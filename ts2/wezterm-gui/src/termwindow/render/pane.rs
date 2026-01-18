@@ -727,20 +727,49 @@ impl crate::TermWindow {
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
 
-        // Calculate the pane position (where on screen to place the browser)
-        // Simple calculation: offset + (cell_index * cell_size)
-        let x = padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
-        let y = top_pixel_y + (pos.top as f32 * cell_height);
+        // Calculate true pixel bounds (fills to edges of splits, same as background_rect)
+        let (x, width_delta) = if pos.left == 0 {
+            // Left edge pane: start at true window edge
+            (0., padding_left + border.left.get() as f32 + (cell_width / 2.0))
+        } else {
+            // Interior pane: extend half-cell into left divider
+            (
+                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                    + (pos.left as f32 * cell_width),
+                cell_width,
+            )
+        };
+
+        let (y, height_delta) = if pos.top == 0 {
+            // Top edge pane: start at true top edge
+            (top_pixel_y - padding_top, padding_top + (cell_height / 2.0))
+        } else {
+            // Interior pane: extend half-cell into top divider
+            (
+                top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
+                cell_height,
+            )
+        };
+
+        // Width: extend to window edge if rightmost, otherwise extend half-cell into right divider
+        let pane_width = if pos.left + pos.width >= self.terminal_size.cols as usize {
+            self.dimensions.pixel_width as f32 - x
+        } else {
+            (pos.width as f32 * cell_width) + width_delta
+        };
+
+        // Height: extend to window edge if bottommost, otherwise extend half-cell into bottom divider
+        let pane_height = if pos.top + pos.height >= self.terminal_size.rows as usize {
+            self.dimensions.pixel_height as f32 - y
+        } else {
+            (pos.height as f32 * cell_height) + height_delta
+        };
 
         // Update browser pane bounds and check if resize needed
         let pane_id = pos.pane.pane_id();
         if let Some(browser) = self.browser_states.borrow().get(&pane_id) {
-            // Pane size in physical pixels
-            let pane_width = pos.pixel_width as u32;
-            let pane_height = pos.pixel_height as u32;
-
             // Store current pane bounds - used directly for rendering
-            browser.set_pane_bounds(x, y, pane_width, pane_height);
+            browser.set_pane_bounds(x, y, pane_width as u32, pane_height as u32);
 
             // Check if browser needs to be resized (tell CEF the new logical size)
             const MACOS_BASE_DPI: f32 = 72.0;
