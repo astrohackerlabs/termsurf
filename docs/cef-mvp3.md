@@ -32,22 +32,20 @@ The browser must always match the precise position and dimensions of its pane.
 
 ## Technical Approach
 
-1. **Single detection point**: Pane resize detection must happen in exactly one
-   place. We detect pane changes, not window changes. The pane is the source of
-   truth.
+1. **Single source of truth**: All pane bounds come from
+   `calculate_pane_pixel_bounds()`. This function is the sole authority for
+   browser viewport position and size. Do not introduce alternative calculations.
 
-2. **Pixel coordinates, not grid**: Use precise pixel bounds, not grid
-   calculations (cols × cell_width). Grid-based sizing causes chunky resizing.
-   The browser must resize continuously to the pane's exact pixel dimensions.
+2. **Edge extension**: Edge panes extend to the window edge (covering
+   padding/borders). Interior panes extend half-cell into dividers. See the
+   "Source of Truth" section below for the exact formulas.
 
 3. **HiDPI support**: Both Retina and standard displays must work correctly.
    Retina currently works—preserve this. The browser must render at the correct
    scale factor for the display.
 
-4. **Re-render loop**: When CEF finishes rendering a new texture, we check if
-   the pane has changed since we requested the render. If it has (e.g., user is
-   still dragging), we request another render. This continues until the texture
-   matches the current pane size.
+4. **Debounced re-render**: When pane size changes, request a CEF re-render
+   using debounced resize with trailing edge. See detailed section below.
 
 ## Debounced Resize with Trailing Edge
 
