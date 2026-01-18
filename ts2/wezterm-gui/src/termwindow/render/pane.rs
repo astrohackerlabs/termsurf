@@ -807,11 +807,24 @@ impl crate::TermWindow {
     ) -> anyhow::Result<()> {
         let (x, y, width, height) = self.calculate_pane_pixel_bounds(pos)?;
 
-        // Update browser pane bounds for rendering
-        // No resize call - we just stretch the initial texture to fit
         let pane_id = pos.pane.pane_id();
         if let Some(browser) = self.browser_states.borrow().get(&pane_id) {
+            // Always set viewport bounds - texture stretches to fit
             browser.set_pane_bounds(x, y, width as u32, height as u32);
+
+            // Convert physical pixels to logical pixels for CEF
+            // CEF expects DIP (device-independent pixels)
+            const MACOS_BASE_DPI: f32 = 72.0;
+            let device_scale_factor = self.dimensions.dpi as f32 / MACOS_BASE_DPI;
+            let logical_width = (width / device_scale_factor) as u32;
+            let logical_height = (height / device_scale_factor) as u32;
+
+            // Request re-render if size changed
+            // Uses same source of truth as viewport - no bouncing
+            let (current_w, current_h) = browser.get_size();
+            if logical_width != current_w || logical_height != current_h {
+                browser.resize(logical_width, logical_height);
+            }
         }
 
         Ok(())

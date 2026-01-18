@@ -3760,6 +3760,26 @@ impl TermWindow {
     pub fn has_browser_for_pane(&self, pane_id: PaneId) -> bool {
         self.browser_states.borrow().contains_key(&pane_id)
     }
+
+    /// Force a browser to re-render at its current size
+    /// Used to fix texture mismatch after resize settles
+    pub fn force_browser_rerender(&self, pane_id: PaneId) {
+        if let Some(browser) = self.browser_states.borrow().get(&pane_id) {
+            let (width, height) = browser.get_size();
+            log::info!(
+                "[CEF] Forcing re-render for pane {} at {}x{}",
+                pane_id,
+                width,
+                height
+            );
+            browser.resize(width, height);
+
+            // Trigger redraw
+            if let Some(ref w) = self.window {
+                w.invalidate();
+            }
+        }
+    }
 }
 
 impl Drop for TermWindow {

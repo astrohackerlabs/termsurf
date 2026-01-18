@@ -621,6 +621,22 @@ impl super::TermWindow {
                     return;
                 }
 
+                // Check for Ctrl+Shift+R to force re-render browser
+                // Note: SHIFT modifier is consumed by the key itself, so 'R' appears as uppercase
+                // Note: macOS doesn't generate key-down KeyEvent for Ctrl+Shift combos, so we use key-up
+                let is_ctrl_shift_r = !window_key.key_is_down
+                    && window_key.modifiers.contains(::window::Modifiers::CTRL)
+                    && matches!(&window_key.key, ::window::KeyCode::Char('R'));
+
+                if is_ctrl_shift_r {
+                    log::info!(
+                        "[CEF] Ctrl+Shift+R: forcing browser re-render for pane {}",
+                        pane_id
+                    );
+                    self.force_browser_rerender(pane_id);
+                    return;
+                }
+
                 // Forward other key events to the browser
                 // TODO: Implement full key event forwarding to CEF browser
                 // For now, consume all keys when browser is active
