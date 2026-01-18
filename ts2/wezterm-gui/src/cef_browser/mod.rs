@@ -20,8 +20,9 @@ use std::sync::Arc;
 /// Texture holder type for storing the CEF render texture bind group
 pub type TextureHolder = std::rc::Rc<RefCell<Option<wgpu::BindGroup>>>;
 
-/// Texture size holder - stores the actual texture dimensions (physical pixels)
-pub type TextureSizeHolder = std::rc::Rc<RefCell<Option<(u32, u32)>>>;
+/// Pane bounds: current position and size of the pane (x, y, width, height)
+/// Updated every frame from paint_browser_overlay, used directly for rendering
+pub type PaneBoundsHolder = std::rc::Rc<RefCell<(f32, f32, u32, u32)>>;
 
 /// State for a single browser instance
 pub struct BrowserState {
@@ -29,19 +30,10 @@ pub struct BrowserState {
     pub pane_id: PaneId,
     pub url: String,
     pub texture_holder: TextureHolder,
-    /// Actual texture size in physical pixels (set by on_accelerated_paint)
-    texture_size: TextureSizeHolder,
+    /// Current pane bounds (x, y, width, height) - updated every frame
+    pane_bounds: PaneBoundsHolder,
+    /// Logical size for CEF (DIP)
     size: std::rc::Rc<RefCell<(u32, u32)>>,
-    device_scale_factor: f32,
-    /// Stored pane position for overlay rendering (in pixels)
-    pane_position: RefCell<PanePosition>,
-}
-
-/// Position describing where the pane is located (in pixels)
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PanePosition {
-    pub x: f32,
-    pub y: f32,
 }
 
 impl BrowserState {
@@ -73,12 +65,11 @@ impl BrowserState {
         // Create render handler parts
         let size = std::rc::Rc::new(RefCell::new((width, height)));
         let texture_holder: TextureHolder = std::rc::Rc::new(RefCell::new(None));
-        let texture_size: TextureSizeHolder = std::rc::Rc::new(RefCell::new(None));
+        let pane_bounds: PaneBoundsHolder = std::rc::Rc::new(RefCell::new((0.0, 0.0, width, height)));
 
         let render_handler = CefRenderHandler {
             size: size.clone(),
             texture_holder: texture_holder.clone(),
-            texture_size: texture_size.clone(),
             device: device.clone(),
             queue: queue.clone(),
             bind_group_layout: bind_group_layout.clone(),
@@ -128,26 +119,20 @@ impl BrowserState {
             pane_id,
             url: url.to_string(),
             texture_holder,
-            texture_size,
+            pane_bounds,
             size,
-            device_scale_factor,
-            pane_position: RefCell::new(PanePosition { x: 0.0, y: 0.0 }),
         })
     }
 
-    /// Update the pane position for overlay rendering
-    pub fn set_pane_position(&self, x: f32, y: f32) {
-        *self.pane_position.borrow_mut() = PanePosition { x, y };
+    /// Set current pane bounds (called from paint_browser_overlay every frame)
+    pub fn set_pane_bounds(&self, x: f32, y: f32, width: u32, height: u32) {
+        *self.pane_bounds.borrow_mut() = (x, y, width, height);
     }
 
-    /// Get the current pane position
-    pub fn get_pane_position(&self) -> PanePosition {
-        *self.pane_position.borrow()
-    }
-
-    /// Get the actual texture size in physical pixels (from CEF's on_accelerated_paint)
-    pub fn get_texture_size(&self) -> Option<(u32, u32)> {
-        *self.texture_size.borrow()
+    /// Get current pane bounds for rendering
+    /// Returns (x, y, width, height) in physical pixels
+    pub fn get_pane_bounds(&self) -> (f32, f32, u32, u32) {
+        *self.pane_bounds.borrow()
     }
 
     /// Get the current logical size (DIP)
@@ -290,7 +275,6 @@ pub fn keycode_to_windows_vk(_code: u32) -> i32 {
 struct CefRenderHandler {
     size: std::rc::Rc<RefCell<(u32, u32)>>,
     texture_holder: TextureHolder,
-    texture_size: TextureSizeHolder,
     device: wgpu::Device,
     queue: wgpu::Queue,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -414,16 +398,6 @@ wrap_render_handler! {
             // Store the bind group
             *self.handler.texture_holder.borrow_mut() = Some(bind_group);
 
-            // Store the actual texture size (physical pixels)
-            let texture_width = info.extra.coded_size.width as u32;
-            let texture_height = info.extra.coded_size.height as u32;
-            *self.handler.texture_size.borrow_mut() = Some((texture_width, texture_height));
-            log::info!(
-                "[CEF] on_accelerated_paint: texture size {}x{} (physical pixels)",
-                texture_width,
-                texture_height
-            );
-
             // Signal that we need a redraw
             (self.handler.invalidate_callback)();
         }
@@ -519,13 +493,7 @@ wrap_render_handler! {
 
             *self.handler.texture_holder.borrow_mut() = Some(bind_group);
 
-            // Store the texture size (physical pixels)
-            *self.handler.texture_size.borrow_mut() = Some((width as u32, height as u32));
-            log::info!(
-                "[CEF] on_paint: texture bind group created successfully, size {}x{}",
-                width,
-                height
-            );
+            // Signal that we need a redraw
             (self.handler.invalidate_callback)();
         }
     }

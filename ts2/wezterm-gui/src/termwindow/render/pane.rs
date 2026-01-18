@@ -699,7 +699,7 @@ impl crate::TermWindow {
     }
 
     /// Paint a browser overlay for a pane with CEF content.
-    /// Sets the browser position and triggers resize if needed.
+    /// Sets the pending state (position + expected size) and triggers resize if needed.
     /// The actual CEF texture is rendered in a separate pass after main rendering.
     #[cfg(all(target_os = "macos", feature = "cef"))]
     fn paint_browser_overlay(
@@ -728,23 +728,21 @@ impl crate::TermWindow {
         let cell_height = self.render_metrics.cell_size.height as f32;
 
         // Calculate the pane position (where on screen to place the browser)
-        let x = if pos.left == 0 {
-            0.
-        } else {
-            padding_left + border.left.get() as f32 - (cell_width / 2.0)
-                + (pos.left as f32 * cell_width)
-        };
+        // Simple calculation: offset + (cell_index * cell_size)
+        let x = padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
+        let y = top_pixel_y + (pos.top as f32 * cell_height);
 
-        let y = if pos.top == 0 {
-            top_pixel_y - padding_top
-        } else {
-            top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0)
-        };
-
-        // Update the browser's position and check if resize needed
+        // Update browser pane bounds and check if resize needed
         let pane_id = pos.pane.pane_id();
         if let Some(browser) = self.browser_states.borrow().get(&pane_id) {
-            // Check if browser needs to be resized (handles window resize, split, close)
+            // Pane size in physical pixels
+            let pane_width = pos.pixel_width as u32;
+            let pane_height = pos.pixel_height as u32;
+
+            // Store current pane bounds - used directly for rendering
+            browser.set_pane_bounds(x, y, pane_width, pane_height);
+
+            // Check if browser needs to be resized (tell CEF the new logical size)
             const MACOS_BASE_DPI: f32 = 72.0;
             let scale = self.dimensions.dpi as f32 / MACOS_BASE_DPI;
             let logical_width = (pos.pixel_width as f32 / scale) as u32;
@@ -762,14 +760,6 @@ impl crate::TermWindow {
                 );
                 browser.resize(logical_width, logical_height);
             }
-
-            browser.set_pane_position(x, y);
-            log::trace!(
-                "[CEF] Updated pane position for browser {}: x={}, y={}",
-                pane_id,
-                x,
-                y
-            );
         }
 
         Ok(())

@@ -23,23 +23,23 @@ The browser must always match the precise position and dimensions of its pane.
    long as it immediately corrects itself to match the new pane dimensions at
    1:1 scale.
 
+6. **Unconditional stretching**: The current texture is always stretched to
+   match the pane dimensions exactly. No gaps, no bands, no overflow. The
+   viewport is set to the pane bounds, period.
+
+7. **Acceptable transient state**: Stretching is acceptable only as a brief
+   transient state while waiting for CEF to produce a correctly-sized texture.
+
 ## Technical Approach
 
 1. **Single detection point**: Pane resize detection must happen in exactly one
    place. We detect pane changes, not window changes. The pane is the source of
    truth.
 
-2. **Unconditional stretching**: The current texture is always stretched to
-   match the pane dimensions exactly. No gaps, no bands, no overflow. The
-   viewport is set to the pane bounds, period.
-
-3. **Re-render loop**: When CEF finishes rendering a new texture, we check if
+2. **Re-render loop**: When CEF finishes rendering a new texture, we check if
    the pane has changed since we requested the render. If it has (e.g., user is
    still dragging), we request another render. This continues until the texture
    matches the current pane size.
-
-4. **Acceptable transient state**: Stretching is acceptable only as a brief
-   transient state while waiting for CEF to produce a correctly-sized texture.
 
 ## Non-Goals for MVP3
 
