@@ -914,9 +914,14 @@ fn main() {
     notify_on_panic();
 
     #[cfg(all(target_os = "macos", feature = "cef"))]
-    match init_cef() {
-        Ok(()) => {}
-        Err(e) => log::error!("CEF init failed: {e}"),
+    {
+        // Detect system dark mode before CEF init (must happen early)
+        cef_integration::init_dark_mode_detection();
+
+        match init_cef() {
+            Ok(()) => {}
+            Err(e) => log::error!("CEF init failed: {e}"),
+        }
     }
 
     if let Err(e) = run() {

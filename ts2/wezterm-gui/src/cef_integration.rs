@@ -5,7 +5,7 @@
 
 use cef::{
     rc::Rc, wrap_app, wrap_browser_process_handler, App, BrowserProcessHandler, ImplApp,
-    ImplBrowserProcessHandler, WrapApp, WrapBrowserProcessHandler,
+    ImplBrowserProcessHandler, ImplCommandLine, WrapApp, WrapBrowserProcessHandler,
 };
 use core_foundation::runloop::{
     kCFRunLoopCommonModes, CFRunLoopAddTimer, CFRunLoopGetMain, CFRunLoopTimerCreate,
@@ -13,7 +13,59 @@ use core_foundation::runloop::{
 };
 use core_foundation_sys::date::CFAbsoluteTimeGetCurrent;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+/// Cached dark mode setting - detected once at CEF init time
+static IS_DARK_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Detect if macOS is in dark mode by querying NSAppearance
+fn detect_macos_dark_mode() -> bool {
+    use cocoa::appkit::NSApplication;
+    use cocoa::base::{id, nil};
+    use objc::{msg_send, sel, sel_impl};
+
+    unsafe {
+        let app = NSApplication::sharedApplication(nil);
+        if app == nil {
+            return false;
+        }
+
+        let appearance: id = msg_send![app, effectiveAppearance];
+        if appearance == nil {
+            return false;
+        }
+
+        let name: id = msg_send![appearance, name];
+        if name == nil {
+            return false;
+        }
+
+        // Convert NSString to Rust string
+        let utf8: *const i8 = msg_send![name, UTF8String];
+        if utf8.is_null() {
+            return false;
+        }
+
+        let name_str = std::ffi::CStr::from_ptr(utf8).to_str().unwrap_or("");
+
+        // Check for dark mode appearance names
+        matches!(
+            name_str,
+            "NSAppearanceNameDarkAqua"
+                | "NSAppearanceNameVibrantDark"
+                | "NSAppearanceNameAccessibilityHighContrastDarkAqua"
+                | "NSAppearanceNameAccessibilityHighContrastVibrantDark"
+        )
+    }
+}
+
+/// Initialize dark mode detection - call this early before CEF init
+pub fn init_dark_mode_detection() {
+    let is_dark = detect_macos_dark_mode();
+    IS_DARK_MODE.store(is_dark, Ordering::SeqCst);
+    log::info!("[CEF] System dark mode detected: {}", is_dark);
+}
 
 /// Wrapper for CFRunLoopTimerRef that implements Send.
 /// This is safe because we only access the timer through CFRunLoop APIs
@@ -42,6 +94,22 @@ wrap_app! {
     }
 
     impl App {
+        fn on_before_command_line_processing(
+            &self,
+            _process_type: Option<&cef::CefStringUtf16>,
+            command_line: Option<&mut cef::CommandLine>,
+        ) {
+            let Some(command_line) = command_line else {
+                return;
+            };
+
+            // Add dark mode switch if system is in dark mode
+            if IS_DARK_MODE.load(Ordering::SeqCst) {
+                command_line.append_switch(Some(&"force-dark-mode".into()));
+                log::info!("[CEF] Added --force-dark-mode (system is in dark mode)");
+            }
+        }
+
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(self.handler.clone())
         }

@@ -126,8 +126,10 @@ windows = { workspace=true, features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cef = { path = "../../cef-rs/cef", optional = true, features = ["accelerated_osr"] }
+cocoa.workspace = true
 core-foundation.workspace = true
 core-foundation-sys.workspace = true
+objc.workspace = true
 
 [dev-dependencies]
 benchmarking.workspace = true
