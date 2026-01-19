@@ -805,7 +805,7 @@ impl crate::TermWindow {
     fn paint_browser_overlay(
         &mut self,
         pos: &PositionedPane,
-        _layers: &mut TripleLayerQuadAllocator,
+        layers: &mut TripleLayerQuadAllocator,
     ) -> anyhow::Result<()> {
         use std::time::Duration;
 
@@ -813,17 +813,29 @@ impl crate::TermWindow {
 
         let (x, y, width, height) = self.calculate_pane_pixel_bounds(pos)?;
 
+        // Control panel is 1 cell height at the top of the browser pane
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        // Render control panel background
+        let bg_color = self.palette().background.to_linear();
+        let control_panel_rect = euclid::rect(x, y, width, cell_height);
+        self.filled_rectangle(layers, 0, control_panel_rect, bg_color)?;
+
+        // Browser bounds: pushed down by control panel height
+        let browser_y = y + cell_height;
+        let browser_height = height - cell_height;
+
         let pane_id = pos.pane.pane_id();
         if let Some(browser) = self.browser_states.borrow().get(&pane_id) {
-            // Always set viewport bounds - texture stretches to fit
-            browser.set_pane_bounds(x, y, width as u32, height as u32);
+            // Set viewport bounds for browser (below control panel)
+            browser.set_pane_bounds(x, browser_y, width as u32, browser_height as u32);
 
             // Convert physical pixels to logical pixels for CEF
             // CEF expects DIP (device-independent pixels)
             const MACOS_BASE_DPI: f32 = 72.0;
             let device_scale_factor = self.dimensions.dpi as f32 / MACOS_BASE_DPI;
             let logical_width = (width / device_scale_factor) as u32;
-            let logical_height = (height / device_scale_factor) as u32;
+            let logical_height = (browser_height / device_scale_factor) as u32;
 
             // Request re-render if size changed
             let (current_w, current_h) = browser.get_size();
