@@ -848,11 +848,14 @@ impl crate::TermWindow {
                 self.config.text_background_opacity
             });
 
+        // Add half-cell margin to match terminal content positioning
+        let half_cell_width = self.render_metrics.cell_size.width as f32 / 2.0;
+
         self.render_screen_line(
             RenderScreenLineParams {
                 top_pixel_y: y,
-                left_pixel_x: x,
-                pixel_width: width,
+                left_pixel_x: x + half_cell_width,
+                pixel_width: width - half_cell_width,
                 stable_line_idx: None,
                 line: &line,
                 selection: 0..0,
