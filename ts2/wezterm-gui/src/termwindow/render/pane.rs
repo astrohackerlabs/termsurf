@@ -823,13 +823,16 @@ impl crate::TermWindow {
 
         let (x, y, width, height) = self.calculate_pane_pixel_bounds(pos)?;
 
-        // Control panel is 1 cell height at the top of the browser pane
+        // Control panel is 2 cell heights at the top of the browser pane
+        // (half-cell top margin + text + half-cell bottom margin)
         let cell_height = self.render_metrics.cell_size.height as f32;
+        let half_cell_height = cell_height / 2.0;
+        let control_bar_height = cell_height * 2.0;
 
         // Render control panel background
         let palette = self.palette().clone();
         let bg_color = palette.background.to_linear();
-        let control_panel_rect = euclid::rect(x, y, width, cell_height);
+        let control_panel_rect = euclid::rect(x, y, width, control_bar_height);
         self.filled_rectangle(layers, 0, control_panel_rect, bg_color)?;
 
         // Render control panel text based on current mode
@@ -858,12 +861,12 @@ impl crate::TermWindow {
                 self.config.text_background_opacity
             });
 
-        // Add half-cell margin to match terminal content positioning
+        // Add half-cell margins to match terminal content positioning
         let half_cell_width = self.render_metrics.cell_size.width as f32 / 2.0;
 
         self.render_screen_line(
             RenderScreenLineParams {
-                top_pixel_y: y,
+                top_pixel_y: y + half_cell_height,
                 left_pixel_x: x + half_cell_width,
                 pixel_width: width - half_cell_width,
                 stable_line_idx: None,
@@ -907,8 +910,8 @@ impl crate::TermWindow {
         )?;
 
         // Browser bounds: pushed down by control panel height
-        let browser_y = y + cell_height;
-        let browser_height = height - cell_height;
+        let browser_y = y + control_bar_height;
+        let browser_height = height - control_bar_height;
 
         let pane_id = pos.pane.pane_id();
         if let Some(browser) = self.browser_states.borrow().get(&pane_id) {
