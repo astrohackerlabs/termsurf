@@ -837,19 +837,22 @@ impl crate::TermWindow {
             let logical_width = (width / device_scale_factor) as u32;
             let logical_height = (browser_height / device_scale_factor) as u32;
 
-            // Request re-render if size changed
-            let (current_w, current_h) = browser.get_size();
-            if logical_width != current_w || logical_height != current_h {
-                browser.resize(logical_width, logical_height);
+            let target_size = (logical_width, logical_height);
+
+            // Check if target size changed (compare against pending, not actual)
+            // We DON'T resize immediately - just track that we need to resize
+            // This avoids the "bouncing" visual artifacts during drag resize
+            if browser.get_pending_size() != Some(target_size) {
+                browser.set_pending_size(logical_width, logical_height);
                 browser.mark_resize_time();
             }
 
             // Settle-and-rerender logic:
-            // After 10ms of no size changes, trigger one final render to fix any
-            // texture mismatches that occurred during rapid resize
+            // Only resize AFTER 10ms of no size changes
+            // During resize, just stretch the existing texture to fit
             if let Some(elapsed) = browser.time_since_last_resize() {
                 if elapsed >= SETTLE_DELAY {
-                    // Settled! Do final render at current size
+                    // Settled! Now do the actual resize
                     log::debug!(
                         "[CEF] Settle render for pane {} at {}x{} (waited {:?})",
                         pane_id,
@@ -859,6 +862,7 @@ impl crate::TermWindow {
                     );
                     browser.resize(logical_width, logical_height);
                     browser.clear_resize_time();
+                    browser.clear_pending_size();
                 } else {
                     // Still waiting to settle - keep paint loop running
                     if let Some(ref w) = self.window {

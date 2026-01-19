@@ -37,6 +37,9 @@ pub struct BrowserState {
     /// Time of last resize call - used for settle-and-rerender logic
     /// When Some, we're waiting to do a final "settle" render after 10ms of no changes
     last_resize_time: RefCell<Option<std::time::Instant>>,
+    /// Pending target size - the size we want to resize to after settling
+    /// Used to detect when the target size changes vs when we're just waiting
+    pending_size: RefCell<Option<(u32, u32)>>,
 }
 
 impl BrowserState {
@@ -125,6 +128,7 @@ impl BrowserState {
             pane_bounds,
             size,
             last_resize_time: RefCell::new(None),
+            pending_size: RefCell::new(None),
         })
     }
 
@@ -158,6 +162,21 @@ impl BrowserState {
     /// Returns Some(elapsed) if waiting, None if not waiting
     pub fn time_since_last_resize(&self) -> Option<std::time::Duration> {
         self.last_resize_time.borrow().map(|t| t.elapsed())
+    }
+
+    /// Get the pending target size (the size we want to resize to after settling)
+    pub fn get_pending_size(&self) -> Option<(u32, u32)> {
+        *self.pending_size.borrow()
+    }
+
+    /// Set the pending target size (called when pane size changes)
+    pub fn set_pending_size(&self, width: u32, height: u32) {
+        *self.pending_size.borrow_mut() = Some((width, height));
+    }
+
+    /// Clear the pending size (after resize is complete)
+    pub fn clear_pending_size(&self) {
+        *self.pending_size.borrow_mut() = None;
     }
 
     /// Get the browser host for sending events
