@@ -673,10 +673,9 @@ impl super::TermWindow {
                             window_key.raw.as_ref().map(|r| r.raw_code)
                         );
 
-                        // Skip KEYUP for navigation keys - CEF moves cursor on both
-                        // KEYDOWN and KEYUP, causing double movement
-                        // Note: Backspace is Char('\u{8}'), Delete is Char('\u{7f}')
-                        let is_navigation_key = matches!(
+                        // Skip KEYUP for action keys - CEF responds to both KEYDOWN and KEYUP,
+                        // causing double actions (e.g., Tab moves focus twice, Enter submits twice)
+                        let is_action_key = matches!(
                             window_key.key,
                             ::window::KeyCode::UpArrow
                                 | ::window::KeyCode::DownArrow
@@ -687,10 +686,14 @@ impl super::TermWindow {
                                 | ::window::KeyCode::PageUp
                                 | ::window::KeyCode::PageDown
                                 | ::window::KeyCode::Char('\u{8}')   // Backspace
-                                | ::window::KeyCode::Char('\u{7f}') // Delete
+                                | ::window::KeyCode::Char('\u{7f}')  // Delete
+                                | ::window::KeyCode::Char('\t')      // Tab
+                                | ::window::KeyCode::Char('\u{1b}')  // Escape
+                                | ::window::KeyCode::Char('\r')      // Enter
+                                | ::window::KeyCode::Char(' ')       // Space
                         );
-                        if is_navigation_key && !window_key.key_is_down {
-                            log::info!("[CEF KEY] Skipping KEYUP for navigation key");
+                        if is_action_key && !window_key.key_is_down {
+                            log::info!("[CEF KEY] Skipping KEYUP for action key");
                             return;
                         }
 
