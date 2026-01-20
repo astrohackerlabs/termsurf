@@ -659,6 +659,36 @@ impl super::TermWindow {
                             return;
                         }
 
+                        // Handle Cmd+[ (go back) and Cmd+] (go forward)
+                        if window_key.key_is_down
+                            && window_key.modifiers.contains(::window::Modifiers::SUPER)
+                        {
+                            match &window_key.key {
+                                ::window::KeyCode::Char('[') => {
+                                    log::info!("[CEF] Cmd+[: navigating back for pane {}", pane_id);
+                                    if let Some(browser) =
+                                        self.browser_states.borrow().get(&pane_id)
+                                    {
+                                        browser.go_back();
+                                    }
+                                    return;
+                                }
+                                ::window::KeyCode::Char(']') => {
+                                    log::info!(
+                                        "[CEF] Cmd+]: navigating forward for pane {}",
+                                        pane_id
+                                    );
+                                    if let Some(browser) =
+                                        self.browser_states.borrow().get(&pane_id)
+                                    {
+                                        browser.go_forward();
+                                    }
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+
                         // Forward key events to CEF browser
                         use crate::cef_browser::{
                             macos_keycode_to_native, macos_keycode_to_windows_vk, CefKeyEvent,

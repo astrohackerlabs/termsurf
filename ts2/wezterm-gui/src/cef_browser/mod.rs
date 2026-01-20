@@ -271,6 +271,18 @@ impl BrowserState {
         }
     }
 
+    /// Navigate back in browser history
+    pub fn go_back(&self) {
+        log::info!("[CEF] go_back()");
+        self.browser.go_back();
+    }
+
+    /// Navigate forward in browser history
+    pub fn go_forward(&self) {
+        log::info!("[CEF] go_forward()");
+        self.browser.go_forward();
+    }
+
     /// Send mouse move event to the browser
     /// x, y are in logical pixels (DIP) relative to the browser viewport
     pub fn send_mouse_move(&self, x: i32, y: i32, modifiers: u32, mouse_leave: bool) {
