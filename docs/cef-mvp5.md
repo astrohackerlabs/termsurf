@@ -550,7 +550,7 @@ add the item to the menu. `CutToClipboard` was not added to this list.
 
 ### Experiment 4: Add Cut to Menu List
 
-**Status:** Planned
+**Status:** SUCCESS
 
 **Goal:** Fix Experiment 3 by adding `CutToClipboard` to the explicit menu
 action list.
@@ -564,3 +564,38 @@ action list.
 - Add: `CutToClipboard,`
 
 One line in one file.
+
+#### Test Result
+
+Cut now appears in Edit menu and works in browser Browse mode.
+
+### Experiment 5: Make Cut act as Copy in Terminal
+
+**Status:** Planned
+
+**Goal:** When Cut (Cmd+X) is triggered outside of browser Browse mode, perform
+a copy operation instead of doing nothing.
+
+**Current behavior:**
+
+- Browse mode: `frame.cut()` ✓
+- Otherwise: does nothing
+
+**Desired behavior:**
+
+- Browse mode: `frame.cut()` ✓
+- Otherwise: copy terminal selection to clipboard
+
+#### Implementation Plan
+
+**1. Add terminal copy logic to CutToClipboard handler**
+
+- File: `wezterm-gui/src/termwindow/mod.rs`
+- Location: End of `CutToClipboard` match arm, after the `#[cfg]` block
+- Add:
+  ```rust
+  let text = self.selection_text(pane);
+  self.copy_to_clipboard(ClipboardCopyDestination::Clipboard, text);
+  ```
+
+This is the same logic used by `CopyTo(ClipboardCopyDestination::Clipboard)`.
