@@ -498,3 +498,36 @@ text and paste into text fields.
 
 - Cut (Cmd+X) in browser
 - Terminal copy+paste still works (no regression)
+
+### Experiment 3: Add Cut (Cmd+X) for Browser
+
+**Status:** Planned
+
+**Goal:** Add Cut functionality to the menu bar. In Browse mode, call
+`frame.cut()`. Outside Browse mode, do nothing.
+
+**Note:** Enable/disable of the menu item is deferred to a future experiment.
+
+#### Implementation Plan
+
+**1. Add Cut KeyAssignment variant**
+
+- File: `config/src/keyassignment.rs`
+- Add `CutToClipboard` variant to the `KeyAssignment` enum (near line 542, next
+  to `CopyTo`)
+
+**2. Add Cut menu item definition**
+
+- File: `wezterm-gui/src/commands.rs`
+- Add `CutToClipboard` match arm (near line 642, next to Copy/Paste):
+  - `brief: "Cut to clipboard"`
+  - `keys: vec![(Modifiers::SUPER, "x".into())]`
+  - `menubar: &["Edit"]`
+
+**3. Handle Cut action in perform_key_assignment**
+
+- File: `wezterm-gui/src/termwindow/mod.rs`
+- Add match arm for `CutToClipboard`
+- Same pattern as CopyTo/PasteFrom:
+  - In Browse mode: call `frame.cut()`
+  - Otherwise: do nothing, return `Handled`
