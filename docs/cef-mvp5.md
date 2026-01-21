@@ -249,3 +249,59 @@ _This section tracks implementation attempts and their outcomes._
 
 **Rationale:** Minimal architectural disruption, consistent menu UX, single
 point of change. The existing `send_key_event()` infrastructure can be reused.
+
+#### Research: Tracing the PerformKeyAssignment Flow
+
+**Event flow:**
+
+```
+Menu Cmd+C pressed
+    ↓
+WindowEvent::PerformKeyAssignment(CopyTo(Clipboard)) dispatched
+    (window/src/os/macos/window.rs:2294)
+    ↓
+Event received in termwindow/mod.rs:965-970
+    ↓
+self.perform_key_assignment(&pane, &action) called
+    (termwindow/mod.rs:967)
+    ↓
+Match on CopyTo at termwindow/mod.rs:2756-2759:
+    CopyTo(dest) => {
+        let text = self.selection_text(pane);
+        self.copy_to_clipboard(*dest, text);
+    }
+```
+
+**State access confirmed** at the `CopyTo`/`PasteFrom` match arms:
+
+| Need           | Available? | How                                      |
+| -------------- | ---------- | ---------------------------------------- |
+| Active pane ID | ✅ Yes     | `pane.pane_id()` (pane is a parameter)   |
+| browser_states | ✅ Yes     | `self.browser_states` (TermWindow field) |
+| Browser mode   | ✅ Yes     | `browser.get_mode()`                     |
+| send_key_event | ✅ Yes     | `browser.send_key_event(&event)`         |
+
+**Execution model:** Synchronous — the match arm executes directly.
+
+**Key codes for CEF:**
+
+| Key | macOS native | Windows VK |
+| --- | ------------ | ---------- |
+| C   | 0x08         | 0x43       |
+| V   | 0x09         | 0x56       |
+| X   | 0x07         | 0x58       |
+
+**Modifier flag:** `EVENTFLAG_COMMAND_DOWN` (0x80) defined in
+`cef_browser/mod.rs:393`
+
+#### Implementation Plan
+
+Modify `termwindow/mod.rs` at the `CopyTo` and `PasteFrom` match arms (~lines
+2756-2765):
+
+1. Check if pane has a browser in Browse mode
+2. If yes: synthesize Cmd+C/V key event, send to CEF, return early
+3. If no: execute existing terminal copy/paste logic
+
+All infrastructure exists. This is a surgical change to ~20 lines in one
+location.
