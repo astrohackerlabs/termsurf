@@ -204,11 +204,18 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
         CliSubCommand::SetWindowTitle(cmd) => cmd.run(client).await,
         CliSubCommand::RenameWorkspace(cmd) => cmd.run(client).await,
         CliSubCommand::ZoomPane(cmd) => cmd.run(client).await,
-        CliSubCommand::Web(cmd) => cmd.run(client).await,
+        // Web command is handled separately via Unix socket, not RPC
+        CliSubCommand::Web(_) => unreachable!("Web command should be handled before RPC"),
     }
 }
 
 pub fn run_cli(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()> {
+    // Handle web commands directly via Unix socket (not RPC)
+    if let CliSubCommand::Web(cmd) = &cli.sub {
+        return cmd.run();
+    }
+
+    // All other commands use the async RPC path
     let executor = promise::spawn::ScopedExecutor::new();
     match promise::spawn::block_on(executor.run(async move { run_cli_async(opts, cli).await })) {
         Ok(_) => Ok(()),

@@ -38,6 +38,8 @@ use wezterm_toast_notification::*;
 mod cef_integration;
 #[cfg(all(target_os = "macos", feature = "cef"))]
 pub mod cef_browser;
+#[cfg(all(target_os = "macos", feature = "cef"))]
+mod termsurf_socket;
 
 mod colorease;
 mod commands;
@@ -831,6 +833,12 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         default_domain_name.as_deref(),
         opts.workspace.as_deref(),
     )?;
+
+    // Start the TermSurf socket server for CLI communication
+    #[cfg(all(target_os = "macos", feature = "cef"))]
+    if let Err(e) = termsurf_socket::start_server() {
+        log::error!("[TermSurf] Failed to start socket server: {}", e);
+    }
 
     // First, let's see if we can ask an already running wezterm to do this.
     // We must do this before we start the gui frontend as the scheduler
