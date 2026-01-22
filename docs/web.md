@@ -188,7 +188,7 @@ flat commands (`web-open`).
 
 ### Experiment 2: Replace RPC with Unix Socket
 
-**Status:** Pending
+**Status:** Success
 
 **Goal:** Replace WezTerm's RPC mechanism for the `web` command with a Unix
 domain socket approach, matching TS1's architecture. This enables bidirectional
@@ -411,3 +411,84 @@ Event (Server → CLI, future):
 **Note:** This experiment maintains the same user-facing behavior. The
 `web open` command will work exactly as before, but uses the socket internally.
 Console streaming will be added in a future experiment.
+
+---
+
+### Experiment 3: Console Output Streaming
+
+**Status:** Pending
+
+**Goal:** Stream console output (console.log, console.error, etc.) from the
+browser to the CLI's stdout/stderr.
+
+**Research Findings:**
+
+CEF provides native console capture via `DisplayHandler::on_console_message()`:
+
+- No JavaScript injection required (unlike TS1's WKWebView approach)
+- Receives: log level, message, source URL, line number
+- Already implemented in cef-rs (`cef/src/handlers/display_handler.rs`)
+
+**Plan:**
+
+1. Create DisplayHandler for console capture:
+
+   - File: `wezterm-gui/src/cef_render/display_handler.rs` (new)
+   - Implement `DisplayHandler` trait with `on_console_message`
+   - Convert CEF log levels to event types:
+     - `LOGSEVERITY_DEBUG` → `console_debug`
+     - `LOGSEVERITY_INFO` → `console_info`
+     - `LOGSEVERITY_WARNING` → `console_warn`
+     - `LOGSEVERITY_ERROR` → `console_error`
+     - Default → `console_log`
+   - Send events to socket server via `broadcast_event`
+
+2. Track request_id in BrowserState:
+
+   - File: `wezterm-gui/src/cef_render/browser_state.rs`
+   - Add `request_id: Option<String>` field
+   - Set when browser is created via socket request
+   - Include in console events for correlation
+
+3. Broadcast console events via socket:
+
+   - Events sent to connections subscribed to the pane
+   - Event format:
+     ```json
+     {
+       "id": "<request_id>",
+       "event": "console_log",
+       "data": {
+         "level": "info",
+         "message": "Hello world",
+         "source": "https://example.com/app.js",
+         "line": 42
+       }
+     }
+     ```
+
+4. CLI event loop:
+
+   - File: `wezterm/src/cli/web.rs`
+   - After sending `open` request, enter read loop for events
+   - Route events to appropriate output:
+     - `console_log`, `console_info`, `console_debug` → stdout
+     - `console_warn`, `console_error` → stderr
+   - Exit on `closed` event or connection close
+
+5. Send `closed` event when browser closes:
+
+   - When browser is destroyed, send `{event: "closed"}` to socket
+   - CLI exits cleanly on receiving this event
+
+**Files to modify:**
+
+| File                                            | Change                   |
+| ----------------------------------------------- | ------------------------ |
+| `wezterm-gui/src/cef_render/display_handler.rs` | New: DisplayHandler impl |
+| `wezterm-gui/src/cef_render/browser_state.rs`   | Add request_id field     |
+| `wezterm-gui/src/cef_render/mod.rs`             | Register DisplayHandler  |
+| `wezterm-gui/src/termsurf_socket/protocol.rs`   | Add console event types  |
+| `wezterm/src/cli/web.rs`                        | Add event loop           |
+
+**Dependencies:** Experiment 2 must be complete (Unix socket communication).
