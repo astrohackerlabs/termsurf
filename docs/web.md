@@ -653,3 +653,208 @@ TS1's routing approach (to support multiple simultaneous browser panes):
 | `mux/src/lib.rs`                                | Add browser_id to WebOpen notif     |
 
 **Dependencies:** Experiment 2 must be complete (Unix socket communication).
+
+---
+
+### Experiment 4: Browser Profiles
+
+**Status:** Pending
+
+**Goal:** Implement named browser profiles to isolate cookies, localStorage, and
+other session data between different use cases.
+
+**Background:**
+
+CEF uses `cache_path` in `RequestContextSettings` to determine where to store
+browser data. When `cache_path` is empty, CEF uses "incognito mode" with
+in-memory storage only. When set to a directory path, CEF persists data there.
+
+Currently, all browsers use `RequestContextSettings::default()` which has an
+empty `cache_path`, meaning every session is incognito.
+
+**Behavior after implementation:**
+
+- Default: Use profile `default` → `~/.config/termsurf/profiles/default/`
+- `--profile <name>`: Use named profile → `~/.config/termsurf/profiles/<name>/`
+- `--incognito`: Use in-memory storage only (no persistence)
+
+**Plan:**
+
+1. Add CLI flags to `WebOpen` (`wezterm/src/cli/web.rs`):
+
+   ```rust
+   #[derive(Debug, Parser, Clone)]
+   pub struct WebOpen {
+       /// The URL to open
+       url: String,
+
+       /// Browser profile name (default: "default")
+       #[arg(long, default_value = "default")]
+       profile: String,
+
+       /// Use incognito mode (in-memory only, no persistence)
+       #[arg(long, conflicts_with = "profile")]
+       incognito: bool,
+   }
+   ```
+
+2. Add profile name validation function:
+
+   ```rust
+   /// Validate profile name: lowercase alphanumeric, must start with letter
+   fn validate_profile_name(name: &str) -> anyhow::Result<()> {
+       if name.is_empty() {
+           anyhow::bail!("Profile name cannot be empty");
+       }
+       if !name.chars().next().unwrap().is_ascii_lowercase() {
+           anyhow::bail!("Profile name must start with a lowercase letter");
+       }
+       if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+           anyhow::bail!("Profile name must contain only lowercase letters and digits");
+       }
+       Ok(())
+   }
+   ```
+
+3. Include profile/incognito in socket request (`wezterm/src/cli/web.rs`):
+
+   ```rust
+   // Validate profile name (unless incognito)
+   if !self.incognito {
+       validate_profile_name(&self.profile)?;
+   }
+
+   let request = TermsurfRequest {
+       id: request_id,
+       action: "open".to_string(),
+       pane_id: Some(pane_id),
+       data: Some(serde_json::json!({
+           "url": self.url,
+           "profile": if self.incognito { None::<String> } else { Some(&self.profile) },
+           "incognito": self.incognito,
+       })),
+   };
+   ```
+
+4. Extract and validate profile in socket server (`termsurf_socket/mod.rs`):
+
+   ```rust
+   fn handle_open(...) -> TermsurfResponse {
+       // ... existing url/pane_id extraction ...
+
+       let profile = request.data.as_ref()
+           .and_then(|d| d.get("profile"))
+           .and_then(|v| v.as_str())
+           .map(|s| s.to_string());
+
+       let incognito = request.data.as_ref()
+           .and_then(|d| d.get("incognito"))
+           .and_then(|v| v.as_bool())
+           .unwrap_or(false);
+
+       // Validate profile name server-side
+       if let Some(ref name) = profile {
+           if let Err(e) = validate_profile_name(name) {
+               return TermsurfResponse::error(request.id.clone(), e.to_string());
+           }
+       }
+
+       // Pass to MuxNotification
+       mux.notify(mux::MuxNotification::WebOpen {
+           pane_id,
+           url: url.clone(),
+           browser_id: browser_id.clone(),
+           profile,
+           incognito,
+       });
+   }
+   ```
+
+5. Update `MuxNotification::WebOpen` (`mux/src/lib.rs`):
+
+   ```rust
+   WebOpen {
+       pane_id: PaneId,
+       url: String,
+       browser_id: String,
+       profile: Option<String>,  // None for incognito
+       incognito: bool,
+   },
+   ```
+
+6. Update `handle_web_open` (`termwindow/mod.rs`):
+
+   ```rust
+   pub fn handle_web_open(
+       &self,
+       pane_id: PaneId,
+       url: String,
+       browser_id: String,
+       profile: Option<String>,
+       incognito: bool,
+   ) {
+       // Pass to BrowserState::new
+   }
+   ```
+
+7. Update `BrowserState::new` to create profile directory and set cache_path
+   (`cef_browser/mod.rs`):
+
+   ```rust
+   pub fn new(
+       // ... existing params ...
+       browser_id: String,
+       profile: Option<String>,
+       incognito: bool,
+   ) -> anyhow::Result<Self> {
+       // Compute cache_path
+       let cache_path = if incognito {
+           None
+       } else {
+           let profile_name = profile.as_deref().unwrap_or("default");
+           let path = dirs::config_dir()
+               .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
+               .join("termsurf")
+               .join("profiles")
+               .join(profile_name);
+
+           // Create directory if it doesn't exist
+           std::fs::create_dir_all(&path)?;
+
+           Some(path)
+       };
+
+       // Create request context with cache_path
+       let mut context_settings = RequestContextSettings::default();
+       if let Some(ref path) = cache_path {
+           context_settings.cache_path = path.to_string_lossy().to_string().into();
+       }
+
+       let mut context = cef::request_context_create_context(
+           Some(&context_settings),
+           Some(&mut CefRequestContextHandlerBuilder::build()),
+       );
+
+       // ... rest of browser creation ...
+   }
+   ```
+
+**Profile validation rules:**
+
+- Lowercase alphanumeric only (`a-z`, `0-9`)
+- Must start with a letter
+- Valid: `default`, `myproject`, `test1`
+- Invalid: `MyProject`, `123test`, `my-project`
+
+**Files to modify:**
+
+| File                                     | Change                              |
+| ---------------------------------------- | ----------------------------------- |
+| `wezterm/src/cli/web.rs`                 | Add --profile and --incognito flags |
+| `wezterm-gui/src/termsurf_socket/mod.rs` | Extract and validate profile        |
+| `mux/src/lib.rs`                         | Add profile/incognito to WebOpen    |
+| `wezterm-gui/src/termwindow/mod.rs`      | Pass profile to BrowserState        |
+| `wezterm-gui/src/cef_browser/mod.rs`     | Create profile dir, set cache_path  |
+| `wezterm-mux-server-impl/sessionhandler` | Update RPC path (for completeness)  |
+
+**Dependencies:** Experiment 3 must be complete.
