@@ -617,3 +617,71 @@ All test cases passed. Key findings:
 
 This validates our connection-based lifecycle model. The architecture is now
 crash-proof and simpler to use.
+
+### Experiment 5: Rename "Subprocess" to "Profile Server"
+
+**Status:** SUCCESS
+
+**Goal:** Improve terminology by renaming "subprocess" to "profile server"
+throughout the codebase. The CEF process is specifically attached to a profile,
+so "profile server" more accurately describes its role.
+
+**Background:** The current code uses "subprocess" to refer to the CEF process
+that manages webviews for a profile. This is a generic implementation term that
+doesn't convey meaning. "Profile server" is more accurate - it's a server that
+handles webview requests for a specific profile.
+
+**Terminology:**
+
+- `web` - the coordinator CLI (unchanged)
+- `profile server` - the CEF process that serves webviews for a profile
+  (previously "subprocess")
+- `webview` - an individual web content view (unchanged)
+
+**Changes:**
+
+1. **CLI flag**: `--browser-subprocess` → `--profile-server`
+
+2. **Variable names**: `is_subprocess` → `is_profile_server`
+
+3. **Function names**:
+   - `run_subprocess()` → `run_profile_server()`
+   - `spawn_subprocess()` → `spawn_profile_server()`
+
+4. **Log prefix**: `[Subprocess]` → `[Profile]`
+
+5. **User-facing messages**:
+   - "Connected to existing subprocess" → "Connected to existing profile server"
+   - "Spawning new subprocess" → "Starting profile server"
+   - "Connected to subprocess" → "Connected to profile server"
+   - "Subprocess status" → "Profile server status"
+   - "Failed to spawn subprocess" → "Failed to start profile server"
+
+6. **Comments**: Update references to "subprocess" → "profile server"
+
+**Not changing:**
+
+- `browser_subprocess_path` in CEF settings - this is a CEF API field name
+
+**Success criteria:**
+
+- [x] `--browser-subprocess` renamed to `--profile-server`
+- [x] All function/variable names updated
+- [x] Log prefix changed to `[Profile]`
+- [x] User-facing messages updated
+- [x] Code compiles and tests pass
+- [x] Existing functionality unchanged
+
+**Results:** SUCCESS (2026-01-24)
+
+All changes applied and tested. The terminology is now consistent:
+
+- CLI flag: `--profile-server` (was `--browser-subprocess`)
+- Functions: `run_profile_server()`, `spawn_profile_server()`
+- Variable: `is_profile_server`
+- Log prefix: `[Profile]`
+- Messages: "Connected to existing profile server", "Starting profile server",
+  "Profile server status"
+
+The rename clarifies that this process is the CEF context for a specific
+profile, not just a generic subprocess.

@@ -127,7 +127,7 @@ fn validate_profile_name(name: &str) -> Result<(), String> {
 fn parse_args() -> Result<(bool, ProfileMode, Option<String>), String> {
     let args: Vec<String> = env::args().collect();
 
-    let is_subprocess = args.iter().any(|a| a == "--browser-subprocess");
+    let is_profile_server = args.iter().any(|a| a == "--profile-server");
     let has_incognito = args.iter().any(|a| a == "--incognito");
 
     // Find --profile value
@@ -136,7 +136,7 @@ fn parse_args() -> Result<(bool, ProfileMode, Option<String>), String> {
         .position(|a| a == "--profile")
         .and_then(|i| args.get(i + 1).cloned());
 
-    // Find --incognito-id value (for subprocess)
+    // Find --incognito-id value (for profile server)
     let incognito_id = args
         .iter()
         .position(|a| a == "--incognito-id")
@@ -165,7 +165,7 @@ fn parse_args() -> Result<(bool, ProfileMode, Option<String>), String> {
         ProfileMode::Named("default".to_string())
     };
 
-    Ok((is_subprocess, profile_mode, url))
+    Ok((is_profile_server, profile_mode, url))
 }
 
 // ============================================================================
@@ -265,14 +265,14 @@ impl WebviewState {
     fn open_webview(&self, url: &str) -> u64 {
         let id = self.next_webview_id.fetch_add(1, Ordering::SeqCst);
         self.webview_count.fetch_add(1, Ordering::SeqCst);
-        println!("[Subprocess] Opened webview {} for: {}", id, url);
+        println!("[Profile] Opened webview {} for: {}", id, url);
         id
     }
 
     fn close_webview(&self, id: u64) -> bool {
         let prev_count = self.webview_count.fetch_sub(1, Ordering::SeqCst);
         println!(
-            "[Subprocess] Closed webview {} (remaining: {})",
+            "[Profile] Closed webview {} (remaining: {})",
             id,
             prev_count - 1
         );
@@ -285,7 +285,7 @@ impl WebviewState {
 }
 
 // ============================================================================
-// Socket Server (Subprocess)
+// Socket Server (Profile Server)
 // ============================================================================
 
 /// Handle a request and return (response, webview_id if opened)
@@ -329,7 +329,7 @@ fn handle_request(request: &Request, state: &Arc<WebviewState>) -> (Response, Op
 
 fn handle_connection(mut stream: UnixStream, state: Arc<WebviewState>) -> bool {
     let peer_id = Uuid::new_v4().to_string()[..8].to_string();
-    println!("[Subprocess] Client {} connected", peer_id);
+    println!("[Profile] Client {} connected", peer_id);
 
     let reader = BufReader::new(stream.try_clone().expect("Failed to clone stream"));
 
@@ -342,7 +342,7 @@ fn handle_connection(mut stream: UnixStream, state: Arc<WebviewState>) -> bool {
             Ok(line) => {
                 let (response, webview_id) = match serde_json::from_str::<Request>(&line) {
                     Ok(request) => {
-                        println!("[Subprocess] {} -> {:?}", peer_id, request);
+                        println!("[Profile] {} -> {:?}", peer_id, request);
                         handle_request(&request, &state)
                     }
                     Err(e) => (
@@ -357,16 +357,16 @@ fn handle_connection(mut stream: UnixStream, state: Arc<WebviewState>) -> bool {
                 }
 
                 let response_json = serde_json::to_string(&response).unwrap();
-                println!("[Subprocess] {} <- {}", peer_id, response_json);
+                println!("[Profile] {} <- {}", peer_id, response_json);
 
                 if let Err(e) = writeln!(stream, "{}", response_json) {
-                    eprintln!("[Subprocess] Failed to write response: {}", e);
+                    eprintln!("[Profile] Failed to write response: {}", e);
                     break;
                 }
                 let _ = stream.flush();
             }
             Err(e) => {
-                eprintln!("[Subprocess] Error reading from {}: {}", peer_id, e);
+                eprintln!("[Profile] Error reading from {}: {}", peer_id, e);
                 break;
             }
         }
@@ -374,7 +374,7 @@ fn handle_connection(mut stream: UnixStream, state: Arc<WebviewState>) -> bool {
 
     // Connection ended - close all webviews owned by this connection
     println!(
-        "[Subprocess] Client {} disconnected, closing {} webview(s)",
+        "[Profile] Client {} disconnected, closing {} webview(s)",
         peer_id,
         owned_webviews.len()
     );
@@ -399,7 +399,7 @@ fn run_socket_server(
     if socket_path.exists() {
         if let Err(e) = fs::remove_file(&socket_path) {
             eprintln!(
-                "[Subprocess] Failed to remove stale socket: {} (continuing anyway)",
+                "[Profile] Failed to remove stale socket: {} (continuing anyway)",
                 e
             );
         }
@@ -408,7 +408,7 @@ fn run_socket_server(
     let listener = match UnixListener::bind(&socket_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[Subprocess] Failed to bind socket: {}", e);
+            eprintln!("[Profile] Failed to bind socket: {}", e);
             return;
         }
     };
@@ -419,7 +419,7 @@ fn run_socket_server(
         .expect("Failed to set non-blocking");
 
     println!(
-        "[Subprocess] Socket server listening at {:?}",
+        "[Profile] Socket server listening at {:?}",
         socket_path
     );
 
@@ -428,7 +428,7 @@ fn run_socket_server(
     // Accept connections in a loop
     loop {
         if shutdown_flag.load(Ordering::SeqCst) {
-            println!("[Subprocess] Shutdown flag set, stopping accept loop");
+            println!("[Profile] Shutdown flag set, stopping accept loop");
             break;
         }
 
@@ -455,14 +455,14 @@ fn run_socket_server(
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                eprintln!("[Subprocess] Failed to accept connection: {}", e);
+                eprintln!("[Profile] Failed to accept connection: {}", e);
             }
         }
     }
 
     // Wait for all connection handlers to finish
     println!(
-        "[Subprocess] Waiting for {} connections to close...",
+        "[Profile] Waiting for {} connections to close...",
         handles.len()
     );
     for handle in handles {
@@ -471,26 +471,26 @@ fn run_socket_server(
 
     // Cleanup socket
     let _ = fs::remove_file(&socket_path);
-    println!("[Subprocess] Socket cleaned up");
+    println!("[Profile] Socket cleaned up");
 }
 
-fn run_subprocess(profile: ProfileMode) {
+fn run_profile_server(profile: ProfileMode) {
     let socket_path = profile.socket_path();
 
     println!(
-        "[Subprocess] Starting with profile={}",
+        "[Profile] Starting with profile={}",
         profile.display_name()
     );
 
     match load_cef(&profile) {
         Ok(()) => {
             println!(
-                "[Subprocess] CEF initialized with profile={}",
+                "[Profile] CEF initialized with profile={}",
                 profile.display_name()
             );
         }
         Err(e) => {
-            eprintln!("[Subprocess] Failed to load CEF: {}", e);
+            eprintln!("[Profile] Failed to load CEF: {}", e);
             std::process::exit(1);
         }
     }
@@ -505,7 +505,7 @@ fn run_subprocess(profile: ProfileMode) {
     #[cfg(target_os = "macos")]
     cef::shutdown();
 
-    println!("[Subprocess] Exiting");
+    println!("[Profile] Exiting");
 }
 
 // ============================================================================
@@ -570,11 +570,11 @@ fn send_request(
     serde_json::from_str(&response_line).map_err(|e| format!("Invalid response JSON: {}", e))
 }
 
-fn spawn_subprocess(profile: &ProfileMode) {
+fn spawn_profile_server(profile: &ProfileMode) {
     let exe = env::current_exe().expect("Failed to get current executable path");
 
     let mut cmd = Command::new(&exe);
-    cmd.arg("--browser-subprocess");
+    cmd.arg("--profile-server");
 
     match profile {
         ProfileMode::Named(name) => {
@@ -590,30 +590,30 @@ fn spawn_subprocess(profile: &ProfileMode) {
         .stderr(Stdio::null())
         .stdin(Stdio::null())
         .spawn()
-        .expect("Failed to spawn subprocess");
+        .expect("Failed to start profile server");
 }
 
 fn run_coordinator(profile: ProfileMode, url: Option<String>) {
     let socket_path = profile.socket_path();
     let url = url.unwrap_or_else(|| "about:blank".to_string());
 
-    // Try to connect to existing subprocess
+    // Try to connect to existing profile server
     let mut stream = if let Some(stream) = try_connect(&socket_path) {
         println!(
-            "Connected to existing subprocess for profile={}",
+            "Connected to existing profile server for profile={}",
             profile.display_name()
         );
         stream
     } else {
         println!(
-            "Spawning new subprocess for profile={}...",
+            "Starting profile server for profile={}...",
             profile.display_name()
         );
-        spawn_subprocess(&profile);
+        spawn_profile_server(&profile);
 
         match wait_for_socket(&socket_path, Duration::from_secs(10)) {
             Ok(stream) => {
-                println!("Connected to subprocess");
+                println!("Connected to profile server");
                 stream
             }
             Err(e) => {
@@ -644,11 +644,11 @@ fn run_coordinator(profile: ProfileMode, url: Option<String>) {
         }
     }
 
-    // Get subprocess status
+    // Get profile server status
     if let Ok(resp) = send_request(&mut stream, "get_status", None) {
         if let Some(data) = resp.data {
             println!(
-                "Subprocess status: pid={}, webviews={}",
+                "Profile server status: pid={}, webviews={}",
                 data.get("pid").and_then(|p| p.as_u64()).unwrap_or(0),
                 data.get("webview_count")
                     .and_then(|c| c.as_u64())
@@ -666,7 +666,7 @@ fn run_coordinator(profile: ProfileMode, url: Option<String>) {
     println!("Disconnecting (webview will close automatically)");
 
     // Stream is dropped here, closing the connection
-    // The subprocess will detect EOF and close our webview
+    // The profile server will detect EOF and close our webview
 }
 
 // ============================================================================
@@ -675,9 +675,9 @@ fn run_coordinator(profile: ProfileMode, url: Option<String>) {
 
 fn main() {
     match parse_args() {
-        Ok((is_subprocess, profile, url)) => {
-            if is_subprocess {
-                run_subprocess(profile);
+        Ok((is_profile_server, profile, url)) => {
+            if is_profile_server {
+                run_profile_server(profile);
             } else {
                 run_coordinator(profile, url);
             }
