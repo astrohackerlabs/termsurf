@@ -467,22 +467,28 @@ the same profile share one subprocess (and thus one CEF context with shared
 cookies/storage), while different profiles are fully isolated in separate
 processes.
 
-### Experiment 4: Connection-Based Browser Lifecycle
+### Experiment 4: Connection-Based Webview Lifecycle
 
 **Status:** Not Started
 
-**Goal:** Simplify the protocol and browser lifecycle:
+**Goal:** Simplify the protocol and webview lifecycle:
 
 1. Rename `open_browser` to `open` (less confusing)
-2. Remove `close_browser` command (connection close = webpage close)
+2. Remove `close_browser` command (connection close = webview close)
 3. Handle coordinator crashes gracefully
 
 **Background:** Experiment 3 uses `open_browser` and `close_browser` commands.
 This has two problems:
 
-1. The name `open_browser` is confusing - we're opening a webpage, not a browser
+1. The name `open_browser` is confusing - we're opening a webview, not a browser
 2. If a coordinator crashes without sending `close_browser`, the subprocess
    never exits (orphaned subprocess)
+
+**Terminology:**
+
+- `web` - the coordinator CLI
+- `subprocess` - the CEF process that manages webviews
+- `webview` - an individual web content view owned by a connection
 
 **Problem with current approach:**
 
@@ -497,9 +503,9 @@ $ kill -9 $!   # Coordinator killed without cleanup
 
 **Proposed solution:**
 
-1. Rename `open_browser` → `open` (we're opening a webpage in the subprocess)
-2. Remove `close_browser` entirely - tie webpage lifetime to connection lifetime
-3. When connection ends (for any reason), the webpage is automatically closed
+1. Rename `open_browser` → `open` (we're opening a webview in the subprocess)
+2. Remove `close_browser` entirely - tie webview lifetime to connection lifetime
+3. When connection ends (for any reason), the webview is automatically closed
 
 **Key insight:** The OS guarantees that when a process dies (clean exit, crash,
 SIGKILL), all its file descriptors are closed. The subprocess sees EOF on the
@@ -524,18 +530,18 @@ After (Experiment 4):
 {"id": "uuid", "status": "ok"}
 ```
 
-No browser_id needed - the subprocess tracks which connection owns which
-webpage internally. No close command needed - disconnecting closes the webpage.
+No ID needed - the subprocess tracks which connection owns which webview
+internally. No close command needed - disconnecting closes the webview.
 
 **Implementation changes:**
 
 1. **Rename command**: `open_browser` → `open`
 
-2. **Track ownership internally**: Subprocess associates each webpage with its
-   connection. No need to expose browser_id to coordinator.
+2. **Track ownership internally**: Subprocess associates each webview with its
+   connection. No need to expose IDs to coordinator.
 
-3. **Cleanup on disconnect**: When the connection handler's read loop exits
-   (EOF or error), close all webpages owned by that connection.
+3. **Cleanup on disconnect**: When the connection handler's read loop exits (EOF
+   or error), close all webviews owned by that connection.
 
 4. **Remove close_browser**: The explicit command is no longer needed.
 
@@ -544,44 +550,44 @@ webpage internally. No close command needed - disconnecting closes the webpage.
 ```
 web (coordinator)                    subprocess
     |                                    |
-    |-- connect ----------------------->| (new connection thread)
-    |-- open {"url": "..."} ----------->| create webpage, track owner
-    |<- ok -----------------------------|
+    |-- connect ------------------------>| (new connection thread)
+    |-- open {"url": "..."} ------------>| create webview, track owner
+    |<- ok ------------------------------|
     |                                    |
-    |   [webpage open, events stream]    |
+    |   [webview open, events stream]    |
     |                                    |
-    |-- disconnect (EOF) -------------->| close owned webpages
-    |   (clean exit, crash, or SIGKILL)  | if no webpages left: shutdown
+    |-- disconnect (EOF) --------------->| close owned webviews
+    |   (clean exit, crash, or SIGKILL)  | if no webviews left: shutdown
 ```
 
 **Test cases:**
 
-1. `web` opens webpage, then exits cleanly → webpage closed, subprocess exits
-2. `web` opens webpage, then is killed with SIGTERM → webpage closed, subprocess
+1. `web` opens webview, then exits cleanly → webview closed, subprocess exits
+2. `web` opens webview, then is killed with SIGTERM → webview closed, subprocess
    exits
-3. `web` opens webpage, then is killed with SIGKILL → webpage closed, subprocess
+3. `web` opens webview, then is killed with SIGKILL → webview closed, subprocess
    exits
-4. Two `web` instances connect, first exits → first webpage closed, subprocess
+4. Two `web` instances connect, first exits → first webview closed, subprocess
    stays alive
-5. Two `web` instances connect, both exit → both webpages closed, subprocess
+5. Two `web` instances connect, both exit → both webviews closed, subprocess
    exits
 
 **Success criteria:**
 
-- [ ] Clean `web` exit closes webpage automatically
-- [ ] SIGTERM'd `web` closes webpage automatically
-- [ ] SIGKILL'd `web` closes webpage automatically
+- [ ] Clean `web` exit closes webview automatically
+- [ ] SIGTERM'd `web` closes webview automatically
+- [ ] SIGKILL'd `web` closes webview automatically
 - [ ] No orphaned subprocesses after `web` death
 - [ ] `open_browser` renamed to `open`
 - [ ] `close_browser` command removed from protocol
-- [ ] Multiple `web` instances can coexist, each with their own webpage
+- [ ] Multiple `web` instances can coexist, each with their own webview
 
 **Benefits:**
 
 1. **Clearer naming**: `open` is less confusing than `open_browser`
-2. **Crash-proof**: No way to leak webpages - connection death always triggers
+2. **Crash-proof**: No way to leak webviews - connection death always triggers
    cleanup
-3. **Simpler protocol**: Fewer commands, no browser_id to track
+3. **Simpler protocol**: Fewer commands, no IDs to track
 4. **Uniform behavior**: Same cleanup path for clean exit and crash
 
 **Results:** (to be filled in after experiment)
