@@ -421,17 +421,19 @@ ryan  12345  web --browser-subprocess --profile test
       profile)
 - [ ] Stale socket from crashed subprocess is detected and cleaned up
 
-**Open questions:**
+**Design decisions:**
 
-1. **Subprocess spawning**: Should the coordinator spawn the subprocess in
-   background (fork/detach) or just not wait for it? On macOS, child processes
-   become orphans when parent exits, which is fine.
+1. **Subprocess spawning**: The coordinator spawns the subprocess with
+   `Command::new().spawn()` and does not wait for it. When the coordinator
+   exits, the subprocess becomes an orphan (reparented to launchd/init) and
+   continues running independently. No daemonization needed.
 
-2. **Browser lifecycle**: Does closing the `web` CLI close the browser? Or does
-   the browser stay open until explicitly closed? For terminal integration, the
-   browser should probably close when the pane closes.
+2. **Browser lifecycle**: The browser and `web` CLI are tied together. The flow
+   is: user runs `web open google.com` → browser opens → console output streams
+   to terminal → user closes browser → `web` CLI exits. The subprocess exits
+   when its last browser closes.
 
-3. **Heartbeat**: Should clients send periodic heartbeats so the subprocess can
-   detect dead connections? Or rely on socket EOF detection?
+3. **Connection detection**: Rely on socket EOF detection when clients
+   disconnect. No heartbeat mechanism needed.
 
 **Results:** (to be filled in after experiment)
