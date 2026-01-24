@@ -1323,3 +1323,285 @@ ignores custom `cache_path` values.
 
 See [profile.md](profile.md) for the complete research findings and recommended
 architecture for multi-profile support.
+
+---
+
+### Experiment 7: CEF in Separate Process
+
+**Status:** Pending
+
+**Goal:** Move CEF into a separate process to enable future multi-profile
+support (one CEF process per profile). This experiment focuses on the
+architectural change with a single CEF process; multi-profile will be a
+follow-up.
+
+**Background:**
+
+Currently, CEF is initialized in the main TermSurf process:
+
+```
+termsurf-gui (Main Process)
+├── WezTerm terminal
+├── CEF browser process (initialized here)
+├── Creates browsers in OSR mode
+└── Composites textures
+     │
+     └── CEF spawns internally:
+          └── TermSurf Helper (renderer/GPU subprocesses)
+```
+
+This works, but CEF can only be initialized once per process with one
+`root_cache_path`. To support multiple profiles (each needing its own
+`root_cache_path`), we need CEF in a separate process.
+
+**Target architecture:**
+
+```
+termsurf-gui (Main Process)
+├── WezTerm terminal
+├── NO CEF initialization
+├── Receives texture handles via IPC
+└── Composites textures
+     │
+     └── Spawns via IPC:
+          └── termsurf-browser (CEF Browser Process)
+               ├── root_cache_path = ~/.config/termsurf/cef/
+               ├── Creates browsers in OSR mode
+               ├── Sends texture handles + events via IPC
+               └── CEF spawns internally:
+                    └── TermSurf Helper (renderer/GPU)
+```
+
+**IPC Protocol:**
+
+Communication via Unix domain socket (or named pipe on Windows). Messages are
+newline-delimited JSON.
+
+**Main → CEF Process (Commands & Input):**
+
+```jsonc
+// Browser commands
+{"type": "create_browser", "pane_id": 1, "url": "https://example.com"}
+{"type": "close_browser", "pane_id": 1}
+{"type": "navigate", "pane_id": 1, "url": "https://other.com"}
+{"type": "go_back", "pane_id": 1}
+{"type": "go_forward", "pane_id": 1}
+{"type": "reload", "pane_id": 1}
+
+// Input events
+{"type": "key_event", "pane_id": 1, "event_type": "keydown", "modifiers": 2, "windows_key_code": 65, "native_key_code": 0, "character": 97, "unmodified_character": 97}
+{"type": "key_event", "pane_id": 1, "event_type": "keyup", "modifiers": 0, "windows_key_code": 65, "native_key_code": 0, "character": 97, "unmodified_character": 97}
+{"type": "key_event", "pane_id": 1, "event_type": "char", "modifiers": 0, "windows_key_code": 65, "native_key_code": 0, "character": 97, "unmodified_character": 97}
+
+{"type": "mouse_move", "pane_id": 1, "x": 100, "y": 200, "modifiers": 0, "mouse_leave": false}
+{"type": "mouse_click", "pane_id": 1, "x": 100, "y": 200, "modifiers": 0, "button": "left", "mouse_up": false, "click_count": 1}
+{"type": "mouse_wheel", "pane_id": 1, "x": 100, "y": 200, "modifiers": 0, "delta_x": 0, "delta_y": -120}
+
+{"type": "resize", "pane_id": 1, "width": 800, "height": 600}
+{"type": "focus", "pane_id": 1, "focused": true}
+```
+
+**CEF → Main Process (Events):**
+
+```jsonc
+// Texture updates (platform-specific handle)
+{"type": "texture_ready", "pane_id": 1, "iosurface_id": 12345, "width": 800, "height": 600, "format": "bgra8"}  // macOS
+{"type": "texture_ready", "pane_id": 1, "dmabuf_fd": 5, "width": 800, "height": 600, "format": "bgra8"}  // Linux (fd passed via SCM_RIGHTS)
+{"type": "texture_ready", "pane_id": 1, "shared_handle": 12345, "width": 800, "height": 600, "format": "bgra8"}  // Windows
+
+// Browser events
+{"type": "browser_created", "pane_id": 1}
+{"type": "browser_closed", "pane_id": 1}
+{"type": "console", "pane_id": 1, "level": "log", "message": "Hello", "source": "https://example.com/app.js", "line": 42}
+{"type": "load_start", "pane_id": 1, "url": "https://example.com"}
+{"type": "load_end", "pane_id": 1, "url": "https://example.com", "status_code": 200}
+{"type": "title_changed", "pane_id": 1, "title": "Example Site"}
+{"type": "url_changed", "pane_id": 1, "url": "https://example.com/page"}
+{"type": "cursor_changed", "pane_id": 1, "cursor": "pointer"}
+```
+
+**Plan:**
+
+1. Create `termsurf-browser` binary (`wezterm-gui/src/bin/termsurf-browser.rs`):
+
+   ```rust
+   // New CEF host process
+   fn main() {
+       // 1. Parse args (socket path passed by parent)
+       let socket_path = std::env::args().nth(1).expect("socket path required");
+
+       // 2. Initialize CEF (moved from main.rs)
+       init_cef()?;
+
+       // 3. Connect to parent via Unix socket
+       let socket = UnixStream::connect(&socket_path)?;
+
+       // 4. Message loop: read commands, send events
+       loop {
+           // Pump CEF messages
+           cef::do_message_loop_work();
+
+           // Process incoming commands (non-blocking)
+           if let Some(cmd) = read_command(&socket) {
+               handle_command(cmd);
+           }
+
+           // Send pending events
+           send_pending_events(&socket);
+       }
+   }
+   ```
+
+2. Move CEF initialization from `main.rs` to `termsurf-browser`:
+
+   - Move `init_cef()` function
+   - Move `BrowserState` and handlers
+   - Keep texture import code in main process (receives handles via IPC)
+
+3. Update main process to spawn and communicate with CEF process:
+
+   ```rust
+   // In termsurf-gui main.rs or new module
+   pub struct CefProcess {
+       child: std::process::Child,
+       socket: UnixStream,
+       texture_cache: HashMap<PaneId, wgpu::Texture>,
+   }
+
+   impl CefProcess {
+       pub fn spawn() -> Result<Self> {
+           // Create socket pair
+           let socket_path = format!("/tmp/termsurf-cef-{}.sock", std::process::id());
+
+           // Spawn termsurf-browser with socket path
+           let child = Command::new("termsurf-browser")
+               .arg(&socket_path)
+               .spawn()?;
+
+           // Wait for connection
+           let listener = UnixListener::bind(&socket_path)?;
+           let (socket, _) = listener.accept()?;
+
+           Ok(Self { child, socket, texture_cache: HashMap::new() })
+       }
+
+       pub fn create_browser(&mut self, pane_id: PaneId, url: &str) {
+           self.send(json!({"type": "create_browser", "pane_id": pane_id, "url": url}));
+       }
+
+       pub fn send_key_event(&mut self, pane_id: PaneId, event: &CefKeyEvent) {
+           self.send(json!({
+               "type": "key_event",
+               "pane_id": pane_id,
+               "event_type": event.event_type,
+               // ... other fields
+           }));
+       }
+
+       pub fn poll_events(&mut self) -> Vec<CefEvent> {
+           // Non-blocking read of events from CEF process
+       }
+   }
+   ```
+
+4. Handle texture imports in main process:
+
+   ```rust
+   fn handle_texture_ready(&mut self, event: &TextureReadyEvent, device: &wgpu::Device) {
+       // Create AcceleratedPaintInfo-like struct from IPC data
+       let texture = match std::env::consts::OS {
+           "macos" => import_iosurface(event.iosurface_id, event.width, event.height, device),
+           "linux" => import_dmabuf(event.dmabuf_fd, event.width, event.height, device),
+           "windows" => import_d3d11(event.shared_handle, event.width, event.height, device),
+           _ => panic!("unsupported platform"),
+       };
+       self.texture_cache.insert(event.pane_id, texture);
+   }
+   ```
+
+5. Update `BrowserState` to be IPC-based:
+
+   Currently `BrowserState` holds a CEF `Browser` directly. Change it to hold a
+   `pane_id` and reference to the `CefProcess`:
+
+   ```rust
+   // Before (in-process)
+   pub struct BrowserState {
+       browser: Option<Browser>,
+       // ...
+   }
+
+   // After (cross-process)
+   pub struct BrowserState {
+       pane_id: PaneId,
+       cef_process: Arc<Mutex<CefProcess>>,
+       // ...
+   }
+
+   impl BrowserState {
+       pub fn send_key_event(&self, event: &CefKeyEvent) {
+           self.cef_process.lock().unwrap()
+               .send_key_event(self.pane_id, event);
+       }
+   }
+   ```
+
+6. Update app bundling to include `termsurf-browser`:
+
+   ```
+   TermSurf.app/
+   └── Contents/
+       ├── MacOS/
+       │   ├── termsurf-gui          # Main process
+       │   └── termsurf-browser      # CEF browser process (NEW)
+       └── Frameworks/
+           ├── Chromium Embedded Framework.framework/
+           └── TermSurf Helper.app/  # CEF's internal subprocesses
+   ```
+
+**Texture handle passing by platform:**
+
+| Platform | Handle Type       | How to Pass                        |
+| -------- | ----------------- | ---------------------------------- |
+| macOS    | IOSurfaceID (u32) | Serialize as integer in JSON       |
+| Linux    | DMA-BUF fd        | Send via SCM_RIGHTS ancillary data |
+| Windows  | HANDLE            | DuplicateHandle + serialize as u64 |
+
+**Files to create:**
+
+| File                                      | Description                |
+| ----------------------------------------- | -------------------------- |
+| `wezterm-gui/src/bin/termsurf-browser.rs` | New CEF host process       |
+| `wezterm-gui/src/cef_process/mod.rs`      | IPC client in main process |
+| `wezterm-gui/src/cef_process/protocol.rs` | Shared message types       |
+
+**Files to modify:**
+
+| File                                 | Change                                |
+| ------------------------------------ | ------------------------------------- |
+| `wezterm-gui/src/main.rs`            | Remove CEF init, spawn CefProcess     |
+| `wezterm-gui/src/cef_browser/mod.rs` | Change to IPC-based BrowserState      |
+| `wezterm-gui/src/termwindow/mod.rs`  | Use CefProcess for browser operations |
+| `scripts/build-debug.sh`             | Build and bundle termsurf-browser     |
+
+**Test plan:**
+
+1. Build: `./scripts/build-debug.sh --open`
+2. Open browser: `termsurf cli web open https://example.com`
+3. Verify:
+   - Browser renders correctly
+   - Keyboard input works
+   - Mouse input works (clicks, scroll)
+   - Console output streams to CLI
+   - Browser closes cleanly
+4. Check process tree:
+   ```bash
+   pstree -p $(pgrep termsurf-gui)
+   # Should show: termsurf-gui -> termsurf-browser -> TermSurf Helper (multiple)
+   ```
+
+**Future work (not in this experiment):**
+
+- Multiple CEF processes for multi-profile support
+- Process crash recovery and restart
+- Lazy spawning (only when first browser is requested)
