@@ -41,9 +41,9 @@ ts3 addresses this with a new process model.
 termsurf (main terminal process)
     │
     ├── termsurf web https://a.com ──┐
-    ├── termsurf web https://b.com ──┼──► browser-subprocess (profile=default)
-    │                                │        └── CEF helper processes
-    │                                │
+    ├── termsurf web https://b.com ──┴──► browser-subprocess (profile=default)
+    │                                         └── CEF helper processes
+    │
     ├── termsurf web --profile=work https://c.com ──► browser-subprocess (profile=work)
     │                                                     └── CEF helper processes
     │
