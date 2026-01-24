@@ -471,101 +471,117 @@ processes.
 
 **Status:** Not Started
 
-**Goal:** Simplify browser lifecycle by tying browsers to connection lifetime,
-eliminating the `close_browser` command and handling coordinator crashes
-gracefully.
+**Goal:** Simplify the protocol and browser lifecycle:
 
-**Background:** Experiment 3 uses explicit `open_browser` and `close_browser`
-commands. However, if a coordinator crashes or is killed without sending
-`close_browser`, the browser remains counted and the subprocess never exits.
-This creates orphaned subprocesses.
+1. Rename `open_browser` to `open` (less confusing)
+2. Remove `close_browser` command (connection close = webpage close)
+3. Handle coordinator crashes gracefully
+
+**Background:** Experiment 3 uses `open_browser` and `close_browser` commands.
+This has two problems:
+
+1. The name `open_browser` is confusing - we're opening a webpage, not a browser
+2. If a coordinator crashes without sending `close_browser`, the subprocess
+   never exits (orphaned subprocess)
 
 **Problem with current approach:**
 
 ```
 $ web https://example.com --profile test &
-# Opens browser_id=1, browser_count=1
+# Sends open_browser, gets browser_id=1
 
 $ kill -9 $!   # Coordinator killed without cleanup
 # Connection EOF detected
-# But browser_count is still 1
-# Subprocess waits forever for close_browser that never comes
+# But subprocess waits forever for close_browser that never comes
 ```
 
 **Proposed solution:**
 
-Tie browser lifetime to connection lifetime. When a connection opens a browser,
-that browser is owned by the connection. When the connection ends (for any
-reason), all browsers owned by that connection are automatically closed.
+1. Rename `open_browser` → `open` (we're opening a webpage in the subprocess)
+2. Remove `close_browser` entirely - tie webpage lifetime to connection lifetime
+3. When connection ends (for any reason), the webpage is automatically closed
 
 **Key insight:** The OS guarantees that when a process dies (clean exit, crash,
 SIGKILL), all its file descriptors are closed. The subprocess sees EOF on the
-socket. We can use this as the signal to clean up.
+socket. We use this as the signal to clean up.
 
 **Protocol changes:**
 
-Remove `close_browser` command. The protocol becomes:
+Before (Experiment 3):
 
 ```json
 {"id": "uuid", "action": "open_browser", "data": {"url": "https://..."}}
 {"id": "uuid", "status": "ok", "data": {"browser_id": 1}}
+
+{"id": "uuid", "action": "close_browser", "data": {"browser_id": 1}}
+{"id": "uuid", "status": "ok"}
 ```
 
-No close command needed - closing the connection closes the browser.
+After (Experiment 4):
+
+```json
+{"id": "uuid", "action": "open", "data": {"url": "https://..."}}
+{"id": "uuid", "status": "ok"}
+```
+
+No browser_id needed - the subprocess tracks which connection owns which
+webpage internally. No close command needed - disconnecting closes the webpage.
 
 **Implementation changes:**
 
-1. **Track browser ownership**: Each connection maintains a list of browser IDs
-   it has opened.
+1. **Rename command**: `open_browser` → `open`
 
-2. **Cleanup on disconnect**: When the connection handler's read loop exits
-   (EOF or error), close all browsers owned by that connection.
+2. **Track ownership internally**: Subprocess associates each webpage with its
+   connection. No need to expose browser_id to coordinator.
 
-3. **Remove close_browser**: The explicit command is no longer needed.
+3. **Cleanup on disconnect**: When the connection handler's read loop exits
+   (EOF or error), close all webpages owned by that connection.
+
+4. **Remove close_browser**: The explicit command is no longer needed.
 
 **Lifecycle flow:**
 
 ```
-Coordinator                          Subprocess
+web (coordinator)                    subprocess
     |                                    |
     |-- connect ----------------------->| (new connection thread)
-    |-- open_browser ------------------>| browser_count++, track owner
+    |-- open {"url": "..."} ----------->| create webpage, track owner
+    |<- ok -----------------------------|
     |                                    |
-    |   [browser open, events stream]    |
+    |   [webpage open, events stream]    |
     |                                    |
-    |-- disconnect (EOF) -------------->| close owned browsers
-    |   (clean exit, crash, or SIGKILL)  | browser_count--
-    |                                    | if count==0: shutdown
+    |-- disconnect (EOF) -------------->| close owned webpages
+    |   (clean exit, crash, or SIGKILL)  | if no webpages left: shutdown
 ```
 
 **Test cases:**
 
-1. Coordinator opens browser, then exits cleanly (closes socket) → browser
-   closed, subprocess exits
-2. Coordinator opens browser, then is killed with SIGTERM → browser closed,
-   subprocess exits
-3. Coordinator opens browser, then is killed with SIGKILL → browser closed,
-   subprocess exits
-4. Two coordinators open browsers, first exits → only first browser closed,
-   subprocess stays alive
-5. Two coordinators open browsers, both exit → both browsers closed, subprocess
+1. `web` opens webpage, then exits cleanly → webpage closed, subprocess exits
+2. `web` opens webpage, then is killed with SIGTERM → webpage closed, subprocess
+   exits
+3. `web` opens webpage, then is killed with SIGKILL → webpage closed, subprocess
+   exits
+4. Two `web` instances connect, first exits → first webpage closed, subprocess
+   stays alive
+5. Two `web` instances connect, both exit → both webpages closed, subprocess
    exits
 
 **Success criteria:**
 
-- [ ] Clean coordinator exit closes browser automatically
-- [ ] SIGTERM'd coordinator closes browser automatically
-- [ ] SIGKILL'd coordinator closes browser automatically
-- [ ] No orphaned subprocesses after coordinator death
+- [ ] Clean `web` exit closes webpage automatically
+- [ ] SIGTERM'd `web` closes webpage automatically
+- [ ] SIGKILL'd `web` closes webpage automatically
+- [ ] No orphaned subprocesses after `web` death
+- [ ] `open_browser` renamed to `open`
 - [ ] `close_browser` command removed from protocol
-- [ ] Multiple connections can coexist, each managing their own browsers
+- [ ] Multiple `web` instances can coexist, each with their own webpage
 
 **Benefits:**
 
-1. **Crash-proof**: No way to leak browsers - connection death always triggers
+1. **Clearer naming**: `open` is less confusing than `open_browser`
+2. **Crash-proof**: No way to leak webpages - connection death always triggers
    cleanup
-2. **Simpler protocol**: One fewer command to implement and test
-3. **Simpler coordinator**: No need to track browser IDs for closing
+3. **Simpler protocol**: Fewer commands, no browser_id to track
 4. **Uniform behavior**: Same cleanup path for clean exit and crash
 
 **Results:** (to be filled in after experiment)
