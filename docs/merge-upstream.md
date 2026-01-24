@@ -5,13 +5,14 @@ TermSurf while preserving our modifications.
 
 ## Overview
 
-TermSurf integrates three upstream projects:
+TermSurf integrates upstream projects:
 
-| Project | Directory | Upstream | Branch | Purpose |
-|---------|-----------|----------|--------|---------|
-| Ghostty | `ts1/` | [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) | main | Terminal emulator (TermSurf 1.x) |
-| WezTerm | `ts2/` + root | [wez/wezterm](https://github.com/wez/wezterm) | main | Terminal emulator (TermSurf 2.0) |
-| cef-rs | `cef-rs/` | [tauri-apps/cef-rs](https://github.com/tauri-apps/cef-rs) | dev | CEF Rust bindings |
+| Project | Directory | Upstream | Remote | Branch | Purpose |
+|---------|-----------|----------|--------|--------|---------|
+| Ghostty | `ts1/` | [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) | `upstream` | main | Terminal emulator (TermSurf 1.x) |
+| WezTerm | `ts2/` | [wezterm/wezterm](https://github.com/wezterm/wezterm) | `wezterm` | main | Terminal emulator (TermSurf 2.0) |
+| WezTerm | `ts3/` | [wezterm/wezterm](https://github.com/wezterm/wezterm) | `wezterm` | main | Terminal emulator (TermSurf 3.0) |
+| cef-rs | `cef-rs/` | [tauri-apps/cef-rs](https://github.com/tauri-apps/cef-rs) | `cef-rs-upstream` | dev | CEF Rust bindings |
 
 Each upstream is tracked via a git remote and merged periodically to get bug
 fixes, performance improvements, and new features.
@@ -21,11 +22,11 @@ fixes, performance improvements, and new features.
 Set up remotes if not already configured:
 
 ```bash
-# Ghostty (if not already set up)
+# Ghostty
 git remote add upstream https://github.com/ghostty-org/ghostty.git
 
-# WezTerm
-git remote add wezterm-upstream https://github.com/wez/wezterm.git
+# WezTerm (used for both ts2 and ts3)
+git remote add wezterm https://github.com/wezterm/wezterm.git
 
 # cef-rs
 git remote add cef-rs-upstream https://github.com/tauri-apps/cef-rs.git
@@ -253,7 +254,9 @@ zig build test
 
 ### Our Modifications
 
-WezTerm is used for TermSurf 2.0. Our modifications are still being developed.
+WezTerm is used for TermSurf 2.0. ts2 served as a testbed for CEF integration
+experiments. It validated that WezTerm + CEF works but revealed architectural
+limitations (see `docs/ts3-1-architecture.md`).
 
 ### Modified Files Inventory
 
@@ -263,22 +266,80 @@ WezTerm is used for TermSurf 2.0. Our modifications are still being developed.
 
 ```bash
 # Fetch
-git fetch wezterm-upstream
+git fetch wezterm
 
 # Review
-git log --oneline HEAD..wezterm-upstream/main | head -20
+git log --oneline HEAD..wezterm/main -- ts2/ | head -20
 
 # Merge
-git merge -X subtree=ts2 wezterm-upstream/main -m "Merge upstream WezTerm"
+git merge -X subtree=ts2 wezterm/main -m "Merge upstream WezTerm into ts2"
 ```
 
 ### Conflict Resolution Guide
 
 *To be documented as modifications are made.*
 
-### WezTerm Test Commands
+### WezTerm (ts2) Test Commands
 
 ```bash
+cd ts2
+cargo build
+cargo test
+```
+
+---
+
+## WezTerm (ts3/)
+
+### Our Modifications
+
+WezTerm is used for TermSurf 3.0. ts3 is a fresh start with the correct
+architecture: the `web` command as a coordinator that spawns browser
+subprocesses (one per profile).
+
+**Base commit:** `05343b387` (January 2026)
+
+### Modified Files Inventory
+
+*To be documented as modifications are made.*
+
+### Submodules
+
+ts3 uses the following submodules (defined in root `.gitmodules`):
+
+| Submodule | Path |
+|-----------|------|
+| harfbuzz | `ts3/deps/harfbuzz/harfbuzz` |
+| freetype2 | `ts3/deps/freetype/freetype2` |
+| libpng | `ts3/deps/freetype/libpng` |
+| zlib | `ts3/deps/freetype/zlib` |
+
+After cloning, initialize with:
+```bash
+git submodule update --init ts3/deps/harfbuzz/harfbuzz ts3/deps/freetype/libpng ts3/deps/freetype/zlib ts3/deps/freetype/freetype2
+```
+
+### Merge Commands
+
+```bash
+# Fetch
+git fetch wezterm
+
+# Review
+git log --oneline HEAD..wezterm/main -- ts3/ | head -20
+
+# Merge
+git merge -X subtree=ts3 wezterm/main -m "Merge upstream WezTerm into ts3"
+```
+
+### Conflict Resolution Guide
+
+*To be documented as modifications are made.*
+
+### WezTerm (ts3) Test Commands
+
+```bash
+cd ts3
 cargo build
 cargo test
 ```
