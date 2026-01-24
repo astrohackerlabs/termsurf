@@ -37,3 +37,17 @@
 [submodule "ts2/deps/freetype/freetype2"]
 	path = ts2/deps/freetype/freetype2
 	url = https://github.com/freetype/freetype2.git
+
+# ts3 (WezTerm for TermSurf 3.0) submodules
+[submodule "ts3/deps/harfbuzz/harfbuzz"]
+	path = ts3/deps/harfbuzz/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz.git
+[submodule "ts3/deps/freetype/libpng"]
+	path = ts3/deps/freetype/libpng
+	url = https://github.com/glennrp/libpng.git
+[submodule "ts3/deps/freetype/zlib"]
+	path = ts3/deps/freetype/zlib
+	url = https://github.com/madler/zlib.git
+[submodule "ts3/deps/freetype/freetype2"]
+	path = ts3/deps/freetype/freetype2
+	url = https://github.com/freetype/freetype2.git
