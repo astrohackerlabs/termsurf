@@ -410,6 +410,7 @@ mod cef_browser {
     /// Shared state for tracking IOSurface IDs from CEF
     pub struct BrowserState {
         /// Current IOSurface ID (updated in on_accelerated_paint)
+        /// Note: This ID is informational only - cross-process lookup doesn't work
         pub iosurface_id: AtomicU32,
         /// Width of the texture
         pub width: AtomicU32,
@@ -424,6 +425,13 @@ mod cef_browser {
                 width: AtomicU32::new(0),
                 height: AtomicU32::new(0),
             }
+        }
+
+        /// Update the IOSurface info (for logging/debugging only)
+        pub fn set_iosurface_info(&self, id: u32, width: u32, height: u32) {
+            self.iosurface_id.store(id, Ordering::SeqCst);
+            self.width.store(width, Ordering::SeqCst);
+            self.height.store(height, Ordering::SeqCst);
         }
     }
 
@@ -519,10 +527,11 @@ mod cef_browser {
                 let handle = info.shared_texture_io_surface;
                 println!("[Profile] on_accelerated_paint: handle={:?}", handle);
                 if let Some(id) = get_iosurface_id(handle) {
-                    self.handler.state.iosurface_id.store(id, Ordering::SeqCst);
-                    self.handler.state.width.store(info.extra.coded_size.width as u32, Ordering::SeqCst);
-                    self.handler.state.height.store(info.extra.coded_size.height as u32, Ordering::SeqCst);
-                    println!("[Profile] IOSurface ID: {}, size: {}x{}", id, info.extra.coded_size.width, info.extra.coded_size.height);
+                    let width = info.extra.coded_size.width as u32;
+                    let height = info.extra.coded_size.height as u32;
+                    // Store IOSurface info for logging/debugging (cross-process lookup doesn't work)
+                    self.handler.state.set_iosurface_info(id, width, height);
+                    println!("[Profile] IOSurface ID: {}, size: {}x{}", id, width, height);
                 } else {
                     println!("[Profile] on_accelerated_paint: get_iosurface_id returned None");
                 }

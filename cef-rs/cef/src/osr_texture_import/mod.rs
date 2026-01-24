@@ -63,7 +63,7 @@ pub(crate) mod dmabuf;
 pub(crate) mod d3d11;
 
 #[cfg(target_os = "macos")]
-pub(crate) mod iosurface;
+pub mod iosurface;
 
 #[cfg(target_os = "macos")]
 pub mod iosurface_ipc;

@@ -111,7 +111,7 @@ pub struct WebviewOverlay {
 #[derive(Default)]
 pub struct WebviewOverlayState {
     /// Map from pane_id to active webview overlay
-    overlays: HashMap<PaneId, WebviewOverlay>,
+    pub overlays: HashMap<PaneId, WebviewOverlay>,
 }
 
 impl WebviewOverlayState {

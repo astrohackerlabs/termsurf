@@ -11,6 +11,20 @@ use config::FreeTypeLoadTarget;
 
 impl crate::TermWindow {
     pub fn call_draw(&mut self, frame: &mut RenderFrame) -> anyhow::Result<()> {
+        // Log once which backend is being used
+        #[cfg(target_os = "macos")]
+        {
+            use std::sync::Once;
+            static LOGGED: Once = Once::new();
+            LOGGED.call_once(|| {
+                let backend = match frame {
+                    RenderFrame::Glium(_) => "Glium (OpenGL)",
+                    RenderFrame::WebGpu => "WebGpu",
+                };
+                log::info!("[Render] Using {} backend for rendering", backend);
+            });
+        }
+
         match frame {
             RenderFrame::Glium(ref mut frame) => self.call_draw_glium(frame),
             RenderFrame::WebGpu => self.call_draw_webgpu(),
@@ -20,7 +34,7 @@ impl crate::TermWindow {
     fn call_draw_webgpu(&mut self) -> anyhow::Result<()> {
         use crate::termwindow::webgpu::WebGpuTexture;
 
-        let webgpu = self.webgpu.as_mut().unwrap();
+        let webgpu = self.webgpu.as_ref().unwrap();
         let render_state = self.render_state.as_ref().unwrap();
 
         let output = webgpu.surface.get_current_texture()?;
@@ -146,6 +160,7 @@ impl crate::TermWindow {
 
         // submit will accept anything that implements IntoIter
         webgpu.queue.submit(std::iter::once(encoder.finish()));
+
         output.present();
 
         Ok(())

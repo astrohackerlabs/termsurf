@@ -4,6 +4,10 @@
 //! This module provides the bindings for:
 //! - `IOSurfaceGetID`: Get numeric ID from an IOSurface handle
 //! - `IOSurfaceLookupByID`: Reconstruct an IOSurface handle from ID in another process
+//!
+//! Note: Cross-process IOSurface sharing via global IDs does not work for
+//! IOSurfaces created by CEF's GPU process. These functions are preserved
+//! for potential future use with different approaches (e.g., Mach ports).
 
 use std::os::raw::c_void;
 
