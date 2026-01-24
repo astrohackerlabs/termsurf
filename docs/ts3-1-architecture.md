@@ -244,14 +244,15 @@ connections, and respond to ping requests from the coordinator.
 **Socket naming convention:**
 
 ```
-/tmp/termsurf-web-{profile}.sock
+~/.config/termsurf/sockets/{profile}.sock
 ```
 
 Examples:
 
-- `/tmp/termsurf-web-default.sock`
-- `/tmp/termsurf-web-work.sock`
-- Incognito: `/tmp/termsurf-web-incognito-{uuid}.sock` (unique per instance)
+- `~/.config/termsurf/sockets/default.sock`
+- `~/.config/termsurf/sockets/work.sock`
+- Incognito: `~/.config/termsurf/sockets/incognito-{uuid}.sock` (unique per
+  instance)
 
 **Protocol format:** Newline-delimited JSON (same as ts1/ts2)
 
@@ -272,7 +273,7 @@ Response:
 1. Coordinator spawns browser subprocess with `--profile test`
 2. Browser subprocess:
    - Loads CEF (as in Experiment 1)
-   - Creates socket at `/tmp/termsurf-web-test.sock`
+   - Creates socket at `~/.config/termsurf/sockets/test.sock`
    - Listens for connections
 3. Coordinator:
    - Waits briefly for socket to appear
