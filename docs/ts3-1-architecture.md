@@ -332,3 +332,106 @@ All test cases passed. Key findings:
 This validates our IPC architecture. The coordinator can spawn and communicate
 with browser subprocesses, establishing the foundation for browser management
 commands and eventually texture handle passing.
+
+### Experiment 3: Multi-Pane Subprocess Sharing
+
+**Status:** Not Started
+
+**Goal:** Validate that multiple `web` invocations with the same profile share
+one subprocess, while different profiles get separate subprocesses. This is
+critical for the multi-pane architecture where browser panes in the same profile
+should share cookies, sessions, and state.
+
+**Background:** Experiment 2 validated basic socket communication, but each
+`web` invocation spawned a new subprocess and blocked waiting for it. For real
+use, we need:
+
+1. Subprocess reuse: Multiple panes with the same profile share one subprocess
+2. Long-lived subprocesses: Stay alive across client connections
+3. Non-blocking coordinators: Don't wait for subprocess to exit
+
+**Test cases:**
+
+1. Run `web --profile=test` in terminal 1 → spawns new subprocess
+2. Run `web --profile=test` in terminal 2 → connects to existing subprocess (no
+   new spawn)
+3. Run `web --profile=other` in terminal 3 → spawns different subprocess
+4. Close terminal 1 → subprocess stays alive (terminal 2 still connected)
+5. Close terminal 2 → subprocess exits (no more browsers open)
+
+**Implementation changes:**
+
+1. **Subprocess (long-lived)**:
+
+   - Accept multiple connections concurrently
+   - Run CEF message pump in main thread
+   - Handle socket connections in separate thread
+   - Track open browser instances with reference counting
+   - Exit when browser count reaches zero
+
+2. **Coordinator (non-blocking)**:
+
+   - Check if socket exists and is connectable before spawning
+   - If connected, reuse existing subprocess
+   - If not, spawn new subprocess and wait for socket
+   - Send `open_browser` command, receive `browser_id`
+   - Don't block waiting for subprocess to exit
+
+3. **Protocol extensions**:
+   ```json
+   {"id": "uuid", "action": "open_browser", "data": {"url": "https://..."}}
+   {"id": "uuid", "status": "ok", "data": {"browser_id": 1}}
+
+   {"id": "uuid", "action": "close_browser", "data": {"browser_id": 1}}
+   {"id": "uuid", "status": "ok"}
+   ```
+
+**Test flow:**
+
+```
+# Terminal 1
+$ web --profile=test
+Connecting to existing subprocess... not found
+Spawning subprocess for profile=test
+Waiting for socket...
+Connected to subprocess (pid=12345)
+Opening browser... browser_id=1
+[stays connected, can send more commands]
+
+# Terminal 2 (while terminal 1 is still running)
+$ web --profile=test
+Connecting to existing subprocess... connected! (pid=12345)
+Opening browser... browser_id=2
+[shares subprocess with terminal 1]
+
+# Verify with ps
+$ ps aux | grep "web --browser-subprocess"
+ryan  12345  web --browser-subprocess --profile test
+# Only ONE subprocess for profile=test
+```
+
+**Success criteria:**
+
+- [ ] Second `web --profile=test` reuses existing subprocess (no "Spawning"
+      message, no CEF init)
+- [ ] Different profile (`--profile=other`) spawns separate subprocess
+- [ ] Subprocess survives when first client disconnects
+- [ ] Subprocess exits when last browser is closed
+- [ ] `ps aux | grep web` shows expected number of processes (one per active
+      profile)
+- [ ] Stale socket from crashed subprocess is detected and cleaned up
+
+**Open questions:**
+
+1. **Subprocess spawning**: Should the coordinator spawn the subprocess in
+   background (fork/detach) or just not wait for it? On macOS, child processes
+   become orphans when parent exits, which is fine.
+
+2. **Browser lifecycle**: Does closing the `web` CLI close the browser? Or does
+   the browser stay open until explicitly closed? For terminal integration, the
+   browser should probably close when the pane closes.
+
+3. **Heartbeat**: Should clients send periodic heartbeats so the subprocess can
+   detect dead connections? Or rely on socket EOF detection?
+
+**Results:** (to be filled in after experiment)
