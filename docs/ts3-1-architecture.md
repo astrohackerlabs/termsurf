@@ -172,7 +172,7 @@ The following has been validated and is ready for ts3:
 
 ### Experiment 1: Profile Loading
 
-**Status:** In Progress
+**Status:** SUCCESS
 
 **Goal:** Validate that the `web` CLI can load CEF with different profile
 directories, confirming our core architecture is sound.
@@ -226,3 +226,83 @@ All test cases passed. Key findings:
 
 This validates our core architecture: one CEF process per profile with automatic
 conflict detection.
+
+### Experiment 2: Socket Communication (Ping/Pong)
+
+**Status:** Not Started
+
+**Goal:** Validate Unix domain socket communication between the coordinator and
+browser subprocess, establishing the foundation for command passing and
+eventually texture handle sharing.
+
+**Background:** Both ts1 and ts2 use Unix domain sockets with newline-delimited
+JSON for IPC. This pattern is proven and we'll adopt it for ts3.
+
+**Hypothesis:** The browser subprocess can create a socket, listen for
+connections, and respond to ping requests from the coordinator.
+
+**Socket naming convention:**
+
+```
+/tmp/termsurf-web-{profile}.sock
+```
+
+Examples:
+
+- `/tmp/termsurf-web-default.sock`
+- `/tmp/termsurf-web-work.sock`
+- Incognito: `/tmp/termsurf-web-incognito-{uuid}.sock` (unique per instance)
+
+**Protocol format:** Newline-delimited JSON (same as ts1/ts2)
+
+Request:
+
+```json
+{"id": "uuid", "action": "ping"}
+```
+
+Response:
+
+```json
+{"id": "uuid", "status": "ok", "data": {"pong": true}}
+```
+
+**Test flow:**
+
+1. Coordinator spawns browser subprocess with `--profile test`
+2. Browser subprocess:
+   - Loads CEF (as in Experiment 1)
+   - Creates socket at `/tmp/termsurf-web-test.sock`
+   - Listens for connections
+3. Coordinator:
+   - Waits briefly for socket to appear
+   - Connects to socket
+   - Sends ping request
+   - Receives pong response
+   - Prints success
+4. Both processes exit cleanly
+
+**Implementation:**
+
+- Add socket server to browser subprocess (listen after CEF init)
+- Add socket client to coordinator (connect after spawning subprocess)
+- Define protocol types: `Request`, `Response`
+- Implement ping/pong handler
+- Clean up socket file on exit
+
+**Success criteria:**
+
+- [ ] Browser subprocess creates socket at expected path
+- [ ] Coordinator connects to socket successfully
+- [ ] Ping request receives pong response
+- [ ] Socket file cleaned up on subprocess exit
+- [ ] Error handling for socket already exists (stale socket)
+
+**Future extensions (not part of this experiment):**
+
+- `open` command to create browser instances
+- `navigate` command to change URLs
+- Event streaming for console output
+- Texture handle passing for rendering
+
+**Results:** (to be filled in after experiment)
