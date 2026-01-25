@@ -495,3 +495,268 @@ over Chrome IPC"** — confirming Chromium switched from global IDs to Mach port
 - [Cross-process Rendering (Russ Bishop)](http://www.russbishop.net/cross-process-rendering)
 - [CEF accelerated_paint_info_t](https://cef-builds.spotifycdn.com/docs/132.3/structcef__accelerated__paint__info__t.html)
 - [OBS Browser ARM64/Apple Silicon PR](https://github.com/obsproject/obs-browser/pull/310)
+
+#### Research: Cross-Platform Texture Transfer Mechanisms
+
+After understanding how Chromium/CEF handles texture sharing internally, we
+researched how to make our cross-process transfer mechanism work on all
+platforms (macOS, Linux, Windows).
+
+**Why Mach Ports Are Unavoidable on macOS:**
+
+In ts2, CEF runs in-process with wezterm-gui. The `on_accelerated_paint`
+callback receives an IOSurface handle that is _already valid_ because
+Chromium/CEF internally transferred it from the GPU helper process via Mach
+ports. The code then creates a Metal texture backed by that IOSurface:
+
+```rust
+let texture: metal::Texture = objc::msg_send![
+    device_ref,
+    newTextureWithDescriptor:desc_ref
+    iosurface:self.handle  // Handle already valid in this process
+    plane:0usize
+];
+```
+
+The Metal texture creation is NOT a transfer mechanism — it's what you do AFTER
+you have a valid handle. In ts3, we need to perform the same Mach port transfer
+that Chromium does internally, but between our profile server and GUI processes.
+
+**Platform-Specific Transfer Mechanisms:**
+
+| Platform    | Handle Type               | Transfer Mechanism         | Complexity |
+| ----------- | ------------------------- | -------------------------- | ---------- |
+| **macOS**   | IOSurface (`*mut c_void`) | Mach ports                 | High       |
+| **Linux**   | DMA-BUF (file descriptor) | Unix socket + `SCM_RIGHTS` | Low        |
+| **Windows** | DXGI handle (`HANDLE`)    | `DuplicateHandle`          | Medium     |
+
+**Key Insight: Linux Is Easier**
+
+On Linux, DMA-BUF uses file descriptors which can be sent over Unix domain
+sockets using `SCM_RIGHTS` ancillary data. This means our existing Unix socket
+infrastructure can carry texture handles directly — no new IPC mechanism needed!
+
+From cef-rs `dmabuf.rs`:
+
+```rust
+pub struct DmaBufImporter {
+    fds: Vec<std::os::fd::RawFd>,  // File descriptors - can use SCM_RIGHTS
+    ...
+}
+```
+
+**No Existing Cross-Platform Abstraction:**
+
+There's no single library that abstracts all three mechanisms because they're
+fundamentally different:
+
+- macOS: Kernel objects transferred via Mach IPC
+- Linux: File descriptors transferred via socket ancillary data
+- Windows: Handles duplicated via Win32 API
+
+cef-rs already abstracts the **import side** (`TextureImporter` trait). We need
+to add a **transfer abstraction**:
+
+```rust
+// Proposed new abstraction
+pub trait TextureTransfer {
+    fn send(&self, info: &AcceleratedPaintInfo, dest: &Destination) -> Result<()>;
+    fn receive(&self) -> Result<ReceivedTextureInfo>;
+}
+
+// Platform implementations:
+// - macOS: MachPortTransfer
+// - Linux: ScmRightsTransfer (uses existing Unix sockets)
+// - Windows: HandleDuplicateTransfer
+```
+
+**Implementation Strategy:**
+
+1. **macOS first** — Mach ports are the hardest; get this working first
+2. **Linux second** — Add `SCM_RIGHTS` support to Unix socket code (simpler)
+3. **Windows third** — `DuplicateHandle` is straightforward
+
+The overall architecture (profile server sends → GUI receives → GUI imports)
+will be identical across platforms. Only the transfer mechanism differs.
+
+**Sources:**
+
+- [Inter-Process Texture Sharing with DMA-BUF](https://blaztinn.gitlab.io/post/dmabuf-texture-sharing/)
+- [Linux Kernel DMA-BUF Documentation](https://docs.kernel.org/driver-api/dma-buf.html)
+- [Cross-process rendering using CALayer](https://teamdev.com/jxbrowser/blog/cross-process-rendering-using-calayer/)
+
+### Experiment 2: Mach Port IOSurface Transfer
+
+**Status:** PLANNED
+
+**Goal:** Implement cross-process IOSurface sharing using Mach ports, the
+Apple-recommended approach that Chromium uses internally.
+
+#### Background
+
+Experiment 1 proved that `IOSurfaceLookup()` by global ID does not work across
+processes, even with process ancestry. Research revealed that Chromium switched
+to passing IOSurface Mach ports directly over their IPC layer. We will implement
+a similar approach.
+
+#### Architecture
+
+```
+Profile Server                              GUI
+──────────────                              ───
+                                      1. Create Mach receive port
+                                      2. Register with bootstrap server
+                                         (com.termsurf.gui.{window_id})
+                                      3. Send bootstrap name to profile
+                                         server over Unix socket
+        ┌─────────────────────────────────┘
+        │
+4. bootstrap_look_up() to get
+   GUI's send right
+        │
+5. on_accelerated_paint(handle)
+6. IOSurfaceCreateMachPort(handle)
+7. Send Mach message with port ──────────→ 8. Receive Mach message
+                                           9. Extract IOSurface port
+                                          10. IOSurfaceLookupFromMachPort()
+                                              → valid handle
+                                          11. Import texture, render
+```
+
+#### Protocol Changes
+
+**GUI → Profile Server (over Unix socket, new field in open response):**
+
+```json
+{
+  "id": "req-1",
+  "action": "open",
+  "data": {
+    "url": "https://google.com",
+    "width": 800,
+    "height": 600,
+    "mach_port_name": "com.termsurf.gui.12345"
+  }
+}
+```
+
+The `mach_port_name` field tells the profile server where to send IOSurface Mach
+ports. This is sent in the `open` request so the profile server knows the
+destination before it starts rendering.
+
+**Mach Message Structure (profile server → GUI):**
+
+```c
+typedef struct {
+    mach_msg_header_t header;
+    mach_msg_body_t body;
+    mach_msg_port_descriptor_t surface_port;  // IOSurface Mach port
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint64_t pane_id;
+} iosurface_frame_msg_t;
+```
+
+#### Implementation Steps
+
+1. **Add Mach port dependencies**
+   - Add `mach2` crate to `wezterm-gui/Cargo.toml`
+   - Add `mach2` crate to `termsurf-web/Cargo.toml`
+
+2. **GUI: Create Mach receive port** (`webview_socket.rs`)
+   - On `WebviewSocketServer` creation, allocate a Mach receive port
+   - Insert send right with `mach_port_insert_right()`
+   - Register with bootstrap server using unique name
+   - Store port and bootstrap name in server state
+
+3. **GUI: Send bootstrap name to profile server**
+   - Modify `open_webview` handler to include `mach_port_name` in the `open`
+     request sent to profile server
+
+4. **Profile server: Look up GUI's Mach port** (`termsurf-web/src/main.rs`)
+   - When handling `open` request, extract `mach_port_name`
+   - Call `bootstrap_look_up()` to get send right to GUI
+   - Store send right in webview state
+
+5. **Profile server: Send IOSurface Mach ports** (`termsurf-web/src/main.rs`)
+   - In `on_accelerated_paint`, call `IOSurfaceCreateMachPort(handle)`
+   - Construct Mach message with `mach_msg_port_descriptor_t`
+   - Send to GUI using `mach_msg()` with `MACH_SEND_MSG`
+
+6. **GUI: Receive Mach messages** (`webview_socket.rs`)
+   - Spawn a thread to listen for Mach messages on the receive port
+   - On message receipt, extract the IOSurface port
+   - Call `IOSurfaceLookupFromMachPort()` to get valid handle
+   - Store handle in `WebviewOverlayState` for rendering
+
+7. **GUI: Import and render texture** (`render/draw.rs`)
+   - Use the IOSurface handle with existing `IOSurfaceImporter`
+   - Render texture over the appropriate pane
+
+#### Files to Modify
+
+| File                                                 | Changes                                         |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| `wezterm-gui/Cargo.toml`                             | Add `mach2` dependency                          |
+| `termsurf-web/Cargo.toml`                            | Add `mach2` dependency                          |
+| `wezterm-gui/src/termwindow/webview_socket.rs`       | Mach port setup, receive thread, handle storage |
+| `termsurf-web/src/main.rs`                           | Look up GUI port, send IOSurface ports          |
+| `cef-rs/cef/src/osr_texture_import/iosurface_ipc.rs` | Add `IOSurfaceCreateMachPort` binding           |
+| `wezterm-gui/src/termwindow/render/draw.rs`          | Render webview texture                          |
+
+#### New cef-rs Bindings Required
+
+```rust
+// In iosurface_ipc.rs
+#[cfg(target_os = "macos")]
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    fn IOSurfaceCreateMachPort(buffer: *const c_void) -> mach_port_t;
+    fn IOSurfaceLookupFromMachPort(port: mach_port_t) -> *mut c_void;
+}
+```
+
+#### Success Criteria
+
+- [ ] GUI creates and registers Mach receive port on startup
+- [ ] Profile server successfully looks up GUI's Mach port
+- [ ] Profile server sends IOSurface Mach port on each frame
+- [ ] GUI receives Mach message and extracts IOSurface port
+- [ ] `IOSurfaceLookupFromMachPort()` returns valid handle (not NULL)
+- [ ] Texture imports successfully into wgpu
+- [ ] Webpage renders correctly in the pane
+
+#### Failure Modes
+
+1. **Bootstrap registration fails**: Check for name conflicts, ensure unique
+   names per window
+2. **Mach message send fails**: Verify port rights, check for `MACH_SEND_*`
+   error codes
+3. **IOSurfaceLookupFromMachPort returns NULL**: Port may have been deallocated,
+   check lifecycle
+4. **Texture import fails**: Verify IOSurface dimensions match, check pixel
+   format
+
+#### Cleanup Considerations
+
+- Deallocate Mach ports with `mach_port_deallocate()` when:
+  - Webview closes
+  - Profile server disconnects
+  - GUI window closes
+- IOSurface Mach ports keep the surface alive — must deallocate after use
+
+#### Testing Strategy
+
+1. **Unit test**: Create IOSurface, create Mach port, verify port is valid
+2. **IPC test**: Two-process test where sender creates IOSurface, sends port,
+   receiver looks up and verifies dimensions match
+3. **Integration test**: Full flow with `web` command, verify texture renders
+
+#### References
+
+- [IOSurfaceCreateMachPort Example](https://fdiv.net/2011/01/27/example-iosurfacecreatemachport-and-iosurfacelookupfrommachport)
+- [Mach Port IPC](https://fdiv.net/2011/01/14/machportt-inter-process-communication)
+- [mach2 crate](https://crates.io/crates/mach2)
+- [Mach Messages in macOS](https://dennisbabkin.com/blog/?t=interprocess-communication-using-mach-messages-for-macos)
+- [Darling Mach Ports Docs](https://docs.darlinghq.org/internals/macos-specifics/mach-ports.html)
