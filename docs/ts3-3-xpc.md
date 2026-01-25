@@ -24,9 +24,9 @@ The profile server renders web content to an IOSurface. The GUI needs to display
 that texture. The challenge: how do you share a GPU texture between separate
 processes on macOS?
 
-## Why Earlier Experiments Failed
+## Why Earlier Attempst Failed
 
-### Experiment 1: IOSurface Global ID Lookup
+### Attempt 1: IOSurface Global ID Lookup
 
 Our first approach used `IOSurfaceGetID()` and `IOSurfaceLookup()`:
 
@@ -46,7 +46,7 @@ Without this flag, IOSurfaces are not globally registered and cannot be looked
 up by ID across process boundaries. This flag was removed for security reasons —
 globally accessible screen buffers are a security hole.
 
-### Experiment 2: Process Ancestry
+### Attempt 2: Process Ancestry
 
 We hypothesized that `IOSurfaceLookup()` might work if the GUI was an ancestor
 of the process that created the IOSurface (similar to how Chromium's browser
