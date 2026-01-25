@@ -19,13 +19,13 @@ transferring Mach port rights between processes on modern macOS.
 
 **What We Built:**
 
-| Component | Purpose |
-|-----------|---------|
-| `termsurf-xpc` | Rust bindings for XPC (connections, listeners, endpoints, Mach ports) |
-| `termsurf-launcher` | XPC service that spawns profile servers and relays endpoints |
-| `termsurf-test-sender` | Test process that creates a pink IOSurface and sends it via XPC |
-| `webview_xpc.rs` | GUI-side XPC manager for receiving Mach ports |
-| `webview_shader.wgsl` | Shader for rendering webview textures |
+| Component              | Purpose                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `termsurf-xpc`         | Rust bindings for XPC (connections, listeners, endpoints, Mach ports) |
+| `termsurf-launcher`    | XPC service that spawns profile servers and relays endpoints          |
+| `termsurf-test-sender` | Test process that creates a pink IOSurface and sends it via XPC       |
+| `webview_xpc.rs`       | GUI-side XPC manager for receiving Mach ports                         |
+| `webview_shader.wgsl`  | Shader for rendering webview textures                                 |
 
 **Validation:** Running `web google.com` displayed a pink 100x100 texture
 stretched to fill the terminal window. This proved the complete IPC pipeline:
@@ -138,6 +138,7 @@ web CLI                    GUI                      Launcher              termsu
 **Location:** `ts3/termsurf-profile/`
 
 CEF-based profile server. Combines:
+
 - XPC session claiming from `termsurf-test-sender`
 - CEF initialization and browser creation
 - `on_accelerated_paint` handler that sends IOSurface via XPC
@@ -296,21 +297,21 @@ CefBrowserHost::create_browser_sync(
 
 #### Files to Create
 
-| File | Purpose |
-|------|---------|
-| `ts3/termsurf-profile/Cargo.toml` | Package manifest |
+| File                               | Purpose            |
+| ---------------------------------- | ------------------ |
+| `ts3/termsurf-profile/Cargo.toml`  | Package manifest   |
 | `ts3/termsurf-profile/src/main.rs` | CEF profile server |
 
 #### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `ts3/termsurf-launcher/src/main.rs` | Spawn `termsurf-profile`, pass profile/URL args |
-| `ts3/termsurf-web/src/main.rs` | Add `--profile` flag, include in open_webview |
-| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Extract profile from request |
-| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Pass profile/URL to launcher |
-| `ts3/Cargo.toml` | Add termsurf-profile to workspace |
-| Build scripts | Bundle termsurf-profile in app |
+| File                                               | Changes                                         |
+| -------------------------------------------------- | ----------------------------------------------- |
+| `ts3/termsurf-launcher/src/main.rs`                | Spawn `termsurf-profile`, pass profile/URL args |
+| `ts3/termsurf-web/src/main.rs`                     | Add `--profile` flag, include in open_webview   |
+| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Extract profile from request                    |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`    | Pass profile/URL to launcher                    |
+| `ts3/Cargo.toml`                                   | Add termsurf-profile to workspace               |
+| Build scripts                                      | Bundle termsurf-profile in app                  |
 
 #### Success Criteria
 

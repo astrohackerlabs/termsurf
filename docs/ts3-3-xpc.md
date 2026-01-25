@@ -985,8 +985,8 @@ integrating CEF.
 
 **Result:** Running `web google.com` successfully displays a pink texture
 stretched to fill the entire terminal window. The complete IPC pipeline works:
-web CLI → Unix socket → GUI → XPC → launcher → test-sender → XPC Mach port →
-GUI → IOSurfaceLookupFromMachPort → wgpu texture import → render pipeline.
+web CLI → Unix socket → GUI → XPC → launcher → test-sender → XPC Mach port → GUI
+→ IOSurfaceLookupFromMachPort → wgpu texture import → render pipeline.
 
 **Key Insight:** IOSurface IDs cannot be shared via Unix sockets on macOS.
 `IOSurfaceLookupByID()` requires Mach port authorization. XPC with Mach port
@@ -1016,6 +1016,7 @@ $ web google.com
 #### Architecture
 
 **Two IPC channels:**
+
 - **Unix socket** (existing): Control messages between web CLI and GUI
 - **XPC** (new): Mach port transfer between test sender and GUI
 
@@ -1315,13 +1316,14 @@ fn claim_session_with_retry(launcher: &XpcConnection, session_id: &str) -> Resul
 
 **Existing:** `src/termwindow/webview_socket.rs` (keep for control messages)
 
-The socket server continues to handle `open_webview`, `close_webview`, etc.
-When it receives `open_webview`, it now also triggers XPC spawn via the new
-XPC manager.
+The socket server continues to handle `open_webview`, `close_webview`, etc. When
+it receives `open_webview`, it now also triggers XPC spawn via the new XPC
+manager.
 
 **New file:** `src/termwindow/webview_xpc.rs`
 
-XPC client for receiving Mach ports from test sender (and later, profile server):
+XPC client for receiving Mach ports from test sender (and later, profile
+server):
 
 ```rust
 use termsurf_xpc::*;
@@ -1474,15 +1476,15 @@ The GUI socket server triggers XPC spawn internally.
 
 #### Files to Modify
 
-| File                                                      | Changes                                    |
-| --------------------------------------------------------- | ------------------------------------------ |
-| `cef-rs/cef/src/osr_texture_import/iosurface.rs`          | Add `from_mach_port()` constructor         |
-| `ts3/wezterm-gui/src/termwindow/mod.rs`                   | Initialize XPC manager                     |
-| `ts3/wezterm-gui/src/termwindow/webview_socket.rs`        | Trigger XPC spawn on `open_webview`        |
-| `ts3/wezterm-gui/src/termwindow/render/pane.rs`           | Render webview overlay texture             |
-| `ts3/wezterm-gui/Cargo.toml`                              | Add termsurf-xpc, cef dependencies         |
-| `ts3/Cargo.toml`                                          | Add launcher, test-sender workspace members|
-| Build scripts                                             | Bundle XPC service in wezterm-gui.app      |
+| File                                               | Changes                                     |
+| -------------------------------------------------- | ------------------------------------------- |
+| `cef-rs/cef/src/osr_texture_import/iosurface.rs`   | Add `from_mach_port()` constructor          |
+| `ts3/wezterm-gui/src/termwindow/mod.rs`            | Initialize XPC manager                      |
+| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Trigger XPC spawn on `open_webview`         |
+| `ts3/wezterm-gui/src/termwindow/render/pane.rs`    | Render webview overlay texture              |
+| `ts3/wezterm-gui/Cargo.toml`                       | Add termsurf-xpc, cef dependencies          |
+| `ts3/Cargo.toml`                                   | Add launcher, test-sender workspace members |
+| Build scripts                                      | Bundle XPC service in wezterm-gui.app       |
 
 #### IOSurface → wgpu Import
 
