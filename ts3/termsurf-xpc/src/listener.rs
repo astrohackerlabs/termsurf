@@ -47,17 +47,14 @@ impl XpcListener {
     ///
     /// This is the key mechanism for dynamic peer-to-peer XPC connections.
     pub fn new_anonymous() -> Result<Self> {
-        // Create a connection with a NULL name to get an anonymous listener
-        // Note: This uses a private but stable pattern
+        // Use xpc_connection_create with NULL name for anonymous connections.
+        // This creates a connection that can accept incoming peer connections
+        // when its endpoint is shared with other processes.
         let raw = unsafe {
-            ffi::xpc_connection_create_mach_service(
-                std::ptr::null(),
-                ffi::dispatch_get_main_queue(),
-                ffi::XPC_CONNECTION_MACH_SERVICE_LISTENER,
-            )
+            ffi::xpc_connection_create(std::ptr::null(), ffi::dispatch_get_main_queue())
         };
         if raw.is_null() {
-            return Err(XpcError::NullPointer("anonymous listener creation"));
+            return Err(XpcError::NullPointer("xpc_connection_create (anonymous)"));
         }
         Ok(Self { raw })
     }
@@ -67,13 +64,24 @@ impl XpcListener {
         self.raw
     }
 
-    /// Set the handler for new incoming connections using a raw block pointer.
+    /// Set the event handler using a raw block pointer.
+    ///
+    /// For anonymous connections, this receives messages directly from the peer.
+    /// For Mach service listeners, this receives new peer connections.
     ///
     /// # Safety
-    /// The handler must be a valid Objective-C block that takes xpc_connection_t.
+    /// The handler must be a valid Objective-C block that takes xpc_object_t.
     /// The block must remain valid for the lifetime of the listener.
-    pub unsafe fn set_new_connection_handler_raw(&self, handler: *mut std::ffi::c_void) {
+    pub unsafe fn set_event_handler_raw(&self, handler: *mut std::ffi::c_void) {
         ffi::xpc_connection_set_event_handler(self.raw, handler);
+    }
+
+    /// Alias for set_event_handler_raw (for backwards compatibility).
+    ///
+    /// # Safety
+    /// Same as set_event_handler_raw.
+    pub unsafe fn set_new_connection_handler_raw(&self, handler: *mut std::ffi::c_void) {
+        self.set_event_handler_raw(handler);
     }
 
     /// Resume the listener (listeners start suspended).

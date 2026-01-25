@@ -7,11 +7,7 @@ license = "MIT"
 
 [dependencies]
 libc.workspace = true
+block2.workspace = true
 
-# block2 will be needed when we add safe block-based event handlers
-# For now, we expose raw block pointers and let callers create blocks
-# block2.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# All code is macOS-only, but we allow the crate to compile on other platforms
-# as a no-op for cross-platform builds
+[dev-dependencies]
+clap.workspace = true

@@ -12,13 +12,13 @@
 //! # Example: Client connecting to a service
 //!
 //! ```ignore
-//! use termsurf_xpc::{XpcConnection, XpcDictionary};
+//! use termsurf_xpc::{XpcConnection, XpcDictionary, set_event_handler};
 //!
 //! // Connect to an XPC service
 //! let conn = XpcConnection::connect_mach_service("com.termsurf.launcher")?;
 //!
 //! // Set up event handler for responses
-//! conn.set_event_handler(|event| {
+//! set_event_handler(&conn, |event| {
 //!     match event {
 //!         Ok(dict) => println!("Received: {:?}", dict.get_string("status")),
 //!         Err(e) => eprintln!("Error: {}", e),
@@ -38,13 +38,14 @@
 //!
 //! ```ignore
 //! use termsurf_xpc::{XpcListener, XpcConnection, XpcDictionary};
+//! use termsurf_xpc::{set_event_handler, set_new_connection_handler};
 //!
 //! // Create anonymous listener
 //! let listener = XpcListener::new_anonymous()?;
 //!
 //! // Set up handler for incoming connections
-//! listener.set_new_connection_handler(|peer| {
-//!     peer.set_event_handler(|event| {
+//! set_new_connection_handler(&listener, |peer| {
+//!     set_event_handler(&peer, |event| {
 //!         if let Ok(dict) = event {
 //!             // Handle incoming message, extract Mach port, etc.
 //!             let port = dict.copy_mach_send("iosurface_port");
@@ -66,11 +67,12 @@
 //!
 //! # Platform Support
 //!
-//! This crate only works on macOS. On other platforms, it compiles as a no-op
-//! to allow cross-platform builds, but all functions will panic if called.
+//! This crate only works on macOS. On other platforms, compilation will fail.
 
 #![cfg_attr(not(target_os = "macos"), allow(unused))]
 
+#[cfg(target_os = "macos")]
+mod block;
 #[cfg(target_os = "macos")]
 mod connection;
 #[cfg(target_os = "macos")]
@@ -80,8 +82,13 @@ mod error;
 #[cfg(target_os = "macos")]
 mod ffi;
 #[cfg(target_os = "macos")]
+pub mod iosurface;
+#[cfg(target_os = "macos")]
 mod listener;
+#[cfg(target_os = "macos")]
+mod runloop;
 
+// Core XPC types
 #[cfg(target_os = "macos")]
 pub use connection::XpcConnection;
 #[cfg(target_os = "macos")]
@@ -89,11 +96,19 @@ pub use dictionary::XpcDictionary;
 #[cfg(target_os = "macos")]
 pub use error::{Result, XpcError};
 #[cfg(target_os = "macos")]
-pub use ffi::mach_port_t;
-#[cfg(target_os = "macos")]
 pub use listener::XpcListener;
 
-// Re-export endpoint type for convenience
+// Block-based event handlers
+#[cfg(target_os = "macos")]
+pub use block::{set_event_handler, set_new_connection_handler};
+
+// Run loop
+#[cfg(target_os = "macos")]
+pub use runloop::{dispatch_main, run_loop};
+
+// Re-export types for convenience
+#[cfg(target_os = "macos")]
+pub use ffi::mach_port_t;
 #[cfg(target_os = "macos")]
 pub type XpcEndpoint = ffi::xpc_endpoint_t;
 

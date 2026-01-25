@@ -66,6 +66,14 @@ extern "C" {
 
     // === Connection ===
 
+    /// Create an anonymous connection/listener.
+    /// The name parameter should be NULL for anonymous connections.
+    /// Pass NULL for targetq to use the default target queue.
+    pub fn xpc_connection_create(
+        name: *const c_char,
+        targetq: dispatch_queue_t,
+    ) -> xpc_connection_t;
+
     /// Connect to an XPC Mach service by name.
     /// Pass XPC_CONNECTION_MACH_SERVICE_LISTENER to create a listener.
     pub fn xpc_connection_create_mach_service(
@@ -164,12 +172,102 @@ extern "C" {
 
     // === Dispatch (minimal, for queue creation) ===
 
-    pub fn dispatch_get_main_queue() -> dispatch_queue_t;
+    // Note: dispatch_get_main_queue() is a macro that returns &_dispatch_main_q
+    // We expose the actual symbol and provide a wrapper function below.
+    pub static _dispatch_main_q: c_void;
 
     pub fn dispatch_queue_create(
         label: *const c_char,
         attr: *const c_void,
     ) -> dispatch_queue_t;
+
+    /// Run the main dispatch queue (blocks forever).
+    pub fn dispatch_main() -> !;
+}
+
+/// Get the main dispatch queue.
+///
+/// This is equivalent to the `dispatch_get_main_queue()` macro in C.
+#[inline]
+pub fn dispatch_get_main_queue() -> dispatch_queue_t {
+    unsafe { &_dispatch_main_q as *const _ as dispatch_queue_t }
+}
+
+// === CoreFoundation (for run loop) ===
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    /// Run the current thread's run loop (blocks until stopped).
+    pub fn CFRunLoopRun();
+}
+
+// === IOSurface ===
+
+pub type IOSurfaceRef = *mut c_void;
+
+// IOSurface property keys
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    pub static kIOSurfaceWidth: *const c_void;
+    pub static kIOSurfaceHeight: *const c_void;
+    pub static kIOSurfaceBytesPerElement: *const c_void;
+    pub static kIOSurfacePixelFormat: *const c_void;
+    pub static kIOSurfaceBytesPerRow: *const c_void;
+
+    pub fn IOSurfaceCreate(properties: *const c_void) -> IOSurfaceRef;
+    pub fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
+    pub fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
+    pub fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
+    pub fn IOSurfaceLock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    pub fn IOSurfaceUnlock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+    pub fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut c_void;
+    pub fn IOSurfaceIncrementUseCount(buffer: IOSurfaceRef);
+    pub fn IOSurfaceDecrementUseCount(buffer: IOSurfaceRef);
+
+    /// Create a Mach port that can be used to transfer this IOSurface to another process.
+    pub fn IOSurfaceCreateMachPort(buffer: IOSurfaceRef) -> mach_port_t;
+
+    /// Reconstruct an IOSurface from a Mach port received from another process.
+    pub fn IOSurfaceLookupFromMachPort(port: mach_port_t) -> IOSurfaceRef;
+}
+
+// === CoreFoundation types for IOSurface property dictionary ===
+
+pub type CFAllocatorRef = *const c_void;
+pub type CFDictionaryRef = *const c_void;
+pub type CFMutableDictionaryRef = *mut c_void;
+pub type CFStringRef = *const c_void;
+pub type CFNumberRef = *const c_void;
+pub type CFTypeRef = *const c_void;
+
+pub const kCFNumberIntType: i32 = 9; // CFNumberType for int
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    pub static kCFAllocatorDefault: CFAllocatorRef;
+    pub static kCFTypeDictionaryKeyCallBacks: c_void;
+    pub static kCFTypeDictionaryValueCallBacks: c_void;
+
+    pub fn CFDictionaryCreateMutable(
+        allocator: CFAllocatorRef,
+        capacity: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> CFMutableDictionaryRef;
+
+    pub fn CFDictionarySetValue(
+        dict: CFMutableDictionaryRef,
+        key: *const c_void,
+        value: *const c_void,
+    );
+
+    pub fn CFNumberCreate(
+        allocator: CFAllocatorRef,
+        the_type: i32,
+        value_ptr: *const c_void,
+    ) -> CFNumberRef;
+
+    pub fn CFRelease(cf: CFTypeRef);
 }
 
 // === Helper functions ===
