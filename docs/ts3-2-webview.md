@@ -589,6 +589,14 @@ will be identical across platforms. Only the transfer mechanism differs.
 
 **Status:** PLANNED
 
+**Terminology Note:** After Experiment 1, the "coordinator" role has been
+significantly reduced. It is now better described as the **web CLI** — a thin
+command-line client that simply requests webviews from the GUI. The web CLI does
+not participate in texture sharing at all. The core IPC for texture sharing is
+between the **GUI** (wezterm-gui) and the **profile server** (termsurf-web in
+`--profile-server` mode). This experiment focuses on that GUI ↔ profile server
+communication.
+
 **Goal:** Implement cross-process IOSurface sharing using Mach ports, the
 Apple-recommended approach that Chromium uses internally.
 
