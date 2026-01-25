@@ -156,6 +156,8 @@ performance but guaranteed to work.
 
 ### Hypothesis 2: Process Tree Ancestry Enables IOSurface Lookup
 
+**Status:** DISPROVEN (see Experiment 1)
+
 An alternative explanation: `IOSurfaceLookup()` may work when the calling
 process is an **ancestor** of the process that created the IOSurface.
 
@@ -249,7 +251,7 @@ architectural change to process spawning.
 
 ### Experiment 1: GUI-Spawned Profile Servers
 
-**Status:** PLANNED
+**Status:** COMPLETED (Hypothesis 2 Disproven)
 
 **Goal:** Re-architect ts3 so that wezterm-gui spawns profile servers instead of
 the coordinator. This is a prerequisite for testing Hypothesis 2 (process
@@ -377,34 +379,51 @@ internal to the GUI.
 
 #### Success Criteria
 
-- [ ] Coordinator only communicates with GUI (not profile server directly)
-- [ ] GUI spawns profile server on first `open_webview` for a profile
-- [ ] GUI connects to profile server and receives IOSurface ID
-- [ ] `IOSurfaceLookup()` returns a valid handle (not NULL)
-- [ ] Texture renders correctly in the pane
+- [x] Coordinator only communicates with GUI (not profile server directly)
+- [x] GUI spawns profile server on first `open_webview` for a profile
+- [x] GUI connects to profile server and receives IOSurface ID
+- [ ] `IOSurfaceLookup()` returns a valid handle (not NULL) — **FAILED**
+- [ ] Texture renders correctly in the pane — not attempted
 
-#### Failure Criteria
+#### Results
 
-If `IOSurfaceLookup()` still returns NULL after this change:
+**Date:** 2026-01-25
 
-- Hypothesis 2 is disproven
-- Process ancestry does not enable IOSurface sharing
-- Must fall back to Mach ports, XPC, or shared memory
-
-#### Key Assumption
-
-This experiment tests whether **grandparent** process ancestry enables IOSurface
-lookup:
+The architectural change was implemented successfully. The coordinator now sends
+`open_webview` to the GUI, which spawns the profile server, connects to it, and
+receives the IOSurface ID. However, `IOSurfaceLookup()` still returned NULL:
 
 ```
-Chromium internal:  Browser → GPU (parent → child, known to work)
-Our architecture:   GUI → Profile Server → GPU (grandparent → grandchild, untested)
+[GUI Socket] Profile server returned: iosurface_id=188, size=800x600
+[GUI Socket] FAILED: IOSurfaceLookup returned NULL for id=188
+[GUI Socket] Hypothesis 2 DISPROVEN: process ancestry does NOT enable IOSurface sharing
 ```
 
-Chromium's browser process is the **direct parent** of the GPU process. In our
-architecture, the GUI is the **grandparent** (two hops away). This is the core
-hypothesis being tested - if it fails, grandparent relationships don't enable
-IOSurface sharing.
+**Conclusion:** Process ancestry (grandparent → grandchild) does NOT enable
+cross-process IOSurface sharing via global IDs. The `kIOSurfaceIsGlobal`
+deprecation is absolute — IOSurfaces cannot be looked up by ID across any
+process boundary, regardless of parent/child relationships.
+
+**Implication:** We must use one of the alternative approaches:
+
+1. Mach port-based IOSurface transfer
+2. Shared memory with pixel copy
+3. XPC services
+4. CALayerHost/CARemoteLayer
+
+#### Key Insight from Failure
+
+We tested whether **grandparent** process ancestry enables IOSurface lookup:
+
+```
+Chromium internal:  Browser → GPU (parent → child, works without IOSurfaceLookup)
+Our architecture:   GUI → Profile Server → GPU (grandparent → grandchild, tested)
+```
+
+The experiment revealed that Chromium likely does NOT use `IOSurfaceLookup()` at
+all — the browser process receives the IOSurface handle directly via Mach IPC,
+not via global ID lookup. The "global ID" approach is fundamentally broken for
+cross-process sharing since macOS 10.11.
 
 #### Deferred Items
 
@@ -424,3 +443,55 @@ IOSurface sharing.
   implements the socket protocol can be used
 - GUI manages engine processes by (engine, profile) tuple - one process per
   engine/profile combination
+
+#### Research: How Chromium/CEF/cef-rs Handle GPU Texture Sharing
+
+After the experiment failed, we researched how texture sharing actually works at
+each layer:
+
+**cef-rs (this repo):**
+
+- No Mach ports used — IOSurface handles passed directly via
+  `on_accelerated_paint`
+- The `iosurface_ipc.rs` module explicitly notes: "Cross-process IOSurface
+  sharing via global IDs does not work for IOSurfaces created by CEF's GPU
+  process"
+- In-process usage (like ts2): Handle used directly to create Metal texture, no
+  lookup needed
+
+**CEF:**
+
+- `on_accelerated_paint` provides the IOSurface handle directly in
+  `cef_accelerated_paint_info_t.shared_texture_io_surface`
+- CEF handles GPU→browser process sharing internally before invoking your
+  callback
+- The handle is valid within the CEF browser process but not in external
+  processes
+
+**Chromium:**
+
+The
+[IOSurface meeting notes](https://www.chromium.org/developers/design-documents/iosurface-meeting-notes/)
+(from 2010) described using `IOSurfaceGetID()`/`IOSurfaceLookup()`. However,
+this predates the `kIOSurfaceIsGlobal` deprecation (macOS 10.11, 2015).
+
+Critically,
+[Chromium code review 1532813002](https://codereview.chromium.org/1532813002) is
+titled: **"Replace IOSurfaceManager by directly passing IOSurface Mach ports
+over Chrome IPC"** — confirming Chromium switched from global IDs to Mach ports.
+
+**Summary:**
+
+| Layer             | Mechanism                                                |
+| ----------------- | -------------------------------------------------------- |
+| Chromium (modern) | Mach ports via Chrome IPC                                |
+| CEF               | Inherits from Chromium; handle valid in browser process  |
+| cef-rs            | Direct handle usage in-process; no cross-process support |
+
+**Sources:**
+
+- [Chromium IOSurface Meeting Notes](https://www.chromium.org/developers/design-documents/iosurface-meeting-notes/)
+- [Chromium Code Review: Mach Port IOSurface](https://codereview.chromium.org/1532813002)
+- [Cross-process Rendering (Russ Bishop)](http://www.russbishop.net/cross-process-rendering)
+- [CEF accelerated_paint_info_t](https://cef-builds.spotifycdn.com/docs/132.3/structcef__accelerated__paint__info__t.html)
+- [OBS Browser ARM64/Apple Silicon PR](https://github.com/obsproject/obs-browser/pull/310)
