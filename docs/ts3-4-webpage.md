@@ -788,3 +788,135 @@ Same as Experiment 1 (which this unblocks):
 - [ ] `web --profile myprofile google.com` creates separate profile directory
 - [ ] Ctrl+C exits cleanly
 - [ ] Repeated `build-debug.sh --open` cycles work without manual cleanup
+
+---
+
+### Experiment 3: Add Debug Logging
+
+**Status:** SUCCESS
+
+**Goal:** Add file-based logging to all three processes (GUI, launcher, profile
+server) so we can see exactly where the pipeline breaks. Experiments 1 and 2
+failed with no visible output because `open` discards stdout/stderr.
+
+**Result:** GUI log (`/tmp/termsurf-gui.log`) captured successfully via
+`open --stdout --stderr`. It revealed that the XPC launcher connection goes
+invalid immediately after connecting (`Launcher connection error: XPC connection
+invalid`), confirming the launcher XPC service never starts. No launcher or
+profile logs were created, which per the diagnostic guide means "XPC service
+never started." The logging infrastructure works and will carry forward into
+future experiments.
+
+#### Problem
+
+When `wezterm-gui.app` is launched via `open` (required for XPC service
+discovery), all stdout/stderr from the GUI, launcher, and profile server are
+lost. We cannot diagnose the pipeline failure without logs.
+
+#### Solution
+
+Redirect each process's output to log files in `/tmp/`:
+
+##### 1. Build scripts: redirect GUI logs
+
+**Files:** `ts3/scripts/build-debug.sh`, `ts3/scripts/build-release.sh`
+
+Change:
+
+```bash
+open "$APP_BUNDLE"
+```
+
+To:
+
+```bash
+open --stdout /tmp/termsurf-gui.log --stderr /tmp/termsurf-gui.log "$APP_BUNDLE"
+echo "Logs: /tmp/termsurf-gui.log"
+```
+
+##### 2. Launcher: redirect stdout/stderr to file at startup
+
+**File:** `ts3/termsurf-launcher/src/main.rs`
+
+At the top of `main()`, before any `println!`, redirect stdout and stderr to
+`/tmp/termsurf-launcher.log` using `dup2`:
+
+```rust
+extern "C" {
+    fn dup2(oldfd: i32, newfd: i32) -> i32;
+}
+
+fn redirect_output(path: &str) {
+    use std::os::unix::io::AsRawFd;
+    let file = std::fs::File::create(path).expect("Failed to create log file");
+    let fd = file.as_raw_fd();
+    unsafe {
+        dup2(fd, 1); // stdout
+        dup2(fd, 2); // stderr
+    }
+    std::mem::forget(file); // keep fd open
+}
+```
+
+All existing `println!` / `eprintln!` calls continue to work — they just write
+to the file instead of the (discarded) stdout.
+
+##### 3. Launcher: redirect profile server output to file
+
+**File:** `ts3/termsurf-launcher/src/main.rs`
+
+When spawning the profile server, redirect its stdout/stderr:
+
+```rust
+let profile_log = std::fs::File::create(
+    format!("/tmp/termsurf-profile-{}.log", session_id)
+).unwrap_or_else(|_| std::fs::File::create("/tmp/termsurf-profile.log").unwrap());
+
+Command::new(&profile_bin_path)
+    .args(["--session-id", &session_id])
+    .args(["--url", &url])
+    .args(["--profile", &profile])
+    .stdout(profile_log.try_clone().unwrap())
+    .stderr(profile_log)
+    .spawn()
+```
+
+#### Log Files Produced
+
+| File                             | Source            | What it shows                                                |
+| -------------------------------- | ----------------- | ------------------------------------------------------------ |
+| `/tmp/termsurf-gui.log`          | wezterm-gui       | XPC manager, socket server, render pipeline                  |
+| `/tmp/termsurf-launcher.log`     | termsurf-launcher | Service startup, spawn requests, session claims              |
+| `/tmp/termsurf-profile-{id}.log` | termsurf-profile  | CEF init, browser creation, paint callbacks, Mach port sends |
+
+#### Files to Modify
+
+| File                                | Changes                                                     |
+| ----------------------------------- | ----------------------------------------------------------- |
+| `ts3/scripts/build-debug.sh`        | `open --stdout --stderr` redirect to log file               |
+| `ts3/scripts/build-release.sh`      | Same as debug                                               |
+| `ts3/termsurf-launcher/src/main.rs` | `dup2` redirect at startup + `.stdout()/.stderr()` on spawn |
+
+#### Verification
+
+```bash
+cd ts3
+./scripts/build-debug.sh --open
+# In terminal:
+web google.com
+# After timeout, read the logs:
+cat /tmp/termsurf-gui.log
+cat /tmp/termsurf-launcher.log
+cat /tmp/termsurf-profile-*.log
+```
+
+#### Diagnostic Guide
+
+The logs will show which step in the pipeline failed:
+
+- No launcher log file → XPC service never started
+- Launcher log but no spawn → `spawn_profile` message never arrived
+- Spawn logged but no profile log → profile binary crashed at startup
+- Profile log but no CEF init → CEF framework failed to load
+- CEF init but no paint → browser didn't render
+- Paint but no Mach port → IOSurface transfer failed
