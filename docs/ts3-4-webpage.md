@@ -406,17 +406,17 @@ impl RenderHandler for ProfileRenderHandler {
 
 **Paint Callback Optimization:**
 
-CEF calls `on_accelerated_paint` on every frame — cursor blinks, animations,
-and repaints all trigger it. ts2 and the cef-rs OSR example process every paint
+CEF calls `on_accelerated_paint` on every frame — cursor blinks, animations, and
+repaints all trigger it. ts2 and the cef-rs OSR example process every paint
 without deduplication because they are in-process (no IPC overhead). In ts3,
 each paint would create a Mach port via `IOSurfaceCreateMachPort` and transfer
 it over XPC to another process. At 60fps, that's 60 Mach port transfers/second
 even for a static page.
 
 The dedup check (`last_handle` comparison) avoids this: when CEF repaints into
-the same IOSurface buffer, the handle pointer doesn't change, so we skip the
-XPC send. With CEF's double-buffering (alternating IOSurface handles), we still
-send on buffer swaps, which is acceptable for MVP.
+the same IOSurface buffer, the handle pointer doesn't change, so we skip the XPC
+send. With CEF's double-buffering (alternating IOSurface handles), we still send
+on buffer swaps, which is acceptable for MVP.
 
 Future optimization: have the GUI read directly from a shared IOSurface without
 per-frame Mach port transfers (the GUI imports once and re-reads the same
@@ -595,8 +595,9 @@ sender and receiver have different ownership rules:
    ```
 
 3. **GUI receiver** (`webview_xpc.rs`) — After `IOSurfaceLookupFromMachPort`
-   succeeds, immediately call `termsurf_xpc::iosurface::deallocate_mach_port(port)`.
-   The IOSurface is now referenced through the IOSurfaceRef, not the Mach port.
+   succeeds, immediately call
+   `termsurf_xpc::iosurface::deallocate_mach_port(port)`. The IOSurface is now
+   referenced through the IOSurfaceRef, not the Mach port.
 
 4. **GUI import caching** — Instead of reimporting from Mach port every frame
    (as `draw.rs:218` currently does), import once when a new surface arrives and
@@ -644,16 +645,16 @@ Add `ctrlc` to `termsurf-profile/Cargo.toml` dependencies.
 
 #### Files to Modify
 
-| File                                               | Changes                                         |
-| -------------------------------------------------- | ----------------------------------------------- |
-| `ts3/termsurf-launcher/src/main.rs`                | Spawn `termsurf-profile`, pass profile/URL args |
-| `ts3/termsurf-web/src/main.rs`                     | Add `--profile` flag, include in open_webview   |
-| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Extract profile from request                    |
-| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`    | Pass profile/URL to launcher                    |
-| `ts3/Cargo.toml`                                   | Add termsurf-profile to workspace               |
+| File                                               | Changes                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------ |
+| `ts3/termsurf-launcher/src/main.rs`                | Spawn `termsurf-profile`, pass profile/URL args              |
+| `ts3/termsurf-web/src/main.rs`                     | Add `--profile` flag, include in open_webview                |
+| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Extract profile from request                                 |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`    | Pass profile/URL to launcher                                 |
+| `ts3/Cargo.toml`                                   | Add termsurf-profile to workspace                            |
 | `ts3/termsurf-xpc/src/ffi.rs`                      | Add `mach_port_deallocate` and `mach_task_self` FFI bindings |
-| `ts3/termsurf-xpc/src/iosurface.rs`                | Add `deallocate_mach_port()` helper             |
-| Build scripts                                      | Bundle termsurf-profile and helper in app       |
+| `ts3/termsurf-xpc/src/iosurface.rs`                | Add `deallocate_mach_port()` helper                          |
+| Build scripts                                      | Bundle termsurf-profile and helper in app                    |
 
 #### Success Criteria
 
@@ -688,3 +689,102 @@ With webpage rendering working:
 1. Delete `termsurf-test-sender` (no longer needed)
 2. Proceed to keyboard/mouse input handling
 3. Add resize support (CEF resize → new IOSurface → GUI update)
+
+---
+
+### Experiment 2: Fix Stale XPC Service Cache
+
+**Status:** FAILED
+
+**Goal:** Add a cleanup step to the build scripts so that stale launchd
+registrations for `com.termsurf.launcher` are removed before launching the app.
+This unblocks Experiment 1's code, which is already implemented but has never
+actually run.
+
+**Failure:** Two issues encountered:
+
+1. Running the binary directly (`$APP_BUNDLE/Contents/MacOS/wezterm-gui`) caused
+   "XPC connection invalid" because launchd couldn't discover the embedded XPC
+   service without LaunchServices registration. Fixed by changing `--open` to
+   use `open "$APP_BUNDLE"`.
+2. After that fix, `web https://google.com` timed out waiting for a surface. No
+   pink screen, no webpage — the profile server either never started, never
+   connected, or never sent an IOSurface. The `launchctl bootout` + `open` fixes
+   were necessary but not sufficient.
+
+#### Problem
+
+macOS caches XPC service registrations in launchd. When `LauncherTest.app` was
+run during Experiment 2 of ts3-3-xpc, launchd registered the old launcher binary
+at:
+
+```
+/Users/ryan/dev/termsurf/ts3/termsurf-launcher/LauncherTest.app/Contents/XPCServices/com.termsurf.launcher.xpc/Contents/MacOS/termsurf-launcher
+```
+
+This registration persists across builds. Even after rebuilding
+`wezterm-gui.app` with the new launcher (which spawns `termsurf-profile` instead
+of `termsurf-test-sender`), launchd continues loading the old binary. The
+result: every `web` command still produces the 100x100 pink square from
+`termsurf-test-sender`.
+
+A `launchctl print` confirms the stale registration:
+
+```
+$ launchctl print gui/$(id -u)/com.termsurf.launcher
+program = .../LauncherTest.app/.../termsurf-launcher
+path = /private/tmp/com.termsurf.launcher.plist
+state = running
+last exit code = (never exited)
+```
+
+#### Solution
+
+Add two lines to the top of each build script (after flag parsing, before any
+build steps):
+
+```bash
+launchctl bootout "gui/$(id -u)/com.termsurf.launcher" 2>/dev/null || true
+rm -f /private/tmp/com.termsurf.launcher.plist
+```
+
+- `launchctl bootout` kills the running process and removes the launchd
+  registration. The `|| true` prevents `set -e` from aborting when the service
+  isn't registered (first build, or already cleaned).
+- `rm -f` removes the stale plist that was written to `/private/tmp/` by the old
+  test scripts.
+
+After this cleanup, when `wezterm-gui.app` launches and connects to
+`com.termsurf.launcher`, launchd will discover the XPC service from the app
+bundle's `Contents/XPCServices/` directory — which now contains the updated
+launcher that spawns `termsurf-profile`.
+
+#### Files to Modify
+
+| File                                          | Changes                                 |
+| --------------------------------------------- | --------------------------------------- |
+| `ts3/scripts/build-debug.sh`                  | Add launchctl bootout + rm before build |
+| `ts3/scripts/build-release.sh`                | Add launchctl bootout + rm before build |
+| `ts3/termsurf-launcher/scripts/build-test.sh` | Add launchctl bootout + rm before build |
+
+No code changes. All Experiment 1 code is preserved as-is.
+
+#### Verification
+
+```bash
+cd ts3
+./scripts/build-debug.sh --open
+# In terminal:
+web google.com
+```
+
+#### Success Criteria
+
+Same as Experiment 1 (which this unblocks):
+
+- [ ] `web google.com` renders Google homepage in pane (not pink, not black)
+- [ ] Surface size is 1600x1200 (800x600 at 2x Retina), not 100x100
+- [ ] `~/.config/termsurf/cef/default/` directory exists with CEF data files
+- [ ] `web --profile myprofile google.com` creates separate profile directory
+- [ ] Ctrl+C exits cleanly
+- [ ] Repeated `build-debug.sh --open` cycles work without manual cleanup
