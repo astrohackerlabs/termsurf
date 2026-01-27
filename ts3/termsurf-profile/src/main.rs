@@ -91,9 +91,9 @@ fn run_profile_server(args: Args) {
         .join("Contents/MacOS/WezTerm Helper");
     println!("Profile: Helper: {:?} (exists={})", helper_path, helper_path.exists());
 
-    let cache_path = dirs_next::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("termsurf/cef")
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let cache_path = std::path::PathBuf::from(home)
+        .join(".config/termsurf/cef")
         .join(&args.profile);
     std::fs::create_dir_all(&cache_path).ok();
     println!("Profile: Cache: {:?}", cache_path);
