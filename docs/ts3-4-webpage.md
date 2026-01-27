@@ -1057,3 +1057,70 @@ is CEF framework loading or the profile server's own XPC claim-session call.
 - [ ] `/tmp/termsurf-profile-*.log` exists and shows "Profile: Starting..."
 - [ ] `web google.com` does not timeout (or fails at a later stage, past XPC)
 - [ ] `launchctl list | grep com.termsurf.launcher` shows the service registered
+
+---
+
+### Experiment 5: Fix CEF API Version Initialization
+
+**Status:** PLANNED
+
+**Goal:** Get past the CEF initialization crash by adding the missing
+`api_hash()` call that ts2 has and ts3's profile server lacks.
+
+#### Root Cause
+
+The profile server crashes at `cef::initialize()` with:
+
+```
+[FATAL:cef/libcef_dll/ctocpp/app_ctocpp.cc:118] CefApp_0_CToCpp called with invalid version -1
+```
+
+ts2's `init_cef()` in `wezterm-gui/src/main.rs` calls this before creating the
+App object:
+
+```rust
+// Configure CEF API version (required before creating App objects)
+let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+```
+
+ts3's `termsurf-profile` does not make this call. Without it, CEF objects are
+tagged with version `-1` (uninitialized), causing the fatal error.
+
+#### Fix
+
+One line added to `termsurf-profile/src/main.rs`.
+
+**File:** `ts3/termsurf-profile/src/main.rs`
+
+In `run_profile_server()`, after loading the CEF framework and before calling
+`cef::execute_process()`, add:
+
+```rust
+// Configure CEF API version (required before creating App objects)
+let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
+```
+
+This mirrors ts2's `init_cef()` exactly.
+
+#### Files to Modify
+
+| File                                  | Changes                         |
+| ------------------------------------- | ------------------------------- |
+| `ts3/termsurf-profile/src/main.rs`    | Add `api_hash()` call           |
+
+#### Verification
+
+```bash
+cd ts3
+./scripts/build-debug.sh --open
+# In terminal:
+web google.com
+# Check profile log for CEF progress:
+cat /tmp/termsurf-profile-*.log
+```
+
+#### Success Criteria
+
+- [ ] Profile log shows "Profile: CEF initialized" (gets past `cef::initialize`)
+- [ ] No `CefApp_0_CToCpp called with invalid version` error in profile log
+- [ ] Pipeline progresses to browser creation or a later stage
