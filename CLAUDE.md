@@ -230,20 +230,48 @@ JavaScript API (`--js-api` flag).
 
 ## cef-rs
 
-CEF (Chromium Embedded Framework) Rust bindings. Used by `ts3/termsurf-profile/`
-for off-screen browser rendering.
+Third-party CEF (Chromium Embedded Framework) Rust bindings, imported and
+modified for TermSurf. Used by `ts3/termsurf-profile/` for off-screen browser
+rendering.
 
-### Validation Status
+### TermSurf Modifications to the Library
 
-CEF integration was validated in a standalone example before ts3 integration:
+These are changes to `cef-rs/cef/src/` (the library itself, not examples):
+
+1. **IOSurface Metal API crash fix** — The original code used
+   `std::mem::transmute` to cast raw pointers to Metal API references, causing
+   memory corruption. Replaced with properly typed references via the `objc`
+   crate. (`cef-rs/cef/src/osr_texture_import/iosurface.rs`)
+
+2. **sRGB double-correction fix** — CEF outputs sRGB pixel data, but the texture
+   pipeline applied gamma correction a second time, washing out all colors.
+   Fixed by declaring the correct sRGB format on texture views.
+   (`cef-rs/cef/src/osr_texture_import/common.rs`, `iosurface.rs`)
+
+3. **IOSurface IPC module (failed experiment)** — Added `iosurface_ipc.rs` to
+   share IOSurface across processes via IOSurface IDs. This failed because
+   IOSurface IDs are process-local. This failure directly motivated the Mach
+   port approach used in ts3. Module is deprecated.
+
+4. **Mach port support for IOSurface** — Extended `iosurface.rs` with
+   `IOSurfaceCreateMachPort` and `IOSurfaceLookupFromMachPort` for cross-process
+   texture sharing. This is what ts3 uses to send rendered surfaces from the
+   profile server to the GUI.
+
+### OSR Example Validation
+
+The OSR (off-screen rendering) example in `cef-rs/examples/osr/` was used as a
+testbed before ts1 integration. Changes made to the example:
 
 | Feature                    | Status     | Notes                                       |
 | -------------------------- | ---------- | ------------------------------------------- |
 | IOSurface texture import   | Working    | Fixed Metal API types in `iosurface.rs`     |
 | Input handling             | Working    | Keyboard, mouse, scroll all functional      |
 | Multiple browser instances | Working    | Per-instance TextureHolder, HashMap routing |
+| Event-driven rendering     | Working    | Render only when CEF signals new frame      |
 | Resize handling            | Working    | Browser resizes with window                 |
 | Context menu               | Suppressed | Prevents winit NSApplication crash          |
+| macOS terminal launch      | Fixed      | NSApp activation policy for multi-browser   |
 | Fullscreen                 | Broken     | winit issue, defer to WezTerm               |
 
 ### Commands
@@ -261,9 +289,14 @@ CEF integration was validated in a standalone example before ts3 integration:
 ### Key Files
 
 - `cef-rs/cef/` — Main CEF wrapper crate
-- `cef-rs/cef/src/osr_texture_import/` — IOSurface import (macOS)
+- `cef-rs/cef/src/osr_texture_import/` — Texture import (IOSurface on macOS,
+  DMA-BUF on Linux, D3D11 on Windows)
+- `cef-rs/cef/src/osr_texture_import/iosurface.rs` — IOSurface import + Mach
+  port creation/lookup (modified for TermSurf)
+- `cef-rs/cef/src/osr_texture_import/common.rs` — Shared texture handling
+  (modified for sRGB fix)
 - `cef-rs/examples/osr/` — Off-screen rendering example (validation testbed)
-- `cef-rs/sys/` — Low-level CEF C API bindings
+- `cef-rs/sys/` — Low-level CEF C API bindings (unmodified)
 - `cef-rs/update-bindings/` — Tool to regenerate bindings from CEF headers
 
 ### Notes
