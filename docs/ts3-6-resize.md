@@ -363,152 +363,44 @@ cat /tmp/termsurf-profile-*.log | grep "Cache\|view_rect\|coded_size"
 - [x] IOSurface dimensions in the log match the pane physical pixel size
 - [x] Page renders at the correct size (fills the pane, not too small or large)
 
----
+## Conclusion
 
-### Experiment 2: Bidirectional XPC for Resize
+### What We Accomplished
 
-**Status:** PLANNED
+Experiment 1 succeeded: the browser now opens at the correct pane dimensions
+instead of hardcoded 800x600. The full pipeline works -- the GUI reads pane
+pixel dimensions and DPI from the Mux, computes logical size and scale factor,
+passes them through the launcher to the profile server as CLI args, and CEF's
+`view_rect()` and `screen_info()` read from shared state. The rendered page
+fills the pane correctly on Retina displays.
 
-**Goal:** When the pane resizes, send the new dimensions to the profile server
-via XPC so CEF re-renders at the correct size.
+### Critical Discovery: One-Process-Per-Profile Was Forgotten
 
-This experiment depends on Experiment 1 (dynamic size in profile server).
+While planning the remaining resize work, we discovered a fundamental oversight:
+**the current code completely ignores the one-process-per-profile constraint
+that is the entire reason ts3 exists.**
 
-#### Changes
+The code today spawns a new `termsurf-profile` process for every `web` command.
+If a user opens two webviews with the same profile (e.g., `web google.com` and
+`web github.com` both using the `default` profile), the second process will
+crash or fail because CEF's `SingletonLock` prevents two processes from opening
+the same `root_cache_path`. This is not a minor bug -- it is a violation of the
+foundational architectural constraint of ts3.
 
-**1. GUI stores reference to profile connection**
+The correct behavior: there must be exactly one `termsurf-profile` process per
+profile. When a second `web` command arrives for an already-running profile, the
+launcher must detect the existing process and send it a "create browser" command
+instead of spawning a new one. The profile server must manage multiple webviews
+within a single CEF process, each with its own size, URL, and IOSurface -- like
+tabs in a browser.
 
-**File:** `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`
+### Change of Course
 
-In the `new_connection_handler` (which fires when the profile connects), store
-the accepted `XpcConnection` alongside the surface receiver. This gives the GUI
-a channel to send messages back to the profile.
+All remaining work in this document (bidirectional resize, settle delay) and all
+other unfinished features (keyboard input, mouse input, navigation, multiple
+pages, page lifecycle, DevTools) are blocked until the one-process-per-profile
+architecture is implemented. Without it, opening a second webview with the same
+profile will crash, making every other feature irrelevant.
 
-**2. Profile server listens for incoming messages**
-
-**File:** `ts3/termsurf-profile/src/main.rs`
-
-Set an event handler on the GUI connection to receive messages. When a `resize`
-message arrives, update the `width` and `height` atomics in `SharedState`, then
-tell CEF the viewport changed.
-
-The profile server needs a reference to the browser host to call
-`was_resized()`. Store it in `SharedState` after browser creation in
-`on_context_initialized`.
-
-```rust
-// On receiving resize message:
-state.width.store(new_width, Ordering::Relaxed);
-state.height.store(new_height, Ordering::Relaxed);
-if let Some(host) = state.browser_host.lock().unwrap().as_ref() {
-    host.was_resized();
-}
-```
-
-CEF will then call `view_rect()` (which reads the updated atomics), re-render,
-and fire `on_accelerated_paint` with a new IOSurface.
-
-**3. GUI sends resize on pane size change**
-
-**File:** `ts3/wezterm-gui/src/termwindow/webview_socket.rs` (or wherever pane
-resize is detected)
-
-When the GUI detects that a pane with an active webview has changed size,
-compute the new logical dimensions and send an XPC message:
-
-```rust
-let msg = XpcDictionary::new();
-msg.set_string("action", "resize");
-msg.set_i64("width", logical_width as i64);
-msg.set_i64("height", logical_height as i64);
-profile_conn.send(&msg);
-```
-
-The exact location where pane resize is detected needs investigation. In ts2,
-this was `paint_browser_overlay()` which checked size every frame. In ts3, a
-similar check would go in the webview rendering path.
-
-#### Files to Modify
-
-| File                                               | Changes                                               |
-| -------------------------------------------------- | ----------------------------------------------------- |
-| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`    | Store profile connection, add send_resize method      |
-| `ts3/termsurf-profile/src/main.rs`                 | Event handler for resize messages, store browser host |
-| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Detect pane resize, send new dimensions               |
-
-#### Verification
-
-```bash
-cd ts3
-./scripts/build-debug.sh --open
-
-# Open webview
-web google.com
-
-# Resize the window by dragging the edge
-# Page should re-render at the new size
-
-# Split the pane (if supported)
-# Page should re-render at the smaller size
-```
-
-#### Success Criteria
-
-- [ ] Resizing the window re-renders the page at the new size
-- [ ] Profile log shows updated dimensions after resize
-- [ ] No crashes during rapid resize
-- [ ] (Stretch) Splitting panes re-renders at smaller size
-
----
-
-### Experiment 3: Settle Delay (If Needed)
-
-**Status:** PLANNED (contingent on bouncing problem)
-
-**Goal:** If Experiment 2 causes bouncing during resize, add a settle delay to
-wait for the resize to finish before re-rendering.
-
-This experiment is only needed if the bouncing problem from ts2 recurs. Skip if
-continuous resize works correctly.
-
-#### Changes
-
-Add settle delay logic to the GUI's resize detection. Instead of sending a
-resize message immediately, wait for the size to stabilize:
-
-```rust
-const SETTLE_DELAY: Duration = Duration::from_millis(30);
-
-// On pane resize detected:
-if new_size != pending_size {
-    pending_size = new_size;
-    last_resize_time = Instant::now();
-}
-
-if last_resize_time.elapsed() >= SETTLE_DELAY {
-    send_resize_to_profile(pending_size);
-    last_resize_time = None;
-    pending_size = None;
-}
-```
-
-ts2 used 30ms. Adjust as needed.
-
-#### Success Criteria
-
-- [ ] No bouncing during rapid window resize
-- [ ] Page settles at the correct size after resize stops
-- [ ] Delay is imperceptible (< 50ms)
-
----
-
-### Next Steps (After This Document)
-
-Once resize is working:
-
-1. **Keyboard input** -- Type in form fields, use keyboard shortcuts
-2. **Mouse input** -- Click links, scroll, hover states
-3. **Navigation** -- Back, forward, reload, URL changes
-4. **Multiple pages** -- Open multiple webviews simultaneously
-5. **Page lifecycle** -- Handle page loads, errors, redirects
-6. **DevTools** -- Open Chrome DevTools for debugging
+**Next document:** Fix the one-process-per-profile architecture before returning
+to resize, input, or any other feature work.
