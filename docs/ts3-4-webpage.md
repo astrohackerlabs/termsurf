@@ -934,8 +934,8 @@ scripts, restoring the mechanism that made the pink screen work in Experiment 2.
 **Result:** The launchd registration fix restored the XPC pipeline. The launcher
 log (`/tmp/termsurf-launcher.log`) now exists and shows the full flow: service
 starts, receives `spawn_profile`, spawns the profile server, receives
-`claim_session`, and returns the GUI endpoint successfully. The GUI log no longer
-shows "XPC connection invalid." The profile server log
+`claim_session`, and returns the GUI endpoint successfully. The GUI log no
+longer shows "XPC connection invalid." The profile server log
 (`/tmp/termsurf-profile-pane-0-31693.log`) shows it starts, loads CEF, connects
 to the GUI, and finds the helper binary. It then crashes at CEF initialization:
 
@@ -1109,9 +1109,9 @@ This mirrors ts2's `init_cef()` exactly.
 
 #### Files to Modify
 
-| File                                  | Changes                         |
-| ------------------------------------- | ------------------------------- |
-| `ts3/termsurf-profile/src/main.rs`    | Add `api_hash()` call           |
+| File                               | Changes               |
+| ---------------------------------- | --------------------- |
+| `ts3/termsurf-profile/src/main.rs` | Add `api_hash()` call |
 
 #### Verification
 
@@ -1129,3 +1129,68 @@ cat /tmp/termsurf-profile-*.log
 - [ ] Profile log shows "Profile: CEF initialized" (gets past `cef::initialize`)
 - [ ] No `CefApp_0_CToCpp called with invalid version` error in profile log
 - [ ] Pipeline progresses to browser creation or a later stage
+
+---
+
+## What We Accomplished
+
+Five experiments took the pipeline from a pink test square to rendering
+google.com in the terminal.
+
+### The Pipeline (Working)
+
+```
+web CLI → Unix socket → GUI → XPC → launcher → termsurf-profile
+                                                       │
+                                            CEF renders webpage
+                                                       │
+                                      IOSurface Mach port via XPC
+                                                       │
+GUI ← IOSurfaceLookupFromMachPort ← XPC ───────────────┘
+  │
+  └── wgpu texture import → render pipeline → google.com on screen
+```
+
+### What We Built
+
+| Component            | What it does                                                  |
+| -------------------- | ------------------------------------------------------------- |
+| `termsurf-profile`   | CEF profile server — renders webpages, sends IOSurface to GUI |
+| Debug logging        | All three processes log to `/tmp/` for diagnostics            |
+| launchd registration | Build scripts register the launcher Mach service with launchd |
+| CEF API version fix  | `api_hash()` call required before creating CEF App objects    |
+
+### What Each Experiment Solved
+
+| # | Experiment                         | Status  | What it fixed                                     |
+| - | ---------------------------------- | ------- | ------------------------------------------------- |
+| 1 | CEF Profile Server                 | FAILED  | Wrote the profile server; couldn't test (no logs) |
+| 2 | Fix Stale XPC Service Cache        | FAILED  | Added launchctl bootout; still no logs            |
+| 3 | Add Debug Logging                  | SUCCESS | `/tmp/` log files for all three processes         |
+| 4 | Restore launchd Mach Registration  | FAILED  | XPC pipeline works; CEF crashes at init           |
+| 5 | Fix CEF API Version Initialization | SUCCESS | `api_hash()` call; google.com renders             |
+
+Experiments 1-2 failed silently because there was no logging. Experiment 3 added
+logging, which revealed the launcher never started (XPC connection invalid).
+Experiment 4 fixed the XPC issue by restoring launchd registration, which
+revealed the CEF version crash. Experiment 5 fixed CEF with a one-line
+`api_hash()` call copied from ts2.
+
+### What Remains
+
+From the "New Goal" at the top of this document:
+
+- [x] Google.com renders in the terminal pane (not pink)
+- [ ] `~/.config/termsurf/cef/myprofile/` directory is created per profile
+- [ ] Different `--profile` values create different directories
+- [ ] Profiles are isolated (separate cookies, storage, cache)
+
+And from "Next Steps":
+
+- [ ] Multiple webviews with different profiles simultaneously
+- [ ] Keyboard input (form fields, shortcuts)
+- [ ] Mouse input (clicks, scroll, hover)
+- [ ] Resize handling (CEF resizes with pane, sends new IOSurface)
+- [ ] Navigation (back, forward, reload, URL changes)
+- [ ] Page lifecycle (loads, errors, redirects)
+- [ ] DevTools
