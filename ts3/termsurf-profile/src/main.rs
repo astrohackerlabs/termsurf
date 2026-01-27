@@ -3,7 +3,7 @@
 //! Renders webpages using CEF off-screen rendering and sends IOSurface
 //! textures to the GUI via XPC Mach port transfer.
 //!
-//! Spawned by the launcher with: --profile, --url, --session-id
+//! Spawned by the launcher with: --profile, --url, --session-id, --width, --height, --scale
 //!
 //! Architecture:
 //! 1. Load CEF framework, handle subprocess early return
@@ -28,13 +28,25 @@ struct Args {
 
     #[arg(long)]
     session_id: String,
+
+    /// Logical width for CEF view_rect (physical pixels / scale)
+    #[arg(long, default_value = "800")]
+    width: u32,
+
+    /// Logical height for CEF view_rect (physical pixels / scale)
+    #[arg(long, default_value = "600")]
+    height: u32,
+
+    /// Device scale factor (e.g. 2.0 for Retina)
+    #[arg(long, default_value = "2.0")]
+    scale: f32,
 }
 
 fn main() {
     let args = Args::parse();
     println!(
-        "Profile: Starting session='{}', url='{}', profile='{}'",
-        args.session_id, args.url, args.profile
+        "Profile: Starting session='{}', url='{}', profile='{}', size={}x{}, scale={}",
+        args.session_id, args.url, args.profile, args.width, args.height, args.scale
     );
 
     #[cfg(target_os = "macos")]
@@ -111,6 +123,9 @@ fn run_profile_server(args: Args) {
     let shared = std::sync::Arc::new(SharedState {
         gui,
         url: args.url,
+        width: std::sync::atomic::AtomicU32::new(args.width),
+        height: std::sync::atomic::AtomicU32::new(args.height),
+        scale: args.scale,
     });
     let mut app = cef_handlers::create_app(shared);
 
@@ -150,6 +165,9 @@ fn run_profile_server(args: Args) {
 struct SharedState {
     gui: std::sync::Arc<XpcConnection>,
     url: String,
+    width: std::sync::atomic::AtomicU32,
+    height: std::sync::atomic::AtomicU32,
+    scale: f32,
 }
 
 /// Connect to launcher, claim session, and establish direct GUI connection
@@ -260,6 +278,7 @@ mod cef_handlers {
     struct RenderHandlerInner {
         gui: Arc<XpcConnection>,
         last_handle: Arc<AtomicPtr<c_void>>,
+        state: Arc<SharedState>,
     }
 
     wrap_render_handler! {
@@ -269,10 +288,9 @@ mod cef_handlers {
 
         impl RenderHandler {
             fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
-                // Hardcoded for this experiment (no resize support yet)
                 if let Some(rect) = rect {
-                    rect.width = 800;
-                    rect.height = 600;
+                    rect.width = self.inner.state.width.load(Ordering::Relaxed) as i32;
+                    rect.height = self.inner.state.height.load(Ordering::Relaxed) as i32;
                 }
             }
 
@@ -282,8 +300,7 @@ mod cef_handlers {
                 screen_info: Option<&mut ScreenInfo>,
             ) -> ::std::os::raw::c_int {
                 if let Some(info) = screen_info {
-                    // Retina: macOS base DPI 72, Retina is 144 (2x)
-                    info.device_scale_factor = 2.0;
+                    info.device_scale_factor = self.inner.state.scale;
                     return 1;
                 }
                 0
@@ -401,6 +418,7 @@ mod cef_handlers {
                 let inner = RenderHandlerInner {
                     gui: self.state.gui.clone(),
                     last_handle: Arc::new(AtomicPtr::new(std::ptr::null_mut())),
+                    state: Arc::clone(&self.state),
                 };
 
                 let render_handler = ProfileRenderHandler::new(inner);

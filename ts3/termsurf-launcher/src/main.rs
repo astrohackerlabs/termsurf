@@ -119,25 +119,33 @@ fn main() {
                             sessions.insert(session_id.clone(), endpoint);
                         }
 
-                        // Extract URL and profile from message
+                        // Extract URL, profile, and dimensions from message
                         let url = msg
                             .get_string("url")
                             .unwrap_or_else(|| "about:blank".to_string());
                         let profile = msg
                             .get_string("profile")
                             .unwrap_or_else(|| "default".to_string());
+                        let width = msg.get_i64("width");
+                        let height = msg.get_i64("height");
+                        let scale = msg
+                            .get_string("scale")
+                            .unwrap_or_else(|| "2.0".to_string());
 
                         // Spawn profile server as child process
                         println!(
-                            "Launcher: Spawning profile server (url={}, profile={})...",
-                            url, profile
+                            "Launcher: Spawning profile server (url={}, profile={}, size={}x{}, scale={})...",
+                            url, profile, width, height, scale
                         );
                         let log_path =
                             format!("/tmp/termsurf-profile-{}.log", session_id);
                         let mut cmd = Command::new(&profile_bin_path);
                         cmd.args(["--session-id", &session_id])
                             .args(["--url", &url])
-                            .args(["--profile", &profile]);
+                            .args(["--profile", &profile])
+                            .args(["--width", &width.to_string()])
+                            .args(["--height", &height.to_string()])
+                            .args(["--scale", &scale]);
                         if let Ok(log_file) = File::create(&log_path) {
                             if let Ok(log_file2) = log_file.try_clone() {
                                 cmd.stdout(log_file).stderr(log_file2);

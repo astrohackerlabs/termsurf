@@ -119,13 +119,19 @@ impl XpcManager {
         pane_id: PaneId,
         url: &str,
         profile: &str,
+        width: u32,
+        height: u32,
+        scale: f32,
     ) -> anyhow::Result<String> {
         let session_id = format!("pane-{}-{}", pane_id, std::process::id());
 
         log::info!(
-            "[XPC Manager] Requesting profile spawn for pane {}, session={}",
+            "[XPC Manager] Requesting profile spawn for pane {}, session={}, size={}x{}, scale={}",
             pane_id,
-            session_id
+            session_id,
+            width,
+            height,
+            scale
         );
 
         // Create a listener for this session
@@ -239,6 +245,9 @@ impl XpcManager {
         msg.set_string("session_id", &session_id);
         msg.set_string("url", url);
         msg.set_string("profile", profile);
+        msg.set_i64("width", width as i64);
+        msg.set_i64("height", height as i64);
+        msg.set_string("scale", &format!("{}", scale));
         msg.set_endpoint("gui_endpoint", endpoint);
 
         self._launcher.send(&msg);

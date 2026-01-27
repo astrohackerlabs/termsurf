@@ -387,8 +387,38 @@ fn handle_request(
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
 
+            // Look up pane pixel dimensions from Mux to pass to profile server
+            let (logical_width, logical_height, scale) = match mux::Mux::try_get() {
+                Some(mux) => match mux.get_pane(pane_id) {
+                    Some(pane) => {
+                        let dims = pane.get_dimensions();
+                        let scale = dims.dpi as f32 / 72.0;
+                        let scale = if scale <= 0.0 { 2.0 } else { scale };
+                        let lw = (dims.pixel_width as f32 / scale) as u32;
+                        let lh = (dims.pixel_height as f32 / scale) as u32;
+                        log::info!(
+                            "[GUI Socket] Pane {} dimensions: {}x{} px, dpi={}, scale={}, logical={}x{}",
+                            pane_id, dims.pixel_width, dims.pixel_height, dims.dpi, scale, lw, lh
+                        );
+                        (lw, lh, scale)
+                    }
+                    None => {
+                        log::warn!(
+                            "[GUI Socket] Pane {} not found, using default 800x600",
+                            pane_id
+                        );
+                        (800u32, 600u32, 2.0f32)
+                    }
+                },
+                None => {
+                    log::warn!("[GUI Socket] Mux not available, using default 800x600");
+                    (800u32, 600u32, 2.0f32)
+                }
+            };
+
             // Request profile spawn (this triggers launcher -> termsurf-profile -> Mach port transfer)
-            let session_id = match xpc_manager.request_profile_spawn(pane_id, url, profile) {
+            let session_id =
+                match xpc_manager.request_profile_spawn(pane_id, url, profile, logical_width, logical_height, scale) {
                 Ok(id) => id,
                 Err(e) => {
                     log::error!("[GUI Socket] Failed to request profile spawn: {}", e);
@@ -527,7 +557,7 @@ fn handle_request(
                 None => return Response::error(&request.id, "XPC manager not available"),
             };
 
-            match xpc_manager.request_profile_spawn(pane_id, "about:blank", "default") {
+            match xpc_manager.request_profile_spawn(pane_id, "about:blank", "default", 800, 600, 2.0) {
                 Ok(session_id) => {
                     log::info!("[GUI Socket] test_xpc: spawned with session_id={}", session_id);
                     Response::ok(

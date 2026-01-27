@@ -224,8 +224,8 @@ Window resize / pane split detected by GUI
 
 ## Tasks
 
-- [ ] Pass initial pane size from GUI through launcher to profile server
-- [ ] Make view_rect() and screen_info() read from dynamic shared state
+- [x] Pass initial pane size from GUI through launcher to profile server
+- [x] Make view_rect() and screen_info() read from dynamic shared state
 - [ ] Add bidirectional XPC: GUI sends resize messages to profile server
 - [ ] Profile server receives resize messages and calls `was_resized()`
 - [ ] GUI detects pane resize and sends new dimensions to profile
@@ -237,10 +237,16 @@ Window resize / pane split detected by GUI
 
 ### Experiment 1: Pass Initial Size at Startup
 
-**Status:** PLANNED
+**Status:** SUCCESS
 
 **Goal:** Remove the hardcoded 800x600 and 2.0 scale factor. Pass the actual
 pane dimensions and DPI from the GUI to the profile server at spawn time.
+
+**Result:** The webview now renders at the actual pane size. The GUI looks up
+pane pixel dimensions via `Mux::try_get()` → `get_pane()` → `get_dimensions()`,
+computes logical size and scale factor, and passes them through the launcher to
+the profile server as CLI args. The profile server's `view_rect()` and
+`screen_info()` read from shared state instead of hardcoded values.
 
 #### Changes
 
@@ -353,9 +359,9 @@ cat /tmp/termsurf-profile-*.log | grep "Cache\|view_rect\|coded_size"
 
 #### Success Criteria
 
-- [ ] Profile log shows dimensions matching the pane size, not 800x600
-- [ ] IOSurface dimensions in the log match the pane physical pixel size
-- [ ] Page renders at the correct size (fills the pane, not too small or large)
+- [x] Profile log shows dimensions matching the pane size, not 800x600
+- [x] IOSurface dimensions in the log match the pane physical pixel size
+- [x] Page renders at the correct size (fills the pane, not too small or large)
 
 ---
 
