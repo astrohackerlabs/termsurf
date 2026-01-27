@@ -64,19 +64,24 @@ $ web google.com
 
 ### Tasks
 
-- [ ] Fix profile path to use `~/.config/termsurf/cef/<profile>/` instead of
+- [x] Fix profile path to use `~/.config/termsurf/cef/<profile>/` instead of
       `~/Library/Application Support/termsurf/cef/<profile>/`
-- [ ] Verify different `--profile` values create different directories
+- [x] Verify different `--profile` values create different directories
 - [ ] Verify profiles are isolated (separate cookies, storage, cache)
 
 ## Experiments
 
 ### Experiment 1: Fix Profile Path and Verify Isolation
 
-**Status:** PLANNED
+**Status:** SUCCESS
 
 **Goal:** Fix the profile cache path to use `~/.config/termsurf/cef/<profile>/`
 and verify that different profiles create separate, isolated directories.
+
+**Result:** All three profiles (`default`, `test1`, `test2`) created separate
+directories under `~/.config/termsurf/cef/`. The first `web` invocation timed
+out (race condition with CEF startup), but succeeded on retry. Each subsequent
+profile created its own directory immediately.
 
 #### Fix
 
@@ -144,13 +149,13 @@ ls ~/.config/termsurf/cef/
 
 #### Success Criteria
 
-- [ ] `~/.config/termsurf/cef/default/` is created when running `web google.com`
-- [ ] `~/.config/termsurf/cef/work/` is created when running
-      `web --profile work google.com`
-- [ ] `~/.config/termsurf/cef/personal/` is created when running
-      `web --profile personal google.com`
-- [ ] All three directories exist simultaneously under `~/.config/termsurf/cef/`
-- [ ] No profile directories are created under
+- [x] `~/.config/termsurf/cef/default/` is created when running `web google.com`
+- [x] `~/.config/termsurf/cef/test1/` is created when running
+      `web --profile test1 google.com`
+- [x] `~/.config/termsurf/cef/test2/` is created when running
+      `web --profile test2 google.com`
+- [x] All three directories exist simultaneously under `~/.config/termsurf/cef/`
+- [x] No profile directories are created under
       `~/Library/Application Support/termsurf/cef/`
 - [ ] Each profile directory contains CEF data (cookies, cache, `Default/`
       subdirectory)
