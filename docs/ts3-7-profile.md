@@ -1559,7 +1559,12 @@ let (viewport_x, viewport_y, viewport_w, viewport_h) = match positioned_pane {
         let cell_height = self.render_metrics.cell_size.height as f32;
 
         // Get offsets for tab bar and borders
-        let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
+        // Note: must check show_tab_bar, as tab_bar_pixel_height() always returns a value
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.0
+        };
         let border = self.get_os_border();
 
         // Calculate pixel position
