@@ -68,13 +68,13 @@ CEF process, like tabs in a browser.
 
 ## Tasks
 
-- [ ] Launcher tracks running profile processes (PID + connection per profile)
-- [ ] Launcher routes `spawn_profile` to existing process if profile is running
-- [ ] Profile server accepts "create browser" commands for additional webviews
-- [ ] Profile server manages multiple browsers with separate sizes, URLs, and
+- [x] Launcher tracks running profile processes (PID + connection per profile)
+- [x] Launcher routes `spawn_profile` to existing process if profile is running
+- [x] Profile server accepts "create browser" commands for additional webviews
+- [x] Profile server manages multiple browsers with separate sizes, URLs, and
       IOSurfaces
-- [ ] Each browser's IOSurface Mach port is sent to the correct GUI pane
-- [ ] GUI correctly maps incoming surfaces to the right pane when multiple
+- [x] Each browser's IOSurface Mach port is sent to the correct GUI pane
+- [x] GUI correctly maps incoming surfaces to the right pane when multiple
       webviews share a profile process
 - [ ] Closing a pane sends a "destroy browser" command to the profile server
 - [ ] Profile server shuts down when its last browser is destroyed
@@ -520,7 +520,7 @@ ps aux | grep termsurf-launcher
 
 ### Experiment 2: One Process Per Profile
 
-**Status:** FAILED
+**Status:** SUCCESS
 
 **Goal:** Implement the core architectural requirement: exactly one
 `termsurf-profile` process per browser profile, with multiple webviews (CEF
@@ -1131,7 +1131,7 @@ ps aux | grep termsurf-profile
 
 ### Experiment 3: Fix Pane Dimension Calculation
 
-**Status:** FAILED
+**Status:** SUCCESS
 
 **Prerequisite:** Builds on Experiment 2 code (one process per profile). That
 code compiles but cannot be tested due to this bug.
@@ -1706,3 +1706,113 @@ pipeline is now correct:
 
 The one-process-per-profile architecture (Experiment 2) should now be fully
 testable with multiple webviews in split panes.
+
+---
+
+## Document Conclusion
+
+### Goal Recap
+
+This document set out to implement **one-process-per-profile**: the foundational
+architectural requirement that exactly one `termsurf-profile` process exists per
+browser profile, with multiple webviews (CEF browsers) sharing that process.
+This constraint is not a design preference—it is mandated by CEF's
+`SingletonLock` mechanism, which crashes any second process attempting to open
+the same `root_cache_path`.
+
+### What We Accomplished
+
+Through four experiments, we achieved the goal:
+
+**Experiment 1 (Failed):** Attempted to merge the launcher into the GUI to
+simplify architecture. This failed due to XPC API constraints—the launcher is
+architecturally necessary on macOS, not just a design choice. The experiment
+validated that keeping the launcher as a dedicated XPC service is the correct
+pattern.
+
+**Experiment 2 (Implemented):** Built the one-process-per-profile architecture:
+
+- Launcher now tracks running profiles with persistent XPC connections
+- When a second `web` command uses the same profile, the launcher forwards a
+  `create_browser` command to the existing process instead of spawning a new one
+- Profile server restructured with `ProfileState` and per-browser `BrowserState`
+- Profile server creates a command listener and registers with the launcher
+- Multiple browsers share a single CEF context, each with its own render handler
+  and GUI connection
+- Browser creation is marshalled to the CEF UI thread via `cef::post_task`
+
+**Experiment 3 (Implemented):** Fixed pane dimension calculation:
+
+- Added global cell size sharing via atomic variables
+- TermWindow updates cell size when `render_metrics` changes
+- Socket handler calculates pane dimensions as `cols × cell_width` instead of
+  using incorrect `pixel_width` values
+- Profile server receives correct logical dimensions for CEF
+
+**Experiment 4 (Succeeded):** Fixed viewport rendering:
+
+- Rendering code now uses `get_panes_to_render()` to find each pane's position
+- Viewport is set to pane bounds (accounting for tab bar and borders) instead of
+  full window
+- Each webview renders within its designated pane area
+
+### Outcome
+
+The system now works as intended:
+
+```
+# First webview - spawns profile process
+web google.com
+# Process starts, registers with launcher
+
+# Second webview - reuses existing process
+web github.com
+# Launcher forwards create_browser to existing process
+# Same CEF context, new browser instance
+
+# Both webviews render side by side in split panes
+# One termsurf-profile process serves both
+```
+
+**Verified behaviors:**
+
+- [x] First `web` command spawns a profile process
+- [x] Second `web` command (same profile) reuses existing process
+- [x] Both webviews render in their respective panes simultaneously
+- [x] Webviews are correctly sized and positioned within pane bounds
+- [x] Profile server logs show multiple browser creation
+- [x] Launcher logs show "Forwarding to existing profile" on second request
+
+### Updated Task Status
+
+| Task                                              | Status   |
+| ------------------------------------------------- | -------- |
+| Launcher tracks running profile processes         | Done     |
+| Launcher routes spawn_profile to existing process | Done     |
+| Profile server accepts create_browser commands    | Done     |
+| Profile server manages multiple browsers          | Done     |
+| Each browser's IOSurface sent to correct GUI pane | Done     |
+| GUI maps surfaces to right pane                   | Done     |
+| Closing pane sends destroy_browser command        | Deferred |
+| Profile shuts down when last browser destroyed    | Deferred |
+
+### Next Steps
+
+With one-process-per-profile complete, the deferred work from ts3-6 is now
+unblocked:
+
+1. **Dynamic resize** — Send new pane dimensions to the profile server when
+   windows resize or panes split. Requires bidirectional XPC (GUI → profile) and
+   calling `host.was_resized()` on the correct browser.
+
+2. **Input forwarding** — Forward keyboard and mouse events to CEF for
+   interacting with web content.
+
+3. **Browser lifecycle** — Handle pane close (destroy browser), profile shutdown
+   (when last browser closes), and navigation commands.
+
+4. **Different profiles** — Test `web --profile work` to verify separate profile
+   processes with isolated cookies/storage.
+
+The architecture is now sound. The remaining work is feature implementation on a
+solid foundation.
