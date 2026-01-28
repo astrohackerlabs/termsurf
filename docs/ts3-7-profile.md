@@ -189,8 +189,8 @@ forward. The GUI doesn't need to know.
 
 **Status:** FAILED
 
-**Goal:** Simplify the architecture by eliminating the separate launcher process.
-The GUI becomes the Mach service that profile servers connect to. This
+**Goal:** Simplify the architecture by eliminating the separate launcher
+process. The GUI becomes the Mach service that profile servers connect to. This
 simplification must happen before implementing multi-profile support.
 
 **Rationale:** The launcher exists only because it was designed that way, not
@@ -418,8 +418,8 @@ let launcher = XpcConnection::connect_mach_service("com.termsurf.launcher")?;
 let gui = XpcConnection::connect_mach_service("com.termsurf.gui")?;
 ```
 
-The rest of the profile server remains unchanged — it still sends `claim_session`
-and receives the endpoint in the reply.
+The rest of the profile server remains unchanged — it still sends
+`claim_session` and receives the endpoint in the reply.
 
 **5. Build scripts: Register GUI as Mach service**
 
@@ -475,16 +475,16 @@ Remove the entire `ts3/termsurf-launcher/` directory and remove it from
 
 #### Files to Modify
 
-| Action | File                                               |
-| ------ | -------------------------------------------------- |
-| Modify | `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`    |
-| Modify | `ts3/termsurf-profile/src/main.rs`                 |
-| Modify | `ts3/scripts/build-debug.sh`                       |
-| Modify | `ts3/scripts/build-release.sh`                     |
-| Modify | `ts3/Cargo.toml`                                   |
-| Modify | `CLAUDE.md`                                        |
-| Modify | `docs/ts3-3-xpc.md`                                |
-| Delete | `ts3/termsurf-launcher/` (entire directory)        |
+| Action | File                                            |
+| ------ | ----------------------------------------------- |
+| Modify | `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` |
+| Modify | `ts3/termsurf-profile/src/main.rs`              |
+| Modify | `ts3/scripts/build-debug.sh`                    |
+| Modify | `ts3/scripts/build-release.sh`                  |
+| Modify | `ts3/Cargo.toml`                                |
+| Modify | `CLAUDE.md`                                     |
+| Modify | `docs/ts3-3-xpc.md`                             |
+| Delete | `ts3/termsurf-launcher/` (entire directory)     |
 
 #### Verification
 
@@ -515,3 +515,339 @@ ps aux | grep termsurf-launcher
 - [ ] GUI logs show `claim_session` handling and process spawning
 - [ ] No `/tmp/termsurf-launcher.log` file created
 - [ ] Build scripts no longer reference launcher
+
+---
+
+### Experiment 2: One Process Per Profile
+
+**Status:** PLANNED
+
+**Goal:** Implement the core architectural requirement: exactly one
+`termsurf-profile` process per browser profile, with multiple webviews (CEF
+browsers) sharing that process.
+
+**What this enables:**
+
+- `web google.com` then `web github.com` → same process, two browsers
+- `web --profile work gitlab.com` → different process for `work` profile
+- Shared cookies/storage within a profile (like Chrome tabs)
+- No CEF `SingletonLock` crashes from duplicate profile processes
+
+#### Architecture Overview
+
+```
+                              ┌─────────────────────────────────────┐
+                              │           Launcher                  │
+                              │                                     │
+                              │  running_profiles: {                │
+                              │    "default" → ProfileEndpoint,     │
+                              │    "work" → ProfileEndpoint,        │
+                              │  }                                  │
+                              └─────────────────────────────────────┘
+                                    │                    ▲
+                     spawn_profile  │                    │ register_profile
+                     (or forward)   │                    │
+                                    ▼                    │
+┌──────────┐        ┌───────────────────────────────────────────────────┐
+│   GUI    │◄──────►│              Profile Server (default)             │
+│          │  XPC   │                                                   │
+│ pane 1 ◄─┼────────┤  browsers: {                                      │
+│ pane 2 ◄─┼────────┤    "session-1" → Browser (google.com) → pane 1   │
+│          │        │    "session-2" → Browser (github.com) → pane 2   │
+└──────────┘        │  }                                                │
+                    └───────────────────────────────────────────────────┘
+```
+
+#### Flow: First Webview for a Profile
+
+```
+1. CLI sends "open_webview" to GUI (profile=default, url=google.com)
+2. GUI creates anonymous XPC listener for pane 1, gets endpoint
+3. GUI sends "spawn_profile" to launcher with gui_endpoint, url, profile, dimensions
+4. Launcher checks running_profiles["default"] → not found
+5. Launcher stores gui_endpoint in pending_sessions, spawns termsurf-profile
+6. Profile initializes CEF with root_cache_path for "default"
+7. Profile creates XPC listener, sends "register_profile" to launcher
+8. Launcher stores profile's endpoint in running_profiles["default"]
+9. Profile claims session from launcher, gets gui_endpoint
+10. Profile creates browser for google.com, connects to GUI
+11. on_accelerated_paint sends IOSurface Mach port to GUI pane 1
+```
+
+#### Flow: Second Webview for Same Profile
+
+```
+1. CLI sends "open_webview" to GUI (profile=default, url=github.com)
+2. GUI creates anonymous XPC listener for pane 2, gets endpoint
+3. GUI sends "spawn_profile" to launcher with gui_endpoint, url, profile, dimensions
+4. Launcher checks running_profiles["default"] → FOUND
+5. Launcher sends "create_browser" to existing profile process
+   (includes gui_endpoint, url, dimensions, session_id)
+6. Profile receives create_browser on its XPC listener
+7. Profile creates second browser for github.com
+8. Profile connects new browser's RenderHandler to GUI pane 2's endpoint
+9. on_accelerated_paint sends IOSurface Mach port to GUI pane 2
+```
+
+No new process spawned. Both browsers share the same CEF context.
+
+#### Changes
+
+**1. Launcher: Track running profiles**
+
+**File:** `ts3/termsurf-launcher/src/main.rs`
+
+Add a map to track which profiles have running processes:
+
+```rust
+struct LauncherState {
+    pending_sessions: Mutex<HashMap<String, XpcEndpoint>>,  // existing
+    running_profiles: Mutex<HashMap<String, XpcEndpoint>>,  // NEW: profile → endpoint
+}
+```
+
+**2. Launcher: Handle register_profile action**
+
+When a profile server finishes CEF init, it registers itself:
+
+```rust
+"register_profile" => {
+    let profile = msg.get_string("profile").unwrap();
+    let endpoint = msg.copy_endpoint("endpoint").unwrap();
+
+    state.running_profiles.lock().unwrap()
+        .insert(profile.to_string(), endpoint);
+
+    log::info!("[Launcher] Profile '{}' registered", profile);
+}
+```
+
+**3. Launcher: Route spawn_profile to existing process**
+
+Modify `spawn_profile` handler to check for existing process first:
+
+```rust
+"spawn_profile" => {
+    let profile = msg.get_string("profile").unwrap();
+    let session_id = msg.get_string("session_id").unwrap();
+    let gui_endpoint = msg.copy_endpoint("gui_endpoint").unwrap();
+    let url = msg.get_string("url").unwrap();
+    let width = msg.get_i64("width") as u32;
+    let height = msg.get_i64("height") as u32;
+    let scale = msg.get_string("scale").unwrap();
+
+    // Store GUI endpoint for claiming
+    state.pending_sessions.lock().unwrap()
+        .insert(session_id.to_string(), gui_endpoint.clone());
+
+    // Check if profile process already running
+    let existing = state.running_profiles.lock().unwrap()
+        .get(profile).cloned();
+
+    if let Some(profile_endpoint) = existing {
+        // Forward to existing process
+        log::info!("[Launcher] Forwarding to existing profile '{}'", profile);
+
+        let conn = XpcConnection::from_endpoint(profile_endpoint)?;
+        let create_msg = XpcDictionary::new();
+        create_msg.set_string("action", "create_browser");
+        create_msg.set_string("session_id", session_id);
+        create_msg.set_endpoint("gui_endpoint", gui_endpoint);
+        create_msg.set_string("url", url);
+        create_msg.set_i64("width", width as i64);
+        create_msg.set_i64("height", height as i64);
+        create_msg.set_string("scale", scale);
+        conn.send(&create_msg);
+    } else {
+        // Spawn new process (existing code)
+        log::info!("[Launcher] Spawning new profile '{}'", profile);
+        // ... spawn termsurf-profile with CLI args ...
+    }
+}
+```
+
+**4. Profile server: Register with launcher after CEF init**
+
+**File:** `ts3/termsurf-profile/src/main.rs`
+
+After CEF initializes, create a listener and register:
+
+```rust
+// After cef::initialize() succeeds...
+
+// Create listener for incoming create_browser commands
+let profile_listener = XpcListener::new_anonymous()?;
+let profile_endpoint = profile_listener.get_endpoint()?;
+
+// Register with launcher
+let register_msg = XpcDictionary::new();
+register_msg.set_string("action", "register_profile");
+register_msg.set_string("profile", &args.profile);
+register_msg.set_endpoint("endpoint", profile_endpoint);
+launcher.send(&register_msg);
+
+// Set up handler for create_browser commands
+set_new_connection_handler(&profile_listener, move |conn| {
+    set_event_handler(&conn, move |event| {
+        if let Ok(msg) = event {
+            let action = msg.get_string("action").unwrap_or_default();
+            if action == "create_browser" {
+                // Marshal to CEF UI thread
+                let url = msg.get_string("url").unwrap().to_string();
+                let session_id = msg.get_string("session_id").unwrap().to_string();
+                let gui_endpoint = msg.copy_endpoint("gui_endpoint").unwrap();
+                let width = msg.get_i64("width") as u32;
+                let height = msg.get_i64("height") as u32;
+
+                cef::post_task(ThreadId::UI, move || {
+                    create_browser(&url, &session_id, gui_endpoint, width, height);
+                });
+            }
+        }
+    });
+    conn.resume();
+});
+profile_listener.resume();
+```
+
+**5. Profile server: Multi-browser state**
+
+Refactor from single-browser to multi-browser state:
+
+```rust
+// OLD: Single browser
+struct SharedState {
+    url: String,
+    width: AtomicU32,
+    height: AtomicU32,
+    gui: Arc<XpcConnection>,
+    last_handle: AtomicPtr<c_void>,
+}
+
+// NEW: Multiple browsers
+struct BrowserState {
+    session_id: String,
+    gui: Arc<XpcConnection>,
+    width: AtomicU32,
+    height: AtomicU32,
+    last_handle: AtomicPtr<c_void>,
+}
+
+struct ProfileState {
+    scale: f32,
+    browsers: Mutex<HashMap<i32, Arc<BrowserState>>>,  // browser_id → state
+}
+
+static PROFILE_STATE: OnceLock<Arc<ProfileState>> = OnceLock::new();
+```
+
+**6. Profile server: Create browser function**
+
+Extract browser creation into a reusable function:
+
+```rust
+fn create_browser(
+    url: &str,
+    session_id: &str,
+    gui_endpoint: XpcEndpoint,
+    width: u32,
+    height: u32,
+) {
+    let profile_state = PROFILE_STATE.get().unwrap();
+
+    // Connect to GUI for this browser
+    let gui = XpcConnection::from_endpoint(gui_endpoint).unwrap();
+    gui.resume();
+
+    // Create browser-specific state
+    let browser_state = Arc::new(BrowserState {
+        session_id: session_id.to_string(),
+        gui: Arc::new(gui),
+        width: AtomicU32::new(width),
+        height: AtomicU32::new(height),
+        last_handle: AtomicPtr::new(std::ptr::null_mut()),
+    });
+
+    // Create render handler for this browser
+    let render_handler = RenderHandler::new(RenderHandlerInner {
+        state: Arc::clone(&browser_state),
+        scale: profile_state.scale,
+    });
+
+    // Create client and browser
+    let client = Client::builder()
+        .render_handler(render_handler)
+        .life_span_handler(/* ... */)
+        .build();
+
+    let window_info = WindowInfo::new_for_offscreen(width, height);
+    let browser_settings = BrowserSettings::new();
+
+    let browser = cef::BrowserHost::create_browser_sync(
+        &window_info,
+        Some(client),
+        url,
+        &browser_settings,
+        None,
+        None,
+    ).unwrap();
+
+    // Store browser state keyed by browser ID
+    let browser_id = browser.get_identifier();
+    profile_state.browsers.lock().unwrap()
+        .insert(browser_id, browser_state);
+}
+```
+
+**7. Profile server: Route paint callbacks to correct browser**
+
+Each `RenderHandlerInner` holds its own `BrowserState`, so paint callbacks
+automatically go to the correct GUI endpoint. No routing needed — it's built
+into the structure.
+
+**8. GUI: No changes required**
+
+The GUI already creates a separate XPC listener per pane. It doesn't know or
+care whether the profile server is new or reused.
+
+#### Files to Modify
+
+| Action | File                                | Change                          |
+| ------ | ----------------------------------- | ------------------------------- |
+| Modify | `ts3/termsurf-launcher/src/main.rs` | Add running_profiles, routing   |
+| Modify | `ts3/termsurf-profile/src/main.rs`  | Multi-browser, register_profile |
+
+#### Verification
+
+```bash
+cd ts3
+./scripts/build-debug.sh --open
+
+# First webview - spawns profile process
+web google.com
+ps aux | grep termsurf-profile
+# Should show 1 process
+
+# Second webview same profile - reuses process
+web github.com
+ps aux | grep termsurf-profile
+# Should STILL show 1 process (same PID)
+
+# Both panes should render their respective pages
+# Check logs
+cat /tmp/termsurf-launcher.log
+# Should show: "Forwarding to existing profile 'default'"
+
+cat /tmp/termsurf-profile-*.log
+# Should show: two "create_browser" logs, two IOSurface sends
+```
+
+#### Success Criteria
+
+- [ ] First `web` command spawns a profile process
+- [ ] Second `web` command (same profile) reuses existing process
+- [ ] Both webviews render in their respective panes
+- [ ] Different profiles spawn separate processes
+- [ ] Launcher logs show "Forwarding to existing profile" on second request
+- [ ] Profile logs show multiple browser creations
+- [ ] No CEF SingletonLock errors
