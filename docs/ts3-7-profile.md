@@ -1483,7 +1483,7 @@ The only remaining issue is viewport positioning in the rendering code.
 
 ### Experiment 4: Fix Viewport Rendering for Pane Bounds
 
-**Status:** PLANNED
+**Status:** SUCCESS
 
 **Prerequisite:** Builds on Experiment 3 code. The dimension calculation is
 correct; only the viewport rendering needs to be fixed.
@@ -1672,3 +1672,37 @@ ps aux | grep termsurf-profile
 5. **Window resize during webview display:** The viewport is recalculated on
    each frame, so resizes should work. However, the webview texture size doesn't
    change until the profile server is notified (deferred: dynamic resize).
+
+#### Conclusion
+
+Experiment 4 successfully fixed the viewport rendering bug that was blocking
+multi-pane webview testing. The changes were minimal but critical:
+
+1. **Used pane_id from the overlay loop** to identify which pane each webview
+   belongs to.
+
+2. **Called `get_panes_to_render()`** to get the current layout of positioned
+   panes with their screen coordinates.
+
+3. **Calculated pixel position** from cell coordinates using
+   `render_metrics.cell_size`, accounting for tab bar height and OS borders.
+
+4. **Set viewport to pane bounds** instead of full window, so each webview
+   renders within its designated pane area.
+
+**What this enables:**
+
+- Multiple webviews can now render side by side in split panes
+- Each webview is correctly positioned and sized within its pane
+- The terminal content area is respected (tab bar, borders)
+- Experiment 2 (one process per profile) can now be properly tested
+
+**Combined with Experiment 3's dimension fix**, the full webview rendering
+pipeline is now correct:
+
+- GUI calculates correct pane dimensions (grid cells × cell size)
+- Profile server creates IOSurface at the correct size
+- GUI renders the texture within the correct viewport bounds
+
+The one-process-per-profile architecture (Experiment 2) should now be fully
+testable with multiple webviews in split panes.
