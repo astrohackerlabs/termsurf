@@ -31,7 +31,7 @@ The project has evolved through three generations:
 - `ts2/` — TermSurf 2.0 (WezTerm fork + in-process CEF). Superseded.
 - `ts1/` — TermSurf 1.x (Ghostty fork + WKWebView). Legacy, still builds.
 - `cef-rs/` — CEF Rust bindings. Used by `ts3/termsurf-profile/`.
-- `tasklog/` — All documentation across all generations.
+- `log/` — All documentation across all generations.
 
 ## TermSurf 3.0 (ts3/) — Active Development
 
@@ -195,7 +195,7 @@ ts2 embedded CEF directly inside WezTerm's process. CEF allows only one
 TermSurf requires multiple profiles (like Chrome profiles), so CEF had to move
 to separate processes — one per profile. That's ts3.
 
-Historical docs: `tasklog/ts2-*.md`
+Historical docs: `log/ts2-*.md`
 
 ## TermSurf 1.x (ts1/) — Legacy
 
@@ -308,40 +308,40 @@ testbed before ts1 integration. Changes made to the example:
 
 ### TermSurf 3.0 (active)
 
-- `tasklog/ts3-1-architecture.md` — High-level architecture overview
-- `tasklog/ts3-2-webview.md` — Webview rendering implementation
-- `tasklog/ts3-3-xpc.md` — XPC architecture for inter-process communication
-- `tasklog/ts3-4-webpage.md` — Webpage rendering solutions
-- `tasklog/ts3-5-profile.md` — Profile isolation for browser data
-- `tasklog/ts3-6-resize.md` — Resize support implementation
+- `log/ts3-1-architecture.md` — High-level architecture overview
+- `log/ts3-2-webview.md` — Webview rendering implementation
+- `log/ts3-3-xpc.md` — XPC architecture for inter-process communication
+- `log/ts3-4-webpage.md` — Webpage rendering solutions
+- `log/ts3-5-profile.md` — Profile isolation for browser data
+- `log/ts3-6-resize.md` — Resize support implementation
 
 ### TermSurf 2.0 (historical)
 
-- `tasklog/ts2-architecture.md` — Technical decisions and design rationale
-- `tasklog/ts2-cef.md` — CEF integration via cef-rs
-- `tasklog/ts2-cef-wezterm.md` — CEF + WezTerm integration details
-- `tasklog/ts2-cef-mvp.md` through `ts2-cef-mvp5.md` — MVP iteration experiments
-- `tasklog/ts2-profile.md` — CEF browser profile research
-- `tasklog/ts2-web.md` — Web command experiments
-- `tasklog/ts2-wezterm-analysis.md` — WezTerm + cef-rs architecture analysis
+- `log/ts2-architecture.md` — Technical decisions and design rationale
+- `log/ts2-cef.md` — CEF integration via cef-rs
+- `log/ts2-cef-wezterm.md` — CEF + WezTerm integration details
+- `log/ts2-cef-mvp.md` through `ts2-cef-mvp5.md` — MVP iteration experiments
+- `log/ts2-profile.md` — CEF browser profile research
+- `log/ts2-web.md` — Web command experiments
+- `log/ts2-wezterm-analysis.md` — WezTerm + cef-rs architecture analysis
 
 ### TermSurf 1.x (legacy)
 
-- `tasklog/ts1-bookmarks.md` — Bookmarks implementation plan
-- `tasklog/ts1-build.md` — Build instructions and troubleshooting
-- `tasklog/ts1-console.md` — Console bridging and JavaScript API
-- `tasklog/ts1-ctrl-z.md` — ctrl+z/fg analysis (deferred)
-- `tasklog/ts1-keybindings.md` — Webview keyboard shortcuts and modes
-- `tasklog/ts1-libghostty.md` — Changes to libghostty
-- `tasklog/ts1-release.md` — Release procedure and versioning
-- `tasklog/ts1-target-blank.md` — target="_blank" link handling
-- `tasklog/ts1-webview.md` — WebView implementation and API checklist
+- `log/ts1-bookmarks.md` — Bookmarks implementation plan
+- `log/ts1-build.md` — Build instructions and troubleshooting
+- `log/ts1-console.md` — Console bridging and JavaScript API
+- `log/ts1-ctrl-z.md` — ctrl+z/fg analysis (deferred)
+- `log/ts1-keybindings.md` — Webview keyboard shortcuts and modes
+- `log/ts1-libghostty.md` — Changes to libghostty
+- `log/ts1-release.md` — Release procedure and versioning
+- `log/ts1-target-blank.md` — target="_blank" link handling
+- `log/ts1-webview.md` — WebView implementation and API checklist
 
 ### General
 
-- `tasklog/merge-upstream.md` — How to merge changes from upstream repos
-- `tasklog/competitors.md` — Terminal-browser hybrid comparison
-- `tasklog/website.md` — termsurf.com website
+- `log/merge-upstream.md` — How to merge changes from upstream repos
+- `log/competitors.md` — Terminal-browser hybrid comparison
+- `log/website.md` — termsurf.com website
 
 ## AI Reminder
 
