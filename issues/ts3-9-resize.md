@@ -522,3 +522,124 @@ continuously during resize. This causes a persistent mismatch.
 
 3. **Speed up CEF response** — Investigate why it takes 1+ seconds for CEF to
    produce a new texture after resize command.
+
+---
+
+### Experiment 2: Remove Debounce
+
+**Status:** PENDING
+
+**Goal:** Remove the 30ms debounce logic entirely and send resize commands on
+every frame where the size changes. This tests whether CEF can keep up with
+rapid resize commands and whether removing the debounce improves perceived
+responsiveness.
+
+#### Hypothesis
+
+The 30ms debounce was added to prevent "flooding" the profile server with resize
+commands. But Experiment 1 showed that the debounce causes resize commands to
+only fire after the user completely stops dragging, resulting in a 1+ second
+delay before the correct texture appears.
+
+If we remove the debounce:
+
+- **Best case:** CEF keeps up, textures arrive faster, resize feels responsive
+- **Worst case:** XPC/CEF gets overwhelmed, performance degrades, but we learn
+  the actual bottleneck
+
+Either outcome provides valuable data.
+
+#### Changes
+
+**webview_xpc.rs — Remove debounce logic**
+
+Replace `check_and_send_resize` with a simpler version that sends immediately
+when size changes:
+
+```rust
+/// Send resize command immediately if size changed from last sent.
+/// No debouncing — send on every frame where size differs.
+pub fn check_and_send_resize(&self, pane_id: PaneId, width: u32, height: u32) -> bool {
+    let current_size = (width, height);
+
+    let mut debounce = self.resize_debounce.lock().unwrap();
+    let state = debounce.entry(pane_id).or_insert(ResizeDebounceState {
+        last_sent_size: None,
+        pending_resize: None,
+    });
+
+    // Only send if size actually changed
+    if state.last_sent_size == Some(current_size) {
+        return false;
+    }
+
+    log::info!(
+        "[RESIZE] pane={} SENDING {}x{} (was {:?})",
+        pane_id,
+        width,
+        height,
+        state.last_sent_size
+    );
+
+    state.last_sent_size = Some(current_size);
+    state.pending_resize = None;
+    drop(debounce);
+
+    self.send_resize(pane_id, width, height)
+}
+```
+
+#### Files to Modify
+
+| File                                            | Changes                              |
+| ----------------------------------------------- | ------------------------------------ |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Replace debounce with immediate send |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Slow drag
+web google.com
+# Slowly drag window edge
+# Watch: Does webview resize more frequently?
+
+# Test 2: Fast drag
+# Rapidly drag window edge back and forth
+# Watch: Does performance degrade? Does app lag?
+
+# Test 3: Check XPC traffic
+cat /tmp/termsurf-gui.log | grep "\[RESIZE\]" | wc -l
+# Expected: Many more resize commands than before
+
+cat /tmp/termsurf-profile-*.log | grep "\[RESIZE-RX\]" | wc -l
+# Expected: Should match GUI send count (no lost commands)
+```
+
+#### What We're Testing
+
+| Question                        | How to Measure                         |
+| ------------------------------- | -------------------------------------- |
+| Can CEF handle rapid resize?    | Watch for lag, dropped frames, crashes |
+| Does removing debounce help UX? | Subjective: does resize feel smoother? |
+| What's the actual bottleneck?   | Compare send count vs receive count    |
+| Is XPC the limiting factor?     | Check if commands are lost or delayed  |
+
+#### Success Criteria
+
+- [ ] Resize commands sent on every size change (no 30ms wait)
+- [ ] App remains stable during rapid resize
+- [ ] Determine if debounce removal improves or worsens UX
+- [ ] Identify actual bottleneck if UX doesn't improve
+
+#### Risks
+
+- **Performance degradation** — Flooding XPC/CEF with resize commands could
+  cause lag or dropped frames
+- **Resource exhaustion** — Rapid IOSurface creation could exhaust GPU memory
+- **Race conditions** — More resize commands in flight increases chance of
+  ordering issues
+
+If performance degrades significantly, we'll know the debounce was necessary and
+can explore middle-ground solutions (e.g., 10ms debounce, or throttle to 60fps).
