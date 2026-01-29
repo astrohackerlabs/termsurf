@@ -130,7 +130,8 @@ The following are explicitly **not** part of this task:
 
 ts3 uses two IPC mechanisms:
 
-- **XPC** — GUI ↔ Launcher, Launcher → Profile, Profile → GUI (IOSurface transfer)
+- **XPC** — GUI ↔ Launcher, Launcher → Profile, Profile → GUI (IOSurface
+  transfer)
 - **Unix domain sockets** — CLI → GUI (the `web` command)
 
 For GUI → Profile resize communication, **XPC is the correct choice**:
@@ -222,13 +223,13 @@ cef::post_task(cef::ThreadId::UI, move || {
 
 ### Key Files
 
-| File | Role |
-|------|------|
-| `ts3/termsurf-profile/src/main.rs` | Command listener, resize handler |
-| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Store command connection |
-| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Detect size change, debounce |
-| `ts2/wezterm-gui/src/cef_browser/mod.rs` | Reference implementation |
-| `ts2/wezterm-gui/src/termwindow/render/pane.rs` | Reference debounce logic |
+| File                                            | Role                             |
+| ----------------------------------------------- | -------------------------------- |
+| `ts3/termsurf-profile/src/main.rs`              | Command listener, resize handler |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Store command connection         |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Detect size change, debounce     |
+| `ts2/wezterm-gui/src/cef_browser/mod.rs`        | Reference implementation         |
+| `ts2/wezterm-gui/src/termwindow/render/pane.rs` | Reference debounce logic         |
 
 ## Experiments
 
@@ -246,11 +247,13 @@ to the GUI via `gui_endpoint`, that same connection can be used by the GUI to
 send commands back. No separate command channel is needed.
 
 Current state:
+
 - Profile server connects to GUI → sends `display_surface`
 - GUI stores connection in a `Vec` (index only, no pane mapping)
 - Profile server's event handler only logs errors
 
 To enable resize:
+
 - GUI stores connection by `pane_id` in a `HashMap`
 - Profile server's event handler processes incoming commands
 - GUI sends `resize_browser` on the existing connection
@@ -337,9 +340,10 @@ set_new_connection_handler(&listener, move |conn| {
 });
 ```
 
-The `pane_id` lookup works because `pending_sessions.insert(session_id, pane_id)`
-happens on line 237-240, BEFORE the spawn message is sent. When the profile
-server connects back, the mapping is already present.
+The `pane_id` lookup works because
+`pending_sessions.insert(session_id, pane_id)` happens on line 237-240, BEFORE
+the spawn message is sent. When the profile server connects back, the mapping is
+already present.
 
 **2. GUI: Add method to send commands**
 
@@ -380,8 +384,8 @@ impl XpcManager {
 
 **File:** `ts3/termsurf-profile/src/main.rs`
 
-Currently, the GUI connection has no event handler (or only logs errors). Add
-a handler to process incoming commands:
+Currently, the GUI connection has no event handler (or only logs errors). Add a
+handler to process incoming commands:
 
 ```rust
 // In create_browser_on_ui_thread, after creating gui connection:
@@ -512,12 +516,12 @@ in a separate `HashMap<PaneId, ResizeState>` if overlay iteration is immutable.
 
 #### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Change `connections` Vec to `peer_connections` HashMap, add `send_command()` and `send_resize()` |
-| `ts3/termsurf-profile/src/main.rs` | Add event handler on gui connection, store Browser ref, add `resize_browser()` |
-| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Add debounce fields to WebviewOverlay |
-| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Detect size change, 30ms debounce, call `send_resize()` |
+| File                                               | Changes                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`    | Change `connections` Vec to `peer_connections` HashMap, add `send_command()` and `send_resize()` |
+| `ts3/termsurf-profile/src/main.rs`                 | Add event handler on gui connection, store Browser ref, add `resize_browser()`                   |
+| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Add debounce fields to WebviewOverlay                                                            |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs`    | Detect size change, 30ms debounce, call `send_resize()`                                          |
 
 #### Verification
 
@@ -599,8 +603,8 @@ impl XpcManager {
 }
 ```
 
-Call this from wherever pane close is handled (e.g., when the overlay is
-removed from the overlays map).
+Call this from wherever pane close is handled (e.g., when the overlay is removed
+from the overlays map).
 
 #### Risks and Mitigations
 
@@ -622,6 +626,7 @@ removed from the overlays map).
 **Result:** FAILED — CEF helper subprocess crashes during browser creation.
 
 **Symptoms:**
+
 - `web google.com` times out after 5 seconds waiting for IOSurface
 - Profile server logs show browser creation started but never completed
 - CEF helper subprocess crashes with:
@@ -633,12 +638,14 @@ removed from the overlays map).
 **What Changed:**
 
 In `create_browser_on_ui_thread`, the original code was:
+
 ```rust
 set_event_handler(&*gui, |event| { /* log errors */ });
 gui.resume();
 ```
 
 The implementation changed this to:
+
 ```rust
 gui.resume();
 // ... create browser_state ...
@@ -675,7 +682,7 @@ communication. Possible explanations:
 
 ### Experiment 2: Fix XPC Event Handler Order
 
-**Status:** PLANNED
+**Status:** FAILED
 
 **Goal:** Fix the XPC event handler ordering bug from Experiment 1. The event
 handler must be set BEFORE `gui.resume()` to avoid undefined behavior.
@@ -696,9 +703,9 @@ set_event_handler(&*gui, move |event| {
 });
 ```
 
-XPC connections should have their event handler set before being resumed. Setting
-the handler after resume may cause race conditions where messages arrive before
-the handler is ready.
+XPC connections should have their event handler set before being resumed.
+Setting the handler after resume may cause race conditions where messages arrive
+before the handler is ready.
 
 #### The Challenge
 
@@ -743,6 +750,7 @@ let browser_state = Arc::new(BrowserState { ... });
 ```
 
 This ensures:
+
 - Event handler is set before resume
 - Handler can safely access browser_state once it's populated
 - Early messages (before state is ready) are ignored harmlessly
@@ -856,17 +864,17 @@ pub fn create_browser_on_ui_thread(
 2. **Safe state access** — The handler checks if state is available before using
    it. Early messages (unlikely but possible) are safely ignored.
 
-3. **No race condition** — The browser is created synchronously on the UI thread.
-   By the time the browser is ready to receive resize commands, the state wrapper
-   is already populated.
+3. **No race condition** — The browser is created synchronously on the UI
+   thread. By the time the browser is ready to receive resize commands, the
+   state wrapper is already populated.
 
 4. **Lock discipline** — The lock is dropped before `post_task` to avoid holding
    it during CEF operations.
 
 #### Files to Modify
 
-| File | Changes |
-|------|---------|
+| File                               | Changes                                                         |
+| ---------------------------------- | --------------------------------------------------------------- |
 | `ts3/termsurf-profile/src/main.rs` | Reorder event handler before resume, use deferred state wrapper |
 
 No changes needed to the GUI side — the XPC connection storage and resize
@@ -909,12 +917,78 @@ cat /tmp/termsurf-profile-*.log | grep -E "(resize_browser|was_resized)"
 #### Risks
 
 1. **Deferred state overhead** — Extra `Arc<Mutex<Option<>>>` wrapper adds
-   indirection. Performance impact should be negligible since resize events
-   are infrequent.
+   indirection. Performance impact should be negligible since resize events are
+   infrequent.
 
 2. **Dropped early messages** — If the GUI sends a resize before state is
-   populated, it's ignored. This is acceptable since the browser hasn't
-   rendered yet anyway.
+   populated, it's ignored. This is acceptable since the browser hasn't rendered
+   yet anyway.
 
 3. **Lock contention** — The mutex is only held briefly during message handling.
    Not a concern at normal resize frequencies.
+
+#### Conclusion
+
+**Result:** FAILED — The XPC handler order fix worked (no crash), but resizing
+produces wrong dimensions and only works once.
+
+**What Worked:**
+
+- The deferred state wrapper approach correctly fixed the XPC handler ordering
+- Browser creation now succeeds (no more CEF subprocess crash)
+- Resize commands are sent from GUI and received by profile server
+- Profile server calls `was_resized()` and `invalidate()` correctly
+
+**What Failed:**
+
+1. **Wrong dimensions sent — physical instead of logical pixels**
+
+   The resize code in `draw.rs` sends viewport dimensions directly:
+   ```rust
+   xpc_manager.check_and_send_resize(*pane_id, viewport_w as u32, viewport_h as u32);
+   ```
+
+   But `viewport_w` and `viewport_h` are in **physical pixels**. CEF expects
+   **logical pixels** (which it multiplies by `device_scale_factor`).
+
+   Evidence from logs:
+   - Initial spawn: logical 1033×1050 → physical IOSurface 2066×2100 ✓
+   - Resize sends: 2067×2100 (physical, should be ~1033 logical)
+   - CEF applies 2× scale → IOSurface becomes 4134×4200 ✗
+
+   The initial spawn in `webview_socket.rs` correctly divides by scale:
+   ```rust
+   let scale = dims.dpi as f32 / 72.0;
+   let lw = (physical_width / scale) as u32;
+   let lh = (physical_height / scale) as u32;
+   ```
+
+   But the resize code omits this division.
+
+2. **Resolution change instead of resize**
+
+   Because physical pixels were sent as logical, CEF doubled the size. The
+   webview appeared to "change resolution" rather than resize — the content
+   rendered at 2× the expected size, making everything appear zoomed out or
+   lower resolution.
+
+3. **Resize only works once**
+
+   After the first incorrect resize, subsequent resizes appeared to stop
+   working. This may be related to the dimension mismatch confusing the debounce
+   logic, or it may have been coincidental with closing the webview.
+
+**Hypothesis for Fix (Experiment 3):**
+
+Divide viewport dimensions by scale factor before sending resize:
+
+```rust
+// In draw.rs, around line 364:
+let scale = self.dimensions.dpi as f32 / 72.0;
+let logical_w = (viewport_w / scale) as u32;
+let logical_h = (viewport_h / scale) as u32;
+xpc_manager.check_and_send_resize(*pane_id, logical_w, logical_h);
+```
+
+This matches how the initial dimensions are calculated in `webview_socket.rs`
+and should produce correctly-sized IOSurfaces after resize.
