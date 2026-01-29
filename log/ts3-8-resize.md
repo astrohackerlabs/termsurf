@@ -308,23 +308,38 @@ pub struct XpcManager {
 }
 ```
 
-In `set_new_connection_handler` (around line 227), the connection is already
-wrapped in `Arc` and `pane_id` is already looked up. Change:
+In `set_new_connection_handler` (around line 149), look up `pane_id` from the
+captured `session_id` and store the connection:
 
 ```rust
-// Before (line 227):
-manager_for_storage.connections.lock().unwrap().push(conn);
+set_new_connection_handler(&listener, move |conn| {
+    log::info!("[XPC Manager] New connection for session {}", session_id_clone);
 
-// After:
-if let Some(pane_id) = pane_id {
-    manager_for_storage.peer_connections.lock().unwrap()
-        .insert(pane_id, Arc::clone(&conn));
-    log::info!("[XPC] Stored peer connection for pane {}", pane_id);
-}
+    let conn = Arc::new(conn);
+    let session_id = session_id_clone.clone();
+    let manager = Arc::clone(&self_clone);
+
+    // Look up pane_id from session BEFORE setting event handler
+    // This works because pending_sessions.insert() happens before spawn_profile
+    let pane_id = manager.pending_sessions.lock().unwrap()
+        .get(&session_id).copied();
+
+    // Store connection by pane_id (replaces the old Vec push at line 227)
+    if let Some(pane_id) = pane_id {
+        manager.peer_connections.lock().unwrap()
+            .insert(pane_id, Arc::clone(&conn));
+        log::info!("[XPC] Stored peer connection for pane {}", pane_id);
+    }
+
+    // ... existing set_event_handler code ...
+
+    conn.resume();
+});
 ```
 
-Note: `pane_id` is already in scope — it's looked up on lines 187-190 from
-`pending_sessions.get(&session_id)`.
+The `pane_id` lookup works because `pending_sessions.insert(session_id, pane_id)`
+happens on line 237-240, BEFORE the spawn message is sent. When the profile
+server connects back, the mapping is already present.
 
 **2. GUI: Add method to send commands**
 
@@ -528,7 +543,7 @@ cat /tmp/termsurf-profile-*.log | grep -i resize
 cat /tmp/termsurf-gui.log | grep "Sent resize"
 # Should show: "[XPC] Sent resize to pane 0: 640x768"
 
-# Open second webview
+# Open second webview in the new pane
 web github.com
 # Should get its own connection
 cat /tmp/termsurf-gui.log | grep "peer connection"
@@ -536,6 +551,11 @@ cat /tmp/termsurf-gui.log | grep "peer connection"
 
 # Drag the window edge to resize
 # Both webviews should update after 30ms settle delay
+
+# Close one pane (Cmd+W or exit)
+# Remaining webview should expand to full size and re-render
+cat /tmp/termsurf-gui.log | grep "Sent resize"
+# Should show resize to larger dimensions
 ```
 
 #### Success Criteria
@@ -565,6 +585,22 @@ xpc_manager.send_command(pane_id, &mouse_event_msg);
 ```
 
 Same connection, same pattern. The `send_command()` method is generic.
+
+#### Connection Cleanup
+
+When a webview pane is closed, remove the stale connection:
+
+```rust
+impl XpcManager {
+    pub fn remove_connection(&self, pane_id: u64) {
+        self.peer_connections.lock().unwrap().remove(&pane_id);
+        log::info!("[XPC] Removed connection for pane {}", pane_id);
+    }
+}
+```
+
+Call this from wherever pane close is handled (e.g., when the overlay is
+removed from the overlays map).
 
 #### Risks and Mitigations
 
