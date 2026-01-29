@@ -232,4 +232,345 @@ cef::post_task(cef::ThreadId::UI, move || {
 
 ## Experiments
 
-_To be added as implementation progresses._
+### Experiment 1: Implement Dynamic Resize via XPC
+
+**Status:** PLANNED
+
+**Goal:** Enable the GUI to send resize commands to the profile server so that
+webviews re-render at the correct size when panes are resized.
+
+#### Overview
+
+Currently, the GUI can receive IOSurface frames from the profile server but
+cannot send commands back. This experiment establishes bidirectional
+communication by:
+
+1. Having the profile server share its command endpoint with the GUI
+2. GUI stores a connection to send resize commands
+3. GUI detects pane size changes with 30ms debounce
+4. Profile server handles resize commands and triggers CEF re-render
+
+#### Changes
+
+**1. Profile Server: Include command endpoint in display_surface**
+
+**File:** `ts3/termsurf-profile/src/main.rs`
+
+In `on_accelerated_paint`, include the command endpoint in the message. The
+endpoint only needs to be sent once per browser session (first frame).
+
+Add to `BrowserState`:
+
+```rust
+struct BrowserState {
+    // ... existing fields ...
+    command_endpoint_sent: AtomicBool,  // Track if we've sent endpoint
+}
+```
+
+Add to `ProfileState`:
+
+```rust
+struct ProfileState {
+    // ... existing fields ...
+    command_endpoint: Mutex<Option<XpcEndpoint>>,  // Cloneable endpoint
+}
+```
+
+In `on_accelerated_paint`, when sending `display_surface`:
+
+```rust
+// Send command endpoint with first frame only
+if !self.inner.state.command_endpoint_sent.swap(true, Ordering::Relaxed) {
+    if let Some(endpoint) = profile_state.command_endpoint.lock().unwrap().clone() {
+        msg.set_endpoint("command_endpoint", endpoint);
+    }
+}
+```
+
+Note: XPC endpoints can only be sent once. The profile server must create the
+endpoint in a way that allows cloning, or create a new endpoint per browser.
+Alternative: send a separate `register_commands` message before the first
+surface.
+
+**2. Profile Server: Handle resize_browser command**
+
+**File:** `ts3/termsurf-profile/src/main.rs`
+
+In the command listener handler (alongside `create_browser`):
+
+```rust
+"resize_browser" => {
+    let session_id = msg.get_string("session_id").unwrap_or_default();
+    let width = msg.get_i64("width") as u32;
+    let height = msg.get_i64("height") as u32;
+
+    println!(
+        "Profile: resize_browser session={}, size={}x{}",
+        session_id, width, height
+    );
+
+    // Store pending resize and post to UI thread
+    state.pending_resizes.lock().unwrap().push((
+        session_id.to_string(),
+        width,
+        height,
+    ));
+
+    let mut task = ResizeBrowserTask::new(Arc::clone(&state));
+    cef::post_task(cef::ThreadId::UI, Some(&mut task));
+}
+```
+
+**3. Profile Server: Store Browser reference for resize**
+
+**File:** `ts3/termsurf-profile/src/main.rs`
+
+`BrowserState` needs to hold the CEF `Browser` to call `was_resized()`:
+
+```rust
+struct BrowserState {
+    session_id: String,
+    gui: Arc<XpcConnection>,
+    width: AtomicU32,
+    height: AtomicU32,
+    last_handle: AtomicPtr<c_void>,
+    browser: Mutex<Option<Browser>>,  // NEW: for resize
+    command_endpoint_sent: AtomicBool,
+}
+```
+
+In `create_browser_on_ui_thread`, store the browser:
+
+```rust
+match browser {
+    Some(b) => {
+        let browser_id = b.identifier();
+        *browser_state.browser.lock().unwrap() = Some(b);
+        // ... rest of existing code ...
+    }
+    None => { /* ... */ }
+}
+```
+
+**4. Profile Server: Resize task for UI thread**
+
+**File:** `ts3/termsurf-profile/src/main.rs`
+
+```rust
+wrap_task! {
+    pub struct ResizeBrowserTask {
+        state: Arc<ProfileState>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            let pending: Vec<_> = self.state.pending_resizes
+                .lock().unwrap().drain(..).collect();
+
+            for (session_id, width, height) in pending {
+                resize_browser_on_ui_thread(&session_id, width, height, &self.state);
+            }
+        }
+    }
+}
+
+fn resize_browser_on_ui_thread(
+    session_id: &str,
+    width: u32,
+    height: u32,
+    state: &Arc<ProfileState>,
+) {
+    let browsers = state.browsers.lock().unwrap();
+
+    // Find browser by session_id
+    let browser_state = browsers.values()
+        .find(|b| b.session_id == session_id);
+
+    if let Some(bs) = browser_state {
+        // Update stored dimensions
+        bs.width.store(width, Ordering::Relaxed);
+        bs.height.store(height, Ordering::Relaxed);
+
+        // Notify CEF
+        if let Some(ref browser) = *bs.browser.lock().unwrap() {
+            if let Some(host) = browser.host() {
+                println!(
+                    "Profile: Calling was_resized for session {} ({}x{})",
+                    session_id, width, height
+                );
+                host.was_resized();
+                host.invalidate(cef::PaintElementType::View);
+            }
+        }
+    } else {
+        eprintln!("Profile: resize_browser - session {} not found", session_id);
+    }
+}
+```
+
+**5. GUI: Store command connection per overlay**
+
+**File:** `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`
+
+Extend the overlay state to include command connection and debounce state:
+
+```rust
+pub struct WebviewOverlay {
+    pub mach_port: u32,
+    pub width: u32,
+    pub height: u32,
+    pub session_id: String,
+    // NEW fields for resize:
+    pub command_conn: Option<Arc<XpcConnection>>,
+    pub last_sent_size: Option<(u32, u32)>,
+    pub pending_size: Option<(u32, u32)>,
+    pub last_resize_time: Option<std::time::Instant>,
+}
+```
+
+When receiving `display_surface`, check for command endpoint:
+
+```rust
+if let Some(endpoint) = msg.get_endpoint("command_endpoint") {
+    match XpcConnection::from_endpoint(endpoint) {
+        Ok(conn) => {
+            set_event_handler(&conn, |event| {
+                if let Err(e) = event {
+                    eprintln!("[XPC] Command connection error: {}", e);
+                }
+            });
+            conn.resume();
+            overlay.command_conn = Some(Arc::new(conn));
+            log::info!("[XPC] Stored command connection for pane {}", pane_id);
+        }
+        Err(e) => {
+            log::error!("[XPC] Failed to connect to command endpoint: {}", e);
+        }
+    }
+}
+```
+
+**6. GUI: Detect size change and debounce**
+
+**File:** `ts3/wezterm-gui/src/termwindow/render/draw.rs`
+
+In `render_webview_overlays_webgpu`, after calculating viewport dimensions:
+
+```rust
+use std::time::{Duration, Instant};
+
+const SETTLE_DELAY: Duration = Duration::from_millis(30);
+
+// After calculating (viewport_x, viewport_y, viewport_w, viewport_h):
+
+let current_size = (viewport_w as u32, viewport_h as u32);
+
+// Check if size changed from what we last sent
+let size_changed = overlay.last_sent_size != Some(current_size);
+
+if size_changed {
+    // Size changed - update pending and mark time
+    if overlay.pending_size != Some(current_size) {
+        overlay.pending_size = Some(current_size);
+        overlay.last_resize_time = Some(Instant::now());
+    }
+}
+
+// Check if we should send resize command
+if let Some(pending) = overlay.pending_size {
+    let should_send = overlay.last_resize_time
+        .map(|t| t.elapsed() >= SETTLE_DELAY)
+        .unwrap_or(false);
+
+    if should_send {
+        if let Some(ref conn) = overlay.command_conn {
+            let msg = termsurf_xpc::XpcDictionary::new();
+            msg.set_string("action", "resize_browser");
+            msg.set_string("session_id", &overlay.session_id);
+            msg.set_i64("width", pending.0 as i64);
+            msg.set_i64("height", pending.1 as i64);
+            conn.send(&msg);
+
+            log::info!(
+                "[Render] Sent resize for pane {}: {}x{}",
+                pane_id, pending.0, pending.1
+            );
+        }
+
+        overlay.last_sent_size = Some(pending);
+        overlay.pending_size = None;
+        overlay.last_resize_time = None;
+    }
+}
+```
+
+**7. GUI: Pass session_id to overlay**
+
+The overlay needs the `session_id` to include in resize commands. This should
+already be available from the XPC message flow—verify it's stored in the overlay
+struct.
+
+#### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ts3/termsurf-profile/src/main.rs` | Send command endpoint, handle `resize_browser`, store Browser ref |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Store command connection and debounce state |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Detect size change, 30ms debounce, send resize |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Open a webview
+web google.com
+
+# Split the pane (Cmd+Shift+D)
+# The webview should re-render at the new smaller size
+
+# Check profile logs for resize handling
+cat /tmp/termsurf-profile-*.log | grep resize
+# Should show: "resize_browser session=..., size=..."
+# Should show: "Calling was_resized for session..."
+
+# Check GUI logs for resize commands
+cat /tmp/termsurf-gui.log | grep "Sent resize"
+# Should show: "[Render] Sent resize for pane 0: 640x768"
+
+# Drag the window edge to resize
+# Webview should update after 30ms settle delay
+
+# Close the split pane
+# Remaining webview should expand and re-render at full size
+```
+
+#### Success Criteria
+
+- [ ] Profile server sends command endpoint with first `display_surface`
+- [ ] GUI stores command connection per overlay
+- [ ] Splitting a pane triggers resize command after 30ms
+- [ ] Profile server receives `resize_browser` and calls `was_resized()`
+- [ ] CEF re-renders at new size
+- [ ] New IOSurface is sent to GUI with correct dimensions
+- [ ] Dragging window edge triggers resize after 30ms settle
+- [ ] Text remains crisp after resize (not stretched)
+- [ ] Multiple webviews in same window each resize independently
+
+#### Risks and Mitigations
+
+1. **XPC endpoint cloning** — XPC endpoints may only be usable once. If so,
+   profile server must create a fresh endpoint per browser or send endpoint via
+   a separate message before the first surface.
+
+2. **Debounce timing** — 30ms may be too short or too long. Start with 30ms (ts2
+   default), adjust if needed based on feel.
+
+3. **Race conditions** — Resize commands may arrive while CEF is already
+   rendering. CEF should handle this gracefully, but watch for crashes or
+   hangs.
+
+4. **Browser reference lifetime** — Storing `Browser` in `BrowserState` requires
+   careful lifetime management. The browser must outlive the state, or we need
+   weak references.
