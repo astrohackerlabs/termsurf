@@ -814,6 +814,7 @@ let state = resize_state.entry(*pane_id).or_insert(WebviewResizeState {
 if state.last_sent_size == Some(target_size) {
     state.pending_size = None;
     state.pending_since = None;
+    drop(resize_state);  // Release borrow for consistency
     // Already at correct size, skip debounce logic
 } else {
     // Check if target size changed (compare against pending, not sent)
