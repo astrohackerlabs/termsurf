@@ -740,11 +740,11 @@ let (width, height) = if msg.get_i64("physical_width") != 0 {
 
 #### Files to Modify
 
-| File                                            | Changes                                    |
-| ----------------------------------------------- | ------------------------------------------ |
-| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Add `send_resize_physical` method          |
-| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Call `send_resize_physical` instead        |
-| `ts3/termsurf-profile/src/main.rs`              | Handle physical dimensions, use `ceil()`   |
+| File                                            | Changes                                  |
+| ----------------------------------------------- | ---------------------------------------- |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Add `send_resize_physical` method        |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Call `send_resize_physical` instead      |
+| `ts3/termsurf-profile/src/main.rs`              | Handle physical dimensions, use `ceil()` |
 
 #### Verification
 
@@ -806,12 +806,14 @@ profile server: texture = 2113 * 2 = 4226  // 1 pixel larger, covers viewport!
 **Log evidence:**
 
 Before (Experiment 2):
+
 ```
 texture=1130x1650 viewport=1131x1650 diff=(-1, 0)
 [BORDER-VISIBLE] gap=(1, 0)  ← permanent 1px border
 ```
 
 After (Experiment 3):
+
 ```
 texture=4226x2490 viewport=4225x2490 diff=(1, 0)
 (no BORDER-VISIBLE at steady state)  ← border eliminated
@@ -832,3 +834,138 @@ actively dragging, not at rest.
 
 This fix eliminates the permanent 1-pixel border that appeared at steady state
 after every resize operation.
+
+### Experiment 4: Port ts2's Half-Cell Boundary Sizing
+
+Port ts2's `calculate_pane_pixel_bounds()` logic to ts3 so webviews fill panes
+precisely, extending to window edges or exactly half a cell into dividers.
+
+#### Goal
+
+Make webviews fill the exact visual bounds of their panes:
+
+- Outer edges: Extend to window border
+- Inner edges (pane dividers): Extend exactly half a cell into the divider
+
+#### Background: How ts2 Does It
+
+In ts2, pane dividers occupy one full cell, but each adjacent pane claims half.
+This creates seamless coverage:
+
+```
+┌─────────────┬─────────────┐
+│   Pane A    │   Pane B    │
+│             │             │
+│   extends → ← extends     │
+│      half cell each       │
+└─────────────┴─────────────┘
+```
+
+The key function is `calculate_pane_pixel_bounds()` in ts2's `pane.rs`.
+
+#### Current ts3 Problem
+
+ts3 uses simple grid math that doesn't account for half-cell boundaries:
+
+```rust
+let x = pos.left as f32 * cell_width + border.left.get() as f32;
+let y = pos.top as f32 * cell_height + tab_bar_height + border.top.get() as f32;
+let w = pos.pixel_width as f32;
+let h = pos.pixel_height as f32;
+```
+
+This doesn't extend to window edges or into dividers.
+
+#### Changes
+
+**1. Create `calculate_pane_pixel_bounds()` function in `draw.rs`:**
+
+Port ts2's logic with these rules:
+
+**X coordinate:**
+
+```rust
+let (x, width_delta) = if pos.left == 0 {
+    // Left edge pane: start at window border, extend half-cell into divider
+    (0.0, padding_left + border_left + (cell_width / 2.0))
+} else {
+    // Interior pane: extend half-cell into left divider
+    let x = padding_left + border_left + (pos.left as f32 * cell_width) - (cell_width / 2.0);
+    (x, cell_width)  // half-cell on each side
+};
+```
+
+**Y coordinate:**
+
+```rust
+let top_pixel_y = tab_bar_height + padding_top + border_top;
+let (y, height_delta) = if pos.top == 0 {
+    // Top edge pane: start at content area top, extend half-cell into divider
+    (top_pixel_y - padding_top, padding_top + (cell_height / 2.0))
+} else {
+    // Interior pane: extend half-cell into top divider
+    let y = top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0);
+    (y, cell_height)
+};
+```
+
+**Width:**
+
+```rust
+let terminal_cols = self.terminal_size.cols;
+let w = if pos.left + pos.width >= terminal_cols {
+    // Rightmost pane: extend to window edge
+    pixel_width - x
+} else {
+    // Interior: use grid width plus delta
+    (pos.width as f32 * cell_width) + width_delta
+};
+```
+
+**Height:**
+
+```rust
+let terminal_rows = self.terminal_size.rows;
+let h = if pos.top + pos.height >= terminal_rows {
+    // Bottom pane: extend to window edge
+    pixel_height - y
+} else {
+    // Interior: use grid height plus delta
+    (pos.height as f32 * cell_height) + height_delta
+};
+```
+
+**2. Update viewport calculation to use new function**
+
+Replace the current simple calculation with the new function call.
+
+#### Files to Modify
+
+| File                                            | Changes                                                          |
+| ----------------------------------------------- | ---------------------------------------------------------------- |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Add `calculate_pane_pixel_bounds()`, update viewport calculation |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Single pane
+web google.com
+# Webview should fill entire window (minus tab bar)
+
+# Test 2: Split panes
+# Split vertically, open webview in left pane
+# Webview should extend from left window edge to middle of divider cell
+
+# Test 3: Multiple splits
+# Create 2x2 grid, open webview in each
+# Each webview should fill its pane precisely
+```
+
+#### Success Criteria
+
+- [ ] Webview in single pane fills entire window (minus tab bar/borders)
+- [ ] Webview extends to window edge when pane is at edge
+- [ ] Webview extends half-cell into divider when adjacent to another pane
+- [ ] No visible gaps between webview and pane boundaries
