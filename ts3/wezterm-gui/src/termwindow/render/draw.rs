@@ -9,7 +9,7 @@ use ::window::glium::uniforms::{
 use ::window::glium::{BlendingFunction, LinearBlendingFactor, Surface};
 #[cfg(target_os = "macos")]
 use ::window::WindowOps;
-use config::FreeTypeLoadTarget;
+use config::{DimensionContext, FreeTypeLoadTarget};
 
 impl crate::TermWindow {
     pub fn call_draw(&mut self, frame: &mut RenderFrame) -> anyhow::Result<()> {
@@ -373,45 +373,93 @@ impl crate::TermWindow {
                 // Find this pane's position in the current layout
                 let positioned_pane = positioned_panes.iter().find(|p| p.pane.pane_id() == *pane_id);
 
+                // Calculate pane pixel bounds using ts2's half-cell boundary logic.
+                // Pane dividers occupy one full cell, but each adjacent pane claims half.
+                // This ensures webviews fill panes precisely.
                 let (viewport_x, viewport_y, viewport_w, viewport_h) = match positioned_pane {
                     Some(pos) => {
-                        // Convert cell position to pixels
                         let cell_width = self.render_metrics.cell_size.width as f32;
                         let cell_height = self.render_metrics.cell_size.height as f32;
 
-                        // Get offsets for tab bar and borders
-                        // Note: must check show_tab_bar, as tab_bar_pixel_height() always returns a value
+                        // Get tab bar height
                         let tab_bar_height = if self.show_tab_bar {
                             self.tab_bar_pixel_height().unwrap_or(0.)
                         } else {
                             0.0
                         };
+
+                        // Get border dimensions
                         let border = self.get_os_border();
+                        let border_left = border.left.get() as f32;
+                        let border_top = border.top.get() as f32;
 
-                        // Calculate pixel position
-                        // Pane's left/top are in cells, relative to the content area
-                        let x = pos.left as f32 * cell_width + border.left.get() as f32;
-                        let y = pos.top as f32 * cell_height + tab_bar_height + border.top.get() as f32;
+                        // Get padding from config
+                        let h_context = DimensionContext {
+                            dpi: self.dimensions.dpi as f32,
+                            pixel_max: self.dimensions.pixel_width as f32,
+                            pixel_cell: cell_width,
+                        };
+                        let v_context = DimensionContext {
+                            dpi: self.dimensions.dpi as f32,
+                            pixel_max: self.dimensions.pixel_height as f32,
+                            pixel_cell: cell_height,
+                        };
+                        let padding_left = self.config.window_padding.left.evaluate_as_pixels(h_context);
+                        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
 
-                        // Pane's pixel_width/height are already in pixels
-                        let w = pos.pixel_width as f32;
-                        let h = pos.pixel_height as f32;
+                        // Terminal grid dimensions
+                        let terminal_cols = self.terminal_size.cols as usize;
+                        let terminal_rows = self.terminal_size.rows as usize;
+
+                        // Window pixel dimensions
+                        let pixel_width = self.dimensions.pixel_width as f32;
+                        let pixel_height = self.dimensions.pixel_height as f32;
+
+                        // Top of content area (after tab bar, padding, border)
+                        let top_pixel_y = tab_bar_height + padding_top + border_top;
+
+                        // X coordinate: extend to window edge or half-cell into divider
+                        let (x, width_delta) = if pos.left == 0 {
+                            // Left edge pane: start at window border
+                            (0.0, padding_left + border_left + (cell_width / 2.0))
+                        } else {
+                            // Interior pane: extend half-cell into left divider
+                            let x = padding_left + border_left + (pos.left as f32 * cell_width) - (cell_width / 2.0);
+                            (x, cell_width) // half-cell on each side
+                        };
+
+                        // Y coordinate: extend to content top or half-cell into divider
+                        let (y, height_delta) = if pos.top == 0 {
+                            // Top edge pane: start at content area top
+                            (top_pixel_y - padding_top, padding_top + (cell_height / 2.0))
+                        } else {
+                            // Interior pane: extend half-cell into top divider
+                            let y = top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0);
+                            (y, cell_height)
+                        };
+
+                        // Width: extend to window edge or use grid width with delta
+                        let w = if pos.left + pos.width >= terminal_cols {
+                            // Rightmost pane: extend to window edge
+                            pixel_width - x
+                        } else {
+                            // Interior: use grid width plus delta
+                            (pos.width as f32 * cell_width) + width_delta
+                        };
+
+                        // Height: extend to window edge or use grid height with delta
+                        let h = if pos.top + pos.height >= terminal_rows {
+                            // Bottom pane: extend to window edge
+                            pixel_height - y
+                        } else {
+                            // Interior: use grid height plus delta
+                            (pos.height as f32 * cell_height) + height_delta
+                        };
 
                         log::info!(
-                            "[Render] Pane {} viewport: ({}, {}) {}x{}",
-                            pane_id, x, y, w, h
-                        );
-                        log::info!(
-                            "[LAYOUT] pane={} pos.left={} pos.top={} pos.pixel={}x{} cell={}x{} tab_bar={} window.dpi={}",
-                            pane_id,
-                            pos.left,
-                            pos.top,
-                            pos.pixel_width,
-                            pos.pixel_height,
-                            cell_width,
-                            cell_height,
-                            tab_bar_height,
-                            self.dimensions.dpi
+                            "[BOUNDS] pane={} pos=({},{}) size={}x{} -> viewport=({:.0},{:.0}) {:.0}x{:.0}",
+                            pane_id, pos.left, pos.top, pos.width, pos.height,
+                            x, y, w, h
                         );
 
                         (x, y, w, h)
