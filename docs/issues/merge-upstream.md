@@ -256,7 +256,7 @@ zig build test
 
 WezTerm is used for TermSurf 2.0. ts2 served as a testbed for CEF integration
 experiments. It validated that WezTerm + CEF works but revealed architectural
-limitations (see `docs/ts3-1-architecture.md`).
+limitations (see `docs/ts3-001-architecture.md`).
 
 ### Modified Files Inventory
 

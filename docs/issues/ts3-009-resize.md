@@ -1,6 +1,6 @@
 # TS3-9: Dynamic Webview Resize (Continued)
 
-Continuation of resize work from [ts3-8-resize.md](./ts3-8-resize.md). The basic
+Continuation of resize work from [ts3-008-resize.md](./ts3-008-resize.md). The basic
 resize pipeline is now functional but exhibits inconsistent behavior.
 
 ## Goal

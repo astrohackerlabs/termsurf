@@ -2,7 +2,7 @@
 
 ## Background
 
-This document continues the work from [ts3-2-webview.md](./ts3-2-webview.md),
+This document continues the work from [ts3-002-webview.md](./ts3-002-webview.md),
 which explored cross-process GPU texture sharing between the profile server
 (CEF) and the GUI (wezterm-gui).
 

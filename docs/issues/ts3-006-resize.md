@@ -2,7 +2,7 @@
 
 ## Background
 
-This document continues from [ts3-5-profile.md](./ts3-5-profile.md), which fixed
+This document continues from [ts3-005-profile.md](./ts3-005-profile.md), which fixed
 profile isolation so each `--profile` value creates a separate CEF data
 directory at `~/.config/termsurf/cef/<profile>/`.
 

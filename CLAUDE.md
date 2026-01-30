@@ -308,12 +308,12 @@ testbed before ts1 integration. Changes made to the example:
 
 ### TermSurf 3.0 (active)
 
-- `docs/issues/ts3-1-architecture.md` — High-level architecture overview
-- `docs/issues/ts3-2-webview.md` — Webview rendering implementation
-- `docs/issues/ts3-3-xpc.md` — XPC architecture for inter-process communication
-- `docs/issues/ts3-4-webpage.md` — Webpage rendering solutions
-- `docs/issues/ts3-5-profile.md` — Profile isolation for browser data
-- `docs/issues/ts3-6-resize.md` — Resize support implementation
+- `docs/issues/ts3-001-architecture.md` — High-level architecture overview
+- `docs/issues/ts3-002-webview.md` — Webview rendering implementation
+- `docs/issues/ts3-003-xpc.md` — XPC architecture for inter-process communication
+- `docs/issues/ts3-004-webpage.md` — Webpage rendering solutions
+- `docs/issues/ts3-005-profile.md` — Profile isolation for browser data
+- `docs/issues/ts3-006-resize.md` — Resize support implementation
 
 ### TermSurf 2.0 (historical)
 

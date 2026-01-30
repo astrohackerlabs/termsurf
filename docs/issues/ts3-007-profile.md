@@ -471,7 +471,7 @@ Remove the entire `ts3/termsurf-launcher/` directory and remove it from
 **8. Update documentation**
 
 - `CLAUDE.md`: Remove launcher from key binaries, update topology diagram
-- `docs/ts3-3-xpc.md`: Update architecture description
+- `docs/ts3-003-xpc.md`: Update architecture description
 
 #### Files to Modify
 
@@ -483,7 +483,7 @@ Remove the entire `ts3/termsurf-launcher/` directory and remove it from
 | Modify | `ts3/scripts/build-release.sh`                  |
 | Modify | `ts3/Cargo.toml`                                |
 | Modify | `CLAUDE.md`                                     |
-| Modify | `docs/ts3-3-xpc.md`                             |
+| Modify | `docs/ts3-003-xpc.md`                             |
 | Delete | `ts3/termsurf-launcher/` (entire directory)     |
 
 #### Verification
