@@ -451,3 +451,129 @@ Not `surface.width * scale` vs `viewport_w`.
 1. Fix the SIZE-MISMATCH diagnostic to compare physical-to-physical
 2. Investigate why spawn-time sizing produces larger dimensions than render-time
    viewport (grid-based calculation vs exact pixel bounds)
+
+### Experiment 2: Fix Diagnostic and Measure Async Lag
+
+Fix the bugs from Experiment 1 and add timestamp-based latency measurement.
+
+#### Goal
+
+1. Correct the SIZE-MISMATCH comparison to physical-to-physical
+2. Add timestamps to measure latency between RESIZE-SEND and TEXTURE-SIZE
+3. Determine if borders appear due to async lag during resize transitions
+
+#### Changes
+
+**1. Fix SIZE-MISMATCH in `draw.rs`:**
+
+The texture dimensions from IOSurface are already physical pixels. Compare
+directly without multiplying by scale:
+
+```rust
+// BEFORE (wrong):
+let texture_physical_w = (surface.width as f32 * scale) as u32;
+let texture_physical_h = (surface.height as f32 * scale) as u32;
+if texture_physical_w != viewport_w as u32 ...
+
+// AFTER (correct):
+if surface.width != viewport_w as u32 || surface.height != viewport_h as u32 {
+    log::warn!(
+        "[SIZE-MISMATCH] pane={} texture={}x{} viewport={}x{} diff=({}, {})",
+        pane_id,
+        surface.width, surface.height,
+        viewport_w as u32, viewport_h as u32,
+        surface.width as i32 - viewport_w as i32,
+        surface.height as i32 - viewport_h as i32
+    );
+}
+```
+
+**2. Add timestamp to RESIZE-SEND in `draw.rs`:**
+
+Record when resize commands are sent so we can correlate with texture arrival:
+
+```rust
+use std::time::SystemTime;
+
+log::info!(
+    "[RESIZE-SEND] pane={} logical={}x{} physical={}x{} timestamp={:?}",
+    pane_id, logical_w, logical_h,
+    (logical_w as f32 * scale) as u32,
+    (logical_h as f32 * scale) as u32,
+    SystemTime::now()
+);
+```
+
+**3. Add timestamp to TEXTURE-SIZE in `webview_xpc.rs`:**
+
+Record when textures arrive to measure round-trip latency:
+
+```rust
+use std::time::SystemTime;
+
+log::info!(
+    "[TEXTURE-SIZE] pane={} size={}x{} timestamp={:?}",
+    pid, width, height,
+    SystemTime::now()
+);
+```
+
+**4. Add transition logging in `draw.rs`:**
+
+Log when texture size doesn't match viewport during render (the moment borders
+would be visible):
+
+```rust
+if surface.width < viewport_w as u32 || surface.height < viewport_h as u32 {
+    log::warn!(
+        "[BORDER-VISIBLE] pane={} texture={}x{} < viewport={}x{} gap=({}, {})",
+        pane_id,
+        surface.width, surface.height,
+        viewport_w as u32, viewport_h as u32,
+        viewport_w as i32 - surface.width as i32,
+        viewport_h as i32 - surface.height as i32
+    );
+}
+```
+
+#### Files to Modify
+
+| File                                            | Changes                           |
+| ----------------------------------------------- | --------------------------------- |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Fix SIZE-MISMATCH, add timestamps |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Add timestamp to TEXTURE-SIZE     |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# In terminal:
+web google.com
+
+# Resize window rapidly, then stop
+# Check logs for latency:
+grep -E "\[(RESIZE-SEND|TEXTURE-SIZE)\]" /tmp/termsurf-gui.log | tail -20
+
+# Check for border-visible moments:
+grep "BORDER-VISIBLE" /tmp/termsurf-gui.log
+
+# Calculate latency by comparing timestamps between RESIZE-SEND and TEXTURE-SIZE
+```
+
+#### Expected Findings
+
+1. **SIZE-MISMATCH** will show actual physical-to-physical comparison (texture
+   larger than viewport by ~325×240 on steady state)
+
+2. **BORDER-VISIBLE** will fire during resize transitions when old texture
+   hasn't caught up to new larger viewport
+
+3. **Latency measurement** will show time between RESIZE-SEND and corresponding
+   TEXTURE-SIZE (expected: 10-50ms for XPC round-trip + CEF render)
+
+#### Success Criteria
+
+- [ ] SIZE-MISMATCH shows correct physical-to-physical comparison
+- [ ] Can measure latency between RESIZE-SEND and TEXTURE-SIZE
+- [ ] BORDER-VISIBLE logs correlate with visible borders during resize
