@@ -72,10 +72,103 @@ Before tackling this issue, we completed the resize implementation in ts3-9:
    of being constrained to the pane's viewport. This suggests the size/position
    calculation is using window dimensions instead of pane dimensions.
 
-## Next Steps
+## Experiment 1: Filter Overlays by Active Tab
 
-- [ ] Investigate how pane IDs are mapped to webview overlays
-- [ ] Understand when/where overlay visibility is determined
-- [ ] Trace the render path to find where the incorrect size is computed
-- [ ] Fix pane association so overlays only render for their owning pane
-- [ ] Fix size calculation to use pane viewport, not window size
+### Hypothesis
+
+The render loop iterates over ALL webview overlays globally, regardless of which
+tab is active. When a pane from Tab A is rendered while Tab B is active, the
+pane isn't found in Tab B's layout, triggering a fallback to full-window
+coordinates that covers the tab bar.
+
+**If we store tab_id in WebviewOverlay and filter by active tab during render,
+overlays will only appear in their owning tab.**
+
+### Technical Analysis
+
+#### Current Flow (Broken)
+
+1. `webview_panes.overlays` is a global `HashMap<PaneId, WebviewOverlay>`
+2. Render loop at `draw.rs:221` iterates ALL overlays without tab filtering:
+   ```rust
+   for (pane_id, _overlay) in webview_panes.overlays.iter() {
+   ```
+3. `positioned_panes` contains only the ACTIVE tab's panes (from
+   `get_panes_to_render()`)
+4. When Tab A's pane isn't found in Tab B's layout, the fallback kicks in:
+   ```rust
+   None => {
+       log::warn!("[Render] Pane {} not found in layout, using full window", pane_id);
+       (0.0, 0.0, window_width, window_height)  // Covers tab bar!
+   }
+   ```
+
+#### Fix: Store and Filter by Tab ID
+
+**Step 1: Add tab_id to WebviewOverlay** (`webview_socket.rs`)
+
+```rust
+pub struct WebviewOverlay {
+    pub session_id: String,
+    pub tab_id: TabId,  // NEW
+}
+```
+
+When creating the overlay in `handle_request` (open_webview action), capture the
+tab_id from the pane's containing tab.
+
+**Step 2: Filter overlays in render loop** (`draw.rs`)
+
+Before iterating overlays, get the active tab and skip overlays from other tabs:
+
+```rust
+let active_tab_id = match mux.get_active_tab_for_window(self.mux_window_id) {
+    Some(tab) => tab.tab_id(),
+    None => return Ok(()),
+};
+
+for (pane_id, overlay) in webview_panes.overlays.iter() {
+    if overlay.tab_id != active_tab_id {
+        continue;  // Skip overlays from other tabs
+    }
+    // ... rest of render logic ...
+}
+```
+
+**Step 3: Clean up overlays when tabs close** (future consideration)
+
+Add cleanup logic to remove overlays when their tab is closed. This prevents
+stale overlays from accumulating.
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ts3/wezterm-gui/src/termwindow/webview_socket.rs` | Add `tab_id` field to `WebviewOverlay`, populate when creating overlay |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Filter overlay iteration by active tab_id |
+
+### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Multi-tab isolation
+web google.com        # Tab 1 shows browser
+Cmd+T                 # Tab 2 should be clean terminal
+# Expected: No browser overlay in Tab 2
+
+# Test 2: Tab switching
+# Switch back to Tab 1
+# Expected: Browser overlay reappears correctly
+
+# Test 3: Multiple browser tabs
+# In Tab 2: web github.com
+# Expected: Each tab shows its own browser, no cross-contamination
+```
+
+### Success Criteria
+
+- [ ] New tabs do not show browser overlays from other tabs
+- [ ] Tab bar remains visible when switching tabs
+- [ ] Browser overlay reappears when switching back to its owning tab
+- [ ] Multiple browser panes in different tabs work independently
