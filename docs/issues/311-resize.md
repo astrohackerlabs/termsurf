@@ -264,10 +264,12 @@ Add XPC response from profile server after resize completes:
 
 ## Success Criteria
 
-- [ ] No black borders appear during or after window resize
-- [ ] Webview fills exact pixel bounds of pane (no blank space at edges)
-- [ ] Resize behavior matches ts2's accuracy
-- [ ] No regression in debounce functionality (still batches rapid resizes)
+- [x] No black borders appear during or after window resize
+- [x] Webview fills exact pixel bounds of pane (no blank space at edges)
+- [x] Resize behavior matches ts2's accuracy
+- [x] No regression in debounce functionality (still batches rapid resizes)
+
+**Issue resolved via Experiments 3 and 4.**
 
 ---
 
@@ -965,7 +967,54 @@ web google.com
 
 #### Success Criteria
 
-- [ ] Webview in single pane fills entire window (minus tab bar/borders)
-- [ ] Webview extends to window edge when pane is at edge
-- [ ] Webview extends half-cell into divider when adjacent to another pane
-- [ ] No visible gaps between webview and pane boundaries
+- [x] Webview in single pane fills entire window (minus tab bar/borders)
+- [x] Webview extends to window edge when pane is at edge
+- [x] Webview extends half-cell into divider when adjacent to another pane
+- [x] No visible gaps between webview and pane boundaries
+
+#### Result: PASSED
+
+All four success criteria met.
+
+#### Conclusion
+
+**The half-cell boundary sizing works correctly.**
+
+Log evidence shows the viewport calculation now matches ts2's behavior:
+
+**Single pane (full window):**
+```
+[BOUNDS] pane=0 pos=(0,0) size=257x73 -> viewport=(0,50) 3376x2248
+```
+- Starts at x=0 (window edge)
+- Width 3376 extends to right window edge
+- Y=50 accounts for tab bar
+
+**Split panes (left + right):**
+```
+[BOUNDS] pane=0 pos=(0,0) size=132x73 -> viewport=(0,50) 1736x2248
+[BOUNDS] pane=1 pos=(133,0) size=124x73 -> viewport=(1736,50) 1640x2248
+```
+- Left pane: x=0 to x=1736 (window edge to half-cell into divider)
+- Right pane: x=1736 to x=3376 (half-cell into divider to window edge)
+- Total coverage: 1736 + 1640 = 3376 (full window width)
+
+**At steady state:**
+```
+texture=1736x2248 viewport=1735x2248 diff=(1, 0)
+```
+- Texture 1px larger than viewport (from Experiment 3's `ceil()` fix)
+- No BORDER-VISIBLE at rest
+
+**Summary of changes:**
+
+Replaced the simple grid-based viewport calculation with ts2's half-cell
+boundary logic:
+
+1. Left/top edge panes start at window border
+2. Interior panes extend half-cell into adjacent dividers
+3. Right/bottom edge panes extend to window border
+4. Width/height deltas account for half-cell on each side
+
+This ensures webviews fill the exact visual bounds of their panes, matching
+ts2's pixel-perfect accuracy.
