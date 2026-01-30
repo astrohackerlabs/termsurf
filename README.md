@@ -16,7 +16,7 @@ termsurf/
 ├── ts1/           # TermSurf 1.x (Ghostty + WKWebView)
 ├── ts2/           # TermSurf 2.0 (WezTerm fork, in progress)
 ├── cef-rs/        # CEF Rust bindings (Chromium browser)
-└── issues/          # Documentation
+└── docs/issues/          # Documentation
 ```
 
 ## TermSurf 1.x
@@ -61,8 +61,8 @@ Fork WezTerm and add CEF browser panes using the validated cef-rs integration.
 
 ## Documentation
 
-- `issues/ts2-cef.md` - CEF integration details and validation results
-- `issues/ts2-wezterm-analysis.md` - WezTerm architecture analysis
+- `docs/issues/ts2-cef.md` - CEF integration details and validation results
+- `docs/issues/ts2-wezterm-analysis.md` - WezTerm architecture analysis
 - `AGENTS.md` - Development guide for coding agents
 
 ## License

@@ -31,7 +31,7 @@ The project has evolved through three generations:
 - `ts2/` — TermSurf 2.0 (WezTerm fork + in-process CEF). Superseded.
 - `ts1/` — TermSurf 1.x (Ghostty fork + WKWebView). Legacy, still builds.
 - `cef-rs/` — CEF Rust bindings. Used by `ts3/termsurf-profile/`.
-- `issues/` — All documentation across all generations.
+- `docs/issues/` — All documentation across all generations.
 
 ## TermSurf 3.0 (ts3/) — Active Development
 
@@ -195,7 +195,7 @@ ts2 embedded CEF directly inside WezTerm's process. CEF allows only one
 TermSurf requires multiple profiles (like Chrome profiles), so CEF had to move
 to separate processes — one per profile. That's ts3.
 
-Historical docs: `issues/ts2-*.md`
+Historical docs: `docs/issues/ts2-*.md`
 
 ## TermSurf 1.x (ts1/) — Legacy
 
@@ -308,40 +308,40 @@ testbed before ts1 integration. Changes made to the example:
 
 ### TermSurf 3.0 (active)
 
-- `issues/ts3-1-architecture.md` — High-level architecture overview
-- `issues/ts3-2-webview.md` — Webview rendering implementation
-- `issues/ts3-3-xpc.md` — XPC architecture for inter-process communication
-- `issues/ts3-4-webpage.md` — Webpage rendering solutions
-- `issues/ts3-5-profile.md` — Profile isolation for browser data
-- `issues/ts3-6-resize.md` — Resize support implementation
+- `docs/issues/ts3-1-architecture.md` — High-level architecture overview
+- `docs/issues/ts3-2-webview.md` — Webview rendering implementation
+- `docs/issues/ts3-3-xpc.md` — XPC architecture for inter-process communication
+- `docs/issues/ts3-4-webpage.md` — Webpage rendering solutions
+- `docs/issues/ts3-5-profile.md` — Profile isolation for browser data
+- `docs/issues/ts3-6-resize.md` — Resize support implementation
 
 ### TermSurf 2.0 (historical)
 
-- `issues/ts2-architecture.md` — Technical decisions and design rationale
-- `issues/ts2-cef.md` — CEF integration via cef-rs
-- `issues/ts2-cef-wezterm.md` — CEF + WezTerm integration details
-- `issues/ts2-cef-mvp.md` through `ts2-cef-mvp5.md` — MVP iteration experiments
-- `issues/ts2-profile.md` — CEF browser profile research
-- `issues/ts2-web.md` — Web command experiments
-- `issues/ts2-wezterm-analysis.md` — WezTerm + cef-rs architecture analysis
+- `docs/issues/ts2-architecture.md` — Technical decisions and design rationale
+- `docs/issues/ts2-cef.md` — CEF integration via cef-rs
+- `docs/issues/ts2-cef-wezterm.md` — CEF + WezTerm integration details
+- `docs/issues/ts2-cef-mvp.md` through `ts2-cef-mvp5.md` — MVP iteration experiments
+- `docs/issues/ts2-profile.md` — CEF browser profile research
+- `docs/issues/ts2-web.md` — Web command experiments
+- `docs/issues/ts2-wezterm-analysis.md` — WezTerm + cef-rs architecture analysis
 
 ### TermSurf 1.x (legacy)
 
-- `issues/ts1-bookmarks.md` — Bookmarks implementation plan
-- `issues/ts1-build.md` — Build instructions and troubleshooting
-- `issues/ts1-console.md` — Console bridging and JavaScript API
-- `issues/ts1-ctrl-z.md` — ctrl+z/fg analysis (deferred)
-- `issues/ts1-keybindings.md` — Webview keyboard shortcuts and modes
-- `issues/ts1-libghostty.md` — Changes to libghostty
-- `issues/ts1-release.md` — Release procedure and versioning
-- `issues/ts1-target-blank.md` — target="_blank" link handling
-- `issues/ts1-webview.md` — WebView implementation and API checklist
+- `docs/issues/ts1-bookmarks.md` — Bookmarks implementation plan
+- `docs/issues/ts1-build.md` — Build instructions and troubleshooting
+- `docs/issues/ts1-console.md` — Console bridging and JavaScript API
+- `docs/issues/ts1-ctrl-z.md` — ctrl+z/fg analysis (deferred)
+- `docs/issues/ts1-keybindings.md` — Webview keyboard shortcuts and modes
+- `docs/issues/ts1-libghostty.md` — Changes to libghostty
+- `docs/issues/ts1-release.md` — Release procedure and versioning
+- `docs/issues/ts1-target-blank.md` — target="_blank" link handling
+- `docs/issues/ts1-webview.md` — WebView implementation and API checklist
 
 ### General
 
-- `issues/merge-upstream.md` — How to merge changes from upstream repos
-- `issues/competitors.md` — Terminal-browser hybrid comparison
-- `issues/website.md` — termsurf.com website
+- `docs/issues/merge-upstream.md` — How to merge changes from upstream repos
+- `docs/issues/competitors.md` — Terminal-browser hybrid comparison
+- `docs/issues/website.md` — termsurf.com website
 
 ## AI Reminder
 
