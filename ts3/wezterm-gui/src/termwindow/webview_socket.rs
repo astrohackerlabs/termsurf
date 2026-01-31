@@ -316,6 +316,21 @@ impl ProfileServerManager {
 // Webview Overlay State
 // ============================================================================
 
+/// Mode for webview input handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebviewMode {
+    /// Browser is focused, receiving input (future: forward to CEF)
+    Browse,
+    /// Control panel is focused, browser dimmed
+    Control,
+}
+
+impl Default for WebviewMode {
+    fn default() -> Self {
+        WebviewMode::Browse
+    }
+}
+
 /// Marker that a pane has an active webview.
 /// Texture data (mach_port, dimensions) is stored in XpcManager::received_surfaces.
 /// This struct only serves as a registry of "which panes have webviews".
@@ -325,6 +340,8 @@ pub struct WebviewOverlay {
     pub session_id: String,
     /// Tab ID that owns this webview (for filtering during render)
     pub tab_id: TabId,
+    /// Current input mode (Browse or Control)
+    pub mode: WebviewMode,
 }
 
 /// Tracks active webview overlays (global, not per-window)
@@ -520,6 +537,7 @@ fn handle_request(
             let overlay = WebviewOverlay {
                 session_id: session_id.clone(),
                 tab_id,
+                mode: WebviewMode::default(),
             };
 
             state.write().unwrap().add_overlay(pane_id, overlay);
@@ -574,6 +592,7 @@ fn handle_request(
             let overlay = WebviewOverlay {
                 session_id: format!("legacy-pane-{}", pane_id),
                 tab_id,
+                mode: WebviewMode::default(),
             };
 
             state.write().unwrap().add_overlay(pane_id, overlay);

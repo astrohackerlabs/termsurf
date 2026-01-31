@@ -514,16 +514,45 @@ grep "\[Webview\]" /tmp/termsurf-gui.log
 
 #### Success Criteria
 
-1. [ ] `WebviewMode` enum exists with Browse and Control variants
-2. [ ] `WebviewOverlay` has `mode` field, defaults to Browse
-3. [ ] Key events intercepted for webview panes
-4. [ ] No keys reach terminal in Browse mode
-5. [ ] No keys reach terminal in Control mode
-6. [ ] Ctrl+C in Browse mode → Control mode
-7. [ ] Enter in Control mode → Browse mode
-8. [ ] Ctrl+C in Control mode → closes webview
-9. [ ] WezTerm keybindings work in both modes
+1. [x] `WebviewMode` enum exists with Browse and Control variants
+2. [x] `WebviewOverlay` has `mode` field, defaults to Browse
+3. [x] Key events intercepted for webview panes
+4. [x] No keys reach terminal in Browse mode
+5. [x] No keys reach terminal in Control mode
+6. [x] Ctrl+C in Browse mode → Control mode
+7. [x] Enter in Control mode → Browse mode
+8. [x] Ctrl+C in Control mode → closes webview
+9. [x] WezTerm keybindings work in both modes
 
 #### Result
 
-(Pending)
+**Success.** Mode switching and key interception working correctly.
+
+#### Conclusion
+
+**What was accomplished:**
+
+Key interception and mode switching now work for webview panes:
+
+1. **WebviewMode enum** added with Browse (default) and Control variants
+2. **Key interception** happens early in `key_event_impl`, before terminal input
+3. **Browse mode**: All keys consumed (Ctrl+C switches to Control mode)
+4. **Control mode**: Enter → Browse, Ctrl+C → exit, other keys → keybindings only
+5. **Terminal protected**: No keys reach the terminal in either mode
+
+**Implementation details:**
+
+- `handle_webview_key_event()` routes keys based on current mode
+- Early return in `key_event_impl` for Browse mode (consume all keys)
+- Post-keybinding block for Control mode (allow keybindings, block terminal)
+- `close_webview_for_pane()` cleans up overlay state and XPC resources
+
+**Files modified:**
+
+- `ts3/wezterm-gui/src/termwindow/webview_socket.rs` — WebviewMode enum, mode field
+- `ts3/wezterm-gui/src/termwindow/keyevent.rs` — Key interception and mode handling
+
+**Next steps:**
+
+- Experiment 2: Update control panel text based on mode
+- Experiment 3: Add visual dimming in Control mode

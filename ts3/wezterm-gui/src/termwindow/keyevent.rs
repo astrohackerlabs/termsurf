@@ -602,6 +602,22 @@ impl super::TermWindow {
             None => return,
         };
 
+        // Check for webview overlay and handle mode-specific input
+        #[cfg(target_os = "macos")]
+        {
+            let pane_id = pane.pane_id();
+            match self.handle_webview_key_event(pane_id, &window_key) {
+                Some(true) => return, // Key was consumed by webview handling
+                Some(false) => {
+                    // Webview exists but key not handled - continue to keybindings only
+                    // We'll block terminal input after process_key
+                }
+                None => {
+                    // No webview, continue normal processing
+                }
+            }
+        }
+
         // The leader key is a kind of modal modifier key.
         // It is allowed to be active for up to the leader timeout duration,
         // after which it auto-deactivates.
@@ -647,6 +663,17 @@ impl super::TermWindow {
         // entries from the stack.
         if window_key.key_is_down {
             self.key_table_state.pop_until_unknown();
+        }
+
+        // Block terminal input for webview panes - no keys should reach the terminal
+        #[cfg(target_os = "macos")]
+        {
+            if self.pane_has_webview_overlay(pane.pane_id()) {
+                if window_key.key_is_down {
+                    log::debug!("[Webview] Consuming unbound key in Control mode");
+                }
+                return;
+            }
         }
 
         let key = self.win_key_code_to_termwiz_key_code(&window_key.key);
@@ -865,5 +892,117 @@ impl super::TermWindow {
             WK::KeyPadPageDown => KC::KeyPadPageDown,
         };
         Key::Code(code)
+    }
+
+    /// Handle key events for webview panes with mode-aware input routing.
+    /// Returns Some(true) if the key was consumed, Some(false) if webview exists
+    /// but key should continue to keybindings, None if no webview.
+    #[cfg(target_os = "macos")]
+    fn handle_webview_key_event(
+        &mut self,
+        pane_id: mux::pane::PaneId,
+        window_key: &KeyEvent,
+    ) -> Option<bool> {
+        use crate::termwindow::webview_socket::{get_server, WebviewMode};
+
+        // Check if this pane has a webview overlay
+        let server = get_server()?;
+        let state = server.state();
+        let mut overlays = state.write().unwrap();
+        let overlay = overlays.overlays.get_mut(&pane_id)?;
+
+        // Check for Ctrl+C
+        let is_ctrl_c = window_key.key_is_down
+            && window_key.modifiers.contains(Modifiers::CTRL)
+            && matches!(
+                &window_key.key,
+                KeyCode::Char('c') | KeyCode::Char('C')
+            );
+
+        // Check for Enter
+        let is_enter = window_key.key_is_down
+            && window_key.modifiers.is_empty()
+            && matches!(&window_key.key, KeyCode::Char('\r'));
+
+        match overlay.mode {
+            WebviewMode::Browse => {
+                if is_ctrl_c {
+                    log::info!("[Webview] Ctrl+C in Browse mode → Control mode");
+                    overlay.mode = WebviewMode::Control;
+                    // Trigger redraw for visual feedback
+                    drop(overlays);
+                    if let Some(ref w) = self.window {
+                        w.invalidate();
+                    }
+                    return Some(true);
+                }
+                // In Browse mode, consume all keys (future: forward to CEF)
+                if window_key.key_is_down {
+                    log::debug!("[Webview] Consuming key in Browse mode: {:?}", window_key.key);
+                }
+                Some(true)
+            }
+            WebviewMode::Control => {
+                if is_enter {
+                    log::info!("[Webview] Enter in Control mode → Browse mode");
+                    overlay.mode = WebviewMode::Browse;
+                    drop(overlays);
+                    if let Some(ref w) = self.window {
+                        w.invalidate();
+                    }
+                    return Some(true);
+                }
+                if is_ctrl_c {
+                    log::info!("[Webview] Ctrl+C in Control mode → Exit browser");
+                    drop(overlays);
+                    self.close_webview_for_pane(pane_id);
+                    return Some(true);
+                }
+                // In Control mode, return Some(false) to allow keybindings
+                // Terminal input will be blocked after process_key
+                Some(false)
+            }
+        }
+    }
+
+    /// Check if a pane has an active webview overlay
+    #[cfg(target_os = "macos")]
+    fn pane_has_webview_overlay(&self, pane_id: mux::pane::PaneId) -> bool {
+        use crate::termwindow::webview_socket::get_server;
+
+        let server = match get_server() {
+            Some(s) => s,
+            None => return false,
+        };
+        let state = server.state();
+        let overlays = state.read().unwrap();
+        overlays.overlays.contains_key(&pane_id)
+    }
+
+    /// Close the webview for a pane and clean up resources
+    #[cfg(target_os = "macos")]
+    fn close_webview_for_pane(&mut self, pane_id: mux::pane::PaneId) {
+        use crate::termwindow::webview_socket::get_server;
+
+        // Remove from overlay state
+        if let Some(server) = get_server() {
+            let state = server.state();
+            let mut overlays = state.write().unwrap();
+            overlays.overlays.remove(&pane_id);
+        }
+
+        // Clean up XPC resources
+        if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+            xpc_manager.remove_surface(pane_id);
+            xpc_manager.remove_connection(pane_id);
+            xpc_manager.remove_invalidate_callback(pane_id);
+        }
+
+        // Trigger redraw
+        if let Some(ref w) = self.window {
+            w.invalidate();
+        }
+
+        log::info!("[Webview] Closed webview for pane {}", pane_id);
     }
 }
