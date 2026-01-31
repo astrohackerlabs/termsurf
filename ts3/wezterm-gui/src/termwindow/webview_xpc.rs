@@ -374,6 +374,58 @@ impl XpcManager {
         }
     }
 
+    /// Send a key event to the browser in the given pane
+    pub fn send_key_event(&self, pane_id: PaneId, key: &::window::KeyEvent) {
+        use ::window::{KeyCode, Modifiers};
+
+        let msg = XpcDictionary::new();
+        msg.set_string("action", "key_event");
+        msg.set_bool("key_is_down", key.key_is_down);
+
+        // Include raw keycode if available (for accurate VK conversion)
+        if let Some(raw) = &key.raw {
+            msg.set_i64("raw_code", raw.raw_code as i64);
+        }
+
+        // Serialize the key for character extraction
+        match &key.key {
+            KeyCode::Char(c) => {
+                msg.set_string("key_type", "char");
+                msg.set_i64("char_code", *c as i64);
+            }
+            KeyCode::LeftArrow => msg.set_string("key_type", "left"),
+            KeyCode::RightArrow => msg.set_string("key_type", "right"),
+            KeyCode::UpArrow => msg.set_string("key_type", "up"),
+            KeyCode::DownArrow => msg.set_string("key_type", "down"),
+            KeyCode::Home => msg.set_string("key_type", "home"),
+            KeyCode::End => msg.set_string("key_type", "end"),
+            KeyCode::PageUp => msg.set_string("key_type", "pageup"),
+            KeyCode::PageDown => msg.set_string("key_type", "pagedown"),
+            KeyCode::Insert => msg.set_string("key_type", "insert"),
+            KeyCode::Function(n) => {
+                msg.set_string("key_type", "function");
+                msg.set_i64("function_num", *n as i64);
+            }
+            _ => msg.set_string("key_type", "unknown"),
+        }
+
+        // Serialize modifiers
+        let mods = key.modifiers;
+        msg.set_bool("shift", mods.contains(Modifiers::SHIFT));
+        msg.set_bool("ctrl", mods.contains(Modifiers::CTRL));
+        msg.set_bool("alt", mods.contains(Modifiers::ALT));
+        msg.set_bool("meta", mods.contains(Modifiers::SUPER));
+
+        if self.send_command(pane_id, &msg) {
+            log::debug!(
+                "[XPC] Sent key_event to pane {}: {:?} down={}",
+                pane_id,
+                key.key,
+                key.key_is_down
+            );
+        }
+    }
+
     /// Remove a peer connection (e.g., when webview pane is closed)
     pub fn remove_connection(&self, pane_id: PaneId) {
         self.peer_connections.lock().unwrap().remove(&pane_id);

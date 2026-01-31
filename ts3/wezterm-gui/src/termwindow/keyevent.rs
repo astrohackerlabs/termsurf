@@ -936,10 +936,14 @@ impl super::TermWindow {
                     }
                     return Some(true);
                 }
-                // In Browse mode, consume all keys (future: forward to CEF)
-                if window_key.key_is_down {
-                    log::debug!("[Webview] Consuming key in Browse mode: {:?}", window_key.key);
+
+                // Forward key to browser via XPC
+                drop(overlays); // Release lock before XPC call
+                if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+                    xpc_manager.send_key_event(pane_id, window_key);
                 }
+
+                // Consume the key (don't send to terminal)
                 Some(true)
             }
             WebviewMode::Control => {
