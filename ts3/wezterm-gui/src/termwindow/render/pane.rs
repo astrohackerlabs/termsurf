@@ -844,6 +844,13 @@ impl crate::TermWindow {
                 None => continue,
             };
 
+            // Choose text based on mode
+            use crate::termwindow::webview_socket::WebviewMode;
+            let display_text = match overlay.mode {
+                WebviewMode::Browse => url,
+                WebviewMode::Control => "Enter to browse. Ctrl+C to exit.".to_string(),
+            };
+
             // Find positioned pane to get viewport bounds
             let pos = match positioned_panes.iter().find(|p| p.pane.pane_id() == *pane_id) {
                 Some(p) => p,
@@ -901,7 +908,7 @@ impl crate::TermWindow {
             };
 
             // Create text element with padding for margins (matching ts2)
-            let element = Element::new(&font, ElementContent::Text(url))
+            let element = Element::new(&font, ElementContent::Text(display_text))
                 .colors(ElementColors {
                     border: BorderColor::default(),
                     bg: palette.background.to_linear().into(),

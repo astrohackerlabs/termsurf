@@ -556,3 +556,86 @@ Key interception and mode switching now work for webview panes:
 
 - Experiment 2: Update control panel text based on mode
 - Experiment 3: Add visual dimming in Control mode
+
+### Experiment 2: Mode-Aware Control Panel Text
+
+**Goal:** Update the control panel to show different text based on the current
+mode:
+
+- Browse mode: Show the URL (current behavior)
+- Control mode: Show "Enter to browse. Ctrl+C to exit."
+
+**Background:**
+
+The `paint_webview_control_bars` function in `pane.rs` already iterates over
+webview overlays and has access to `overlay.mode`. Currently it always displays
+the URL:
+
+```rust
+// Line 842-845: Get URL
+let url = match xpc_manager.get_received_surface(*pane_id) {
+    Some(surface) => surface.url.clone(),
+    None => continue,
+};
+
+// Line 904: Create text element with URL
+let element = Element::new(&font, ElementContent::Text(url))
+```
+
+#### Approach
+
+After getting the URL, check the overlay mode and choose the appropriate text:
+
+```rust
+// Get URL from received surface
+let url = match xpc_manager.get_received_surface(*pane_id) {
+    Some(surface) => surface.url.clone(),
+    None => continue,
+};
+
+// Choose text based on mode
+use crate::termwindow::webview_socket::WebviewMode;
+let display_text = match overlay.mode {
+    WebviewMode::Browse => url,
+    WebviewMode::Control => "Enter to browse. Ctrl+C to exit.".to_string(),
+};
+```
+
+Then use `display_text` instead of `url` when creating the element:
+
+```rust
+let element = Element::new(&font, ElementContent::Text(display_text))
+```
+
+#### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ts3/wezterm-gui/src/termwindow/render/pane.rs` | Mode-aware text in paint_webview_control_bars |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# 1. Open webview (starts in Browse mode)
+web google.com
+
+# 2. Verify Browse mode
+# - Control panel shows URL (e.g., "https://www.google.com/")
+
+# 3. Press Ctrl+C — switch to Control mode
+# - Control panel shows "Enter to browse. Ctrl+C to exit."
+
+# 4. Press Enter — switch back to Browse mode
+# - Control panel shows URL again
+
+# 5. Press Ctrl+C, then Ctrl+C again — exit browser
+# - Browser closes, terminal visible
+```
+
+#### Success Criteria
+
+1. [ ] Browse mode shows URL in control panel
+2. [ ] Control mode shows "Enter to browse. Ctrl+C to exit."
+3. [ ] Text updates immediately on mode switch
