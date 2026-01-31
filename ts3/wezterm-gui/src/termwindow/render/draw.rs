@@ -10,6 +10,8 @@ use ::window::glium::{BlendingFunction, LinearBlendingFactor, Surface};
 #[cfg(target_os = "macos")]
 use ::window::WindowOps;
 use config::{DimensionContext, FreeTypeLoadTarget};
+#[cfg(target_os = "macos")]
+use wgpu::util::DeviceExt;
 
 impl crate::TermWindow {
     pub fn call_draw(&mut self, frame: &mut RenderFrame) -> anyhow::Result<()> {
@@ -326,7 +328,7 @@ impl crate::TermWindow {
                 ..Default::default()
             });
 
-            // Create bind group
+            // Create bind group for texture
             let bind_group = webgpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Webview Texture Bind Group"),
                 layout: &webgpu.webview_bind_group_layout,
@@ -340,6 +342,29 @@ impl crate::TermWindow {
                         resource: wgpu::BindingResource::Sampler(&sampler),
                     },
                 ],
+            });
+
+            // Create dim uniform based on mode (0.0 = full brightness, 0.5 = 50% dimmed)
+            use crate::termwindow::webview_socket::WebviewMode;
+            let dim_factor: f32 = match overlay.mode {
+                WebviewMode::Browse => 0.0,
+                WebviewMode::Control => 0.5,
+            };
+            let dim_buffer =
+                webgpu
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Webview Dim Buffer"),
+                        contents: bytemuck::cast_slice(&[dim_factor]),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+            let dim_bind_group = webgpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Webview Dim Bind Group"),
+                layout: &webgpu.webview_dim_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: dim_buffer.as_entire_binding(),
+                }],
             });
 
             // Create encoder and render pass
@@ -367,6 +392,7 @@ impl crate::TermWindow {
 
                 render_pass.set_pipeline(&webgpu.webview_render_pipeline);
                 render_pass.set_bind_group(0, &bind_group, &[]);
+                render_pass.set_bind_group(1, &dim_bind_group, &[]);
 
                 // Find this pane's position in the current layout
                 let positioned_pane = positioned_panes.iter().find(|p| p.pane.pane_id() == *pane_id);

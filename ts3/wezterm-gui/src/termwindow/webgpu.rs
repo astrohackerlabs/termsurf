@@ -38,6 +38,8 @@ pub struct WebGpuState {
     pub webview_render_pipeline: wgpu::RenderPipeline,
     #[cfg(target_os = "macos")]
     pub webview_bind_group_layout: wgpu::BindGroupLayout,
+    #[cfg(target_os = "macos")]
+    pub webview_dim_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub struct RawHandlePair {
@@ -530,10 +532,26 @@ impl WebGpuState {
             });
 
         #[cfg(target_os = "macos")]
+        let webview_dim_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Webview Dim Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(4), // f32
+                    },
+                    count: None,
+                }],
+            });
+
+        #[cfg(target_os = "macos")]
         let webview_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Webview Pipeline Layout"),
-                bind_group_layouts: &[&webview_bind_group_layout],
+                bind_group_layouts: &[&webview_bind_group_layout, &webview_dim_bind_group_layout],
                 immediate_size: 0,
             });
 
@@ -595,6 +613,8 @@ impl WebGpuState {
             webview_render_pipeline,
             #[cfg(target_os = "macos")]
             webview_bind_group_layout,
+            #[cfg(target_os = "macos")]
+            webview_dim_bind_group_layout,
         })
     }
 

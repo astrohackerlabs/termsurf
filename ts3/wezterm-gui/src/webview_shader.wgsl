@@ -38,10 +38,18 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
 @group(0) @binding(0) var webview_texture: texture_2d<f32>;
 @group(0) @binding(1) var webview_sampler: sampler;
 
+// Dimming uniform for Control mode
+struct DimUniforms {
+    dim_factor: f32,
+}
+@group(1) @binding(0) var<uniform> dim_uniforms: DimUniforms;
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Sample the webview texture
     // The viewport is set to pane bounds, so tex_coord [0,1] maps to the pane area
     let color = textureSample(webview_texture, webview_sampler, input.tex_coord);
-    return color;
+    // Apply dimming: reduce brightness in Control mode (dim_factor=0.5 -> 50% brightness)
+    let brightness = 1.0 - dim_uniforms.dim_factor;
+    return vec4<f32>(color.rgb * brightness, color.a);
 }
