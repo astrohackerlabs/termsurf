@@ -499,13 +499,13 @@ Profile: URL changed to 'https://www.google.com/'
 **What this enables:**
 
 The control panel rendering code (Experiment 2) can now access the current URL
-via `xpc_manager.get_received_surface(pane_id).url` to display it in the
-control bar.
+via `xpc_manager.get_received_surface(pane_id).url` to display it in the control
+bar.
 
 **Files modified:**
 
-- `ts3/termsurf-profile/src/main.rs` — Added URL to BrowserState, DisplayHandler,
-  and XPC message
+- `ts3/termsurf-profile/src/main.rs` — Added URL to BrowserState,
+  DisplayHandler, and XPC message
 - `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` — Added URL to ReceivedSurface
 
 **Next step:**
@@ -517,9 +517,9 @@ text, viewport adjustment).
 
 ### Experiment 2: Render Control Panel
 
-**Goal:** Render a control panel at the top of each webview pane, displaying
-the URL. The webview content should render below the control panel, not
-overlapping it.
+**Goal:** Render a control panel at the top of each webview pane, displaying the
+URL. The webview content should render below the control panel, not overlapping
+it.
 
 **Background:**
 
@@ -647,8 +647,8 @@ self.render_element(&computed, gl_state, None)?;
 
 #### Files to Modify
 
-| File | Changes |
-|------|---------|
+| File                                            | Changes                                    |
+| ----------------------------------------------- | ------------------------------------------ |
 | `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Viewport adjustment, control bar rendering |
 
 #### Verification
@@ -685,7 +685,8 @@ grep "viewport" /tmp/termsurf-gui.log
 2. [x] Webview viewport starts below control bar (Y offset)
 3. [x] Webview viewport height reduced by control bar height
 4. [x] CEF receives correct reduced height in resize commands
-5. [x] Control bar area visible (even if just terminal background showing through)
+5. [x] Control bar area visible (even if just terminal background showing
+       through)
 6. [x] No visual overlap between control bar area and webview
 
 **Part B (text rendering):**
@@ -721,6 +722,7 @@ grep "viewport" /tmp/termsurf-gui.log
 The text rendering happens at the wrong point in the render pipeline.
 
 **ts2 (works):**
+
 ```
 paint_pass() {
     render content to layers
@@ -732,6 +734,7 @@ call_draw()  ← submits to GPU
 ```
 
 **ts3 (broken):**
+
 ```
 paint_pass() {
     render content to layers
@@ -745,7 +748,7 @@ call_draw_webgpu() {
 }
 ```
 
-`render_element` writes to WezTerm's layer buffers. In ts3, we call it *after*
+`render_element` writes to WezTerm's layer buffers. In ts3, we call it _after_
 those buffers have already been submitted to the GPU. The text is rendered to
 buffers that are no longer being displayed.
 
@@ -753,8 +756,8 @@ buffers that are no longer being displayed.
 
 Move control bar text rendering from `call_draw_webgpu()` to `paint_pass()`.
 Call it after `drop(layers)` but before `paint_modal()`, exactly where ts2
-places `paint_browser_control_bars()`. This requires calculating viewport
-bounds in `paint_pass()` rather than in `render_webview_overlays_webgpu()`.
+places `paint_browser_control_bars()`. This requires calculating viewport bounds
+in `paint_pass()` rather than in `render_webview_overlays_webgpu()`.
 
 **Files modified (to be reverted or fixed):**
 
@@ -806,6 +809,7 @@ for (x, y, width, height, url) in control_bars {
 **Step 1: Create `paint_webview_control_bars()` function**
 
 Create a new function in `pane.rs` that:
+
 1. Iterates through webview overlays (like `paint_browser_control_bars` in ts2)
 2. Gets URL from `ReceivedSurface` via XPC manager
 3. Calculates control bar bounds using positioned panes
@@ -813,13 +817,14 @@ Create a new function in `pane.rs` that:
 
 **Step 2: Call from `paint_pass()` after `drop(layers)`**
 
-Insert the call between `drop(layers)` and `paint_modal()` in `paint.rs:274-275`.
+Insert the call between `drop(layers)` and `paint_modal()` in
+`paint.rs:274-275`.
 
 **Step 3: Clean up `draw.rs`**
 
-Remove the broken `render_control_bar_text()` function and its call site.
-Keep the `ControlBarInfo` collection logic only if needed for other purposes
-(may also be removable).
+Remove the broken `render_control_bar_text()` function and its call site. Keep
+the `ControlBarInfo` collection logic only if needed for other purposes (may
+also be removable).
 
 #### Changes
 
@@ -972,11 +977,11 @@ Clean up:
 
 #### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `ts3/wezterm-gui/src/termwindow/render/pane.rs` | Add `paint_webview_control_bars()` |
+| File                                             | Changes                                                  |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| `ts3/wezterm-gui/src/termwindow/render/pane.rs`  | Add `paint_webview_control_bars()`                       |
 | `ts3/wezterm-gui/src/termwindow/render/paint.rs` | Call `paint_webview_control_bars()` after `drop(layers)` |
-| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Remove broken text rendering code |
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs`  | Remove broken text rendering code                        |
 
 #### Verification
 
@@ -1015,10 +1020,12 @@ grep "paint_webview_control_bars" /tmp/termsurf-gui.log
 2. [x] Function called from `paint_pass()` after `drop(layers)`
 3. [x] Control bar text renders visibly on screen
 4. [x] URL displays with half-cell margins (left, top, bottom)
-5. [~] Text uses terminal palette colors (foreground on background) — text color correct, but background is transparent
+5. [~] Text uses terminal palette colors (foreground on background) — text color
+   correct, but background is transparent
 6. [x] Multiple webview panes each show their own URL
 7. [x] Broken code removed from draw.rs
-8. [ ] No rendering artifacts or visual glitches — terminal text visible behind URL
+8. [ ] No rendering artifacts or visual glitches — terminal text visible behind
+       URL
 
 #### Result
 
@@ -1043,7 +1050,8 @@ grep "paint_webview_control_bars" /tmp/termsurf-gui.log
 
 ts2 uses **two separate functions** for the control bar:
 
-1. **`paint_browser_overlay`** — called during `paint_pane` while layers buffer is mapped:
+1. **`paint_browser_overlay`** — called during `paint_pane` while layers buffer
+   is mapped:
    ```rust
    self.filled_rectangle(layers, 0, control_panel_rect, bg_color)?;
    ```
@@ -1064,15 +1072,235 @@ In ts3, webview panes bypass `paint_pane` entirely — they render via
 **Hypothesis for fix:**
 
 Add a `paint_webview_overlay_background()` function that:
+
 1. Is called during the pane rendering loop (before `drop(layers)`)
 2. Uses `filled_rectangle(layers, ...)` to render solid background
 3. Only renders for panes that have webview overlays
 
 This mirrors ts2's two-phase approach:
+
 - Phase 1 (with layers): `filled_rectangle` for background
 - Phase 2 (after drop): `render_element` for text
 
 **Files to modify:**
 
-- `ts3/wezterm-gui/src/termwindow/render/pane.rs` — add `paint_webview_overlay_background()`
+- `ts3/wezterm-gui/src/termwindow/render/pane.rs` — add
+  `paint_webview_overlay_background()`
 - `ts3/wezterm-gui/src/termwindow/render/paint.rs` — call it during pane loop
+
+---
+
+### Experiment 4: Render Control Bar Background
+
+**Goal:** Add solid background to the control bar using `filled_rectangle`,
+matching ts2's two-phase rendering approach.
+
+**Background:**
+
+Experiment 3 successfully rendered the control bar text, but the background was
+transparent. This is because ts2 uses two separate rendering phases:
+
+1. **Phase 1** (`paint_browser_overlay`): Called during `paint_pane` while the
+   layers buffer is mapped. Uses `filled_rectangle` to draw solid background.
+
+2. **Phase 2** (`paint_browser_control_bars`): Called after `drop(layers)`. Uses
+   `render_element` to draw text.
+
+We implemented Phase 2 in Experiment 3. Now we need to implement Phase 1.
+
+**ts2 approach:**
+
+```rust
+// pane.rs:46 - in paint_pane
+if self.has_browser_for_pane(pane_id) {
+    return self.paint_browser_overlay(pos, layers);
+}
+
+// pane.rs:832 - in paint_browser_overlay
+self.filled_rectangle(layers, 0, control_panel_rect, bg_color)?;
+```
+
+#### Approach
+
+**Option A: Check in paint_pane (like ts2)**
+
+Add a check at the start of `paint_pane` to see if the pane has a webview
+overlay. If so, call `paint_webview_overlay_background()` which renders only the
+control bar background, then return early (skip terminal rendering).
+
+**Option B: Separate loop in paint_pass**
+
+Add a separate loop in `paint_pass` that iterates through webview panes and
+calls `paint_webview_overlay_background()` for each one.
+
+**Decision: Option A.** This matches ts2's architecture exactly. The pane
+rendering loop already iterates through all panes, so we intercept webview panes
+there.
+
+#### Changes
+
+**Step 1: Add helper to check for webview overlay**
+
+**File: `ts3/wezterm-gui/src/termwindow/render/pane.rs`**
+
+```rust
+/// Check if a pane has an active webview overlay
+#[cfg(target_os = "macos")]
+fn has_webview_overlay(&self, pane_id: mux::pane::PaneId) -> bool {
+    use crate::termwindow::webview_socket::get_server;
+
+    let server = match get_server() {
+        Some(s) => s,
+        None => return false,
+    };
+    let state = server.state();
+    let overlays = state.read().unwrap();
+    overlays.overlays.contains_key(&pane_id)
+}
+```
+
+**Step 2: Add background rendering function**
+
+**File: `ts3/wezterm-gui/src/termwindow/render/pane.rs`**
+
+```rust
+/// Paint webview overlay background (control bar only).
+/// Called during paint_pane while layers buffer is mapped.
+/// Text rendering is done separately in paint_webview_control_bars().
+#[cfg(target_os = "macos")]
+fn paint_webview_overlay_background(
+    &mut self,
+    pos: &PositionedPane,
+    layers: &mut TripleLayerQuadAllocator,
+) -> anyhow::Result<()> {
+    use config::DimensionContext;
+
+    let cell_height = self.render_metrics.cell_size.height as f32;
+    let cell_width = self.render_metrics.cell_size.width as f32;
+    let control_bar_height = cell_height * 2.0;
+
+    // Calculate viewport bounds (same logic as other viewport calculations)
+    let tab_bar_height = if self.show_tab_bar {
+        self.tab_bar_pixel_height().unwrap_or(0.)
+    } else {
+        0.0
+    };
+
+    let border = self.get_os_border();
+    let border_left = border.left.get() as f32;
+    let border_top = border.top.get() as f32;
+
+    let h_context = DimensionContext {
+        dpi: self.dimensions.dpi as f32,
+        pixel_max: self.dimensions.pixel_width as f32,
+        pixel_cell: cell_width,
+    };
+    let v_context = DimensionContext {
+        dpi: self.dimensions.dpi as f32,
+        pixel_max: self.dimensions.pixel_height as f32,
+        pixel_cell: cell_height,
+    };
+    let padding_left = self.config.window_padding.left.evaluate_as_pixels(h_context);
+    let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
+
+    let terminal_cols = self.terminal_size.cols as usize;
+    let pixel_width = self.dimensions.pixel_width as f32;
+    let top_pixel_y = tab_bar_height + padding_top + border_top;
+
+    // X coordinate
+    let (x, width_delta) = if pos.left == 0 {
+        (0.0, padding_left + border_left + (cell_width / 2.0))
+    } else {
+        let x = padding_left + border_left + (pos.left as f32 * cell_width) - (cell_width / 2.0);
+        (x, cell_width)
+    };
+
+    // Y coordinate
+    let y = if pos.top == 0 {
+        top_pixel_y - padding_top
+    } else {
+        top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0)
+    };
+
+    // Width
+    let width = if pos.left + pos.width >= terminal_cols {
+        pixel_width - x
+    } else {
+        (pos.width as f32 * cell_width) + width_delta
+    };
+
+    // Render control bar background
+    let palette = self.palette().clone();
+    let bg_color = palette.background.to_linear();
+    let control_bar_rect = euclid::rect(x, y, width, control_bar_height);
+    self.filled_rectangle(layers, 0, control_bar_rect, bg_color)?;
+
+    Ok(())
+}
+```
+
+**Step 3: Call from paint_pane**
+
+**File: `ts3/wezterm-gui/src/termwindow/render/pane.rs`**
+
+At the start of `paint_pane`, after the `use_box_model_render` check:
+
+```rust
+// Check if this pane has a webview overlay
+#[cfg(target_os = "macos")]
+{
+    let pane_id = pos.pane.pane_id();
+    if self.has_webview_overlay(pane_id) {
+        // Render control bar background only (text done in paint_webview_control_bars)
+        return self.paint_webview_overlay_background(pos, layers);
+    }
+}
+```
+
+#### Files to Modify
+
+| File                                            | Changes                                                                                       |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `ts3/wezterm-gui/src/termwindow/render/pane.rs` | Add `has_webview_overlay()`, `paint_webview_overlay_background()`, and call from `paint_pane` |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# 1. Open webview
+web google.com
+
+# 2. Verify control bar has solid background
+# - Should see opaque background (terminal palette background color)
+# - URL text should be visible on solid background
+# - No terminal text bleeding through
+
+# 3. Test with terminal content
+echo "This text should NOT be visible behind the control bar"
+web google.com
+
+# 4. Test resize
+# - Drag window edge
+# - Background should remain solid during resize
+
+# 5. Test splits
+split-pane
+web github.com
+# Each webview should have solid control bar background
+```
+
+#### Success Criteria
+
+1. [ ] `has_webview_overlay()` helper function exists
+2. [ ] `paint_webview_overlay_background()` function exists
+3. [ ] Function called from `paint_pane` for webview panes
+4. [ ] Control bar background is solid (not transparent)
+5. [ ] Background uses terminal palette background color
+6. [ ] No terminal text visible behind control bar
+7. [ ] Background renders correctly during resize
+8. [ ] Multiple webview panes each have solid backgrounds
+
+#### Result
+
+(Pending)
