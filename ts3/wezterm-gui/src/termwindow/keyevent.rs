@@ -463,6 +463,33 @@ impl super::TermWindow {
             None => return,
         };
 
+        // Skip keybinding processing when webview is active in Browse mode
+        // Do NOT call set_handled() - we want KeyEvent to still be dispatched
+        // so key_event_impl can forward to CEF and handle Ctrl+C
+        #[cfg(target_os = "macos")]
+        {
+            use crate::termwindow::webview_socket::{get_server, WebviewMode};
+
+            let pane_id = pane.pane_id();
+            if let Some(server) = get_server() {
+                let state = server.state();
+                let overlays = state.read().unwrap();
+                if let Some(overlay) = overlays.overlays.get(&pane_id) {
+                    if overlay.mode == WebviewMode::Browse {
+                        // In Browse mode: skip keybinding processing
+                        // but let KeyEvent flow through to key_event_impl
+                        if key.key_is_down {
+                            log::debug!(
+                                "[Webview] Skipping keybindings in Browse mode: {:?}",
+                                key.key
+                            );
+                        }
+                        return; // Early return, NO set_handled()
+                    }
+                }
+            }
+        }
+
         // First, try to match raw physical key
         let phys_key = match &key.key {
             phys @ KeyCode::Physical(_) => Some(phys.clone()),
