@@ -455,16 +455,77 @@ web apple.com
 
 #### Success Criteria
 
-1. [ ] Helper app bundle created at `Frameworks/TermSurf Profile Helper.app`
-2. [ ] `Info.plist` contains `LSUIElement=1`
-3. [ ] Binary located inside helper app, not in `Contents/MacOS/`
-4. [ ] Launcher finds and spawns the binary correctly
+1. [x] Helper app bundle created at `Frameworks/TermSurf Profile Helper.app`
+2. [x] `Info.plist` contains `LSUIElement=1`
+3. [x] Binary located inside helper app, not in `Contents/MacOS/`
+4. [x] Launcher finds and spawns the binary correctly
 5. [ ] No dock icon when opening webviews
 6. [ ] No focus stealing
 7. [ ] Webviews render correctly
 8. [ ] Resize still works (issue 311 fixes intact)
-9. [ ] (Optional) `objc` dependency removed, workaround code deleted
+9. [x] (Optional) `objc` dependency removed, workaround code deleted
 
 #### Result
 
-_Pending_
+**Failed.** The profile process crashes immediately on startup before any
+webview can be created.
+
+#### Conclusion
+
+The bundle structure changes were successful (criteria 1-4, 9), but the profile
+process fails to start because the CEF library loader cannot find the framework.
+
+**Root Cause:**
+
+The `LibraryLoader` in `cef-rs/cef/src/library_loader.rs` uses the binary's
+location to resolve the CEF framework path. It has two modes controlled by a
+`helper` parameter:
+
+```rust
+let resolver = if helper { "../../.." } else { "../Frameworks" };
+```
+
+- `helper: false` → `../Frameworks` (for binaries in `Contents/MacOS/`)
+- `helper: true` → `../../..` (for binaries in `Contents/Frameworks/Helper.app/Contents/MacOS/`)
+
+The current code in `termsurf-profile/src/main.rs:115` calls:
+```rust
+let _loader = LibraryLoader::new(&exe, false);
+```
+
+With the binary now at:
+```
+Contents/Frameworks/TermSurf Profile Helper.app/Contents/MacOS/termsurf-profile
+```
+
+The `false` (non-helper) path resolves to:
+```
+Contents/Frameworks/TermSurf Profile Helper.app/Contents/Frameworks/
+```
+
+This path doesn't exist, causing `canonicalize().unwrap()` to panic.
+
+**Error from log:**
+```
+thread 'main' panicked at library_loader.rs:20:14:
+called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+```
+
+**Hypothesis for Fix:**
+
+Change the `LibraryLoader::new()` call from `helper: false` to `helper: true`:
+
+```rust
+let _loader = LibraryLoader::new(&exe, true);
+```
+
+This will use the `../../..` resolver, which correctly navigates from:
+```
+Contents/Frameworks/TermSurf Profile Helper.app/Contents/MacOS/
+    ↑ ..    → Contents/Frameworks/TermSurf Profile Helper.app/Contents/
+    ↑ ../.. → Contents/Frameworks/TermSurf Profile Helper.app/
+    ↑ ../../.. → Contents/Frameworks/
+```
+
+Then joins with `Chromium Embedded Framework.framework/...` to find the correct
+framework location.
