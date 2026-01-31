@@ -1011,15 +1011,68 @@ grep "paint_webview_control_bars" /tmp/termsurf-gui.log
 
 #### Success Criteria
 
-1. [ ] `paint_webview_control_bars()` function exists in pane.rs
-2. [ ] Function called from `paint_pass()` after `drop(layers)`
-3. [ ] Control bar text renders visibly on screen
-4. [ ] URL displays with half-cell margins (left, top, bottom)
-5. [ ] Text uses terminal palette colors (foreground on background)
-6. [ ] Multiple webview panes each show their own URL
-7. [ ] Broken code removed from draw.rs
-8. [ ] No rendering artifacts or visual glitches
+1. [x] `paint_webview_control_bars()` function exists in pane.rs
+2. [x] Function called from `paint_pass()` after `drop(layers)`
+3. [x] Control bar text renders visibly on screen
+4. [x] URL displays with half-cell margins (left, top, bottom)
+5. [~] Text uses terminal palette colors (foreground on background) — text color correct, but background is transparent
+6. [x] Multiple webview panes each show their own URL
+7. [x] Broken code removed from draw.rs
+8. [ ] No rendering artifacts or visual glitches — terminal text visible behind URL
 
 #### Result
 
-(Pending)
+**Partial failure.** Text renders correctly, but background is transparent.
+
+#### Conclusion
+
+**What worked:**
+
+- `paint_webview_control_bars()` renders URL text at the correct position
+- Text has correct half-cell margins matching ts2
+- Text color uses terminal palette foreground
+- Multiple webview panes each show their own URL
+- Broken code cleaned up from draw.rs
+
+**What didn't work:**
+
+- Control bar background is transparent instead of solid
+- Terminal text from the underlying pane is visible behind the URL
+
+**Root cause:**
+
+ts2 uses **two separate functions** for the control bar:
+
+1. **`paint_browser_overlay`** — called during `paint_pane` while layers buffer is mapped:
+   ```rust
+   self.filled_rectangle(layers, 0, control_panel_rect, bg_color)?;
+   ```
+
+2. **`paint_browser_control_bars`** — called after `drop(layers)`:
+   ```rust
+   self.render_element(&computed, gl_state, None)?;
+   ```
+
+Experiment 3 only implemented the equivalent of #2 (text rendering via
+`render_element`). The solid background is rendered separately via
+`filled_rectangle` during the pane rendering loop, before layers are dropped.
+
+In ts3, webview panes bypass `paint_pane` entirely — they render via
+`render_webview_overlays_webgpu`. There is no equivalent call to
+`filled_rectangle` for the control bar background.
+
+**Hypothesis for fix:**
+
+Add a `paint_webview_overlay_background()` function that:
+1. Is called during the pane rendering loop (before `drop(layers)`)
+2. Uses `filled_rectangle(layers, ...)` to render solid background
+3. Only renders for panes that have webview overlays
+
+This mirrors ts2's two-phase approach:
+- Phase 1 (with layers): `filled_rectangle` for background
+- Phase 2 (after drop): `render_element` for text
+
+**Files to modify:**
+
+- `ts3/wezterm-gui/src/termwindow/render/pane.rs` — add `paint_webview_overlay_background()`
+- `ts3/wezterm-gui/src/termwindow/render/paint.rs` — call it during pane loop
