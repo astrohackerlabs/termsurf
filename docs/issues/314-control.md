@@ -512,3 +512,189 @@ control bar.
 
 Experiment 2 will implement the actual control panel rendering (background,
 text, viewport adjustment).
+
+---
+
+### Experiment 2: Render Control Panel
+
+**Goal:** Render a control panel at the top of each webview pane, displaying
+the URL. The webview content should render below the control panel, not
+overlapping it.
+
+**Background:**
+
+ts2 renders the control panel in two phases (see `pane.rs:813-966`):
+
+1. **Phase 1 (paint_browser_overlay)**: Render background via `filled_rectangle`
+   while layers buffer is mapped
+2. **Phase 2 (paint_browser_control_bars)**: Render text via `render_element`
+   after layers are dropped
+
+ts3's webview rendering is different — it happens in a separate function
+(`render_webview_overlays_webgpu`) that uses its own wgpu render passes. We need
+to adapt the approach.
+
+#### Approach
+
+**Part A: Viewport adjustment and background**
+
+1. Calculate control bar dimensions (2 cell heights)
+2. Adjust webview viewport to start below control bar
+3. Adjust CEF resize commands to use reduced height
+4. Render control bar background as a filled quad
+
+**Part B: Text rendering**
+
+1. Access URL from `ReceivedSurface`
+2. Use WezTerm's text rendering to display URL with half-cell margins
+
+For this experiment, we'll implement Part A first. Part B (text) may require
+additional investigation into WezTerm's text rendering from our render path.
+
+#### Changes
+
+**Step 1: Calculate control bar height**
+
+In `render_webview_overlays_webgpu`, after getting cell dimensions:
+
+```rust
+let cell_height = self.render_metrics.cell_size.height as f32;
+let cell_width = self.render_metrics.cell_size.width as f32;
+let control_bar_height = cell_height * 2.0;
+```
+
+**Step 2: Adjust viewport for webview texture**
+
+Currently the webview fills the entire pane. Change to:
+
+```rust
+// Control bar occupies top 2 cell heights
+let webview_y = viewport_y + control_bar_height;
+let webview_h = viewport_h - control_bar_height;
+
+// Use adjusted viewport for webview texture
+render_pass.set_viewport(viewport_x, webview_y, viewport_w, webview_h, 0.0, 1.0);
+```
+
+**Step 3: Adjust CEF resize to match**
+
+The resize command should use the reduced height:
+
+```rust
+// Send resize with control bar height subtracted
+let logical_h = ((viewport_h - control_bar_height) / scale) as u32;
+xpc_manager.send_resize(*pane_id, logical_w, logical_h);
+```
+
+**Step 4: Render control bar background**
+
+Before the webview render pass, create a separate render pass for the control
+bar background:
+
+```rust
+// Render control bar background
+{
+    let mut control_bar_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Control Bar Background"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &output_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+
+    // Set viewport to control bar area
+    control_bar_pass.set_viewport(
+        viewport_x,
+        viewport_y,
+        viewport_w,
+        control_bar_height,
+        0.0,
+        1.0,
+    );
+
+    // Use a simple solid color pipeline (or filled_rectangle equivalent)
+    // TODO: Need to create or reuse a solid color shader/pipeline
+}
+```
+
+**Step 5: Render URL text (Part B - may be separate experiment)**
+
+After webview rendering, use WezTerm's Element system to render the URL:
+
+```rust
+// Get URL from received surface
+let url = surface.url.clone();
+
+// Create text element (similar to ts2's paint_browser_control_bars)
+let element = Element::new(&font, ElementContent::Text(url))
+    .colors(ElementColors { ... })
+    .padding(BoxDimension {
+        left: Dimension::Pixels(half_cell_width),
+        top: Dimension::Pixels(half_cell_height),
+        ...
+    });
+
+// Compute and render
+let computed = self.compute_element(&layout_context, &element)?;
+computed.translate(euclid::vec2(viewport_x, viewport_y));
+self.render_element(&computed, gl_state, None)?;
+```
+
+#### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ts3/wezterm-gui/src/termwindow/render/draw.rs` | Viewport adjustment, control bar rendering |
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# 1. Open webview
+web google.com
+
+# 2. Verify control bar space
+# - Top 2 cell heights should be reserved (may be empty or have background)
+# - Webview content should start below this area
+
+# 3. Verify no overlap
+# - Webview should not cover the control bar area
+# - No visual glitches at the boundary
+
+# 4. Test resize
+# - Drag window edge
+# - Control bar area should maintain 2 cell height
+# - Webview should resize correctly below it
+
+# 5. Check logs for adjusted viewport
+grep "viewport" /tmp/termsurf-gui.log
+# Expected: Viewport Y should be offset by control bar height
+```
+
+#### Success Criteria
+
+**Part A (viewport adjustment):**
+
+1. [ ] Control bar height calculated as 2 cell heights
+2. [ ] Webview viewport starts below control bar (Y offset)
+3. [ ] Webview viewport height reduced by control bar height
+4. [ ] CEF receives correct reduced height in resize commands
+5. [ ] Control bar area visible (even if just terminal background showing through)
+6. [ ] No visual overlap between control bar area and webview
+
+**Part B (text rendering):**
+
+1. [ ] URL retrieved from ReceivedSurface
+2. [ ] URL rendered with half-cell margins
+3. [ ] Text uses terminal palette colors
+4. [ ] Long URLs truncate gracefully
+
+#### Result
+
+_Pending_
