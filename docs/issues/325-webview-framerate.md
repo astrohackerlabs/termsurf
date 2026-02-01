@@ -4,8 +4,8 @@ Webview content does not refresh at 60fps, causing visible lag.
 
 ## Status
 
-Experiment 5 failed — CFRunLoop timers don't work reliably with CEF's external
-message pump. Experiment 3 (polling loop) remains the working solution.
+**Resolved.** Webview now renders at 60fps using a 1ms polling loop with
+`do_message_loop_work()`.
 
 ## Product Requirements
 
@@ -981,6 +981,53 @@ later, investigate alternative approaches:
 2. Use `kCFRunLoopDefaultMode` instead of `kCFRunLoopCommonModes`
 3. Investigate CEF's multi-threaded message loop mode
 4. Profile why `on_schedule_message_pump_work` stops being called
+
+## Conclusion
+
+**Problem:** Webview content was rendering at 12-20fps instead of 60fps, causing
+visible lag during scrolling, hover effects, and interactions.
+
+**Root cause:** CEF's `run_message_loop()` does not pump the message queue
+frequently enough for 60fps rendering. The `windowless_frame_rate: 60` setting
+only sets the maximum rate — CEF still needs its message loop pumped frequently
+to actually render frames.
+
+**Solution:** Replace `run_message_loop()` with a custom polling loop that calls
+`do_message_loop_work()` every 1ms. This allows CEF to render at its configured
+60fps.
+
+```rust
+// Before (12-20fps):
+cef::run_message_loop();
+
+// After (60fps):
+while !quit_flag.load(Ordering::Relaxed) {
+    cef::do_message_loop_work();
+    std::thread::sleep(Duration::from_millis(1));
+}
+```
+
+**Trade-off:** The polling loop uses slightly more CPU when idle (~5-10%) compared
+to the blocking `run_message_loop()`. This is acceptable for now. Attempts to
+optimize with CFRunLoop timers (Experiments 4-5) failed — CEF's
+`on_schedule_message_pump_work` callback doesn't work reliably in the
+out-of-process architecture.
+
+**Key learnings:**
+
+1. CEF's `windowless_frame_rate` is a maximum, not a guarantee — message loop
+   frequency determines actual frame rate
+2. ts2 achieved 60fps because it integrated CEF into WezTerm's existing event
+   loop with demand-driven `do_message_loop_work()` calls
+3. ts3's out-of-process architecture requires explicit polling since there's no
+   existing event loop to integrate with
+4. The dedup optimization (removed in Experiment 1) was based on a wrong
+   assumption and was correctly removed, though it wasn't the primary cause
+
+**Files changed:**
+
+- `ts3/termsurf-profile/src/main.rs` — Replaced `run_message_loop()` with polling
+  loop, removed dedup logic, added frame timing diagnostics
 
 ## References
 
