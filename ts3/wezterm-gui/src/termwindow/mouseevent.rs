@@ -1217,14 +1217,26 @@ impl super::TermWindow {
 
         match &event.kind {
             WMEK::Move => {
+                // Issue 322: Include button state for drag selection
+                let modifiers = {
+                    let buttons = self.webview_mouse_buttons.borrow();
+                    *buttons.get(&pane_id).unwrap_or(&0)
+                };
                 log::info!(
-                    "[MOUSE] Move pane={} physical=({}, {}) rel=({:.1}, {:.1}) cef=({}, {}) scale={:.2}",
-                    pane_id, event.coords.x, event.coords.y, rel_x, rel_y, cef_x, cef_y, scale
+                    "[MOUSE] Move pane={} cef=({}, {}) modifiers=0x{:x}",
+                    pane_id, cef_x, cef_y, modifiers
                 );
-                xpc_manager.send_mouse_move(pane_id, cef_x, cef_y, 0);
+                xpc_manager.send_mouse_move(pane_id, cef_x, cef_y, modifiers);
                 true
             }
             WMEK::Press(MousePress::Left) => {
+                // Issue 322: Track button state for drag selection
+                {
+                    let mut buttons = self.webview_mouse_buttons.borrow_mut();
+                    let state = buttons.entry(pane_id).or_insert(0);
+                    *state |= 0x10; // EVENTFLAG_LEFT_MOUSE_BUTTON
+                }
+
                 let click_count = self.compute_click_count(pane_id, cef_x, cef_y);
                 log::info!(
                     "[MOUSE] Press LEFT pane={} cef=({}, {}) click_count={}",
@@ -1234,6 +1246,14 @@ impl super::TermWindow {
                 true
             }
             WMEK::Release(MousePress::Left) => {
+                // Issue 322: Clear button state
+                {
+                    let mut buttons = self.webview_mouse_buttons.borrow_mut();
+                    if let Some(state) = buttons.get_mut(&pane_id) {
+                        *state &= !0x10; // Clear EVENTFLAG_LEFT_MOUSE_BUTTON
+                    }
+                }
+
                 // Use same count as press (don't re-compute on release)
                 let click_count = {
                     let states = self.click_state.borrow();

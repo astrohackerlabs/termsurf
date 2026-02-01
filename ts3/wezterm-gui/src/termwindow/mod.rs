@@ -430,6 +430,11 @@ pub struct TermWindow {
     #[cfg(target_os = "macos")]
     click_state: RefCell<HashMap<PaneId, crate::termwindow::mouseevent::ClickState>>,
 
+    /// Per-pane mouse button state for drag detection (issue 322)
+    /// Value is a bitmask: 0x10=left, 0x20=middle, 0x40=right
+    #[cfg(target_os = "macos")]
+    webview_mouse_buttons: RefCell<HashMap<PaneId, u32>>,
+
     window_background: Vec<LoadedBackgroundLayer>,
 
     current_modifier_and_leds: (Modifiers, KeyboardLedStatus),
@@ -808,6 +813,8 @@ impl TermWindow {
             webview_resize_state: RefCell::new(HashMap::new()),
             #[cfg(target_os = "macos")]
             click_state: RefCell::new(HashMap::new()),
+            #[cfg(target_os = "macos")]
+            webview_mouse_buttons: RefCell::new(HashMap::new()),
             ui_items: vec![],
             dragging: None,
             last_ui_item: None,
