@@ -40,6 +40,36 @@ Launcher: Profile 'default' connection error: XPC connection invalid
 4. **Profile notifies launcher on exit** - Send unregister message before
    shutting down
 
+## Analysis
+
+**Option 1 is wrong.** Keeping profiles alive forever is bad because there could
+be unlimited profiles. We need to close unused ones to free resources.
+
+**Option 2: Respawn on failure**
+
+- Launcher tries to forward, connection fails
+- Launcher unregisters dead profile, spawns new one
+- Pros: Simple, handles any unexpected death (crashes, etc.)
+- Cons: Reactive - we hit an error before recovering
+
+**Option 4: Profile notifies launcher (track connections)**
+
+- Profile already knows when connections drop: `[CONN-0] GUI disconnected (remaining: {})`
+- Profile sends "unregister_profile" message to launcher before exiting
+- Launcher removes profile from registry
+- Next request spawns fresh
+- Pros: Clean, no error path
+- Cons: Requires new IPC message from profile → launcher
+
+## Recommended Fix
+
+**Implement both Option 2 and Option 4:**
+
+1. **Primary path (Option 4):** Profile notifies launcher before exiting - this
+   is the clean path for normal shutdown
+2. **Safety net (Option 2):** Launcher handles connection failures by
+   unregistering and respawning - this catches crashes or unexpected deaths
+
 ## Files Involved
 
 - `ts3/termsurf-profile/src/main.rs` - Profile server exit logic
