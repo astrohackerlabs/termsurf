@@ -16,7 +16,7 @@
 //! 8. run_message_loop() blocks until Ctrl+C
 
 use clap::Parser;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -29,8 +29,14 @@ static PROFILE_START_TIME: OnceLock<Instant> = OnceLock::new();
 // Issue 326, Experiment 1: Global quit flag for graceful shutdown on GUI disconnect
 static QUIT_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-// Issue 326, Experiment 3: Track GUI connections - only exit when all disconnect
-static GUI_CONNECTION_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+// Issue 330, Experiment 3: Track active connections by ID for idempotent cleanup
+// Replaces the old GUI_CONNECTION_COUNT counter which could be decremented multiple times
+static CONNECTION_ID: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_CONNECTIONS: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+
+fn active_connections() -> &'static Mutex<HashSet<u64>> {
+    ACTIVE_CONNECTIONS.get_or_init(|| Mutex::new(HashSet::new()))
+}
 use termsurf_xpc::*;
 
 #[derive(Parser)]
@@ -743,9 +749,13 @@ mod cef_handlers {
             }
         };
 
-        // Issue 326, Experiment 3: Track GUI connections for graceful shutdown
-        let count = crate::GUI_CONNECTION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        println!("Profile: GUI connection established (total: {})", count);
+        // Issue 330, Experiment 3: Track active connections by ID for idempotent cleanup
+        let conn_id = crate::CONNECTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut conns = crate::active_connections().lock().unwrap();
+            conns.insert(conn_id);
+            println!("[CONN-{}] GUI connection established (active: {:?})", conn_id, conns);
+        }
 
         // 2. Create deferred state wrapper (will be populated after browser creation)
         let deferred_state: Arc<Mutex<Option<Arc<BrowserState>>>> =
@@ -754,6 +764,7 @@ mod cef_handlers {
         // 3. Set event handler BEFORE resume
         let deferred_for_handler = Arc::clone(&deferred_state);
         let scale_for_handler = state.scale;
+        let conn_id_for_handler = conn_id; // Issue 330, Experiment 3: Capture for idempotent error handler
         set_event_handler(&*gui, move |event| {
             match event {
                 Ok(msg) => {
@@ -1012,17 +1023,34 @@ mod cef_handlers {
                     }
                 }
                 Err(e) => {
-                    // Issue 326, Experiment 3: Track disconnects, only exit when all gone
+                    // Issue 330, Experiment 3: Idempotent disconnect handling
+                    // Only act if this connection is still in the active set
                     match e {
                         XpcError::ConnectionInterrupted | XpcError::ConnectionInvalid => {
-                            let count = crate::GUI_CONNECTION_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) - 1;
-                            println!("Profile: GUI disconnected (remaining: {})", count);
-                            if count == 0 {
-                                println!("Profile: No more GUI connections, exiting gracefully");
-                                crate::QUIT_FLAG.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let mut conns = crate::active_connections().lock().unwrap();
+                            if conns.remove(&conn_id_for_handler) {
+                                // This connection was still active, now it's gone
+                                println!(
+                                    "[CONN-{}] GUI disconnected (remaining: {:?})",
+                                    conn_id_for_handler, conns
+                                );
+                                if conns.is_empty() {
+                                    println!(
+                                        "[CONN-{}] No more GUI connections, exiting gracefully",
+                                        conn_id_for_handler
+                                    );
+                                    drop(conns); // Release lock before setting flag
+                                    crate::QUIT_FLAG.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
+                            } else {
+                                // Already disconnected - ignore duplicate error
+                                println!(
+                                    "[CONN-{}] Ignoring duplicate disconnect (already removed)",
+                                    conn_id_for_handler
+                                );
                             }
                         }
-                        _ => eprintln!("Profile: GUI connection error: {}", e),
+                        _ => eprintln!("[CONN-{}] GUI connection error: {}", conn_id_for_handler, e),
                     }
                 }
             }
