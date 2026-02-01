@@ -128,9 +128,11 @@ cd ts3 && ./scripts/build-debug.sh --open
 
 ---
 
-## Experiment 5: Rename config directory and file
+## Experiment 5: Rename config directory and file ✓
 
 Rename `~/.config/wezterm/wezterm.lua` to `~/.config/termsurf/termsurf.lua`.
+
+**Status: Success** - Works when `WEZTERM_CONFIG_FILE` env var is not set. (When launching from WezTerm, this var is inherited and overrides the path.)
 
 ### Changes
 
@@ -142,6 +144,7 @@ Rename `~/.config/wezterm/wezterm.lua` to `~/.config/termsurf/termsurf.lua`.
 | `ts3/config/src/config.rs` | 1009 | `".wezterm.lua"` → `".termsurf.lua"`    |
 | `ts3/config/src/config.rs` | 1011 | `"wezterm.lua"` → `"termsurf.lua"`      |
 | `ts3/config/src/config.rs` | 1025 | `"wezterm.lua"` → `"termsurf.lua"`      |
+| `ts3/config/src/lua.rs`    | 230  | `".wezterm"` → `".termsurf"` (Lua path) |
 
 ### Verification
 
