@@ -49,3 +49,23 @@ Rename `wezterm-gui` to `termsurf-gui`.
 cd ts3 && ./scripts/build-debug.sh --open
 # App should launch and function normally
 ```
+
+---
+
+## Experiment 2: Rename app bundle
+
+Rename `wezterm-gui.app` to `termsurf-gui.app`.
+
+### Changes
+
+| File                           | Change                                                  |
+| ------------------------------ | ------------------------------------------------------- |
+| `ts3/scripts/build-debug.sh`   | `APP_BUNDLE=.../wezterm-gui.app` → `.../termsurf-gui.app` |
+| `ts3/scripts/build-release.sh` | `APP_BUNDLE=.../wezterm-gui.app` → `.../termsurf-gui.app` |
+
+### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+# App should launch from termsurf-gui.app bundle
+```
