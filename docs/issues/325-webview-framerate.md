@@ -4,8 +4,8 @@ Webview content does not refresh at 60fps, causing visible lag.
 
 ## Status
 
-Experiment 5 designed. Adding `external_message_pump: 1` to fix experiment 4's
-CFRunLoop timer approach.
+Experiment 5 failed — CFRunLoop timers don't work reliably with CEF's external
+message pump. Experiment 3 (polling loop) remains the working solution.
 
 ## Product Requirements
 
@@ -952,7 +952,35 @@ top -pid $(pgrep -f termsurf-profile)
 | CPU when idle | ~5-10% | ~0% |
 | CPU during scroll | ~5-10% | ~1-2% |
 
-**Status:** Not started.
+**Status:** Failed.
+
+**Result:** Webview rendered the initial frame but then stopped updating. Scroll
+events were received but never processed — tasks posted to CEF's UI thread via
+`post_task` never executed.
+
+**Analysis:** Only 3 frames were produced (`frame=0`, `frame=1`, `frame=2`), then
+nothing. Scroll events arrived at the XPC handler and were posted to CEF's UI
+thread, but `MouseWheelTask::execute()` was never called.
+
+This indicates that after the initial burst, `do_message_loop_work()` stopped
+being called. Either:
+
+1. CEF stopped calling `on_schedule_message_pump_work` after initial setup
+2. The CFRunLoop timer mechanism isn't working correctly across threads
+3. There's a deadlock or blocking issue in the timer/callback interaction
+
+**Conclusion:** The CFRunLoop timer approach doesn't work reliably with CEF's
+external message pump in this out-of-process architecture. The polling approach
+(Experiment 3) remains the working solution.
+
+**Recommendation:** Keep the simple polling loop from Experiment 3. The ~5-10%
+CPU overhead when idle is acceptable for now. If CPU usage becomes a concern
+later, investigate alternative approaches:
+
+1. Hybrid: Poll at lower frequency (e.g., 10ms) when idle, faster when active
+2. Use `kCFRunLoopDefaultMode` instead of `kCFRunLoopCommonModes`
+3. Investigate CEF's multi-threaded message loop mode
+4. Profile why `on_schedule_message_pump_work` stops being called
 
 ## References
 
