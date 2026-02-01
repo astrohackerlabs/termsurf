@@ -54,7 +54,8 @@ be unlimited profiles. We need to close unused ones to free resources.
 
 **Option 4: Profile notifies launcher (track connections)**
 
-- Profile already knows when connections drop: `[CONN-0] GUI disconnected (remaining: {})`
+- Profile already knows when connections drop:
+  `[CONN-0] GUI disconnected (remaining: {})`
 - Profile sends "unregister_profile" message to launcher before exiting
 - Launcher removes profile from registry
 - Next request spawns fresh
@@ -146,10 +147,99 @@ The unregistration works, but it's **too late**. The sequence is:
 4. But the GUI has already given up waiting and disconnected
 5. Launcher exits because no GUI connections remain
 
-The fix only helps *future* requests, but the *current* request is already lost.
+The fix only helps _future_ requests, but the _current_ request is already lost.
 
 **Hypothesis:** The safety net (Option 2) cannot work alone because the error is
 detected too late. We must implement Option 4 first: the profile notifies the
 launcher before exiting. This ensures the profile is already unregistered when
 the second request arrives, so the launcher spawns fresh instead of forwarding
 to a dead process.
+
+---
+
+## Experiment 2: Profile notifies launcher before exit
+
+Implement Option 4. When the profile server detects all GUI connections are
+gone, it sends an `unregister_profile` message to the launcher before exiting.
+
+### Current Behavior
+
+In `create_browser_on_ui_thread` (lines 1037-1044), when all connections drop:
+
+```rust
+if conns.is_empty() {
+    println!(
+        "[CONN-{}] No more GUI connections, exiting gracefully",
+        conn_id_for_handler
+    );
+    drop(conns); // Release lock before setting flag
+    crate::QUIT_FLAG.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+```
+
+The profile exits without notifying the launcher.
+
+### Fix
+
+1. Store the launcher connection in a global (it's already an Arc)
+2. Before setting QUIT_FLAG, send `unregister_profile` to the launcher
+
+Add global for launcher connection:
+
+```rust
+static LAUNCHER_CONNECTION: OnceLock<Arc<XpcConnection>> = OnceLock::new();
+```
+
+Store after connecting (in `run_profile_server`, after line 165):
+
+```rust
+let launcher = Arc::new(launcher);
+let _ = LAUNCHER_CONNECTION.set(Arc::clone(&launcher));
+```
+
+Modify shutdown logic (lines 1037-1044):
+
+```rust
+if conns.is_empty() {
+    println!(
+        "[CONN-{}] No more GUI connections, exiting gracefully",
+        conn_id_for_handler
+    );
+    drop(conns); // Release lock before sending
+
+    // Notify launcher to unregister this profile
+    if let Some(launcher) = crate::LAUNCHER_CONNECTION.get() {
+        if let Some(state) = crate::PROFILE_STATE.get() {
+            let msg = XpcDictionary::new();
+            msg.set_string("action", "unregister_profile");
+            msg.set_string("profile", &state.profile);
+            launcher.send(&msg);
+            println!("[CONN-{}] Sent unregister_profile to launcher", conn_id_for_handler);
+        }
+    }
+
+    crate::QUIT_FLAG.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+```
+
+Add handler in launcher (in the event handler for profile connections):
+
+```rust
+if action == "unregister_profile" {
+    let profile = msg.get_string("profile").unwrap_or_default();
+    running_profiles.lock().unwrap().remove(&profile);
+    println!("Launcher: Profile '{}' unregistered (self-reported)", profile);
+}
+```
+
+### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+web google.com   # Opens webview
+# Close with Ctrl+C twice
+# Check launcher log for "unregistered (self-reported)"
+web google.com   # Should spawn new profile and work
+tail -f /tmp/termsurf-launcher.log
+# Expected: "Profile 'default' unregistered (self-reported)" then "Spawning new profile"
+```
