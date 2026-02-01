@@ -86,8 +86,8 @@ pub fn fixup_appimage() {
         /// However, if we are using the system wezterm to spawn a portable
         /// AppImage then we want these to not take effect.
         fn clean_wezterm_config_env() {
-            std::env::remove_var("WEZTERM_CONFIG_FILE");
-            std::env::remove_var("WEZTERM_CONFIG_DIR");
+            std::env::remove_var("TERMSURF_CONFIG_FILE");
+            std::env::remove_var("TERMSURF_CONFIG_DIR");
         }
 
         if config::HOME_DIR.starts_with(append_extra_file_name_suffix(&appimage, ".home")) {

@@ -156,9 +156,11 @@ cd ts3 && ./scripts/build-debug.sh --open
 
 ---
 
-## Experiment 6: Rename config env vars
+## Experiment 6: Rename config env vars ✓
 
 Rename `WEZTERM_CONFIG_FILE` → `TERMSURF_CONFIG_FILE` and `WEZTERM_CONFIG_DIR` → `TERMSURF_CONFIG_DIR`.
+
+**Status: Success**
 
 ### Changes
 
