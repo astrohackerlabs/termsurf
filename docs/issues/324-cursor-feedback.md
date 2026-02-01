@@ -230,7 +230,260 @@ After cursor feedback, these features remain:
 
 ## Experiments
 
-_No experiments yet._
+### Experiment 1: Send Cursor Type via XPC
+
+**Status:** Not started
+
+**Hypothesis:** Adding `on_cursor_change` to the DisplayHandler and sending the
+cursor type to the GUI via XPC will enable cursor feedback in webviews.
+
+**Approach:** The DisplayHandler already exists in termsurf-profile (for URL
+changes). Add the cursor change callback, send XPC messages, handle them in the
+GUI, and apply the cursor in mouse event handling.
+
+#### 1a. Profile Server: Add on_cursor_change to DisplayHandler
+
+In `termsurf-profile/src/main.rs`, extend the DisplayHandler to handle cursor
+changes. The `on_cursor_change` callback is part of `ImplDisplayHandler`:
+
+```rust
+wrap_display_handler! {
+    pub struct ProfileDisplayHandler {
+        inner: DisplayHandlerInner,
+    }
+
+    impl DisplayHandler {
+        fn on_address_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            url: Option<&CefString>,
+        ) {
+            if let Some(url) = url {
+                let url_str = url.to_string();
+                println!("Profile: URL changed to '{}'", url_str);
+                *self.inner.state.url.lock().unwrap() = url_str;
+            }
+        }
+
+        // Issue 324: Cursor feedback
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _cursor: cef::CursorHandle,
+            type_: cef::CursorType,
+            _custom_cursor_info: Option<&cef::CursorInfo>,
+        ) {
+            // Convert CursorType to i64 for XPC
+            let cursor_type: i64 = type_.into();
+            println!("Profile: Cursor changed to type {}", cursor_type);
+
+            // Send to GUI via XPC
+            let msg = termsurf_xpc::XpcDictionary::new();
+            msg.set_string("action", "cursor_change");
+            msg.set_i64("cursor_type", cursor_type);
+            self.inner.state.gui.send(&msg);
+        }
+    }
+}
+```
+
+Note: Need to add `CursorType` to the imports in the `cef_imports!` block.
+
+#### 1b. GUI: Add Cursor Storage to XpcManager
+
+In `webview_xpc.rs`, add a field to store cursor type per pane:
+
+```rust
+pub struct XpcManager {
+    // ... existing fields ...
+
+    /// Current cursor type per pane (CEF cursor type value)
+    /// Issue 324: Cursor feedback
+    webview_cursors: Mutex<HashMap<PaneId, i64>>,
+}
+
+impl XpcManager {
+    pub fn new() -> Self {
+        Self {
+            // ... existing init ...
+            webview_cursors: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Get cursor type for a pane (issue 324)
+    pub fn get_cursor(&self, pane_id: PaneId) -> Option<i64> {
+        self.webview_cursors.lock().unwrap().get(&pane_id).copied()
+    }
+}
+```
+
+#### 1c. GUI: Handle cursor_change XPC Message
+
+In the XPC event handler, add a case for `cursor_change`:
+
+```rust
+if action == "display_surface" {
+    // ... existing code ...
+} else if action == "cursor_change" {
+    // Issue 324: Cursor feedback
+    let cursor_type = msg.get_i64("cursor_type");
+    log::info!(
+        "[XPC Manager] Cursor change: session={} type={}",
+        session_id, cursor_type
+    );
+
+    // Look up pane_id from session
+    let pane_id = {
+        let pending = manager.pending_sessions.lock().unwrap();
+        pending.get(&session_id).copied()
+    };
+
+    if let Some(pane_id) = pane_id {
+        manager
+            .webview_cursors
+            .lock()
+            .unwrap()
+            .insert(pane_id, cursor_type);
+
+        // Trigger invalidation to update cursor
+        if let Some(callback) = manager
+            .invalidate_callbacks
+            .lock()
+            .unwrap()
+            .get(&pane_id)
+        {
+            callback();
+        }
+    }
+}
+```
+
+#### 1d. GUI: Apply Cursor in Mouse Handler
+
+In `mouseevent.rs`, add a helper to convert CEF cursor type to WezTerm cursor:
+
+```rust
+/// Convert CEF cursor type to WezTerm MouseCursor (issue 324)
+#[cfg(target_os = "macos")]
+fn cef_cursor_to_mouse_cursor(cef_type: i64) -> MouseCursor {
+    match cef_type {
+        0 => MouseCursor::Arrow,          // CT_POINTER
+        2 => MouseCursor::Hand,           // CT_HAND
+        3 => MouseCursor::Text,           // CT_IBEAM
+        6 | 8 => MouseCursor::SizeLeftRight,   // CT_EASTRESIZE, CT_WESTRESIZE
+        7 | 9 => MouseCursor::SizeUpDown,      // CT_NORTHRESIZE, CT_SOUTHRESIZE
+        _ => MouseCursor::Arrow,          // Default for unsupported
+    }
+}
+```
+
+Then update `handle_webview_mouse_event` to apply the cursor on Move events:
+
+```rust
+WMEK::Move => {
+    // Issue 322: Include button state for drag selection
+    let modifiers = {
+        let buttons = self.webview_mouse_buttons.borrow();
+        *buttons.get(&pane_id).unwrap_or(&0)
+    };
+
+    // Issue 324: Apply cursor feedback
+    if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+        if let Some(cursor_type) = xpc_manager.get_cursor(pane_id) {
+            let cursor = cef_cursor_to_mouse_cursor(cursor_type);
+            // Note: Need access to context here - may need to restructure
+        }
+    }
+
+    log::info!(
+        "[MOUSE] Move pane={} cef=({}, {}) modifiers=0x{:x}",
+        pane_id, cef_x, cef_y, modifiers
+    );
+    xpc_manager.send_mouse_move(pane_id, cef_x, cef_y, modifiers);
+    true
+}
+```
+
+**Challenge:** The current `handle_webview_mouse_event` returns `bool` and
+doesn't have access to `context` to call `set_cursor`. We need to either:
+- Return the cursor to apply from the handler, or
+- Store the cursor on TermWindow state and apply it after the handler returns
+
+#### 1e. Alternative: Return Cursor from Handler
+
+Modify `handle_webview_mouse_event` to return `Option<MouseCursor>`:
+
+```rust
+/// Handle mouse events for webview panes.
+/// Returns Some(cursor) if the event was consumed and cursor should be set.
+fn handle_webview_mouse_event(&mut self, event: &MouseEvent) -> Option<MouseCursor> {
+    // ... existing code ...
+
+    match &event.kind {
+        WMEK::Move => {
+            // ... existing move handling ...
+
+            // Issue 324: Return cursor to apply
+            let cursor = if let Some(xpc_manager) = get_xpc_manager() {
+                xpc_manager
+                    .get_cursor(pane_id)
+                    .map(cef_cursor_to_mouse_cursor)
+            } else {
+                None
+            };
+
+            xpc_manager.send_mouse_move(pane_id, cef_x, cef_y, modifiers);
+            return cursor.or(Some(MouseCursor::Arrow));
+        }
+        // ... other cases return Some(MouseCursor::Arrow) ...
+    }
+}
+```
+
+Then in `mouse_event_impl`, apply the cursor:
+
+```rust
+#[cfg(target_os = "macos")]
+if let Some(cursor) = self.handle_webview_mouse_event(&event) {
+    context.set_cursor(Some(cursor));
+    return;
+}
+```
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Cursor over link
+web google.com
+# Hover over a link (e.g., "Gmail" in top right)
+# Expected: Cursor changes to hand/pointer
+
+# Test 2: Cursor over text
+# Hover over regular text on the page
+# Expected: Cursor changes to I-beam (text cursor)
+
+# Test 3: Cursor over non-interactive
+# Hover over background/images
+# Expected: Cursor is arrow
+
+# Test 4: Check logs
+tail -f /tmp/termsurf-profile-*.log | grep "Cursor"
+# Should see: "Profile: Cursor changed to type X"
+
+tail -f /tmp/termsurf-gui.log | grep "Cursor"
+# Should see: "[XPC Manager] Cursor change: session=X type=Y"
+```
+
+#### Success Criteria
+
+- [ ] Profile server logs show cursor type changes
+- [ ] GUI logs show received cursor_change messages
+- [ ] Hand cursor appears over links
+- [ ] I-beam cursor appears over selectable text
+- [ ] Arrow cursor appears over non-interactive areas
 
 ## References
 
