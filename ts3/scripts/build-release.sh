@@ -66,6 +66,9 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
+# 3b. Copy app icon
+cp "$REPO_DIR/assets/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/"
+
 # 4. Copy executables
 cp "$REPO_DIR/target/release/termsurf-gui" "$APP_BUNDLE/Contents/MacOS/"
 cp "$REPO_DIR/target/release/wezterm" "$APP_BUNDLE/Contents/MacOS/"
@@ -123,6 +126,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>LSEnvironment</key>
     <dict>
         <key>MallocNanoZone</key>
