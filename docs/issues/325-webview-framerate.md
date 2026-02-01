@@ -4,8 +4,8 @@ Webview content does not refresh at 60fps, causing visible lag.
 
 ## Status
 
-Experiment 4 designed. Optimizing CPU usage with demand-driven CFRunLoop timers
-(like ts2) instead of 1ms polling.
+Experiment 4 failed — missing `external_message_pump: 1` setting. Experiment 3
+(polling loop) remains the working solution.
 
 ## Product Requirements
 
@@ -826,7 +826,55 @@ web google.com
 | CPU during scroll | ~5-10% | ~1-2% |
 | Wakeups when idle | ~1000/sec | ~0/sec |
 
-**Status:** Not started.
+**Status:** Failed.
+
+**Result:** Webview did not open at all. GUI reported "Timeout waiting for surface
+from XPC" — no frames were ever received.
+
+**Analysis:** The profile server started correctly:
+- CEF initialized
+- Browser created
+- CFRunLoop running
+
+But no `FRAME-TX` log output appeared — `on_accelerated_paint` was never called.
+
+**Root cause:** CEF was not configured to use the external message pump. Without
+`external_message_pump: 1` in CEF settings, CEF:
+
+1. Uses its own internal message loop scheduling
+2. **Never calls `on_schedule_message_pump_work`** — this callback is only
+   invoked when `external_message_pump: 1` is set
+3. Expects `run_message_loop()` to be called for proper operation
+
+We replaced `run_message_loop()` with `CFRunLoopRun()`, but CEF wasn't
+configured to drive rendering through our callback. The CFRunLoop ran, but
+CEF never scheduled any work on it.
+
+**Missing configuration:**
+
+```rust
+// ts3/termsurf-profile/src/main.rs
+let settings = cef::Settings {
+    windowless_rendering_enabled: 1,
+    no_sandbox: 1,
+    external_message_pump: 1,  // <-- MISSING! Required for on_schedule_message_pump_work
+    // ...
+};
+```
+
+Both ts2 and the cef-rs OSR example set `external_message_pump: 1`:
+
+- `ts2/wezterm-gui/src/main.rs:129` — `external_message_pump: 1`
+- `cef-rs/examples/osr/src/main.rs:674` — `external_message_pump: true as _`
+
+**Conclusion:** The experiment failed because of a missing CEF configuration
+setting, not a fundamental flaw in the approach. The CFRunLoop timer pattern
+is correct, but CEF must be told to use external message pump mode.
+
+**Next steps:** Either:
+
+1. Add `external_message_pump: 1` and retry this experiment
+2. Revert to the working polling loop (Experiment 3) and optimize later
 
 ## References
 
