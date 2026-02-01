@@ -4,8 +4,8 @@ Webview content does not refresh at 60fps, causing visible lag.
 
 ## Status
 
-Experiment 4 failed — missing `external_message_pump: 1` setting. Experiment 3
-(polling loop) remains the working solution.
+Experiment 5 designed. Adding `external_message_pump: 1` to fix experiment 4's
+CFRunLoop timer approach.
 
 ## Product Requirements
 
@@ -875,6 +875,84 @@ is correct, but CEF must be told to use external message pump mode.
 
 1. Add `external_message_pump: 1` and retry this experiment
 2. Revert to the working polling loop (Experiment 3) and optimize later
+
+### Experiment 5: Fix Experiment 4 (Add external_message_pump)
+
+**Goal:** Fix experiment 4 by adding the missing `external_message_pump: 1`
+setting to CEF configuration.
+
+**Hypothesis:** With `external_message_pump: 1` set, CEF will call
+`on_schedule_message_pump_work` to request work, our CFRunLoop timers will fire,
+and we'll achieve 60fps with minimal CPU usage.
+
+**Approach:** Add the single missing setting to CEF initialization.
+
+**Changes:**
+
+1. **`ts3/termsurf-profile/src/main.rs`** — Add `external_message_pump: 1` to
+   settings (around line 239):
+
+   Before:
+   ```rust
+   let settings = cef::Settings {
+       windowless_rendering_enabled: 1,
+       no_sandbox: 1,
+       root_cache_path: cef::CefString::from(cache_path.to_str().unwrap()),
+       browser_subprocess_path: cef::CefString::from(helper_path.to_str().unwrap()),
+       persist_session_cookies: 1,
+       ..Default::default()
+   };
+   ```
+
+   After:
+   ```rust
+   let settings = cef::Settings {
+       windowless_rendering_enabled: 1,
+       no_sandbox: 1,
+       external_message_pump: 1,  // Required for on_schedule_message_pump_work
+       root_cache_path: cef::CefString::from(cache_path.to_str().unwrap()),
+       browser_subprocess_path: cef::CefString::from(helper_path.to_str().unwrap()),
+       persist_session_cookies: 1,
+       ..Default::default()
+   };
+   ```
+
+**Verification:**
+
+```bash
+# Kill any stale processes first!
+pkill -f termsurf-profile
+pkill -f termsurf-launcher
+
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Verify webview opens
+web google.com
+# Expected: Page loads and displays (unlike Exp 4 which timed out)
+
+# Test 2: Check frame rate during scroll
+tail -f /tmp/termsurf-profile-*.log | grep FRAME-TX
+# Scroll the page
+# Expected: ~60fps (frame intervals ~16ms)
+
+# Test 3: Monitor CPU usage when idle
+top -pid $(pgrep -f termsurf-profile)
+# Expected: Near 0% when not scrolling (vs ~5-10% with polling)
+
+# Test 4: Monitor CPU usage during scroll
+# Expected: Lower than polling approach
+```
+
+**Expected outcome:**
+
+| Metric | Polling (Exp 3) | CFRunLoop (Exp 5) |
+|--------|-----------------|-------------------|
+| Webview opens | Yes | Yes |
+| FPS during scroll | ~60 | ~60 |
+| CPU when idle | ~5-10% | ~0% |
+| CPU during scroll | ~5-10% | ~1-2% |
+
+**Status:** Not started.
 
 ## References
 
