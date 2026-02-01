@@ -4,7 +4,7 @@ Display appropriate cursor shapes when hovering over webview content.
 
 ## Status
 
-Not started.
+**Complete.** Cursor feedback working for webviews.
 
 ## Product Requirements
 
@@ -212,11 +212,11 @@ fn cef_cursor_to_wezterm(cef_type: u32) -> MouseCursor {
 
 ## Success Criteria
 
-- [ ] I-beam cursor appears when hovering over selectable text
-- [ ] Hand/pointer cursor appears when hovering over links
-- [ ] Arrow cursor appears when hovering over non-interactive areas
-- [ ] Cursor changes are immediate (no noticeable delay)
-- [ ] Cursor reverts to arrow when leaving the webview
+- [x] I-beam cursor appears when hovering over selectable text
+- [x] Hand/pointer cursor appears when hovering over links
+- [x] Arrow cursor appears when hovering over non-interactive areas
+- [x] Cursor changes are immediate (no noticeable delay)
+- [x] Cursor reverts to arrow when leaving the webview
 
 ## Next Steps (Other Mouse Input)
 
@@ -232,7 +232,7 @@ After cursor feedback, these features remain:
 
 ### Experiment 1: Send Cursor Type via XPC
 
-**Status:** Not started
+**Status:** SUCCESS
 
 **Hypothesis:** Adding `on_cursor_change` to the DisplayHandler and sending the
 cursor type to the GUI via XPC will enable cursor feedback in webviews.
@@ -479,11 +479,113 @@ tail -f /tmp/termsurf-gui.log | grep "Cursor"
 
 #### Success Criteria
 
-- [ ] Profile server logs show cursor type changes
-- [ ] GUI logs show received cursor_change messages
-- [ ] Hand cursor appears over links
-- [ ] I-beam cursor appears over selectable text
-- [ ] Arrow cursor appears over non-interactive areas
+- [x] Profile server logs show cursor type changes
+- [x] GUI logs show received cursor_change messages
+- [x] Hand cursor appears over links
+- [x] I-beam cursor appears over selectable text
+- [x] Arrow cursor appears over non-interactive areas
+
+---
+
+## Conclusion
+
+### What Was Accomplished
+
+Cursor feedback for ts3 webviews is complete:
+
+1. **CEF callback integration** — Added `on_cursor_change` to the DisplayHandler
+   in termsurf-profile. CEF calls this whenever the cursor should change based
+   on what element is under the mouse.
+
+2. **XPC cursor messaging** — The profile server sends cursor type to the GUI
+   via XPC `cursor_change` action. The GUI stores cursor type per pane in a
+   new `webview_cursors` HashMap.
+
+3. **Cursor type mapping** — Added `cef_cursor_to_mouse_cursor()` helper that
+   maps CEF's cursor types to WezTerm's `MouseCursor` enum:
+   - CT_POINTER (0) → Arrow
+   - CT_HAND (2) → Hand
+   - CT_IBEAM (3) → Text
+   - CT_EASTRESIZE/WESTRESIZE (6/8) → SizeLeftRight
+   - CT_NORTHRESIZE/SOUTHRESIZE (7/9) → SizeUpDown
+
+4. **Handler refactoring** — Changed `handle_webview_mouse_event` to return
+   `Option<MouseCursor>` instead of `bool`, allowing the caller to apply the
+   cursor via `context.set_cursor()`.
+
+### What We Learned
+
+1. **DisplayHandler owns cursor changes** — In CEF, cursor changes come through
+   `on_cursor_change` in the DisplayHandler, not the RenderHandler. The
+   DisplayHandler was already set up for URL changes, making it easy to extend.
+
+2. **Return type refactoring worked well** — Changing the handler to return
+   `Option<MouseCursor>` was cleaner than storing cursor state on TermWindow.
+   The caller has access to `context` and can apply the cursor immediately.
+
+3. **Immediate feedback** — The XPC messaging and invalidation callback ensure
+   cursor changes appear immediately as the user moves the mouse. No perceptible
+   delay.
+
+### Implementation Summary
+
+```
+Cursor Feedback Flow:
+
+CEF detects hover element change
+    │
+    ▼
+on_cursor_change(type=CT_HAND)
+    │
+    ▼
+XPC: { action: "cursor_change", cursor_type: 2 }
+    │
+    ▼
+GUI stores cursor in webview_cursors[pane_id]
+    │
+    ▼
+Mouse move event over webview
+    │
+    ▼
+handle_webview_mouse_event() returns Some(Hand)
+    │
+    ▼
+context.set_cursor(Some(MouseCursor::Hand))
+```
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `termsurf-profile/src/main.rs` | Added `on_cursor_change` to DisplayHandler |
+| `webview_xpc.rs` | Added `webview_cursors` field, `get_cursor()`, `cursor_change` handler |
+| `mouseevent.rs` | Added `cef_cursor_to_mouse_cursor()`, changed handler return type |
+
+### What's Next
+
+With cursor feedback complete, the core mouse input features are done:
+
+| Feature | Status | Issue |
+|---------|--------|-------|
+| Mouse move/click | Complete | 319 |
+| Double/triple-click | Complete | 320 |
+| Scroll | Complete | 321 |
+| Drag selection | Complete | 322 |
+| Shift-click extend | Complete | 323 |
+| Cursor feedback | Complete | 324 |
+
+Remaining mouse-related features:
+
+| Feature | Priority | Notes |
+|---------|----------|-------|
+| Cmd-click | Medium | Open links (modifiers passed, needs link URL extraction) |
+| Right-click | Medium | Context menus (currently suppressed) |
+| Middle-click | Low | Paste or open in new tab |
+
+Recommended next focus: Move beyond mouse input to other webview features like
+navigation controls, tab management, or profile switching.
+
+---
 
 ## References
 
