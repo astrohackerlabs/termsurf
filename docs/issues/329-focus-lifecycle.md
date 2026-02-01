@@ -382,11 +382,14 @@ focus commands to the affected webviews.
 **Background:**
 
 When a user clicks on a different pane:
-1. `mouse_event_terminal` calls `tab.set_active_idx(pos.index)` (mouseevent.rs:712)
+
+1. `mouse_event_terminal` calls `tab.set_active_idx(pos.index)`
+   (mouseevent.rs:712)
 2. This triggers `MuxNotification::PaneFocused(pane_id)`
 3. Handler at mod.rs:1341 currently just calls `update_title_post_status()`
 
 We need to:
+
 - Track which pane was previously focused
 - When focus changes, unfocus the old webview (if any)
 - Focus the new webview if it's in Browse mode
@@ -455,9 +458,9 @@ We need to:
 
 **Files to modify:**
 
-| File                                    | Changes                                    |
-| --------------------------------------- | ------------------------------------------ |
-| `ts3/wezterm-gui/src/termwindow/mod.rs` | Add field, initialize, handle PaneFocused  |
+| File                                    | Changes                                   |
+| --------------------------------------- | ----------------------------------------- |
+| `ts3/wezterm-gui/src/termwindow/mod.rs` | Add field, initialize, handle PaneFocused |
 
 **Verification:**
 
@@ -510,8 +513,8 @@ cat /tmp/termsurf-gui.log | grep "\[FOCUS\]"
 **Risks:**
 
 1. **Initialization race** — `last_focused_pane` starts as `None`, so the first
-   pane switch won't unfocus anything. This is acceptable since there's no
-   prior webview to unfocus.
+   pane switch won't unfocus anything. This is acceptable since there's no prior
+   webview to unfocus.
 
 2. **Tab switching** — Switching tabs may also trigger `PaneFocused`. Need to
    verify this works correctly across tabs.
