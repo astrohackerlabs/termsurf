@@ -465,11 +465,157 @@ disconnect events for the same connection only decrement the count once.
 we can prevent the double decrement by tracking which connections have already
 fired their error handler.
 
-### Future Experiments
+**Root cause:** The current design uses a global counter
+(`GUI_CONNECTION_COUNT`) that is blindly decremented on every error event. If
+XPC fires multiple error events for the same connection (which it does), the
+counter decrements multiple times, causing premature exit.
 
-**Experiment 3: Idempotent Error Handler** — If listener cleanup doesn't fully
-solve the issue, make the error handler idempotent by tracking whether it has
-already fired for a given connection.
+**Solution:** Replace the counter with a `HashSet<u64>` that tracks active
+connection IDs. When an error fires, try to remove the connection ID from the
+set. Only if the remove succeeds (meaning the connection was still tracked) do
+we check if the set is empty.
+
+**Changes:**
+
+1. **Replace counter with HashSet** (`ts3/termsurf-profile/src/main.rs`)
+
+   Remove the atomic counter:
+
+   ```rust
+   // Remove this
+   static GUI_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+   ```
+
+   Add a HashSet protected by a Mutex:
+
+   ```rust
+   use std::collections::HashSet;
+   use std::sync::Mutex;
+
+   // Issue 330, Experiment 3: Track active connections by ID for idempotent cleanup
+   static ACTIVE_CONNECTIONS: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+
+   fn active_connections() -> &'static Mutex<HashSet<u64>> {
+       ACTIVE_CONNECTIONS.get_or_init(|| Mutex::new(HashSet::new()))
+   }
+   ```
+
+2. **Update connection establishment** (in `create_browser_on_ui_thread`)
+
+   Replace:
+
+   ```rust
+   let count = crate::GUI_CONNECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+   println!("[CONN-{}] GUI connection established (total: {})", conn_id, count);
+   ```
+
+   With:
+
+   ```rust
+   {
+       let mut conns = crate::active_connections().lock().unwrap();
+       conns.insert(conn_id);
+       println!("[CONN-{}] GUI connection established (active: {:?})", conn_id, conns);
+   }
+   ```
+
+3. **Update error handler** (in the event handler closure)
+
+   Replace:
+
+   ```rust
+   Err(e) => {
+       match e {
+           XpcError::ConnectionInterrupted | XpcError::ConnectionInvalid => {
+               let count = crate::GUI_CONNECTION_COUNT.fetch_sub(1, Ordering::Relaxed) - 1;
+               println!("[CONN-{}] GUI disconnected (remaining: {})", conn_id_for_handler, count);
+               if count == 0 {
+                   println!("[CONN-{}] No more GUI connections, exiting gracefully", conn_id_for_handler);
+                   crate::QUIT_FLAG.store(true, Ordering::Relaxed);
+               }
+           }
+           _ => eprintln!("[CONN-{}] GUI connection error: {}", conn_id_for_handler, e),
+       }
+   }
+   ```
+
+   With:
+
+   ```rust
+   Err(e) => {
+       match e {
+           XpcError::ConnectionInterrupted | XpcError::ConnectionInvalid => {
+               let mut conns = crate::active_connections().lock().unwrap();
+               if conns.remove(&conn_id_for_handler) {
+                   // This connection was still active, now it's gone
+                   println!(
+                       "[CONN-{}] GUI disconnected (remaining: {:?})",
+                       conn_id_for_handler, conns
+                   );
+                   if conns.is_empty() {
+                       println!(
+                           "[CONN-{}] No more GUI connections, exiting gracefully",
+                           conn_id_for_handler
+                       );
+                       drop(conns); // Release lock before setting flag
+                       crate::QUIT_FLAG.store(true, std::sync::atomic::Ordering::Relaxed);
+                   }
+               } else {
+                   // Already disconnected - ignore duplicate error
+                   println!(
+                       "[CONN-{}] Ignoring duplicate disconnect (already removed)",
+                       conn_id_for_handler
+                   );
+               }
+           }
+           _ => eprintln!("[CONN-{}] GUI connection error: {}", conn_id_for_handler, e),
+       }
+   }
+   ```
+
+**Files to modify:**
+
+| File                               | Changes                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `ts3/termsurf-profile/src/main.rs` | Replace counter with HashSet, update handler |
+
+**Verification:**
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test: Open two webviews, close one
+web google.com
+# Split pane
+web google.com
+# Close second webview (Ctrl+C twice)
+
+# Check profile server logs
+cat /tmp/termsurf-profile-*.log | grep "CONN-"
+# Expected:
+# [CONN-0] GUI connection established (active: {0})
+# [CONN-1] GUI connection established (active: {0, 1})
+# [CONN-1] GUI disconnected (remaining: {0})
+# [CONN-1] Ignoring duplicate disconnect (already removed)  <- Idempotent!
+# NO exit message - profile server stays running
+
+# Verify pane 0 still works
+# Should continue receiving frames
+```
+
+**Success criteria:**
+
+- [ ] Active connections tracked in HashSet by conn_id
+- [ ] Duplicate disconnect events are ignored (logged but don't decrement)
+- [ ] Profile server remains running after closing one webview
+- [ ] Pane 0's webview continues to receive frames
+- [ ] Closing pane 0 after pane 1 exits gracefully
+
+**Expected outcome:** Multiple error events for the same connection will only
+cause one removal from the set. The profile server will remain running as long
+as at least one connection is still in the set.
+
+### Future Experiments
 
 **Experiment 4: Separate Endpoints** — Test if using completely separate XPC
 mechanisms for each browser avoids the issue.
