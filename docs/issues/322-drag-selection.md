@@ -177,7 +177,136 @@ After drag selection, these features remain:
 
 ## Experiments
 
-_No experiments yet._
+### Experiment 1: Track Button State in Move Events
+
+**Status:** Not started
+
+**Hypothesis:** Including the left mouse button flag in mouse move events when
+the button is held will enable CEF to perform drag selection.
+
+**Approach:** Track button state per-pane and include it in the modifiers field
+when sending mouse move events.
+
+#### 1a. Add Button State Tracking
+
+In `mod.rs`, add a field to TermWindow (similar to click_state):
+
+```rust
+/// Per-pane mouse button state for drag detection (issue 322)
+#[cfg(target_os = "macos")]
+webview_mouse_buttons: RefCell<HashMap<PaneId, u32>>,
+```
+
+Initialize in `new_window()`:
+
+```rust
+#[cfg(target_os = "macos")]
+webview_mouse_buttons: RefCell::new(HashMap::new()),
+```
+
+The value is a bitmask of held buttons using CEF's event flags:
+- `0x10` = `EVENTFLAG_LEFT_MOUSE_BUTTON`
+- `0x20` = `EVENTFLAG_MIDDLE_MOUSE_BUTTON`
+- `0x40` = `EVENTFLAG_RIGHT_MOUSE_BUTTON`
+
+#### 1b. Update Press Handler
+
+Set the button flag on press:
+
+```rust
+WMEK::Press(MousePress::Left) => {
+    // Issue 322: Track button state for drag selection
+    {
+        let mut buttons = self.webview_mouse_buttons.borrow_mut();
+        let state = buttons.entry(pane_id).or_insert(0);
+        *state |= 0x10; // EVENTFLAG_LEFT_MOUSE_BUTTON
+    }
+
+    let click_count = self.compute_click_count(pane_id, cef_x, cef_y);
+    log::info!(
+        "[MOUSE] Press LEFT pane={} cef=({}, {}) click_count={}",
+        pane_id, cef_x, cef_y, click_count
+    );
+    xpc_manager.send_mouse_click(pane_id, cef_x, cef_y, 0, false, click_count as i32, 0);
+    true
+}
+```
+
+#### 1c. Update Release Handler
+
+Clear the button flag on release:
+
+```rust
+WMEK::Release(MousePress::Left) => {
+    // Issue 322: Clear button state
+    {
+        let mut buttons = self.webview_mouse_buttons.borrow_mut();
+        if let Some(state) = buttons.get_mut(&pane_id) {
+            *state &= !0x10; // Clear EVENTFLAG_LEFT_MOUSE_BUTTON
+        }
+    }
+
+    let click_count = {
+        let states = self.click_state.borrow();
+        states.get(&pane_id).map(|s| s.count).unwrap_or(1)
+    };
+    log::info!(
+        "[MOUSE] Release LEFT pane={} cef=({}, {}) click_count={}",
+        pane_id, cef_x, cef_y, click_count
+    );
+    xpc_manager.send_mouse_click(pane_id, cef_x, cef_y, 0, true, click_count as i32, 0);
+    true
+}
+```
+
+#### 1d. Update Move Handler
+
+Include button state in modifiers:
+
+```rust
+WMEK::Move => {
+    // Issue 322: Include button state for drag selection
+    let modifiers = {
+        let buttons = self.webview_mouse_buttons.borrow();
+        *buttons.get(&pane_id).unwrap_or(&0)
+    };
+
+    log::info!(
+        "[MOUSE] Move pane={} cef=({}, {}) modifiers=0x{:x}",
+        pane_id, cef_x, cef_y, modifiers
+    );
+    xpc_manager.send_mouse_move(pane_id, cef_x, cef_y, modifiers);
+    true
+}
+```
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Drag selection
+web google.com
+# Click and drag across text
+# Expected: Text highlights as you drag
+
+# Test 2: Check logs
+tail -f /tmp/termsurf-gui.log | grep "\[MOUSE\]"
+# During drag: modifiers=0x10
+# After release: modifiers=0x0
+
+# Test 3: Copy selection
+# Select text with drag, press Cmd+C
+# Paste in terminal to verify
+```
+
+#### Success Criteria
+
+- [ ] Log shows modifiers=0x10 during drag
+- [ ] Log shows modifiers=0x0 after release
+- [ ] Text highlights as user drags
+- [ ] Selection persists after mouse release
+- [ ] Can copy selection with Cmd+C
 
 ## References
 
