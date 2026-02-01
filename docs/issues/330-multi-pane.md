@@ -639,6 +639,79 @@ This confirms that the root cause was the non-idempotent counter-based approach,
 not any issue with the XPC library itself. The XPC library does fire multiple
 error events for a single disconnect, but that's now handled correctly.
 
+### Experiment 4: GUI-Side Cursor Cleanup
+
+**Goal:** Fix memory leak where `webview_cursors` accumulates stale entries after
+webviews close.
+
+**Background:** During the issue 330 review, we found that `close_webview_for_pane()`
+cleans up most per-pane state but misses `webview_cursors`:
+
+| Map | Cleaned on close? |
+|-----|-------------------|
+| `peer_connections` | ✅ via `remove_connection()` |
+| `received_surfaces` | ✅ via `remove_surface()` |
+| `pending_sessions` | ✅ via `remove_surface()` |
+| `invalidate_callbacks` | ✅ via `remove_invalidate_callback()` |
+| `webview_cursors` | ❌ Never cleaned |
+| `listeners` | ❌ Known limitation (experiment 2) |
+
+Each closed webview leaves one stale `i64` in `webview_cursors`. Minor leak but
+should be fixed for completeness.
+
+**Changes:**
+
+1. **Update `remove_connection()` to also clean cursors**
+   (`ts3/wezterm-gui/src/termwindow/webview_xpc.rs`)
+
+   Current code (line 614-617):
+
+   ```rust
+   pub fn remove_connection(&self, pane_id: PaneId) {
+       self.peer_connections.lock().unwrap().remove(&pane_id);
+       log::info!("[XPC] Removed connection for pane {}", pane_id);
+   }
+   ```
+
+   Change to:
+
+   ```rust
+   pub fn remove_connection(&self, pane_id: PaneId) {
+       self.peer_connections.lock().unwrap().remove(&pane_id);
+       self.webview_cursors.lock().unwrap().remove(&pane_id);
+       log::info!("[XPC] Removed connection for pane {}", pane_id);
+   }
+   ```
+
+**Files to modify:**
+
+| File | Changes |
+|------|---------|
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Add cursor cleanup to `remove_connection()` |
+
+**Verification:**
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test: Open and close webviews repeatedly
+web google.com
+# Ctrl+C twice to close
+web google.com
+# Ctrl+C twice to close
+# Repeat several times
+
+# Check logs for cleanup messages
+cat /tmp/termsurf-gui.log | grep "Removed connection"
+# Should see cleanup happening each time
+```
+
+**Success criteria:**
+
+- [ ] `webview_cursors` cleaned when webview closes
+- [ ] No functional regression (cursor still works while webview is open)
+- [ ] Cleanup logged for debugging
+
 ## Success Criteria
 
 - [x] Closing one webview does not affect other webviews
