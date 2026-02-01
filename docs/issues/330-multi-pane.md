@@ -113,60 +113,141 @@ profile server side appear to receive disconnect errors.
 | `ts3/termsurf-profile/src/main.rs`              | Profile server connection handling |
 | `ts3/termsurf-xpc/src/lib.rs`                   | XPC connection wrapper             |
 
-## Proposed Investigation
+## Experiments
 
-### Experiment 1: Add Connection Identifiers
+### Experiment 1: Diagnostic Logging
 
-Add unique identifiers to each connection on both GUI and profile server sides
-to track which specific connection is receiving errors.
+**Goal:** Add detailed connection identifiers to determine which specific
+connections are receiving disconnect errors and in what order.
 
-**Profile server:**
+**Hypothesis:** The profile server's error handler is being invoked for both
+connections when only one is closed. By adding unique identifiers to each
+connection, we can determine if:
 
-```rust
-// In create_browser_on_ui_thread, assign a unique ID to each browser
-static BROWSER_ID: AtomicU64 = AtomicU64::new(0);
-let browser_id = BROWSER_ID.fetch_add(1, Ordering::Relaxed);
-println!("[CONN-{}] GUI connection established", browser_id);
+1. Both connections genuinely receive errors (XPC library issue)
+2. One connection's error handler is being called twice (bug in our code)
+3. The connections share some state that gets invalidated (XPC endpoint issue)
 
-// In error handler
-println!("[CONN-{}] GUI disconnected", browser_id);
+**Changes:**
+
+1. **Add connection ID to profile server** (`ts3/termsurf-profile/src/main.rs`)
+
+   Add a static counter and capture it in each connection's error handler:
+
+   ```rust
+   // Near other statics at top of file
+   static CONNECTION_ID: AtomicU64 = AtomicU64::new(0);
+   ```
+
+   In `create_browser_on_ui_thread`, before setting up the event handler:
+
+   ```rust
+   let conn_id = crate::CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
+   println!("[CONN-{}] Creating GUI connection for session {}", conn_id, session_id);
+   ```
+
+   Update the connection established message:
+
+   ```rust
+   let count = crate::GUI_CONNECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+   println!("[CONN-{}] GUI connection established (total: {})", conn_id, count);
+   ```
+
+   Update the error handler to include the connection ID:
+
+   ```rust
+   Err(e) => {
+       match e {
+           XpcError::ConnectionInterrupted | XpcError::ConnectionInvalid => {
+               let count = crate::GUI_CONNECTION_COUNT.fetch_sub(1, Ordering::Relaxed) - 1;
+               println!("[CONN-{}] GUI disconnected (remaining: {})", conn_id, count);
+               if count == 0 {
+                   println!("[CONN-{}] No more GUI connections, exiting gracefully", conn_id);
+                   crate::QUIT_FLAG.store(true, Ordering::Relaxed);
+               }
+           }
+           _ => eprintln!("[CONN-{}] GUI connection error: {}", conn_id, e),
+       }
+   }
+   ```
+
+2. **Add logging to GUI connection removal**
+   (`ts3/wezterm-gui/src/termwindow/webview_xpc.rs`)
+
+   Update `remove_connection` to log the pointer before removal:
+
+   ```rust
+   pub fn remove_connection(&self, pane_id: PaneId) {
+       let mut connections = self.peer_connections.lock().unwrap();
+       if let Some(conn) = connections.remove(&pane_id) {
+           log::info!(
+               "[XPC] Removing connection for pane {}: {:p} (dropping Arc)",
+               pane_id,
+               Arc::as_ptr(&conn)
+           );
+           // conn is dropped here when it goes out of scope
+       } else {
+           log::warn!("[XPC] No connection found for pane {}", pane_id);
+       }
+   }
+   ```
+
+**Files to modify:**
+
+| File                                            | Changes                         |
+| ----------------------------------------------- | ------------------------------- |
+| `ts3/termsurf-profile/src/main.rs`              | Add CONNECTION_ID, update logs  |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Update `remove_connection` logs |
+
+**Verification:**
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test: Open two webviews, close one
+web google.com
+# Split pane
+web google.com
+# Close second webview (Ctrl+C twice)
+
+# Check profile server logs
+cat /tmp/termsurf-profile-*.log | grep "CONN-"
+# Expected output should show:
+# [CONN-0] Creating GUI connection for session pane-0-XXXXX
+# [CONN-0] GUI connection established (total: 1)
+# [CONN-1] Creating GUI connection for session pane-1-XXXXX
+# [CONN-1] GUI connection established (total: 2)
+# Then when closing pane 1:
+# [CONN-1] GUI disconnected (remaining: 1)  <- expected
+# [CONN-0] GUI disconnected (remaining: 0)  <- BUG: why is CONN-0 disconnecting?
+
+# Check GUI logs
+cat /tmp/termsurf-gui.log | grep "Removing connection"
+# Should show only pane 1's connection being removed
 ```
 
-**GUI:**
+**Success criteria:**
 
-```rust
-// In remove_connection, log which connection is being dropped
-println!("[XPC] Dropping connection for pane {}: {:p}", pane_id, Arc::as_ptr(conn));
-```
+- [ ] Logs clearly show which connection ID receives each disconnect
+- [ ] Can determine if both connections genuinely error or if it's a double-call
+- [ ] Identify root cause for further experiments
 
-### Experiment 2: Delay Connection Removal
+**Expected outcome:** The logs will reveal whether:
 
-Test if the issue is timing-related by adding a delay before removing the
-connection:
+- CONN-0 and CONN-1 both receive genuine XPC errors (library/OS issue)
+- Only CONN-1 should disconnect but CONN-0's handler fires too (shared state)
+- The error handler is being called twice for the same connection (bug)
 
-```rust
-fn close_webview_for_pane(&mut self, pane_id: PaneId) {
-    // ... remove overlay ...
+### Future Experiments
 
-    // Delay before removing XPC connection
-    std::thread::sleep(Duration::from_millis(100));
+**Experiment 2: Delay Connection Removal** — Test if timing affects the issue by
+adding a delay before dropping the connection.
 
-    if let Some(xpc_manager) = get_xpc_manager() {
-        xpc_manager.remove_connection(pane_id);
-    }
-}
-```
+**Experiment 3: Listener Lifecycle** — Investigate whether XPC listeners need
+cleanup when webviews close.
 
-### Experiment 3: Check Listener Lifecycle
-
-Investigate whether listeners need to be removed when webviews close:
-
-```rust
-// Add method to XpcManager
-pub fn remove_listener_for_session(&self, session_id: &str) {
-    // Find and remove the listener associated with this session
-}
-```
+**Experiment 4: Separate Endpoints** — Test if using completely separate XPC
+mechanisms for each browser avoids the issue.
 
 ## Success Criteria
 
