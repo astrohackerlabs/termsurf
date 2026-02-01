@@ -1934,10 +1934,55 @@ cat /tmp/termsurf-profile-*.log | grep "CLIPBOARD"
 - **Cmd+X (cut)**: Copy + delete selection
 - **Cmd+A (select all)**: Could work with key events, or use `document.execCommand('selectAll')`
 
-#### Result
+#### Result: SUCCESS
 
-*Pending*
+Cmd+V now pastes clipboard contents into the browser. The GUI reads the clipboard,
+sends text via XPC, and the profile server injects it using JavaScript.
 
 #### Conclusion
 
-*Pending*
+**What was accomplished in Phase 1 (Keyboard Input):**
+
+| Feature | Status | Experiment |
+|---------|--------|------------|
+| Basic keyboard input (typing) | ✅ Working | Exp 1 |
+| Arrow keys, Tab, Enter, etc. | ✅ Working | Exp 1 |
+| Shift+arrow text selection | ✅ Working | Exp 1 |
+| Skip WezTerm keybindings in Browse mode | ✅ Working | Exp 3 |
+| Cmd+C/V/X/A generate KeyEvents | ✅ Working | Exp 5 |
+| Cmd+V paste into browser | ✅ Working | Exp 6 |
+| Cmd+C copy from browser | ❌ Not implemented | — |
+| Cmd+X cut from browser | ❌ Not implemented | — |
+| Cmd+A select all | ❓ Untested (may work via key events) | — |
+
+**Key technical insights:**
+
+1. **macOS key equivalents**: Cmd+C/V/X don't generate KeyEvents by default.
+   Fixed by modifying `performKeyEquivalent:` to intercept and synthesize them.
+
+2. **Process clipboard isolation**: The profile server (CEF) cannot access the
+   system clipboard because it's not the active application. Solved by proxying
+   clipboard contents from GUI via XPC.
+
+3. **JavaScript injection**: `document.execCommand('insertText')` reliably
+   inserts text at the cursor in inputs, textareas, and contenteditable elements.
+
+**Next steps for keyboard input:**
+
+1. **Cmd+C (copy)**: Execute JavaScript to get `window.getSelection().toString()`,
+   send result back to GUI via XPC, GUI writes to clipboard.
+
+2. **Cmd+X (cut)**: Same as copy, then execute `document.execCommand('delete')`.
+
+3. **Cmd+A (select all)**: May already work via key events. If not, use
+   `document.execCommand('selectAll')`.
+
+**Phase 2 (Mouse Input) - Not yet started:**
+
+- Mouse click/move/drag forwarding to CEF
+- Scroll wheel support
+- Text selection via mouse
+- Right-click context menu
+
+The keyboard input foundation is now solid enough to support basic browser
+interaction. Users can navigate to pages, type in forms, and paste content.
