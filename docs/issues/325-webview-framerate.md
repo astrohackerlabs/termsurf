@@ -290,14 +290,14 @@ cause. Keeping this change because:
 
 The lag likely comes from one of these sources:
 
-1. **XPC message latency** — Each `display_surface` message goes through XPC.
-   At 60fps, messages arrive every 16.7ms. If XPC adds even 5-10ms latency,
-   frames could pile up or be dropped.
+1. **XPC message latency** — Each `display_surface` message goes through XPC. At
+   60fps, messages arrive every 16.7ms. If XPC adds even 5-10ms latency, frames
+   could pile up or be dropped.
 
 2. **WezTerm invalidate → render delay** — Calling `window.invalidate()` doesn't
    immediately repaint. WezTerm batches repaints and may not render until the
-   next vsync or event loop tick. The delay between invalidate and actual
-   render could be 1-2 frames.
+   next vsync or event loop tick. The delay between invalidate and actual render
+   could be 1-2 frames.
 
 3. **Metal texture import overhead** — Each frame requires
    `IOSurfaceLookupFromMachPort` and creating a new wgpu texture. This may be
@@ -378,7 +378,7 @@ CEF paint → XPC send → XPC receive → invalidate → render
 
    Note: TX and RX times use different clocks (profile vs GUI process), so
    `delta` is only meaningful if both started at similar times. The key metric
-   is the *pattern* — are deltas consistent or do they grow?
+   is the _pattern_ — are deltas consistent or do they grow?
 
 3. **`ts3/wezterm-gui/src/termwindow/webview_xpc.rs`** — Log invalidate call:
 
@@ -420,13 +420,13 @@ web google.com
 
 **Expected Findings:**
 
-| Symptom | Likely Cause |
-|---------|--------------|
-| TX rate < 60fps | CEF not rendering fast enough |
-| Large TX→RX delta | XPC message latency |
-| RX without INVALIDATE | Invalidate callback not firing |
+| Symptom                   | Likely Cause                       |
+| ------------------------- | ---------------------------------- |
+| TX rate < 60fps           | CEF not rendering fast enough      |
+| Large TX→RX delta         | XPC message latency                |
+| RX without INVALIDATE     | Invalidate callback not firing     |
 | INVALIDATE without RENDER | WezTerm batching/dropping repaints |
-| Growing delta over time | Backpressure / queue buildup |
+| Growing delta over time   | Backpressure / queue buildup       |
 
 **Status:** Success.
 
@@ -435,14 +435,14 @@ XPC or WezTerm rendering.
 
 **Findings:**
 
-| Metric | Observed | Expected |
-|--------|----------|----------|
-| Scroll events received | 57 | — |
-| Frames produced | 35 | ~57 |
-| Frame interval | 9-588ms | 16.7ms |
-| Effective FPS | ~12-20 | 60 |
-| XPC latency | ~10-30ms | — |
-| Invalidate→Render gap | ~10-30ms | — |
+| Metric                 | Observed | Expected |
+| ---------------------- | -------- | -------- |
+| Scroll events received | 57       | —        |
+| Frames produced        | 35       | ~57      |
+| Frame interval         | 9-588ms  | 16.7ms   |
+| Effective FPS          | ~12-20   | 60       |
+| XPC latency            | ~10-30ms | —        |
+| Invalidate→Render gap  | ~10-30ms | —        |
 
 Key observations:
 
@@ -452,8 +452,8 @@ Key observations:
 2. **XPC is fast enough** — Frames arrive at the GUI within milliseconds of
    being sent. No significant queue buildup.
 
-3. **WezTerm renders promptly** — INVALIDATE triggers RENDER within ~10-30ms.
-   No frames dropped on the GUI side.
+3. **WezTerm renders promptly** — INVALIDATE triggers RENDER within ~10-30ms. No
+   frames dropped on the GUI side.
 
 4. **CEF batches input** — 57 scroll events produced only 35 frames. CEF
    combines multiple inputs per render, which is normal, but the render rate
@@ -461,6 +461,65 @@ Key observations:
 
 **Conclusion:** The lag is caused by CEF's off-screen rendering not hitting
 60fps. The `windowless_frame_rate` setting appears to be ignored or overridden.
+
+### ts2 Comparison: Why ts2 Achieves 60fps
+
+Confirmed that ts2 (in-process CEF) does NOT have this problem — it runs at full
+60fps. The key difference is **message loop integration**.
+
+**ts2 (60fps) — CFRunLoop Timer Callbacks:**
+
+```rust
+// ts2/wezterm-gui/src/cef_integration.rs:79-163
+
+// CEF calls this when it needs work done
+fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+    schedule_cef_work(delay_ms);  // Creates CFRunLoop timer
+}
+
+// Timer fires precisely when CEF needs it
+extern "C" fn timer_callback(...) {
+    cef::do_message_loop_work();  // Pump work immediately
+}
+```
+
+ts2 uses `do_message_loop_work()` driven by CFRunLoop timers. CEF tells the GUI
+exactly when it needs work pumped via `on_schedule_message_pump_work(delay_ms)`,
+and the GUI responds by setting a timer that fires after `delay_ms` and calls
+`do_message_loop_work()`.
+
+**ts3 (12-20fps) — Blocking `run_message_loop()`:**
+
+```rust
+// ts3/termsurf-profile/src/main.rs:281-285
+cef::run_message_loop();  // Blocks in separate process
+```
+
+ts3 uses CEF's blocking `run_message_loop()` in a separate process. The GUI has
+no control over when work is pumped — CEF runs at its own pace.
+
+**The critical difference:**
+
+| Aspect       | ts2                                      | ts3                           |
+| ------------ | ---------------------------------------- | ----------------------------- |
+| Message loop | `do_message_loop_work()` on demand       | `run_message_loop()` blocking |
+| Scheduling   | `on_schedule_message_pump_work` callback | None (CEF controls timing)    |
+| Integration  | CFRunLoop timers, precise timing         | Separate process, no control  |
+| Frame rate   | 60fps achieved                           | 12-20fps observed             |
+
+**Root cause:** ts3's `run_message_loop()` is not pumping work fast enough. CEF
+internally throttles because nothing is requesting frames at 60fps. The
+`windowless_frame_rate: 60` setting only sets the _maximum_ rate — CEF still
+needs its message loop pumped frequently to actually render.
+
+**Proposed fix:** Replace `run_message_loop()` with a custom loop using
+`do_message_loop_work()`. Either:
+
+1. **Demand-driven:** Implement `on_schedule_message_pump_work` to pump work
+   exactly when CEF requests it (like ts2).
+
+2. **Polling:** Call `do_message_loop_work()` in a tight loop with short sleeps
+   (simpler but less efficient).
 
 ### Next Steps
 
@@ -489,8 +548,8 @@ Investigate CEF's rendering pipeline:
    - `webgl_antialiasing` / other GPU settings
    - Chrome command-line switches for off-screen rendering
 
-6. **Profile CEF internally** — Use Chrome's tracing (`--enable-tracing`) to
-   see where time is spent inside CEF's rendering pipeline.
+6. **Profile CEF internally** — Use Chrome's tracing (`--enable-tracing`) to see
+   where time is spent inside CEF's rendering pipeline.
 
 ## References
 
