@@ -542,6 +542,35 @@ impl XpcManager {
         }
     }
 
+    /// Send mouse wheel event to the browser (issue 321, experiment 1)
+    pub fn send_mouse_wheel(
+        &self,
+        pane_id: PaneId,
+        x: i32,
+        y: i32,
+        delta_x: i32,
+        delta_y: i32,
+        modifiers: u32,
+    ) -> bool {
+        let msg = XpcDictionary::new();
+        msg.set_string("action", "mouse_wheel");
+        msg.set_i64("x", x as i64);
+        msg.set_i64("y", y as i64);
+        msg.set_i64("delta_x", delta_x as i64);
+        msg.set_i64("delta_y", delta_y as i64);
+        msg.set_i64("modifiers", modifiers as i64);
+
+        if self.send_command(pane_id, &msg) {
+            log::debug!(
+                "[XPC] Sent mouse_wheel to pane {}: ({}, {}) delta=({}, {})",
+                pane_id, x, y, delta_x, delta_y
+            );
+            true
+        } else {
+            false
+        }
+    }
+
     /// Remove a peer connection (e.g., when webview pane is closed)
     pub fn remove_connection(&self, pane_id: PaneId) {
         self.peer_connections.lock().unwrap().remove(&pane_id);

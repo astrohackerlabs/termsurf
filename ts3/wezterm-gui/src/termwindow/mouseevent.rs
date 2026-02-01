@@ -1246,6 +1246,27 @@ impl super::TermWindow {
                 xpc_manager.send_mouse_click(pane_id, cef_x, cef_y, 0, true, click_count as i32, 0);
                 true
             }
+            WMEK::VertWheel(amount) => {
+                // Issue 321, experiment 1: Scroll support
+                // CEF expects delta in "wheel ticks" where 120 = 1 line
+                let delta_y = (*amount as i32) * 120;
+                log::info!(
+                    "[MOUSE] VertWheel pane={} cef=({}, {}) amount={} delta_y={}",
+                    pane_id, cef_x, cef_y, amount, delta_y
+                );
+                xpc_manager.send_mouse_wheel(pane_id, cef_x, cef_y, 0, delta_y, 0);
+                true
+            }
+            WMEK::HorzWheel(amount) => {
+                // Issue 321, experiment 1: Scroll support
+                let delta_x = (*amount as i32) * 120;
+                log::info!(
+                    "[MOUSE] HorzWheel pane={} cef=({}, {}) amount={} delta_x={}",
+                    pane_id, cef_x, cef_y, amount, delta_x
+                );
+                xpc_manager.send_mouse_wheel(pane_id, cef_x, cef_y, delta_x, 0, 0);
+                true
+            }
             other => {
                 log::debug!("[MOUSE] Ignored event: {:?}", other);
                 false // Let other events pass through for now

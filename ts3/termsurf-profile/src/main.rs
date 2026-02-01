@@ -914,6 +914,34 @@ mod cef_handlers {
                             cef::post_task(cef::ThreadId::UI, Some(&mut task));
                             println!("[MOUSE] post_task returned");
                         }
+                        "mouse_wheel" => {
+                            // Issue 321, experiment 1: Scroll support
+                            println!("[MOUSE] mouse_wheel handler entered");
+
+                            let state_guard = deferred_for_handler.lock().unwrap();
+                            let Some(bs) = state_guard.as_ref() else {
+                                println!("[MOUSE] FAIL: deferred_for_handler is None");
+                                return;
+                            };
+
+                            let x = msg.get_i64("x") as i32;
+                            let y = msg.get_i64("y") as i32;
+                            let delta_x = msg.get_i64("delta_x") as i32;
+                            let delta_y = msg.get_i64("delta_y") as i32;
+                            let modifiers = msg.get_i64("modifiers") as u32;
+                            println!(
+                                "[MOUSE] mouse_wheel coords: ({}, {}) delta=({}, {})",
+                                x, y, delta_x, delta_y
+                            );
+
+                            let bs = Arc::clone(bs);
+                            drop(state_guard);
+
+                            let mut task = MouseWheelTask::new(bs, x, y, delta_x, delta_y, modifiers);
+                            println!("[MOUSE] Calling post_task for MouseWheelTask");
+                            cef::post_task(cef::ThreadId::UI, Some(&mut task));
+                            println!("[MOUSE] post_task returned");
+                        }
                         // Issue 319, experiment 2: Log unhandled actions
                         other => {
                             println!("[XPC-RECV] Unhandled action: {:?}", other);
@@ -1272,6 +1300,49 @@ mod cef_handlers {
                     self.click_count,
                 );
                 println!("[MOUSE-TASK] send_mouse_click_event returned");
+            }
+        }
+    }
+
+    // Issue 321, experiment 1: Scroll support.
+
+    wrap_task! {
+        pub struct MouseWheelTask {
+            state: Arc<BrowserState>,
+            x: i32,
+            y: i32,
+            delta_x: i32,
+            delta_y: i32,
+            modifiers: u32,
+        }
+
+        impl Task {
+            fn execute(&self) {
+                println!("[MOUSE-TASK] MouseWheelTask::execute() called");
+
+                let browser_guard = self.state.browser.lock().unwrap();
+                let Some(browser) = browser_guard.as_ref() else {
+                    println!("[MOUSE-TASK] FAIL: browser is None");
+                    return;
+                };
+
+                let Some(host) = browser.host() else {
+                    println!("[MOUSE-TASK] FAIL: browser.host() is None");
+                    return;
+                };
+                println!("[MOUSE-TASK] Host obtained, calling send_mouse_wheel_event");
+
+                let mouse_event = cef::MouseEvent {
+                    x: self.x,
+                    y: self.y,
+                    modifiers: self.modifiers,
+                };
+                host.send_mouse_wheel_event(
+                    Some(&mouse_event),
+                    self.delta_x,
+                    self.delta_y,
+                );
+                println!("[MOUSE-TASK] send_mouse_wheel_event returned");
             }
         }
     }
