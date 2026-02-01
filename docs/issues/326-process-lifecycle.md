@@ -151,6 +151,76 @@ ps aux | grep termsurf
 4. **GUI crash** — Profile should detect abnormal disconnect same as normal
    close.
 
+## Experiments
+
+### Experiment 1: Profile Exits on GUI Disconnect
+
+**Goal:** Make the profile server exit gracefully when the GUI disconnects.
+
+**Hypothesis:** The profile server already receives XPC disconnect errors. By
+detecting these errors and setting the existing `quit_flag`, the profile will
+exit within milliseconds via the 1ms polling loop.
+
+**Approach:** Modify the GUI connection event handler to detect disconnect errors
+and trigger shutdown using the existing `quit_flag` pattern from Issue 325.
+
+**Changes:**
+
+1. **`ts3/termsurf-profile/src/main.rs`** — In `create_browser_on_ui_thread`,
+   modify the event handler's error case:
+
+   Before:
+   ```rust
+   Err(e) => {
+       eprintln!("Profile: GUI connection error: {}", e);
+   }
+   ```
+
+   After:
+   ```rust
+   Err(e) => {
+       match e {
+           XpcError::ConnectionInterrupted | XpcError::ConnectionInvalid => {
+               eprintln!("Profile: GUI disconnected, exiting gracefully");
+               // Signal the main loop to exit
+               quit_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+           }
+           _ => eprintln!("Profile: GUI connection error: {}", e),
+       }
+   }
+   ```
+
+   Note: The `quit_flag` needs to be accessible from the event handler. This may
+   require passing it through the handler closure or using a global atomic.
+
+**Verification:**
+
+```bash
+# Kill any existing processes
+pkill -f termsurf-profile
+pkill -f termsurf-launcher
+
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Normal close
+web google.com
+# Wait for page to load
+# Close GUI window (Cmd+Q or click X)
+sleep 1
+ps aux | grep termsurf-profile
+# Expected: No termsurf-profile process
+
+# Test 2: Check logs for graceful shutdown
+cat /tmp/termsurf-profile-*.log | tail -10
+# Expected: "GUI disconnected, exiting gracefully" followed by "Shutting down..."
+
+# Test 3: Multiple open/close cycles
+# Repeat Test 1 several times
+# Expected: No accumulation of orphaned processes
+```
+
+**Status:** Not started.
+
 ## References
 
 - Issue 325 — Discovered this bug during frame rate testing
