@@ -183,6 +183,189 @@ web google.com
 - [ ] Multiple webviews: only active one has blinking caret
 - [ ] No regression in keyboard/mouse input
 
+## Experiments
+
+### Experiment 1: Focus on Mode Change
+
+**Goal:** Stop the caret from blinking when entering Control mode, and resume
+blinking when returning to Browse mode.
+
+**Hypothesis:** Sending `host.set_focus(0)` when entering Control mode will
+unfocus the browser, stopping the caret. Sending `host.set_focus(1)` when
+returning to Browse mode will refocus the browser, resuming the caret.
+
+**Scope:** Mode changes only. Pane switching is deferred to experiment 2.
+
+**Changes:**
+
+1. **Add `focus` action handler in profile server**
+   (`ts3/termsurf-profile/src/main.rs`, in the action match block after
+   `mouse_wheel`)
+
+   ```rust
+   "focus" => {
+       // Issue 329: Focus/unfocus browser for caret control
+       let state_guard = deferred_for_handler.lock().unwrap();
+       let Some(bs) = state_guard.as_ref() else {
+           println!("Profile: focus ignored (state not ready)");
+           return;
+       };
+
+       let focused = msg.get_bool("focused");
+       println!("[FOCUS] Received focus command: {}", focused);
+
+       let bs = Arc::clone(bs);
+       drop(state_guard);
+
+       let mut task = FocusTask::new(bs, focused);
+       cef::post_task(cef::ThreadId::UI, Some(&mut task));
+   }
+   ```
+
+2. **Add `FocusTask` struct** (`ts3/termsurf-profile/src/main.rs`, near other
+   task structs like `ResizeBrowserTask`)
+
+   ```rust
+   /// Issue 329: Task to set browser focus state
+   struct FocusTask {
+       browser_state: Arc<BrowserState>,
+       focused: bool,
+   }
+
+   impl FocusTask {
+       fn new(browser_state: Arc<BrowserState>, focused: bool) -> Self {
+           Self { browser_state, focused }
+       }
+   }
+
+   impl cef::Task for FocusTask {
+       fn execute(&mut self) {
+           if let Some(browser) = self.browser_state.browser.lock().unwrap().as_ref() {
+               if let Some(host) = browser.host() {
+                   println!("[FOCUS] Setting focus to {}", self.focused);
+                   host.set_focus(if self.focused { 1 } else { 0 });
+               }
+           }
+       }
+   }
+   ```
+
+3. **Add `send_focus` method to XpcManager**
+   (`ts3/wezterm-gui/src/termwindow/webview_xpc.rs`, after `send_select_all`)
+
+   ```rust
+   /// Issue 329: Send focus command to the browser
+   pub fn send_focus(&self, pane_id: PaneId, focused: bool) -> bool {
+       let msg = XpcDictionary::new();
+       msg.set_string("action", "focus");
+       msg.set_bool("focused", focused);
+
+       if self.send_command(pane_id, &msg) {
+           log::info!("[XPC] Sent focus to pane {}: {}", pane_id, focused);
+           true
+       } else {
+           false
+       }
+   }
+   ```
+
+4. **Send focus on mode change** (`ts3/wezterm-gui/src/termwindow/keyevent.rs`,
+   in `handle_webview_overlay_key`)
+
+   In the `WebviewMode::Browse` branch, after setting `overlay.mode`:
+   ```rust
+   if is_ctrl_c {
+       log::info!("[Webview] Ctrl+C in Browse mode → Control mode");
+       overlay.mode = WebviewMode::Control;
+       // Issue 329: Unfocus webview to stop caret blinking
+       drop(overlays);
+       if let Some(xpc) = crate::termwindow::webview_xpc::get_xpc_manager() {
+           xpc.send_focus(pane_id, false);
+       }
+       if let Some(ref w) = self.window {
+           w.invalidate();
+       }
+       return Some(true);
+   }
+   ```
+
+   In the `WebviewMode::Control` branch, after setting `overlay.mode`:
+   ```rust
+   if is_enter {
+       log::info!("[Webview] Enter in Control mode → Browse mode");
+       overlay.mode = WebviewMode::Browse;
+       // Issue 329: Refocus webview to resume caret blinking
+       drop(overlays);
+       if let Some(xpc) = crate::termwindow::webview_xpc::get_xpc_manager() {
+           xpc.send_focus(pane_id, true);
+       }
+       if let Some(ref w) = self.window {
+           w.invalidate();
+       }
+       return Some(true);
+   }
+   ```
+
+**Files to modify:**
+
+| File                                            | Changes                                     |
+| ----------------------------------------------- | ------------------------------------------- |
+| `ts3/termsurf-profile/src/main.rs`              | Add `FocusTask`, add `focus` action handler |
+| `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` | Add `send_focus()` method                   |
+| `ts3/wezterm-gui/src/termwindow/keyevent.rs`    | Send focus on mode change                   |
+
+**Verification:**
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+
+# Test 1: Control mode unfocuses
+web google.com
+# Click in search box, caret should blink
+# Press Ctrl+C to enter Control mode
+# Expected: Caret stops blinking
+
+# Check logs
+cat /tmp/termsurf-profile-*.log | grep "\[FOCUS\]"
+# Expected: "[FOCUS] Received focus command: false"
+#           "[FOCUS] Setting focus to false"
+
+# Test 2: Browse mode refocuses
+# Press Enter to return to Browse mode
+# Expected: Caret resumes blinking
+
+# Check logs
+cat /tmp/termsurf-profile-*.log | grep "\[FOCUS\]"
+# Expected: "[FOCUS] Received focus command: true"
+#           "[FOCUS] Setting focus to true"
+
+# Test 3: Keyboard input still works in Browse mode
+# Type "hello" in the search box
+# Expected: Text appears, caret follows
+
+# Test 4: Ctrl+C in Control mode still closes webview
+# Press Ctrl+C (now in Browse mode)
+# Press Ctrl+C again (now in Control mode)
+# Expected: Webview closes
+```
+
+**Success criteria:**
+
+- [ ] Caret stops blinking when pressing Ctrl+C (Browse → Control)
+- [ ] Caret resumes blinking when pressing Enter (Control → Browse)
+- [ ] Keyboard input still works in Browse mode
+- [ ] Ctrl+C in Control mode still closes the webview
+- [ ] Logs show focus commands being sent and received
+
+**Risks:**
+
+1. **CEF thread safety** — `set_focus` must be called on the CEF UI thread. The
+   `FocusTask` pattern (same as other XPC handlers) ensures this.
+
+2. **Focus state mismatch** — If user rapidly toggles modes, focus state could
+   get out of sync. This is acceptable for now; experiment 2 (pane switching)
+   may need more robust state tracking.
+
 ## References
 
 - Issue 328 — Initial caret fix (focus toggle on first paint)
