@@ -270,3 +270,48 @@ Launcher: Unknown action: unregister_profile
 
 **Fix:** Add the `unregister_profile` handler to the main connection handler
 (alongside `spawn_profile`, `claim_session`, `register_profile`).
+
+---
+
+## Experiment 3: Fix unregister handler location
+
+Move the `unregister_profile` handler from the profile connection event handler
+to the main connection event handler.
+
+### Current Code
+
+The main event handler (lines 108-300) handles actions via `match action.as_str()`:
+
+- `"spawn_profile"` - spawn or forward to profile
+- `"register_profile"` - register profile's command endpoint
+- `"claim_session"` - profile claims a GUI endpoint
+
+The `unregister_profile` action falls through to the `_` case which logs
+"Unknown action".
+
+### Fix
+
+Add `unregister_profile` case to the main `match action.as_str()` block:
+
+```rust
+"unregister_profile" => {
+    // Issue 332, Experiment 3: Profile self-reports shutdown
+    let profile = msg.get_string("profile").unwrap_or_default();
+    running_profiles.lock().unwrap().remove(&profile);
+    println!("Launcher: Profile '{}' unregistered (self-reported)", profile);
+}
+```
+
+Also remove the duplicate handler from the profile connection event handler
+(added in experiment 2) since it's now handled in the main handler.
+
+### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+web google.com   # Opens webview
+# Close with Ctrl+C twice
+tail -f /tmp/termsurf-launcher.log
+# Expected: "Profile 'default' unregistered (self-reported)"
+web google.com   # Should spawn new profile and work immediately
+```
