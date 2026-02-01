@@ -840,6 +840,23 @@ mod cef_handlers {
                             let mut task = CutTask::new(bs);
                             cef::post_task(cef::ThreadId::UI, Some(&mut task));
                         }
+                        "do_select_all" => {
+                            // Issue 318, experiment 3: Select all via CEF
+                            let state_guard = deferred_for_handler.lock().unwrap();
+                            let Some(bs) = state_guard.as_ref() else {
+                                println!("Profile: do_select_all ignored (state not ready)");
+                                return;
+                            };
+
+                            println!("[CLIPBOARD] Received do_select_all command");
+
+                            let bs = Arc::clone(bs);
+                            drop(state_guard); // Release lock before post_task
+
+                            // Post to CEF UI thread
+                            let mut task = SelectAllTask::new(bs);
+                            cef::post_task(cef::ThreadId::UI, Some(&mut task));
+                        }
                         _ => {}
                     }
                 }
@@ -1067,6 +1084,32 @@ mod cef_handlers {
                     }
                 } else {
                     println!("[CLIPBOARD] CutTask: no browser");
+                }
+            }
+        }
+    }
+
+    // ====== Select All Task ======
+    //
+    // Task for selecting all content via CEF's native frame.select_all().
+    // Issue 318, experiment 3: Doesn't touch clipboard, just modifies selection.
+
+    wrap_task! {
+        pub struct SelectAllTask {
+            state: Arc<BrowserState>,
+        }
+
+        impl Task {
+            fn execute(&self) {
+                if let Some(browser) = self.state.browser.lock().unwrap().as_ref() {
+                    if let Some(frame) = browser.main_frame() {
+                        println!("[CLIPBOARD] Calling frame.select_all()");
+                        frame.select_all();
+                    } else {
+                        println!("[CLIPBOARD] SelectAllTask: no main frame");
+                    }
+                } else {
+                    println!("[CLIPBOARD] SelectAllTask: no browser");
                 }
             }
         }

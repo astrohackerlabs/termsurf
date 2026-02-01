@@ -466,6 +466,19 @@ impl XpcManager {
         }
     }
 
+    /// Send select_all command to the browser (issue 318, experiment 3)
+    pub fn send_select_all(&self, pane_id: PaneId) -> bool {
+        let msg = XpcDictionary::new();
+        msg.set_string("action", "do_select_all");
+
+        if self.send_command(pane_id, &msg) {
+            log::info!("[XPC] Sent do_select_all to pane {}", pane_id);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Remove a peer connection (e.g., when webview pane is closed)
     pub fn remove_connection(&self, pane_id: PaneId) {
         self.peer_connections.lock().unwrap().remove(&pane_id);

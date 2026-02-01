@@ -1020,6 +1020,20 @@ impl super::TermWindow {
                     return Some(true); // Consume the key
                 }
 
+                // Handle Cmd+A (select all) - call CEF's native select_all (issue 318, experiment 3)
+                let is_cmd_a = window_key.key_is_down
+                    && window_key.modifiers.contains(Modifiers::SUPER)
+                    && matches!(&window_key.key, KeyCode::Char('a') | KeyCode::Char('A'));
+
+                if is_cmd_a {
+                    log::info!("[CLIPBOARD] Cmd+A detected, sending do_select_all to browser");
+                    drop(overlays); // Release lock before XPC call
+                    if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+                        xpc_manager.send_select_all(pane_id);
+                    }
+                    return Some(true); // Consume the key
+                }
+
                 // Forward other keys to browser via XPC
                 drop(overlays); // Release lock before XPC call
                 if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
