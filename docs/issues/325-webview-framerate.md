@@ -4,7 +4,8 @@ Webview content does not refresh at 60fps, causing visible lag.
 
 ## Status
 
-Experiment 1 designed.
+Experiment 1 complete (partial success). Dedup removed, but lag persists. Root
+cause still unknown.
 
 ## Product Requirements
 
@@ -46,8 +47,6 @@ CEF renders frame
     ▼
 on_accelerated_paint(IOSurface handle)
     │
-    ├─ If handle == last_handle: RETURN (dedup)
-    │
     ├─ Create Mach port from IOSurface
     │
     └─ Send XPC: { action: "display_surface", port, width, height }
@@ -59,6 +58,8 @@ on_accelerated_paint(IOSurface handle)
             │
             └─ Call invalidate callback → Window repaints
 ```
+
+Note: Dedup logic was removed in Experiment 1. Every frame now triggers XPC.
 
 ### The Deduplication Problem
 
@@ -272,7 +273,61 @@ web google.com
 # Expected: Characters appear instantly
 ```
 
-**Status:** Implemented, awaiting test.
+**Status:** Partial success.
+
+**Result:** Dedup removed, code kept. However, lag persists — the dedup was not
+the primary cause of the frame rate issue.
+
+**Conclusion:** The dedup logic was based on a wrong assumption (that CEF does
+double-buffering), so removing it is correct. But the lag has another root
+cause. Keeping this change because:
+
+1. It's semantically correct — GUI should be notified on every frame
+2. It eliminates one potential source of dropped frames
+3. The code is simpler without the dedup state tracking
+
+### Remaining Hypotheses
+
+The lag likely comes from one of these sources:
+
+1. **XPC message latency** — Each `display_surface` message goes through XPC.
+   At 60fps, messages arrive every 16.7ms. If XPC adds even 5-10ms latency,
+   frames could pile up or be dropped.
+
+2. **WezTerm invalidate → render delay** — Calling `window.invalidate()` doesn't
+   immediately repaint. WezTerm batches repaints and may not render until the
+   next vsync or event loop tick. The delay between invalidate and actual
+   render could be 1-2 frames.
+
+3. **Metal texture import overhead** — Each frame requires
+   `IOSurfaceLookupFromMachPort` and creating a new wgpu texture. This may be
+   expensive if done 60 times per second.
+
+4. **GUI event loop starvation** — If the GUI is busy processing other events
+   (terminal output, input handling), XPC messages may queue up.
+
+5. **Double-buffering mismatch** — CEF may be rendering ahead of what the GUI
+   displays, causing a perception of lag even if frames arrive on time.
+
+### Next Steps
+
+To find the real bottleneck, add timestamp logging at each stage:
+
+```rust
+// Profile server (on_accelerated_paint)
+println!("[FRAME-TX] t={:?}", Instant::now());
+
+// GUI (display_surface handler)
+println!("[FRAME-RX] t={:?}", Instant::now());
+
+// GUI (invalidate callback)
+println!("[INVALIDATE] t={:?}", Instant::now());
+
+// GUI (actual render)
+println!("[RENDER] t={:?}", Instant::now());
+```
+
+Compare timestamps to see where time is lost.
 
 ## References
 
