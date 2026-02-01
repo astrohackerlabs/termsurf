@@ -219,6 +219,8 @@ clicking links works before adding wheel, modifiers, and click counting.
 
 ## Experiment 1: Mouse Move and Left Click
 
+**Status: FAILED**
+
 Start with the minimal implementation: mouse movement and left-button clicks. Verify
 that clicking links works before adding scrolling, modifiers, or click counting.
 
@@ -586,6 +588,62 @@ These will be addressed in later experiments:
 - No drag support (text selection)
 - No right-click support
 - No middle-click support
+
+### Conclusion (Experiment 1)
+
+**Result: Failed.** Mouse events are not being delivered to CEF.
+
+#### What's Broken
+
+The GUI successfully intercepts mouse events, transforms coordinates, and calls
+`send_command()` via XPC. The connection appears valid (no "No connection for pane"
+warnings). However, the profile server never receives the mouse events — zero
+`mouse_move` or `mouse_click` actions appear in the profile logs.
+
+Observed behavior: hover highlights appear briefly then disappear, clicks work once
+then stop. This suggests messages may be delivered initially but the connection
+enters a broken state where `send()` silently fails.
+
+Confusingly, keyboard input uses the identical `send_command()` path and works
+reliably. The XPC connection works in both directions for other message types:
+
+| Direction         | Message Type      | Status  |
+| ----------------- | ----------------- | ------- |
+| Profile → GUI     | `display_surface` | Works   |
+| Launcher → Profile| `create_browser`  | Works   |
+| GUI → Profile     | `key_event`       | Works   |
+| GUI → Profile     | `mouse_move`      | Broken  |
+| GUI → Profile     | `mouse_click`     | Broken  |
+
+The profile logs show repeated "XPC connection interrupted" errors and unexpected
+`create_browser` commands, suggesting connection instability that may be related.
+
+#### Ideas for Fixing
+
+1. **Debug XPC connection state**: Add logging to verify the connection stored in
+   `peer_connections` is the same object the profile has its event handler on.
+   Multiple reconnections may cause GUI to send on a connection the profile isn't
+   listening to.
+
+2. **Verify event handler registration**: Confirm the profile's event handler for
+   `mouse_move`/`mouse_click` is actually registered. Add a catch-all log in the
+   handler's `_ => {}` branch to see if messages arrive with unexpected action names.
+
+3. **Test with synchronous reply**: Use `send_with_reply_sync()` instead of `send()`
+   for mouse events temporarily. If this works, the issue is with async message
+   delivery. If it fails, we'll get an actual error message.
+
+4. **Compare with keyboard path**: Trace exactly what happens for a keyboard event
+   vs a mouse event. Find where the paths diverge.
+
+5. **Check for connection replacement**: The logs show many "New connection for
+   session" messages after errors. If the GUI stores a new connection but the
+   profile's event handler is on the old one, messages would be lost. May need to
+   re-register handlers on reconnection.
+
+6. **Simplify**: Strip mouse handling down to the absolute minimum — send a single
+   test message on click and verify it arrives. Remove all the coordinate
+   transformation and throttling to isolate the core IPC issue.
 
 ## References
 
