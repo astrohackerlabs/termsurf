@@ -103,3 +103,23 @@ Rename "WezTerm" to "TermSurf" in macOS menu bar.
 cd ts3 && ./scripts/build-debug.sh --open
 # Check menu bar shows "TermSurf" instead of "WezTerm"
 ```
+
+---
+
+## Experiment 4: Rename bundle name
+
+Rename `CFBundleName` from "WezTerm" to "TermSurf" so the main menu bar shows "TermSurf".
+
+### Changes
+
+| File                           | Change                                      |
+| ------------------------------ | ------------------------------------------- |
+| `ts3/scripts/build-debug.sh`   | `<string>WezTerm</string>` → `<string>TermSurf</string>` |
+| `ts3/scripts/build-release.sh` | `<string>WezTerm</string>` → `<string>TermSurf</string>` |
+
+### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+# Main menu bar item should show "TermSurf" (bold, next to Apple logo)
+```
