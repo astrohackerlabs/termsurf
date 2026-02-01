@@ -4,7 +4,7 @@ Click-and-drag to select text in webview panes.
 
 ## Status
 
-Not started.
+**Complete.** Click-and-drag text selection working.
 
 ## Product Requirements
 
@@ -158,11 +158,11 @@ host.send_mouse_move_event(Some(&mouse_event), 0);
 
 ## Success Criteria
 
-- [ ] Click-and-drag selects text
-- [ ] Selection highlights during drag
-- [ ] Selection persists after mouse release
-- [ ] Can copy selection with Cmd+C
-- [ ] Multiple drag selections work (new drag clears old selection)
+- [x] Click-and-drag selects text
+- [x] Selection highlights during drag
+- [x] Selection persists after mouse release
+- [x] Can copy selection with Cmd+C
+- [x] Multiple drag selections work (new drag clears old selection)
 
 ## Next Steps (Other Mouse Input)
 
@@ -179,7 +179,7 @@ After drag selection, these features remain:
 
 ### Experiment 1: Track Button State in Move Events
 
-**Status:** Not started
+**Status:** SUCCESS
 
 **Hypothesis:** Including the left mouse button flag in mouse move events when
 the button is held will enable CEF to perform drag selection.
@@ -302,11 +302,96 @@ tail -f /tmp/termsurf-gui.log | grep "\[MOUSE\]"
 
 #### Success Criteria
 
-- [ ] Log shows modifiers=0x10 during drag
-- [ ] Log shows modifiers=0x0 after release
-- [ ] Text highlights as user drags
-- [ ] Selection persists after mouse release
-- [ ] Can copy selection with Cmd+C
+- [x] Log shows modifiers=0x10 during drag
+- [x] Log shows modifiers=0x0 after release
+- [x] Text highlights as user drags
+- [x] Selection persists after mouse release
+- [x] Can copy selection with Cmd+C
+
+---
+
+## Conclusion
+
+### What Was Accomplished
+
+Drag selection for ts3 webviews is complete:
+
+1. **Click-and-drag selection** — Press left button, drag across text, release
+   to select. Text highlights in real-time as the user drags.
+
+2. **Button state tracking** — Per-pane `webview_mouse_buttons` HashMap stores
+   which buttons are currently held using CEF's event flag bitmask.
+
+3. **Modifier propagation** — Mouse move events include the button state in
+   the modifiers field, telling CEF when to extend selection.
+
+4. **Copy support** — Selected text can be copied with Cmd+C (from issue 317).
+
+### What We Learned
+
+1. **CEF needs button state in move events** — Unlike some APIs that track drag
+   state internally, CEF requires the `EVENTFLAG_LEFT_MOUSE_BUTTON` flag (0x10)
+   in every mouse move event during a drag operation.
+
+2. **Simple bitmask approach works** — Using a u32 bitmask per pane is simpler
+   than tracking individual button states. The same pattern can support middle
+   and right button drags if needed.
+
+3. **Existing infrastructure was ready** — The XPC `send_mouse_move()` already
+   accepted a modifiers parameter; we just weren't populating it.
+
+### Implementation Summary
+
+```
+Drag Selection Flow:
+
+Press LEFT
+    │
+    ├─ webview_mouse_buttons[pane] |= 0x10
+    │
+    └─ send_mouse_click(is_up=false)
+
+Move (during drag)
+    │
+    ├─ modifiers = webview_mouse_buttons[pane]  // 0x10
+    │
+    └─ send_mouse_move(modifiers=0x10)
+           │
+           ▼
+       CEF extends selection
+
+Release LEFT
+    │
+    ├─ webview_mouse_buttons[pane] &= !0x10
+    │
+    └─ send_mouse_click(is_up=true)
+           │
+           ▼
+       CEF finalizes selection
+```
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mod.rs` | Added `webview_mouse_buttons: RefCell<HashMap<PaneId, u32>>` |
+| `mouseevent.rs` | Updated Press/Release/Move handlers for button tracking |
+
+### What's Next
+
+With drag selection complete, these mouse features remain:
+
+| Feature | Priority | Notes |
+|---------|----------|-------|
+| Modifier keys | Medium | Shift-click to extend, Cmd-click for links |
+| Right-click | Medium | Context menus |
+| Middle-click | Low | Paste or open in new tab |
+| Cursor feedback | Low | Change cursor shape over links, text |
+
+Recommended next issue: **323-modifier-keys** for Shift-click selection extension
+and Cmd-click link handling.
+
+---
 
 ## References
 
