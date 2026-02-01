@@ -6,7 +6,7 @@
 #
 # Flags:
 #   --clean     Clear build caches and do a fresh build
-#   --open      Run wezterm-gui after building
+#   --open      Run termsurf-gui after building
 #   --open-web  Run web CLI after building (for testing CEF)
 
 set -euo pipefail
@@ -67,7 +67,7 @@ mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # 4. Copy executables
-cp "$REPO_DIR/target/debug/wezterm-gui" "$APP_BUNDLE/Contents/MacOS/"
+cp "$REPO_DIR/target/debug/termsurf-gui" "$APP_BUNDLE/Contents/MacOS/"
 cp "$REPO_DIR/target/debug/wezterm" "$APP_BUNDLE/Contents/MacOS/"
 cp "$REPO_DIR/target/debug/web" "$APP_BUNDLE/Contents/MacOS/"
 
@@ -114,7 +114,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>wezterm-gui</string>
+    <string>termsurf-gui</string>
     <key>CFBundleIdentifier</key>
     <string>org.wezfurlong.wezterm</string>
     <key>CFBundleName</key>
@@ -167,7 +167,7 @@ echo "Registered com.termsurf.launcher with launchd"
 echo ""
 echo "=== Debug Build Complete ==="
 echo "App bundle: $APP_BUNDLE"
-echo "  Contents/MacOS/wezterm-gui                              (terminal)"
+echo "  Contents/MacOS/termsurf-gui                             (terminal)"
 echo "  Contents/MacOS/wezterm                                  (CLI)"
 echo "  Contents/MacOS/web                                      (web coordinator)"
 echo "  Contents/Frameworks/TermSurf Profile Helper.app         (CEF profile server)"
@@ -175,7 +175,7 @@ echo ""
 
 # Open if requested
 if [ "$OPEN" = true ]; then
-    echo "Running wezterm-gui..."
+    echo "Running termsurf-gui..."
     open --stdout /tmp/termsurf-gui.log --stderr /tmp/termsurf-gui.log "$APP_BUNDLE"
     echo "Logs: /tmp/termsurf-gui.log"
 fi
