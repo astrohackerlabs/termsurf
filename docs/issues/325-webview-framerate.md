@@ -272,7 +272,7 @@ web google.com
 # Expected: Characters appear instantly
 ```
 
-**Status:** Not started.
+**Status:** Implemented, awaiting test.
 
 ## References
 

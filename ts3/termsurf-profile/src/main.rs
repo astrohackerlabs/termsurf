@@ -17,8 +17,7 @@
 
 use clap::Parser;
 use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::atomic::{AtomicPtr, AtomicU32};
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -85,7 +84,6 @@ struct BrowserState {
     gui: Arc<XpcConnection>,
     width: AtomicU32,
     height: AtomicU32,
-    last_handle: AtomicPtr<c_void>,
     /// Browser reference for resize operations
     browser: Mutex<Option<cef::Browser>>,
     /// Current URL (updated on navigation via DisplayHandler)
@@ -453,16 +451,10 @@ mod cef_handlers {
                     return;
                 }
 
-                // Dedup: only send when IOSurface handle changes.
-                // CEF calls on_accelerated_paint every frame (cursor blinks, etc.)
-                // but reuses the same IOSurface buffer. We only need to send a new
-                // Mach port when the buffer changes (double-buffering swap).
+                // Send every frame — GUI needs to know when content changes,
+                // not just when the IOSurface handle changes. (Issue 325)
                 let handle = info.shared_texture_io_surface as *mut std::ffi::c_void;
                 if handle.is_null() {
-                    return;
-                }
-                let prev = self.inner.state.last_handle.swap(handle, Ordering::Relaxed);
-                if handle == prev {
                     return;
                 }
 
@@ -987,7 +979,6 @@ mod cef_handlers {
             gui: Arc::clone(&gui),
             width: std::sync::atomic::AtomicU32::new(width),
             height: std::sync::atomic::AtomicU32::new(height),
-            last_handle: AtomicPtr::new(std::ptr::null_mut()),
             browser: Mutex::new(None),
             url: Mutex::new(url.to_string()),
         });
