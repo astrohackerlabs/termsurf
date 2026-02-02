@@ -364,10 +364,15 @@ tail -f /tmp/termsurf-profile-*.log | grep NAV
 
 ### Experiment 3: Match uppercase 'R' without checking SHIFT modifier
 
-**Status: Pending**
+**Status: Failed**
 
 Follow ts2's pattern: match on `KeyCode::Char('R')` directly instead of checking
 for `Modifiers::SHIFT`. When Shift is held, the character arrives as uppercase.
+
+**Failure reason:** Cmd+Shift+R still does not trigger. The key difference between
+ts2 and ts3 may be the event type: ts2 handles this in `raw_key_event_impl` with
+`RawKeyEvent`, while ts3 handles it in `key_event_impl` with `KeyEvent`. The key
+representation may differ between these event types.
 
 #### Rationale
 
@@ -427,4 +432,109 @@ Check logs:
 tail -f /tmp/termsurf-gui.log | grep NAV
 tail -f /tmp/termsurf-profile-*.log | grep NAV
 # Expected: "[NAV] Cmd+Shift+R detected" when pressing Cmd+Shift+R
+```
+
+---
+
+### Experiment 4: Handle shortcuts in raw_key_event_impl like ts2
+
+**Status: Pending**
+
+Handle Cmd+R and Cmd+Shift+R directly in `raw_key_event_impl` instead of deferring
+to `key_event_impl`. This matches ts2's working approach exactly.
+
+#### Rationale
+
+ts2 handles browser shortcuts in `raw_key_event_impl` (lines 466-520):
+1. Checks if pane has a browser in Browse mode
+2. Matches Cmd+R → `browser.reload()`
+3. Matches Cmd+Shift+R (uppercase 'R') → `browser.reload_ignore_cache()`
+4. Calls `key.set_handled()` and returns
+
+ts3 currently only skips keybinding processing in `raw_key_event_impl`, then
+defers handling to `key_event_impl`. The key representation may differ between
+`RawKeyEvent` and `KeyEvent`, causing Cmd+Shift+R to fail.
+
+#### Step 1: Handle shortcuts in raw_key_event_impl (keyevent.rs)
+
+Replace the current Browse mode early-return block (around lines 466-491) with
+actual shortcut handling like ts2:
+
+```rust
+// Skip keybinding processing when webview is active in Browse mode
+// AND handle browser shortcuts directly here (ts2 pattern)
+#[cfg(target_os = "macos")]
+{
+    use crate::termwindow::webview_socket::{get_server, WebviewMode};
+
+    let pane_id = pane.pane_id();
+    if let Some(server) = get_server() {
+        let state = server.state();
+        let overlays = state.read().unwrap();
+        if let Some(overlay) = overlays.overlays.get(&pane_id) {
+            if overlay.mode == WebviewMode::Browse {
+                // Handle browser shortcuts in Browse mode (issue 337)
+                if key.key_is_down && key.modifiers.contains(Modifiers::SUPER) {
+                    let handled = match &key.key {
+                        KeyCode::Char('r') => {
+                            log::info!("[NAV] Cmd+R in raw_key_event: reload");
+                            drop(overlays);
+                            if let Some(xpc_manager) =
+                                crate::termwindow::webview_xpc::get_xpc_manager()
+                            {
+                                xpc_manager.send_reload(pane_id);
+                            }
+                            true
+                        }
+                        KeyCode::Char('R') => {
+                            log::info!("[NAV] Cmd+Shift+R in raw_key_event: hard reload");
+                            drop(overlays);
+                            if let Some(xpc_manager) =
+                                crate::termwindow::webview_xpc::get_xpc_manager()
+                            {
+                                xpc_manager.send_reload_ignore_cache(pane_id);
+                            }
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        key.set_handled();
+                        return;
+                    }
+                }
+
+                // For other keys in Browse mode: skip keybinding processing
+                // but let KeyEvent flow through to key_event_impl
+                if key.key_is_down {
+                    log::debug!(
+                        "[Webview] Skipping keybindings in Browse mode: {:?}",
+                        key.key
+                    );
+                }
+                return; // Early return, NO set_handled()
+            }
+        }
+    }
+}
+```
+
+#### Step 2: Keep key_event_impl handlers for Control mode
+
+The existing handlers in `key_event_impl` can remain for Control mode, or we can
+add similar handling to `raw_key_event_impl` for Control mode as well.
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+web example.com
+# Press Cmd+R → page should reload
+# Press Cmd+Shift+R → page should hard reload (bypass cache)
+```
+
+Check logs:
+```bash
+tail -f /tmp/termsurf-gui.log | grep NAV
+# Expected: "[NAV] Cmd+R in raw_key_event" or "[NAV] Cmd+Shift+R in raw_key_event"
 ```
