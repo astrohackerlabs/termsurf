@@ -25,11 +25,23 @@ Cross-platform terminal emulator with browser panes. Each browser profile runs
 in its own CEF process, enabling true session isolation (separate cookies,
 storage, logins) like Chrome profiles.
 
+### Prerequisites (macOS)
+
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install build tools
+brew install cmake ninja
+```
+
 ### Quick Start
 
 ```bash
 cd ts3 && ./scripts/build-debug.sh --open
 ```
+
+The first build downloads CEF (~300MB) automatically.
 
 Then in the terminal:
 
@@ -111,6 +123,7 @@ TermSurf webviews have two modes:
 | Ctrl+C (Browse)  | Switch to Control mode |
 | Enter (Control)  | Switch to Browse mode  |
 | Ctrl+C (Control) | Close webview          |
+| Cmd+C (Control)  | Copy URL to clipboard  |
 
 ### Logs
 
