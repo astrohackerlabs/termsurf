@@ -104,11 +104,13 @@ CLI ──Unix socket──► GUI (WezTerm)
 |                 | Scroll (trackpad, wheel)                   | Working |
 |                 | Hover effects                              | Working |
 |                 | Cursor feedback (hand, I-beam, arrow)      | Working |
+| **Navigation**  | Back (Cmd+[)                               | Working |
+|                 | Forward (Cmd+])                            | Working |
+|                 | Reload (Cmd+R)                             | Working |
+|                 | Hard reload (Cmd+Shift+R)                  | Working |
 | **Performance** | 60fps rendering                            | Working |
 |                 | Graceful process shutdown                  | Working |
-| **Not Started** | Multiple profiles (`--profile`)            | Planned |
-|                 | Navigation (back, forward, reload)         | Planned |
-|                 | DevTools                                   | Planned |
+| **Not Started** | DevTools                                   | Planned |
 |                 | Loading indicators                         | Planned |
 
 ### Modes
