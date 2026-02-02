@@ -1266,7 +1266,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
         ReloadConfiguration => CommandDef {
             brief: "Reload configuration".into(),
             doc: "Reloads the configuration file".into(),
-            keys: vec![(Modifiers::SUPER, "r".into())],
+            keys: vec![],  // Removed Cmd+R - config auto-reloads, Cmd+R used for browser refresh (issue 337)
             args: &[],
             menubar: &["TermSurf"],
             icon: Some("md_reload"),

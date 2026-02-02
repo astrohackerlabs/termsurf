@@ -546,6 +546,32 @@ impl XpcManager {
         }
     }
 
+    /// Send reload command to the browser (issue 337)
+    pub fn send_reload(&self, pane_id: PaneId) -> bool {
+        let msg = XpcDictionary::new();
+        msg.set_string("action", "reload");
+
+        if self.send_command(pane_id, &msg) {
+            log::info!("[XPC] Sent reload to pane {}", pane_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Send reload_ignore_cache command to the browser (issue 337)
+    pub fn send_reload_ignore_cache(&self, pane_id: PaneId) -> bool {
+        let msg = XpcDictionary::new();
+        msg.set_string("action", "reload_ignore_cache");
+
+        if self.send_command(pane_id, &msg) {
+            log::info!("[XPC] Sent reload_ignore_cache to pane {}", pane_id);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Issue 329: Send focus command to the browser
     pub fn send_focus(&self, pane_id: PaneId, focused: bool) -> bool {
         let msg = XpcDictionary::new();

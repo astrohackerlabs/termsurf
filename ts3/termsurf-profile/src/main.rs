@@ -954,6 +954,38 @@ mod cef_handlers {
                             let mut task = GoForwardTask::new(bs);
                             cef::post_task(cef::ThreadId::UI, Some(&mut task));
                         }
+                        "reload" => {
+                            // Issue 337: Reload page
+                            let state_guard = deferred_for_handler.lock().unwrap();
+                            let Some(bs) = state_guard.as_ref() else {
+                                println!("Profile: reload ignored (state not ready)");
+                                return;
+                            };
+
+                            println!("[NAV] Received reload command");
+
+                            let bs = Arc::clone(bs);
+                            drop(state_guard);
+
+                            let mut task = ReloadTask::new(bs);
+                            cef::post_task(cef::ThreadId::UI, Some(&mut task));
+                        }
+                        "reload_ignore_cache" => {
+                            // Issue 337: Hard reload (bypass cache)
+                            let state_guard = deferred_for_handler.lock().unwrap();
+                            let Some(bs) = state_guard.as_ref() else {
+                                println!("Profile: reload_ignore_cache ignored (state not ready)");
+                                return;
+                            };
+
+                            println!("[NAV] Received reload_ignore_cache command");
+
+                            let bs = Arc::clone(bs);
+                            drop(state_guard);
+
+                            let mut task = ReloadIgnoreCacheTask::new(bs);
+                            cef::post_task(cef::ThreadId::UI, Some(&mut task));
+                        }
                         "mouse_move" => {
                             // Issue 319, experiment 3: Deep handler logging
                             println!("[MOUSE] mouse_move handler entered");
@@ -1419,6 +1451,50 @@ mod cef_handlers {
                     browser.go_forward();
                 } else {
                     println!("[NAV] GoForwardTask: no browser");
+                }
+            }
+        }
+    }
+
+    // ====== Reload Task ======
+    //
+    // Task for reloading the page via CEF's browser.reload().
+    // Issue 337: Browser refresh.
+
+    wrap_task! {
+        pub struct ReloadTask {
+            state: Arc<BrowserState>,
+        }
+
+        impl Task {
+            fn execute(&self) {
+                if let Some(browser) = self.state.browser.lock().unwrap().as_ref() {
+                    println!("[NAV] Calling browser.reload()");
+                    browser.reload();
+                } else {
+                    println!("[NAV] ReloadTask: no browser");
+                }
+            }
+        }
+    }
+
+    // ====== Reload Ignore Cache Task ======
+    //
+    // Task for hard reload via CEF's browser.reload_ignore_cache().
+    // Issue 337: Browser refresh (bypass cache).
+
+    wrap_task! {
+        pub struct ReloadIgnoreCacheTask {
+            state: Arc<BrowserState>,
+        }
+
+        impl Task {
+            fn execute(&self) {
+                if let Some(browser) = self.state.browser.lock().unwrap().as_ref() {
+                    println!("[NAV] Calling browser.reload_ignore_cache()");
+                    browser.reload_ignore_cache();
+                } else {
+                    println!("[NAV] ReloadIgnoreCacheTask: no browser");
                 }
             }
         }

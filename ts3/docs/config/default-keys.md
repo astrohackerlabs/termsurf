@@ -64,7 +64,6 @@ in a form that you can copy and paste into your own configuration.
 | `CTRL+SHIFT`     | `PageDown`      | `MoveTabRelative=1` |
 | `SHIFT`          | `PageUp`      | `ScrollByPage=-1` |
 | `SHIFT`          | `PageDown`    | `ScrollByPage=1` |
-| `SUPER`          | `r`    | `ReloadConfiguration` |
 | `CTRL+SHIFT`     | `R`    | `ReloadConfiguration` |
 | `SUPER`          | `h`    | `HideApplication` (macOS only) |
 | `SUPER`          | `k`    | `ClearScrollback="ScrollbackOnly"` |

@@ -438,7 +438,7 @@ tail -f /tmp/termsurf-profile-*.log | grep NAV
 
 ### Experiment 4: Handle shortcuts in raw_key_event_impl like ts2
 
-**Status: Pending**
+**Status: Success**
 
 Handle Cmd+R and Cmd+Shift+R directly in `raw_key_event_impl` instead of deferring
 to `key_event_impl`. This matches ts2's working approach exactly.
@@ -538,3 +538,37 @@ Check logs:
 tail -f /tmp/termsurf-gui.log | grep NAV
 # Expected: "[NAV] Cmd+R in raw_key_event" or "[NAV] Cmd+Shift+R in raw_key_event"
 ```
+
+---
+
+## Conclusion
+
+Browser refresh is now fully implemented:
+
+- **Cmd+R** reloads the current page
+- **Cmd+Shift+R** performs a hard reload (bypasses cache)
+
+### Key Learnings
+
+1. **Remove conflicting default keybindings**: WezTerm's default Cmd+R →
+   `ReloadConfiguration` binding had to be removed since config auto-reloads anyway.
+
+2. **Handle shortcuts in `raw_key_event_impl`, not `key_event_impl`**: The key
+   representation differs between `RawKeyEvent` and `KeyEvent`. ts2 handles browser
+   shortcuts in `raw_key_event_impl` where the uppercase 'R' is correctly detected
+   for Cmd+Shift+R. Deferring to `key_event_impl` caused Cmd+Shift+R to fail.
+
+3. **Match on character case, not SHIFT modifier**: When Shift is held, the key
+   arrives as uppercase `KeyCode::Char('R')`. Matching on the character directly
+   (like ts2) is simpler and more reliable than checking `Modifiers::SHIFT`.
+
+### Files Modified
+
+- `ts3/wezterm-gui/src/commands.rs` — Removed Cmd+R default keybinding
+- `ts3/wezterm-gui/src/termwindow/keyevent.rs` — Handle Cmd+R/Cmd+Shift+R in
+  `raw_key_event_impl`
+- `ts3/wezterm-gui/src/termwindow/webview_xpc.rs` — Added `send_reload()` and
+  `send_reload_ignore_cache()` XPC methods
+- `ts3/termsurf-profile/src/main.rs` — Added ReloadTask, ReloadIgnoreCacheTask,
+  and XPC handlers
+- `ts3/docs/config/default-keys.md` — Removed Cmd+R from documentation

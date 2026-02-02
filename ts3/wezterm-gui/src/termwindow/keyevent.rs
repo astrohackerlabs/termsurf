@@ -463,9 +463,8 @@ impl super::TermWindow {
             None => return,
         };
 
-        // Skip keybinding processing when webview is active in Browse mode
-        // Do NOT call set_handled() - we want KeyEvent to still be dispatched
-        // so key_event_impl can forward to CEF and handle Ctrl+C
+        // Handle browser shortcuts in Browse mode (ts2 pattern - issue 337)
+        // Must handle here in raw_key_event_impl, not key_event_impl
         #[cfg(target_os = "macos")]
         {
             use crate::termwindow::webview_socket::{get_server, WebviewMode};
@@ -476,7 +475,38 @@ impl super::TermWindow {
                 let overlays = state.read().unwrap();
                 if let Some(overlay) = overlays.overlays.get(&pane_id) {
                     if overlay.mode == WebviewMode::Browse {
-                        // In Browse mode: skip keybinding processing
+                        // Handle browser shortcuts in Browse mode (issue 337)
+                        if key.key_is_down && key.modifiers.contains(Modifiers::SUPER) {
+                            let handled = match &key.key {
+                                KeyCode::Char('r') => {
+                                    log::info!("[NAV] Cmd+R in raw_key_event: reload");
+                                    drop(overlays);
+                                    if let Some(xpc_manager) =
+                                        crate::termwindow::webview_xpc::get_xpc_manager()
+                                    {
+                                        xpc_manager.send_reload(pane_id);
+                                    }
+                                    true
+                                }
+                                KeyCode::Char('R') => {
+                                    log::info!("[NAV] Cmd+Shift+R in raw_key_event: hard reload");
+                                    drop(overlays);
+                                    if let Some(xpc_manager) =
+                                        crate::termwindow::webview_xpc::get_xpc_manager()
+                                    {
+                                        xpc_manager.send_reload_ignore_cache(pane_id);
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if handled {
+                                key.set_handled();
+                                return;
+                            }
+                        }
+
+                        // For other keys in Browse mode: skip keybinding processing
                         // but let KeyEvent flow through to key_event_impl
                         if key.key_is_down {
                             log::debug!(
@@ -1065,6 +1095,36 @@ impl super::TermWindow {
                     return Some(true);
                 }
 
+                // Handle Cmd+R (reload) - issue 337
+                let is_cmd_r = window_key.key_is_down
+                    && window_key.modifiers.contains(Modifiers::SUPER)
+                    && !window_key.modifiers.contains(Modifiers::SHIFT)
+                    && matches!(&window_key.key, KeyCode::Char('r'));
+
+                if is_cmd_r {
+                    log::info!("[NAV] Cmd+R detected, sending reload to browser");
+                    drop(overlays);
+                    if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+                        xpc_manager.send_reload(pane_id);
+                    }
+                    return Some(true);
+                }
+
+                // Handle Cmd+Shift+R (hard reload) - issue 337
+                // Match uppercase 'R' only - Shift produces uppercase (ts2 pattern)
+                let is_cmd_shift_r = window_key.key_is_down
+                    && window_key.modifiers.contains(Modifiers::SUPER)
+                    && matches!(&window_key.key, KeyCode::Char('R'));
+
+                if is_cmd_shift_r {
+                    log::info!("[NAV] Cmd+Shift+R detected, sending reload_ignore_cache to browser");
+                    drop(overlays);
+                    if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+                        xpc_manager.send_reload_ignore_cache(pane_id);
+                    }
+                    return Some(true);
+                }
+
                 // Forward other keys to browser via XPC
                 drop(overlays); // Release lock before XPC call
                 if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
@@ -1133,6 +1193,36 @@ impl super::TermWindow {
                     drop(overlays);
                     if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
                         xpc_manager.send_go_forward(pane_id);
+                    }
+                    return Some(true);
+                }
+
+                // Handle Cmd+R (reload) in Control mode - issue 337
+                let is_cmd_r = window_key.key_is_down
+                    && window_key.modifiers.contains(Modifiers::SUPER)
+                    && !window_key.modifiers.contains(Modifiers::SHIFT)
+                    && matches!(&window_key.key, KeyCode::Char('r'));
+
+                if is_cmd_r {
+                    log::info!("[NAV] Cmd+R in Control mode, sending reload");
+                    drop(overlays);
+                    if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+                        xpc_manager.send_reload(pane_id);
+                    }
+                    return Some(true);
+                }
+
+                // Handle Cmd+Shift+R (hard reload) in Control mode - issue 337
+                // Match uppercase 'R' only - Shift produces uppercase (ts2 pattern)
+                let is_cmd_shift_r = window_key.key_is_down
+                    && window_key.modifiers.contains(Modifiers::SUPER)
+                    && matches!(&window_key.key, KeyCode::Char('R'));
+
+                if is_cmd_shift_r {
+                    log::info!("[NAV] Cmd+Shift+R in Control mode, sending reload_ignore_cache");
+                    drop(overlays);
+                    if let Some(xpc_manager) = crate::termwindow::webview_xpc::get_xpc_manager() {
+                        xpc_manager.send_reload_ignore_cache(pane_id);
                     }
                     return Some(true);
                 }
