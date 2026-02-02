@@ -1,40 +1,89 @@
-# Wez's Terminal
+# TermSurf
 
-<img height="128" alt="WezTerm Icon" src="https://raw.githubusercontent.com/wezterm/wezterm/main/assets/icon/wezterm-icon.svg" align="left"> *A GPU-accelerated cross-platform terminal emulator and multiplexer written by <a href="https://github.com/wez">@wez</a> and implemented in <a href="https://www.rust-lang.org/">Rust</a>*
+A terminal emulator with an integrated web browser. Type `web google.com` in your
+terminal and a webpage renders directly in the terminal pane.
 
-User facing docs and guide at: https://wezterm.org/
+Built on [WezTerm](https://wezterm.org/) with [CEF](https://bitbucket.org/chromiumembedded/cef/)
+(Chromium Embedded Framework) for browser rendering.
 
-![Screenshot](docs/screenshots/two.png)
+## Features
 
-*Screenshot of wezterm on macOS, running vim*
+- **Integrated browser**: Run `web <url>` to open a webpage in the current pane
+- **Multiple profiles**: Each browser profile runs in its own process with isolated
+  cookies, storage, and cache (like Chrome profiles)
+- **Browser navigation**: Cmd+[ (back), Cmd+] (forward), Cmd+R (reload),
+  Cmd+Shift+R (hard reload)
+- **Two modes**: Browse mode (keys go to webpage) and Control mode (Ctrl+C to toggle)
+- **GPU-accelerated**: WebGPU rendering with IOSurface texture sharing
 
-## Installation
+## Current Status
 
-https://wezterm.org/installation
+| Feature                       | Status      |
+| ----------------------------- | ----------- |
+| Single webview per profile    | Working     |
+| Multiple browser profiles     | Working     |
+| Browser navigation            | Working     |
+| Browser refresh               | Working     |
+| Profile path isolation        | Working     |
+| Dynamic initial pane sizing   | Working     |
+| Multi-webview per profile     | Not started |
+| Dynamic resize on pane change | Not started |
+| Input forwarding (full)       | Not started |
 
-## Getting help
+## Build Prerequisites
 
-This is a spare time project, so please bear with me.  There are a couple of channels for support:
+- macOS (currently macOS-only due to XPC/IOSurface)
+- Rust toolchain
+- Xcode command line tools
 
-* You can use the [GitHub issue tracker](https://github.com/wezterm/wezterm/issues) to see if someone else has a similar issue, or to file a new one.
-* Start or join a thread in our [GitHub Discussions](https://github.com/wezterm/wezterm/discussions); if you have general
-  questions or want to chat with other wezterm users, you're welcome here!
-* There is a [Matrix room via Element.io](https://app.element.io/#/room/#wezterm:matrix.org)
-  for (potentially!) real time discussions.
+## Building
 
-The GitHub Discussions and Element/Gitter rooms are better suited for questions
-than bug reports, but don't be afraid to use whichever you are most comfortable
-using and we'll work it out.
+```bash
+# Debug build
+./scripts/build-debug.sh [--open] [--clean]
 
-## Supporting the Project
+# Release build
+./scripts/build-release.sh [--open] [--clean]
+```
 
-If you use and like WezTerm, please consider sponsoring it: your support helps
-to cover the fees required to maintain the project and to validate the time
-spent working on it!
+Flags:
+- `--open`: Run the app after building
+- `--clean`: Clear build caches first
 
-[Read more about sponsoring](https://wezterm.org/sponsor.html).
+## Usage
 
-* [![Sponsor WezTerm](https://img.shields.io/github/sponsors/wez?label=Sponsor%20WezTerm&logo=github&style=for-the-badge)](https://github.com/sponsors/wez)
-* [Patreon](https://patreon.com/WezFurlong)
-* [Ko-Fi](https://ko-fi.com/wezfurlong)
-* [Liberapay](https://liberapay.com/wez)
+```bash
+# Open a webpage in the current pane
+web google.com
+
+# Browser shortcuts (in Browse mode)
+Cmd+[        # Go back
+Cmd+]        # Go forward
+Cmd+R        # Reload
+Cmd+Shift+R  # Hard reload (bypass cache)
+
+# Mode switching
+Ctrl+C       # Toggle between Browse and Control mode
+```
+
+## Architecture
+
+```
+web command → GUI → XPC Launcher → Profile Server (CEF) → IOSurface → GPU render
+```
+
+Each browser profile runs in a separate `termsurf-profile` process. The GUI
+communicates with profile servers via XPC, receiving rendered frames as IOSurface
+Mach ports for zero-copy GPU compositing.
+
+## Logs
+
+Debug logs are written to `/tmp/`:
+- `/tmp/termsurf-gui.log` — GUI process
+- `/tmp/termsurf-launcher.log` — XPC launcher
+- `/tmp/termsurf-profile-*.log` — Profile servers
+
+## Credits
+
+- [WezTerm](https://wezterm.org/) by [@wez](https://github.com/wez) — Terminal emulator foundation
+- [CEF](https://bitbucket.org/chromiumembedded/cef/) — Chromium Embedded Framework
