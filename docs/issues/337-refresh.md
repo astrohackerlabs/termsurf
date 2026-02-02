@@ -268,3 +268,74 @@ Check logs:
 tail -f /tmp/termsurf-gui.log | grep NAV
 tail -f /tmp/termsurf-profile-*.log | grep NAV
 ```
+
+---
+
+### Experiment 2: Remove Cmd+R from WezTerm's default keybindings
+
+**Status: Pending**
+
+Remove the Cmd+R → ReloadConfiguration default keybinding. WezTerm auto-reloads
+config files when they change, so the manual reload shortcut is unnecessary.
+This frees Cmd+R for browser refresh.
+
+#### Rationale
+
+- WezTerm's `automatically_reload_config` is enabled by default
+- Config changes are detected and applied automatically
+- Manual reload via Cmd+R is redundant
+- Removing it allows Experiment 1's handler in `key_event_impl` to receive the key
+
+#### Step 1: Remove Cmd+R keybinding from commands.rs
+
+In `ts3/wezterm-gui/src/commands.rs`, find the `ReloadConfiguration` entry
+(around line 1266) and remove the keybinding:
+
+```rust
+// Before:
+ReloadConfiguration => CommandDef {
+    brief: "Reload configuration".into(),
+    doc: "Reloads the configuration file".into(),
+    keys: vec![(Modifiers::SUPER, "r".into())],
+    args: &[],
+    menubar: &["TermSurf"],
+    icon: Some("md_reload"),
+},
+
+// After:
+ReloadConfiguration => CommandDef {
+    brief: "Reload configuration".into(),
+    doc: "Reloads the configuration file".into(),
+    keys: vec![],  // Removed Cmd+R binding
+    args: &[],
+    menubar: &["TermSurf"],
+    icon: Some("md_reload"),
+},
+```
+
+The menu item remains in the TermSurf menu but without a keyboard shortcut.
+
+#### Step 2: Update default-keys.md documentation
+
+Remove the Cmd+R line from `ts3/docs/config/default-keys.md` (line 67):
+
+```markdown
+| `SUPER`          | `r`    | `ReloadConfiguration` |
+```
+
+#### Verification
+
+```bash
+cd ts3 && ./scripts/build-debug.sh --open
+web example.com
+# Press Cmd+R → page should reload (not config)
+# Press Cmd+Shift+R → page should hard reload
+# In terminal pane (no webview): Cmd+R should do nothing
+# TermSurf menu should still show "Reload configuration" (without shortcut)
+```
+
+Check logs:
+```bash
+tail -f /tmp/termsurf-gui.log | grep NAV
+tail -f /tmp/termsurf-profile-*.log | grep NAV
+```
