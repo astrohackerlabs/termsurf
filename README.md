@@ -1,6 +1,6 @@
 # TermSurf
 
-**A terminal that browses.**
+**A terminal that surfs.**
 
 Type `web` and a full Chromium browser opens right in your terminal pane. No
 window switching. No context loss. Just web.
