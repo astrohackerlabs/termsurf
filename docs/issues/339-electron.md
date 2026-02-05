@@ -189,7 +189,7 @@ are viable.
 
 ### Experiment 1: Study Electron's Implementation
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 
 **Goal:** Understand exactly how Electron implements `FrameSinkVideoCapturer`
 and what Chromium APIs it uses.
@@ -227,3 +227,141 @@ and what Chromium APIs it uses.
    - What's the minimum Chromium version?
 
 **Deliverable:** Architecture document explaining Electron's approach in detail.
+
+---
+
+#### Findings
+
+##### Key Source Files
+
+Electron's OSR implementation lives in `/electron/shell/browser/osr/`:
+
+| File | Purpose |
+| ---- | ------- |
+| `osr_video_consumer.cc` | Implements `viz::mojom::FrameSinkVideoConsumer`, receives captured frames |
+| `osr_render_widget_host_view.cc` | Creates the video capturer, manages the render widget |
+| `osr_paint_event.h` | Defines `OffscreenSharedTextureValue` struct for frame data |
+| `osr_host_display_client_mac.mm` | macOS-specific IOSurface handling |
+| `README.md` | Excellent documentation of the entire architecture |
+
+##### How Electron Creates the Capturer
+
+In `OffScreenVideoConsumer` constructor (`osr_video_consumer.cc:37-73`):
+
+```cpp
+video_capturer_(view->CreateVideoCapturer()) {
+  video_capturer_->SetAutoThrottlingEnabled(false);  // No throttling!
+  video_capturer_->SetMinSizeChangePeriod(base::TimeDelta());
+  video_capturer_->SetFormat(format);
+  video_capturer_->SetAnimationFpsLockIn(false, 1);  // Prevent stutter
+  video_capturer_->SetResolutionConstraints(
+      gfx::Size(1, 1),
+      gfx::Size(media::limits::kMaxDimension, media::limits::kMaxDimension),
+      false);
+  SetFrameRate(view_->frame_rate());
+}
+```
+
+Key configuration:
+- `SetAutoThrottlingEnabled(false)` — Disables frame rate throttling
+- `SetAnimationFpsLockIn(false, 1)` — Prevents animation-based frame dropping
+- No resolution constraints — Adapts to any window size
+
+##### Starting Capture with GPU Texture Sharing
+
+In `OffScreenVideoConsumer::SetActive()` (`osr_video_consumer.cc:77-87`):
+
+```cpp
+video_capturer_->Start(
+    this,
+    view_->offscreen_use_shared_texture()
+        ? viz::mojom::BufferFormatPreference::kPreferMappableSharedImage
+        : viz::mojom::BufferFormatPreference::kDefault);
+```
+
+The `kPreferMappableSharedImage` preference tells Chromium to use GPU memory
+buffers (IOSurface on macOS, D3D11 texture on Windows).
+
+##### Frame Delivery Flow
+
+1. **Chromium captures frame** → `FrameSinkVideoCapturerImpl` creates a
+   `GpuMemoryBuffer` via `GmbVideoFramePoolContext`
+
+2. **GPU process creates texture** → Platform-specific (IOSurface on macOS)
+
+3. **Frame delivered to consumer** → `OnFrameCaptured()` callback with
+   `media::mojom::VideoBufferHandlePtr`
+
+4. **Extract platform handle** (`osr_video_consumer.cc:104-141`):
+
+```cpp
+// macOS
+texture.shared_texture_handle =
+    reinterpret_cast<uintptr_t>(gmb_handle.io_surface().get());
+```
+
+5. **Application imports texture** — Using `IOSurfaceRef` directly
+
+##### macOS IOSurface Handling
+
+In `osr_host_display_client_mac.mm`, Electron shows how to import IOSurface:
+
+```cpp
+base::apple::ScopedCFTypeRef<IOSurfaceRef> io_surface(
+    IOSurfaceLookupFromMachPort(ca_layer_params.io_surface_mach_port.get()));
+void* pixels = static_cast<void*>(IOSurfaceGetBaseAddress(io_surface.get()));
+size_t stride = IOSurfaceGetBytesPerRow(io_surface.get());
+```
+
+##### Frame Pool Architecture
+
+From `README.md`: The capturer uses a pool of **10 frames**
+(`kFramePoolCapacity`). This is critical for high frame rates:
+
+- CEF: Single frame, blocks if previous frame not consumed
+- Electron: 10-frame pool, can queue frames without blocking
+
+##### Key Chromium Dependencies
+
+| Component | Header | Purpose |
+| --------- | ------ | ------- |
+| `viz::ClientFrameSinkVideoCapturer` | `components/viz/host/client_frame_sink_video_capturer.h` | Creates and manages the capturer |
+| `viz::mojom::FrameSinkVideoConsumer` | `services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom` | Interface for receiving frames |
+| `gfx::GpuMemoryBufferHandle` | `ui/gfx/gpu_memory_buffer.h` | Cross-process texture handle |
+| `media::VideoFrame` | `media/base/video_frame.h` | Frame container |
+
+##### Why This Works (and CEF Doesn't)
+
+| Aspect | CEF | Electron |
+| ------ | --- | -------- |
+| Capture point | `CefCopyFrameGenerator` | `FrameSinkVideoCapturerImpl` |
+| Frame dropping | `if (frame_in_progress_) return;` | 10-frame pool, no dropping |
+| Throttling | Hard-coded in OSR code | `SetAutoThrottlingEnabled(false)` |
+| API level | CEF abstraction layer | Direct Chromium viz API |
+
+##### Minimum Requirements
+
+- **Chromium version:** 134+ (based on README.md timestamp)
+- **macOS APIs:** IOSurface, Mach ports
+- **Build dependency:** Must link against Chromium's viz and media components
+
+##### Critical Insight: Electron Bypasses CEF Entirely
+
+Electron doesn't use CEF at all. It embeds Chromium directly and accesses
+`viz::ClientFrameSinkVideoCapturer` through Chromium's internal APIs. This means:
+
+1. **We cannot add this to CEF easily** — CEF would need to expose these APIs
+2. **Patching CEF is significant work** — Would need to add new callback type
+3. **Best path: Use Chromium directly** — Either via Electron or custom embedding
+
+##### Recommendation
+
+Based on this research, the viable options are:
+
+1. **Embed Electron** — Use Electron's proven OSR implementation directly
+2. **Fork Electron's approach** — Extract the OSR code and adapt for TermSurf
+3. **Patch CEF** — Add `FrameSinkVideoCapturer` support (significant C++ work)
+
+Option 1 (Embed Electron) is the lowest risk since it's already working.
+Option 2 requires understanding Chromium's build system.
+Option 3 requires maintaining a CEF fork.
