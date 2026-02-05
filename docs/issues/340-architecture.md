@@ -337,6 +337,35 @@ Before abandoning CEF or rewriting in C++, we should:
 If the XPC layer can be fixed, we keep the current Rust architecture and avoid
 the complexity of Electron or direct Chromium embedding.
 
+## Conclusion
+
+**Fix the XPC layer first.**
+
+The cef-rs OSR example proves CEF can deliver high frame rates with
+`on_accelerated_paint` and `shared_texture_enabled`. The bottleneck is almost
+certainly our XPC implementation, not CEF.
+
+Sharing a GPU texture at 60fps across processes is a solved problem—macOS does
+this constantly (WindowServer, compositing, video playback). XPC with Mach port
+transfer is the standard mechanism. There's no fundamental reason our
+implementation can't achieve the same performance.
+
+Exploring XPC performance improvements is **far simpler** than:
+
+- Embedding Electron (new runtime, new dependencies, new complexity)
+- Wrapping Chromium directly (25GB checkout, C++ rewrite, maintenance burden)
+- Patching CEF (fork maintenance forever)
+
+The path forward:
+
+1. Profile the XPC frame path to find where time is lost
+2. Compare ts3's message loop against the working cef-rs example
+3. Fix whatever is throttling frames
+4. Achieve 60fps with the existing Rust + CEF architecture
+
+Only if XPC optimization fails should we revisit the heavier options from
+Research 2.
+
 ## Related Issues
 
 - [Issue 338: Browser lag investigation](./338-lag.md) — Why CEF doesn't work
