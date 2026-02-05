@@ -365,3 +365,69 @@ Based on this research, the viable options are:
 Option 1 (Embed Electron) is the lowest risk since it's already working.
 Option 2 requires understanding Chromium's build system.
 Option 3 requires maintaining a CEF fork.
+
+---
+
+## Conclusion: The CEF Impasse
+
+**We have reached a fundamental impasse with CEF.**
+
+The evidence is now conclusive:
+
+1. **Issue 338** — Five experiments confirmed CEF's frame throttling is hard-coded
+   in `CefCopyFrameGenerator::GenerateCopyFrame()`. No configuration can bypass it.
+
+2. **Experiment 1** — Electron achieves 240fps by using Chromium's
+   `FrameSinkVideoCapturer` API directly. This API is *internal to Chromium* and
+   not exposed by CEF.
+
+3. **Steam's trajectory** — Valve hit the same wall and spent years migrating
+   from CEF to direct Chromium embedding. Steam is now effectively its own
+   browser platform.
+
+### The Ceiling is Architectural, Not Configurational
+
+CEF was designed as a simplified embedding layer. It deliberately hides
+Chromium's internal compositor APIs behind abstractions like `OnAcceleratedPaint`.
+The frame-dropping logic is part of that abstraction — CEF's authors considered
+it a feature, not a bug.
+
+The `FrameSinkVideoCapturer` API that Electron uses is internal to Chromium's
+`viz` layer. CEF does not expose it, and adding support would require forking
+CEF itself.
+
+### The Steam Lesson
+
+Steam's migration away from CEF is instructive:
+
+> *"Use CEF until you are forced not to. The day CEF blocks your vision is the
+> day you earn the pain."*
+
+Steam used CEF to ship fast (2010–2017), then gradually replaced it with direct
+Chromium embedding (2017–2020) once their UI became mission-critical. Today,
+Steam is effectively its own browser platform.
+
+This trajectory is rare. Most apps never outgrow CEF. But TermSurf has hit the
+wall: browser-quality smoothness is core to the product, and CEF cannot deliver it.
+
+### Paths Forward
+
+| Path | Effort | Risk | Maintenance |
+| ---- | ------ | ---- | ----------- |
+| **Patch CEF** | High | Medium | Fork forever |
+| **Use OBS's CEF fork** | Medium | Unknown | Depends on OBS |
+| **Embed Electron** | Medium | Low | Electron updates |
+| **Embed Chromium directly** | Very High | High | Chromium updates |
+
+### Recommendation
+
+**Embed Electron** is the recommended path forward.
+
+Rationale:
+- Proven 240fps GPU-accelerated OSR in production
+- Active maintenance by a large team
+- Well-documented APIs (`webPreferences.offscreen`)
+- Lower risk than patching CEF or embedding Chromium directly
+- Electron's OSR code can serve as reference even if we later diverge
+
+The day CEF blocks your vision is the day you earn the pain. That day has arrived.
