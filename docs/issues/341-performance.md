@@ -368,6 +368,77 @@ CEF itself.
 **Next step:** Identify what ts3's profile server does differently from the
 cef-rs example that causes the 30fps throttling
 
+### Experiment 4: Enable `external_message_pump`
+
+**Status:** Not started
+
+**Goal:** Fix the configuration mismatch between ts3 and the cef-rs example by
+enabling `external_message_pump` in CEF settings.
+
+**Rationale:** The cef-rs example (60fps) sets `external_message_pump: true`. ts3
+(17fps) does not. This is the most obvious configuration difference between the
+two.
+
+ts3 is in a **contradictory state**: it calls `do_message_loop_work()` in a
+manual polling loop (the external message pump pattern), but doesn't tell CEF
+it's using an external message pump. CEF's internal scheduler doesn't know the
+app is manually driving the loop, so it may be fighting the manual pumping or
+throttling frame production.
+
+#### Configuration Comparison
+
+| Setting                  | cef-rs example (60fps) | ts3 (17fps)            |
+| ------------------------ | ---------------------- | ---------------------- |
+| `external_message_pump`  | `true`                 | **not set (false)**    |
+| `windowless_rendering`   | `true`                 | `true`                 |
+| Message loop             | `do_message_loop_work` | `do_message_loop_work` |
+
+#### Why Previous Attempts Failed
+
+Issue 325, Experiments 4-5 tried adding `external_message_pump: 1` but combined
+it with **CFRunLoop timers**, which broke for unrelated reasons (timers stopped
+firing after initial setup). Nobody has tried the simple combination of
+`external_message_pump: 1` with the **existing polling loop** that already works.
+
+#### Implementation
+
+One-line change to CEF settings in `ts3/termsurf-profile/src/main.rs`:
+
+```rust
+let settings = cef::Settings {
+    windowless_rendering_enabled: 1,
+    no_sandbox: 1,
+    external_message_pump: 1,  // NEW: Tell CEF we're driving the loop
+    root_cache_path: cef::CefString::from(cache_path.to_str().unwrap()),
+    browser_subprocess_path: cef::CefString::from(helper_path.to_str().unwrap()),
+    persist_session_cookies: 1,
+    ..Default::default()
+};
+```
+
+The existing polling loop stays unchanged:
+
+```rust
+while !QUIT_FLAG.load(Ordering::Relaxed) {
+    cef::do_message_loop_work();
+    std::thread::sleep(Duration::from_millis(1));
+}
+```
+
+#### Success Criteria
+
+| Result       | Conclusion                                                              |
+| ------------ | ----------------------------------------------------------------------- |
+| ~60fps       | `external_message_pump` was the missing setting. Keep this fix.         |
+| Still ~30fps | The setting alone isn't enough. Investigate other differences (window). |
+
+#### Notes
+
+- This is intentionally minimal — one setting change, no other modifications
+- If this fails, a secondary difference to investigate is the cef-rs example's
+  `NSApplicationActivationPolicyRegular` call, which makes the process a
+  foreground GUI app and may affect macOS frame scheduling
+
 ## Related Issues
 
 - [Issue 338: Browser lag investigation](./338-lag.md) — Original performance
