@@ -952,6 +952,43 @@ focus-stealing problem. Two viable options:
 2. **Native NSWindow with `canBecomeKey: NO`** — Create the window via AppKit
    directly, overriding focus behavior at the Cocoa level.
 
+### Experiment 9: Restore Hidden Window (Exp 7 Baseline)
+
+**Status:** Not started
+
+**Goal:** Revert the code from Experiment 8 (CVDisplayLink) back to the
+Experiment 7 state (hidden 1x1 winit window). This is a pure restoration — no
+new changes, no focus-stealing fix.
+
+**Rationale:** Experiment 7 achieved the best performance so far (78% at 60fps,
+57 consecutive frames). Experiment 8 attempted to get the same benefit without a
+window but failed (30% at 60fps). The hidden window approach is the correct
+foundation. Focus-stealing will be addressed in a subsequent experiment.
+
+#### Changes
+
+1. **Add `winit` dependency back** to `Cargo.toml`
+2. **Remove `cv_display_link` module** entirely
+3. **Restore `MinimalApp`** struct implementing `winit::application::ApplicationHandler`
+   - `resumed()` creates a hidden 1×1 window
+   - `about_to_wait()` calls `do_message_loop_work()` and checks `QUIT_FLAG`
+4. **Restore winit event loop** using `pump_app_events(Some(Duration::ZERO))`
+   in a loop with 1ms sleep
+5. **Keep** `external_message_pump: 1` and `QUIT_FLAG`
+
+#### Expected Outcome
+
+Performance should match Experiment 7 results exactly:
+
+| Metric                | Expected |
+| --------------------- | -------- |
+| Average FPS           | ~25.7    |
+| Frames at ~60fps      | ~78%     |
+| Max consecutive 60fps | ~57      |
+
+**Known issue:** The hidden window steals focus. This will be fixed in a
+subsequent experiment.
+
 ## Related Issues
 
 - [Issue 338: Browser lag investigation](./338-lag.md) — Original performance
