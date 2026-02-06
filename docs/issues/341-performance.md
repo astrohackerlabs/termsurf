@@ -1089,14 +1089,111 @@ create windows that participate in the window server (receiving vsync
 notifications) but the app itself won't be activated — focus stays wherever it
 was.
 
+#### Results
+
+**FAILED** — The main window still lost focus when opening a webview. The
+Accessory activation policy does not prevent winit from stealing focus. Winit
+internally calls `makeKeyAndOrderFront:` (or similar) when creating the window,
+which activates the process regardless of the activation policy.
+
+#### Conclusion
+
+`NSApplicationActivationPolicyAccessory` is not sufficient. The focus stealing
+happens at the window level (winit's internal NSWindow creation), not at the
+application activation policy level. Need to bypass winit entirely and create
+the NSWindow directly with `canBecomeKey: NO`.
+
+### Experiment 11: Native NSWindow with canBecomeKey: NO
+
+**Status:** Not started
+
+**Goal:** Replace winit with a native NSWindow created via AppKit FFI, subclassed
+to override `canBecomeKey` returning `NO`. This prevents the window from ever
+becoming the key window, which is what causes focus stealing.
+
+**Problem:** Experiments 7, 9, and 10 proved that a window is needed for vsync,
+but winit's window creation steals focus. `NSApplicationActivationPolicyAccessory`
+(Exp 10) didn't help because winit internally activates the window during
+creation. We need full control over the window's behavior.
+
+**Hypothesis:** When an NSWindow's `canBecomeKey` returns `NO`, it cannot become
+the key window, so it cannot steal keyboard focus. Combined with `orderBack:`
+instead of `makeKeyAndOrderFront:`, the window will exist in the window server
+(providing vsync notifications) without any focus side effects.
+
+#### Changes
+
+1. **Remove `winit` dependency** from `Cargo.toml` (keep `cocoa`)
+2. **Remove `MinimalApp`** struct and winit event loop entirely
+3. **Register a custom NSWindow subclass** via the Objective-C runtime that
+   overrides `canBecomeKey` to return `NO`
+4. **Create a 1×1 borderless NSWindow** using the custom subclass
+5. **Call `orderBack:`** instead of `makeKeyAndOrderFront:` to place the window
+   in the window server without activating it
+6. **Keep `NSApplicationActivationPolicyAccessory`** as belt-and-suspenders
+7. **Restore simple sleep+pump loop** (like Exp 8, without CVDisplayLink)
+
+#### Implementation
+
+```rust
+use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSBackingStoreType};
+use cocoa::base::{id, nil, NO};
+use cocoa::foundation::{NSPoint, NSRect, NSSize};
+use objc::declare::ClassDecl;
+use objc::runtime::{Class, Object, Sel, BOOL};
+
+// 1. Register subclass with canBecomeKey -> NO
+extern "C" fn can_become_key(_this: &Object, _sel: Sel) -> BOOL { NO }
+
+let superclass = Class::get("NSWindow").unwrap();
+let mut decl = ClassDecl::new("CEFHostWindow", superclass).unwrap();
+unsafe { decl.add_method(sel!(canBecomeKey), can_become_key as extern "C" fn(&Object, Sel) -> BOOL); }
+let host_class = decl.register();
+
+// 2. Create window using custom class
+let window: id = unsafe {
+    let alloc: id = msg_send![host_class, alloc];
+    let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(1., 1.));
+    let window: id = msg_send![alloc,
+        initWithContentRect:rect
+        styleMask:NSWindowStyleMask::NSBorderlessWindowMask
+        backing:NSBackingStoreType::NSBackingStoreBuffered
+        defer:NO
+    ];
+    let _: () = msg_send![window, orderBack:nil];
+    window
+};
+```
+
+#### Expected Outcome
+
+| Result                    | Meaning                                                       |
+| ------------------------- | ------------------------------------------------------------- |
+| Focus stays on WezTerm    | Fix works. Native window provides vsync without focus issues. |
+| Focus still stolen        | Something else is activating the process. Investigate further. |
+| Performance regression    | Custom NSWindow doesn't get vsync. Unlikely — it's still an NSWindow. |
+
+#### Why This Should Work
+
+macOS focus stealing requires two things: the app must be activated, and the
+window must become key. By subclassing NSWindow to return `NO` from
+`canBecomeKey`, the window can never become key — it simply exists in the window
+server's window list. The window server still sends vsync notifications to all
+windows, regardless of key status. Combined with `orderBack:` (which places the
+window without activating it) and `NSApplicationActivationPolicyAccessory` (which
+prevents app-level activation), there are three layers of protection against
+focus stealing.
+
 #### Notes
 
-- This is a single line of code change (plus dependency)
-- If this works, it fully solves the hidden window approach with no downsides
-- Performance should remain identical to Experiments 7/9 since the window still
-  exists and still receives vsync notifications
-- The `cocoa` crate provides the `objc` macros (`msg_send!`, `class!`) needed
-  for the FFI call
+- Removes the `winit` dependency entirely — simpler, fewer transitive deps
+- Uses `cocoa` and `objc` crates (already in the dependency tree from Exp 10)
+- The Objective-C runtime allows dynamic class registration without needing
+  Xcode or Interface Builder
+- `orderBack:` places the window behind all other windows — it won't be visible
+  even if we forget `with_visible(false)`
+- The simple sleep+pump loop (`do_message_loop_work()` + 1ms sleep) replaces
+  winit's event loop
 
 ## Related Issues
 
