@@ -1581,9 +1581,114 @@ configuration or event pumping — possibly a `CFRunLoop` observer,
 connection. The mechanism is internal to winit's macOS backend.
 
 **Next step:** Stop trying to replicate winit's internals. Go back to winit
-(which gives vsync) and fix focus stealing from the other direction — let winit
-create and manage the window, then use objc to immediately resign focus after
-the window is created.
+and prevent focus stealing via method swizzling.
+
+### Experiment 15: Swizzle canBecomeKey on Winit's Window
+
+**Status:** Not started
+
+**Goal:** Go back to winit (for vsync) and prevent focus stealing by swizzling
+NSWindow's `canBecomeKey` method to return `NO` before winit creates its window.
+
+**Problem:** Four experiments (11-14) tried to replicate winit's vsync with a
+native NSWindow. All failed identically at ~34% at 60fps. Winit's internal
+setup — whatever it is — cannot be replicated by creating an NSWindow manually.
+Meanwhile, winit produces 61-78% at 60fps but steals focus.
+
+Previous focus-fix attempts with winit:
+- `with_active(false)` — didn't work
+- `NSApplicationActivationPolicyAccessory` (Exp 10) — didn't work
+
+Both failed because winit internally calls `makeKeyAndOrderFront:`, which makes
+the window key and activates the application regardless of these settings.
+
+**Hypothesis:** If we swizzle `canBecomeKey` on the `NSWindow` class itself
+(via the ObjC runtime) *before* winit creates its EventLoop and window, then
+when winit calls `makeKeyAndOrderFront:`, the window will be ordered front
+(preserving vsync registration) but *cannot* become key (preserving focus).
+
+This is the reverse of Experiment 11's approach: instead of building a focus-safe
+window and trying to add vsync, we take winit's vsync-capable window and remove
+its ability to steal focus.
+
+#### Changes
+
+1. **Remove native NSWindow code** (CEFHostWindow subclass, orderFront, content
+   view, NSApp event pump — all of Exp 11-14)
+2. **Restore winit** dependency and `MinimalApp` event loop from Exp 9
+3. **Before `EventLoop::new()`**, swizzle `canBecomeKey` on `NSWindow`:
+   - Get the `NSWindow` class via ObjC runtime
+   - Replace the `canBecomeKey` method with one that returns `NO`
+4. **Keep `NSApplicationActivationPolicyAccessory`** as belt-and-suspenders
+
+#### Implementation
+
+```rust
+use objc::runtime::{Class, Method, Sel, BOOL};
+use std::ffi::c_void;
+
+// Replacement: canBecomeKey -> NO
+extern "C" fn can_become_key_no(_this: &objc::runtime::Object, _sel: Sel) -> BOOL {
+    cocoa::base::NO
+}
+
+// Swizzle NSWindow.canBecomeKey before winit touches it
+unsafe {
+    let class = Class::get("NSWindow").unwrap();
+    let sel = sel!(canBecomeKey);
+    let method = class.instance_method(sel).unwrap();
+    let new_imp = can_become_key_no as extern "C" fn(&objc::runtime::Object, Sel) -> BOOL;
+    // method_setImplementation replaces the IMP for this method
+    let _: *mut c_void = msg_send![method, setImplementation: new_imp as *mut c_void];
+}
+```
+
+Note: The actual swizzling API may need `objc::runtime::method_setImplementation`
+or similar. The exact implementation will be determined at build time.
+
+#### Expected Outcome
+
+| Result                       | Meaning                                                          |
+| ---------------------------- | ---------------------------------------------------------------- |
+| Vsync + no focus steal       | Problem fully solved. Winit provides vsync, swizzle prevents focus. |
+| Vsync but focus still stolen | Winit calls `[NSApp activateIgnoringOtherApps:]` separately. Need to swizzle that too. |
+| Vsync lost                   | `canBecomeKey: NO` prevents winit from fully setting up the window. Unlikely — key status and window registration are orthogonal. |
+
+#### Why This Should Work
+
+Method swizzling replaces the implementation of an Objective-C method at runtime.
+By replacing `canBecomeKey` on the `NSWindow` class *before* winit creates any
+windows, every NSWindow in this process will return `NO` from `canBecomeKey`.
+
+When winit calls `makeKeyAndOrderFront:`:
+1. The window is ordered front (**vsync registration preserved**)
+2. The runtime checks `canBecomeKey` → returns `NO`
+3. The window is **not** made key (**no focus stealing**)
+
+This is safe because `termsurf-profile` has no other NSWindows — CEF does
+off-screen rendering and doesn't create macOS windows. The swizzle only affects
+this process, not the system.
+
+#### Why Previous Focus Fixes Failed
+
+- `with_active(false)` — winit window attribute, but winit may ignore it or
+  call `makeKeyAndOrderFront:` regardless
+- `NSApplicationActivationPolicyAccessory` — prevents app-level activation, but
+  `makeKeyAndOrderFront:` can still make the window key *within* the app,
+  triggering macOS to switch focus to the process
+- Swizzling `canBecomeKey` works at a deeper level — it prevents the window from
+  ever becoming key, which is the root cause of focus stealing
+
+#### Notes
+
+- This flips the approach: instead of replicating winit's vsync (Exp 11-14),
+  we disable winit's focus stealing
+- Restores `winit` dependency, removes `cocoa` NSWindow creation code
+- Keeps `cocoa` and `objc` for the swizzle and activation policy
+- Method swizzling is a standard Objective-C pattern used by many macOS apps
+  for customizing framework behavior
+- If `canBecomeKey` alone isn't enough, we may also need to swizzle
+  `canBecomeMain` and/or `[NSApp activateIgnoringOtherApps:]`
 
 ## Related Issues
 
