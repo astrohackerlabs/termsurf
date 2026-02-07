@@ -2098,7 +2098,7 @@ processes trying to drive frame production from scratch.
 
 ### Experiment 18: Revert to Pre-Performance-Work Baseline
 
-**Status:** Not started
+**Status:** COMPLETE
 
 **Goal:** Revert the profile server code to its original state before any
 performance experiments (Issue 338 onward), establishing a clean foundation for
@@ -2159,6 +2159,35 @@ All non-performance changes made during Issues 325-337 remain intact:
 - All GUI-side code unchanged
 
 Only the message loop implementation and CEF settings revert.
+
+#### Results
+
+314 frames in 11.0 seconds = **28.5 fps** average.
+
+| Interval Bucket | Count | Percentage | Meaning |
+|-----------------|-------|------------|---------|
+| 0-5ms (duplicates) | 37 | 12% | Same-timestamp double frames |
+| 14-20ms (60fps) | 126 | 40% | Good frames |
+| 30-36ms (30fps) | 72 | 23% | Half-rate frames |
+| >50ms (drops) | 56 | 18% | Missed frames / gaps |
+
+Max consecutive 60fps streak: **11 frames**.
+
+The simple polling loop produces a bimodal pattern — frames alternate between
+16ms (60fps) and 33ms (30fps) intervals, with frequent ~80ms drops. Only 40% of
+frames land at 60fps and the longest streak is just 11.
+
+For comparison, the Experiment 3 baseline (with `external_message_pump` and the
+hidden window) achieved 70% at 60fps with streaks of 40. The
+`external_message_pump` setting was genuinely helping — but it required a window
+(NSApplication/winit) to drive the vsync signal, which is the approach that was
+rejected.
+
+#### Conclusion
+
+The revert is complete. This is the clean pre-performance baseline: a simple
+`sleep(1ms)` + `do_message_loop_work()` polling loop running at ~28fps with
+unstable timing. Any future experiments start from this foundation.
 
 ## Related Issues
 
