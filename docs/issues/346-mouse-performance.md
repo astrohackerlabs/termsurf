@@ -258,3 +258,47 @@ The investigation should now focus on per-event cost: mutex contention (H2),
 cursor change round-trips (H3), and eliminating `post_task` overhead.
 
 **Status:** Done
+
+### Experiment 2: Measure the cursor change rate
+
+**Goal:** Determine how many `on_cursor_change` callbacks fire per second during
+mouse movement + scrolling. Each callback sends an XPC message back to the GUI,
+so if the rate is high, cursor changes are a significant source of per-event
+overhead — potentially doubling XPC traffic (mouse_move in, cursor_change out).
+
+**What to measure:**
+
+- Callbacks per second during benchmark with mouse movement
+- Whether cursor type actually changes, or CEF fires the callback redundantly
+- The ratio of cursor changes to mouse moves (1:1 would mean every mouse move
+  triggers a cursor change round-trip)
+
+**Implementation plan:**
+
+1. Add a global `AtomicU64` counter (`CURSOR_CHANGE_COUNT`) to the profile server
+2. Increment it at the top of `on_cursor_change` in the display handler (inside
+   `cef_handlers` module, accessed via `crate::CURSOR_CHANGE_COUNT`)
+3. In the message loop, log the count once per second alongside the mouse rate:
+   ```
+   [CURSOR-RATE] 58 cursor_change callbacks in last second
+   ```
+   Only log when count > 0.
+4. Track with `last_cursor_rate_count`, computing the delta each second using
+   the same timing as the mouse rate logger
+
+**How to test:**
+
+1. `web benchmark` with no mouse movement — expect 0 or near-0 cursor changes
+2. `web benchmark` with continuous mouse movement — measure the rate
+
+**What the results tell us:**
+
+- If rate is ~60/sec (1:1 with mouse moves): H3 is confirmed — every mouse move
+  triggers a cursor change round-trip, doubling XPC traffic. Deduplicating cursor
+  changes would halve the per-event overhead.
+- If rate is >> 60/sec: CEF fires redundant callbacks even without type changes.
+  Filtering by actual type change is critical.
+- If rate is near 0: H3 is ruled out. The per-event cost is elsewhere (H2 mutex
+  contention or `post_task` overhead).
+
+**Status:** Not started
