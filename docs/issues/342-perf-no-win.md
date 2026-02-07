@@ -766,7 +766,7 @@ can create a CVDisplayLink or CADisplayLink directly without a window.
 
 ### Experiment 4: CFRunLoop + `external_message_pump` + `on_schedule_message_pump_work`
 
-**Status:** Not started
+**Status:** Complete — FAILED (webview never opens, times out)
 
 **Goal:** Replace the blind 1ms polling loop with CEF's cooperative scheduling
 system. Enable `external_message_pump`, implement `on_schedule_message_pump_work`
@@ -926,3 +926,41 @@ requires NSObject/NSThread, which we're trying to avoid).
   values)
 - Interval distribution — do we see consistent 16ms intervals?
 - Whether `CFRunLoopRun()` blocks correctly and timers fire as expected
+
+#### Conclusion
+
+Total failure. The webview never opens — the app times out waiting for the
+profile server to produce its first frame. CEF never reaches
+`on_context_initialized`, meaning `cef::initialize()` or the early
+`do_message_loop_work()` calls that process initialization tasks never complete.
+
+The root cause: `CFRunLoopRun()` blocks the main thread, but CEF's initialization
+requires `do_message_loop_work()` to be called to process startup tasks. With
+`external_message_pump: 1`, CEF doesn't do its own internal message processing —
+it relies entirely on us calling `do_message_loop_work()`. But our
+`on_schedule_message_pump_work` callback schedules CFRunLoop timers, and those
+timers can only fire once `CFRunLoopRun()` is running. This creates a chicken-
+and-egg deadlock:
+
+1. CEF needs `do_message_loop_work()` to finish initialization
+2. Our pump schedules timers that call `do_message_loop_work()`
+3. Timers only fire when `CFRunLoopRun()` is running
+4. We call `CFRunLoopRun()` after CEF init — but CEF init never completes
+   because step 1 is waiting for step 2
+
+The reference implementation avoids this because `NSApp().run()` is called after
+`cef::initialize()` returns, and `on_context_initialized` fires during that run
+loop. But in the reference impl, `cef::initialize()` itself succeeds without
+`do_message_loop_work()` — it's only the browser creation that needs the loop.
+In our case, something in the initialization or XPC setup sequence blocks before
+we ever reach `CFRunLoopRun()`.
+
+This experiment reveals that `external_message_pump` fundamentally changes CEF's
+expectations about who drives message processing. It's not a drop-in replacement
+for the polling loop — it requires careful orchestration of when the run loop
+starts relative to CEF initialization. A future attempt would need to either:
+
+- Call `do_message_loop_work()` in a polling loop during initialization, then
+  switch to CFRunLoop once `on_context_initialized` fires
+- Or start `CFRunLoopRun()` before `cef::initialize()` on a background thread
+  and initialize CEF from within a run loop callback
