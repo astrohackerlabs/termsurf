@@ -649,7 +649,7 @@ callbacks (and CEF's internal timer sources) can fire.
 
 ### Experiment 3: `run_message_loop()` with NSApplication
 
-**Status:** Not started
+**Status:** Complete — FAILED (19.2fps, regression from baseline)
 
 **Goal:** Replace the manual polling loop with `cef::run_message_loop()`, which
 internally runs a CFRunLoop/NSRunLoop on macOS. Combined with the NSApplication
@@ -708,3 +708,58 @@ owns the loop entirely.
   unlock the display link?
 - `Event.ScrollJank.MissedVsyncs.PerFrame` — does the missed vsync count drop?
 - Frame rate, interval distribution, and max 60fps streak vs Experiments 1-2
+
+#### Results
+
+265 frames over ~13s. **19.2fps** — a significant regression from the 28.5fps
+polling baseline.
+
+| Metric                  | Exp 3 (run_message_loop) | Baseline (polling) |
+| ----------------------- | ------------------------ | ------------------ |
+| Frames                  | 265                      | 314                |
+| Duration                | ~13s                     | ~11s               |
+| Mean interval           | 52.2ms                   | 35.1ms             |
+| Effective fps           | 19.2                     | 28.5               |
+| At 60fps (14-19ms)      | 4%                       | 40%                |
+| Max 60fps streak        | 11                       | 11                 |
+
+Interval distribution:
+
+| Bucket   | Count |
+| -------- | ----- |
+| 0-9ms    | 33    |
+| 10-19ms  | 46    |
+| 20-29ms  | 13    |
+| 30-39ms  | 31    |
+| 40-49ms  | 32    |
+| 50-59ms  | 50    |
+| 60-79ms  | 28    |
+| 80-99ms  | 16    |
+| 100+ms   | 15    |
+
+The 50-59ms bucket is dominant, suggesting CEF's internal loop is throttling to
+~20fps without a functioning display link.
+
+#### Conclusion
+
+`run_message_loop()` made things worse, not better. Three key findings:
+
+1. **No display link histograms at all.** The CEF debug log contains zero
+   `ExternalBeginFrameSourceMac.DisplayLink`, `MissedVsyncs`,
+   `DroppedFrames`, or `CaptureDuration` histograms. Experiment 1's polling
+   loop produced all of these. This suggests `run_message_loop()` runs a
+   different code path that doesn't even activate the display link frame source.
+
+2. **Performance regressed from 28.5fps to 19.2fps.** Without the display link,
+   CEF's internal loop falls back to a conservative timer-based schedule
+   (~50ms intervals). The 1ms polling loop was actually better at catching
+   frames promptly because it called `do_message_loop_work()` aggressively.
+
+3. **Same `SetApplicationIsDaemon: paramErr (-50)` error** from the CEF
+   subprocess — unchanged across all experiments.
+
+The hypothesis that `run_message_loop()` would service the CFRunLoop and unlock
+the display link was wrong. The display link requires more than just a running
+run loop — it likely requires a connection to the window server's display
+hardware, which a windowless process doesn't have. The question is now whether we
+can create a CVDisplayLink or CADisplayLink directly without a window.
