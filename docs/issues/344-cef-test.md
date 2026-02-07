@@ -811,6 +811,23 @@ Profile: Connected to GUI
 Profile server continues rendering (FRAME-TX logs appear). The GUI window shows
 colored halves (no texture transfer yet).
 
+**Results:**
+
+- Full XPC bootstrap chain works across three processes:
+  - Launcher: starts, receives `spawn_profile`, stores endpoint, spawns profile
+  - Profile: connects to launcher, claims session, gets GUI endpoint, connects
+  - GUI: connects to launcher, sends `spawn_profile` with anonymous endpoint
+- Profile server runs CEF and produces `[FRAME-TX]` at expected rates
+- Profile output: 70 frames in 10 seconds (google.com, static after load)
+- GUI window shows blue/green placeholder halves (no texture transfer yet)
+- Logs spread across three files: `/tmp/cef-test-{gui,launcher,profile-left-1}.log`
+- Known issue: GUI's anonymous listener callback doesn't fire because
+  `XpcListener::new_anonymous()` dispatches on `dispatch_get_main_queue()` and
+  winit's `run_app` may not pump it actively. The profile IS connected (confirmed
+  by profile log), but the GUI doesn't see the incoming connection in its
+  callback. This must be resolved in Phase 6 — likely by switching to
+  `pump_app_events` or using a private dispatch queue.
+
 ### Phase 6: IOSurface Transfer — One Browser Visible
 
 Connect the rendering pipeline: profile server sends IOSurface Mach ports to the

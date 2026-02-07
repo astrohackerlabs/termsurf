@@ -1,8 +1,9 @@
 //! cef-test GUI — window with split-view wgpu rendering.
 //!
 //! Creates a single window and renders two colored halves side by side.
-//! Phase 3: validates the wgpu pipeline and quad geometry before adding
-//! IOSurface import complexity in later phases.
+//! Phase 5: connects to the launcher via XPC, spawns a profile server,
+//! and accepts the direct connection. No texture transfer yet — just
+//! proves the XPC bootstrap chain works.
 
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -12,6 +13,9 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowAttributes, WindowId},
 };
+
+#[cfg(target_os = "macos")]
+use termsurf_xpc::*;
 
 // ============================================================================
 // Vertex
@@ -359,12 +363,118 @@ fn create_solid_bind_group(
 }
 
 // ============================================================================
+// XPC Bootstrap
+// ============================================================================
+
+/// State for tracking XPC connections to profile servers.
+#[cfg(target_os = "macos")]
+struct XpcState {
+    /// Connection to the launcher
+    _launcher: XpcConnection,
+    /// Listener for the left profile's direct connection (must keep alive)
+    _left_listener: XpcListener,
+    /// Direct connection from the left profile server (set when profile connects)
+    _left_conn: std::sync::Mutex<Option<Arc<XpcConnection>>>,
+}
+
+/// Connect to the launcher and spawn the left profile server.
+#[cfg(target_os = "macos")]
+fn bootstrap_xpc() -> Option<XpcState> {
+    println!("GUI: Connecting to launcher...");
+
+    let launcher = match XpcConnection::connect_mach_service("com.cef-test.launcher") {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("GUI: Failed to connect to launcher: {}", e);
+            return None;
+        }
+    };
+
+    set_event_handler(&launcher, |event| {
+        if let Err(e) = event {
+            eprintln!("GUI: Launcher connection error: {}", e);
+        }
+    });
+    launcher.resume();
+    println!("GUI: Connected to launcher");
+
+    // Create anonymous listener for the left profile
+    let left_listener = match XpcListener::new_anonymous() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("GUI: Failed to create listener: {}", e);
+            return None;
+        }
+    };
+
+    let endpoint = match left_listener.get_endpoint() {
+        Ok(ep) => ep,
+        Err(e) => {
+            eprintln!("GUI: Failed to get endpoint: {}", e);
+            return None;
+        }
+    };
+
+    // Track the profile connection
+    let left_conn: Arc<std::sync::Mutex<Option<Arc<XpcConnection>>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let left_conn_for_handler = Arc::clone(&left_conn);
+
+    set_new_connection_handler(&left_listener, move |conn| {
+        println!("GUI: Profile 'left' connected");
+        let conn = Arc::new(conn);
+
+        set_event_handler(&*conn, |event| {
+            match event {
+                Ok(msg) => {
+                    let action = msg.get_string("action").unwrap_or_default();
+                    println!("GUI: Received from profile: {}", action);
+                }
+                Err(e) => {
+                    eprintln!("GUI: Profile connection error: {}", e);
+                }
+            }
+        });
+        conn.resume();
+
+        *left_conn_for_handler.lock().unwrap() = Some(conn);
+    });
+
+    left_listener.resume();
+
+    // Send spawn_profile to launcher
+    let session_id = "left-1";
+    println!("GUI: Requesting profile 'left' (session={}, url=google.com)", session_id);
+
+    let msg = XpcDictionary::new();
+    msg.set_string("action", "spawn_profile");
+    msg.set_string("session_id", session_id);
+    msg.set_string("url", "https://google.com");
+    msg.set_string("profile", "left");
+    msg.set_i64("width", 800);
+    msg.set_i64("height", 800);
+    msg.set_string("scale", "2.0");
+    msg.set_endpoint("gui_endpoint", endpoint);
+
+    launcher.send(&msg);
+    println!("GUI: Sent spawn_profile request");
+
+    Some(XpcState {
+        _launcher: launcher,
+        _left_listener: left_listener,
+        _left_conn: std::sync::Mutex::new(None),
+    })
+}
+
+// ============================================================================
 // App
 // ============================================================================
 
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<GpuState>,
+    #[cfg(target_os = "macos")]
+    _xpc: Option<XpcState>,
 }
 
 impl ApplicationHandler for App {
@@ -385,9 +495,15 @@ impl ApplicationHandler for App {
 
         let gpu = pollster::block_on(GpuState::new(window.clone()));
         println!(
-            "cef-test-gui: Window created ({}x{} physical)",
+            "GUI: Window created ({}x{} physical)",
             gpu.size.width, gpu.size.height
         );
+
+        // Bootstrap XPC after window creation
+        #[cfg(target_os = "macos")]
+        {
+            self._xpc = bootstrap_xpc();
+        }
 
         self.window = Some(window);
         self.gpu = Some(gpu);
@@ -401,7 +517,7 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("cef-test-gui: Window closed");
+                println!("GUI: Window closed");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
@@ -412,7 +528,7 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size);
-                    println!("cef-test-gui: Resized to {}x{}", size.width, size.height);
+                    println!("GUI: Resized to {}x{}", size.width, size.height);
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -424,12 +540,14 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    println!("cef-test-gui: Starting...");
+    println!("GUI: Starting...");
     let event_loop = EventLoop::new().unwrap();
     let mut app = App {
         window: None,
         gpu: None,
+        #[cfg(target_os = "macos")]
+        _xpc: None,
     };
     event_loop.run_app(&mut app).unwrap();
-    println!("cef-test-gui: Done");
+    println!("GUI: Done");
 }

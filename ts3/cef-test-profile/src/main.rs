@@ -1,15 +1,17 @@
-//! cef-test profile server — standalone headless CEF process.
+//! cef-test profile server — headless CEF process with XPC connection.
 //!
 //! Loads a URL and renders it off-screen, logging frame output.
-//! No XPC, no multi-browser — just CEF rendering in isolation.
+//! Connects to the GUI via the launcher's XPC bootstrap chain.
 //!
 //! Usage:
-//!   cef-test-profile --url https://google.com [--width 800] [--height 600] [--scale 2.0]
+//!   cef-test-profile --session-id left-1 --url https://google.com \
+//!     --profile left --service com.cef-test.launcher \
+//!     [--width 800] [--height 600] [--scale 2.0]
 
 use clap::Parser;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 static FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static START_TIME: OnceLock<Instant> = OnceLock::new();
@@ -40,8 +42,20 @@ mod cfrunloop {
 
 #[derive(Parser)]
 struct Args {
+    /// Session ID for XPC endpoint claim
+    #[arg(long)]
+    session_id: String,
+
     #[arg(long)]
     url: String,
+
+    /// Profile name (used for cache path isolation)
+    #[arg(long, default_value = "default")]
+    profile: String,
+
+    /// Launcher Mach service name
+    #[arg(long, default_value = "com.cef-test.launcher")]
+    service: String,
 
     /// Logical width for CEF view_rect
     #[arg(long, default_value = "800")]
@@ -59,8 +73,8 @@ struct Args {
 fn main() {
     let args = Args::parse();
     println!(
-        "cef-test-profile: url='{}', size={}x{}, scale={}",
-        args.url, args.width, args.height, args.scale
+        "Profile: session='{}', url='{}', profile='{}', size={}x{}, scale={}",
+        args.session_id, args.url, args.profile, args.width, args.height, args.scale
     );
 
     #[cfg(target_os = "macos")]
@@ -69,7 +83,7 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = args;
-        eprintln!("cef-test-profile: CEF not supported on this platform");
+        eprintln!("Profile: CEF not supported on this platform");
         std::process::exit(1);
     }
 }
@@ -84,17 +98,18 @@ struct ProfileState {
 #[cfg(target_os = "macos")]
 fn run(args: Args) {
     use cef::library_loader::LibraryLoader;
+    use termsurf_xpc::*;
 
     let exe = std::env::current_exe().expect("Failed to get executable path");
-    println!("cef-test-profile: exe={:?}", exe);
+    println!("Profile: exe={:?}", exe);
 
     // Load CEF framework (false = main process, not a helper)
     let _loader = LibraryLoader::new(&exe, false);
     if !_loader.load() {
-        eprintln!("cef-test-profile: Failed to load CEF framework");
+        eprintln!("Profile: Failed to load CEF framework");
         std::process::exit(1);
     }
-    println!("cef-test-profile: CEF framework loaded");
+    println!("Profile: CEF framework loaded");
 
     // Required before creating App objects
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
@@ -109,7 +124,40 @@ fn run(args: Args) {
     if exit_code >= 0 {
         std::process::exit(exit_code);
     }
-    println!("cef-test-profile: Main process (ret={})", exit_code);
+    println!("Profile: Main process (ret={})", exit_code);
+
+    // Connect to launcher
+    println!("Profile: Connecting to launcher '{}'...", args.service);
+    let launcher = XpcConnection::connect_mach_service(&args.service)
+        .expect("Failed to connect to launcher");
+
+    set_event_handler(&launcher, |event| {
+        if let Err(e) = event {
+            eprintln!("Profile: Launcher error: {}", e);
+        }
+    });
+    launcher.resume();
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Claim session (gets GUI endpoint)
+    println!("Profile: Claiming session '{}'...", args.session_id);
+    let gui_endpoint = claim_session_with_retry(&launcher, &args.session_id)
+        .expect("Failed to claim session");
+    println!("Profile: Got GUI endpoint");
+
+    // Connect directly to GUI via endpoint
+    let gui_conn = XpcConnection::from_endpoint(gui_endpoint)
+        .expect("Failed to connect to GUI");
+    set_event_handler(&gui_conn, |event| {
+        if let Ok(msg) = event {
+            let action = msg.get_string("action").unwrap_or_default();
+            println!("Profile: Received from GUI: {}", action);
+        } else if let Err(e) = event {
+            eprintln!("Profile: GUI connection error: {}", e);
+        }
+    });
+    gui_conn.resume();
+    println!("Profile: Connected to GUI");
 
     // Profile state
     let state = Arc::new(ProfileState {
@@ -119,11 +167,13 @@ fn run(args: Args) {
         scale: args.scale,
     });
 
-    // Cache path
+    // Cache path (per-profile isolation)
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let cache_path = std::path::PathBuf::from(home).join(".config/cef-test/default");
+    let cache_path = std::path::PathBuf::from(home)
+        .join(".config/cef-test")
+        .join(&args.profile);
     std::fs::create_dir_all(&cache_path).ok();
-    println!("cef-test-profile: cache={:?}", cache_path);
+    println!("Profile: cache={:?}", cache_path);
 
     // CEF settings
     let settings = cef::Settings {
@@ -145,23 +195,20 @@ fn run(args: Args) {
         std::ptr::null_mut(),
     );
     if init_result != 1 {
-        eprintln!(
-            "cef-test-profile: CEF initialize failed (returned {})",
-            init_result
-        );
+        eprintln!("Profile: CEF initialize failed (returned {})", init_result);
         std::process::exit(1);
     }
-    println!("cef-test-profile: CEF initialized");
+    println!("Profile: CEF initialized");
 
     // Ctrl+C handler
     ctrlc::set_handler(move || {
-        println!("cef-test-profile: Ctrl+C, shutting down...");
+        println!("Profile: Ctrl+C, shutting down...");
         QUIT_FLAG.store(true, Ordering::Relaxed);
     })
     .expect("Failed to set Ctrl+C handler");
 
     // Message loop (matching ts3's pattern exactly)
-    println!("cef-test-profile: Running message loop...");
+    println!("Profile: Running message loop...");
     let mut loop_count: u64 = 0;
     let mut max_mlw_us: u128 = 0;
     let mut max_cfl_us: u128 = 0;
@@ -204,9 +251,58 @@ fn run(args: Args) {
     );
 
     // Shutdown
-    println!("cef-test-profile: Shutting down...");
+    println!("Profile: Shutting down...");
     cef::shutdown();
-    println!("cef-test-profile: Done");
+    println!("Profile: Done");
+}
+
+/// Claim a session from the launcher with exponential backoff retry.
+#[cfg(target_os = "macos")]
+fn claim_session_with_retry(
+    launcher: &termsurf_xpc::XpcConnection,
+    session_id: &str,
+) -> termsurf_xpc::Result<termsurf_xpc::XpcEndpoint> {
+    use termsurf_xpc::*;
+
+    let max_retries = 10;
+    let mut delay = Duration::from_millis(100);
+
+    for attempt in 1..=max_retries {
+        let msg = XpcDictionary::new();
+        msg.set_string("action", "claim_session");
+        msg.set_string("session_id", session_id);
+
+        match launcher.send_with_reply_sync(&msg) {
+            Ok(reply) => {
+                if let Some(err) = reply.get_string("error") {
+                    println!("Profile: Attempt {}/{}: {}", attempt, max_retries, err);
+                    if attempt < max_retries {
+                        std::thread::sleep(delay);
+                        delay = (delay * 2).min(Duration::from_secs(2));
+                        continue;
+                    }
+                    return Err(XpcError::Unknown(err));
+                }
+                if let Some(endpoint) = reply.get_endpoint("endpoint") {
+                    return Ok(endpoint);
+                }
+                return Err(XpcError::Unknown("No endpoint in reply".into()));
+            }
+            Err(e) => {
+                println!("Profile: Attempt {}/{}: {:?}", attempt, max_retries, e);
+                if attempt < max_retries {
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(Duration::from_secs(2));
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    Err(termsurf_xpc::XpcError::Unknown(
+        "Max retries exceeded".into(),
+    ))
 }
 
 // ============================================================================
@@ -349,7 +445,7 @@ mod cef_handlers {
 
         impl BrowserProcessHandler {
             fn on_context_initialized(&self) {
-                println!("cef-test-profile: CEF context initialized, creating browser...");
+                println!("Profile: CEF context initialized, creating browser...");
 
                 let render_inner = RenderHandlerInner {
                     state: Arc::clone(&self.state),
@@ -385,16 +481,15 @@ mod cef_handlers {
                     Some(b) => {
                         let id = b.identifier();
                         println!(
-                            "cef-test-profile: Browser {} created for '{}'",
+                            "Profile: Browser {} created for '{}'",
                             id, self.state.url
                         );
-                        // Set initial focus (toggle for proper initialization)
                         if let Some(host) = b.host() {
                             host.set_focus(0);
                             host.set_focus(1);
                         }
                     }
-                    None => eprintln!("cef-test-profile: Failed to create browser"),
+                    None => eprintln!("Profile: Failed to create browser"),
                 }
             }
         }
