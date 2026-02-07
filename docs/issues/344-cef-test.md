@@ -613,3 +613,326 @@ add ts3 features until performance degrades, identifying the exact culprit.
 A minimal reproduction is the gold standard for performance debugging. Whether
 the problem reproduces or not, we learn something definitive and have a fast
 iteration environment.
+
+## Build Plan
+
+Each phase produces something testable. Fix issues before moving on.
+
+### Phase 1: Scaffold & Extract termsurf-xpc
+
+Extract `termsurf-xpc` from `ts3/` to the top level so both ts3 and cef-test can
+depend on it without cef-test depending on ts3. Create the cef-test workspace
+with three empty crate stubs.
+
+**Steps:**
+
+1. Move `ts3/termsurf-xpc/` to `termsurf-xpc/` (top level)
+2. Update `ts3/Cargo.toml` workspace members and path references
+3. Update `ts3/termsurf-profile/Cargo.toml` to `path = "../../termsurf-xpc"`
+4. Update `ts3/termsurf-launcher/Cargo.toml` similarly
+5. Verify ts3 builds: `cd ts3 && cargo build`
+6. Create `cef-test/Cargo.toml` (workspace with three members)
+7. Create `cef-test/cef-test-gui/Cargo.toml` (stub, depends on termsurf-xpc)
+8. Create `cef-test/cef-test-profile/Cargo.toml` (stub, depends on cef + termsurf-xpc)
+9. Create `cef-test/cef-test-launcher/Cargo.toml` (stub, depends on termsurf-xpc)
+10. Create minimal `main.rs` for each (just `fn main() {}`)
+
+**Test:** `cargo build` succeeds for both the cef-test workspace and ts3. No
+regressions.
+
+### Phase 2: Profile Server — Standalone Headless CEF
+
+Build `cef-test-profile` as a standalone headless CEF process. No XPC yet — just
+initialize CEF, load a URL, and log frame output. This validates that CEF works
+in our new binary before adding cross-process complexity.
+
+**Steps:**
+
+1. CLI args: `--url <url>` (plus `--width`, `--height`, `--scale` with defaults)
+2. Load CEF framework (`LibraryLoader`)
+3. Subprocess check (`execute_process`)
+4. CEF settings: `windowless_rendering_enabled`, `shared_texture_enabled`,
+   `root_cache_path` → `~/.config/cef-test/default/`
+5. Render handler: `view_rect`, `screen_info`, `on_accelerated_paint`
+6. In `on_accelerated_paint`: log `[FRAME-TX] frame=N w=W h=H time=T` (no Mach
+   port creation yet)
+7. Context menu handler: suppress (prevents crash)
+8. Message loop: `do_message_loop_work()` + `cfrunloop::run_for(0.001)`
+9. Ctrl+C handler for graceful shutdown
+10. Bundle using cef-rs's `bundle-cef-app` tool
+
+**Test:** Run the bundled binary:
+
+```bash
+cargo build -p cef-test-profile
+cargo run -p bundle-cef-app -- cef-test-profile -o cef-test-profile.app
+./cef-test-profile.app/Contents/MacOS/cef-test-profile --url https://google.com
+```
+
+Observe `[FRAME-TX]` log lines appearing. Count frame intervals — they should
+roughly match ts3's baseline (~38fps, ~16-17ms intervals with periodic spikes).
+This confirms CEF is rendering and we've reproduced the same performance
+profile.
+
+### Phase 3: GUI — Window + Split Rendering
+
+Build `cef-test-gui` with a winit window and wgpu rendering pipeline. No CEF
+textures yet — render two different solid colors in the left and right halves.
+This validates the window, wgpu setup, and the split-view quad geometry before
+adding IOSurface import complexity.
+
+**Steps:**
+
+1. Create winit window (1600x800 logical)
+2. Initialize wgpu (Metal backend, Bgra8UnormSrgb surface format)
+3. Create shader (same pass-through as cef-rs OSR example)
+4. Create render pipeline with bind group layout (texture + sampler)
+5. Create two vertex buffers: left quad (NDC x ∈ [-1, 0]) and right quad (NDC
+   x ∈ [0, +1])
+6. Create two solid-color textures (e.g., dark blue and dark green) as
+   placeholder bind groups
+7. Event loop: `pump_app_events` → on `RedrawRequested`, draw left quad with
+   blue texture, draw right quad with green texture
+8. Handle window close
+
+**Test:** Run `cef-test-gui`. A window opens showing a blue left half and a
+green right half. Resizing the window updates the surface correctly. Closing the
+window exits cleanly.
+
+### Phase 4: Build Script & App Bundle
+
+Create the build script and macOS app bundle structure. This is needed before
+Phase 5 because the launcher must be registered as an XPC service inside the app
+bundle.
+
+**Steps:**
+
+1. Create `cef-test/scripts/build.sh`
+2. `cargo build` all three binaries
+3. Create `CefTest.app/Contents/` directory structure
+4. Copy `cef-test-gui` to `Contents/MacOS/`
+5. Copy `cef-test-profile` to `Contents/Helpers/` (or `Frameworks/`)
+6. Copy CEF framework to `Contents/Frameworks/`
+7. Copy CEF helper processes
+8. Create `Contents/XPCServices/com.cef-test.launcher.xpc/` with launcher
+   binary and `Info.plist`
+9. Create app `Info.plist`
+10. Handle code signing if required for XPC
+
+**Test:** Run `./scripts/build.sh`. It produces `CefTest.app`. Run
+`./CefTest.app/Contents/MacOS/cef-test-gui`. The window opens with the colored
+halves from Phase 3. The launcher binary exists at the correct path inside the
+bundle.
+
+### Phase 5: Launcher & XPC Bootstrap
+
+Implement the launcher and the XPC connection chain: GUI → Launcher → Profile
+Server → direct GUI connection. No data transfer yet — just prove the bootstrap
+works.
+
+**Steps:**
+
+1. Implement `cef-test-launcher`:
+   - Register as Mach service `com.cef-test.launcher`
+   - Handle `spawn_profile`: store GUI endpoint, spawn profile process
+   - Handle `claim_session`: return stored endpoint to profile
+   - Exit when GUI disconnects
+2. Update `cef-test-gui`:
+   - Connect to `com.cef-test.launcher`
+   - Create anonymous XPC listener for left slot
+   - Send `spawn_profile` with endpoint, session-id, url, dimensions
+   - Accept incoming connection from profile server
+   - Log success: `"GUI: Profile 'left' connected"`
+3. Update `cef-test-profile`:
+   - Accept `--session-id` and `--service` (launcher name) CLI args
+   - Connect to launcher, send `claim_session`
+   - Receive GUI endpoint from reply
+   - Connect to GUI via endpoint
+   - Log success: `"Profile: Connected to GUI"`
+   - Continue running CEF (from Phase 2) after connecting
+
+**Test:** Run via the app bundle. Logs show the full chain:
+
+```
+Launcher: Starting...
+GUI: Connected to launcher
+GUI: Requesting profile 'left' (session=left-1, url=google.com)
+Launcher: Spawning profile (session=left-1)
+Profile: Claiming session left-1
+Launcher: Session left-1 claimed
+Profile: Connected to GUI
+```
+
+Profile server continues rendering (FRAME-TX logs appear). The GUI window shows
+colored halves (no texture transfer yet).
+
+### Phase 6: IOSurface Transfer — One Browser Visible
+
+Connect the rendering pipeline: profile server sends IOSurface Mach ports to the
+GUI, GUI imports them as wgpu textures, renders in the left half. This is the
+critical phase — it proves cross-process GPU texture sharing works in cef-test.
+
+**Steps:**
+
+1. Update `cef-test-profile` `on_accelerated_paint`:
+   - Create Mach port: `IOSurfaceCreateMachPort(handle)`
+   - Send XPC message: `display_surface` with `iosurface_port`, `width`,
+     `height`
+2. Update `cef-test-gui` XPC event handler:
+   - Receive `display_surface` message
+   - Extract Mach port: `copy_mach_send("iosurface_port")`
+   - Look up IOSurface: `IOSurfaceLookupFromMachPort(port)`
+   - Import via Metal: `IOSurfaceImporter::from_mach_port()` →
+     `import_to_wgpu()`
+   - Create bind group from imported texture
+   - Store as left slot's current texture
+   - Deallocate Mach port
+   - Request window redraw
+3. Update rendering: replace left placeholder bind group with the live texture
+
+**Test:** Run via app bundle. The left half of the window shows a live webpage
+(google.com). The right half remains the solid placeholder color. The page should
+be static (no input yet) but fully rendered.
+
+### Phase 7: Two Profiles Side by Side
+
+Spawn a second profile server and render both textures. This proves the full
+multi-process architecture works.
+
+**Steps:**
+
+1. Update `cef-test-gui`:
+   - Create a second anonymous XPC listener for right slot
+   - Send a second `spawn_profile` to the launcher (different profile name,
+     different URL, different session-id)
+   - Accept the second profile server's connection
+   - Store right slot's texture from its `display_surface` messages
+2. Update rendering: draw both textures (left and right bind groups)
+3. Update launcher: handle second spawn (may reuse or spawn new process
+   depending on profile name)
+
+**Test:** Run via app bundle. The left half shows github.com, the right half
+shows google.com. Both are fully rendered, side by side, in a single window. No
+interaction yet — just visual confirmation of two independent browser processes
+sharing a window.
+
+### Phase 8: Mouse Input
+
+Route mouse events from the GUI to the correct profile server. This makes the
+browsers interactive — hover effects, clicking links, scrolling.
+
+**Steps:**
+
+1. Track cursor position in GUI
+2. On `CursorMoved`: determine target (left if x < half, right otherwise)
+3. Translate coordinates to profile-local space (right side: subtract half
+   width)
+4. Scale to logical coordinates (divide by scale factor)
+5. Send `mouse_move` via XPC to target profile
+6. On `MouseInput`: send `mouse_click` with button, up/down, click count
+7. On `MouseWheel`: convert line delta to pixels, send `mouse_wheel`
+8. Track modifier state (`ModifiersChanged`)
+9. Update `cef-test-profile`: receive `mouse_move`, `mouse_click`,
+   `mouse_wheel` messages, forward to CEF `BrowserHost`
+
+**Test:** Move the mouse over both browsers. Hover effects appear (link
+underlines, button highlights). Click links — navigation works. Scroll on both
+sides. Right-click does nothing (context menu suppressed). Verify input goes to
+the correct browser based on cursor position.
+
+### Phase 9: Keyboard Input & Focus
+
+Route keyboard events to the focused profile. This completes the core user
+interaction — typing into forms, submitting searches.
+
+**Steps:**
+
+1. Track focus state in GUI (which side was last clicked)
+2. On `MouseInput` (click): set focus to the side the click landed on
+3. Send `focus` message: `{focused: 0}` to old side, `{focused: 1}` to new side
+4. On `KeyboardInput`: convert to CEF key event (native key code, char code,
+   modifiers)
+5. Send `key_event` to focused profile
+6. Handle special keys: Tab, Enter, Backspace, arrow keys, copy/paste shortcuts
+7. Update `cef-test-profile`: receive `key_event`, forward to CEF `BrowserHost`
+   as `KEYDOWN` then `CHAR` events
+
+**Test:** Click on Google's search box on the right side. Type a search query.
+Press Enter. Search results appear. Click a link. Navigate back. Switch focus to
+the left side (github.com) by clicking it. Type in GitHub's search box. Both
+browsers respond to keyboard input independently.
+
+**Acceptance test:** This is the full user scenario — "open github.com on the
+left and google.com on the right, type something into google.com, search, and
+scroll around."
+
+### Phase 10: Resize
+
+Handle window resize so both browsers re-render at the correct dimensions.
+
+**Steps:**
+
+1. On winit `Resized` event: recalculate per-profile dimensions (half window
+   width, full height)
+2. Reconfigure wgpu surface
+3. Update vertex buffers if needed (NDC coordinates are resolution-independent,
+   so likely no change)
+4. Send `resize` message to both profile servers with new logical dimensions and
+   scale factor
+5. Profile servers update `view_rect` return values and call
+   `browser_host.was_resized()`
+6. CEF re-renders at new size, sends new IOSurface
+
+**Test:** Drag the window corner to resize. Both browsers re-render at the new
+dimensions without distortion or crashes. Maximize the window — both browsers
+fill their halves correctly.
+
+### Phase 11: Performance Measurement & Analysis
+
+Instrument everything and collect the data that answers the fundamental question:
+does the multi-process architecture reproduce the performance problem?
+
+**Steps:**
+
+1. GUI logs per-profile frame intervals:
+   `[LEFT] frame=N interval=Tms` / `[RIGHT] frame=N interval=Tms`
+2. Profile server logs message loop timing (same instrumentation as Issue 343
+   Exp 3): `do_message_loop_work` duration, `cfrunloop` duration, total loop
+   time, spike counts
+3. Run for 60+ seconds with both browsers loaded
+4. Collect data, compute: average fps, % frames at 60fps (16-17ms), max
+   consecutive 60fps streak, spike distribution
+5. Compare against baselines:
+
+   | Source                  | fps  | 60fps % | Max streak |
+   | ----------------------- | ---- | ------- | ---------- |
+   | cef-rs OSR (in-process) | ~60  | ~95%    | ~400+      |
+   | ts3 profile server      | 38.2 | 71%     | 424        |
+   | cef-test left profile   | ?    | ?       | ?          |
+   | cef-test right profile  | ?    | ?       | ?          |
+
+**Test:** Run, interact with both browsers for 60 seconds, collect logs. Produce
+a performance summary. The numbers tell us which path to take:
+
+- **~38fps (matches ts3):** Problem is inherent to multi-process headless CEF.
+  Iterate on message loop experiments here in cef-test.
+- **~60fps (matches cef-rs):** Problem is in ts3's integration. Use cef-test as
+  the reference, bisect ts3.
+- **Something in between:** Both factors contribute. Identify which experiments
+  close the remaining gap.
+
+### Phase Summary
+
+| Phase | Deliverable                         | Key risk addressed                        |
+| ----- | ----------------------------------- | ----------------------------------------- |
+| 1     | Workspace scaffold, extracted xpc   | Dependency structure, ts3 not broken       |
+| 2     | Standalone headless CEF binary      | CEF initializes and renders in new binary  |
+| 3     | Window with split-view rendering    | wgpu pipeline and quad geometry correct    |
+| 4     | App bundle with build script        | Bundle structure valid for CEF + XPC       |
+| 5     | XPC bootstrap chain                 | GUI ↔ Launcher ↔ Profile connection works |
+| 6     | Live webpage in window (one side)   | Cross-process IOSurface sharing works      |
+| 7     | Two browsers side by side           | Multi-profile architecture works           |
+| 8     | Mouse interaction                   | Input routing and coordinate translation   |
+| 9     | Keyboard interaction                | Full user interaction (acceptance test)    |
+| 10    | Window resize                       | Dynamic dimension changes                  |
+| 11    | Performance numbers                 | The answer to the fundamental question     |
