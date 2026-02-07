@@ -21,9 +21,6 @@ static START_TIME: OnceLock<Instant> = OnceLock::new();
 static QUIT_FLAG: AtomicBool = AtomicBool::new(false);
 /// Set to true when the page finishes loading (is_loading=0).
 static PAGE_LOADED: AtomicBool = AtomicBool::new(false);
-/// Timestamp of last on_accelerated_paint call (for interval measurement).
-static LAST_PAINT_TIME: Mutex<Option<Instant>> = Mutex::new(None);
-
 #[cfg(target_os = "macos")]
 mod cfrunloop {
     use std::ffi::c_void;
@@ -225,10 +222,6 @@ fn run(args: Args) {
 
     // Message loop (matching ts3's pattern exactly)
     println!("Profile: Running message loop...");
-    let mut loop_count: u64 = 0;
-    let mut max_mlw_us: u128 = 0;
-    let mut max_cfl_us: u128 = 0;
-    let mut mlw_spike_count: u64 = 0;
 
     // Scroll simulation state
     let scroll_interval = Duration::from_millis(8); // ~125Hz, matching Apple mouse polling
@@ -238,29 +231,10 @@ fn run(args: Args) {
     let scroll_delta: i32 = 120; // standard scroll unit (one "notch")
     let direction_switch_every: u64 = 25; // reverse every 25 events (~200ms)
     let mut events_since_switch: u64 = 0;
-    let mut scroll_event_count: u64 = 0;
 
     while !QUIT_FLAG.load(Ordering::Relaxed) {
-        let t0 = Instant::now();
-
         cef::do_message_loop_work();
-        let t1 = Instant::now();
-
         cfrunloop::run_for(0.0);
-        let t2 = Instant::now();
-
-        let mlw_us = (t1 - t0).as_micros();
-        let cfl_us = (t2 - t1).as_micros();
-
-        if mlw_us > max_mlw_us {
-            max_mlw_us = mlw_us;
-        }
-        if cfl_us > max_cfl_us {
-            max_cfl_us = cfl_us;
-        }
-        if mlw_us > 1000 {
-            mlw_spike_count += 1;
-        }
 
         // Simulated scroll input at ~125Hz
         if PAGE_LOADED.load(Ordering::Relaxed) {
@@ -295,25 +269,12 @@ fn run(args: Args) {
                             0,
                             scroll_delta * scroll_direction,
                         );
-                        scroll_event_count += 1;
                     }
                 }
             }
         }
 
-        loop_count += 1;
-        if loop_count % 1000 == 0 {
-            println!(
-                "[LOOP-TIMING] iter={} max_mlw={}us max_cfl={}us mlw_spikes={} scroll_events={}",
-                loop_count, max_mlw_us, max_cfl_us, mlw_spike_count, scroll_event_count
-            );
-        }
     }
-
-    println!(
-        "[LOOP-TIMING] FINAL iter={} max_mlw={}us max_cfl={}us mlw_spikes={} scroll_events={}",
-        loop_count, max_mlw_us, max_cfl_us, mlw_spike_count, scroll_event_count
-    );
 
     // Shutdown
     println!("Profile: Shutting down...");
@@ -409,7 +370,6 @@ mod cef_handlers {
                 if let Some(rect) = rect {
                     rect.width = self.inner.state.width.load(Ordering::Relaxed) as i32;
                     rect.height = self.inner.state.height.load(Ordering::Relaxed) as i32;
-                    println!("[VIEW_RECT] {}x{}", rect.width, rect.height);
                 }
             }
 
@@ -452,29 +412,12 @@ mod cef_handlers {
                 let w = info.extra.coded_size.width;
                 let h = info.extra.coded_size.height;
 
-                // Measure interval since last paint
-                let interval_us = {
-                    let mut guard = crate::LAST_PAINT_TIME.lock().unwrap();
-                    let interval = guard.map(|prev| now.duration_since(prev).as_micros() as u64);
-                    *guard = Some(now);
-                    interval
-                };
-
                 // Create Mach port from IOSurface handle
                 let port = termsurf_xpc::iosurface::create_mach_port(handle);
                 if port == 0 {
                     eprintln!("[FRAME-TX] frame={} create_mach_port failed", frame_id);
                     return;
                 }
-
-                let interval_str = match interval_us {
-                    Some(us) => format!("{}us", us),
-                    None => "first".to_string(),
-                };
-                println!(
-                    "[FRAME-TX] frame={} w={} h={} time={}ms interval={} port={}",
-                    frame_id, w, h, t_ms, interval_str, port
-                );
 
                 // Send to GUI via XPC
                 let msg = termsurf_xpc::XpcDictionary::new();

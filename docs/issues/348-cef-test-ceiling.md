@@ -315,3 +315,60 @@ recycling pattern is unpredictable (not a simple double/triple buffer).
 per-frame IOSurface import to measure its actual cost.
 
 **Status:** Done
+
+### Experiment 3: Revert sleeps, re-benchmark without hot-path logs
+
+**Goal:** Establish a clean baseline with the 1ms sleeps restored and all
+hot-path logs removed. Experiments 1 and 2 introduced two confounding changes
+simultaneously: the 0ms sleep and hot-path logging. We need to separate their
+effects.
+
+**Problem with 0ms sleep:** After removing the sleeps in Experiment 1, three
+consecutive benchmark runs showed progressive degradation: 46.7fps → 33.7fps →
+27.9fps. This pattern is consistent with thermal throttling — both processes
+spin at 100% CPU with no idle time, the machine heats up, macOS throttles clock
+speed, and each subsequent run starts hotter.
+
+The original 1ms sleep wasn't just wasted latency — it kept CPU utilization
+low enough to avoid thermal throttling. The Experiment 1 result of 55.7fps was
+likely a "cold" first run before thermal effects accumulated.
+
+**What needs to change:**
+
+Revert the two sleep changes from Experiment 1:
+
+1. **Profile server** — `cef-test-profile/src/main.rs`:
+   ```rust
+   // Revert to:
+   cfrunloop::run_for(0.001);  // 1ms sleep
+   ```
+
+2. **GUI** — `cef-test-gui/src/main.rs`:
+   ```rust
+   // Revert to:
+   let status = event_loop.pump_app_events(Some(Duration::from_millis(1)), &mut app);
+   ```
+
+No other changes. The hot-path log removal from after Experiment 2 stays.
+
+**How to test:**
+
+1. Revert the sleep changes
+2. Let the machine cool for a few minutes (close heavy apps, wait)
+3. `cd ts3 && ./cef-test-scripts/benchmark.sh --release`
+4. Run 3 times back-to-back, record fps/p50/p95/60fps%
+5. Check for progressive degradation (if none, thermals are fine)
+
+**What the results tell us:**
+
+The original baseline (with 1ms sleeps + hot-path logs) was 50.3–51.6fps. This
+experiment has 1ms sleeps but NO hot-path logs. Comparing:
+
+- If fps improves beyond 51.6fps: the hot-path logs were a bottleneck even at
+  1ms sleep cadence. The log cleanup alone was worth the effort.
+- If fps stays at ~51fps: the logs weren't significant at 1ms cadence. The
+  Experiment 1 improvement (55.7fps) was real but unsustainable due to thermals.
+- If results are stable across 3 runs (no progressive degradation): confirms
+  that 1ms sleep prevents thermal throttling.
+
+**Status:** Not started
