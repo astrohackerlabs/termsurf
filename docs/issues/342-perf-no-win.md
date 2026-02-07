@@ -964,3 +964,111 @@ starts relative to CEF initialization. A future attempt would need to either:
   switch to CFRunLoop once `on_context_initialized` fires
 - Or start `CFRunLoopRun()` before `cef::initialize()` on a background thread
   and initialize CEF from within a run loop callback
+
+### Experiment 5: Replace `sleep(1ms)` with `CFRunLoopRunInMode`
+
+**Status:** Not started
+
+**Goal:** Replace the dead `thread::sleep(1ms)` in the polling loop with a live
+`CFRunLoopRunInMode` call that services the main thread's CFRunLoop for 1ms. This
+is the smallest possible change that tests whether CEF's internal run loop
+sources are being starved.
+
+**Rationale:** The cef-rs OSR example achieves 60fps with a loop that looks
+almost identical to ours:
+
+```rust
+// OSR example (60fps):
+loop {
+    do_message_loop_work();
+    event_loop.pump_app_events(Duration::from_millis(1));
+}
+
+// Profile server (28fps):
+loop {
+    do_message_loop_work();
+    thread::sleep(Duration::from_millis(1));
+}
+```
+
+The critical difference is what happens between `do_message_loop_work()` calls.
+`pump_app_events` internally runs one CFRunLoop iteration — servicing any pending
+timer sources, Mach port sources, and display link callbacks. `sleep` does
+nothing — it just blocks the thread for 1ms.
+
+CEF's compositor may rely on CFRunLoop sources that fire between work calls. Exp
+1 showed CEF's `ExternalBeginFrameSourceMac.DisplayLink` only fires 3 times — if
+that's a CFRunLoop source, it needs the run loop to be serviced to deliver
+callbacks. `sleep` starves it; `CFRunLoopRunInMode` feeds it.
+
+This avoids Exp 4's deadlock because we never block on `CFRunLoopRun()`. We keep
+the existing polling cadence — `do_message_loop_work()` is still called ~1000x
+per second. The only change is replacing dead sleep with live run loop servicing.
+
+No `external_message_pump`. No NSApplication. Just one line.
+
+**Changes:** One modification to `ts3/termsurf-profile/src/main.rs`:
+
+1. **Add CFRunLoop FFI** (minimal — just two functions and a constant):
+
+```rust
+#[cfg(target_os = "macos")]
+mod cfrunloop {
+    use std::ffi::c_void;
+
+    type CFStringRef = *const c_void;
+    type CFTimeInterval = f64;
+
+    // CFRunLoopRunResult values
+    const K_CFRUNLOOP_RUN_FINISHED: i32 = 1;
+    const K_CFRUNLOOP_RUN_STOPPED: i32 = 2;
+    const K_CFRUNLOOP_RUN_TIMED_OUT: i32 = 3;
+    const K_CFRUNLOOP_RUN_HANDLED_SOURCE: i32 = 4;
+
+    extern "C" {
+        static kCFRunLoopDefaultMode: CFStringRef;
+        fn CFRunLoopRunInMode(
+            mode: CFStringRef,
+            seconds: CFTimeInterval,
+            return_after_source_handled: u8,
+        ) -> i32;
+    }
+
+    /// Run the main thread's CFRunLoop for up to `seconds`, returning after
+    /// one source is handled or the timeout expires.
+    pub fn run_for(seconds: f64) -> i32 {
+        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, 1) }
+    }
+}
+```
+
+2. **Replace `sleep(1ms)` with `CFRunLoopRunInMode`** in the polling loop:
+
+```rust
+// Before:
+while !QUIT_FLAG.load(Ordering::Relaxed) {
+    cef::do_message_loop_work();
+    std::thread::sleep(Duration::from_millis(1));
+}
+
+// After:
+while !QUIT_FLAG.load(Ordering::Relaxed) {
+    cef::do_message_loop_work();
+    // Issue 342, Experiment 5: Service the CFRunLoop instead of dead sleeping.
+    // This allows CEF's internal timer sources and display link callbacks to fire.
+    #[cfg(target_os = "macos")]
+    cfrunloop::run_for(0.001); // 1ms
+    #[cfg(not(target_os = "macos"))]
+    std::thread::sleep(std::time::Duration::from_millis(1));
+}
+```
+
+**What to look for:**
+
+- Frame rate vs baseline (28.5fps) — does servicing the run loop help?
+- `Viz.ExternalBeginFrameSourceMac.DisplayLink` sample count — does the display
+  link fire more than 3 times now?
+- Interval distribution — shift toward 16ms intervals?
+- CPU usage — `CFRunLoopRunInMode` with `return_after_source_handled=true`
+  returns immediately if no sources fire, so it shouldn't spin the CPU more than
+  `sleep` does
