@@ -284,4 +284,34 @@ all frames. If CEF allocates a new IOSurface per frame, the pointer will change.
   cache the Mach port per handle and only create a new one when the handle
   changes.
 
-**Status:** Not started
+**Result:**
+
+CEF allocates a new IOSurface for every frame:
+
+| Side  | Frames | Unique handles |
+| ----- | ------ | -------------- |
+| LEFT  | 3,304  | 861            |
+| RIGHT | ~2,800 | 850            |
+
+Every frame gets a different IOSurface pointer. The handle count (~850) is less
+than the frame count (~3,000), so CEF does recycle from a pool — but the
+recycling pattern is unpredictable (not a simple double/triple buffer).
+
+**Findings:**
+
+1. **The "send Mach port once" optimization is not possible.** CEF doesn't paint
+   into a stable buffer. The per-frame `IOSurfaceCreateMachPort` → XPC send →
+   `IOSurfaceLookupFromMachPort` → `import_to_wgpu()` pipeline is unavoidable
+   with the current CEF API.
+
+2. **Hot-path logging confirmed devastating.** The single `println!` per frame
+   dropped performance from 55.7fps to 23–48fps with massive variance —
+   consistent with the Issue 346 finding.
+
+3. **L3/L4 is a dead end.** Cannot eliminate per-frame IOSurface transfer cost.
+   The remaining ~5fps gap (55.7 → 60) must come from elsewhere.
+
+**Next step:** Investigate wgpu presentation mode (L5) or instrument the
+per-frame IOSurface import to measure its actual cost.
+
+**Status:** Done
