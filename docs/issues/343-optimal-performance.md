@@ -1299,3 +1299,32 @@ Medium. If `do_message_loop_work()` is the only thing driving CEF's rendering,
 removing it will produce zero frames. But the app won't crash — CEF will simply
 be idle. The `[FRAME-TX]` log will show immediately whether frames are arriving
 or not, and we can kill the process and revert.
+
+#### Results
+
+**Status: FAILED — no frames delivered. Webview did not open at all.**
+
+The app launched but the webview never rendered. No `[FRAME-TX]` entries were
+logged. CEF's `OnPaint` callback never fired. The log file was not updated
+(still contained Exp 5 data with "Running message loop (instrumented)..." header).
+
+This matches the third expected outcome: "No frames delivered (OnPaint stops
+firing)."
+
+#### Conclusion
+
+`do_message_loop_work()` is **essential**. CFRunLoop sources alone cannot drive
+CEF's rendering pipeline. Without the explicit call, CEF never processes its
+internal task queue, never triggers layout/paint, and never calls `OnPaint`.
+
+**H3 ruled out.** The two systems are not fighting — `do_message_loop_work()`
+is doing work that CFRunLoop sources simply don't cover. CEF does not post its
+core rendering tasks as CFRunLoop sources. The internal task queue that
+`do_message_loop_work()` drains is the only path to rendering.
+
+This also reframes the Exp 3/4 comparison: the reason `pump_app_events` reduces
+`do_message_loop_work()` spike rate in the cef-rs example isn't because it
+handles the *same* work — it's because it handles *complementary* work
+(NSApplication events, display link, Core Animation) that reduces the total
+workload CEF needs to process internally. Our CFRunLoop call doesn't process
+that complementary work, so `do_message_loop_work()` has to do everything.
