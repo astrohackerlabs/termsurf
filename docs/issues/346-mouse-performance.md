@@ -218,4 +218,43 @@ would help and which hypotheses are most likely.
 - If rate is bursty (varying widely second to second): supports H1 (task queue
   contention from bursts)
 
-**Status:** Not started
+**Result:**
+
+The rate is ~60Hz — far below the assumed ~125Hz hardware polling rate:
+
+```
+[MOUSE-RATE] 59-62 events/sec (steady state, continuous movement)
+[MOUSE-RATE] 48-53 events/sec (occasional dips, likely brief pauses)
+[MOUSE-RATE] 33 events/sec (ramp-up in first second)
+```
+
+Benchmark with continuous mouse movement: 40.4fps, p50=16.9ms, p95=50.0ms.
+
+**Findings:**
+
+1. **Something upstream already throttles to ~60Hz.** Either macOS, winit, or
+   WezTerm's event loop caps mouse events before they reach the profile server.
+   We are not dealing with a 125Hz+ firehose.
+
+2. **The rate is very stable, not bursty.** Nearly every second is 59–62 events.
+   This weakens H1 (task queue contention from bursts) — the events arrive at a
+   steady cadence, not in bursts that would back up the queue.
+
+3. **60 events/sec still causes a 12fps drop.** Even at this modest rate, we go
+   from 51.5fps to 40.4fps — roughly 1fps lost per 5 mouse events/sec. The
+   per-event cost is the problem, not the volume.
+
+4. **GUI-side throttling alone won't fix this.** Halving from 60Hz to 30Hz would
+   reduce load but not eliminate the drop, because the per-event cost is so high.
+
+**Hypothesis impact:**
+
+- H1 (post_task contention): Weakened — steady rate, not bursty
+- H2 (mutex contention): Strengthened — per-event cost dominates
+- H3 (cursor change round-trips): Strengthened — per-event overhead matters most
+- H4 (excessive rate): **Ruled out** — rate is only ~60Hz
+
+The investigation should now focus on per-event cost: mutex contention (H2),
+cursor change round-trips (H3), and eliminating `post_task` overhead.
+
+**Status:** Done
