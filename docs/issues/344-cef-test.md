@@ -437,9 +437,13 @@ matches ts3: the problem is inherent to multi-process headless CEF.
 
 ## Directory Structure
 
+The cef-test crates live inside the ts3 Cargo workspace. This lets them depend
+on `termsurf-xpc` and share workspace-level dependency versions (wgpu, libc,
+block2, clap, etc.) without depending on any WezTerm or terminal emulator code.
+
 ```
-cef-test/
-├── Cargo.toml                      (workspace)
+ts3/
+├── Cargo.toml                      (workspace — add 3 new members)
 ├── cef-test-gui/
 │   ├── Cargo.toml
 │   └── src/
@@ -453,9 +457,17 @@ cef-test/
 │   ├── Cargo.toml
 │   └── src/
 │       └── main.rs                 (XPC bootstrap service)
-└── scripts/
-    └── build.sh                    (build all, bundle as macOS app)
+├── cef-test-scripts/
+│   └── build.sh                    (build all, bundle as macOS app)
+├── termsurf-xpc/                   (shared, no changes needed)
+├── termsurf-profile/               (existing ts3 code, untouched)
+├── termsurf-launcher/              (existing ts3 code, untouched)
+└── wezterm-gui/                    (existing ts3 code, untouched)
 ```
+
+Workspace membership is a build system convenience, not a code dependency.
+`cargo build -p cef-test-gui` builds only that crate and its direct
+dependencies — it does not compile WezTerm.
 
 ### macOS App Bundle
 
@@ -484,59 +496,45 @@ name.
 
 ## Dependencies
 
-### Shared XPC Crate
+All three cef-test crates live in the ts3 Cargo workspace and use
+`foo.workspace = true` for shared dependencies. `termsurf-xpc` is referenced
+via `path = "../termsurf-xpc"` — no extraction needed.
 
-Both cef-test and ts3 need XPC bindings. Currently `termsurf-xpc` lives inside
-`ts3/`. To satisfy the "no dependency on ts3" constraint, extract it to a
-top-level location:
-
-```
-termsurf/
-├── termsurf-xpc/       ← extracted from ts3/termsurf-xpc/
-├── cef-rs/
-├── cef-test/
-├── ts3/                (references ../termsurf-xpc/)
-└── docs/
-```
-
-Both ts3 and cef-test reference it via `path = "../termsurf-xpc"`. The crate has
-no dependencies on ts3 code — it's a standalone XPC bindings library with `libc`
-and `block2` as its only dependencies.
-
-### cef-test-gui Dependencies
+### cef-test-gui
 
 ```toml
 [dependencies]
 termsurf-xpc = { path = "../termsurf-xpc" }
-cef = { path = "../cef-rs/cef", features = ["accelerated_osr"] }
-wgpu = "..."
+wgpu.workspace = true
 winit = "0.30"
 pollster = "0.4"
-bytemuck = "1"
+bytemuck.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-metal = "..."
-objc = "..."
-io-surface = "..."
+cef = { path = "../../cef-rs/cef", features = ["accelerated_osr"] }
+metal.workspace = true
+objc.workspace = true
+io-surface.workspace = true
 ```
 
-Note: cef-test-gui depends on the `cef` crate only for the `IOSurfaceImporter`
-and texture import utilities. It does NOT initialize CEF or call any CEF browser
-APIs.
+Depends on the `cef` crate only for `IOSurfaceImporter` and texture import
+utilities. Does NOT initialize CEF or call any CEF browser APIs.
 
-### cef-test-profile Dependencies
+### cef-test-profile
 
 ```toml
 [dependencies]
 termsurf-xpc = { path = "../termsurf-xpc" }
-cef = { path = "../cef-rs/cef", features = ["accelerated_osr"] }
-clap = "..."
+clap.workspace = true
 ctrlc = "3.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cef = { path = "../../cef-rs/cef", features = ["accelerated_osr"] }
 ```
 
 No wgpu, no winit, no window. Headless.
 
-### cef-test-launcher Dependencies
+### cef-test-launcher
 
 ```toml
 [dependencies]
@@ -562,13 +560,13 @@ Nothing else. The launcher is pure XPC plumbing.
 ## Build & Run
 
 ```bash
-cd cef-test && ./scripts/build.sh
+cd ts3 && ./cef-test-scripts/build.sh
 ./CefTest.app/Contents/MacOS/cef-test-gui
 ```
 
 The build script:
 
-1. `cargo build` all three binaries
+1. `cargo build -p cef-test-gui -p cef-test-profile -p cef-test-launcher`
 2. Bundle into CefTest.app with correct directory structure
 3. Copy CEF framework into Frameworks/
 4. Copy helper processes
@@ -618,27 +616,26 @@ iteration environment.
 
 Each phase produces something testable. Fix issues before moving on.
 
-### Phase 1: Scaffold & Extract termsurf-xpc
+### Phase 1: Scaffold
 
-Extract `termsurf-xpc` from `ts3/` to the top level so both ts3 and cef-test can
-depend on it without cef-test depending on ts3. Create the cef-test workspace
-with three empty crate stubs.
+Add three new crate stubs to the ts3 Cargo workspace. They share the workspace's
+dependency declarations and `Cargo.lock` but have no code dependencies on
+WezTerm or any other ts3 crate.
 
 **Steps:**
 
-1. Move `ts3/termsurf-xpc/` to `termsurf-xpc/` (top level)
-2. Update `ts3/Cargo.toml` workspace members and path references
-3. Update `ts3/termsurf-profile/Cargo.toml` to `path = "../../termsurf-xpc"`
-4. Update `ts3/termsurf-launcher/Cargo.toml` similarly
-5. Verify ts3 builds: `cd ts3 && cargo build`
-6. Create `cef-test/Cargo.toml` (workspace with three members)
-7. Create `cef-test/cef-test-gui/Cargo.toml` (stub, depends on termsurf-xpc)
-8. Create `cef-test/cef-test-profile/Cargo.toml` (stub, depends on cef + termsurf-xpc)
-9. Create `cef-test/cef-test-launcher/Cargo.toml` (stub, depends on termsurf-xpc)
-10. Create minimal `main.rs` for each (just `fn main() {}`)
+1. Add `"cef-test-gui"`, `"cef-test-profile"`, `"cef-test-launcher"` to the
+   `[workspace] members` list in `ts3/Cargo.toml`
+2. Create `ts3/cef-test-gui/Cargo.toml` with dependencies listed in the
+   Dependencies section above
+3. Create `ts3/cef-test-profile/Cargo.toml` similarly
+4. Create `ts3/cef-test-launcher/Cargo.toml` similarly
+5. Create minimal `src/main.rs` for each (just `fn main() {}`)
+6. Create `ts3/cef-test-scripts/` directory for build scripts
 
-**Test:** `cargo build` succeeds for both the cef-test workspace and ts3. No
-regressions.
+**Test:** `cd ts3 && cargo build -p cef-test-gui -p cef-test-profile -p
+cef-test-launcher` succeeds. `cargo build -p wezterm-gui` still succeeds (no
+regressions).
 
 ### Phase 2: Profile Server — Standalone Headless CEF
 
@@ -707,7 +704,7 @@ bundle.
 
 **Steps:**
 
-1. Create `cef-test/scripts/build.sh`
+1. Create `ts3/cef-test-scripts/build.sh`
 2. `cargo build` all three binaries
 3. Create `CefTest.app/Contents/` directory structure
 4. Copy `cef-test-gui` to `Contents/MacOS/`
@@ -719,7 +716,7 @@ bundle.
 9. Create app `Info.plist`
 10. Handle code signing if required for XPC
 
-**Test:** Run `./scripts/build.sh`. It produces `CefTest.app`. Run
+**Test:** Run `./cef-test-scripts/build.sh`. It produces `CefTest.app`. Run
 `./CefTest.app/Contents/MacOS/cef-test-gui`. The window opens with the colored
 halves from Phase 3. The launcher binary exists at the correct path inside the
 bundle.
@@ -925,7 +922,7 @@ a performance summary. The numbers tell us which path to take:
 
 | Phase | Deliverable                         | Key risk addressed                        |
 | ----- | ----------------------------------- | ----------------------------------------- |
-| 1     | Workspace scaffold, extracted xpc   | Dependency structure, ts3 not broken       |
+| 1     | Workspace scaffold                  | Dependency structure, ts3 not broken       |
 | 2     | Standalone headless CEF binary      | CEF initializes and renders in new binary  |
 | 3     | Window with split-view rendering    | wgpu pipeline and quad geometry correct    |
 | 4     | App bundle with build script        | Bundle structure valid for CEF + XPC       |
