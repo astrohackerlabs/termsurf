@@ -1,10 +1,9 @@
 //! cef-test GUI — window with split-view wgpu rendering.
 //!
-//! Creates a single window and renders two colored halves side by side.
-//! Phase 6: receives IOSurface Mach ports from the profile server via XPC,
-//! imports them as wgpu textures via Metal, and renders the left half with
-//! the live browser content. Uses pump_app_events + CFRunLoop to ensure
-//! XPC dispatch queue callbacks fire on the main thread.
+//! Creates a single window and renders two browser halves side by side.
+//! Phase 7: spawns two independent profile servers (github.com on left,
+//! google.com on right), each in its own process with its own CEF instance.
+//! Both send IOSurface Mach ports via XPC, GUI imports and renders both.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -49,7 +48,7 @@ mod cfrunloop {
 }
 
 // ============================================================================
-// Pending Surface (shared between XPC callback and main loop)
+// Pending Surfaces (shared between XPC callbacks and main loop)
 // ============================================================================
 
 #[cfg(target_os = "macos")]
@@ -59,8 +58,15 @@ struct PendingSurface {
     height: u32,
 }
 
+/// Two pending surface slots — one per browser half.
 #[cfg(target_os = "macos")]
-type PendingSurfaceSlot = Arc<Mutex<Option<PendingSurface>>>;
+struct PendingSurfaces {
+    left: Option<PendingSurface>,
+    right: Option<PendingSurface>,
+}
+
+#[cfg(target_os = "macos")]
+type SharedPendingSurfaces = Arc<Mutex<PendingSurfaces>>;
 
 // ============================================================================
 // Vertex
@@ -298,9 +304,9 @@ impl GpuState {
         }
     }
 
-    /// Import an IOSurface from a Mach port and update the left bind group.
+    /// Import an IOSurface from a Mach port and create a bind group.
     #[cfg(target_os = "macos")]
-    fn import_surface(&mut self, pending: PendingSurface) {
+    fn import_surface(&self, pending: &PendingSurface) -> Option<wgpu::BindGroup> {
         use cef::osr_texture_import::iosurface::IOSurfaceImporter;
         use cef::osr_texture_import::TextureImporter;
         use cef::sys::cef_color_type_t;
@@ -317,30 +323,26 @@ impl GpuState {
                     "GUI: IOSurfaceLookupFromMachPort failed (port={})",
                     pending.mach_port
                 );
-                return;
+                return None;
             }
         };
 
-        // Import as wgpu texture via Metal
         let texture = match importer.import_to_wgpu(&self.device) {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("GUI: Failed to import texture: {:?}", e);
-                return;
+                return None;
             }
         };
 
-        // Create texture view with sRGB format for correct color interpretation.
-        // CEF outputs sRGB data — the texture is Bgra8Unorm but view_formats
-        // includes Bgra8UnormSrgb so we can sample it correctly.
+        // sRGB view for correct color interpretation
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(wgpu::TextureFormat::Bgra8UnormSrgb),
             ..Default::default()
         });
 
-        // Create bind group from the imported texture
-        self.left_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Left IOSurface Bind Group"),
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("IOSurface Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -352,7 +354,7 @@ impl GpuState {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        });
+        }))
     }
 
     fn render(&self) {
@@ -391,12 +393,12 @@ impl GpuState {
 
             pass.set_pipeline(&self.pipeline);
 
-            // Draw left half (live browser texture or blue placeholder)
+            // Draw left half
             pass.set_bind_group(0, &self.left_bind_group, &[]);
             pass.set_vertex_buffer(0, self.left_vbuf.slice(..));
             pass.draw(0..4, 0..1);
 
-            // Draw right half (green placeholder)
+            // Draw right half
             pass.set_bind_group(0, &self.right_bind_group, &[]);
             pass.set_vertex_buffer(0, self.right_vbuf.slice(..));
             pass.draw(0..4, 0..1);
@@ -477,17 +479,90 @@ fn create_solid_bind_group(
 struct XpcState {
     /// Connection to the launcher (must keep alive)
     _launcher: XpcConnection,
-    /// Listener for the left profile's direct connection (must keep alive)
-    _left_listener: XpcListener,
-    /// Direct connection from the left profile server (must keep alive)
-    _left_conn: Mutex<Option<Arc<XpcConnection>>>,
+    /// Listeners (must keep alive to accept connections)
+    _listeners: Vec<XpcListener>,
+    /// Direct connections from profile servers (must keep alive)
+    _connections: Mutex<Vec<Arc<XpcConnection>>>,
 }
 
-/// Connect to the launcher and spawn the left profile server.
-/// The `pending` slot receives IOSurface Mach ports from the profile's
-/// `display_surface` XPC messages.
+/// Create a listener for one profile slot and wire up display_surface handling.
+/// Returns the listener and the endpoint to send to the launcher.
 #[cfg(target_os = "macos")]
-fn bootstrap_xpc(pending: PendingSurfaceSlot) -> Option<XpcState> {
+fn create_profile_listener(
+    label: &'static str,
+    pending: SharedPendingSurfaces,
+    is_left: bool,
+) -> Option<(XpcListener, XpcEndpoint, Arc<Mutex<Vec<Arc<XpcConnection>>>>)> {
+    let listener = match XpcListener::new_anonymous() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("GUI: Failed to create {} listener: {}", label, e);
+            return None;
+        }
+    };
+
+    let endpoint = match listener.get_endpoint() {
+        Ok(ep) => ep,
+        Err(e) => {
+            eprintln!("GUI: Failed to get {} endpoint: {}", label, e);
+            return None;
+        }
+    };
+
+    let conns: Arc<Mutex<Vec<Arc<XpcConnection>>>> = Arc::new(Mutex::new(Vec::new()));
+    let conns_for_handler = Arc::clone(&conns);
+
+    set_new_connection_handler(&listener, move |conn| {
+        println!("GUI: Profile '{}' connected", label);
+        let conn = Arc::new(conn);
+        let pending = Arc::clone(&pending);
+
+        set_event_handler(&*conn, move |event| {
+            match event {
+                Ok(msg) => {
+                    let action = msg.get_string("action").unwrap_or_default();
+
+                    if action == "display_surface" {
+                        let port = msg.copy_mach_send("iosurface_port");
+                        let width = msg.get_i64("width") as u32;
+                        let height = msg.get_i64("height") as u32;
+                        let frame_id = msg.get_i64("frame_id");
+
+                        if port == 0 {
+                            eprintln!("GUI: [{}] null Mach port for frame {}", label, frame_id);
+                            return;
+                        }
+
+                        let mut guard = pending.lock().unwrap();
+                        let slot = if is_left {
+                            &mut guard.left
+                        } else {
+                            &mut guard.right
+                        };
+                        *slot = Some(PendingSurface {
+                            mach_port: port,
+                            width,
+                            height,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("GUI: [{}] connection error: {}", label, e);
+                }
+            }
+        });
+        conn.resume();
+
+        conns_for_handler.lock().unwrap().push(conn);
+    });
+
+    listener.resume();
+    Some((listener, endpoint, conns))
+}
+
+/// Connect to the launcher and spawn both profile servers.
+#[cfg(target_os = "macos")]
+fn bootstrap_xpc(pending: SharedPendingSurfaces) -> Option<XpcState> {
     println!("GUI: Connecting to launcher...");
 
     let launcher = match XpcConnection::connect_mach_service("com.cef-test.launcher") {
@@ -506,100 +581,56 @@ fn bootstrap_xpc(pending: PendingSurfaceSlot) -> Option<XpcState> {
     launcher.resume();
     println!("GUI: Connected to launcher");
 
-    // Create anonymous listener for the left profile
-    let left_listener = match XpcListener::new_anonymous() {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("GUI: Failed to create listener: {}", e);
-            return None;
-        }
-    };
+    let mut listeners = Vec::new();
+    let mut all_conns: Vec<Arc<Mutex<Vec<Arc<XpcConnection>>>>> = Vec::new();
 
-    let endpoint = match left_listener.get_endpoint() {
-        Ok(ep) => ep,
-        Err(e) => {
-            eprintln!("GUI: Failed to get endpoint: {}", e);
-            return None;
-        }
-    };
+    // Left profile: github.com
+    let (left_listener, left_endpoint, left_conns) =
+        create_profile_listener("left", Arc::clone(&pending), true)?;
+    listeners.push(left_listener);
+    all_conns.push(left_conns);
 
-    // Track the profile connection
-    let left_conn: Arc<Mutex<Option<Arc<XpcConnection>>>> =
-        Arc::new(Mutex::new(None));
-    let left_conn_for_handler = Arc::clone(&left_conn);
+    // Right profile: google.com
+    let (right_listener, right_endpoint, right_conns) =
+        create_profile_listener("right", Arc::clone(&pending), false)?;
+    listeners.push(right_listener);
+    all_conns.push(right_conns);
 
-    set_new_connection_handler(&left_listener, move |conn| {
-        println!("GUI: Profile 'left' connected");
-        let conn = Arc::new(conn);
-        let pending = Arc::clone(&pending);
-
-        set_event_handler(&*conn, move |event| {
-            match event {
-                Ok(msg) => {
-                    let action = msg.get_string("action").unwrap_or_default();
-
-                    if action == "display_surface" {
-                        let port = msg.copy_mach_send("iosurface_port");
-                        let width = msg.get_i64("width") as u32;
-                        let height = msg.get_i64("height") as u32;
-                        let frame_id = msg.get_i64("frame_id");
-
-                        if port == 0 {
-                            eprintln!("GUI: Received null Mach port for frame {}", frame_id);
-                            return;
-                        }
-
-                        let mut guard = pending.lock().unwrap();
-                        // Note: old Mach ports are not explicitly deallocated here.
-                        // mach_task_self_ FFI is broken (declared as fn, actually a
-                        // static variable). Ports are cleaned up at process exit.
-                        *guard = Some(PendingSurface {
-                            mach_port: port,
-                            width,
-                            height,
-                        });
-
-                        println!(
-                            "[FRAME-RX] frame={} w={} h={} port={}",
-                            frame_id, width, height, port
-                        );
-                    } else {
-                        println!("GUI: Received from profile: {}", action);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("GUI: Profile connection error: {}", e);
-                }
-            }
-        });
-        conn.resume();
-
-        *left_conn_for_handler.lock().unwrap() = Some(conn);
-    });
-
-    left_listener.resume();
-
-    // Send spawn_profile to launcher
-    let session_id = "left-1";
-    println!("GUI: Requesting profile 'left' (session={}, url=google.com)", session_id);
-
+    // Spawn left profile
+    println!("GUI: Requesting profile 'left' (session=left-1, url=github.com)");
     let msg = XpcDictionary::new();
     msg.set_string("action", "spawn_profile");
-    msg.set_string("session_id", session_id);
-    msg.set_string("url", "https://google.com");
+    msg.set_string("session_id", "left-1");
+    msg.set_string("url", "https://github.com");
     msg.set_string("profile", "left");
     msg.set_i64("width", 800);
     msg.set_i64("height", 800);
     msg.set_string("scale", "2.0");
-    msg.set_endpoint("gui_endpoint", endpoint);
-
+    msg.set_endpoint("gui_endpoint", left_endpoint);
     launcher.send(&msg);
-    println!("GUI: Sent spawn_profile request");
+
+    // Spawn right profile
+    println!("GUI: Requesting profile 'right' (session=right-1, url=google.com)");
+    let msg = XpcDictionary::new();
+    msg.set_string("action", "spawn_profile");
+    msg.set_string("session_id", "right-1");
+    msg.set_string("url", "https://google.com");
+    msg.set_string("profile", "right");
+    msg.set_i64("width", 800);
+    msg.set_i64("height", 800);
+    msg.set_string("scale", "2.0");
+    msg.set_endpoint("gui_endpoint", right_endpoint);
+    launcher.send(&msg);
+
+    println!("GUI: Sent both spawn_profile requests");
+
+    // Merge all connection trackers into one Vec
+    let merged_conns: Mutex<Vec<Arc<XpcConnection>>> = Mutex::new(Vec::new());
 
     Some(XpcState {
         _launcher: launcher,
-        _left_listener: left_listener,
-        _left_conn: Mutex::new(None),
+        _listeners: listeners,
+        _connections: merged_conns,
     })
 }
 
@@ -611,7 +642,7 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<GpuState>,
     #[cfg(target_os = "macos")]
-    pending_surface: PendingSurfaceSlot,
+    pending: SharedPendingSurfaces,
     #[cfg(target_os = "macos")]
     _xpc: Option<XpcState>,
 }
@@ -641,7 +672,7 @@ impl ApplicationHandler for App {
         // Bootstrap XPC after window creation
         #[cfg(target_os = "macos")]
         {
-            self._xpc = bootstrap_xpc(Arc::clone(&self.pending_surface));
+            self._xpc = bootstrap_xpc(Arc::clone(&self.pending));
         }
 
         self.window = Some(window);
@@ -679,16 +710,37 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    /// Check for a pending IOSurface from the profile server and import it.
+    /// Check for pending IOSurfaces from profile servers and import them.
     #[cfg(target_os = "macos")]
-    fn process_pending_surface(&mut self) {
-        let pending = self.pending_surface.lock().unwrap().take();
-        if let Some(surface) = pending {
+    fn process_pending_surfaces(&mut self) {
+        let (left, right) = {
+            let mut guard = self.pending.lock().unwrap();
+            (guard.left.take(), guard.right.take())
+        };
+
+        let mut needs_redraw = false;
+
+        if let Some(surface) = left {
             if let Some(gpu) = &mut self.gpu {
-                gpu.import_surface(surface);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
+                if let Some(bind_group) = gpu.import_surface(&surface) {
+                    gpu.left_bind_group = bind_group;
+                    needs_redraw = true;
                 }
+            }
+        }
+
+        if let Some(surface) = right {
+            if let Some(gpu) = &mut self.gpu {
+                if let Some(bind_group) = gpu.import_surface(&surface) {
+                    gpu.right_bind_group = bind_group;
+                    needs_redraw = true;
+                }
+            }
+        }
+
+        if needs_redraw {
+            if let Some(window) = &self.window {
+                window.request_redraw();
             }
         }
     }
@@ -700,31 +752,28 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     #[cfg(target_os = "macos")]
-    let pending_surface: PendingSurfaceSlot = Arc::new(Mutex::new(None));
+    let pending: SharedPendingSurfaces = Arc::new(Mutex::new(PendingSurfaces {
+        left: None,
+        right: None,
+    }));
 
     let mut app = App {
         window: None,
         gpu: None,
         #[cfg(target_os = "macos")]
-        pending_surface,
+        pending,
         #[cfg(target_os = "macos")]
         _xpc: None,
     };
 
-    // Use pump_app_events instead of run_app so we can pump the main dispatch
-    // queue (CFRunLoop) between winit iterations. This is required for XPC
-    // callbacks to fire — XpcListener::new_anonymous() dispatches on the main
-    // queue, which only gets pumped when CFRunLoop runs.
     loop {
         let status = event_loop.pump_app_events(Some(Duration::from_millis(1)), &mut app);
 
-        // Pump main dispatch queue for XPC callbacks
         #[cfg(target_os = "macos")]
         cfrunloop::run_for(0.001);
 
-        // Process any received IOSurface
         #[cfg(target_os = "macos")]
-        app.process_pending_surface();
+        app.process_pending_surfaces();
 
         if let PumpStatus::Exit(_) = status {
             break;

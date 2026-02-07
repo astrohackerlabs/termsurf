@@ -901,6 +901,25 @@ shows google.com. Both are fully rendered, side by side, in a single window. No
 interaction yet — just visual confirmation of two independent browser processes
 sharing a window.
 
+**Result:** Working. Both profiles render side by side in a single window.
+GitHub.com (left, static) renders its initial frames then goes idle. Google.com
+(right, animated doodle) renders continuously at ~14fps — matching the actual
+doodle animation rate as confirmed in a separate browser. No crashes.
+
+Key implementation details:
+- `create_profile_listener()` helper extracts per-profile XPC listener setup
+  for reuse. Each profile gets its own anonymous listener, endpoint, and
+  connection tracking.
+- `PendingSurfaces` struct holds separate `left` and `right` slots. XPC
+  callbacks route to the correct slot via an `is_left` boolean captured in
+  the closure.
+- Launcher needed no changes — it already handles multiple `spawn_profile`
+  calls, spawning a separate process for each.
+- Profile server needed no changes — each instance independently connects
+  back to its designated anonymous listener.
+- Window size: 1600x800 logical (3200x1600 physical on Retina), with each
+  profile rendering at 800x800 logical (1600x1600 physical).
+
 ### Phase 8: Mouse Input
 
 Route mouse events from the GUI to the correct profile server. This makes the
