@@ -1628,3 +1628,100 @@ explanations:
 both produced total failures. The raw FFI approach to NSApplication event
 pumping is either incorrect or fundamentally incompatible with CEF's headless
 process model. A different direction is needed.
+
+### Experiment 9: Question the Assumption — cef-rs OSR Without a Window
+
+**Status:** Not started
+
+**Goal:** Determine whether the cef-rs OSR example's 60fps performance comes
+from `pump_app_events` or from having a window with a Metal layer (which
+creates a CVDisplayLink under the hood).
+
+**Hypothesis tested:** Is the window the key, not the event pump?
+
+#### Motivation
+
+Experiments 6, 7, and 8 all failed when touching the event pump. Every attempt
+to replicate what `pump_app_events` does via raw FFI broke the app completely.
+This suggests we may be chasing the wrong cause.
+
+The cef-rs OSR example has three things our profile server doesn't:
+
+1. `NSApplicationActivationPolicyRegular` — makes it a full GUI process
+2. A winit window with a wgpu/Metal surface — creates a CVDisplayLink
+3. `pump_app_events` processing the winit event loop
+
+We assumed #3 was the cause of 60fps (Exp 4 conclusion). But what if it's #2?
+A Metal layer implicitly creates a CVDisplayLink, which provides a hardware
+60Hz vsync signal. This signal drives Core Animation and may also drive CEF's
+`SyntheticBeginFrameSource` timer scheduling. Without a display link, macOS
+may coalesce timers and deliver them at a degraded cadence — explaining why
+CFRunLoop returns instantly 96% of the time (no sources pending because the
+display link never fires).
+
+This experiment tests this directly: remove the window from the cef-rs OSR
+example and see if it still gets 60fps.
+
+#### Changes
+
+One change to `cef-rs/examples/osr/src/main.rs`:
+
+**Skip window creation in `create_browser_window`.** Replace the window + wgpu
+setup with a minimal headless browser that still calls `on_accelerated_paint`
+but doesn't render to a window. The simplest approach: skip `create_browser_window`
+entirely and create the browser directly with a minimal render handler, similar
+to how the profile server does it.
+
+However, since the example's architecture is deeply coupled to the window
+(wgpu State, BrowserInstance, window events), the cleaner approach is to
+**comment out the window creation and wgpu setup** while keeping:
+
+- The winit event loop and `pump_app_events` (the control variable)
+- CEF initialization with the same settings
+- Browser creation with `windowless_rendering_enabled: true`
+- The `on_accelerated_paint` callback (just log, don't render)
+
+Specifically in `create_browser_window`:
+
+```rust
+fn create_browser_window(&mut self, event_loop: &ActiveEventLoop, url: &str, ...) {
+    // Skip window and wgpu State creation
+    // Create browser with no window, minimal render handler
+    let window_info = WindowInfo {
+        windowless_rendering_enabled: true as _,
+        shared_texture_enabled: true as _,
+        external_begin_frame_enabled: false as _,
+        ..Default::default()
+    };
+    let browser_settings = BrowserSettings {
+        windowless_frame_rate: 60,
+        ..Default::default()
+    };
+    // ... create browser with a logging-only render handler
+}
+```
+
+Add frame counting with timestamps in the render handler to measure delivery
+rate, similar to the profile server's `[FRAME-TX]` logging.
+
+#### What Stays the Same
+
+- winit event loop created and `pump_app_events` called (the thing we're testing)
+- `NSApplicationActivationPolicyRegular` still set
+- `do_message_loop_work()` still called every iteration
+- `external_message_pump: true` in CEF settings
+- Same CEF initialization
+
+#### Expected Outcomes
+
+| Result | Meaning |
+| --- | --- |
+| fps drops to ~38 (matches profile server) | The **window/display link** is the key, not `pump_app_events`. Our headless process can never match 60fps without a display link. Next step: install a CVDisplayLink or create a hidden CAMetalLayer. |
+| fps stays at ~60 | `pump_app_events` really is the key. Our raw FFI attempts (Exp 7, 8) failed due to implementation bugs, not because the approach is wrong. Next step: use winit properly or fix the FFI. |
+| fps drops to an intermediate value (~45-55) | Both the window and `pump_app_events` contribute. The event pump helps but the display link provides additional timing precision. |
+
+#### Risk
+
+Low. This only modifies the cef-rs example, not the profile server. The
+example is a test harness — no production impact. If the modification is too
+invasive, we can create a separate minimal example instead.
