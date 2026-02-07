@@ -419,20 +419,33 @@ catastrophic. Only revisit if all other approaches fail.
 
 Ordered by likelihood of success and implementation effort:
 
-- [ ] **1. CEF debug logging** (Idea 10) — Zero code changes, may reveal root cause
-- [ ] **2. `run_message_loop()` clean test** (Idea 3) — Simplest code change, may have been misconfigured in Exp 6
-- [ ] **3. NSApplication init without window** (Idea 12) — One line of code, may unlock CEF timers
-- [ ] **4. CFRunLoop-based pump** (Idea 2) — Addresses the likely root cause (timer infrastructure)
-- [ ] **5. OnScheduleMessagePumpWork** (Idea 1) — The "correct" way to drive CEF externally
-- [ ] **6. CVDisplayLink from display ID** (Idea 4) — Proven timing source, needs proper integration
-- [ ] **7. GUI-driven frame requests** (Idea 7) — Architectural change, but fundamentally sound
-- [ ] **8. Instrument SyntheticBeginFrameSource** (Idea 9) — Deep investigation if above ideas fail
-- [ ] **9. Compare process environments** (Idea 11) — Diagnostic, helps guide further experiments
-- [ ] **10. CADisplayLink via NSScreen** (Idea 5) — Modern API, requires macOS 14+
-- [ ] **11. dispatch_source timer** (Idea 6) — Simple fallback, not vsync-aligned
-- [ ] **12. Double buffering** (Idea 8) — Doesn't solve 60fps, papers over the problem
+- [ ] **1. CEF debug logging** (Idea 10) — Zero code changes, may reveal root
+      cause
+- [ ] **2. `run_message_loop()` clean test** (Idea 3) — Simplest code change,
+      may have been misconfigured in Exp 6
+- [ ] **3. NSApplication init without window** (Idea 12) — One line of code, may
+      unlock CEF timers
+- [ ] **4. CFRunLoop-based pump** (Idea 2) — Addresses the likely root cause
+      (timer infrastructure)
+- [ ] **5. OnScheduleMessagePumpWork** (Idea 1) — The "correct" way to drive CEF
+      externally
+- [ ] **6. CVDisplayLink from display ID** (Idea 4) — Proven timing source,
+      needs proper integration
+- [ ] **7. GUI-driven frame requests** (Idea 7) — Architectural change, but
+      fundamentally sound
+- [ ] **8. Instrument SyntheticBeginFrameSource** (Idea 9) — Deep investigation
+      if above ideas fail
+- [ ] **9. Compare process environments** (Idea 11) — Diagnostic, helps guide
+      further experiments
+- [ ] **10. CADisplayLink via NSScreen** (Idea 5) — Modern API, requires macOS
+      14+
+- [ ] **11. dispatch_source timer** (Idea 6) — Simple fallback, not
+      vsync-aligned
+- [ ] **12. Double buffering** (Idea 8) — Doesn't solve 60fps, papers over the
+      problem
 - [ ] **13. Invalidate() at 60Hz** (Idea 13) — Hack, unlikely to work
-- [ ] **14. external_begin_frame correct usage** (Idea 14) — Fragile API, last resort
+- [ ] **14. external_begin_frame correct usage** (Idea 14) — Fragile API, last
+      resort
 
 ## Constraints
 
@@ -451,3 +464,60 @@ Ordered by likelihood of success and implementation effort:
   investigation
 - [Issue 340: Architecture reconsideration](./340-architecture.md) — Research
   that led to the performance hypothesis
+
+## Experiments
+
+### Experiment 1: CEF Debug Logging
+
+**Status:** Not started
+
+**Goal:** Enable Chromium's internal logging to see what CEF's compositor and
+frame scheduler are doing. Understand _why_ frames are being dropped or delayed.
+
+**Changes:** Two modifications to `ts3/termsurf-profile/src/main.rs`:
+
+1. **Add `log_severity` and `log_file` to CEF Settings** (~line 222):
+
+```rust
+let settings = cef::Settings {
+    windowless_rendering_enabled: 1,
+    no_sandbox: 1,
+    log_severity: cef::LogSeverity::VERBOSE,
+    log_file: cef::CefString::from("/tmp/cef-debug.log"),
+    root_cache_path: ...,
+    ...
+};
+```
+
+2. **Add `--enable-logging` and `--v=1` to command-line args** (~line 683):
+
+```rust
+fn on_before_command_line_processing(&self, ..., command_line: ...) {
+    if let Some(command_line) = command_line {
+        command_line.append_switch(Some(&"no-startup-window".into()));
+        command_line.append_switch(Some(&"enable-logging".into()));
+        command_line.append_switch_with_value(
+            Some(&"v".into()),
+            Some(&"1".into()),
+        );
+    }
+}
+```
+
+**No functional code changes.** The rendering loop stays the same. This is pure
+diagnostics.
+
+**What to look for in `/tmp/cef-debug.log`:**
+
+- `BeginFrame` / `SyntheticBeginFrameSource` — is the frame timer ticking at
+  60Hz?
+- `Compositor` / `Draw` / `SubmitCompositorFrame` — is the compositor producing
+  frames?
+- `DisplayScheduler` / `ShouldDraw` — is the scheduler blocking frames?
+- Any throttling, timer, or scheduling warnings
+- Messages about `CFRunLoop`, `NSRunLoop`, or timer sources
+
+**Expected output:** A log file at `/tmp/cef-debug.log` plus the normal
+`[FRAME-TX]` entries in `/tmp/termsurf-profile-default.log`. Cross-referencing
+these will reveal what happens between CEF's internal frame scheduling and our
+`on_accelerated_paint` callback.
