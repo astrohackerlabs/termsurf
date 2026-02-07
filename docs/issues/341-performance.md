@@ -1585,7 +1585,7 @@ and prevent focus stealing via method swizzling.
 
 ### Experiment 15: Swizzle canBecomeKey on Winit's Window
 
-**Status:** Not started
+**Status:** FAILED — Global swizzle broke CEF entirely
 
 **Goal:** Go back to winit (for vsync) and prevent focus stealing by swizzling
 NSWindow's `canBecomeKey` method to return `NO` before winit creates its window.
@@ -1689,6 +1689,135 @@ this process, not the system.
   for customizing framework behavior
 - If `canBecomeKey` alone isn't enough, we may also need to swizzle
   `canBecomeMain` and/or `[NSApp activateIgnoringOtherApps:]`
+
+#### Results
+
+**FAILED** — The webview did not open at all. The global `canBecomeKey` swizzle
+on the `NSWindow` class broke CEF entirely.
+
+Swizzling at the class level affects *every* NSWindow instance in the process —
+including internal windows that CEF/Chromium creates during initialization. Even
+in off-screen rendering mode, CEF creates hidden helper windows that require
+`canBecomeKey` to return `YES` to function properly. The global override
+prevented CEF from initializing or creating browsers.
+
+#### Conclusion
+
+Global method swizzling on NSWindow is not viable. CEF depends on its internal
+windows being able to become key. We cannot distinguish between winit's window
+(which we want to prevent from becoming key) and CEF's internal windows (which
+must be allowed to become key) when swizzling at the class level.
+
+The profile server process cannot prevent focus stealing from within itself
+without breaking CEF. The fix must come from the **other side** — the GUI
+process should reclaim focus after spawning the profile server.
+
+### Experiment 16: GUI-Side Focus Reclaim
+
+**Status:** Not started
+
+**Goal:** Accept that the profile server will momentarily steal focus, and have
+the WezTerm GUI immediately reclaim it.
+
+**Problem:** Eight experiments (10-15) tried to prevent the profile server from
+stealing focus:
+
+| Experiment | Approach                            | Result                        |
+| ---------- | ----------------------------------- | ----------------------------- |
+| Exp 10     | NSApplicationActivationPolicyAccessory | Focus still stolen         |
+| Exp 11     | Native NSWindow, canBecomeKey: NO   | Focus fixed, lost vsync       |
+| Exp 12     | orderFront instead of orderBack     | Focus fixed, lost vsync       |
+| Exp 13     | Layer-backed content view           | Focus fixed, lost vsync       |
+| Exp 14     | NSApp event pumping                 | Focus fixed, lost vsync       |
+| Exp 15     | Global canBecomeKey swizzle + winit | Broke CEF entirely            |
+
+The fundamental conflict: winit's window is needed for vsync (Exp 7/9 proved
+this), but winit's window creation steals focus. Every attempt to prevent focus
+stealing either breaks vsync (Exp 11-14) or breaks CEF (Exp 15).
+
+**Insight:** The focus steal is a **momentary** problem. The profile server
+starts, winit creates a window, focus briefly moves to that process, then
+nothing else happens — the profile server has no UI, no keyboard handling, and
+the user is already interacting with WezTerm. The fix doesn't need to prevent
+the steal — it just needs to **undo** it immediately.
+
+**Hypothesis:** After the GUI spawns a profile server via XPC, it should
+immediately reclaim focus. On macOS, this is done with
+`[NSApp activateIgnoringOtherApps:YES]` or the modern
+`NSApplication.activate()`. The timing is:
+
+1. GUI sends `spawn_profile` to launcher via XPC
+2. Launcher spawns `termsurf-profile` process
+3. Profile server creates winit window → **focus steals to profile server**
+4. GUI calls `[NSApp activate]` → **focus returns to GUI**
+
+The delay between steps 3 and 4 depends on how quickly the GUI detects the
+profile server has started. Options:
+
+- **Timer-based:** GUI sets a short timer (e.g., 500ms after spawn) to reclaim
+  focus. Simple but fragile — the profile server may not have started yet, or
+  may have already started long before.
+- **XPC-triggered:** When the profile server connects to the GUI via the
+  anonymous XPC endpoint (step 4 in the current topology), the GUI reclaims
+  focus in the connection handler. This is precise — focus is reclaimed at
+  exactly the right moment.
+
+#### Changes
+
+1. **In `webview_xpc.rs`** (GUI-side XPC handler): When the profile server's
+   XPC connection is established, call `[NSApp activateIgnoringOtherApps:YES]`
+   to reclaim focus
+2. **No changes to `termsurf-profile`** — keep the winit window as-is (Exp 9
+   configuration for vsync)
+3. **Revert Exp 15 code changes** in `termsurf-profile` — remove the swizzle,
+   remove the Accessory policy, restore clean Exp 9 state
+
+#### Implementation
+
+In `ts3/wezterm-gui/src/termwindow/webview_xpc.rs`, in the XPC connection
+handler:
+
+```rust
+// When profile server connects, reclaim focus
+unsafe {
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let _: () = msg_send![app, activateIgnoringOtherApps:YES];
+}
+```
+
+#### Expected Outcome
+
+| Result                              | Meaning                                                  |
+| ----------------------------------- | -------------------------------------------------------- |
+| Brief flicker, then focus returns   | Fix works. The focus steal is imperceptible to the user.  |
+| No flicker at all                   | Even better — the reclaim happens before the user notices. |
+| Focus doesn't return                | The timing is wrong. May need a longer delay or different trigger point. |
+| Performance regression              | Unlikely — no changes to the profile server's event loop. |
+
+#### Why This Should Work
+
+This is how most macOS apps handle subprocess focus issues. Apps like Spotlight,
+Alfred, and iTerm2 all manage focus across multiple processes. The standard
+pattern is: let the subprocess do what it needs to do, then the main app
+reclaims focus when it's ready.
+
+The XPC connection event is the ideal trigger because:
+- It fires after the profile server has fully initialized (window created, CEF
+  running)
+- It fires in the GUI process on a dispatch queue thread
+- The GUI already has an `NSApplication` instance (WezTerm is a GUI app)
+- `activateIgnoringOtherApps:` is designed for exactly this case
+
+#### Notes
+
+- This is the first experiment that modifies the **GUI process** rather than
+  the profile server
+- The profile server keeps its winit window for vsync — no performance risk
+- The focus reclaim should happen within milliseconds of the focus steal,
+  making it imperceptible
+- If the flicker is noticeable, a follow-up experiment could add a small delay
+  before the profile server creates its winit window, giving the GUI time to
+  set up a focus-reclaim callback first
 
 ## Related Issues
 
