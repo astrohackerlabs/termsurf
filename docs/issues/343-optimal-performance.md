@@ -1156,3 +1156,70 @@ wait up to 16ms instead of 1ms. But since `do_message_loop_work()` already takes
 1-33ms per call, an extra 15ms of waiting on empty iterations may not change
 the effective cadence much — or it may give CEF's internal threads time to post
 work that `do_message_loop_work()` can then process more efficiently.
+
+#### Results
+
+**Status: FAILED — regression across all metrics.**
+
+| Metric | Baseline | Exp 5 | Delta |
+| --- | --- | --- | --- |
+| Total frames | — | 390 | — |
+| Duration | — | 12.4s | — |
+| Average FPS | 38.2 | 31.3 | -18% |
+| 60fps range (excl dup) | 71.0% | 65.8% | -5.2pp |
+| Max streak | 424 | 24 | -94% |
+
+**Loop timing (instrumentation from Exp 3):**
+
+```
+FINAL iter=810 max_mlw=33244us max_cfl=953us max_total=33278us mlw_spikes=810 cfl_instant=466
+```
+
+- 810 iterations in 12.4s (~65/sec) — same iteration rate as Exp 3
+- `mlw_spikes=810` — 100% of `do_message_loop_work()` calls >1ms, unchanged
+- `cfl_instant=466` — 57.5% instant returns (down from 96% at 1ms timeout)
+- `max_cfl=953us` — CFRunLoop never blocks for the full 16ms, caps at ~1ms
+
+**Frame interval distribution (389 intervals):**
+
+| Bucket | Count | Percent |
+| --- | --- | --- |
+| 0-1ms (batch/duplicate) | 56 | 14.4% |
+| 13-20ms (60fps, good) | 219 | 56.3% |
+| 21-34ms (30-47fps) | 50 | 12.9% |
+| 35-50ms (missed) | 14 | 3.6% |
+| 51-100ms (stall) | 38 | 9.8% |
+| 101-200ms (very bad) | 5 | 1.3% |
+| 200+ms (terrible) | 7 | 1.8% |
+
+#### Conclusion
+
+The 16ms timeout matched the "Performance regression" expected outcome. The
+longer timeout did not catch any additional CFRunLoop sources — `max_cfl` was
+only 953us, meaning CFRunLoop never waited anywhere close to 16ms. The instant
+return rate dropped from 96% to 57.5%, but that's because the longer timeout
+let some sub-1ms sources fire that previously timed out — not because we caught
+any new 2-15ms sources.
+
+The max streak collapse from 424 to 24 is the most telling result. The longer
+timeout introduced unpredictable delays that disrupted the frame cadence without
+providing any offsetting benefit. The rendering pipeline can hit 60fps but
+cannot sustain it past ~24 frames before a stall interrupts.
+
+**Hypotheses ruled out:**
+
+- **H1 (timing mismatch) — partially ruled out.** The specific mechanism
+  proposed (1ms timeout missing sources scheduled 2-16ms in the future) is
+  disproven. CFRunLoop sources are not pending at those timescales. However, H1
+  in the broader sense (our event pump is inadequate compared to
+  `pump_app_events`) remains open — the problem may not be *when* we pump but
+  *what* we pump.
+
+**Key insight:** The difference between our `CFRunLoopRunInMode` and the
+cef-rs example's `pump_app_events` is not about timeout duration. It's about
+what each function processes. `pump_app_events` runs the full `NSApplication`
+event loop including `nextEventMatchingMask:untilDate:inMode:dequeue:`, which
+processes window server events, display link callbacks, and Core Animation
+commits. `CFRunLoopRunInMode` only processes CFRunLoop sources. The work that
+makes `do_message_loop_work()` spike to >1ms on every call may be work that
+should have been handled by the NSApplication event loop instead.
