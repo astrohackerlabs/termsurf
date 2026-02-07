@@ -2005,6 +2005,30 @@ produce frames on our schedule, not its own.
 | No frames at all           | The binding may need additional setup (e.g., frame time argument). Check CEF source. |
 | Still ~30fps               | CEF's compositor has additional internal throttling that `external_begin_frame` doesn't override. Investigate `windowless_frame_rate` interaction. |
 
+#### Baseline (Pre-Exp 17, Hidden Window with Focus Stealing)
+
+Before implementing Experiment 17, the code was reverted to the Exp 9
+configuration (hidden winit window, `external_message_pump`, focus stealing).
+This establishes the performance target to beat.
+
+**Overall stats:** 660 frames over 27.0s = **24.5 fps average**
+
+| Interval             | Count | Percentage |
+| -------------------- | ----- | ---------- |
+| Burst (0-5ms)        | 18    | 2%         |
+| 60fps (6-20ms)       | 463   | **70%**    |
+| 30fps (21-40ms)      | 38    | 5%         |
+| Mid (41-70ms)        | 61    | 9%         |
+| Low (>70ms)          | 79    | 11%        |
+
+**Dominant intervals:** 17ms (195), 16ms (120) — strong vsync-aligned peak.
+
+**Max consecutive 60fps frames:** 40
+
+This is the best achievable with the hidden window approach, but it requires
+focus stealing. Experiment 17 must match or exceed 70% at 60fps without any
+window.
+
 #### Why This Wasn't Tried Earlier
 
 We assumed CEF needed environmental signals (vsync, display link, window server
