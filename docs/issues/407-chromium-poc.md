@@ -179,35 +179,137 @@ Write the spinning blue square page and its HTTP server.
 counter shows ~60fps, random string appears. Reload — same string persists. Open
 in incognito — different string appears.
 
-### Phase 2: Build Chromium from source
+### Phase 2: Merge Chromium into the repo
 
-Get `content_shell` building and running on macOS.
+Fork Chromium into the termsurf monorepo, following the same pattern used for
+Ghostty (`ts1/`), WezTerm (`ts2/`, `ts3/`), and cef-rs (`cef-rs/`). The
+Chromium source lives at `ts4/termsurf-chromium/` and carries the full upstream
+git history.
 
-- [ ] Install depot_tools (`git clone` into `~/depot_tools`, add to `PATH`)
-- [ ] Fetch Chromium source into `/Users/ryan/dev/chromium/`:
-      `mkdir /Users/ryan/dev/chromium && cd /Users/ryan/dev/chromium
-      caffeinate fetch --no-history chromium`
-      ~30–50 GB. Takes hours. `--no-history` saves disk. `caffeinate` prevents
-      sleep. The existing `/Users/ryan/dev/termsurf/chromium/` is a shallow
-      read-only clone from Issue 401 research — it cannot be built.
-- [ ] Exclude `/Users/ryan/dev/chromium` from Spotlight indexing
+**Step 1: Fetch the Chromium source with depot_tools**
+
+Chromium cannot be built from a plain `git clone` — it requires `depot_tools`
+and `gclient sync` to fetch hundreds of dependencies (V8, Skia, ICU, etc.).
+
+```
+# Install depot_tools
+git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+  ~/depot_tools
+export PATH="$HOME/depot_tools:$PATH"
+
+# Fetch Chromium into a staging directory
+mkdir /tmp/chromium-staging && cd /tmp/chromium-staging
+caffeinate fetch --no-history chromium
+```
+
+This creates `/tmp/chromium-staging/src/` with the full source and all
+dependencies. ~30–50 GB. Takes hours. `caffeinate` prevents sleep.
+`--no-history` skips git history to save disk (we will re-fetch with history
+for the merge).
+
+Alternatively, fetch with history for a proper merge:
+
+```
+caffeinate fetch chromium
+```
+
+This preserves upstream git history so that `git merge -X subtree` works for
+future upstream merges.
+
+**Step 2: Move everything into `ts4/termsurf-chromium/`**
+
+Inside the Chromium repo, create a commit that moves the entire source tree
+into a subdirectory:
+
+```
+cd /tmp/chromium-staging/src
+git mv $(ls -A | grep -v '.git') ts4/termsurf-chromium/
+# Or use a script to handle the large number of files
+mkdir ts4/termsurf-chromium
+git ls-files | while read f; do
+  mkdir -p "ts4/termsurf-chromium/$(dirname "$f")"
+  git mv "$f" "ts4/termsurf-chromium/$f"
+done
+git commit -m "Move Chromium source into ts4/termsurf-chromium/"
+```
+
+This commit exists only in the staging repo. It rewrites all paths so that
+the subtree merge maps correctly.
+
+**Step 3: Merge into termsurf with unrelated histories**
+
+```
+cd /Users/ryan/dev/termsurf
+git remote add chromium /tmp/chromium-staging/src
+git fetch chromium
+git merge chromium/main --allow-unrelated-histories \
+  -m "Merge Chromium into ts4/termsurf-chromium"
+```
+
+The termsurf repo now contains the Chromium source at
+`ts4/termsurf-chromium/` with full upstream history. Future upstream merges
+use:
+
+```
+git fetch chromium
+git merge -X subtree=ts4/termsurf-chromium chromium/main \
+  -m "Merge upstream Chromium"
+```
+
+**Step 4: Update merge-upstream documentation**
+
+Add Chromium to `docs/issues/002-merge-upstream.md`:
+
+| Project  | Directory                | Upstream                    | Remote     | Branch |
+| -------- | ------------------------ | --------------------------- | ---------- | ------ |
+| Chromium | `ts4/termsurf-chromium/` | chromium.googlesource.com   | `chromium` | main   |
+
+**Step 5: Verify the source is buildable**
+
+```
+cd /Users/ryan/dev/termsurf/ts4/termsurf-chromium
+# gclient sync may be needed to fetch deps that aren't in git
+gclient sync
+```
+
+**Note on `.gclient`:** The `gclient` configuration file and `depot_tools`
+integration may need adjustment since the source now lives inside a
+subdirectory of the termsurf repo rather than at the root of its own repo.
+This may require a `.gclient` file in `ts4/` or `ts4/termsurf-chromium/`
+that points to the correct paths.
+
+**Note on the existing shallow clone:** The existing
+`/Users/ryan/dev/termsurf/chromium/` directory is a shallow read-only clone
+from Issue 401 research. It is separate from `ts4/termsurf-chromium/` and
+can be removed after this phase.
+
+### Phase 3: Build Chromium from source
+
+Get `content_shell` building and running on macOS from the merged source.
+
+- [ ] Exclude `ts4/termsurf-chromium/` from Spotlight indexing
 - [ ] Configure GN:
-      `cd /Users/ryan/dev/chromium/src
+      ```
+      cd ts4/termsurf-chromium
       gn gen out/Default --args='
         is_debug = false
         symbol_level = 0
         enable_nacl = false
         is_component_build = true
-      '`
+      '
+      ```
 - [ ] Build content_shell: `autoninja -C out/Default content_shell` (1–7 hours
       depending on hardware)
+- [ ] Add `ts4/termsurf-chromium/out/` to `.gitignore`
 - [ ] Verify it runs:
-      `./out/Default/Content\ Shell.app/Contents/MacOS/Content\ Shell \
-        http://localhost:9407`
+      ```
+      ./ts4/termsurf-chromium/out/Default/Content\ Shell.app/Contents/MacOS/Content\ Shell \
+        http://localhost:9407
+      ```
       Start the Bun server first. Confirm the test page loads with spinning
       square, FPS counter, and localStorage string.
 
-### Phase 3: Modify content_shell for dual profiles
+### Phase 4: Modify content_shell for dual profiles
 
 Modify ~5 files inside the Chromium tree to create two `ShellBrowserContext`
 instances with different storage paths and display two `WebContents` side by
@@ -255,7 +357,7 @@ std::unique_ptr<WebContents> web_contents_b_;
 **Step 4: Build and run**
 
 ```
-autoninja -C out/Default content_shell
+autoninja -C ts4/termsurf-chromium/out/Default content_shell
 ```
 
 Incremental build after ~5 file changes: 1–5 minutes.
@@ -265,7 +367,7 @@ Incremental build after ~5 file changes: 1–5 minutes.
 cd /Users/ryan/dev/termsurf/ts4 && bun run server.ts
 
 # Terminal 2:
-/Users/ryan/dev/chromium/src/out/Default/Content\ Shell.app/Contents/MacOS/Content\ Shell \
+./ts4/termsurf-chromium/out/Default/Content\ Shell.app/Contents/MacOS/Content\ Shell \
   --hide-toolbar
 ```
 
@@ -273,7 +375,7 @@ cd /Users/ryan/dev/termsurf/ts4 && bun run server.ts
 Left pane shows one localStorage string, right pane shows a different one. Both
 strings persist across app restarts.
 
-### Phase 4: Measure and document
+### Phase 5: Measure and document
 
 - [ ] Verify profile isolation: two different localStorage strings, persisting
       across restarts. Check `~/.config/termsurf/poc/profile-a/` and
