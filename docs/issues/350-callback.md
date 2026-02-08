@@ -390,4 +390,64 @@ Experiment 1). Work/sec should reflect actual source + timer fires without zombi
 inflation. If the source eliminates timer supersession, work/sec should be higher
 than Experiment 1's ~100/sec, and fps should improve above ~29.
 
-**Status:** Not started
+**Status:** Complete
+
+**Results (trial 7 of benchmark, last profile log preserved):**
+
+```
+[PUMP] callbacks=982(imm=982 def=0) fires=988(src=981 tmr=0 fb=7) reentrant=0 work=988
+[PUMP] callbacks=204(imm=175 def=29) fires=181(src=175 tmr=0 fb=6) reentrant=0 work=181
+[PUMP] callbacks=150(imm=150 def=0) fires=157(src=150 tmr=0 fb=7) reentrant=0 work=157
+[PUMP] callbacks=192(imm=145 def=47) fires=149(src=145 tmr=0 fb=4) reentrant=0 work=149
+[PUMP] callbacks=154(imm=115 def=39) fires=120(src=115 tmr=0 fb=5) reentrant=0 work=120
+[PUMP] callbacks=151(imm=103 def=48) fires=108(src=103 tmr=0 fb=5) reentrant=0 work=108
+[PUMP] callbacks=174(imm=109 def=65) fires=114(src=109 tmr=0 fb=5) reentrant=0 work=114
+[PUMP] callbacks=222(imm=110 def=112) fires=110(src=110 tmr=0 fb=0) reentrant=0 work=110
+[PUMP] callbacks=207(imm=103 def=104) fires=103(src=103 tmr=0 fb=0) reentrant=0 work=103
+[PUMP] callbacks=136(imm=97 def=39) fires=102(src=97 tmr=0 fb=5) reentrant=0 work=102
+```
+
+Benchmark: ~22fps (down from ~29fps in Experiment 1), thermal nominal. Zombie
+leak is fixed (fallback back to 0-7/sec), but performance got worse, not better.
+
+**Findings:**
+
+1. **Zombie fix confirmed.** Fallback fires are back to single digits, matching
+   Experiment 1. The timer invalidation and source-pending tracking work
+   correctly.
+
+2. **tmr=0 always.** Despite 29-112 deferred callbacks/sec, no deferred timer
+   ever fires. The source callback's `do_pump_work` invalidates any pending
+   timer. CEF says "call me in 5ms" → timer created → source fires first →
+   invalidates the timer → deferred work waits for the next source fire or a
+   33ms fallback instead of the requested 5ms.
+
+3. **More work, fewer frames.** Experiment 1: ~100 work/sec → 29fps.
+   Experiment 3: ~100-180 work/sec → 22fps. The source eliminated supersession
+   (fires ≈ callbacks), but extra work calls didn't produce extra frames — they
+   add overhead that slows the rendering pipeline.
+
+4. **p50 jumped from 25ms → 44ms.** Each frame takes longer despite more
+   `do_message_loop_work()` calls per second.
+
+5. **Source adds lock contention.** Each pump cycle now involves 4 PUMP lock
+   acquisitions (schedule_work → source_callback → do_pump_work × 2) vs 2 in
+   the timer approach. Background-thread `schedule_work(0)` calls contend with
+   the main thread.
+
+**Comparison across experiments:**
+
+| Experiment | Approach      | work/sec  | fps  | p50   |
+| ---------- | ------------- | --------- | ---- | ----- |
+| 1          | Timer-only    | ~100      | ~29  | 25ms  |
+| 2          | Source (buggy)| ~30,000+  | ~22  | 50ms  |
+| 3          | Source (fixed)| ~100-180  | ~22  | 44ms  |
+
+**Conclusion:** CFRunLoopSource didn't help. Timer supersession (Experiment 1's
+callbacks > fires gap) was not the bottleneck — the timer-only approach was
+actually better. The source approach adds overhead (lock contention, deferred
+timer invalidation) that outweighs any benefit from eliminating supersession.
+
+Next steps: revert to the timer-only approach (Experiment 1) and investigate the
+remaining ideas — benchmark timer contention (the 8ms scroll timer competing for
+main thread time) or replacing bare `CFRunLoopRun()` with `NSApp().run()`.

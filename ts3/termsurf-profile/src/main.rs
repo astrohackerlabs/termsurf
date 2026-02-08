@@ -326,6 +326,7 @@ mod cef_pump {
         is_active: bool,
         reentrancy_detected: bool,
         is_fallback_timer: bool,
+        source_pending: bool,
     }
 
     struct SendablePtr(*mut c_void);
@@ -337,6 +338,7 @@ mod cef_pump {
         is_active: false,
         reentrancy_detected: false,
         is_fallback_timer: false,
+        source_pending: false,
     });
 
     /// Initialize the persistent CFRunLoopSource. Must be called once on the
@@ -353,9 +355,10 @@ mod cef_pump {
         if delay_ms <= 0 {
             SCHED_IMMEDIATE.fetch_add(1, Ordering::Relaxed);
             // Signal the persistent source — O(1), no timer allocation
-            let pump = PUMP.lock().unwrap();
+            let mut pump = PUMP.lock().unwrap();
             if let Some(ref source) = pump.source {
                 super::cfrunloop::signal_source(source.0);
+                pump.source_pending = true;
             }
         } else {
             SCHED_DEFERRED.fetch_add(1, Ordering::Relaxed);
@@ -390,6 +393,10 @@ mod cef_pump {
     /// CFRunLoopSource callback — fires for delay=0 (immediate) work.
     unsafe extern "C" fn source_callback(_info: *mut c_void) {
         FIRE_SOURCE.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut pump = PUMP.lock().unwrap();
+            pump.source_pending = false;
+        }
         do_pump_work();
     }
 
@@ -409,8 +416,10 @@ mod cef_pump {
     fn do_pump_work() {
         let mut pump = PUMP.lock().unwrap();
 
-        // Clear fired timer reference (source stays registered)
-        pump.timer = None;
+        // Invalidate any pending timer (prevents zombie timer leak)
+        if let Some(timer) = pump.timer.take() {
+            super::cfrunloop::invalidate_timer(timer.0);
+        }
 
         // Reentrancy guard
         if pump.is_active {
@@ -433,15 +442,17 @@ mod cef_pump {
         pump.is_active = false;
         let was_reentrant = pump.reentrancy_detected;
         let has_timer = pump.timer.is_some();
+        let source_pending = pump.source_pending;
         drop(pump);
 
         if was_reentrant {
             // Reentrant call detected — signal source for immediate work
-            let pump = PUMP.lock().unwrap();
+            let mut pump = PUMP.lock().unwrap();
             if let Some(ref source) = pump.source {
                 super::cfrunloop::signal_source(source.0);
+                pump.source_pending = true;
             }
-        } else if !has_timer {
+        } else if !source_pending && !has_timer {
             // No new work requested — schedule fallback timer (30fps floor)
             schedule_fallback();
         }
