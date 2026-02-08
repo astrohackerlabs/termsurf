@@ -2,7 +2,11 @@
 
 ## Goal
 
-Choose which terminal emulator to integrate into ts4's Rust terminal process.
+Choose which terminal emulator to integrate into ts4's terminal process. The
+language of the terminal process is not predetermined — it follows from
+whichever emulator fits best. If the best emulator is written in Zig, the
+terminal process is Zig. If Rust, Rust. If C, C.
+
 The terminal process runs headless — no window, no event loop, no display
 connection. It renders text to an IOSurface backed by Metal, creates a Mach
 port, and sends it to the Swift compositor via XPC. The emulator must fit this
@@ -132,26 +136,28 @@ Questions to answer:
 - Does it support ligatures, color emoji, bold/italic, and variable fonts?
 - How are glyphs rasterized? (CPU via CoreText/FreeType, or GPU?)
 
-### 6. Language compatibility
+### 6. Language and XPC compatibility
 
 **Weight: Medium**
 
-The terminal process is written in Rust. The Swift window communicates with it
-over XPC (C API). The language of the emulator affects integration complexity.
+The terminal process communicates with the Swift window over XPC (C API). The
+emulator's language determines the terminal process's language. Any language
+that can call C functions works — the XPC and IOSurface APIs are all C.
 
-| Language        | Integration with Rust                              |
-| --------------- | -------------------------------------------------- |
-| Rust            | Native — direct crate dependency                   |
-| Zig             | C-ABI — libghostty exposes C API, callable via FFI |
-| C / Objective-C | C-ABI — callable via FFI, but large surface area   |
-| C++ / Python    | Difficult — C++ has no stable ABI, Python is slow  |
+| Language        | XPC / IOSurface integration                             |
+| --------------- | ------------------------------------------------------- |
+| Zig             | C interop is native — call XPC/IOSurface C APIs directly |
+| Rust            | Via FFI — already proven in ts4 prototype                |
+| C / Objective-C | Native — XPC and IOSurface are C APIs                    |
+| C++             | Native — C APIs callable directly from C++               |
+| Python          | Possible via ctypes but impractical for GPU rendering    |
 
 Questions to answer:
 
 - What language is the core library written in?
-- Does it expose a C-ABI compatible interface?
-- How many functions/types would need to cross the language boundary?
-- Is there existing FFI infrastructure (headers, bindings)?
+- Can that language call C APIs directly? (XPC, IOSurface, Mach ports)
+- Does the emulator expose a C-ABI compatible library interface?
+- How natural is Metal / IOSurface integration from that language?
 
 ### 7. Input injection
 
@@ -231,7 +237,7 @@ Questions to answer:
 - What build system does the emulator use?
 - What are the native dependencies? (system libraries, frameworks)
 - How long does a clean build take?
-- Can it be built as a static library for linking into the Rust process?
+- Can it be built as a static library or standalone process?
 
 ## Evaluation Matrix
 
