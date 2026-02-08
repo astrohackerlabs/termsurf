@@ -26,19 +26,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
-        // Connect to the XPC terminal service
-        let serviceName = "com.termsurf.ts4.terminal"
-        NSLog("[Window] Connecting to %@", serviceName)
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        let callback: xipc_frame_callback = { port, width, height, context in
+            guard let context = context else { return }
+            let delegate = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
+            delegate.handleFrame(port: port, width: width, height: height)
+        }
 
-        xipc_connect(
-            serviceName,
-            { port, width, height, context in
-                guard let context = context else { return }
-                let delegate = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
-                delegate.handleFrame(port: port, width: width, height: height)
-            },
-            Unmanaged.passUnretained(self).toOpaque()
-        )
+        // Connect to the Rust terminal service (blue)
+        NSLog("[Window] Connecting to com.termsurf.ts4.terminal")
+        xipc_connect("com.termsurf.ts4.terminal", callback, context)
+
+        // Connect to the C++ browser service (green)
+        NSLog("[Window] Connecting to com.termsurf.ts4.browser")
+        xipc_connect("com.termsurf.ts4.browser", callback, context)
     }
 
     private func handleFrame(port: mach_port_t, width: UInt32, height: UInt32) {

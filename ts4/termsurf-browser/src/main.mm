@@ -1,10 +1,14 @@
 #import <Metal/Metal.h>
 #import <IOSurface/IOSurface.h>
 #import <CoreFoundation/CoreFoundation.h>
+#include <xpc/xpc.h>
+#include <dispatch/dispatch.h>
 #include <cstdio>
 #include <mach/mach.h>
 
 int main() {
+    fprintf(stderr, "[Browser] Starting...\n");
+
     // Step 1: Create IOSurface (BGRA8, 800x600)
     int width = 800;
     int height = 600;
@@ -22,25 +26,25 @@ int main() {
 
     IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef)properties);
     if (!surface) {
-        fprintf(stderr, "ERROR: Failed to create IOSurface\n");
+        fprintf(stderr, "[Browser] ERROR: Failed to create IOSurface\n");
         return 1;
     }
 
-    printf("IOSurface created: %zux%zu\n",
-           IOSurfaceGetWidth(surface),
-           IOSurfaceGetHeight(surface));
+    fprintf(stderr, "[Browser] IOSurface created: %zux%zu\n",
+            IOSurfaceGetWidth(surface),
+            IOSurfaceGetHeight(surface));
 
-    // Step 2: Create Metal device and command queue
+    // Step 2: Create Metal device and render green
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (!device) {
-        fprintf(stderr, "ERROR: No Metal device available\n");
+        fprintf(stderr, "[Browser] ERROR: No Metal device available\n");
         return 1;
     }
 
     id<MTLCommandQueue> commandQueue = [device newCommandQueue];
-    printf("Metal device: %s\n", [[device name] UTF8String]);
+    fprintf(stderr, "[Browser] Metal device: %s\n", [[device name] UTF8String]);
 
-    // Step 3: Create Metal texture backed by the IOSurface
+    // Create Metal texture backed by the IOSurface (zero-copy)
     MTLTextureDescriptor *texDesc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                      width:width
@@ -53,11 +57,11 @@ int main() {
                                                     iosurface:surface
                                                         plane:0];
     if (!texture) {
-        fprintf(stderr, "ERROR: Failed to create Metal texture from IOSurface\n");
+        fprintf(stderr, "[Browser] ERROR: Failed to create Metal texture from IOSurface\n");
         return 1;
     }
 
-    // Step 4: Render a clear-to-green pass
+    // Render clear-to-green
     MTLRenderPassDescriptor *passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
     passDesc.colorAttachments[0].texture = texture;
     passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -67,53 +71,73 @@ int main() {
     id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
     id<MTLRenderCommandEncoder> encoder =
         [commandBuffer renderCommandEncoderWithDescriptor:passDesc];
-
-    // Empty pass — just clears to green
     [encoder endEncoding];
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
 
-    printf("Rendered green (0, 255, 0, 255)\n");
-
-    // Step 5: Read back pixels from IOSurface and verify
+    // Verify pixel
     IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr);
-
     auto *base = static_cast<const uint8_t *>(IOSurfaceGetBaseAddress(surface));
-    size_t stride = IOSurfaceGetBytesPerRow(surface);
-
-    // Read pixel at (0,0) — BGRA format
-    uint8_t b0 = base[0];
-    uint8_t g0 = base[1];
-    uint8_t r0 = base[2];
-    uint8_t a0 = base[3];
-
-    if (r0 == 0 && g0 == 255 && b0 == 0 && a0 == 255) {
-        printf("Pixel at (0,0): (%u, %u, %u, %u) ✓\n", r0, g0, b0, a0);
-    } else {
-        printf("Pixel at (0,0): (%u, %u, %u, %u) ✗ (expected 0, 255, 0, 255)\n",
-               r0, g0, b0, a0);
-    }
-
-    // Check middle pixel
-    size_t midOffset = 300 * stride + 400 * bytesPerElement;
-    uint8_t bm = base[midOffset];
-    uint8_t gm = base[midOffset + 1];
-    uint8_t rm = base[midOffset + 2];
-    uint8_t am = base[midOffset + 3];
-    printf("Pixel at (400,300): (%u, %u, %u, %u)\n", rm, gm, bm, am);
-
+    uint8_t b0 = base[0], g0 = base[1], r0 = base[2], a0 = base[3];
     IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+    fprintf(stderr, "[Browser] Rendered green, pixel (0,0): (%u, %u, %u, %u)\n", r0, g0, b0, a0);
 
-    // Step 6: Create Mach port from IOSurface
-    mach_port_t port = IOSurfaceCreateMachPort(surface);
-    printf("Mach port: %u\n", port);
+    // Step 3: Set up XPC listener
+    const char *service_name = "com.termsurf.ts4.browser";
+    xpc_connection_t listener = xpc_connection_create_mach_service(
+        service_name,
+        dispatch_get_main_queue(),
+        XPC_CONNECTION_MACH_SERVICE_LISTENER
+    );
 
-    if (port != 0) {
-        printf("Phase 4 complete: IOSurface + Metal + Mach port verified\n");
-    } else {
-        printf("ERROR: Mach port creation failed\n");
+    if (!listener) {
+        fprintf(stderr, "[Browser] Failed to create XPC listener\n");
+        return 1;
     }
 
-    CFRelease(surface);
-    return 0;
+    xpc_connection_set_event_handler(listener, ^(xpc_object_t peer) {
+        if (xpc_get_type(peer) == XPC_TYPE_ERROR) {
+            fprintf(stderr, "[Browser] Listener error\n");
+            return;
+        }
+
+        fprintf(stderr, "[Browser] New client connected\n");
+
+        xpc_connection_set_event_handler(peer, ^(xpc_object_t event) {
+            if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+                if (event == XPC_ERROR_CONNECTION_INVALID) {
+                    fprintf(stderr, "[Browser] Client disconnected\n");
+                }
+                return;
+            }
+
+            if (xpc_get_type(event) != XPC_TYPE_DICTIONARY) return;
+
+            const char *action = xpc_dictionary_get_string(event, "action");
+            if (action) {
+                fprintf(stderr, "[Browser] Received: %s\n", action);
+            }
+        });
+        xpc_connection_resume(peer);
+
+        // Create Mach port and send frame
+        mach_port_t port = IOSurfaceCreateMachPort(surface);
+        fprintf(stderr, "[Browser] Created Mach port: %u\n", port);
+
+        xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+        xpc_dictionary_set_string(msg, "action", "frame");
+        xpc_dictionary_set_mach_send(msg, "iosurface_port", port);
+        xpc_dictionary_set_uint64(msg, "width", (uint64_t)width);
+        xpc_dictionary_set_uint64(msg, "height", (uint64_t)height);
+        xpc_connection_send_message(peer, msg);
+        // msg is released by ARC (xpc objects are Obj-C objects under ARC)
+
+        fprintf(stderr, "[Browser] Frame sent: %dx%d\n", width, height);
+    });
+
+    xpc_connection_resume(listener);
+    fprintf(stderr, "[Browser] Listening on %s\n", service_name);
+
+    // Block forever, processing XPC events
+    dispatch_main();
 }
