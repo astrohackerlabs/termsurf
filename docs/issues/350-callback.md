@@ -342,3 +342,52 @@ even though the source is already signaled for the next iteration.
 These are implementation bugs, not architectural problems. The CFRunLoopSource
 approach is sound — we just need to fix the source/timer interaction before we
 can evaluate whether it improves fps.
+
+### Experiment 3: Fix zombie timer leak and source-pending tracking
+
+**Goal:** Fix the two bugs from Experiment 2 and get a clean measurement of
+CFRunLoopSource performance.
+
+**Bug 1 fix: Invalidate timers before clearing.**
+
+In `do_pump_work`, replace `pump.timer = None` with:
+
+```rust
+if let Some(timer) = pump.timer.take() {
+    super::cfrunloop::invalidate_timer(timer.0);
+}
+```
+
+This ensures any pending timer is removed from the run loop, not just orphaned.
+
+**Bug 2 fix: Track source-pending state.**
+
+Add `source_pending: bool` to `PumpState`. Update the three touchpoints:
+
+1. **`schedule_work(0)`** — after signaling the source, set `source_pending = true`
+2. **`source_callback`** — set `source_pending = false` (the signal was consumed)
+3. **`do_pump_work` post-work logic** — don't schedule fallback if
+   `source_pending` is true (source is already queued for the next iteration)
+
+The post-work decision tree becomes:
+
+```
+if was_reentrant:
+    signal source (immediate re-pump)
+elif source_pending:
+    do nothing (source already queued)
+elif has_timer:
+    do nothing (deferred timer already pending)
+else:
+    schedule fallback (33ms safety net)
+```
+
+**What to keep:** All diagnostic counters from Experiments 1-2. The log format
+is unchanged — the same `[PUMP]` line lets us compare directly with prior runs.
+
+**Expected outcome:** Fallback fires should drop back to single digits (as in
+Experiment 1). Work/sec should reflect actual source + timer fires without zombie
+inflation. If the source eliminates timer supersession, work/sec should be higher
+than Experiment 1's ~100/sec, and fps should improve above ~29.
+
+**Status:** Not started
