@@ -162,11 +162,131 @@ Libraries provide:
    macOS, Windows, and Linux. CEF abstracts platform differences; we'd need to
    handle them ourselves.
 
-## Next Steps
+## Order of Operations
 
-- [ ] Research Chromium Content API embedding (what Electron does under the
-      hood)
-- [ ] Evaluate terminal library options (Alacritty core vs WezTerm termwiz)
-- [ ] Prototype: own window + embedded terminal rendering
-- [ ] Prototype: own window + Chromium content rendering
-- [ ] Define the Chromium wrapper boundary (what C++ FFI is needed)
+### Risk assessment
+
+| Component                  | Risk          | Reason                                                    |
+| -------------------------- | ------------- | --------------------------------------------------------- |
+| Own window + wgpu          | Low           | winit + wgpu is well-documented Rust                      |
+| Terminal embedding         | Low           | `alacritty_terminal` is a clean library crate             |
+| GPU text rendering         | Medium        | Non-trivial but solved by Alacritty/WezTerm               |
+| Chromium embedding         | **Very high** | CEF exists because this is hard. Unstable C++ API, massive build system |
+| Multi-process + XPC        | Low           | Already proven in ts3                                     |
+
+Chromium embedding is the existential risk. If it turns out to be infeasible
+without CEF, everything else is wasted. But it also has the longest lead time —
+understanding the Content API, building a C++ shim, integrating with GN/Ninja.
+
+The strategy: de-risk Chromium with research first (Phase 0), then build the
+terminal stack (Phases 1-2) to validate the rendering pipeline and have a
+working product, then tackle Chromium (Phases 3-4) with a proven compositor.
+
+### Phase 0: Chromium feasibility research
+
+**Goal:** Determine whether direct Chromium embedding is feasible before writing
+any code.
+
+Study how CEF and Electron wrap Chromium's Content API. The CEF source is in
+`/cef/` — its `libcef/` directory is literally the answer to "how do you embed
+Chromium." The Chromium source is in `/chromium/` for deep reference. Electron's
+source is in `/electron/`.
+
+Key questions to answer:
+
+1. What is the minimal Content API surface for: initialize browser process,
+   create off-screen browser, receive rendered frames, send input?
+2. How does CEF's `CefBrowserHost::CreateBrowser()` map to Content API calls?
+3. How does CEF's `OnAcceleratedPaint` receive rendered frames from Chromium's
+   compositor? Can we get frames without CEF's `CefCopyFrameGenerator`
+   throttling?
+4. What does Electron's `OffScreenRenderWidgetHostView` do differently to
+   achieve 240fps?
+5. What is the build system integration story? Can we build a minimal Chromium
+   shared library with GN and link it from Rust via C FFI?
+
+If this research reveals that direct embedding is a multi-year effort or
+fundamentally blocked, we stop here and reconsider (maybe CEF with workarounds,
+maybe WebKit, maybe Servo).
+
+### Phase 1: Window + GPU compositor
+
+**Goal:** Create the rendering foundation that both terminal and browser will
+use.
+
+Create a winit window with wgpu. Render two colored rectangles side by side at
+60fps. This proves the compositor works before adding real content.
+
+Deliverable: a Rust binary that opens a window and composites multiple textures
+into a single frame at 60fps. The compositor API should accept arbitrary textures
+(from terminal rendering, browser rendering, or test patterns) and place them in
+a pane layout.
+
+### Phase 2: Terminal in our window
+
+**Goal:** Embed a real terminal and validate the compositor with real content.
+
+Use `alacritty_terminal` for PTY management, VTE parsing, and grid state. Write
+or adapt GPU text rendering (Alacritty's `alacritty/src/renderer/` uses OpenGL
+— we need wgpu, so adaptation is required).
+
+This gives us a working, usable product — a terminal running in our own window.
+It validates the entire rendering pipeline with real content: input handling,
+PTY I/O, VTE parsing, GPU text rasterization, compositor presentation.
+
+Deliverable: a terminal emulator that runs in our window at 60fps. Not
+feature-complete — just enough to run a shell, display output, and handle basic
+input.
+
+### Phase 3: Chromium in-process
+
+**Goal:** Get a webpage rendering into a texture in our process.
+
+Build the C++ shim around Chromium's Content API based on Phase 0 research.
+Initialize a browser instance, navigate to a URL, receive rendered frames as
+GPU textures, composite them alongside the terminal in our window.
+
+This is where we prove the concept. If a webpage renders at 60fps in our
+compositor alongside the terminal, the architecture is validated.
+
+Deliverable: our window showing a terminal pane and a browser pane side by side,
+both at 60fps, in a single process.
+
+### Phase 4: Chromium out-of-process
+
+**Goal:** Move Chromium to a separate process per profile and prove 60fps with
+the full multi-process pipeline.
+
+Reuse ts3's proven patterns:
+
+- One process per browser profile (non-negotiable architectural constraint)
+- XPC Mach service for process management
+- IOSurface Mach port transfer for cross-process texture sharing
+- Anonymous XPC endpoints for direct GUI ↔ profile communication
+
+The difference from ts3: we own the window and compositor, so the GUI side is
+simpler. No WezTerm integration, no fighting with someone else's event loop.
+
+Deliverable: terminal + browser in our window at 60fps, with the browser running
+in a separate process communicating via XPC.
+
+### Why terminal before browser
+
+- **Phase 0 (research) de-risks Chromium before any code is written.** If
+  embedding is infeasible, we find out with zero wasted implementation effort.
+- **Terminal gives a working product immediately.** While Chromium embedding
+  takes weeks or months, we have a functional terminal to iterate on.
+- **The compositor built in Phases 1-2 is exactly what Phase 3 needs.** The
+  browser pane is just another texture in the compositor.
+- **Building Chromium takes ~40 minutes per compile.** Starting there means days
+  before seeing any pixels. A terminal window renders in minutes.
+- **If Chromium takes months, we still have something to ship and use.**
+
+### Why NOT browser first
+
+- Chromium embedding requires building Chromium itself (GN + Ninja, ~40min).
+  Starting there means days of build system work before any visible progress.
+- A window + terminal can be built in days, validating the entire rendering
+  pipeline that the browser will later plug into.
+- The research phase (Phase 0) catches feasibility issues without code
+  investment. If direct embedding is blocked, we pivot before writing a line.
