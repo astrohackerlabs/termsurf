@@ -965,3 +965,69 @@ can be processed per second. Possible next steps:
   adds latency per frame that the in-process reference doesn't have
 - **Profile `do_message_loop_work()` call cost** — understand how many calls CEF
   actually needs per frame in the out-of-process architecture
+
+### Experiment 8: Fixed-rate 1ms repeating timer
+
+**Goal:** Determine whether the ~31fps cap is caused by timer scheduling overhead
+or something else (IPC latency, CEF internal pacing). This gives a binary answer.
+
+**Hypothesis:** The timer-only architecture creates a new one-shot timer for every
+`schedule_work` call. Each cycle involves: timer callback returns → run loop
+checks other sources → new timer created and registered → run loop schedules it →
+timer fires. This overhead adds ~10ms per cycle, capping work at ~100/sec. If we
+bypass on-demand timers and just poll at 1000Hz, the overhead disappears.
+
+**Method:** Replace the on-demand cef_pump with a single 1ms repeating timer that
+calls `do_message_loop_work()` on every tick. This is the busy-wait approach
+capped at 1000Hz — enough to saturate CEF's pipeline without burning 100% CPU.
+
+Keep `external_message_pump: 1` and the `on_schedule_message_pump_work` callback,
+but use the callback only for diagnostic logging — don't create any timers from
+it. The repeating timer drives all work unconditionally.
+
+**What to change in `cef_pump`:**
+
+1. Remove `schedule_work`, `schedule_internal`, `schedule_fallback`, and
+   `timer_callback` — no more on-demand timers
+2. Add `pub fn pump_callback()` — called by a 1ms repeating timer. Contains the
+   reentrancy guard and calls `do_message_loop_work()`. Keeps diagnostic counters
+   for work/sec.
+3. Change `schedule_work` to only increment diagnostic counters (track CEF's
+   callback rate for comparison)
+4. Remove PumpState's timer field — no timers to track
+
+**In the main loop:**
+
+```rust
+// Create 1ms repeating pump timer (replaces on-demand timers)
+let _pump_timer = cfrunloop::create_repeating_timer(0.001, cef_pump::pump_callback);
+
+// Keep the 8ms scroll timer for benchmarking
+let _scroll_timer = cfrunloop::create_repeating_timer(0.008, benchmark_timers::tick_callback);
+
+nsapp::run();
+```
+
+**Diagnostic log format:**
+
+```
+[PUMP] callbacks=150(imm=120 def=30) work=950 idle=50
+```
+
+Where `callbacks` is what CEF requested (for comparison with Experiments 1/7),
+`work` is how many times `do_message_loop_work()` was called, and `idle` is ticks
+where the reentrancy guard triggered (pump already active).
+
+**Expected outcomes:**
+
+- **~50fps, work ~1000/sec:** Timer scheduling overhead was the bottleneck.
+  Solution: use a high-frequency repeating timer instead of on-demand timers.
+  CPU usage at 1ms polling is negligible.
+- **~31fps, work ~1000/sec:** Timer overhead was NOT the bottleneck. The cap is
+  elsewhere — likely IPC latency or CEF's internal frame pacing. Further
+  investigation needed.
+- **~31fps, work ~100/sec:** Reentrancy guard blocks most ticks — CEF holds the
+  main thread during `do_message_loop_work()` for ~10ms, so only ~100 of 1000
+  ticks actually execute. This would mean CEF itself is the bottleneck.
+
+**Status:** Not started
