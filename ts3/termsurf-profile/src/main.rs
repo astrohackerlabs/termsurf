@@ -297,15 +297,66 @@ mod nsapp {
     }
 
     /// Stop the NSApplication run loop (thread-safe).
-    /// Calls NSApp.stop(nil) then CFRunLoopStop to ensure the loop wakes.
+    /// Issue 350, Experiment 7: Posts a dummy NSEvent after stop: so NSApp.run()
+    /// actually checks the stop flag. Without an event, the headless process has
+    /// nothing to dispatch and NSApp.run() blocks on nextEventMatchingMask: forever.
     pub fn stop() {
         unsafe {
             let app = shared_app();
-            // [app stop:nil]
+
+            // [app stop:nil] — sets internal stop flag
             let sel = sel_registerName(b"stop:\0".as_ptr().cast());
             send_obj()(app, sel, std::ptr::null());
-            // CFRunLoopStop to wake the loop so it sees the stop flag
-            super::cfrunloop::stop();
+
+            // Create dummy NSEvent to wake NSApp.run()
+            // [NSEvent otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:]
+            #[repr(C)]
+            struct NSPoint {
+                x: f64,
+                y: f64,
+            }
+            type MsgSendEvent = unsafe extern "C" fn(
+                *mut c_void,    // NSEvent class
+                *mut c_void,    // selector
+                isize,          // type (15 = ApplicationDefined)
+                NSPoint,        // location
+                usize,          // modifierFlags
+                f64,            // timestamp
+                isize,          // windowNumber
+                *const c_void,  // context (nil)
+                i16,            // subtype
+                isize,          // data1
+                isize,          // data2
+            ) -> *mut c_void;
+            let msg_send_event: MsgSendEvent =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let cls = objc_getClass(b"NSEvent\0".as_ptr().cast());
+            let sel = sel_registerName(
+                b"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:\0"
+                    .as_ptr()
+                    .cast(),
+            );
+            let event = msg_send_event(
+                cls,
+                sel,
+                15, // NSEventTypeApplicationDefined
+                NSPoint { x: 0.0, y: 0.0 },
+                0,
+                0.0,
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+            );
+
+            // [NSApp postEvent:event atStart:YES]
+            type MsgSendPost =
+                unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i8);
+            let msg_send_post: MsgSendPost =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let sel = sel_registerName(b"postEvent:atStart:\0".as_ptr().cast());
+            msg_send_post(app, sel, event, 1);
         }
     }
 }

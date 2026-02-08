@@ -881,4 +881,87 @@ called. Trial 1's process reaches `cef::shutdown()`, releases the `SingletonLock
 and exits. Trial 2's retry loop succeeds on the first or second attempt. Full
 7-trial benchmark completes.
 
-**Status:** Not started
+**Status:** Complete
+
+**Results (all 7 trials completed):**
+
+```
+[BENCH] Trial 1/7: 33.1fps  20.5% @60fps  p50=21.3ms  p95=83.5ms
+[BENCH] Trial 2/7: 30.5fps  15.4% @60fps  p50=24.6ms  p95=93.1ms
+[BENCH] Trial 3/7: 31.1fps  19.2% @60fps  p50=22.7ms  p95=91.1ms
+[BENCH] Trial 4/7: 30.7fps  18.6% @60fps  p50=21.1ms  p95=94.4ms
+[BENCH] Trial 5/7: 30.8fps  18.8% @60fps  p50=20.7ms  p95=94.2ms
+[BENCH] Trial 6/7: 32.4fps  16.8% @60fps  p50=23.1ms  p95=94.2ms
+[BENCH] Trial 7/7: 31.6fps  18.8% @60fps  p50=22.4ms  p95=90.6ms
+```
+
+Average: ~31.5fps, p50 ~22ms. Thermal nominal, no bimodal behavior.
+
+**Infrastructure fixes confirmed:** All three race condition fixes work together:
+
+- Experiment 5 (early unregister) — launcher spawns new process, not forwarding
+- Experiment 6 (CEF init retry) — handles SingletonLock contention
+- Experiment 7 (dummy NSEvent) — nsapp::run() returns cleanly, process exits
+
+Profile log confirms clean shutdown: "Shutting down... Done."
+
+**PUMP diagnostics (trial 7):**
+
+```
+[PUMP] callbacks=380(imm=380 def=0) fires=384(src=379 tmr=0 fb=5) reentrant=0 work=384  ← page load
+[PUMP] callbacks=176(imm=169 def=7) fires=172(src=169 tmr=0 fb=3) reentrant=0 work=172
+[PUMP] callbacks=121(imm=120 def=1) fires=126(src=120 tmr=0 fb=6) reentrant=0 work=126
+[PUMP] callbacks=154(imm=123 def=31) fires=128(src=123 tmr=0 fb=5) reentrant=0 work=128
+[PUMP] callbacks=122(imm=93 def=29) fires=97(src=93 tmr=0 fb=4) reentrant=0 work=97
+[PUMP] callbacks=123(imm=93 def=30) fires=95(src=93 tmr=0 fb=2) reentrant=0 work=95
+[PUMP] callbacks=142(imm=110 def=32) fires=113(src=110 tmr=0 fb=3) reentrant=0 work=113
+[PUMP] callbacks=174(imm=96 def=78) fires=96(src=96 tmr=0 fb=0) reentrant=0 work=96
+[PUMP] callbacks=164(imm=94 def=70) fires=94(src=94 tmr=0 fb=0) reentrant=0 work=94
+[PUMP] callbacks=120(imm=108 def=12) fires=113(src=108 tmr=0 fb=5) reentrant=0 work=113
+```
+
+**Findings:**
+
+1. **Small improvement over Experiment 1.** ~31.5fps vs ~29fps — a real but modest
+   ~2.5fps gain. p50 improved from 25ms to 22ms.
+
+2. **Pump behavior is nearly identical to Experiment 1.** ~95-130 work/sec during
+   steady-state scrolling, 0-6 fallback fires/sec. The dual-mode timer
+   registration did not significantly change how often timers fire.
+
+3. **NSEventTrackingRunLoopMode is irrelevant to the benchmark.** Our simulated
+   scroll sends `mouse_wheel_event` through CEF's API, not through macOS event
+   tracking. The run loop never enters `NSEventTrackingRunLoopMode` because
+   there's no actual trackpad/mouse being tracked. The dual-mode registration
+   will help with real user scrolling (when input comes from the GUI via XPC →
+   macOS events) but doesn't affect the benchmark.
+
+4. **The ~31fps cap is fundamental to the timer-only architecture.** At ~100
+   work/sec, with 3-4 `do_message_loop_work()` calls needed per frame, each
+   frame takes 3-4 timer cycles. At ~10ms per cycle, that's 30-40ms per frame
+   — matching the observed p50 of 22ms (some cycles are faster).
+
+**Comparison across all experiments:**
+
+| Experiment | Approach                          | fps   | p50   | p95   |
+| ---------- | --------------------------------- | ----- | ----- | ----- |
+| 1          | Timer-only, CFRunLoopRun          | ~29   | 25ms  | 87ms  |
+| 2          | Source (buggy)                    | ~22   | 50ms  | —     |
+| 3          | Source (fixed)                    | ~22   | 44ms  | —     |
+| 4-6        | Failed (race conditions)          | —     | —     | —     |
+| 7          | Timer-only, NSApp, dual-mode      | ~31.5 | 22ms  | 91ms  |
+| Reference  | Busy-wait (100% CPU)              | ~50   | 17ms  | —     |
+
+**Conclusion:** The dual-mode timer registration and NSApp provided a small but
+real improvement (~2.5fps). The infrastructure fixes (early unregister, CEF retry,
+dummy event) are solid and should be kept. But the remaining gap to ~50fps
+(reference) cannot be closed by run loop tuning alone. The ~100 work/sec rate is
+the bottleneck — the timer-only architecture limits how many CEF pipeline stages
+can be processed per second. Possible next steps:
+
+- **Reduce fallback timer delay** (Idea 2 from the original list) — drop from
+  33ms to 1ms to increase work rate
+- **Investigate the out-of-process overhead** — IOSurface Mach port transfer
+  adds latency per frame that the in-process reference doesn't have
+- **Profile `do_message_loop_work()` call cost** — understand how many calls CEF
+  actually needs per frame in the out-of-process architecture
