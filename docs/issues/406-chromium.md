@@ -208,19 +208,114 @@ Chromium host process manages all profiles, each with isolated storage.
 
 ## Decision
 
-This finding does not change the immediate next step (Issue 407 Chromium
-framerate PoC). But it expands the design space:
+**Use the Chromium Content API directly. CEF is not viable.**
 
-1. **CEF path:** Proven, simpler to start with, but carries the
-   one-profile-per-process constraint and the 300 MB framework size.
-2. **Content API path:** More work upfront, but eliminates the profile
-   constraint, gives more control over frame delivery, and produces a smaller
-   binary.
+This is not a speculative preference — it is the conclusion of 26 experiments
+across Issues 325–350, spanning months of work on ts2 and ts3. CEF's off-screen
+rendering path has fundamental, unsolvable performance limitations on macOS that
+prevent it from achieving 60fps in a headless process.
 
-The PoC should start with CEF (proven path, faster to build) and measure
-framerate. If CEF's framerate is sufficient, we can decide later whether to
-migrate to the Content API for the profile flexibility. If CEF's framerate is
-insufficient, the Content API becomes necessary regardless.
+### Why CEF is ruled out
+
+**CEF cannot achieve 60fps without a visible window.** A headless CEF process on
+macOS maxes out at ~50fps in a busy-wait loop (100% CPU) or ~31fps with an
+event-driven pump (<5% CPU). There is no middle ground (Issue 350, 9
+experiments). The busy-wait causes thermal throttling within minutes, degrading
+to ~28fps (Issue 348). The event-driven pump is the only production-viable
+approach, and it caps at 31fps.
+
+The root causes are architectural, not configurable:
+
+- **CEF's compositor needs a window server connection for vsync.** Without a
+  window, CEF's `ExternalBeginFrameSourceMac.DisplayLink` fires only 3 times
+  across an entire session (Issue 342). A hidden 1x1 window provides vsync but
+  steals focus from the GUI — 8 experiments tried to fix this and all failed
+  (Issue 341, Experiments 10–16).
+
+- **`do_message_loop_work()` costs ~2ms even idle.** In a headless process, all
+  system-level work accumulates in CEF's internal task queue. The function takes
+  > 1ms on 100% of calls (vs 5.7% in a windowed process). Pumping faster starves
+  > other timers and makes performance worse (Issue 350, Experiments 8–9).
+
+- **CEF allocates a new IOSurface every frame.** ~850 unique IOSurface handles
+  per ~3000 frames. The per-frame `IOSurfaceCreateMachPort` +
+  `IOSurfaceLookupFromMachPort` pipeline is unavoidable — there is no way to
+  cache or reuse Mach ports (Issue 348).
+
+- **`CefCopyFrameGenerator` discards frames when one is in-progress.** This
+  `if (frame_in_progress_) return;` check is hard-coded in CEF's C++ source and
+  cannot be configured away (Issue 338).
+
+- **CEF's frame scheduling APIs do not work as expected.**
+  `send_external_begin_frame()` produced the worst result of any experiment at
+  14.8fps (Issue 341, Experiment 17). `multi_threaded_message_loop` is
+  incompatible with OSR on macOS. Chrome command-line flags
+  (`--disable-frame-rate-limit`, `--disable-gpu-vsync`) have no effect on the
+  OSR code path (Issue 338).
+
+- **`on_schedule_message_pump_work` fires from a background thread.** There is
+  no synchronous "more work needed" signal, so every pump cycle requires a timer
+  round-trip through the run loop (Issue 350).
+
+Beyond performance, CEF carries the one-profile-per-process constraint (the
+subject of this document), a 300 MB framework size, and no path to the
+`FrameSinkVideoCapturer` API that Electron uses for 240fps capture (Issue 339).
+
+### Why the Content API
+
+The Content API eliminates every CEF limitation above:
+
+1. **Multiple profiles per process.** `content::BrowserContext` fully supports
+   multiple instances with different storage paths. No `SingletonLock` at the
+   content layer. This eliminates the entire multi-process profile architecture
+   from ts3 (launcher, per-profile processes, XPC endpoint relay).
+
+2. **Direct compositor access.** The Content API gives access to Chromium's
+   `viz` layer and `FrameSinkVideoCapturer` — the same API Electron uses to
+   achieve 240fps. CEF hides this behind `OnPaint`/`OnAcceleratedPaint` with no
+   way to reach the underlying capture mechanism.
+
+3. **No frame-dropping abstraction.** Without `CefCopyFrameGenerator` in the
+   path, frame delivery is controlled by the embedder, not by CEF's simplified
+   abstraction layer.
+
+4. **Smaller binary.** No 300 MB CEF framework wrapper. The content layer is a
+   subset of Chromium.
+
+5. **Electron proves the path works.** Electron embeds the Content API directly
+   and achieves 200+ fps for simple content, multiple isolated sessions via
+   `session.fromPartition()`, and full control over frame delivery — all in a
+   single process.
+
+### What this means for the PoC (Issue 407)
+
+The Chromium framerate PoC (Issue 407) should use the Content API directly, not
+CEF. The PoC design remains the same (WebGL spinning cube, off-screen rendering,
+IOSurface Mach port transfer to a Swift Metal window), but the Chromium
+embedding layer changes from CEF to the Content API.
+
+This is more work upfront — the Content API has no stable embedding surface and
+requires a full Chromium checkout — but it tests the actual architecture ts4
+will use. Testing CEF would only confirm what 26 experiments have already
+proven: CEF's headless OSR path cannot sustain 60fps on macOS.
+
+### Evidence summary
+
+| Issue | Experiments | Key finding                                                                                    |
+| ----- | ----------- | ---------------------------------------------------------------------------------------------- |
+| 325   | 5           | CEF's `run_message_loop()` doesn't pump fast enough; 1ms polling achieves ~60fps but burns CPU |
+| 338   | 5           | `CefCopyFrameGenerator` discards >66% of frames; hard-coded, not configurable                  |
+| 339   | —           | Electron achieves 240fps via `FrameSinkVideoCapturer`, inaccessible from CEF                   |
+| 341   | 18          | Hidden window provides vsync but steals focus; 8 attempts to fix all failed                    |
+| 342   | 4           | `CFRunLoopRunInMode` breakthrough: 28fps → 38fps; CEF timers were starved                      |
+| 343   | 8           | All attempts to go beyond 38fps failed; `do_message_loop_work()` >1ms on 100% of calls         |
+| 344   | —           | Minimal cef-test harness confirms ~50fps ceiling is inherent to headless CEF                   |
+| 345   | —           | ts3 matches cef-test at ~51fps — WezTerm integration is not the bottleneck                     |
+| 346   | 3           | "Mouse performance" issue was bimodal coincidence, not a real problem                          |
+| 347   | —           | Release builds recover ~12fps; CEF OSR baseline is ~9fps below Chrome's 60fps                  |
+| 348   | —           | CEF allocates new IOSurface per frame; Mach port caching is impossible                         |
+| 349   | —           | `PresentMode::Fifo` causes bistable timing; busy-wait = 100% CPU + thermal throttling          |
+| 350   | 9           | Event-driven pump caps at ~31fps; 9 experiments proved pump scheduling is not the cause        |
 
 ## Sources
 
