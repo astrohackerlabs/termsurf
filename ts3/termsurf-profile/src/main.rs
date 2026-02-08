@@ -195,6 +195,10 @@ struct Args {
     /// Enable benchmark mode: simulate scrolling at ~125Hz and collect frame stats
     #[arg(long)]
     benchmark: bool,
+
+    /// Benchmark trial duration in seconds (default: 70)
+    #[arg(long, default_value = "70")]
+    benchmark_duration: u64,
 }
 
 fn main() {
@@ -558,9 +562,9 @@ fn run_profile_server(args: Args) {
                 next_summary_time += Duration::from_secs(10);
             }
 
-            // Auto-quit after 70 seconds
-            if elapsed >= Duration::from_secs(70) {
-                println!("[BENCHMARK] 70 seconds elapsed, printing final stats...");
+            // Auto-quit after benchmark duration
+            if elapsed >= Duration::from_secs(args.benchmark_duration) {
+                println!("[BENCHMARK-DONE] {} seconds elapsed", args.benchmark_duration);
                 if let Some(stats) = BENCHMARK_STATS.get() {
                     stats.lock().unwrap().print_summary();
                 }
@@ -571,6 +575,18 @@ fn run_profile_server(args: Args) {
 
     // 11. Shutdown
     println!("Profile: Shutting down...");
+
+    // Unregister from launcher BEFORE cef::shutdown() (which is slow).
+    // This lets the launcher spawn a fresh profile for the next benchmark trial
+    // without waiting for CEF teardown to complete.
+    if let Some(launcher) = LAUNCHER_CONNECTION.get() {
+        let msg = termsurf_xpc::XpcDictionary::new();
+        msg.set_string("action", "unregister_profile");
+        msg.set_string("profile", &args.profile);
+        launcher.send(&msg);
+        println!("Profile: Sent unregister_profile to launcher");
+    }
+
     cef::shutdown();
     println!("Profile: Done");
     // _loader dropped here, unloading CEF framework

@@ -141,6 +141,7 @@ impl XpcManager {
         height: u32,
         scale: f32,
         benchmark: bool,
+        benchmark_duration: u64,
     ) -> anyhow::Result<String> {
         let session_id = format!("pane-{}-{}", pane_id, std::process::id());
 
@@ -333,6 +334,7 @@ impl XpcManager {
         msg.set_string("scale", &format!("{}", scale));
         if benchmark {
             msg.set_bool("benchmark", true);
+            msg.set_i64("benchmark_duration", benchmark_duration as i64);
         }
         msg.set_endpoint("gui_endpoint", endpoint);
 

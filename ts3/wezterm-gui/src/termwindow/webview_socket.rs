@@ -436,6 +436,11 @@ fn handle_request(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
+            let benchmark_duration = data
+                .get("benchmark_duration")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(70);
+
             // Look up pane grid dimensions from Mux, compute pixel size using cell size
             let (logical_width, logical_height, scale) = match mux::Mux::try_get() {
                 Some(mux) => match mux.get_pane(pane_id) {
@@ -491,7 +496,7 @@ fn handle_request(
 
             // Request profile spawn (this triggers launcher -> termsurf-profile -> Mach port transfer)
             let session_id =
-                match xpc_manager.request_profile_spawn(pane_id, url, profile, logical_width, logical_height, scale, benchmark) {
+                match xpc_manager.request_profile_spawn(pane_id, url, profile, logical_width, logical_height, scale, benchmark, benchmark_duration) {
                 Ok(id) => id,
                 Err(e) => {
                     log::error!("[GUI Socket] Failed to request profile spawn: {}", e);
@@ -667,7 +672,7 @@ fn handle_request(
                 None => return Response::error(&request.id, "XPC manager not available"),
             };
 
-            match xpc_manager.request_profile_spawn(pane_id, "about:blank", "default", 800, 600, 2.0, false) {
+            match xpc_manager.request_profile_spawn(pane_id, "about:blank", "default", 800, 600, 2.0, false, 70) {
                 Ok(session_id) => {
                     log::info!("[GUI Socket] test_xpc: spawned with session_id={}", session_id);
                     Response::ok(

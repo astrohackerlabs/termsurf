@@ -1265,105 +1265,201 @@ fn run_coordinator(profile: ProfileMode, url: Option<String>) {
     // TODO: Get actual terminal dimensions
     let (width, height) = (800u32, 600u32);
 
-    // Send open_webview to GUI - GUI will spawn/manage the profile server
-    println!("Opening webview: {} (profile={})", url, profile.display_name());
-    let response = send_request(
-        &mut gui_stream,
-        "open_webview",
-        Some(serde_json::json!({
-            "engine": engine.to_string_lossy(),
-            "profile": profile.display_name(),
-            "url": url,
-            "pane_id": pane_id,
-            "width": width,
-            "height": height,
-            "benchmark": is_benchmark
-        })),
-    );
-
-    match response {
-        Ok(resp) if resp.status == "ok" => {
-            if let Some(data) = &resp.data {
-                let webview_id = data.get("webview_id").and_then(|id| id.as_u64()).unwrap_or(0);
-                let iosurface_id = data.get("iosurface_id").and_then(|id| id.as_u64()).unwrap_or(0);
-                let w = data.get("width").and_then(|w| w.as_u64()).unwrap_or(width as u64);
-                let h = data.get("height").and_then(|h| h.as_u64()).unwrap_or(height as u64);
-                println!(
-                    "Webview opened: webview_id={}, iosurface_id={}, size={}x{}",
-                    webview_id, iosurface_id, w, h
-                );
-            }
-        }
-        Ok(resp) => {
-            eprintln!(
-                "Failed to open webview: {}",
-                resp.error.unwrap_or_default()
-            );
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Failed to open webview: {}", e);
-            std::process::exit(1);
-        }
-    }
-
     if is_benchmark {
-        // Benchmark mode: poll profile log for completion, then print stats
-        println!("\nBenchmark running (70 seconds)...");
-
+        // Multi-trial benchmark mode
+        let num_trials: u64 = 7;
+        let trial_duration: u64 = 10;
         let log_path = format!("/tmp/termsurf-profile-{}.log", profile.display_name());
-        let timeout = Duration::from_secs(90);
-        let start = std::time::Instant::now();
 
-        let mut found = false;
-        while start.elapsed() < timeout {
-            if let Ok(content) = fs::read_to_string(&log_path) {
-                if content.contains("[BENCHMARK] 70 seconds elapsed") {
-                    found = true;
+        println!("\nBenchmark: {} trials of {}s each\n", num_trials, trial_duration);
 
-                    // Find the final [PERF] lines after the [BENCHMARK] marker
-                    let lines: Vec<&str> = content.lines().collect();
-                    if let Some(idx) = lines.iter().rposition(|l| l.contains("[BENCHMARK]")) {
-                        let perf_line1 = lines.get(idx + 1).copied().unwrap_or("");
-                        let perf_line2 = lines.get(idx + 2).copied().unwrap_or("");
+        struct TrialResult {
+            fps: f64,
+            pct_60fps: f64,
+            p50_ms: f64,
+            p95_ms: f64,
+        }
+        let mut results: Vec<TrialResult> = Vec::new();
 
-                        let frames = extract_stat(perf_line1, "frames=");
-                        let duration = extract_stat(perf_line1, "duration=");
-                        let avg_fps = extract_stat(perf_line1, "avg_fps=");
-                        let pct_60fps = extract_stat(perf_line1, "60fps%=");
-                        let max_streak = extract_stat(perf_line1, "max_streak=");
+        for trial in 1..=num_trials {
+            // Delete stale log file so we get a clean read
+            let _ = fs::remove_file(&log_path);
 
-                        let p50_str = extract_stat(perf_line2, "p50=");
-                        let p95_str = extract_stat(perf_line2, "p95=");
-                        let p50_ms = p50_str
-                            .trim_end_matches("us")
-                            .parse::<f64>()
-                            .unwrap_or(0.0)
-                            / 1000.0;
-                        let p95_ms = p95_str
-                            .trim_end_matches("us")
-                            .parse::<f64>()
-                            .unwrap_or(0.0)
-                            / 1000.0;
+            // Open webview (triggers profile server spawn)
+            let response = send_request(
+                &mut gui_stream,
+                "open_webview",
+                Some(serde_json::json!({
+                    "engine": engine.to_string_lossy(),
+                    "profile": profile.display_name(),
+                    "url": url,
+                    "pane_id": pane_id,
+                    "width": width,
+                    "height": height,
+                    "benchmark": true,
+                    "benchmark_duration": trial_duration
+                })),
+            );
 
-                        println!("\n=== ts3 Benchmark (70s) ===\n");
-                        println!(
-                            "{} fps | {}% at 60fps | streak: {} | p50: {:.1}ms | p95: {:.1}ms\n",
-                            avg_fps, pct_60fps, max_streak, p50_ms, p95_ms
-                        );
-                        println!("{} frames over {}", frames, duration);
-                    }
+            match &response {
+                Ok(resp) if resp.status == "ok" => {}
+                Ok(resp) => {
+                    eprintln!(
+                        "[BENCH] Trial {}/{}: Failed to open webview: {}",
+                        trial,
+                        num_trials,
+                        resp.error.as_deref().unwrap_or("unknown")
+                    );
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[BENCH] Trial {}/{}: Failed to open webview: {}",
+                        trial, num_trials, e
+                    );
                     break;
                 }
             }
-            thread::sleep(Duration::from_secs(1));
+
+            // Poll for trial completion
+            let timeout = Duration::from_secs(trial_duration + 30);
+            let start = std::time::Instant::now();
+            let mut found = false;
+
+            while start.elapsed() < timeout {
+                if let Ok(content) = fs::read_to_string(&log_path) {
+                    if content.contains("[BENCHMARK-DONE]") {
+                        found = true;
+
+                        // Parse results from final [PERF] lines after marker
+                        let lines: Vec<&str> = content.lines().collect();
+                        if let Some(idx) = lines.iter().rposition(|l| l.contains("[BENCHMARK-DONE]"))
+                        {
+                            let perf_line1 = lines.get(idx + 1).copied().unwrap_or("");
+                            let perf_line2 = lines.get(idx + 2).copied().unwrap_or("");
+
+                            let avg_fps = extract_stat(perf_line1, "avg_fps=");
+                            let pct_60fps = extract_stat(perf_line1, "60fps%=");
+
+                            let p50_str = extract_stat(perf_line2, "p50=");
+                            let p95_str = extract_stat(perf_line2, "p95=");
+
+                            let fps: f64 = avg_fps.parse().unwrap_or(0.0);
+                            let pct: f64 = pct_60fps.parse().unwrap_or(0.0);
+                            let p50_ms = p50_str
+                                .trim_end_matches("us")
+                                .parse::<f64>()
+                                .unwrap_or(0.0)
+                                / 1000.0;
+                            let p95_ms = p95_str
+                                .trim_end_matches("us")
+                                .parse::<f64>()
+                                .unwrap_or(0.0)
+                                / 1000.0;
+
+                            println!(
+                                "[BENCH] Trial {}/{}: {:.1}fps  {:.1}% @60fps  p50={:.1}ms  p95={:.1}ms",
+                                trial, num_trials, fps, pct, p50_ms, p95_ms
+                            );
+
+                            results.push(TrialResult {
+                                fps,
+                                pct_60fps: pct,
+                                p50_ms,
+                                p95_ms,
+                            });
+                        }
+                        break;
+                    }
+                }
+                thread::sleep(Duration::from_secs(1));
+            }
+
+            if !found {
+                eprintln!("[BENCH] Trial {}/{}: TIMEOUT", trial, num_trials);
+            }
+
+            // Close webview (GUI cleanup, profile server may already be exiting)
+            let _ = send_request(
+                &mut gui_stream,
+                "close_webview",
+                Some(serde_json::json!({"pane_id": pane_id})),
+            );
+
+            // Pause between trials to let profile server fully exit
+            // and launcher detect the dead connection
+            if trial < num_trials {
+                thread::sleep(Duration::from_millis(2000));
+            }
         }
 
-        if !found {
-            eprintln!("\nBenchmark timed out after 90 seconds");
+        // Print summary
+        if !results.is_empty() {
+            // Classify: "good" = fps >= 45, "bad" = fps < 45
+            let good_count = results.iter().filter(|r| r.fps >= 45.0).count();
+            let bad_count = results.len() - good_count;
+            let bimodal = good_count > 0 && bad_count > 0;
+
+            println!(
+                "\n[BENCH] Summary: {}/{} good mode, {}/{} bad mode (bimodal: {})",
+                good_count,
+                results.len(),
+                bad_count,
+                results.len(),
+                if bimodal { "YES" } else { "NO" }
+            );
         }
     } else {
-        // Normal mode: wait for Ctrl+C
+        // Normal mode: open webview, wait for Ctrl+C, close
+        println!("Opening webview: {} (profile={})", url, profile.display_name());
+        let response = send_request(
+            &mut gui_stream,
+            "open_webview",
+            Some(serde_json::json!({
+                "engine": engine.to_string_lossy(),
+                "profile": profile.display_name(),
+                "url": url,
+                "pane_id": pane_id,
+                "width": width,
+                "height": height,
+                "benchmark": false
+            })),
+        );
+
+        match response {
+            Ok(resp) if resp.status == "ok" => {
+                if let Some(data) = &resp.data {
+                    let webview_id =
+                        data.get("webview_id").and_then(|id| id.as_u64()).unwrap_or(0);
+                    let iosurface_id =
+                        data.get("iosurface_id").and_then(|id| id.as_u64()).unwrap_or(0);
+                    let w = data
+                        .get("width")
+                        .and_then(|w| w.as_u64())
+                        .unwrap_or(width as u64);
+                    let h = data
+                        .get("height")
+                        .and_then(|h| h.as_u64())
+                        .unwrap_or(height as u64);
+                    println!(
+                        "Webview opened: webview_id={}, iosurface_id={}, size={}x{}",
+                        webview_id, iosurface_id, w, h
+                    );
+                }
+            }
+            Ok(resp) => {
+                eprintln!(
+                    "Failed to open webview: {}",
+                    resp.error.unwrap_or_default()
+                );
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Failed to open webview: {}", e);
+                std::process::exit(1);
+            }
+        }
+
         println!("\nPress Ctrl+C to close webview...");
         let (tx, rx) = std::sync::mpsc::channel();
         ctrlc::set_handler(move || {
@@ -1371,33 +1467,14 @@ fn run_coordinator(profile: ProfileMode, url: Option<String>) {
         })
         .expect("Error setting Ctrl+C handler");
 
-        // Block until Ctrl+C
         let _ = rx.recv();
         println!("\nShutting down...");
-    }
 
-    // Send close_webview to GUI
-    let close_response = send_request(
-        &mut gui_stream,
-        "close_webview",
-        Some(serde_json::json!({
-            "pane_id": pane_id
-        })),
-    );
-
-    match close_response {
-        Ok(resp) if resp.status == "ok" => {
-            println!("Webview closed in pane {}", pane_id);
-        }
-        Ok(resp) => {
-            eprintln!(
-                "Failed to close webview: {}",
-                resp.error.unwrap_or_default()
-            );
-        }
-        Err(e) => {
-            eprintln!("Failed to send close_webview: {}", e);
-        }
+        let _ = send_request(
+            &mut gui_stream,
+            "close_webview",
+            Some(serde_json::json!({"pane_id": pane_id})),
+        );
     }
 
     println!("Done");

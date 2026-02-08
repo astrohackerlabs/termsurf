@@ -231,9 +231,46 @@ After Experiment 3 (present mode fix), the same test should show:
 **Implementation scope:** Changes needed in the coordinator
 (`termsurf-web/src/main.rs`) to loop over trials, and in the profile server
 (`termsurf-profile/src/main.rs`) to support shorter trial durations. The GUI and
-launcher should not need changes — each trial is a normal spawn/quit cycle.
+launcher also needed changes to pass `benchmark_duration` through the XPC chain.
 
-**Status:** Not started
+**Implementation notes:**
+
+- Added `--benchmark-duration` arg to the profile server (default 70, 10 for
+  multi-trial). Plumbed through: coordinator JSON → GUI socket → GUI XPC →
+  launcher → profile server CLI arg.
+- Changed completion marker from `[BENCHMARK] 70 seconds elapsed` to
+  `[BENCHMARK-DONE]` (duration-independent).
+- First attempt hung on trial 2. Root cause: profile server's `cef::shutdown()`
+  is slow (several seconds). The launcher still thought the old profile was
+  running and forwarded `create_browser` to a dead connection. Fix: send
+  `unregister_profile` to the launcher explicitly before `cef::shutdown()`.
+
+**Results:**
+
+```
+[BENCH] Trial 1/7: 43.4fps  66.2% @60fps  p50=16.7ms  p95=83.3ms
+[BENCH] Trial 2/7: 50.9fps  79.3% @60fps  p50=18.1ms  p95=33.2ms
+[BENCH] Trial 3/7: 49.9fps  75.5% @60fps  p50=18.3ms  p95=33.6ms
+[BENCH] Trial 4/7: 51.3fps  79.2% @60fps  p50=18.7ms  p95=33.4ms
+[BENCH] Trial 5/7: 50.1fps  76.5% @60fps  p50=18.6ms  p95=33.6ms
+[BENCH] Trial 6/7: 50.3fps  79.8% @60fps  p50=18.5ms  p95=33.3ms
+[BENCH] Trial 7/7: 50.4fps  81.2% @60fps  p50=18.8ms  p95=33.5ms
+
+Summary: 6/7 good mode, 1/7 bad mode (bimodal: YES)
+```
+
+**Analysis:**
+
+- Bimodal pattern confirmed: 1/7 trials entered bad mode.
+- Bad mode (trial 1): p50=16.7ms (perfect single vsync) but p95=83.3ms (5
+  vsync intervals). Most frames on time, but occasional cascading delays — fits
+  the FIFO queue hypothesis.
+- Good mode (trials 2-7): tightly clustered at 49.9–51.3fps, p50=18.1–18.8ms,
+  p95=33.2–33.6ms. Extremely stable once entered.
+- The p95 values quantize cleanly to vsync multiples: 33ms (2×), 83ms (5×).
+- This provides a clean baseline for testing the PresentMode fix in Experiment 3.
+
+**Status:** Done
 
 ### Experiment 3: Change WezTerm present mode to AutoVsync
 
