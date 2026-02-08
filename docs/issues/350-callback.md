@@ -539,4 +539,56 @@ diagnostic data from Experiment 1 strongly suggests it is — fires ≈ 30/sec
 matches the 33ms fallback rate), fps should jump significantly. Target: ≥45fps
 (matching the reference's ~50fps minus overhead from out-of-process IPC).
 
-**Status:** Not started
+**Status:** Failed (race condition prevents multi-trial benchmarking)
+
+**Results (1 of 7 trials completed before hang):**
+
+```
+[BENCH] Trial 1/7: 31.9fps  14.7% @60fps  p50=25.1ms  p95=87.7ms
+```
+
+Trial 1 completed but trial 2 hung: the browser appeared but never scrolled and
+never ended. Required Ctrl+C to exit. No profile log was preserved (overwritten
+by the dying process).
+
+**Root cause: race condition in `nsapp::stop()` shutdown path.**
+
+The launcher log reveals the failure:
+
+```
+Launcher: Received action: spawn_profile          ← Trial 1 (new process spawned)
+Launcher: Spawning new profile 'default'
+Launcher: Received action: register_profile       ← Trial 1 registers
+Launcher: Received action: spawn_profile          ← Trial 2 arrives while trial 1 still registered
+Launcher: Forwarding to existing profile 'default' ← FORWARDED to dying process!
+Launcher: Received action: claim_session          ← Dying process "claims" trial 2
+Launcher: Received action: unregister_profile     ← Trial 1 unregisters (too late)
+Launcher: Profile 'default' connection error      ← Trial 1 process dies
+```
+
+The benchmark coordinator sent trial 2's `spawn_profile` in the window between
+trial 1's benchmark completing (printing `[BENCHMARK-DONE]`) and the profile
+process actually unregistering from the launcher. The launcher saw profile
+'default' still registered and forwarded the request to the dying process instead
+of spawning a new one. The dying process briefly accepted the session, then exited.
+No new process was ever spawned for trial 2.
+
+**Why this didn't happen in Experiments 1-3:** Those used bare `CFRunLoopRun()` +
+`CFRunLoopStop()`. `CFRunLoopStop` exits the run loop immediately on the current
+iteration. `NSApp.stop()` only takes effect after the current event finishes
+dispatching — there's a small delay before `NSApp.run()` returns and the shutdown
+code (which sends `unregister_profile`) executes. This widened the race window
+enough for trial 2's spawn to slip through.
+
+**Trial 1 result (31.9fps) is promising but inconclusive.** The single trial
+showed improvement over Experiment 1's ~29fps, but one data point isn't enough to
+draw conclusions. The dual-mode timer registration and NSApp changes couldn't be
+properly evaluated due to the race condition.
+
+**Conclusion:** The `nsapp::run()` / `nsapp::stop()` approach has a latent race
+condition with multi-trial benchmarking that bare `CFRunLoopRun()` / `CFRunLoopStop()`
+doesn't trigger. The fix requires either: (a) unregistering from the launcher
+before printing benchmark results (moving unregister into `tick_callback`), or
+(b) having the benchmark coordinator wait for profile process death before
+starting the next trial. The architectural changes (dual-mode timers, NSApp)
+cannot be evaluated until the race condition is fixed.
