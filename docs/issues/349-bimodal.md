@@ -111,3 +111,116 @@ GUI to see if good-mode runs have different phase alignment than bad-mode runs.
    reading, no changes needed — highest information value)
 2. **L2:** Test with idle terminal (quick behavioral test)
 3. **L4:** Timestamp first frames to check phase alignment (diagnostic)
+
+## Experiments
+
+### Experiment 1: Code review of WezTerm render pipeline
+
+**Goal:** Understand how WezTerm schedules and presents frames, and identify
+differences from cef-test that could explain the bimodal pattern.
+
+**Method:** Code reading of the WezTerm GUI rendering pipeline. No code changes.
+
+**Findings:**
+
+Reviewed the following files:
+- `wezterm-gui/src/frontend.rs` — event loop
+- `wezterm-gui/src/termwindow/mod.rs` — window event dispatch
+- `wezterm-gui/src/termwindow/render/paint.rs` — paint scheduling
+- `wezterm-gui/src/termwindow/render/draw.rs` — draw calls, webview overlay
+- `wezterm-gui/src/termwindow/render/pane.rs` — per-pane rendering
+- `wezterm-gui/src/termwindow/webview_xpc.rs` — XPC surface reception
+- `wezterm-gui/src/termwindow/webgpu.rs` — wgpu surface configuration
+
+**Key discovery: PresentMode differs.**
+
+| Setting        | cef-test                    | ts3 (WezTerm)          |
+| -------------- | --------------------------- | ---------------------- |
+| Present mode   | `PresentMode::AutoVsync`    | `PresentMode::Fifo`    |
+| Frame latency  | `desired_maximum_frame_latency: 2` | Not set (default) |
+
+This is the most likely cause of the bimodal pattern:
+
+- **Fifo** (WezTerm): Strict FIFO queue. Frames are presented in order at each
+  vsync. If a frame misses the vsync deadline, it waits for the next vsync —
+  AND it pushes all subsequent frames back in the queue. A single late frame
+  can desynchronize the entire pipeline, causing a cascade where every
+  subsequent frame also misses. This creates a bistable system: either all
+  frames are on time (good mode) or the queue is perpetually one frame behind
+  (bad mode).
+
+- **AutoVsync** (cef-test): Automatically selects the best vsync mode. On
+  macOS with Metal, this likely uses Mailbox semantics, where a late frame
+  simply replaces the pending frame in the queue instead of backing up behind
+  it. A single late frame is absorbed gracefully — it doesn't cascade.
+
+This explains every observation:
+- Why ts3 is bimodal but cef-test is not (different present modes)
+- Why the mode is stable within a run (once the Fifo queue desynchronizes, it
+  stays desynchronized)
+- Why the mode is random between runs (depends on whether early frames happen
+  to hit or miss the first few vsync deadlines)
+
+**Other findings:**
+
+1. **Event-driven rendering.** WezTerm uses `window.invalidate()` to trigger
+   redraws. The XPC callback calls `invalidate()` immediately when a new
+   IOSurface arrives — there's no deferral.
+
+2. **Animation timer competition.** WezTerm schedules cursor blink and animated
+   image updates via `smol::Timer`, which calls `invalidate()` on its own
+   schedule. This could compete with webview-triggered redraws, but is unlikely
+   to cause the bimodal pattern since the timer fires infrequently (~1Hz for
+   cursor blink).
+
+3. **Webview renders after terminal.** In `call_draw_webgpu()`, the webview
+   IOSurface is imported and rendered after all terminal content. The terminal
+   render time is added to the webview frame's latency budget. If terminal
+   rendering takes variable time, it could push webview frames past vsync.
+
+**Recommended next experiment:** Change WezTerm's present mode from `Fifo` to
+`AutoVsync` and re-run the ts3 benchmark. If the bimodal pattern disappears,
+the present mode is the cause.
+
+**Status:** Done
+
+### Experiment 2: Change WezTerm present mode to AutoVsync
+
+**Goal:** Test whether changing WezTerm's wgpu present mode from `Fifo` to
+`AutoVsync` eliminates the bimodal pattern.
+
+**Hypothesis:** `PresentMode::Fifo` creates a strict FIFO queue where one late
+frame desynchronizes all subsequent frames. `AutoVsync` (likely Mailbox on
+macOS) absorbs late frames without cascading. Switching should eliminate the
+bimodal pattern and stabilize ts3 at ~50fps, matching cef-test.
+
+**What needs to change:**
+
+One line in `wezterm-gui/src/termwindow/webgpu.rs`:
+
+```rust
+// Before:
+present_mode: wgpu::PresentMode::Fifo,
+
+// After:
+present_mode: wgpu::PresentMode::AutoVsync,
+```
+
+**How to test:**
+
+1. Make the change
+2. `cd ts3 && ./scripts/build-release.sh --open`
+3. Run `web benchmark` 3–5 times
+4. Check for bimodal pattern: are results consistent across runs, or still
+   random?
+
+**What the results tell us:**
+
+- If results are stable (~50fps, no bimodal): Fifo was the cause. Ship with
+  AutoVsync.
+- If bimodal persists: the present mode isn't the cause. Investigate L2
+  (terminal rendering contention) next.
+- If fps changes but bimodal persists: the present mode affects performance
+  but doesn't explain the bistable behavior.
+
+**Status:** Not started
