@@ -455,16 +455,16 @@ Mach port: 1234
 Same as Phase 3 but in C++/Obj-C++ with raw Metal. No wgpu — the browser process
 will eventually use Chromium's GPU pipeline.
 
-- [ ] Create an IOSurface via `IOSurfaceCreate()` (BGRA8, specified width and
+- [x] Create an IOSurface via `IOSurfaceCreate()` (BGRA8, specified width and
       height)
-- [ ] Create `MTLDevice` and `MTLCommandQueue`
-- [ ] Create `MTLTexture` from the IOSurface via
+- [x] Create `MTLDevice` and `MTLCommandQueue`
+- [x] Create `MTLTexture` from the IOSurface via
       `[device newTextureWithDescriptor:iosurface:plane:]`
-- [ ] Create a render pass descriptor that clears to green
-- [ ] Encode and commit the command buffer, wait for completion
-- [ ] Read back pixels from the IOSurface and verify they are green
-- [ ] Create a Mach port via `IOSurfaceCreateMachPort()`
-- [ ] Print the Mach port number and IOSurface dimensions as confirmation
+- [x] Create a render pass descriptor that clears to green
+- [x] Encode and commit the command buffer, wait for completion
+- [x] Read back pixels from the IOSurface and verify they are green
+- [x] Create a Mach port via `IOSurfaceCreateMachPort()`
+- [x] Print the Mach port number and IOSurface dimensions as confirmation
 
 **Test:** Run `termsurf-browser`. Output confirms green pixels and a valid Mach
 port. No window needed.

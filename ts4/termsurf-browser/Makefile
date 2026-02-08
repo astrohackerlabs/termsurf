@@ -1,14 +1,15 @@
 CXX = clang++
-CXXFLAGS = -std=c++17 -Wall -Wextra
+CXXFLAGS = -std=c++17 -Wall -Wextra -fobjc-arc
+FRAMEWORKS = -framework Metal -framework IOSurface -framework CoreFoundation -framework Foundation
 TARGET = termsurf-browser
 
-SRCS = src/main.cpp
-OBJS = $(SRCS:.cpp=.o)
+SRCS = src/main.mm
+OBJS = $(SRCS:.mm=.o)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) $(FRAMEWORKS) -o $@ $^
 
-src/%.o: src/%.cpp
+src/%.o: src/%.mm
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
