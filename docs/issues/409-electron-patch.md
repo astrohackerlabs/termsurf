@@ -217,9 +217,9 @@ After all patches apply, push the branch upstream:
 git push origin 146.0.7650.0-electron
 ```
 
-- [ ] `146.0.7650.0-electron` branch created
-- [ ] All 147 patches applied cleanly
-- [ ] Branch pushed upstream
+- [x] `146.0.7650.0-electron` branch created
+- [x] All 147 patches applied cleanly
+- [x] Branch pushed upstream
 
 ### Phase 4: Verify Content Shell (baseline)
 
