@@ -393,6 +393,41 @@ Left pane shows one localStorage string, right pane shows a different one. Both
 strings persist across app restarts. Content Shell remains unmodified and still
 builds and runs independently.
 
+#### Experiments
+
+##### Experiment 1: Raw dual WebContents (2fps — partial success)
+
+Created a `TwoProfilesMainParts` subclass that overrides
+`InitializeBrowserContexts()` to create two `ShellBrowserContext` instances with
+different `SHELL_DIR_USER_DATA` paths, and `InitializeMessageLoopContext()` to
+create two `WebContents` in one window — Shell A (profile A) via
+`Shell::CreateNewWindow()`, and WebContents B (profile B) via raw
+`WebContents::Create()`, manually added as a subview to Shell A's window.
+
+**Result:** Partial success. Two panes rendered side by side in one window,
+each showing the spinning blue square with a different localStorage identity
+string — proving profile isolation works. However, both panes rendered at only
+2fps instead of 60fps.
+
+**Diagnosis:** Chromium throttles `requestAnimationFrame` to ~1-2fps for
+WebContents it considers hidden or in a background state. WebContents B was
+created via raw `WebContents::Create()` without ever receiving a `WasShown()`
+call, so Chromium treated it as a background tab. Shell A's WebContents may
+also have been affected by the manual NSView frame manipulation disrupting
+the Shell's internal visibility tracking.
+
+##### Experiment 2: Fix visibility throttling
+
+Call `web_contents_b_->WasShown()` after attaching WebContents B to the view
+hierarchy, so the compositor knows both panes are visible and should render at
+full framerate. If Shell A's WebContents is also throttled, ensure its
+visibility state is correct after the layout change.
+
+If `WasShown()` alone doesn't resolve the issue, investigate whether the
+`RenderWidgetHostView` needs explicit resize or
+`WasResized()` notifications after the manual frame changes, or whether
+Chromium's occlusion detection on macOS is misclassifying the views.
+
 ### Phase 5: Measure and document
 
 - [ ] Verify profile isolation: two different localStorage strings, persisting
