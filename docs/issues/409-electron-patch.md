@@ -30,38 +30,55 @@ Our `termsurf-chromium` submodule (at `ts4/termsurf-chromium/src/`) is a
 Chromium fork with a linear commit history:
 
 ```
-Chromium 146.0.7650.0 (vanilla)
-  + Electron's 147 patches (applied as commits)
-  ← electron-base tag (marks where Electron patches end)
-  + TermSurf's commits (content/two_profiles/, BUILD.gn, etc.)
-  ← main branch HEAD
+146.0.7650.0           tag    ← vanilla Chromium
+146.0.7650.0-electron  branch ← + Electron's 147 patches (applied as commits)
+146.0.7650.0-termsurf  branch ← + TermSurf's commits (submodule points here)
 ```
 
 Electron does not maintain a Chromium fork — it applies patches at build time.
 We take a different approach: the patches become permanent commits in our fork.
 TermSurf's own modifications are regular commits on top.
 
-### The `electron-base` tag
+### Branch and tag convention
 
-A tag called `electron-base` marks the boundary between Electron's patches and
-TermSurf's commits. This serves two purposes:
+Each Chromium version produces three references:
 
-1. **Visibility.** `git log electron-base..HEAD` shows exactly what TermSurf has
-   changed on top of Electron's patches.
-2. **Rebase target.** When the Electron patch set updates, TermSurf's commits
-   are rebased onto the new `electron-base`.
+| Reference                   | Type   | Purpose                                    |
+| --------------------------- | ------ | ------------------------------------------ |
+| `146.0.7650.0`              | tag    | Vanilla Chromium (from upstream)            |
+| `146.0.7650.0-electron`     | branch | Electron's patches applied on top           |
+| `146.0.7650.0-termsurf`     | branch | TermSurf's commits on top of Electron       |
+
+The submodule points to the `-termsurf` branch. This makes it easy to diff
+between layers:
+
+```bash
+git log 146.0.7650.0..146.0.7650.0-electron          # what Electron changed
+git log 146.0.7650.0-electron..146.0.7650.0-termsurf  # what TermSurf changed
+```
+
+When Electron bumps Chromium versions, new branches are created with the new
+version number. Old branches stay around as history.
 
 ### Rebase workflow
 
 TermSurf's modifications are maintained as regular commits — not a separate
-patch set. When Electron updates (new Chromium version or new patches), we
-rebase our commits on top:
+patch set. When Electron updates its patches (same Chromium version), we rebase:
 
 ```
-1. Check out vanilla Chromium at Electron's new version
-2. Apply the updated Electron patch set → new electron-base
-3. Rebase TermSurf's commits onto the new electron-base
-4. Rebuild and test
+1. Re-apply the updated Electron patches → update 146.0.7650.0-electron
+2. Rebase 146.0.7650.0-termsurf onto the updated -electron branch
+3. Rebuild and test
+```
+
+When Electron bumps to a new Chromium version entirely:
+
+```
+1. Check out the new vanilla Chromium tag
+2. Apply the Electron patches → create <new-version>-electron
+3. Cherry-pick or rebase TermSurf's commits → create <new-version>-termsurf
+4. Update the submodule to point to the new -termsurf branch
+5. Rebuild and test
 ```
 
 This works cleanly because TermSurf's changes don't overlap with Electron's
@@ -74,23 +91,28 @@ workflow any fork uses to stay current with upstream.
 
 ## Staying in Sync with Electron
 
-When Electron bumps its Chromium version:
+When Electron bumps its Chromium version (e.g., from 146.0.7650.0 to
+147.0.xxxx.0):
 
 ```bash
+cd ts4/termsurf-chromium/src
+
 # 1. Fetch the new vanilla Chromium version
 git fetch upstream
-git checkout <new-chromium-version>
+git checkout <new-version>
 
-# 2. Apply the updated Electron patch set
+# 2. Create the new Electron branch and apply patches
+git checkout -b <new-version>-electron
 while IFS= read -r patch; do
   git am --3way "../../electron/patches/chromium/$patch"
 done < ../../electron/patches/chromium/.patches
 
-# 3. Move the electron-base tag
-git tag -f electron-base HEAD
+# 3. Create the new TermSurf branch and rebase our commits
+git checkout -b <new-version>-termsurf
+git cherry-pick <old-version>-electron..<old-version>-termsurf
 
-# 4. Rebase TermSurf's commits
-git rebase electron-base main
+# 4. Push both branches upstream
+git push origin <new-version>-electron <new-version>-termsurf
 
 # 5. Rebuild and test
 autoninja -C out/Default content/two_profiles:two_profiles
@@ -113,33 +135,70 @@ APIs. This returns the fork to a clean vanilla Chromium state.
 
 ### Phase 2: Match Chromium version
 
-Our fork was created with `fetch chromium`, which pulled whatever was HEAD at
-that time. Electron targets Chromium 146.0.7650.0. We need to verify our fork is
-on the same version, and check out the correct tag if it isn't.
+Electron targets Chromium 146.0.7650.0. Our fork was created with
+`fetch chromium`, which pulled whatever was HEAD at that time. We need to check
+out the correct version before applying patches.
+
+#### Repository topology
+
+```
+~/dev/termsurf-chromium/src/          ← "upstream" (full history)
+  origin:   git@github.com:termsurf/termsurf-chromium.git
+  upstream: https://chromium.googlesource.com/chromium/src.git
+
+ts4/termsurf-chromium/src/            ← submodule (shallow clone)
+  origin:   ~/dev/termsurf-chromium/src
+```
+
+The full-history repo at `~/dev/termsurf-chromium/src/` is the source of truth.
+It will eventually live only on GitHub, but for now it lives locally. The
+submodule is a shallow clone that fetches from it. All work (version checkout,
+patch application, TermSurf commits) happens in the submodule, then gets pushed
+back to the full-history repo. This simulates the future GitHub-based flow.
+
+#### Workflow
+
+1. **Check out the target version upstream:**
+
+   ```bash
+   cd ~/dev/termsurf-chromium/src
+   git checkout 146.0.7650.0
+   ```
+
+2. **Fetch and check out in the submodule:**
+
+   ```bash
+   cd ts4/termsurf-chromium/src
+   git fetch origin
+   git checkout 146.0.7650.0
+   ```
+
+3. **Verify the version matches:**
+
+   ```bash
+   git log --oneline -1
+   git tag -l '146.0.7650.0'   # tag should exist and match HEAD
+   ```
+
+The `-electron` and `-termsurf` branches are created in later phases. After all
+work is done, push from the submodule back upstream:
 
 ```bash
 cd ts4/termsurf-chromium/src
-git log --oneline -1  # What version are we on?
-git tag -l '146.0.7650.0'  # Does this tag exist?
+git push origin 146.0.7650.0-electron 146.0.7650.0-termsurf
 ```
 
-If the version doesn't match, check out the correct one:
-
-```bash
-git checkout 146.0.7650.0
-```
-
-If the tag doesn't exist, we may need to fetch it from upstream or use the
-commit hash that corresponds to Electron's pinned version.
-
-- [ ] Verified fork is on Chromium 146.0.7650.0
+- [ ] Upstream repo checked out at 146.0.7650.0
+- [ ] Submodule fetched and on the same commit
+- [ ] Version verified
 
 ### Phase 3: Apply the Electron patch set
 
-Apply all 147 patches in order from the Electron repo:
+Create the `-electron` branch and apply all 147 patches in order:
 
 ```bash
 cd ts4/termsurf-chromium/src
+git checkout -b 146.0.7650.0-electron
 
 while IFS= read -r patch; do
   git am --3way "../../electron/patches/chromium/$patch" || {
@@ -152,14 +211,15 @@ done < ../../electron/patches/chromium/.patches
 If a patch fails to apply, our Chromium version doesn't match Electron's. Fix by
 checking out the correct version in Phase 2.
 
-After all patches apply, tag the boundary:
+After all patches apply, push the branch upstream:
 
 ```bash
-git tag electron-base HEAD
+git push origin 146.0.7650.0-electron
 ```
 
+- [ ] `146.0.7650.0-electron` branch created
 - [ ] All 147 patches applied cleanly
-- [ ] `electron-base` tag created
+- [ ] Branch pushed upstream
 
 ### Phase 4: Verify Content Shell (baseline)
 
@@ -188,8 +248,13 @@ windowed rendering.
 
 ### Phase 5: Rewrite Two Profiles
 
-Rebuild the Two Profiles app from scratch, this time using the APIs that the
-Electron patches provide:
+Create the `-termsurf` branch from the `-electron` branch and rebuild the Two
+Profiles app from scratch, using the APIs that the Electron patches provide:
+
+```bash
+cd ts4/termsurf-chromium/src
+git checkout -b 146.0.7650.0-termsurf 146.0.7650.0-electron
+```
 
 - Create `content/two_profiles/` with the same macOS bundle structure as before
 - Use the three-layer throttling bypass on each WebContents:
@@ -201,9 +266,12 @@ Electron patches provide:
 - Consider using Chromium's `views` framework (`views::Widget` +
   `views::WebView`) for view composition instead of raw NSView manipulation
 - Register the target in `BUILD.gn`
+- Update the parent repo's submodule to point to `146.0.7650.0-termsurf`
 
+- [ ] `146.0.7650.0-termsurf` branch created
 - [ ] Two Profiles app created with throttling bypass
 - [ ] App builds successfully
+- [ ] Branch pushed upstream
 
 ### Phase 6: Verify Two Profiles at 60fps
 
