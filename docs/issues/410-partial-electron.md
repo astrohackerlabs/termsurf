@@ -206,9 +206,9 @@ autoninja -C out/Default content/two_profiles:two_profiles
 ./out/Default/Two\ Profiles.app/Contents/MacOS/Two\ Profiles
 ```
 
-- [ ] Both panes render at 60fps
-- [ ] Different localStorage strings (profile isolation works)
-- [ ] Strings persist across app restarts
+- [x] Both panes render — but at 2-3fps, not 60fps
+- [ ] ~~Different localStorage strings (profile isolation works)~~
+- [ ] ~~Strings persist across app restarts~~
 
 ### Phase 6: Push and update submodule
 
@@ -221,3 +221,61 @@ git push origin 146.0.7650.0-termsurf
 
 - [ ] Branch pushed upstream
 - [ ] Parent repo submodule updated
+
+## Conclusion
+
+### What we accomplished
+
+The core infrastructure works. Chromium `146.0.7650.0` builds from source with
+Electron's three throttling patches applied cleanly on top. Content Shell runs
+at 60fps on the patched Chromium, confirming the patches don't break anything.
+The Two Profiles app builds and launches with two side-by-side WebContents in
+separate BrowserContexts.
+
+### What didn't work
+
+The throttling bypass calls in `two_profiles_main_parts.mm` have no effect —
+both panes still render at 2-3fps, the same as Issue 407. The calls to
+`disable_hidden_`, `SetSchedulerThrottling`, and the compositor patch are not
+reaching the right objects at the right time.
+
+### Why it didn't work
+
+The bypass calls run during `InitializeMessageLoopContext()`, immediately after
+creating the WebContents and laying out the views. At this point:
+
+1. **The renderer processes don't exist yet.** Navigation is asynchronous. The
+   `RenderWidgetHostImpl` we set `disable_hidden_` on may be a placeholder that
+   gets replaced when navigation commits and a new renderer process is created.
+
+2. **The Mojo messages are lost.** `SetSchedulerThrottling(false)` sends a Mojo
+   IPC to the renderer's `WebViewImpl`. If the renderer process hasn't started,
+   the message has nowhere to go.
+
+3. **Layer 3 is not automatic.** The compositor patch adds
+   `SetBackgroundThrottling(bool)` to `ui::Compositor`, but nobody calls it.
+   Additionally, content_shell on macOS uses native Cocoa views, not the
+   aura/views compositor — so this patch may not apply to our case at all.
+
+### Next steps
+
+These should be explored as a series of experiments in a new issue:
+
+1. **Timing fix.** Use a `WebContentsObserver` to hook `RenderViewReady()` or
+   `RenderFrameCreated()` and set the bypass flags after the renderer is alive.
+   This is the most likely fix for Layers 1 and 2.
+
+2. **Verify each layer independently.** Test each bypass in isolation to confirm
+   which layers are actually responsible for the 2-3fps throttling on macOS. The
+   aura-specific code paths (Layer 1's `RenderWidgetHostViewAura` and Layer 3's
+   `ui::Compositor`) may be irrelevant on macOS, where content_shell uses native
+   views.
+
+3. **Study how Electron calls these APIs.** The patches add the APIs to
+   Chromium, but Electron's own code (in `shell/browser/`) calls them. Read
+   Electron's source to understand the correct call sites and lifecycle hooks.
+
+4. **Investigate macOS-specific throttling.** macOS has its own occlusion
+   detection (`NSWindow` occlusion state, `NSView` visibility). Chromium's
+   macOS-specific code may have additional throttling paths that the three
+   Electron patches don't cover.
