@@ -321,14 +321,16 @@ This is still unknown. Candidates:
 
 ### Experiment 1: RenderFrameCreated observer with force-show
 
-**Hypothesis:** The bypass calls in Phase 4 failed because they ran during
+#### Hypothesis
+
+The bypass calls in Phase 4 failed because they ran during
 `InitializeMessageLoopContext()`, before renderer processes exist. The
 `RenderWidgetHostImpl` set at that point is a placeholder that gets replaced
 when navigation commits. Electron solves this by setting bypass flags in a
 `RenderFrameCreated()` WebContentsObserver hook, which fires after the renderer
 is alive and the correct RenderWidgetHostImpl is active.
 
-**Design:**
+#### Design
 
 1. Create a `ThrottleBypassObserver` class that implements `WebContentsObserver`
 2. Override `RenderFrameCreated(RenderFrameHost*)`:
@@ -343,13 +345,13 @@ is alive and the correct RenderWidgetHostImpl is active.
 5. Remove the existing bypass calls from `InitializeMessageLoopContext()` — the
    observer handles timing
 
-**What this tests:**
+#### What this tests
 
 - Whether `RenderFrameCreated` fires at the right lifecycle point (Q3)
 - Whether `WasShown({})` reverses the hiding done by `Hide()` (Q4)
 - Whether `disable_hidden_` prevents re-hiding once set on the correct instance
 
-**What this does NOT test:**
+#### What this does NOT test
 
 - Whether the `BrowserCompositorMac` also needs to be re-shown (Q5). The
   `WasShown({})` call on `RenderWidgetHostImpl` does not touch the compositor.
@@ -358,13 +360,14 @@ is alive and the correct RenderWidgetHostImpl is active.
   `ShowWithVisibility()` on the `RenderWidgetHostViewMac` to re-show the
   compositor.
 
-**Files to modify:**
+#### Files to modify
 
 - `content/two_profiles/two_profiles_main_parts.h` — add
   `ThrottleBypassObserver` class declaration and observer member pointers
 - `content/two_profiles/two_profiles_main_parts.mm` — implement the observer,
   attach to both WebContents, remove old bypass calls
 
-**Expected result:** Both panes at 60fps. If only one pane improves, or if fps
-increases but doesn't reach 60, the BrowserCompositorMac bypass is likely needed
-as a follow-up.
+#### Expected result
+
+Both panes at 60fps. If only one pane improves, or if fps increases but doesn't
+reach 60, the BrowserCompositorMac bypass is likely needed as a follow-up.
