@@ -175,6 +175,60 @@ throttle, intercepting or overriding the occlusion state for our window might
 solve the problem at the source rather than patching each downstream throttling
 layer.
 
+## Research Plan
+
+### Question 1: What triggers the throttling?
+
+We don't know what calls `Hide()` or `WasOccluded()` on our second WebContents.
+Add logging to `RenderWidgetHostViewMac::Hide()`,
+`RenderWidgetHostViewMac::WasOccluded()`, and
+`RenderWidgetHostImpl::WasHidden()` to capture stack traces when they're called.
+This reveals the exact trigger.
+
+**Where to look:**
+
+- `content/browser/renderer_host/render_widget_host_view_mac.mm` — `Hide()` and
+  `WasOccluded()`
+- `content/browser/renderer_host/render_widget_host_impl.cc` — `WasHidden()`
+
+### Question 2: Does the RenderWidgetHostImpl get replaced?
+
+Our hypothesis says the `RenderWidgetHostImpl` we set `disable_hidden_` on is a
+placeholder that gets replaced during navigation. Verify this by logging the
+pointer address of the `RenderWidgetHostImpl` at two points: (a) when we set
+`disable_hidden_` in `InitializeMessageLoopContext()`, and (b) after navigation
+completes (via a `WebContentsObserver::DidFinishNavigation()` hook). If the
+addresses differ, the hypothesis is confirmed.
+
+### Question 3: Does RenderFrameCreated fire at the right time?
+
+Electron uses `RenderFrameCreated()` as its hook. Add a
+`WebContentsObserver` to both WebContents that logs when `RenderFrameCreated()`
+fires and what `RenderWidgetHostImpl` is active at that point. If the instance
+is different from what we set during initialization, we've found the fix.
+
+### Question 4: Does WasShown() bypass everything?
+
+Electron's `SetBackgroundThrottling()` calls `rwh_impl->WasShown({})` if the
+widget is currently hidden. This is a brute-force approach: instead of preventing
+individual throttling layers, just tell the widget it's visible again. Test
+whether calling `WasShown({})` from a `RenderFrameCreated` observer restores
+60fps.
+
+### Question 5: Does BrowserCompositorMac need its own bypass?
+
+The `disable_hidden_` flag prevents `RenderWidgetHostImpl::WasHidden()` but
+doesn't prevent `BrowserCompositorMac::SetRenderWidgetHostIsHidden(true)`, which
+is called by `RenderWidgetHostViewMac::WasOccluded()`. If the compositor
+transitions to `HasNoCompositor`, no frames are produced regardless of the
+renderer state. Check whether the BrowserCompositorMac is in `HasNoCompositor`
+state for the throttled WebContents.
+
+**Where to look:**
+
+- `content/browser/renderer_host/browser_compositor_view_mac.mm` —
+  `SetRenderWidgetHostIsHidden()` and `UpdateState()`
+
 ## Research Findings
 
 ### How Electron actually calls the bypass APIs
@@ -262,57 +316,3 @@ This is still unknown. Candidates:
 - macOS occlusion detection marking the view as hidden
 - The NSView not being properly added to the window's view hierarchy before
   visibility is evaluated
-
-## Research Plan
-
-### Question 1: What triggers the throttling?
-
-We don't know what calls `Hide()` or `WasOccluded()` on our second WebContents.
-Add logging to `RenderWidgetHostViewMac::Hide()`,
-`RenderWidgetHostViewMac::WasOccluded()`, and
-`RenderWidgetHostImpl::WasHidden()` to capture stack traces when they're called.
-This reveals the exact trigger.
-
-**Where to look:**
-
-- `content/browser/renderer_host/render_widget_host_view_mac.mm` — `Hide()` and
-  `WasOccluded()`
-- `content/browser/renderer_host/render_widget_host_impl.cc` — `WasHidden()`
-
-### Question 2: Does the RenderWidgetHostImpl get replaced?
-
-Our hypothesis says the `RenderWidgetHostImpl` we set `disable_hidden_` on is a
-placeholder that gets replaced during navigation. Verify this by logging the
-pointer address of the `RenderWidgetHostImpl` at two points: (a) when we set
-`disable_hidden_` in `InitializeMessageLoopContext()`, and (b) after navigation
-completes (via a `WebContentsObserver::DidFinishNavigation()` hook). If the
-addresses differ, the hypothesis is confirmed.
-
-### Question 3: Does RenderFrameCreated fire at the right time?
-
-Electron uses `RenderFrameCreated()` as its hook. Add a
-`WebContentsObserver` to both WebContents that logs when `RenderFrameCreated()`
-fires and what `RenderWidgetHostImpl` is active at that point. If the instance
-is different from what we set during initialization, we've found the fix.
-
-### Question 4: Does WasShown() bypass everything?
-
-Electron's `SetBackgroundThrottling()` calls `rwh_impl->WasShown({})` if the
-widget is currently hidden. This is a brute-force approach: instead of preventing
-individual throttling layers, just tell the widget it's visible again. Test
-whether calling `WasShown({})` from a `RenderFrameCreated` observer restores
-60fps.
-
-### Question 5: Does BrowserCompositorMac need its own bypass?
-
-The `disable_hidden_` flag prevents `RenderWidgetHostImpl::WasHidden()` but
-doesn't prevent `BrowserCompositorMac::SetRenderWidgetHostIsHidden(true)`, which
-is called by `RenderWidgetHostViewMac::WasOccluded()`. If the compositor
-transitions to `HasNoCompositor`, no frames are produced regardless of the
-renderer state. Check whether the BrowserCompositorMac is in `HasNoCompositor`
-state for the throttled WebContents.
-
-**Where to look:**
-
-- `content/browser/renderer_host/browser_compositor_view_mac.mm` —
-  `SetRenderWidgetHostIsHidden()` and `UpdateState()`
