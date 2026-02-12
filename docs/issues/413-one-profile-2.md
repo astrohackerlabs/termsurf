@@ -917,6 +917,109 @@ Chrome never does this. When you switch Chrome profiles, each profile gets its
 own window and its own browser-side coordination. Chrome does not place two
 different profiles' WebContents in the same renderer scheduling context.
 
+### Experiment 6: Two visible views, same profile, side by side
+
+#### Hypothesis
+
+Two WebContents from the same BrowserContext, both visible and rendering in the
+same window side by side, maintain 60fps. Experiment 5 proved that creating and
+navigating a second same-profile WebContents doesn't degrade the first — but its
+view was never attached to a window. This experiment attaches both views,
+confirming that two active compositors sharing one profile can render
+simultaneously at full framerate.
+
+#### Design
+
+Change from Experiment 5:
+
+1. **Reorder `InitializeMessageLoopContext`.** Create `web_contents_b_` *before*
+   calling `ReparentToCustomWindow`, so both views exist when the window is laid
+   out.
+
+2. **Change `ReparentToCustomWindow` signature.** Accept both `Shell*` and
+   `WebContents*` so it can lay out both views.
+
+3. **Widen the custom window.** From 800×600 to 1200×600 to give each view
+   600×600.
+
+4. **Side-by-side layout.** View A gets the left half, view B gets the right
+   half. Both get `NSViewHeightSizable` so they grow vertically with the window.
+   No proportional horizontal resize — this is a framerate test, not a window
+   management exercise.
+
+What stays the same from Experiment 5:
+
+- `InitializeBrowserContexts`: profile A path override, both profile A and B
+  contexts created (profile B unused).
+- Both WebContents use `browser_context_.get()` (same profile).
+- Both navigate to `GetStartupURL()` (the box-demo spinning square).
+- Cleanup order in `PostMainMessageLoopRun` unchanged.
+
+```cpp
+// shell_browser_main_parts.cc — InitializeMessageLoopContext
+Shell* shell = Shell::CreateNewWindow(browser_context_.get(), GetStartupURL(),
+                                      nullptr, gfx::Size());
+
+WebContents::CreateParams params(browser_context_.get());
+web_contents_b_ = WebContents::Create(params);
+NavigationController::LoadURLParams load_params(GetStartupURL());
+load_params.transition_type = ui::PageTransitionFromInt(
+    ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
+web_contents_b_->GetController().LoadURLWithParams(load_params);
+
+#if BUILDFLAG(IS_MAC)
+ReparentToCustomWindow(shell, web_contents_b_.get());
+#endif
+```
+
+```objc
+// shell_browser_main_parts_mac.mm — ReparentToCustomWindow
+void ReparentToCustomWindow(Shell* shell, WebContents* web_contents_b) {
+  NSRect frame = NSMakeRect(200, 200, 1200, 600);
+  // ... create custom window ...
+
+  NSView* view_a = shell->web_contents()->GetNativeView().GetNativeNSView();
+  NSView* view_b = web_contents_b->GetNativeView().GetNativeNSView();
+
+  [view_a removeFromSuperview];
+
+  NSRect bounds = g_custom_window.contentView.bounds;
+  CGFloat half = bounds.size.width / 2.0;
+
+  view_a.frame = NSMakeRect(0, 0, half, bounds.size.height);
+  view_a.autoresizingMask = NSViewHeightSizable;
+  [g_custom_window.contentView addSubview:view_a];
+
+  view_b.frame = NSMakeRect(half, 0, half, bounds.size.height);
+  view_b.autoresizingMask = NSViewHeightSizable;
+  [g_custom_window.contentView addSubview:view_b];
+
+  // Hide Shell's original window, show ours.
+  [shell->window().GetNativeNSWindow() orderOut:nil];
+  [g_custom_window makeKeyAndOrderFront:nil];
+}
+```
+
+#### Build & run
+
+```bash
+pkill -f "One Profile" 2>/dev/null; sleep 1
+PATH="/Users/ryan/depot_tools:$PATH" autoninja -C out/Default one_profile
+cd /Users/ryan/dev/termsurf/ts4/box-demo && bun run server.ts &
+open out/Default/One\ Profile.app --args http://localhost:9407
+```
+
+#### Expected result
+
+Both panes show the spinning blue square at 60fps. Each pane has its own FPS
+counter visible. If both are 60fps, this confirms that TermSurf's
+process-per-profile architecture will work — each profile process can host
+multiple visible WebContents at full framerate.
+
+A failure (either pane below 60fps) would indicate compositor contention when two
+views are simultaneously visible in the same window — a more fundamental problem
+than multi-profile, since Chrome handles this with tabs and split views.
+
 ## Issue 413 Conclusion
 
 ### The architecture of TermSurf
