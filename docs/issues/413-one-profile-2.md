@@ -740,16 +740,16 @@ The custom window appeared but the spinning blue square was nearly frozen.
 #### Conclusion
 
 **The root cause is found.** Creating and navigating a second `WebContents` —
-even with its view never attached to any window — degrades Shell A from 60fps
-to 2fps. This is not a view hierarchy issue, not a compositor lifecycle issue,
-not a visibility race condition. It is a process-level interference caused by
-the mere existence of a second navigating WebContents.
+even with its view never attached to any window — degrades Shell A from 60fps to
+2fps. This is not a view hierarchy issue, not a compositor lifecycle issue, not
+a visibility race condition. It is a process-level interference caused by the
+mere existence of a second navigating WebContents.
 
 This explains every previous observation:
 
 - **Issue 407:** Two Profiles at 2fps — both panes, including Shell A which used
-  the standard `Shell::CreateNewWindow` lifecycle. The second WebContents was the
-  cause, not the view attachment.
+  the standard `Shell::CreateNewWindow` lifecycle. The second WebContents was
+  the cause, not the view attachment.
 - **Issues 408–410:** Throttling patches had no effect because `Hide()`,
   `WasOccluded()`, and `WasHidden()` were never called. The throttling was never
   the problem — the second WebContents was.
@@ -773,8 +773,8 @@ Experiment 4 proved that a second navigating WebContents causes the 2fps
 degradation. But the second WebContents used `browser_context_b_` — a different
 profile. We don't know whether the problem is:
 
-**(a)** Two navigating WebContents in one process (regardless of profile) — would
-mean content_shell fundamentally can't handle multiple active renderers.
+**(a)** Two navigating WebContents in one process (regardless of profile) —
+would mean content_shell fundamentally can't handle multiple active renderers.
 
 **(b)** Two navigating WebContents from different BrowserContexts — would mean
 multi-profile-in-one-process doesn't work, but same-profile multi-WebContents
@@ -794,10 +794,10 @@ WebContents with the **same** BrowserContext as Shell A.
 #### Hypothesis
 
 Experiment 4 showed that creating and navigating a second WebContents with
-`browser_context_b_` (profile B) drops Shell A to 2fps. But we don't know if
-the problem is two WebContents in general, or two different profiles
-specifically. Chrome successfully renders multiple WebContents within the same
-profile at 60fps.
+`browser_context_b_` (profile B) drops Shell A to 2fps. But we don't know if the
+problem is two WebContents in general, or two different profiles specifically.
+Chrome successfully renders multiple WebContents within the same profile at
+60fps.
 
 Creating a second WebContents with `browser_context_` (profile A — the same
 profile Shell A uses) should work at 60fps, because this is the normal operating
@@ -856,12 +856,12 @@ cd /Users/ryan/dev/termsurf/ts4/box-demo && bun run server.ts &
 
 #### What this tests
 
-- Whether two navigating WebContents from the **same** BrowserContext coexist
-  at 60fps in content_shell
-- Whether the Experiment 4 degradation is caused by multi-profile contention
-  or by multi-WebContents contention
-- Whether content_shell's compositor and GPU process can schedule frames for
-  two active renderers sharing one profile
+- Whether two navigating WebContents from the **same** BrowserContext coexist at
+  60fps in content_shell
+- Whether the Experiment 4 degradation is caused by multi-profile contention or
+  by multi-WebContents contention
+- Whether content_shell's compositor and GPU process can schedule frames for two
+  active renderers sharing one profile
 
 #### What determines success or failure
 
@@ -880,9 +880,9 @@ cd /Users/ryan/dev/termsurf/ts4/box-demo && bun run server.ts &
 #### Expected result
 
 60fps. Chrome proves that multiple WebContents within one profile work fine.
-Content Shell is minimal but should inherit the same compositor scheduling.
-This is the most important experiment in the series — it determines the
-architecture of TermSurf.
+Content Shell is minimal but should inherit the same compositor scheduling. This
+is the most important experiment in the series — it determines the architecture
+of TermSurf.
 
 #### Result: PASSED
 
@@ -898,13 +898,13 @@ multi-WebContents.
 
 This is the most important finding of the entire Issue 413 series:
 
-| Experiment | Change | FPS | Verdict |
-| --- | --- | --- | --- |
-| 1 | Path override | 60 | Harmless |
-| 2 | Second BrowserContext (unused) | 60 | Harmless |
-| 3 | Custom window + reparented view | 60 | Harmless |
-| 4 | Second WebContents, **different profile** | 2 | **Root cause** |
-| 5 | Second WebContents, **same profile** | 60 | Confirmed |
+| Experiment | Change                                    | FPS | Verdict        |
+| ---------- | ----------------------------------------- | --- | -------------- |
+| 1          | Path override                             | 60  | Harmless       |
+| 2          | Second BrowserContext (unused)            | 60  | Harmless       |
+| 3          | Custom window + reparented view           | 60  | Harmless       |
+| 4          | Second WebContents, **different profile** | 2   | **Root cause** |
+| 5          | Second WebContents, **same profile**      | 60  | Confirmed      |
 
 The 2fps degradation is caused specifically by navigating a WebContents from a
 second BrowserContext. Creating the second BrowserContext alone is fine
@@ -932,7 +932,7 @@ simultaneously at full framerate.
 
 Change from Experiment 5:
 
-1. **Reorder `InitializeMessageLoopContext`.** Create `web_contents_b_` *before*
+1. **Reorder `InitializeMessageLoopContext`.** Create `web_contents_b_` _before_
    calling `ReparentToCustomWindow`, so both views exist when the window is laid
    out.
 
@@ -1016,18 +1016,54 @@ counter visible. If both are 60fps, this confirms that TermSurf's
 process-per-profile architecture will work — each profile process can host
 multiple visible WebContents at full framerate.
 
-A failure (either pane below 60fps) would indicate compositor contention when two
-views are simultaneously visible in the same window — a more fundamental problem
-than multi-profile, since Chrome handles this with tabs and split views.
+A failure (either pane below 60fps) would indicate compositor contention when
+two views are simultaneously visible in the same window — a more fundamental
+problem than multi-profile, since Chrome handles this with tabs and split views.
+
+#### Result: PASSED
+
+Both panes render the spinning blue square at 60fps simultaneously. Two visible,
+actively compositing WebContents sharing one BrowserContext in one window, both
+at full framerate.
+
+#### Conclusion
+
+This is the final confirmation the architecture needed. Experiment 5 showed that
+a second same-profile WebContents doesn't degrade the first when navigating in
+the background. Experiment 6 proves it holds when both views are on screen,
+actively rendering, with their own compositors fighting for GPU time. There is
+no contention — Chromium handles this exactly the way Chrome handles multiple
+tabs.
+
+Updated results table:
+
+| Experiment | Change                                         | FPS | Verdict                    |
+| ---------- | ---------------------------------------------- | --- | -------------------------- |
+| 1          | Path override                                  | 60  | Harmless                   |
+| 2          | Second BrowserContext (unused)                 | 60  | Harmless                   |
+| 3          | Custom window + reparented view                | 60  | Harmless                   |
+| 4          | Second WebContents, **different profile**      | 2   | **Root cause**             |
+| 5          | Second WebContents, **same profile** (hidden)  | 60  | Confirmed                  |
+| 6          | Second WebContents, **same profile** (visible) | 60  | **Architecture validated** |
+
+Experiments 4–6 together tell the complete story. The 2fps degradation is
+exclusively a multi-profile-in-one-process problem. Within a single profile,
+Chromium can render any number of visible WebContents at 60fps — exactly what a
+browser does with tabs. The multi-process architecture is not a workaround; it
+is the correct design.
 
 ## Issue 413 Conclusion
 
 ### The architecture of TermSurf
 
-The experiments prove that **one Content API process per profile** is the correct
-architecture. Within a single process, multiple WebContents sharing one
-BrowserContext render at 60fps. Across different BrowserContexts in one process,
-rendering collapses to 2fps.
+Six experiments, starting from a known-good 60fps Content Shell clone, prove
+that **one Content API process per profile** is the correct architecture.
+
+Within a single process, multiple WebContents sharing one BrowserContext render
+at 60fps — even when both are visible and actively compositing side by side
+(Experiment 6). Across different BrowserContexts in one process, rendering
+collapses to 2fps (Experiment 4). The boundary is clear: one profile per
+process.
 
 The architecture:
 
@@ -1048,7 +1084,7 @@ This combines the best of ts3 and ts4:
   Mach port transfer (proven at 60fps in Issue 403).
 - **From ts4:** Content API instead of CEF. No 31fps ceiling. Multiple
   WebContents per profile share cookies, localStorage, and sessions — like tabs
-  in a browser.
+  in a browser. Experiment 6 proves multiple visible views at 60fps.
 - **From Ghostty:** Metal renderer composites IOSurfaces from all profile
   processes alongside terminal panes. Native terminal rendering stays
   in-process.
