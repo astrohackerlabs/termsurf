@@ -731,3 +731,57 @@ cd /Users/ryan/dev/termsurf/ts4/box-demo && bun run server.ts &
 60fps. A WebContents without a view shouldn't participate in the rendering
 pipeline — no compositor, no BeginFrame signals, no display link subscription.
 The renderer process exists but has nothing to paint to.
+
+#### Result: FAILED
+
+2.3fps. Shell A dropped from 60fps to ~4fps initially, then settled at 2.3fps.
+The custom window appeared but the spinning blue square was nearly frozen.
+
+#### Conclusion
+
+**The root cause is found.** Creating and navigating a second `WebContents` —
+even with its view never attached to any window — degrades Shell A from 60fps
+to 2fps. This is not a view hierarchy issue, not a compositor lifecycle issue,
+not a visibility race condition. It is a process-level interference caused by
+the mere existence of a second navigating WebContents.
+
+This explains every previous observation:
+
+- **Issue 407:** Two Profiles at 2fps — both panes, including Shell A which used
+  the standard `Shell::CreateNewWindow` lifecycle. The second WebContents was the
+  cause, not the view attachment.
+- **Issues 408–410:** Throttling patches had no effect because `Hide()`,
+  `WasOccluded()`, and `WasHidden()` were never called. The throttling was never
+  the problem — the second WebContents was.
+- **Issue 411:** Deferred view attachment didn't help because the degradation
+  happens before any view is attached. Shell A was at 2fps from the moment the
+  second WebContents was created and navigated.
+- **Issue 412/413 Experiments 1–3:** Path override, second BrowserContext, and
+  window reparenting all passed at 60fps because none of them created a second
+  navigating WebContents.
+
+The degradation is not caused by the second `BrowserContext` (Experiment 2
+passed), not by the `WebContents::Create` call alone (untested yet), but by
+something in the navigation or renderer process lifecycle. The second
+WebContents spawns a renderer process that competes for GPU process resources,
+compositor scheduling, or display link callbacks — and this contention drags
+Shell A down to 2fps.
+
+### What's next
+
+The root cause is isolated to Step 4: creating and navigating a second
+WebContents. The next experiments should decompose this further:
+
+1. **Create WebContents without navigating.** Does `WebContents::Create(params)`
+   alone (no `LoadURLWithParams`) cause the drop? If not, the navigation or
+   renderer process creation is the trigger.
+2. **Navigate to about:blank instead of the test page.** Does a trivial page
+   still cause the drop? If not, the test page's `requestAnimationFrame` loop
+   may be competing for GPU time.
+3. **Check GPU process utilization.** Is the GPU process at 100%? Are both
+   renderers sharing a single GPU thread? Is the compositor scheduler giving
+   equal time to both and starving Shell A?
+4. **Check if this is a content_shell-specific limitation.** Run Chrome or
+   Electron with two tabs — they handle multiple WebContents at 60fps. What do
+   they do differently? Likely a proper compositor scheduler configuration or
+   GPU process thread pool that content_shell lacks.
