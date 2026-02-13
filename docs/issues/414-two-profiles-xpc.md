@@ -447,6 +447,7 @@ This tells us which intercept strategy to use.
 **Step 3: Measure the rate.**
 
 Add a frame counter and a periodic log (once per second) that reports:
+
 - Frames in the last second
 - IOSurface dimensions
 - Which rendering path was used
