@@ -232,14 +232,17 @@ reusable:
 
 ### From termsurf-xpc
 
-- **XPC API surface:** `XpcConnection`, `XpcListener`, `XpcDictionary`,
-  `XpcEndpoint`. Mach port transfer via `set_mach_send` / `copy_mach_send`.
-  IOSurface helpers: `create_mach_port`, `lookup_from_mach_port`,
-  `deallocate_mach_port`.
-- **Language:** Currently Rust. For the PoC, we can either use termsurf-xpc
-  directly (write GUI in Rust) or call the XPC C API directly from C++/ObjC
-  (since XPC is a C framework). Long-term, we need C++ bindings for the profile
-  server and Swift/Zig bindings for Ghostty integration.
+Reference implementation for the XPC patterns we need. The Rust code won't be
+reused directly, but the patterns translate 1:1 to Apple's C API
+(`<xpc/xpc.h>`):
+
+- **Connection management:** `xpc_connection_create_mach_service()` for named
+  services, `xpc_connection_set_event_handler()` for message dispatch.
+- **Mach port transfer:** `xpc_dictionary_set_mach_send()` (sender) /
+  `xpc_dictionary_copy_mach_send()` (receiver).
+- **IOSurface sharing:** `IOSurfaceCreateMachPort()` (sender) /
+  `IOSurfaceLookupFromMachPort()` (receiver) / `mach_port_deallocate()`
+  (cleanup).
 
 ### From the One Profile app
 
@@ -251,25 +254,23 @@ reusable:
 
 ## Language choice for the PoC
 
-The PoC involves two binaries:
+C++ for everything. Both the GUI and profile server are C++/Objective-C++.
 
-- **Profile server:** Must link against Chromium (C++). XPC calls from C++ use
-  Apple's C API directly (`<xpc/xpc.h>`). No bindings crate needed.
-- **GUI:** Needs Metal rendering + XPC Mach service registration. Options:
-  - **Rust + wgpu:** Reuse cef-test-gui compositing code. Proven pipeline. Mach
-    service registration via termsurf-xpc's `XpcListener::new_mach_service`.
-  - **Swift + Metal:** Native macOS approach. Easy XPC, easy Metal.
-  - **C++ + Metal:** Consistent with profile server language.
+- **Profile server:** C++. Links against Chromium. XPC calls use Apple's C API
+  directly (`<xpc/xpc.h>`). Modified from the One Profile app.
+- **GUI:** C++/Objective-C++. Metal rendering via Objective-C++
+  (`<Metal/Metal.h>`, `<QuartzCore/QuartzCore.h>`). XPC Mach service
+  registration via Apple's C API. IOSurface import via
+  `<IOSurface/IOSurface.h>`.
 
-Recommendation: **Rust GUI** (reuse cef-test-gui compositing and termsurf-xpc
-for Mach service registration) + **C++ profile server** (modify One Profile
-app). The GUI is cef-test-gui with the launcher logic moved in and the anonymous
-endpoint relay removed. The profile server is the One Profile app with IOSurface
-capture and XPC frame delivery added.
+This keeps the entire PoC in one language, avoids cross-language build
+complexity, and matches Chromium's own codebase. The cef-test Rust code and
+termsurf-xpc crate are useful as reference for the XPC protocol and IOSurface
+transfer patterns, but the implementation will be native C++.
 
-## Experiments
+## Ideas for Experiments
 
-### Experiment 1: IOSurface capture from Content API
+### Idea 1: IOSurface capture from Content API
 
 **Goal:** Prove we can extract the composited output of a Content API
 `WebContents` as an IOSurface at 60fps.
@@ -286,23 +287,23 @@ get an IOSurface from the Content API compositor at 60fps?
 Start with the CALayer backing store approach. If that doesn't work, try
 `CopyFromSurface()`.
 
-### Experiment 2: Single profile server with XPC frame delivery
+### Idea 2: Single profile server with XPC frame delivery
 
 **Goal:** Prove IOSurface Mach port transfer from a Content API process to a
 separate GUI process works at 60fps.
 
 Two components:
 
-1. **GUI** (Rust, reuse cef-test-gui compositing) — registers as Mach service
-   `com.termsurf.two-profiles`, spawns profile server, receives Mach ports,
-   imports as Metal textures, renders to window
-2. **Profile server** (modified One Profile app) — captures frames as
+1. **GUI** (C++/ObjC++) — registers as Mach service `com.termsurf.two-profiles`,
+   spawns profile server, receives Mach ports, imports as Metal textures,
+   renders to window
+2. **Profile server** (modified One Profile app, C++) — captures frames as
    IOSurfaces, connects to GUI's Mach service, sends Mach ports via XPC
 
 This proves the full pipeline: Content API → IOSurface → Mach port → XPC → GPU
 texture → window. If this hits 60fps, the architecture is validated.
 
-### Experiment 3: Two profile servers, one window
+### Idea 3: Two profile servers, one window
 
 **Goal:** Two profiles, two processes, one window, both at 60fps.
 
@@ -313,7 +314,7 @@ cef-test but with Content API instead of CEF.
 Success criteria: both panes rendering the spinning blue square at 60fps with
 different localStorage identities (proving profile isolation).
 
-### Experiment 4: Stress test and benchmarking
+### Idea 4: Stress test and benchmarking
 
 **Goal:** Sustained 60fps under load, matching or exceeding cef-test's 50fps.
 
@@ -350,3 +351,134 @@ Once this PoC works, the path to TermSurf is clear:
    `web` commands for the same profile reuse the existing process.
 4. **Multiple WebContents per profile:** Each profile server handles multiple
    WebContents (tabs). Issue 413 Experiment 6 proved this works at 60fps.
+
+## Experiments
+
+### Experiment 1: Intercept the compositor's IOSurface
+
+#### Hypothesis
+
+Chromium's macOS compositor already produces IOSurfaces as part of its normal
+rendering pipeline. We don't need `CopyFromSurface()` or any capture mechanism —
+we just need to intercept the existing IOSurface at the right point. If we can
+grab it at 60fps, the entire frame delivery pipeline (IOSurface → Mach port →
+XPC → GUI) is a solved problem.
+
+#### Background: how Chromium presents frames on macOS
+
+Research into Chromium's macOS rendering pipeline reveals a clean architecture:
+
+```
+GPU process (or GPU thread if in-process)
+  ↓ Compositor produces frames
+CALayerTreeCoordinator
+  ↓ GetContentIOSurface() → raw IOSurface
+  ↓ IOSurfaceCreateMachPort() → Mach port
+  ↓ Packages into CALayerParams { ca_context_id OR io_surface_mach_port }
+Browser process
+  ↓ DisplayCALayerTree::UpdateCALayerTree(ca_layer_params)
+  ↓ IOSurfaceLookupFromMachPort() → IOSurface
+  ↓ Sets CALayer.contents = io_surface
+CoreAnimation
+  ↓ Presents to screen
+```
+
+Two rendering modes exist:
+
+1. **Remote layers (`ca_context_id`):** The GPU process creates a `CAContext`
+   with a layer tree. The browser process creates a `CALayerHost` with the
+   context ID. WindowServer composites remotely. Used when GPU is in-process.
+
+2. **IOSurface Mach port:** The GPU process extracts the IOSurface from the
+   layer tree via `GetContentIOSurface()`, creates a Mach port via
+   `IOSurfaceCreateMachPort()`, and sends it in `CALayerParams`. The browser
+   process imports it via `IOSurfaceLookupFromMachPort()`. Used when GPU is
+   out-of-process.
+
+The key files:
+
+- `ui/accelerated_widget_mac/ca_layer_tree_coordinator.{h,mm}` — GPU-side.
+  Manages the layer tree, calls `GetContentIOSurface()`, creates Mach ports.
+- `ui/accelerated_widget_mac/ca_renderer_layer_tree.{h,mm}` — Builds the
+  hierarchy of CALayers from compositor output. Each `ContentLayer` holds an
+  `io_surface_` member.
+- `ui/accelerated_widget_mac/display_ca_layer_tree.{h,mm}` — Browser-side.
+  Receives `CALayerParams`, imports IOSurfaces, assigns to CALayers.
+- `ui/gfx/ca_layer_params.h` — The IPC structure: `ca_context_id` (uint32) or
+  `io_surface_mach_port` (scoped Mach port), plus `pixel_size` and
+  `scale_factor`.
+
+The critical insight: **Chromium already creates IOSurface Mach ports.** We
+don't need to invent a capture mechanism. We need to intercept what Chromium
+already produces.
+
+#### Design
+
+Modify the One Profile app to intercept frames at the
+`DisplayCALayerTree::UpdateCALayerTree()` call site and log what arrives.
+
+**Step 1: Determine which rendering path content_shell uses.**
+
+Add logging to `DisplayCALayerTree::UpdateCALayerTree()` (or its equivalent in
+the One Profile app's rendering path) to check which `CALayerParams` field is
+populated:
+
+- If `ca_layer_params.ca_context_id != 0` → remote layer path (in-process GPU)
+- If `ca_layer_params.io_surface_mach_port` → IOSurface Mach port path
+
+This tells us which intercept strategy to use.
+
+**Step 2: Grab the IOSurface.**
+
+- **If IOSurface Mach port path:** Call
+  `IOSurfaceLookupFromMachPort(ca_layer_params.io_surface_mach_port.get())` to
+  get the IOSurface. Log its dimensions (`IOSurfaceGetWidth`,
+  `IOSurfaceGetHeight`). Increment a frame counter.
+
+- **If remote layer path:** We need to either:
+  - (a) Force the IOSurface Mach port path by disabling remote layers (e.g.,
+    `--disable-gpu-compositing` or similar flag), or
+  - (b) Intercept earlier at `CALayerTreeCoordinator` where
+    `GetContentIOSurface()` is called before the CA context ID path is chosen,
+    or
+  - (c) Intercept at the `CARendererLayerTree::ContentLayer` level where each
+    layer holds an `io_surface_` member directly.
+
+**Step 3: Measure the rate.**
+
+Add a frame counter and a periodic log (once per second) that reports:
+- Frames in the last second
+- IOSurface dimensions
+- Which rendering path was used
+
+#### What we're modifying
+
+The One Profile app in `content/one_profile/`. The exact file depends on which
+intercept point works best:
+
+- **Minimal change:** Add logging to `display_ca_layer_tree.mm` in the
+  `ui/accelerated_widget_mac/` directory. This is Chromium code (not One Profile
+  code), so the change is a Chromium fork modification.
+- **Cleaner change:** Override the relevant method in the One Profile app's
+  `ShellBrowserMainParts` or platform delegate, if the rendering path is
+  hookable from the embedder level.
+
+The experiment will reveal which approach is practical.
+
+#### Expected result
+
+60 frames per second with IOSurface dimensions matching the window size (e.g.,
+1600×1200 physical pixels for an 800×600 logical window at 2x Retina). This
+proves that we can intercept Chromium's compositor output at full framerate
+without any additional capture mechanism.
+
+#### What a failure would mean
+
+- **0 frames (wrong path):** Content_shell uses the remote layer path and we
+  can't easily intercept IOSurfaces. Fix: force the IOSurface path or intercept
+  earlier in the pipeline.
+- **< 60fps:** The intercept itself is adding overhead (unlikely for a simple
+  log). Investigate.
+- **IOSurface is null or wrong size:** The compositor isn't producing
+  single-surface frames (multi-layer tree). Need to understand the layer
+  structure and potentially composite multiple IOSurfaces ourselves.
