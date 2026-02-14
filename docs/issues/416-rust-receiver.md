@@ -421,18 +421,575 @@ need (they use `NSApplication` directly).
 
 **Mitigation:** Standard pattern, well-documented. Follow winit + wgpu examples.
 
-## Comparison: Swift vs Rust receiver
+## Experiments
 
-| Aspect                 | Swift (Issue 415)              | Rust (this issue)             |
-| ---------------------- | ------------------------------ | ----------------------------- |
-| Lines of code          | ~330                           | ~500+ (estimated)             |
-| Unsafe code            | None                           | ~200 lines in `unsafe` blocks |
-| XPC                    | C API via automatic bridging   | C API via FFI + `block2`      |
-| IOSurface              | ARC-managed, no manual release | Manual `CFRelease` required   |
-| Metal texture          | 1 safe method call             | `objc::msg_send!` (unsafe)    |
-| GPU abstraction        | Raw Metal (native)             | wgpu (via Metal HAL)          |
-| Window management      | NSApplication (native)         | winit                         |
-| Shader compilation     | Manual xcrun (SPM can't)       | build.rs (automated)          |
-| Display sync           | CADisplayLink                  | winit redraw events           |
-| Existing code to reuse | None (written from scratch)    | termsurf-xpc, cef-rs importer |
-| Target integration     | Ghostty (Swift + Zig)          | WezTerm (Rust)                |
+### Experiment 1: Single-pane Rust receiver
+
+#### Hypothesis
+
+Rust can receive an IOSurface Mach port via the `termsurf-xpc` crate,
+reconstruct the IOSurface, create a wgpu texture from it via the Metal HAL
+(following the cef-rs pattern), and render it in a winit window at 60fps. If
+this works, every Rust-specific unknown is resolved and Experiment 2 just adds
+the second pane.
+
+#### Why single-pane first
+
+The architecture is proven from Issues 414 and 415. The question is whether Rust
+can do the same work with its unsafe FFI constraints. There are seven
+independent unknowns:
+
+1. **Cargo workspace integration** — The `termsurf-xpc` crate uses workspace
+   dependencies (`libc.workspace = true`, `block2.workspace = true`). The
+   receiver must be added to the existing `ts4/Cargo.toml` workspace, and GPU
+   dependencies (`wgpu`, `winit`, `objc`, `metal`) must be added as workspace
+   dependencies.
+
+2. **XPC Mach service listener via `termsurf-xpc`** —
+   `XpcListener::new_mach_service()` + `block::set_new_connection_handler()` +
+   `block::set_event_handler()`. These are proven in ts3 but never used for
+   receiving IOSurface frames from a Chromium sender.
+
+3. **IOSurface reconstruction** — `iosurface::lookup_from_mach_port()` from
+   `termsurf-xpc`. Must return a valid handle, and manual `CFRelease` must not
+   double-free or leak.
+
+4. **IOSurface → Metal → wgpu texture** — The three-layer unsafe pipeline from
+   cef-rs: `device.as_hal::<wgpu::wgc::api::Metal>()` →
+   `objc::msg_send![device, newTextureWithDescriptor:iosurface:plane:]` →
+   `Device::texture_from_raw()` → `device.create_texture_from_hal()`. This is
+   the most complex unknown.
+
+5. **winit + wgpu window and render pipeline** — Standard boilerplate. Surface
+   creation, adapter/device, bind group layout, render pipeline with WGSL
+   shader.
+
+6. **WGSL fullscreen quad shader** — Translate the Metal shader from Issue 414
+   to WGSL. Same logic (vertex_id triangle strip, texture sampling) but
+   different syntax and bind group model.
+
+7. **Cross-thread IOSurface handoff** — XPC events arrive on a dispatch queue
+   thread. Rendering happens on the winit event loop thread. Need a
+   `Mutex<Option<*mut c_void>>` for thread-safe handoff, plus `EventLoopProxy`
+   to wake the event loop.
+
+If any of these fail, a single-pane setup makes debugging straightforward. Once
+all seven work together, adding the second pane is mechanical.
+
+#### Design
+
+##### Design divergences from issue-level plan
+
+During experiment design, three corrections to the issue-level project structure
+emerged:
+
+1. **WGSL replaces Metal shaders.** The issue design proposed `shaders.metal`
+   with a `build.rs` compiler, but wgpu uses WGSL natively. No `build.rs` needed
+   — the shader is loaded at compile time with `include_str!`. This is simpler
+   than both the Metal approach (no xcrun) and the SPM approach (which couldn't
+   compile .metal files at all).
+
+2. **Workspace integration required.** The `termsurf-xpc` crate uses
+   `libc.workspace = true` and `block2.workspace = true`, so it can only be used
+   within the `ts4/Cargo.toml` workspace. The receiver must be added as a
+   workspace member, and GPU dependencies added as workspace dependencies.
+
+3. **`block2 = "0.6"`** not `"0.5"` — the workspace already pins version 0.6.
+
+##### Workspace setup
+
+Add `two-profiles-rust` to the existing `ts4/Cargo.toml` workspace:
+
+```toml
+[workspace]
+members = [
+    "termsurf-terminal",
+    "termsurf-xpc",
+    "two-profiles-rust",
+]
+resolver = "2"
+
+[workspace.dependencies]
+libc = "0.2"
+block2 = "0.6"
+clap = { version = "4.0", features = ["derive"] }
+wgpu = "28"
+winit = "0.30"
+objc = "0.2"
+metal = "0.33"
+```
+
+The receiver's `Cargo.toml`:
+
+```toml
+[package]
+name = "two-profiles-rust"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "receiver"
+path = "src/main.rs"
+
+[dependencies]
+termsurf-xpc = { path = "../termsurf-xpc" }
+wgpu.workspace = true
+winit.workspace = true
+objc.workspace = true
+metal.workspace = true
+libc.workspace = true
+```
+
+##### Project structure (single-pane)
+
+```
+ts4/two-profiles-rust/
+├── Cargo.toml
+├── src/
+│   ├── main.rs          — Everything: XPC, IOSurface import, wgpu rendering
+│   └── shaders.wgsl     — Fullscreen quad shader (loaded via include_str!)
+└── com.termsurf.two-profiles-rust.plist
+```
+
+For Experiment 1, all Rust code lives in `main.rs`. If this works, Experiment 2
+may split into the multi-file layout (`xpc.rs`, `renderer.rs`).
+
+##### WGSL shader
+
+Translate the Metal shader from Issue 414 to WGSL:
+
+```wgsl
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) texcoord: vec2f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
+    var positions = array<vec2f, 4>(
+        vec2f(-1.0, -1.0), vec2f(1.0, -1.0),
+        vec2f(-1.0,  1.0), vec2f(1.0,  1.0),
+    );
+    var texcoords = array<vec2f, 4>(
+        vec2f(0.0, 1.0), vec2f(1.0, 1.0),
+        vec2f(0.0, 0.0), vec2f(1.0, 0.0),
+    );
+    var out: VertexOutput;
+    out.position = vec4f(positions[vid], 0.0, 1.0);
+    out.texcoord = texcoords[vid];
+    return out;
+}
+
+@group(0) @binding(0)
+var tex: texture_2d<f32>;
+@group(0) @binding(1)
+var samp: sampler;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    return textureSample(tex, samp, in.texcoord);
+}
+```
+
+Same logic as the Metal shader: fullscreen quad from `vertex_index`, texture
+sampling. The key difference is bind groups (`@group(0) @binding(0/1)`) instead
+of Metal's `[[texture(0)]]` / `[[sampler(0)]]`.
+
+##### XPC listener
+
+Using `termsurf-xpc` crate's safe wrappers:
+
+```rust
+use termsurf_xpc::{XpcListener, XpcConnection, block};
+
+let listener = XpcListener::new_mach_service(
+    "com.termsurf.two-profiles-rust")?;
+
+block::set_new_connection_handler(&listener, move |peer: XpcConnection| {
+    eprintln!("[Receiver] Profile server connected");
+
+    block::set_event_handler(&peer, move |result| {
+        match result {
+            Ok(dict) => handle_message(dict),
+            Err(e) => eprintln!("[Receiver] XPC error: {:?}", e),
+        }
+    });
+    peer.resume();
+
+    // Store peer to prevent Drop from canceling the connection.
+    PEERS.lock().unwrap().push(peer);
+});
+listener.resume();
+```
+
+The `set_new_connection_handler` callback receives an `XpcConnection` that must
+be stored in a strong reference (`Vec`) to prevent `Drop` from canceling it.
+Same pattern as the Swift receiver's `gPeers` array.
+
+##### IOSurface message handling
+
+```rust
+use termsurf_xpc::{XpcDictionary, iosurface};
+
+fn handle_message(dict: XpcDictionary) {
+    let action = dict.get_string("action");
+    if action.as_deref() != Some("display_surface") { return; }
+
+    let port = dict.copy_mach_send("iosurface_port");
+    if port == 0 { return; }  // MACH_PORT_NULL
+
+    let surface = iosurface::lookup_from_mach_port(port);
+    iosurface::deallocate_mach_port(port);
+
+    if let Some(surface) = surface {
+        // Release the previous IOSurface before replacing.
+        let mut lock = PENDING_SURFACE.lock().unwrap();
+        if let Some(old) = lock.take() {
+            unsafe { CFRelease(old); }
+        }
+        *lock = Some(surface);
+        drop(lock);
+
+        // Wake the event loop to trigger a redraw.
+        if let Some(proxy) = EVENT_PROXY.lock().unwrap().as_ref() {
+            proxy.send_event(()).ok();
+        }
+    }
+}
+```
+
+Key differences from Swift:
+
+- `CFRelease` is required for the old IOSurface (Rust has no ARC for CF objects)
+- Mach port is deallocated via `iosurface::deallocate_mach_port()` (wraps
+  `mach_port_deallocate(mach_task_self_, port)`)
+- Thread-safe handoff via `Mutex`, event loop wake via `EventLoopProxy`
+
+##### IOSurface → wgpu texture
+
+Adapted from `cef-rs/cef/src/osr_texture_import/iosurface.rs`:
+
+```rust
+use std::ffi::c_void;
+use metal::{MTLPixelFormat, MTLTextureType, MTLTextureUsage};
+
+extern "C" {
+    fn IOSurfaceGetWidth(surface: *const c_void) -> usize;
+    fn IOSurfaceGetHeight(surface: *const c_void) -> usize;
+}
+
+fn import_iosurface(
+    device: &wgpu::Device,
+    surface: *mut c_void,
+) -> Option<wgpu::Texture> {
+    let width = unsafe { IOSurfaceGetWidth(surface) } as u32;
+    let height = unsafe { IOSurfaceGetHeight(surface) } as u32;
+    if width == 0 || height == 0 { return None; }
+
+    let texture_desc = wgpu::TextureDescriptor {
+        label: Some("IOSurface"),
+        size: wgpu::Extent3d {
+            width, height, depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    };
+
+    unsafe {
+        // 1. Get Metal device from wgpu HAL
+        let hal_device_guard =
+            device.as_hal::<wgpu::wgc::api::Metal>();
+        let hal_device = hal_device_guard?;
+        let raw_device = hal_device.raw_device();
+
+        // 2. Create Metal texture descriptor
+        let metal_desc = metal::TextureDescriptor::new();
+        metal_desc.set_width(width as u64);
+        metal_desc.set_height(height as u64);
+        metal_desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
+        metal_desc.set_texture_type(MTLTextureType::D2);
+        metal_desc.set_usage(MTLTextureUsage::ShaderRead);
+
+        // 3. Create Metal texture from IOSurface
+        let device_ref: &metal::DeviceRef = raw_device;
+        let desc_ref: &metal::TextureDescriptorRef =
+            metal_desc.as_ref();
+        let metal_tex: metal::Texture = objc::msg_send![
+            device_ref,
+            newTextureWithDescriptor:desc_ref
+            iosurface:surface
+            plane:0usize
+        ];
+
+        // 4. Wrap as wgpu HAL texture
+        let hal_tex =
+            <wgpu::wgc::api::Metal as wgpu::hal::Api>
+            ::Device::texture_from_raw(
+                metal_tex,
+                texture_desc.format,
+                MTLTextureType::D2,
+                1, // array layers
+                1, // mip levels
+                wgpu::hal::CopyExtent {
+                    width, height, depth: 1,
+                },
+            );
+
+        // 5. Wrap as wgpu texture
+        Some(device.create_texture_from_hal::<
+            wgpu::wgc::api::Metal
+        >(hal_tex, &texture_desc))
+    }
+}
+```
+
+This is the critical path — five steps of unsafe FFI. The pattern is proven in
+cef-rs but has never been tested with `Bgra8UnormSrgb` format (cef-rs uses
+`Bgra8Unorm` with sRGB view formats). If colors are wrong, the first thing to
+try is `Bgra8Unorm` + `Bgra8UnormSrgb` in `view_formats`.
+
+##### Cross-thread handoff
+
+```rust
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use winit::event_loop::EventLoopProxy;
+
+static PENDING_SURFACE: Mutex<Option<*mut c_void>> = Mutex::new(None);
+static EVENT_PROXY: OnceLock<Mutex<EventLoopProxy<()>>> = OnceLock::new();
+static PEERS: Mutex<Vec<XpcConnection>> = Mutex::new(Vec::new());
+```
+
+When XPC receives a new IOSurface, it stores the raw pointer in
+`PENDING_SURFACE` and wakes the event loop via `EVENT_PROXY`. The render
+callback grabs the pointer and imports it.
+
+**`Send` safety:** `*mut c_void` is not `Send`. The pointer needs a newtype
+wrapper with an unsafe `Send` impl, since IOSurface handles are kernel objects
+safe to access from any thread.
+
+**CFRelease responsibility:** The old IOSurface must be released when replaced.
+The `handle_message` function releases the previous surface before storing the
+new one.
+
+##### winit event loop
+
+```rust
+use winit::event::{Event, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit::window::WindowBuilder;
+
+let event_loop = EventLoop::<()>::with_user_event().build()?;
+
+let window = WindowBuilder::new()
+    .with_title("Rust Receiver")
+    .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0))
+    .build(&event_loop)?;
+
+// Store proxy for XPC thread to wake the event loop.
+EVENT_PROXY.set(Mutex::new(event_loop.create_proxy())).ok();
+
+// ... wgpu setup (adapter, device, surface, pipeline) ...
+
+event_loop.run(move |event, control_flow| {
+    match event {
+        Event::UserEvent(()) => {
+            window.request_redraw();
+        }
+        Event::WindowEvent {
+            event: WindowEvent::RedrawRequested, ..
+        } => {
+            render(&device, &wgpu_surface, &queue);
+        }
+        Event::WindowEvent {
+            event: WindowEvent::CloseRequested, ..
+        } => {
+            control_flow.exit();
+        }
+        _ => {}
+    }
+});
+```
+
+The event loop waits until a `UserEvent` arrives (sent by the XPC handler via
+`EventLoopProxy`), requests a redraw, and renders on `RedrawRequested`. No
+busy-wait — the XPC handler drives the framerate.
+
+**winit API version note:** winit 0.30 uses `EventLoop::run()` with a closure
+that receives `(Event, &ActiveEventLoop)`. If winit 0.30 has switched to the
+`ApplicationHandler` trait, the code structure changes but the logic is the
+same. This will be resolved during implementation.
+
+##### wgpu render pipeline setup
+
+```rust
+let bind_group_layout = device.create_bind_group_layout(
+    &wgpu::BindGroupLayoutDescriptor {
+        label: Some("texture_bind_group_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float {
+                        filterable: true,
+                    },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(
+                    wgpu::SamplerBindingType::Filtering,
+                ),
+                count: None,
+            },
+        ],
+    },
+);
+
+let pipeline_layout = device.create_pipeline_layout(
+    &wgpu::PipelineLayoutDescriptor {
+        label: Some("pipeline_layout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    },
+);
+
+let shader = device.create_shader_module(
+    wgpu::ShaderModuleDescriptor {
+        label: Some("shader"),
+        source: wgpu::ShaderSource::Wgsl(
+            include_str!("shaders.wgsl").into(),
+        ),
+    },
+);
+
+let pipeline = device.create_render_pipeline(
+    &wgpu::RenderPipelineDescriptor {
+        label: Some("render_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    },
+);
+```
+
+Each frame, create a bind group with the current texture and sampler, then draw
+4 vertices as a triangle strip — same as the Metal shader in Issues 414/415.
+
+##### FPS logging
+
+Same format as Issues 414 and 415:
+
+```
+[Receiver] 60 frames (60.0 fps) | IOSurface 1600x1200
+```
+
+Frame counter incremented on each XPC message, logged every second via
+`std::time::Instant`.
+
+#### Launchd plist
+
+Use the plist from the issue design (`com.termsurf.two-profiles-rust.plist`).
+The binary path points to `target/debug/receiver`.
+
+#### Build and run
+
+```bash
+# Build (from ts4/ workspace root)
+cd ts4
+cargo build -p two-profiles-rust
+
+# Load launchd plist
+launchctl load ~/dev/termsurf/ts4/two-profiles-rust/com.termsurf.two-profiles-rust.plist
+
+# Start ONE profile server (single pane)
+cd ~/dev/termsurf/ts4/termsurf-chromium/src
+out/Default/One\ Profile.app/Contents/MacOS/One\ Profile \
+  --hidden \
+  --xpc-service=com.termsurf.two-profiles-rust \
+  --session-id=profile-a \
+  --user-data-dir=$HOME/.config/termsurf/poc/profile-a \
+  http://localhost:9407 2>&1 &
+```
+
+#### Success criteria
+
+- One pane showing the spinning blue square with localStorage identity
+- 60fps sustained for 60+ seconds
+- Pixel-perfect Retina quality (1600x1200 IOSurface in 800x600 logical window)
+- sRGB color correctness (blue square matches Chrome)
+- Receiver is Rust — no C/ObjC files, only FFI via `unsafe`
+- Builds with `cargo build` from the ts4 workspace
+- Uses `termsurf-xpc` crate for XPC handling
+- WGSL shader (not Metal shader) via wgpu
+- IOSurface → Metal → wgpu texture import via cef-rs pattern
+
+#### What could go wrong
+
+1. **wgpu HAL API incompatibility.** The cef-rs code uses
+   `device.as_hal::<wgpu::wgc::api::Metal>()` and `Device::texture_from_raw()`.
+   These are unstable internal APIs that change across wgpu versions. If wgpu 28
+   has different signatures than when the cef-rs code was last updated, the
+   texture import will fail to compile.
+
+2. **`termsurf-xpc` callback lifetime issues.** The `set_new_connection_handler`
+   and `set_event_handler` closures capture references that must outlive the XPC
+   connection. If the closures or the `XpcConnection` values are dropped
+   prematurely, the handlers become dangling pointers.
+
+3. **IOSurface CFRelease mismatch.** `lookup_from_mach_port()` follows the
+   Create Rule — the caller owns the returned IOSurface. If we forget
+   `CFRelease` when replacing a surface, we leak kernel memory. If we release
+   too early, the Metal texture becomes invalid mid-render.
+
+4. **sRGB format mismatch.** The cef-rs code uses `Bgra8Unorm` (non-sRGB) for
+   the Metal descriptor and handles sRGB via view formats. The Swift receiver
+   used `bgra8Unorm_srgb` (sRGB) for both the Metal texture and pipeline. If the
+   formats are wrong, colors will be washed out (double gamma) or too dark (no
+   gamma). The fix is to try: (a) `BGRA8Unorm_sRGB` Metal + `Bgra8UnormSrgb`
+   wgpu, (b) `BGRA8Unorm` Metal + `Bgra8Unorm` wgpu with sRGB view formats.
+
+5. **winit API version.** winit 0.30 may use the `ApplicationHandler` trait
+   instead of the closure-based `EventLoop::run()`. The cef-rs OSR example uses
+   winit 0.29. If the APIs are incompatible, pin winit 0.29 instead.
+
+6. **`*mut c_void` is not `Send`.** The IOSurface pointer must cross from the
+   XPC dispatch queue thread to the winit event loop thread. Need a newtype
+   wrapper with `unsafe impl Send` — a raw `Mutex<Option<*mut c_void>>` will not
+   compile because `*mut c_void` is not `Send`.
+
+7. **winit surface format.** wgpu's surface may prefer a different pixel format
+   than `Bgra8UnormSrgb`. The render pipeline's output format must match the
+   surface's preferred format. Query with
+   `surface.get_capabilities(&adapter).formats[0]`.
