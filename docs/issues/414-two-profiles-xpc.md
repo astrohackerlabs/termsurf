@@ -1526,3 +1526,185 @@ The full pipeline is now proven end-to-end:
 
 What remains is running two profile servers simultaneously into one window with
 side-by-side compositing — the target architecture.
+
+### Experiment 5: Fix Retina rendering
+
+#### Hypothesis
+
+The receiver window is blurry because both sides of the pipeline operate at 1x
+logical pixels instead of 2x physical pixels. Fixing the sender to capture at
+physical resolution and the receiver to render at the screen's backing scale
+factor will produce crisp Retina output.
+
+#### Background
+
+Experiment 4's receiver window was visibly blurry on a Retina (2x) display. The
+logs show `IOSurface 640x360` — the logical pixel size of the sender's window.
+On a 2x Retina screen, the IOSurface should be 1280x720 physical pixels.
+
+Investigation of the Chromium source tree reveals two independent problems:
+
+**Problem 1: The capturer has no resolution constraints.**
+
+In `shell_video_consumer.cc`, the `FrameSinkVideoCapturer` is created with:
+
+```cpp
+capturer_->SetFormat(media::PIXEL_FORMAT_ARGB);
+capturer_->SetMinCapturePeriod(base::Milliseconds(16));
+capturer_->SetAutoThrottlingEnabled(false);
+```
+
+But `SetResolutionConstraints()` is never called. Without constraints, the
+capturer's internal oracle defaults to the frame sink's logical (DIP) size —
+640x360 on a Retina screen — not the physical pixel size (1280x720). The
+compositor renders at 2x internally, but the capturer downscales to DIPs.
+
+The API exists and is straightforward:
+
+```cpp
+capturer_->SetResolutionConstraints(
+    gfx::Size(physical_width, physical_height),  // min
+    gfx::Size(physical_width, physical_height),  // max
+    /*use_fixed_aspect_ratio=*/false);
+```
+
+Setting min = max forces the capturer to produce IOSurfaces at exactly the
+specified resolution. The physical dimensions come from the `WebContents` view
+size multiplied by the device scale factor.
+
+Note: Chromium also has a `SetScaleOverrideForCapture()` mechanism on
+`RenderWidgetHostViewBase` that multiplies the device_scale_factor for HiDPI
+capture mode. This is designed for capturing at *higher* than native resolution.
+Since we just want native Retina resolution (not super-resolution), setting
+explicit resolution constraints is the simpler and more direct fix.
+
+**Problem 2: The receiver's CAMetalLayer renders at 1x.**
+
+`CAMetalLayer.contentsScale` defaults to `1.0`. On a 2x Retina screen, Metal
+renders a 640x360 drawable and macOS stretches it 2x to fill the 1280x720
+backing store — a guaranteed blur. The fix is setting `contentsScale` to the
+screen's `backingScaleFactor` and `drawableSize` to physical pixel dimensions.
+
+Both problems must be fixed together. Without the sender fix, we'd have a 2x
+drawable stretching a 1x source texture. Without the receiver fix, we'd have a
+1x drawable downscaling a 2x source texture. Both are blurry.
+
+#### Design
+
+Two changes:
+
+##### Fix 1: Sender — set resolution constraints on the capturer
+
+In `shell_video_consumer.cc`, after creating the capturer and before calling
+`Start()`, compute the physical pixel dimensions and set resolution constraints:
+
+```cpp
+// Get the view's size in physical pixels for Retina-correct capture.
+auto* view = web_contents->GetRenderWidgetHostView();
+gfx::Size view_size = view->GetVisibleViewportSize();  // logical (DIP)
+float scale = view->GetDeviceScaleFactor();
+gfx::Size physical_size(
+    static_cast<int>(std::ceil(view_size.width() * scale)),
+    static_cast<int>(std::ceil(view_size.height() * scale)));
+
+capturer_->SetResolutionConstraints(
+    physical_size, physical_size, /*use_fixed_aspect_ratio=*/false);
+```
+
+Using `std::ceil()` for the logical-to-physical conversion, per the lesson from
+Issue 311 (truncation of odd logical dimensions loses a pixel).
+
+After this fix, the IOSurface should be 1280x720 on a 2x Retina display (for a
+640x360 logical window), and the log should show:
+
+```
+[ShellVideoConsumer] ... | IOSurface 1280x720
+```
+
+##### Fix 2: Receiver — set CAMetalLayer contentsScale
+
+In `setup_metal()` in `main.mm`, after creating the `CAMetalLayer`, set the
+scale and drawable size:
+
+```objc
+CGFloat scale = [[NSScreen mainScreen] backingScaleFactor];
+g_metal_layer.contentsScale = scale;
+
+CGSize viewSize = view.bounds.size;
+g_metal_layer.drawableSize = CGSizeMake(
+    viewSize.width * scale,
+    viewSize.height * scale);
+```
+
+This tells Metal to render at 2x physical resolution. The drawable is now
+1280x720 pixels for a 640x360 logical window. The IOSurface texture (also
+1280x720 after Fix 1) maps 1:1 to the drawable — no stretching, no blur.
+
+#### What we're modifying
+
+- `content/one_profile/browser/shell_video_consumer.cc` — Add
+  `SetResolutionConstraints()` call with physical pixel dimensions
+- `ts4/two-profiles-receiver/main.mm` — Set `contentsScale` and `drawableSize`
+  in `setup_metal()`
+
+No changes to shaders, Makefile, plist, or the `--hidden` flag.
+
+#### Run and verify
+
+Same procedure as Experiment 4:
+
+1. `cd ts4/box-demo && bun run server.ts`
+2. Rebuild both binaries:
+   ```bash
+   cd ~/dev/termsurf/ts4/termsurf-chromium/src
+   export PATH="$(cd ../depot_tools && pwd):$PATH"
+   autoninja -C out/Default one_profile
+
+   cd ~/dev/termsurf/ts4/two-profiles-receiver && make
+   ```
+3. Reload the launchd plist:
+   ```bash
+   launchctl unload ~/dev/termsurf/ts4/two-profiles-receiver/com.termsurf.two-profiles.plist
+   launchctl load ~/dev/termsurf/ts4/two-profiles-receiver/com.termsurf.two-profiles.plist
+   ```
+4. Start the hidden profile server:
+   ```bash
+   cd ~/dev/termsurf/ts4/termsurf-chromium/src
+   out/Default/One\ Profile.app/Contents/MacOS/One\ Profile \
+     --hidden --xpc-service=com.termsurf.two-profiles \
+     http://localhost:9407 2>&1
+   ```
+5. Verify:
+   - Profile server logs: `IOSurface 1280x720` (not 640x360)
+   - Receiver logs: `IOSurface 1280x720`
+   - Receiver window: spinning blue square with crisp edges, no blur
+   - Both processes at 60fps
+
+#### Expected result
+
+Both sender and receiver operate at 2x physical resolution. The IOSurface is
+1280x720 (double the 640x360 logical window). The receiver renders the texture
+1:1 into its 2x Metal drawable. The spinning blue square has crisp, sharp edges.
+
+```
+Profile server:  IOSurface 1280x720  (was 640x360)
+Receiver:        IOSurface 1280x720  (was 640x360)
+```
+
+#### What a failure would mean
+
+- **IOSurface still 640x360 after Fix 1:** `GetVisibleViewportSize()` or
+  `GetDeviceScaleFactor()` returns unexpected values in the delayed-attach
+  context. Log both values to debug. Try hardcoding `gfx::Size(1280, 720)` as a
+  sanity check. If hardcoding works, the issue is in how we read the view's
+  properties.
+- **IOSurface is 1280x720 but receiver still blurry:** The `contentsScale` fix
+  didn't take effect. Verify that `drawableSize` is being set *after* the layer
+  is attached to the view. Log `g_metal_layer.contentsScale` and
+  `g_metal_layer.drawableSize` to confirm.
+- **Colors wrong or washed out:** sRGB double-correction (same bug as cef-test).
+  The IOSurface is sRGB but the Metal texture descriptor specifies linear. Use
+  `MTLPixelFormatBGRA8Unorm_sRGB` for the texture created from the IOSurface.
+- **< 60fps:** Capturing at 2x resolution (4x the pixel count) may increase
+  GPU load. Check if the profile server maintains 60fps at 1280x720. If not,
+  try `SetAutoThrottlingEnabled(true)` or reduce the window size.
