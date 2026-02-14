@@ -245,3 +245,9 @@ historical reference.
 8. Merge Ghostty into `ts5/`
 9. Verify build (`cd ts5 && zig build`)
 10. Commit the merge
+
+## Implementations
+
+### Change 1: Move `termsurf-chromium` to top level
+
+(To be filled out.)
