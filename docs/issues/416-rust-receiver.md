@@ -65,12 +65,19 @@ Zero-copy texture import:
   wgpu texture via `device.create_texture_from_hal::<Metal>()`
 - sRGB format handling (prevents double gamma correction)
 
-### What needs adaptation
+### Crate fitness
 
-The `termsurf-xpc` code was designed for a different architecture (anonymous XPC endpoints
-relayed through a launcher). The receiver here uses a simpler pattern: a
-launchd-registered Mach service that senders connect to directly, same as Issues
-414 and 415. The IOSurface import code from cef-rs can be used almost unchanged.
+The `termsurf-xpc` crate's core abstractions (listener, connection, dictionary,
+blocks) are architecture-agnostic. ts3 used anonymous endpoints relayed through
+a launcher, but the crate supports direct Mach service listeners equally well:
+`XpcListener::new_mach_service()` creates a listener with the
+`XPC_CONNECTION_MACH_SERVICE_LISTENER` flag, exactly what the receiver needs.
+
+The crate is essential because XPC event handlers are Objective-C blocks. The
+`block2` crate integration in `block.rs` handles block creation, memory
+management, and lifetime correctness. Writing inline FFI without it would mean
+reimplementing ~100 lines of block handling. The IOSurface import code from
+cef-rs can be used almost unchanged.
 
 ## Project structure
 
@@ -384,8 +391,8 @@ correct lifetimes. Getting this wrong causes use-after-free or data races.
 
 **Mitigation:** The `termsurf-xpc` crate already handles this correctly. If
 writing inline FFI instead, follow the patterns in
-`ts3/wezterm-gui/src/termwindow/webview_xpc.rs` (ts3 reference, for the
-patterns only).
+`ts3/wezterm-gui/src/termwindow/webview_xpc.rs` (ts3 reference, for the patterns
+only).
 
 ### 4. CoreFoundation memory management
 
