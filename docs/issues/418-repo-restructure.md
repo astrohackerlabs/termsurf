@@ -299,7 +299,30 @@ rm -rf .git/modules/ts4/termsurf-chromium
 
 The ts2 and ts3 submodules (freetype, harfbuzz, etc.) remain unchanged.
 
-#### Step 3: Move the directory
+#### Step 3: Convert submodule to standalone repo
+
+The `src/` directory currently has a `.git` file (not a directory) containing a
+relative path like `gitdir: ../../../.git/modules/ts4/termsurf-chromium/src`.
+After the `git rm --cached` in Step 2, this pointer still exists but will break
+when we move the directory. Convert it to a standalone repo before moving:
+
+```bash
+# Read the current gitdir path
+cat ts4/termsurf-chromium/src/.git
+# e.g.: gitdir: ../../../.git/modules/ts4/termsurf-chromium/src
+
+# Replace the .git file with the actual .git directory
+rm ts4/termsurf-chromium/src/.git
+mv .git/modules/ts4/termsurf-chromium/src ts4/termsurf-chromium/src/.git
+
+# Fix the core.worktree config inside the moved .git directory
+# (it may point to the old absolute path)
+cd ts4/termsurf-chromium/src
+git config --unset core.worktree 2>/dev/null || true
+cd ~/dev/termsurf
+```
+
+#### Step 4: Move the directory
 
 ```bash
 mv ts4/termsurf-chromium termsurf-chromium
@@ -308,7 +331,7 @@ mv ts4/termsurf-chromium termsurf-chromium
 The `.gclient` file inside `termsurf-chromium/` already has the correct URL
 (`git@github.com:termsurf/termsurf-chromium.git`) and does not need updating.
 
-#### Step 4: Update `.gitignore`
+#### Step 5: Update `.gitignore`
 
 Remove:
 
@@ -323,7 +346,7 @@ Add:
 /termsurf-chromium/
 ```
 
-#### Step 5: Update `ts4/.gitignore`
+#### Step 6: Update `ts4/.gitignore`
 
 Remove all `termsurf-chromium/` entries:
 
@@ -339,7 +362,7 @@ termsurf-chromium/src/out/
 These are no longer needed since the entire directory is gitignored at the top
 level.
 
-#### Step 6: Update Claude skills
+#### Step 7: Update Claude skills
 
 **`.claude/skills/build-chromium/SKILL.md`** — All paths change from
 `ts4/termsurf-chromium/` to `termsurf-chromium/`:
@@ -367,12 +390,12 @@ it must also update `docs/chromium.md` accordingly.
 - When creating a new Chromium branch, add it to the Branches table in
   `docs/chromium.md` with a link to the corresponding issue doc
 
-#### Step 7: Update `CLAUDE.md`
+#### Step 8: Update `CLAUDE.md`
 
 Update the ts4 directory structure and build commands sections to reference
 `termsurf-chromium/` at the top level instead of `ts4/termsurf-chromium/`.
 
-#### Step 8: Create `docs/chromium.md`
+#### Step 9: Create `docs/chromium.md`
 
 Document the tracked branch, commit, remote configuration, and branch strategy
 in a dedicated file so it's easy to find:
@@ -421,7 +444,7 @@ gitignored from the main repo. To set up from scratch:
       git@github.com:termsurf/termsurf-chromium.git termsurf-chromium/src
 ```
 
-#### Step 9: Verify test apps
+#### Step 10: Verify test apps
 
 The ts4 test apps (Issues 414–416) do **not** reference `ts4/termsurf-chromium/`
 in their own code or plists. The launchd plists reference
@@ -440,8 +463,8 @@ termsurf-chromium/src/out/Default/Content\ Shell.app/Contents/MacOS/Content\ She
 
 No code changes needed in the test apps themselves.
 
-#### Step 10: Commit
+#### Step 11: Commit
 
 Stage all changes (`.gitmodules`, `.gitignore`, `ts4/.gitignore`, `CLAUDE.md`,
-`.claude/skills/build-chromium/SKILL.md`, `docs/chromium.md`, removal of
-submodule index entry) and commit.
+`.claude/skills/build-chromium/SKILL.md`, `.claude/skills/git-poet/SKILL.md`,
+`docs/chromium.md`, removal of submodule index entry) and commit.
