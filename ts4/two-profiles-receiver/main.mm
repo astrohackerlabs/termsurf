@@ -1,6 +1,6 @@
 // Copyright 2025 TermSurf
 // Metal receiver: receives IOSurface Mach ports via XPC and renders them.
-// Part of Issue 414 Experiment 3: hidden sender, visible receiver.
+// Part of Issue 414 Experiment 7: two profile servers side by side.
 
 #import <Cocoa/Cocoa.h>
 #import <IOSurface/IOSurface.h>
@@ -12,19 +12,25 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <mutex>
+#include <vector>
+
+// --- Pane indices ---
+
+enum Pane { LEFT = 0, RIGHT = 1, PANE_COUNT = 2 };
 
 // --- XPC state (must be static to prevent ARC from releasing them) ---
 
 static xpc_connection_t g_listener = nil;
-static xpc_connection_t g_peer = nil;
+static std::vector<xpc_connection_t> g_peers;
 
 // --- Shared state between XPC thread and render thread ---
 
 static std::mutex g_surface_mutex;
-static IOSurfaceRef g_pending_surface = nullptr;
-static int g_frame_count = 0;
+static IOSurfaceRef g_pending_surface[PANE_COUNT] = { nullptr, nullptr };
+static int g_frame_count[PANE_COUNT] = { 0, 0 };
 static struct timespec g_last_log_time;
 
 // --- Metal state ---
@@ -34,7 +40,15 @@ static id<MTLCommandQueue> g_command_queue = nil;
 static id<MTLRenderPipelineState> g_pipeline = nil;
 static id<MTLSamplerState> g_sampler = nil;
 static CAMetalLayer *g_metal_layer = nil;
-static id<MTLTexture> g_current_texture = nil;
+static id<MTLTexture> g_current_texture[PANE_COUNT] = { nil, nil };
+
+// --- Session ID → pane mapping ---
+
+static Pane pane_for_session(const char *session_id) {
+    if (session_id && strcmp(session_id, "profile-b") == 0)
+        return RIGHT;
+    return LEFT;  // default: profile-a or unknown → left
+}
 
 // --- XPC message handler ---
 
@@ -58,16 +72,20 @@ static void handle_message(xpc_object_t msg) {
             return;
         }
 
-        // Swap in the new surface.
+        // Map session_id to pane.
+        const char *session_id = xpc_dictionary_get_string(msg, "session_id");
+        Pane pane = pane_for_session(session_id);
+
+        // Swap in the new surface for this pane.
         {
             std::lock_guard<std::mutex> lock(g_surface_mutex);
-            if (g_pending_surface)
-                CFRelease(g_pending_surface);
-            g_pending_surface = surface;
+            if (g_pending_surface[pane])
+                CFRelease(g_pending_surface[pane]);
+            g_pending_surface[pane] = surface;
         }
 
-        // FPS logging.
-        g_frame_count++;
+        // FPS logging (per-pane counts, single log line).
+        g_frame_count[pane]++;
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         double elapsed = (now.tv_sec - g_last_log_time.tv_sec) +
@@ -75,10 +93,15 @@ static void handle_message(xpc_object_t msg) {
         if (elapsed >= 1.0) {
             size_t w = IOSurfaceGetWidth(surface);
             size_t h = IOSurfaceGetHeight(surface);
+            double fps_l = g_frame_count[LEFT] / elapsed;
+            double fps_r = g_frame_count[RIGHT] / elapsed;
             fprintf(stderr,
-                    "[Receiver] %d frames in %.2fs (%.1f fps) | IOSurface %zux%zu\n",
-                    g_frame_count, elapsed, g_frame_count / elapsed, w, h);
-            g_frame_count = 0;
+                    "[Receiver] L: %d (%.1f fps) R: %d (%.1f fps) | "
+                    "IOSurface %zux%zu\n",
+                    g_frame_count[LEFT], fps_l,
+                    g_frame_count[RIGHT], fps_r, w, h);
+            g_frame_count[LEFT] = 0;
+            g_frame_count[RIGHT] = 0;
             g_last_log_time = now;
         }
     } else if (strcmp(action, "register") == 0) {
@@ -148,33 +171,38 @@ static void setup_metal(NSView *view) {
 // --- Render one frame ---
 
 static void render_frame() {
-    // Check for a new IOSurface.
-    IOSurfaceRef surface = nullptr;
+    // Grab the latest IOSurface for each pane.
+    IOSurfaceRef surfaces[PANE_COUNT] = { nullptr, nullptr };
     {
         std::lock_guard<std::mutex> lock(g_surface_mutex);
-        surface = g_pending_surface;
-        if (surface)
-            CFRetain(surface);
+        for (int i = 0; i < PANE_COUNT; i++) {
+            surfaces[i] = g_pending_surface[i];
+            if (surfaces[i])
+                CFRetain(surfaces[i]);
+        }
     }
 
-    if (surface) {
-        // Create a Metal texture from the IOSurface.
-        MTLTextureDescriptor *desc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm_sRGB
-                                        width:IOSurfaceGetWidth(surface)
-                                       height:IOSurfaceGetHeight(surface)
-                                    mipmapped:NO];
-        desc.usage = MTLTextureUsageShaderRead;
-        id<MTLTexture> newTexture = [g_device newTextureWithDescriptor:desc
-                                                            iosurface:surface
-                                                                plane:0];
-        CFRelease(surface);
+    // Update Metal textures from new IOSurfaces.
+    for (int i = 0; i < PANE_COUNT; i++) {
+        if (surfaces[i]) {
+            MTLTextureDescriptor *desc = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm_sRGB
+                                            width:IOSurfaceGetWidth(surfaces[i])
+                                           height:IOSurfaceGetHeight(surfaces[i])
+                                        mipmapped:NO];
+            desc.usage = MTLTextureUsageShaderRead;
+            id<MTLTexture> newTexture = [g_device newTextureWithDescriptor:desc
+                                                                iosurface:surfaces[i]
+                                                                    plane:0];
+            CFRelease(surfaces[i]);
 
-        if (newTexture)
-            g_current_texture = newTexture;
+            if (newTexture)
+                g_current_texture[i] = newTexture;
+        }
     }
 
-    if (!g_current_texture)
+    // Need at least one texture to render.
+    if (!g_current_texture[LEFT] && !g_current_texture[RIGHT])
         return;
 
     id<CAMetalDrawable> drawable = [g_metal_layer nextDrawable];
@@ -192,11 +220,32 @@ static void render_frame() {
         [cmdBuf renderCommandEncoderWithDescriptor:passDesc];
 
     [encoder setRenderPipelineState:g_pipeline];
-    [encoder setFragmentTexture:g_current_texture atIndex:0];
     [encoder setFragmentSamplerState:g_sampler atIndex:0];
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                vertexStart:0
-                vertexCount:4];
+
+    double drawableW = g_metal_layer.drawableSize.width;
+    double drawableH = g_metal_layer.drawableSize.height;
+    double halfW = drawableW / 2.0;
+
+    // Left pane (profile-a).
+    if (g_current_texture[LEFT]) {
+        MTLViewport vp = { 0, 0, halfW, drawableH, 0, 1 };
+        [encoder setViewport:vp];
+        [encoder setFragmentTexture:g_current_texture[LEFT] atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0
+                    vertexCount:4];
+    }
+
+    // Right pane (profile-b).
+    if (g_current_texture[RIGHT]) {
+        MTLViewport vp = { halfW, 0, halfW, drawableH, 0, 1 };
+        [encoder setViewport:vp];
+        [encoder setFragmentTexture:g_current_texture[RIGHT] atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0
+                    vertexCount:4];
+    }
+
     [encoder endEncoding];
 
     [cmdBuf presentDrawable:drawable];
@@ -236,10 +285,12 @@ static void start_xpc_listener() {
 
     xpc_connection_set_event_handler(g_listener, ^(xpc_object_t peer) {
         if (xpc_get_type(peer) == XPC_TYPE_CONNECTION) {
-            fprintf(stderr, "[Receiver] Profile server connected\n");
-            g_peer = (xpc_connection_t)peer;
+            fprintf(stderr, "[Receiver] Profile server connected (%zu total)\n",
+                    g_peers.size() + 1);
+            xpc_connection_t peer_conn = (xpc_connection_t)peer;
+            g_peers.push_back(peer_conn);
             xpc_connection_set_event_handler(
-                g_peer, ^(xpc_object_t event) {
+                peer_conn, ^(xpc_object_t event) {
                     if (xpc_get_type(event) == XPC_TYPE_DICTIONARY) {
                         handle_message(event);
                     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
@@ -249,7 +300,7 @@ static void start_xpc_listener() {
                             fprintf(stderr, "[Receiver] XPC error\n");
                     }
                 });
-            xpc_connection_resume(g_peer);
+            xpc_connection_resume(peer_conn);
         } else if (xpc_get_type(peer) == XPC_TYPE_ERROR) {
             fprintf(stderr, "[Receiver] Listener error\n");
         }
@@ -270,8 +321,8 @@ static void start_xpc_listener() {
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    // Create window.
-    NSRect frame = NSMakeRect(100, 100, 800, 600);
+    // Create window: 1600x600 logical = two 800x600 panes side by side.
+    NSRect frame = NSMakeRect(100, 100, 1600, 600);
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                        NSWindowStyleMaskResizable;
     _window = [[NSWindow alloc] initWithContentRect:frame
