@@ -2,6 +2,7 @@
 members = [
     "termsurf-terminal",
     "termsurf-xpc",
+    "two-profiles-rust",
 ]
 resolver = "2"
 
@@ -9,3 +10,8 @@ resolver = "2"
 libc = "0.2"
 block2 = "0.6"
 clap = { version = "4.0", features = ["derive"] }
+wgpu = "28"
+winit = "0.30"
+objc = "0.2"
+metal = "0.33"
+pollster = "0.4"

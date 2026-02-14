@@ -1197,3 +1197,81 @@ Same as Experiment 1:
 5. **Window not visible.** The receiver runs as a launchd service, which may not
    have access to the WindowServer. If the window doesn't appear, try running the
    receiver binary directly (not via launchd) with the plist unloaded.
+
+#### Result: PASSED
+
+Rock-solid 60fps for 75+ seconds. All seven unknowns from Experiment 1 are now
+resolved.
+
+##### Log output
+
+```
+[Receiver] Listening on com.termsurf.two-profiles-rust...
+[Receiver] Window and wgpu pipeline ready
+[Receiver] Profile server connected (1 total)
+[Receiver] 104 frames (103.5 fps) | IOSurface 1600x1200
+[Receiver] 61 frames (60.0 fps) | IOSurface 1600x1200
+[Receiver] 60 frames (59.4 fps) | IOSurface 1600x1200
+...
+[Receiver] 60 frames (60.0 fps) | IOSurface 1600x1200  (sustained 60+ seconds)
+```
+
+The first second logged 103.5fps (burst while catching up), then locked to
+60.0fps for every subsequent second. 77 log lines total — over 75 seconds of
+sustained rendering.
+
+##### What was wrong in Experiment 1
+
+The sender was launched with `--service` instead of `--xpc-service`. The Chromium
+source defines the flag as `xpc-service` in `shell_switches.h`. With the wrong
+flag, the sender never called `xpc_connection_create_mach_service()`, so launchd
+never started the receiver. Zero code changes were needed — only the command line.
+
+##### Unknown resolution
+
+All seven unknowns from the Experiment 1 hypothesis:
+
+| # | Unknown | Status | Notes |
+|---|---------|--------|-------|
+| 1 | Cargo workspace integration | **PASSED** | Builds with `cargo build -p two-profiles-rust` |
+| 2 | XPC Mach service listener | **PASSED** | `XpcListener::new_mach_service()` works, connections accepted |
+| 3 | IOSurface reconstruction | **PASSED** | `lookup_from_mach_port()` returns valid 1600x1200 surface |
+| 4 | IOSurface → Metal → wgpu texture | **PASSED** | Five-step unsafe pipeline works correctly |
+| 5 | winit + wgpu rendering | **PASSED** | Window creates, pipeline initializes, frames render |
+| 6 | WGSL shader | **PASSED** | Fullscreen quad renders correctly |
+| 7 | Cross-thread handoff | **PASSED** | `Mutex<Option<SendPtr>>` + `EventLoopProxy` wake works |
+
+##### Success criteria checklist
+
+- [x] One pane showing the spinning blue square
+- [x] 60fps sustained for 60+ seconds (75+ seconds observed)
+- [x] Retina quality (1600x1200 IOSurface in 800x600 logical window)
+- [x] Receiver written entirely in Rust
+- [x] Builds with `cargo build`
+- [x] Uses `termsurf-xpc` crate for XPC handling
+- [x] WGSL shader via wgpu
+- [x] IOSurface → Metal → wgpu texture import via cef-rs pattern
+- [ ] sRGB color correctness — not visually verified (receiver window was
+  rendered by launchd service; content appeared but color accuracy was not
+  compared side-by-side with Chrome)
+
+##### What we learned
+
+1. **The full Rust pipeline works.** XPC → IOSurface → Metal → wgpu → winit, all
+   in Rust with `unsafe` FFI. No C/ObjC source files needed. The ~577-line
+   `main.rs` replaces the Swift and Objective-C++ receivers.
+
+2. **The `mach_task_self_` fix was essential.** Without it, any call to
+   `deallocate_mach_port` crashes. This fix should be committed to `termsurf-xpc`.
+
+3. **CLI flag names matter.** `--service` vs `--xpc-service` caused Experiment 1
+   to fail with no error message — the sender silently ignored the unknown flag
+   and never connected. Always verify flag names against source code.
+
+4. **Launchd on-demand startup works.** The receiver was started by launchd when
+   the sender connected to the Mach service. The window appeared despite running
+   as a launchd agent. No `RunAtLoad` key needed in production.
+
+5. **wgpu 28 is compatible with IOSurface import.** The `as_hal::<Metal>()` →
+   `texture_from_raw()` → `create_texture_from_hal()` pipeline works with wgpu
+   28 despite the API churn documented in Experiment 1.

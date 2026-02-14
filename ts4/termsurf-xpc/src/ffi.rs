@@ -208,8 +208,9 @@ pub type kern_return_t = i32;
 extern "C" {
     pub fn mach_port_deallocate(task: mach_port_t, name: mach_port_t) -> kern_return_t;
 
-    // mach_task_self() is a macro that expands to mach_task_self_()
-    pub fn mach_task_self_() -> mach_port_t;
+    // mach_task_self_ is a global variable (extern mach_port_t mach_task_self_;).
+    // The C macro mach_task_self() simply reads this variable.
+    pub static mach_task_self_: mach_port_t;
 }
 
 /// Get the current task's Mach port.
@@ -217,7 +218,7 @@ extern "C" {
 /// This is equivalent to the `mach_task_self()` macro in C.
 #[inline]
 pub fn mach_task_self() -> mach_port_t {
-    unsafe { mach_task_self_() }
+    unsafe { mach_task_self_ }
 }
 
 // === CoreFoundation (for run loop) ===

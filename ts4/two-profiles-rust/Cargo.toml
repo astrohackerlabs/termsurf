@@ -1,0 +1,17 @@
+[package]
+name = "two-profiles-rust"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "receiver"
+path = "src/main.rs"
+
+[dependencies]
+termsurf-xpc = { path = "../termsurf-xpc" }
+wgpu.workspace = true
+winit.workspace = true
+objc.workspace = true
+metal.workspace = true
+libc.workspace = true
+pollster.workspace = true
