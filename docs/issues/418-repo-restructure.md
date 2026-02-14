@@ -56,6 +56,42 @@ directly (not Electron itself). To find the current version:
 2. Use that version tag as our base
 3. Create `{version}-termsurf` branch on top of the tag
 
+**Push local branches to origin.** Several local branches exist that have never
+been pushed to `github.com/termsurf/termsurf-chromium`. Push them all before the
+move:
+
+| Branch                   | Status                      |
+| ------------------------ | --------------------------- |
+| `146.0.7650.0-termsurf`  | Local only — push to origin |
+| `146.0.7650.0-issue-411` | Local only — push to origin |
+| `146.0.7650.0-issue-412` | Local only — push to origin |
+| `146.0.7650.0-issue-413` | Local only — push to origin |
+| `146.0.7650.0-issue-414` | Local only — push to origin |
+| `146.0.7650.0-issue-415` | Local only — push to origin |
+| `146.0.7650.0-issue-416` | Local only — push to origin |
+| `146.0.7650.0-electron`  | Already on origin           |
+| `main`                   | Already on origin           |
+
+**Verify ts4 test apps still work after the move.** Several ts4 apps and scripts
+reference `ts4/termsurf-chromium/` paths (for `content_shell`, build output,
+etc.). After moving `termsurf-chromium/` to the top level, update these
+references:
+
+- `ts4/scripts/build-phase*.sh` — build scripts that may reference
+  `termsurf-chromium/src/out/Default/`
+- `ts4/.gitignore` — references `termsurf-chromium/` subdirectories
+- `.claude/skills/build-chromium/SKILL.md` — build instructions reference
+  `ts4/termsurf-chromium/`
+- `CLAUDE.md` — build commands and directory structure reference
+  `ts4/termsurf-chromium/`
+- Launchd plists for test receivers (Issues 414–416) — the `content_shell`
+  sender path in the plist `ProgramArguments` may reference the old location
+- Any hardcoded paths in experiment code (two-profiles-receiver,
+  two-profiles-swift, two-profiles-rust)
+
+After updating paths, verify that `content_shell` can still be built and that
+the test senders (from Issues 414–416) can still connect to their receivers.
+
 **Current state:**
 
 - Branch: `146.0.7650.0-termsurf`
