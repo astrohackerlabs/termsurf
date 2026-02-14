@@ -32,7 +32,7 @@ Where `<repo>` is one of:
 
 ## Steps
 
-1. **Read the documentation** - Read `docs/merge-upstream.md` for the full process, especially the repo-specific conflict resolution guides.
+1. **Read the documentation** - For ghostty, read `docs/ghostty.md`. For wezterm and cef-rs, read `docs/issues/002-merge-upstream.md`.
 
 2. **Pre-merge checklist**
    - Ensure working tree is clean (`git status`)
