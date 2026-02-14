@@ -29,13 +29,21 @@ Ghostty integration.
 
 ## Chromium branch
 
-**No new branch.** The sender is unchanged from Issue 414. We reuse the existing
-`146.0.7650.0-issue-414` branch in the `termsurf-chromium` submodule as-is. The
-same `One Profile.app` binary with `--hidden`, `--xpc-service`, `--session-id`,
-and `--user-data-dir` flags works identically — the sender has no knowledge of
-what language the receiver is written in.
+Create a new branch `146.0.7650.0-issue-415` in the `termsurf-chromium`
+submodule, forked from `146.0.7650.0-issue-414`. Every issue gets its own branch
+of Chromium, even when no Chromium changes are expected. This keeps the history
+clean and allows each issue's submodule pointer to be pinned independently.
 
-No Chromium code changes are required for this issue.
+```bash
+cd ts4/termsurf-chromium/src
+git checkout -b 146.0.7650.0-issue-415 146.0.7650.0-issue-414
+```
+
+The sender is unchanged from Issue 414. The same `One Profile.app` binary with
+`--hidden`, `--xpc-service`, `--session-id`, and `--user-data-dir` flags works
+identically — the sender has no knowledge of what language the receiver is
+written in. No Chromium code changes are expected, but the branch exists for
+completeness.
 
 ## Project structure
 
