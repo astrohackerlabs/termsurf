@@ -424,3 +424,8 @@ cd ts5 && zig build
 
 Verify the app still builds cleanly. The icon will remain the upstream Ghostty
 icon for now.
+
+#### Result
+
+Success. Removed all four icon additions from experiment 1. Build passes and
+`TermSurf.app` is produced. The app uses the upstream Ghostty icon for now.
