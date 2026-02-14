@@ -702,7 +702,7 @@ works for launchd-registered services.
     </dict>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/two-profiles-receiver</string>
+        <string>/Users/ryan/dev/termsurf/ts4/two-profiles-receiver/receiver</string>
     </array>
     <key>StandardOutPath</key>
     <string>/tmp/two-profiles-receiver.log</string>
@@ -714,9 +714,6 @@ works for launchd-registered services.
 
 Install with:
 ```bash
-# Symlink so plist doesn't need updating on rebuilds
-ln -sf $(pwd)/ts4/two-profiles-receiver/receiver /usr/local/bin/two-profiles-receiver
-# Register the service
 cp ts4/two-profiles-receiver/com.termsurf.two-profiles.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.termsurf.two-profiles.plist
 ```
