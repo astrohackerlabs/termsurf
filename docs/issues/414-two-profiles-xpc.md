@@ -1968,3 +1968,72 @@ IOSurface 1600×1200    ──►   Drawable 1600×1200
   interpolating due to floating-point texture coordinate imprecision. Try
   `MTLSamplerMinMagFilterNearest` as a diagnostic — if nearest looks identical
   to linear, the coordinates are precise and the softness has another cause.
+
+#### Result: PASSED
+
+Pixel-perfect Retina rendering at 60fps. The receiver window is visually crisp
+— indistinguishable from Chrome rendering the same page directly.
+
+Receiver log:
+
+```
+[Receiver] Listening on com.termsurf.two-profiles...
+[Receiver] Profile server connected
+[Receiver] Window and Metal pipeline ready
+[Receiver] 73 frames in 1.01s (72.5 fps) | IOSurface 1600x1200
+[Receiver] 61 frames in 1.02s (60.0 fps) | IOSurface 1600x1200
+[Receiver] 60 frames in 1.00s (59.9 fps) | IOSurface 1600x1200
+[Receiver] 61 frames in 1.01s (60.1 fps) | IOSurface 1600x1200
+[Receiver] 60 frames in 1.00s (60.0 fps) | IOSurface 1600x1200
+[Receiver] 61 frames in 1.02s (60.0 fps) | IOSurface 1600x1200
+[Receiver] 61 frames in 1.02s (60.0 fps) | IOSurface 1600x1200
+```
+
+Profile server log:
+
+```
+[ShellVideoConsumer] Connected to XPC service: com.termsurf.two-profiles
+[ShellVideoConsumer] Attached to FrameSinkId FrameSinkId(5, 3), starting capture
+[ShellVideoConsumer] 60 frames in 1.00208s (59.8757 fps) | IOSurface 1600x1200
+[ShellVideoConsumer] 61 frames in 1.01446s (60.1306 fps) | IOSurface 1600x1200
+[ShellVideoConsumer] 61 frames in 1.01666s (60.0005 fps) | IOSurface 1600x1200
+```
+
+Key observations:
+
+- **Crisp Retina rendering.** Side-by-side comparison with Chrome shows no
+  visible quality difference. The `FrameSinkVideoCapturer` → IOSurface → Metal
+  pipeline preserves full fidelity.
+- **1:1 pixel mapping works.** The 1600×1200 IOSurface (800×600 logical × 2x
+  Retina) maps exactly to the 1600×1200 Metal drawable. No scaling, no bilinear
+  filtering artifacts.
+- **sRGB format is correct.** `MTLPixelFormatBGRA8Unorm_sRGB` for all three
+  declarations (layer, texture, pipeline) produces correct colors. Chromium's
+  IOSurfaces contain sRGB-encoded data.
+- **60fps sustained.** Both sender and receiver maintain 60fps with the 2x
+  resolution (1600×1200 = 1.92M pixels per frame, 4× the Experiment 4 pixel
+  count). No performance impact from the resolution increase.
+
+#### Conclusion
+
+Experiment 6 completes the single-profile rendering pipeline with full Retina
+quality. The three Retina fixes across Experiments 5 and 6 are:
+
+1. **Sender: `SetResolutionConstraints()`** (Experiment 5) — forces the capturer
+   to produce IOSurfaces at physical pixel resolution instead of logical (DIP).
+2. **Receiver: `contentsScale` + `drawableSize`** (Experiment 5) — tells Metal
+   to render at the screen's backing scale factor.
+3. **Receiver: matched window size + sRGB format** (Experiment 6) — ensures 1:1
+   pixel mapping and correct color space interpretation.
+
+The full pipeline is now proven at production quality:
+
+1. **Capture** (Experiment 1): `FrameSinkVideoCapturer` → IOSurface at 60fps
+2. **Transfer** (Experiment 2): IOSurface → Mach port → XPC at 60fps
+3. **Hidden sender** (Experiments 3–4): `orderOut:nil` → 60fps, no throttling
+4. **Retina rendering** (Experiments 5–6): physical pixels, sRGB, 1:1 mapping
+5. **Visible receiver** (Experiment 6): IOSurface → Metal → screen, crisp at
+   60fps
+
+What remains is running two profile servers simultaneously into one window with
+side-by-side compositing — the target architecture.

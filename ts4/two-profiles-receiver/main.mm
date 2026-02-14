@@ -96,7 +96,7 @@ static void setup_metal(NSView *view) {
 
     g_metal_layer = [CAMetalLayer layer];
     g_metal_layer.device = g_device;
-    g_metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    g_metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
     g_metal_layer.framebufferOnly = NO;
     g_metal_layer.displaySyncEnabled = YES;
 
@@ -129,7 +129,7 @@ static void setup_metal(NSView *view) {
         [[MTLRenderPipelineDescriptor alloc] init];
     pipelineDesc.vertexFunction = vertexFunc;
     pipelineDesc.fragmentFunction = fragmentFunc;
-    pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
 
     g_pipeline = [g_device newRenderPipelineStateWithDescriptor:pipelineDesc
                                                          error:&error];
@@ -160,7 +160,7 @@ static void render_frame() {
     if (surface) {
         // Create a Metal texture from the IOSurface.
         MTLTextureDescriptor *desc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm_sRGB
                                         width:IOSurfaceGetWidth(surface)
                                        height:IOSurfaceGetHeight(surface)
                                     mipmapped:NO];
@@ -271,7 +271,7 @@ static void start_xpc_listener() {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     // Create window.
-    NSRect frame = NSMakeRect(100, 100, 640, 360);
+    NSRect frame = NSMakeRect(100, 100, 800, 600);
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                        NSWindowStyleMaskResizable;
     _window = [[NSWindow alloc] initWithContentRect:frame
