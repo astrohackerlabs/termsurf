@@ -187,12 +187,11 @@ termsurf/                        (root — TermSurf repo)
 └── TODO.md
 ```
 
-**Merge strategy:** Add Ghostty as a remote, fetch, then use `git merge` with
-`--allow-unrelated-histories` into a temporary branch. Use `git read-tree` or
-equivalent to place Ghostty's tree under `ts5/`, preserving Ghostty's full
-commit history. This is the same pattern used by projects like git-subtree: the
-upstream history is preserved, and future merges from Ghostty can be pulled and
-re-prefixed into `ts5/`.
+**Merge strategy:** `git subtree add --prefix=ts5 upstream main` for the initial
+import. This places Ghostty's tree under `ts5/` and creates a merge commit.
+Future upstream merges use `git subtree pull --prefix=ts5 upstream main`. See
+Experiments section below for why `git merge -X subtree` doesn't work with this
+repo's history.
 
 **After the merge:** `cd ts5 && zig build` should work. The macOS app builds
 from `ts5/`. From this point forward, TermSurf development means modifying files

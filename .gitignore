@@ -39,6 +39,25 @@ ts1/Box_test_diff.ppm
 ts1/ghostty.qcow2
 ts1/vgcore.*
 
+# TermSurf 5.0 / Ghostty (ts5/)
+ts5/zig-cache/
+ts5/.zig-cache/
+ts5/zig-out/
+ts5/build/
+ts5/.flatpak-builder/
+ts5/flatpak/builddir/
+ts5/flatpak/repo/
+ts5/result*
+ts5/.nixos-test-history
+ts5/example/*.wasm
+ts5/test/ghostty
+ts5/test/cases/**/*.actual.png
+ts5/glad.zip
+ts5/Box_test.ppm
+ts5/Box_test_diff.ppm
+ts5/ghostty.qcow2
+ts5/vgcore.*
+
 # Vendored analysis repos (not committed)
 vendor/wezterm/
 vendor/electron/

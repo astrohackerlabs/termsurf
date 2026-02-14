@@ -14,7 +14,7 @@ TermSurf is a terminal emulator with an integrated web browser. Users type
 terminal pane, sharing cookies and sessions across tabs within the same browser
 profile.
 
-The project has evolved through four generations:
+The project has evolved through five generations:
 
 - **ts1** (Ghostty + WKWebView) — macOS-only. WKWebView had limited API and no
   cross-platform path. Abandoned in favor of CEF.
@@ -26,32 +26,36 @@ The project has evolved through four generations:
   communicate with the GUI via XPC Mach port transfer. Superseded by ts4 after
   26 experiments (Issues 325–350) proved CEF's headless off-screen rendering
   caps at ~31fps on macOS.
-- **ts4** (Ghostty fork + in-process Chromium) — **Active development.** Forks
-  Ghostty as the application (terminal panes are native, in-process). Embeds
-  Chromium directly via the Content API (not CEF) for browser panes, with
-  multiple browser profiles coexisting in one process. No custom XPC protocol.
+- **ts4** (Chromium Content API experiments) — Proved in-process Chromium works:
+  multiple browser profiles coexisting in one process, 60fps rendering. PoC only
+  — used content_shell inside the Chromium source tree. Superseded by ts5.
+- **ts5** (Ghostty fork + in-process Chromium) — **Active development.** Forks
+  Ghostty as the application (terminal panes are native, in-process). Will embed
+  Chromium directly via the Content API for browser panes.
 
 **Directory structure:**
 
-- `ts4/` — TermSurf 4.0 (Ghostty fork + in-process Chromium). Active work.
+- `ts5/` — TermSurf 5.0 (Ghostty fork + in-process Chromium). Active work.
+- `ts4/` — TermSurf 4.0 (Chromium Content API experiments). Superseded.
 - `ts3/` — TermSurf 3.0 (WezTerm fork + out-of-process CEF). Superseded.
 - `ts2/` — TermSurf 2.0 (WezTerm fork + in-process CEF). Superseded.
-- `ts1/` — TermSurf 1.x (Ghostty fork + WKWebView). Legacy, still builds.
+- `ts1/` — TermSurf 1.x (Ghostty fork + WKWebView). Legacy.
 - `vendor/cef-rs/` — CEF Rust bindings. Used by `ts3/termsurf-profile/`.
 - `docs/issues/` — All documentation across all generations.
 
-## TermSurf 4.0 (ts4/) — Active Development
+## TermSurf 5.0 (ts5/) — Active Development
 
 ### Architecture
 
-ts4 returns to the ts1 approach — fork Ghostty as the application — with the
-critical fix: replace WKWebView (which was too limited) with Chromium embedded
-directly via the Content API (not CEF, which cannot sustain 60fps headless).
+ts5 forks Ghostty as the application — terminal panes are native, in-process
+Ghostty rendering. Browser panes will embed Chromium directly via the Content
+API (not CEF, which cannot sustain 60fps headless). This combines the ts1
+approach (Ghostty as the app) with the ts4 finding (in-process Chromium works).
 
 ```
 Ghostty Fork (Zig + Swift macOS shell)
 ├── Terminal panes (in-process, native Ghostty rendering)
-├── Browser panes (in-process Chromium via Content API)
+├── Browser panes (in-process Chromium via Content API) [TBD]
 │   ├── BrowserContext "work" (Profile 1)
 │   ├── BrowserContext "personal" (Profile 2)
 │   └── BrowserContext "guest" (Profile N)
@@ -60,25 +64,55 @@ Ghostty Fork (Zig + Swift macOS shell)
 └── Metal renderer (inherited from Ghostty)
 ```
 
-**Key architectural decisions:**
+### Current State
 
-- **Chromium is in-process.** The browser host runs inside the Ghostty fork's
-  process. Chromium may still spawn its own renderer and GPU sub-processes
-  internally (this is Chromium's own multi-process architecture and is
-  expected). We do not invent a custom XPC or IPC protocol.
+ts5 starts as unmodified upstream Ghostty (imported via `git subtree add`).
+Browser pane integration has not started yet — the Chromium Content API
+embedding (proven in ts4's PoC) will be added incrementally.
+
+### Directory Structure
+
+- `ts5/src/` — Shared Zig core (libghostty)
+- `ts5/macos/` — Ghostty macOS app (Swift + Xcode)
+- `ts5/build.zig` — Ghostty build system
+- `ts5/build.zig.zon` — Ghostty dependencies
+- `ts5/include/` — libghostty C API headers
+- `ts5/pkg/` — Platform packages (Linux, macOS, etc.)
+
+### Build Commands
+
+```bash
+cd ts5 && zig build
+```
+
+### Upstream Merges
+
+ts5 uses `git subtree` (not `git merge -X subtree`) because the repo's rename
+history breaks the subtree merge strategy. See Issue 418 Experiments 1–3.
+
+```bash
+# Pull latest upstream Ghostty
+git fetch upstream
+git subtree pull --prefix=ts5 upstream main -m "Merge upstream Ghostty into ts5"
+```
+
+## TermSurf 4.0 (ts4/) — Superseded
+
+ts4 proved that in-process Chromium works: multiple browser profiles in one
+process at 60fps. The PoC modified Chromium's `content_shell` inside the
+Chromium source tree. Superseded by ts5, which forks Ghostty as the actual
+application.
+
+### Key Findings
+
+- **Chromium is in-process.** The browser host runs inside the application
+  process. Chromium spawns its own renderer and GPU sub-processes internally.
 - **Multiple profiles in one process.** Chromium's `content::BrowserContext`
   supports multiple instances with different storage paths. Each gets isolated
-  cookies, localStorage, and cache. This is what Chrome and Electron do. The
-  one-profile-per-process constraint was a CEF limitation, not a Chromium
-  limitation (Issue 406).
-- **No CEF.** CEF's headless off-screen rendering caps at ~31fps on macOS with
-  an event-driven pump, or ~50fps with a busy-wait loop at 100% CPU. 26
-  experiments across Issues 325–350 proved this is architectural, not
-  configurable. The Content API eliminates every CEF limitation.
-- **Fallback.** If multiple profiles cannot coexist in one process in practice,
-  we may fall back to a multi-process approach with one Chromium process per
-  profile, communicating via XPC (similar to ts3's architecture but with the
-  Content API instead of CEF).
+  cookies, localStorage, and cache. The one-profile-per-process constraint was a
+  CEF limitation, not a Chromium limitation (Issue 406).
+- **No CEF.** CEF's headless off-screen rendering caps at ~31fps on macOS.
+  The Content API eliminates every CEF limitation.
 
 ### How We Got Here
 
@@ -93,29 +127,12 @@ Ghostty Fork (Zig + Swift macOS shell)
 | 406   | Profile isolation is CEF-only; Content API supports multiple profiles; CEF ruled out |
 | 407   | In-process Chromium PoC: two profiles, side by side, high framerate |
 
-### Current Work: Issue 407 PoC
+### Issue 407 PoC (Completed)
 
-The PoC modifies Chromium's `content_shell` (the minimal Content API embedder)
-inside the Chromium source tree. The modifications are small (~5 files) and use
-Chromium's native windowed rendering. The resulting `.app` bundle is built by
-Chromium's GN/Ninja build system.
-
-**Phases:**
-
-1. **Test page** — Bun app serving a blue spinning square with localStorage
-   identity and FPS counter (`ts4/box-demo/public/index.html`, `ts4/box-demo/server.ts`)
-2. **Merge Chromium** — Fork Chromium into `termsurf-chromium/` following
-   the merge-upstream pattern (depot_tools fetch, move to subdirectory, merge
-   unrelated histories)
-3. **Build Chromium** — Configure GN, build content_shell with
-   `autoninja -C out/Default content_shell`
-4. **Modify content_shell** — Add second `ShellBrowserContext` with different
-   storage path, display two `WebContents` side by side in one window
-5. **Measure** — Verify profile isolation, measure framerate, document findings
-
-**Success criteria:** Two panes in one window, each showing a different
-localStorage string that persists across restarts. Both rendering at 60fps or
-higher. No custom XPC/IPC protocol.
+The PoC modified Chromium's `content_shell` (the minimal Content API embedder)
+inside the Chromium source tree. Two panes in one window, each with a different
+browser profile, rendering at 60fps. This validated the architecture now being
+implemented in ts5.
 
 ### Directory Structure
 
@@ -314,9 +331,11 @@ to separate processes — one per profile. That's ts3.
 
 Historical docs: `docs/issues/ts2-*.md`
 
-## TermSurf 1.x (ts1/) — Legacy
+## TermSurf 1.x (ts1/) — Legacy (superseded by ts5)
 
-Ghostty fork with WKWebView for browser panes. macOS-only. Still builds.
+Ghostty fork with WKWebView for browser panes. macOS-only. Superseded by ts5
+which starts from a clean upstream Ghostty and will use Chromium instead of
+WKWebView.
 
 ### Commands
 
@@ -423,7 +442,12 @@ testbed before ts1 integration. Changes made to the example:
 
 ## Documentation
 
-### TermSurf 4.0 (active)
+### TermSurf 5.0 (active)
+
+- `docs/issues/417-ghostty-vs-wezterm.md` — Terminal emulator selection (Ghostty)
+- `docs/issues/418-repo-restructure.md` — Repo restructure and Ghostty import
+
+### TermSurf 4.0
 
 - `docs/issues/400-a-new-hope.md` — Original ts4 vision and architecture sketch
 - `docs/issues/401-chromium-feasibility.md` — Content API surface analysis
