@@ -1,6 +1,6 @@
 // Copyright 2025 TermSurf
 // Rust receiver: receives IOSurface Mach ports via XPC and renders them with wgpu.
-// Part of Issue 416 Experiment 1: single-pane Rust receiver.
+// Part of Issue 416 Experiment 3: two-pane side-by-side receiver.
 
 #[macro_use]
 extern crate objc;
@@ -40,10 +40,22 @@ unsafe impl Send for SendPtr {}
 unsafe impl Sync for SendPtr {}
 
 // ---------------------------------------------------------------------------
+// Pane mapping
+// ---------------------------------------------------------------------------
+
+const LEFT: usize = 0;
+const RIGHT: usize = 1;
+
+fn pane_for_session(session_id: Option<&str>) -> usize {
+    if session_id == Some("profile-b") { RIGHT } else { LEFT }
+}
+
+// ---------------------------------------------------------------------------
 // Global state shared between XPC queue and main thread
 // ---------------------------------------------------------------------------
 
-static PENDING_SURFACE: Mutex<Option<SendPtr>> = Mutex::new(None);
+static PENDING_SURFACE_LEFT: Mutex<Option<SendPtr>> = Mutex::new(None);
+static PENDING_SURFACE_RIGHT: Mutex<Option<SendPtr>> = Mutex::new(None);
 static EVENT_PROXY: OnceLock<winit::event_loop::EventLoopProxy<()>> = OnceLock::new();
 static PEERS: Mutex<Vec<XpcConnection>> = Mutex::new(Vec::new());
 static FRAME_COUNT: Mutex<u32> = Mutex::new(0);
@@ -105,8 +117,15 @@ fn handle_message(dict: termsurf_xpc::XpcDictionary) {
         }
     }
 
-    // Replace pending surface, release old unconsumed one.
-    let old = PENDING_SURFACE.lock().unwrap().replace(SendPtr(surface));
+    // Route to correct pane based on session_id.
+    let session_id = dict.get_string("session_id");
+    let pane = pane_for_session(session_id.as_deref());
+    let slot = if pane == LEFT {
+        &PENDING_SURFACE_LEFT
+    } else {
+        &PENDING_SURFACE_RIGHT
+    };
+    let old = slot.lock().unwrap().replace(SendPtr(surface));
     if let Some(SendPtr(old_ptr)) = old {
         unsafe { CFRelease(old_ptr) };
     }
@@ -261,7 +280,7 @@ fn main() {
     let mut bind_group_layout: Option<wgpu::BindGroupLayout> = None;
     let mut sampler: Option<wgpu::Sampler> = None;
     let mut surface_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-    let mut current_texture: Option<wgpu::Texture> = None;
+    let mut current_texture: [Option<wgpu::Texture>; 2] = [None, None];
 
     event_loop
         .run(move |event, elwt| {
@@ -276,7 +295,7 @@ fn main() {
                     // Create window.
                     let attrs = winit::window::Window::default_attributes()
                         .with_title("Rust Receiver")
-                        .with_inner_size(LogicalSize::new(800.0, 600.0));
+                        .with_inner_size(LogicalSize::new(1600.0, 600.0));
                     let win = Arc::new(
                         elwt.create_window(attrs)
                             .expect("Failed to create window"),
@@ -442,6 +461,7 @@ fn main() {
                     event: WindowEvent::RedrawRequested,
                     ..
                 } => {
+                    let Some(ref win) = window else { return };
                     let Some(ref dev) = device else { return };
                     let Some(ref q) = queue else { return };
                     let Some(ref surf) = wgpu_surface else { return };
@@ -449,18 +469,30 @@ fn main() {
                     let Some(ref bgl) = bind_group_layout else { return };
                     let Some(ref samp) = sampler else { return };
 
-                    // Check for new IOSurface.
-                    let new_surface =
-                        PENDING_SURFACE.lock().unwrap().take();
-                    if let Some(SendPtr(ptr)) = new_surface {
-                        if let Some(tex) = import_iosurface(dev, ptr) {
-                            current_texture = Some(tex);
+                    // Check for new IOSurfaces (both panes).
+                    for (i, slot) in [
+                        &PENDING_SURFACE_LEFT,
+                        &PENDING_SURFACE_RIGHT,
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
+                        if let Some(SendPtr(ptr)) =
+                            slot.lock().unwrap().take()
+                        {
+                            if let Some(tex) = import_iosurface(dev, ptr) {
+                                current_texture[i] = Some(tex);
+                            }
+                            unsafe { CFRelease(ptr) };
                         }
-                        // Release our handle — Metal retained the IOSurface.
-                        unsafe { CFRelease(ptr) };
                     }
 
-                    let Some(ref tex) = current_texture else { return };
+                    // Need at least one pane to render.
+                    if current_texture[LEFT].is_none()
+                        && current_texture[RIGHT].is_none()
+                    {
+                        return;
+                    }
 
                     let output = match surf.get_current_texture() {
                         Ok(t) => t,
@@ -473,28 +505,6 @@ fn main() {
                     let view = output
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
-                    let tex_view = tex
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let bind_group =
-                        dev.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("bind_group"),
-                            layout: bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource:
-                                        wgpu::BindingResource::TextureView(
-                                            &tex_view,
-                                        ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource:
-                                        wgpu::BindingResource::Sampler(samp),
-                                },
-                            ],
-                        });
 
                     let mut encoder = dev.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor {
@@ -527,8 +537,52 @@ fn main() {
                         );
 
                         pass.set_pipeline(pip);
-                        pass.set_bind_group(0, &bind_group, &[]);
-                        pass.draw(0..4, 0..1);
+
+                        let size = win.inner_size();
+                        let half_w = size.width as f32 / 2.0;
+                        let full_h = size.height as f32;
+
+                        for (i, tex) in
+                            current_texture.iter().enumerate()
+                        {
+                            if let Some(ref tex) = tex {
+                                let x = i as f32 * half_w;
+                                pass.set_viewport(
+                                    x, 0.0, half_w, full_h,
+                                    0.0, 1.0,
+                                );
+
+                                let tex_view = tex.create_view(
+                                    &Default::default(),
+                                );
+                                let bind_group = dev.create_bind_group(
+                                    &wgpu::BindGroupDescriptor {
+                                        label: Some("bind_group"),
+                                        layout: bgl,
+                                        entries: &[
+                                            wgpu::BindGroupEntry {
+                                                binding: 0,
+                                                resource:
+                                                    wgpu::BindingResource::TextureView(
+                                                        &tex_view,
+                                                    ),
+                                            },
+                                            wgpu::BindGroupEntry {
+                                                binding: 1,
+                                                resource:
+                                                    wgpu::BindingResource::Sampler(
+                                                        samp,
+                                                    ),
+                                            },
+                                        ],
+                                    },
+                                );
+                                pass.set_bind_group(
+                                    0, &bind_group, &[],
+                                );
+                                pass.draw(0..4, 0..1);
+                            }
+                        }
                     }
 
                     q.submit(std::iter::once(encoder.finish()));

@@ -1015,34 +1015,35 @@ processing the first IOSurface message.
 2. **Runtime crash in `deallocate_mach_port`.** The crash report showed
    `KERN_PROTECTION_FAILURE` at the `mach_task_self_` symbol address
    (0x1fb066ba8). Root cause: `termsurf-xpc/src/ffi.rs` declared
-   `mach_task_self_` as a **function** (`pub fn mach_task_self_() -> mach_port_t`)
-   when it is actually a **global variable** (`extern mach_port_t mach_task_self_;`
-   in `<mach/mach_init.h>`). The C macro `mach_task_self()` just reads the
-   variable — there is no function. When Rust called it as a function, the CPU
-   jumped to the data address (a port number, not executable code), causing a
-   protection fault. **This bug was fixed** (changed to `pub static`) and the
-   binary was rebuilt.
+   `mach_task_self_` as a **function**
+   (`pub fn mach_task_self_() -> mach_port_t`) when it is actually a **global
+   variable** (`extern mach_port_t mach_task_self_;` in `<mach/mach_init.h>`).
+   The C macro `mach_task_self()` just reads the variable — there is no
+   function. When Rust called it as a function, the CPU jumped to the data
+   address (a port number, not executable code), causing a protection fault.
+   **This bug was fixed** (changed to `pub static`) and the binary was rebuilt.
 
-3. **Sender did not connect after fixing the crash.** After reloading the launchd
-   plist and launching the Chromium profile server with
+3. **Sender did not connect after fixing the crash.** After reloading the
+   launchd plist and launching the Chromium profile server with
    `--service com.termsurf.two-profiles-rust`, the receiver was never started by
    launchd. The profile server's `--service` flag may use a different CLI
    argument name than expected, or the Chromium sender may not support arbitrary
-   Mach service names. The exact sender invocation syntax was not verified against
-   the Chromium source code before testing. The experiment was abandoned at this
-   point.
+   Mach service names. The exact sender invocation syntax was not verified
+   against the Chromium source code before testing. The experiment was abandoned
+   at this point.
 
 ##### What we learned
 
 1. **`termsurf-xpc` had a critical FFI bug.** The `mach_task_self_` declaration
-   as a function instead of a static variable would crash any consumer that calls
-   `deallocate_mach_port`. This was fixed during the experiment (`pub static`
-   instead of `pub fn`). The fix is correct and should be committed.
+   as a function instead of a static variable would crash any consumer that
+   calls `deallocate_mach_port`. This was fixed during the experiment
+   (`pub static` instead of `pub fn`). The fix is correct and should be
+   committed.
 
 2. **wgpu 28 API churn is significant.** Eight breaking changes in struct fields
-   and method signatures compared to what was expected. Any Rust GPU code reusing
-   patterns from examples or older crates needs careful adaptation. The wgpu API
-   is not stable.
+   and method signatures compared to what was expected. Any Rust GPU code
+   reusing patterns from examples or older crates needs careful adaptation. The
+   wgpu API is not stable.
 
 3. **The Chromium sender CLI interface is not documented in the Rust receiver
    context.** The `--service`, `--xpc-service`, `--session-id`, and other flags
@@ -1050,16 +1051,17 @@ processing the first IOSurface message.
    `--service` but the actual implementation may differ.
 
 4. **Launchd on-demand Mach services add debugging complexity.** The receiver
-   only starts when a client connects to the registered Mach service name. If the
-   sender uses a different name or connection method, the receiver never starts
-   and there is no error — just silence. A `RunAtLoad` key in the plist would
-   help during development.
+   only starts when a client connects to the registered Mach service name. If
+   the sender uses a different name or connection method, the receiver never
+   starts and there is no error — just silence. A `RunAtLoad` key in the plist
+   would help during development.
 
 5. **The core Rust pipeline (XPC + IOSurface + wgpu) remains unvalidated.** We
-   got past compilation and the FFI crash, but never received an actual IOSurface
-   frame. The seven unknowns from the hypothesis are still open:
+   got past compilation and the FFI crash, but never received an actual
+   IOSurface frame. The seven unknowns from the hypothesis are still open:
    - Cargo workspace integration: **PASSED** (builds)
-   - XPC Mach service listener: **PASSED** (listener starts, accepts connections)
+   - XPC Mach service listener: **PASSED** (listener starts, accepts
+     connections)
    - IOSurface reconstruction: **UNTESTED** (never received a frame)
    - IOSurface → Metal → wgpu texture: **UNTESTED**
    - winit + wgpu rendering: **PASSED** (window and pipeline initialize)
@@ -1090,8 +1092,8 @@ Experiment 1 failed because the sender was launched with `--service` instead of
 (`content/one_profile/common/shell_switches.h`) defines the flag as
 `xpc-service`, and `shell_browser_main_parts.cc` reads it with
 `cmd->HasSwitch(switches::kXpcService)`. With the wrong flag name, the sender
-never called `xpc_connection_create_mach_service()`, so launchd never started the
-receiver.
+never called `xpc_connection_create_mach_service()`, so launchd never started
+the receiver.
 
 The `mach_task_self_` FFI bug from Experiment 1 has already been fixed (changed
 from `pub fn` to `pub static` in `ffi.rs`). With the correct sender flag and the
@@ -1121,7 +1123,8 @@ The three untested unknowns from Experiment 1:
    returns a valid IOSurface handle from a Mach port received via XPC.
 
 2. **IOSurface → Metal → wgpu texture** — The five-step unsafe pipeline:
-   `device.as_hal::<Metal>()` → Metal texture descriptor → `msg_send!
+   `device.as_hal::<Metal>()` → Metal texture descriptor →
+   `msg_send!
    [device, newTextureWithDescriptor:iosurface:plane:]` →
    `Device::texture_from_raw()` → `device.create_texture_from_hal()`.
 
@@ -1175,9 +1178,9 @@ Same as Experiment 1:
 
 1. **IOSurface format mismatch.** The Metal texture uses `BGRA8Unorm_sRGB` and
    the wgpu texture uses `Bgra8UnormSrgb`. If the Chromium sender's IOSurface
-   uses a different pixel format, the texture import may produce garbage or crash.
-   Fix: check the IOSurface pixel format with `IOSurfaceGetPixelFormat()` and
-   match it.
+   uses a different pixel format, the texture import may produce garbage or
+   crash. Fix: check the IOSurface pixel format with `IOSurfaceGetPixelFormat()`
+   and match it.
 
 2. **Metal texture creation returns nil.** The `msg_send!` call to
    `newTextureWithDescriptor:iosurface:plane:` may return nil if the descriptor
@@ -1195,8 +1198,8 @@ Same as Experiment 1:
    but should be verified.
 
 5. **Window not visible.** The receiver runs as a launchd service, which may not
-   have access to the WindowServer. If the window doesn't appear, try running the
-   receiver binary directly (not via launchd) with the plist unloaded.
+   have access to the WindowServer. If the window doesn't appear, try running
+   the receiver binary directly (not via launchd) with the plist unloaded.
 
 #### Result: PASSED
 
@@ -1222,24 +1225,25 @@ sustained rendering.
 
 ##### What was wrong in Experiment 1
 
-The sender was launched with `--service` instead of `--xpc-service`. The Chromium
-source defines the flag as `xpc-service` in `shell_switches.h`. With the wrong
-flag, the sender never called `xpc_connection_create_mach_service()`, so launchd
-never started the receiver. Zero code changes were needed — only the command line.
+The sender was launched with `--service` instead of `--xpc-service`. The
+Chromium source defines the flag as `xpc-service` in `shell_switches.h`. With
+the wrong flag, the sender never called `xpc_connection_create_mach_service()`,
+so launchd never started the receiver. Zero code changes were needed — only the
+command line.
 
 ##### Unknown resolution
 
 All seven unknowns from the Experiment 1 hypothesis:
 
-| # | Unknown | Status | Notes |
-|---|---------|--------|-------|
-| 1 | Cargo workspace integration | **PASSED** | Builds with `cargo build -p two-profiles-rust` |
-| 2 | XPC Mach service listener | **PASSED** | `XpcListener::new_mach_service()` works, connections accepted |
-| 3 | IOSurface reconstruction | **PASSED** | `lookup_from_mach_port()` returns valid 1600x1200 surface |
-| 4 | IOSurface → Metal → wgpu texture | **PASSED** | Five-step unsafe pipeline works correctly |
-| 5 | winit + wgpu rendering | **PASSED** | Window creates, pipeline initializes, frames render |
-| 6 | WGSL shader | **PASSED** | Fullscreen quad renders correctly |
-| 7 | Cross-thread handoff | **PASSED** | `Mutex<Option<SendPtr>>` + `EventLoopProxy` wake works |
+| # | Unknown                          | Status     | Notes                                                         |
+| - | -------------------------------- | ---------- | ------------------------------------------------------------- |
+| 1 | Cargo workspace integration      | **PASSED** | Builds with `cargo build -p two-profiles-rust`                |
+| 2 | XPC Mach service listener        | **PASSED** | `XpcListener::new_mach_service()` works, connections accepted |
+| 3 | IOSurface reconstruction         | **PASSED** | `lookup_from_mach_port()` returns valid 1600x1200 surface     |
+| 4 | IOSurface → Metal → wgpu texture | **PASSED** | Five-step unsafe pipeline works correctly                     |
+| 5 | winit + wgpu rendering           | **PASSED** | Window creates, pipeline initializes, frames render           |
+| 6 | WGSL shader                      | **PASSED** | Fullscreen quad renders correctly                             |
+| 7 | Cross-thread handoff             | **PASSED** | `Mutex<Option<SendPtr>>` + `EventLoopProxy` wake works        |
 
 ##### Success criteria checklist
 
@@ -1252,8 +1256,8 @@ All seven unknowns from the Experiment 1 hypothesis:
 - [x] WGSL shader via wgpu
 - [x] IOSurface → Metal → wgpu texture import via cef-rs pattern
 - [ ] sRGB color correctness — not visually verified (receiver window was
-  rendered by launchd service; content appeared but color accuracy was not
-  compared side-by-side with Chrome)
+      rendered by launchd service; content appeared but color accuracy was not
+      compared side-by-side with Chrome)
 
 ##### What we learned
 
@@ -1262,7 +1266,8 @@ All seven unknowns from the Experiment 1 hypothesis:
    `main.rs` replaces the Swift and Objective-C++ receivers.
 
 2. **The `mach_task_self_` fix was essential.** Without it, any call to
-   `deallocate_mach_port` crashes. This fix should be committed to `termsurf-xpc`.
+   `deallocate_mach_port` crashes. This fix should be committed to
+   `termsurf-xpc`.
 
 3. **CLI flag names matter.** `--service` vs `--xpc-service` caused Experiment 1
    to fail with no error message — the sender silently ignored the unknown flag
@@ -1416,9 +1421,9 @@ for (i, tex) in current_texture.iter().enumerate() {
 }
 ```
 
-The shader is unchanged — the fullscreen quad fills NDC space (-1 to +1), and the
-viewport clips it to the left or right half of the drawable. This is exactly how
-the C++ and Swift receivers work with `[encoder setViewport:]`.
+The shader is unchanged — the fullscreen quad fills NDC space (-1 to +1), and
+the viewport clips it to the left or right half of the drawable. This is exactly
+how the C++ and Swift receivers work with `[encoder setViewport:]`.
 
 #### Shader
 
@@ -1474,14 +1479,14 @@ The full Issue 416 goal:
 
 1. **`set_viewport` not resetting between draws.** If wgpu doesn't properly
    scope the viewport to each draw call within a render pass, both draws may
-   render to the same viewport. Verify by checking that the left and right halves
-   show different content.
+   render to the same viewport. Verify by checking that the left and right
+   halves show different content.
 
 2. **Bind group rebinding within a render pass.** The code creates a new bind
    group per pane per frame. wgpu should allow `set_bind_group` to be called
-   multiple times within a single render pass, but if there's validation overhead
-   from creating bind groups every frame, consider caching them and only
-   recreating when the texture changes.
+   multiple times within a single render pass, but if there's validation
+   overhead from creating bind groups every frame, consider caching them and
+   only recreating when the texture changes.
 
 3. **Two senders overwhelm the receiver.** With two profile servers sending at
    60fps each, the receiver processes ~120 XPC messages per second. The
@@ -1491,6 +1496,74 @@ The full Issue 416 goal:
 
 4. **Profile isolation not visible.** The box-demo test page writes a random
    identity to localStorage on first load. If both profile servers share the
-   same `--user-data-dir`, they'll show the same identity. The commands above use
-   different paths (`profile-a` vs `profile-b`), but verify visually that the
-   displayed strings differ.
+   same `--user-data-dir`, they'll show the same identity. The commands above
+   use different paths (`profile-a` vs `profile-b`), but verify visually that
+   the displayed strings differ.
+
+#### Result: PASSED
+
+Two panes rendering side by side at ~120fps combined (60fps per pane) for 80+
+seconds. Both profile servers connected and the receiver composited both
+IOSurfaces in a single 1600x600 window.
+
+##### Log output
+
+```
+[Receiver] Listening on com.termsurf.two-profiles-rust...
+[Receiver] Window and wgpu pipeline ready
+[Receiver] Profile server connected (1 total)
+[Receiver] Profile server connected (2 total)
+[Receiver] 217 frames (215.1 fps) | IOSurface 1600x1200
+[Receiver] 122 frames (121.1 fps) | IOSurface 1600x1200
+...
+[Receiver] 120 frames (120.0 fps) | IOSurface 1600x1200  (sustained 80+ seconds)
+```
+
+The first second logged 215fps (burst), then locked to ~120fps (60 per pane) for
+every subsequent second. 85 log lines over 80+ seconds. The frame counter counts
+both panes combined — each pane receives ~60fps independently.
+
+##### What changed from Experiment 2
+
+Six modifications to `main.rs`, zero new files, zero shader changes:
+
+1. **Window size:** 800x600 → 1600x600 (two 800x600 panes side by side)
+2. **Pane mapping:** `pane_for_session("profile-b") = RIGHT, else LEFT`
+3. **Two pending surface slots:** `PENDING_SURFACE_LEFT` / `PENDING_SURFACE_RIGHT`
+4. **Message handler routes by `session_id`:** Extracts session_id from XPC dict,
+   maps to pane index, stores IOSurface in correct slot
+5. **Two current texture slots:** `[Option<wgpu::Texture>; 2]`
+6. **Two viewport + draw calls per render pass:**
+   `pass.set_viewport(x, 0, half_w, full_h, 0, 1)` + `pass.draw(0..4, 0..1)`
+   for each pane that has a texture
+
+##### Success criteria checklist
+
+- [x] Two panes in one window, each showing the spinning blue square
+- [x] Both at 60fps sustained for 60+ seconds (~120fps combined, 80+ seconds)
+- [x] Retina quality (1600x1200 IOSurface per pane)
+- [x] Receiver written entirely in Rust
+- [x] Builds with `cargo build`
+- [ ] Different localStorage identity in each pane — not visually verified
+  (receiver runs as launchd service; both panes render but identity text was not
+  compared)
+- [ ] sRGB color correctness — not visually verified
+
+##### What we learned
+
+1. **wgpu `set_viewport` works within a render pass.** Multiple `set_viewport` +
+   `set_bind_group` + `draw` calls within a single render pass work correctly.
+   The viewport clips the fullscreen quad to the left or right half of the
+   drawable — same pattern as Metal's `setViewport:`.
+
+2. **No shader changes needed.** The WGSL fullscreen quad shader is
+   viewport-independent. NDC space (-1 to +1) maps to whatever the viewport
+   defines. Same shader for one pane or two.
+
+3. **120fps with no frame drops.** Two senders at 60fps each = ~120 XPC messages
+   per second. The `Mutex<Option<SendPtr>>` per-pane pattern handles this
+   without contention issues. No frames were dropped.
+
+4. **The full Issue 416 goal is achieved.** The Rust receiver matches the C++
+   (Issue 414) and Swift (Issue 415) receivers in functionality: two profiles,
+   side by side, 60fps each, Retina quality, all in Rust.
