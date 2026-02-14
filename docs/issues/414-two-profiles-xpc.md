@@ -705,9 +705,9 @@ works for launchd-registered services.
         <string>/Users/ryan/dev/termsurf/ts4/two-profiles-receiver/receiver</string>
     </array>
     <key>StandardOutPath</key>
-    <string>/tmp/two-profiles-receiver.log</string>
+    <string>/Users/ryan/dev/termsurf/logs/two-profiles-receiver.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/two-profiles-receiver.log</string>
+    <string>/Users/ryan/dev/termsurf/logs/two-profiles-receiver.log</string>
 </dict>
 </plist>
 ```
@@ -723,7 +723,7 @@ launchctl unload ~/dev/termsurf/ts4/two-profiles-receiver/com.termsurf.two-profi
 ```
 
 When the profile server connects to the service name, launchd starts the
-receiver on demand. Output goes to `/tmp/two-profiles-receiver.log`.
+receiver on demand. Output goes to `/Users/ryan/dev/termsurf/logs/two-profiles-receiver.log`.
 
 For interactive debugging, skip the plist and run:
 ```bash
@@ -789,7 +789,7 @@ consumer's `ConnectToService()` before calling `Attach()`.
      --xpc-service com.termsurf.two-profiles \
      http://localhost:9407 2>&1
    ```
-4. Check receiver output: `tail -f /tmp/two-profiles-receiver.log`
+4. Check receiver output: `tail -f /Users/ryan/dev/termsurf/logs/two-profiles-receiver.log`
 
 #### What we're creating
 

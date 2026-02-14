@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.termsurf.two-profiles</string>
+    <key>MachServices</key>
+    <dict>
+        <key>com.termsurf.two-profiles</key>
+        <true/>
+    </dict>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ryan/dev/termsurf/ts4/two-profiles-receiver/receiver</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/ryan/dev/termsurf/logs/two-profiles-receiver.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ryan/dev/termsurf/logs/two-profiles-receiver.log</string>
+</dict>
+</plist>

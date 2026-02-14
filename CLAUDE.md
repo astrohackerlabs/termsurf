@@ -265,9 +265,9 @@ cd ts3 && ./scripts/build-release.sh [--open] [--clean]
 
 Logs are written to `/tmp/`:
 
-- `/tmp/termsurf-gui.log` — GUI process output
-- `/tmp/termsurf-launcher.log` — Launcher output
-- `/tmp/termsurf-profile-{session_id}.log` — Per-session profile server output
+- `~/dev/termsurf/logs/termsurf-gui.log` — GUI process output
+- `~/dev/termsurf/logs/termsurf-launcher.log` — Launcher output
+- `~/dev/termsurf/logs/termsurf-profile-{session_id}.log` — Per-session profile server output
 
 ### Directory Structure and Key Files
 
