@@ -24,9 +24,9 @@ Swift. This issue ports the receiver to Rust, validating that:
 3. Rust can create wgpu textures from IOSurfaces via the Metal HAL
 4. The full pipeline sustains 60fps with Retina quality in Rust
 
-The ts3 codebase already has working Rust code for XPC (`termsurf-xpc` crate)
-and IOSurface-to-wgpu import (`cef-rs`). This issue reuses that proven code in a
-standalone receiver, separate from WezTerm.
+The `termsurf-xpc` crate (already copied to `ts4/termsurf-xpc/`) provides
+working Rust XPC bindings, and `cef-rs` has IOSurface-to-wgpu import code. This
+issue reuses that proven code in a standalone receiver, separate from WezTerm.
 
 ## Chromium branch
 
@@ -43,7 +43,7 @@ The sender is unchanged from Issue 414. No Chromium code changes are expected.
 
 ## Existing Rust code to reuse
 
-### `ts3/termsurf-xpc/` — XPC crate
+### `ts4/termsurf-xpc/` — XPC crate
 
 Complete XPC FFI bindings with safe wrappers:
 
@@ -67,7 +67,7 @@ Zero-copy texture import:
 
 ### What needs adaptation
 
-The ts3 code was designed for a different architecture (anonymous XPC endpoints
+The `termsurf-xpc` code was designed for a different architecture (anonymous XPC endpoints
 relayed through a launcher). The receiver here uses a simpler pattern: a
 launchd-registered Mach service that senders connect to directly, same as Issues
 414 and 415. The IOSurface import code from cef-rs can be used almost unchanged.
@@ -304,7 +304,7 @@ Or, depend on `termsurf-xpc` as a path dependency:
 
 ```toml
 [dependencies]
-termsurf-xpc = { path = "../../ts3/termsurf-xpc" }
+termsurf-xpc = { path = "../termsurf-xpc" }
 ```
 
 ## Build and run
@@ -384,7 +384,8 @@ correct lifetimes. Getting this wrong causes use-after-free or data races.
 
 **Mitigation:** The `termsurf-xpc` crate already handles this correctly. If
 writing inline FFI instead, follow the patterns in
-`ts3/wezterm-gui/src/termwindow/webview_xpc.rs`.
+`ts3/wezterm-gui/src/termwindow/webview_xpc.rs` (ts3 reference, for the
+patterns only).
 
 ### 4. CoreFoundation memory management
 
