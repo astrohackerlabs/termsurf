@@ -5,13 +5,12 @@ to fork Ghostty (Issue 417), clean up vendored dependencies, and prepare for the
 Ghostty merge.
 
 **Context:** With Ghostty selected as the terminal emulator (Issue 417), the
-repo will contain Ghostty's source tree inside a `termsurf-ghostty/` directory,
-with historical directories (ts1–ts4), vendored code, and documentation
-alongside it. Keeping Ghostty in its own subdirectory (rather than at the repo
-root) avoids conflicts with our own top-level files (README.md, docs/, etc.)
-and makes future upstream merges cleaner. The Chromium fork moves from a
-submodule inside ts4 to a top-level gitignored directory with proper
-origin/upstream configuration.
+repo will contain Ghostty's source tree inside a `ts5/` directory, with
+historical directories (ts1–ts4), vendored code, and documentation alongside it.
+Keeping Ghostty in its own subdirectory (rather than at the repo root) avoids
+conflicts with our own top-level files (README.md, docs/, etc.) and makes future
+upstream merges cleaner. The Chromium fork moves from a submodule inside ts4 to
+a top-level gitignored directory with proper origin/upstream configuration.
 
 ## Changes
 
@@ -168,18 +167,17 @@ Update the project overview and directory structure sections to reflect:
 - Chromium branch strategy (track Electron's version)
 - Current tracked version and commit
 
-### 6. Merge Ghostty into `termsurf-ghostty/`
+### 6. Merge Ghostty into `ts5/`
 
-After the restructure is complete, merge the latest Ghostty into a
-`termsurf-ghostty/` subdirectory. Keeping Ghostty in its own directory avoids
-conflicts with TermSurf's top-level files (README.md, .gitignore, docs/, etc.)
-and makes future upstream merges cleaner — Ghostty's files never collide with
-ours.
+After the restructure is complete, merge the latest Ghostty into a `ts5/`
+subdirectory. Keeping Ghostty in its own directory avoids conflicts with
+TermSurf's top-level files (README.md, .gitignore, docs/, etc.) and makes future
+upstream merges cleaner — Ghostty's files never collide with ours.
 
 ```
 termsurf/                        (root — TermSurf repo)
 │
-├── termsurf-ghostty/            (Ghostty fork)
+├── ts5/            (Ghostty fork)
 │   ├── src/                     (libghostty — Zig core)
 │   ├── macos/                   (Ghostty macOS app — Swift)
 │   ├── pkg/                     (Ghostty platform packages)
@@ -216,15 +214,15 @@ termsurf/                        (root — TermSurf repo)
 
 **Merge strategy:** Add Ghostty as a remote, fetch, then use `git merge` with
 `--allow-unrelated-histories` into a temporary branch. Use `git read-tree` or
-equivalent to place Ghostty's tree under `termsurf-ghostty/`, preserving
-Ghostty's full commit history. This is the same pattern used by projects like
-git-subtree: the upstream history is preserved, and future merges from Ghostty
-can be pulled and re-prefixed into `termsurf-ghostty/`.
+equivalent to place Ghostty's tree under `ts5/`, preserving Ghostty's full
+commit history. This is the same pattern used by projects like git-subtree: the
+upstream history is preserved, and future merges from Ghostty can be pulled and
+re-prefixed into `ts5/`.
 
-**After the merge:** `cd termsurf-ghostty && zig build` should work. The macOS
-app builds from `termsurf-ghostty/`. From this point forward, TermSurf
-development means modifying files inside `termsurf-ghostty/` to add browser
-pane support, and the ts1–ts4 directories are historical reference.
+**After the merge:** `cd ts5 && zig build` should work. The macOS app builds
+from `ts5/`. From this point forward, TermSurf development means modifying files
+inside `ts5/` to add browser pane support, and the ts1–ts4 directories are
+historical reference.
 
 ## Order of Operations
 
@@ -235,6 +233,6 @@ pane support, and the ts1–ts4 directories are historical reference.
 5. Update `.gitignore`
 6. Update `CLAUDE.md`
 7. Commit the restructure
-8. Merge Ghostty into `termsurf-ghostty/`
-9. Verify build (`cd termsurf-ghostty && zig build`)
+8. Merge Ghostty into `ts5/`
+9. Verify build (`cd ts5 && zig build`)
 10. Commit the merge
