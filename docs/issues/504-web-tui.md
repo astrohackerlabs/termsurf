@@ -242,3 +242,40 @@ cd web && cargo run -- https://google.com
 6. Pressing `q` exits cleanly, restoring the terminal.
 7. `Ctrl+C` also exits cleanly.
 8. Resizing the terminal redraws the layout correctly.
+
+#### Result
+
+All pass criteria met. Layout renders correctly with URL bar, viewport
+placeholder, and status bar. Resize works. `q` and `Ctrl+C` both exit cleanly.
+
+### Experiment 2: Brighten the chrome
+
+#### Goal
+
+The URL bar border/title, viewport border/title, and status bar text all use
+`Color::DarkGray` or the terminal default, making them too dim to read
+comfortably. Increase the brightness of the chrome elements so they're clearly
+visible while still being visually subordinate to the viewport area (which will
+eventually contain browser content).
+
+#### Changes
+
+##### `web/src/main.rs`
+
+**URL bar:** Set the border and title to `Color::Gray`. The URL text itself
+stays at the default (white/foreground) — it's the most important piece of
+information in the chrome.
+
+**Viewport:** Keep the placeholder text at `Color::DarkGray` — this is temporary
+and should be dim. Set the border and title to `Color::Gray` to match the URL
+bar frame.
+
+**Status bar:** Change from `Color::DarkGray` to `Color::Gray`. The key hints
+(`[q]`) should be legible at a glance.
+
+#### Pass Criteria
+
+1. Chrome borders and titles are visibly brighter than before.
+2. Status bar text is clearly readable.
+3. Viewport placeholder text remains dim (it's temporary).
+4. URL text is the brightest element in the chrome (default foreground).
