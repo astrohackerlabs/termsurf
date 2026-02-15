@@ -425,3 +425,51 @@ autoninja -C out/Default chromium_profile_server
 
 Test with the existing ts4/two-profiles-swift receiver to verify frames arrive
 at 60fps. Verify no Dock icon appears.
+
+#### Result: Failed
+
+The build succeeded after resolving several compile and link errors, but the app
+crashes on launch with a DCHECK failure in
+`content/shell/app/paths_apple.mm:41`.
+
+**Root cause:** `paths_apple.mm` uses `base::apple::IsBackgroundOnlyProcess()`
+to determine the app bundle's `Contents` directory. When `LSUIElement=true` is
+set in Info.plist, `IsBackgroundOnlyProcess()` returns true, which triggers a
+code path designed for Content Shell's helper processes (renderer, GPU,
+utility). That code path walks up **9 directory levels** from the executable to
+find `Contents`, because helper processes are deeply nested inside
+`Content Shell Framework.framework/Versions/C/Helpers/Content Shell Helper.app/Contents/MacOS/`.
+Our main executable is only **2 levels** deep
+(`Chromium Profile Server.app/Contents/MacOS/`), so the 9-level walk lands in
+the user's home directory tree instead of `Contents`.
+
+```
+DCHECK failed: "Contents" == path.BaseName().value() (Contents vs. dev).
+```
+
+**Why this matters:** `LSUIElement=true` is not optional — the profile server
+must run as a background process with no Dock icon. But
+`IsBackgroundOnlyProcess()` is called from
+`ShellMainDelegate::BasicStartupComplete()`, which is inherited code in
+`content_shell_app`. The path resolution is deeply coupled to Content Shell's
+specific bundle layout assumptions.
+
+**Conclusion:** The "link against content_shell_lib, subclass only what's
+needed" approach fails because Content Shell's inherited code makes assumptions
+about the app bundle layout that conflict with our requirements. The
+`LSUIElement` / `IsBackgroundOnlyProcess()` collision is one example, but the
+tight coupling between Content Shell's startup sequence and its expected bundle
+structure means other assumptions will likely surface too. Subclassing Content
+Shell is not a viable path for a background-mode embedder.
+
+**Build errors resolved along the way:**
+
+1. GN doesn't auto-discover new directories — had to register the target in root
+   `BUILD.gn`'s `gn_all` deps.
+2. `profile_server_main.cc` in `mac_app_bundle` sources lacked include paths for
+   `//base` — moved it to the `source_set`.
+3. Missing `#include "base/files/file_util.h"` for `base::MakeAbsoluteFilePath`.
+4. `ContentMainParams::argv` expects `const char**`, not `char**` — fixed with
+   `const_cast`.
+5. `ShellMainDelegate` lives in `content_shell_app` (a separate static library
+   from `content_shell_lib`) — had to add both as deps.
