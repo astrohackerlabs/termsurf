@@ -596,3 +596,23 @@ So:
 #### Result
 
 Builds with no warnings. Ready for interactive testing.
+
+### Experiment 10: Undim viewport text
+
+#### Goal
+
+The viewport coordinate/dimension text still uses `Color::DarkGray` from when it
+was a "waiting for browser..." placeholder. Now that it displays useful debug
+information (origin and size), it should be readable. Change it to
+`Color::Reset` to use the terminal's default foreground.
+
+#### Changes
+
+##### `web/src/main.rs`
+
+Change the viewport `Paragraph` style from `Color::DarkGray` to `Color::Reset`.
+
+#### Pass Criteria
+
+1. Viewport origin and size text is clearly readable.
+2. Text uses the terminal's default foreground color.
