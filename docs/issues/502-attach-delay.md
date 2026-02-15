@@ -217,5 +217,47 @@ The `PostDelayedTask` / `base::Seconds(2)` block is deleted entirely.
 #### Test Command
 
 ```bash
-cd ts4/two-profiles-receiver && swift run 2>/tmp/cps-a-stderr.log
+cd chromium/src
+out/Default/Chromium\ Profile\ Server.app/Contents/MacOS/Chromium\ Profile\ Server \
+  --hidden \
+  --xpc-service=com.termsurf.two-profiles \
+  --session-id=profile-a \
+  --user-data-dir=$HOME/.config/termsurf/poc/profile-a \
+  http://localhost:9407 2>/tmp/cps-502-test.log
 ```
+
+#### Result: Pass
+
+Build: 21 targets, zero errors.
+
+Timing comparison:
+
+| Metric | Before (Issue 501) | After (Issue 502) |
+|--------|-------------------|-------------------|
+| Launch timestamp | `060800.723` | `073448.144` |
+| Attach timestamp | `060802.798` | `073448.826` |
+| **Delay** | **2.07s** | **0.68s** |
+
+The `RenderViewReady()` callback fired 0.68 seconds after launch — as soon as
+the RWHV was actually ready. The capturer attached immediately and began
+delivering frames at 60fps:
+
+```
+[ShellVideoConsumer] Attached to FrameSinkId FrameSinkId(5, 3), starting capture
+[ShellVideoConsumer] 47 frames in 1.01565s (46.2756 fps) | IOSurface 1600x1200
+[ShellVideoConsumer] 60 frames in 1.0003s (59.9821 fps) | IOSurface 1600x1200
+[ShellVideoConsumer] 61 frames in 1.0166s (60.0039 fps) | IOSurface 1600x1200
+[ShellVideoConsumer] 61 frames in 1.01656s (60.006 fps) | IOSurface 1600x1200
+[ShellVideoConsumer] 61 frames in 1.01671s (59.9973 fps) | IOSurface 1600x1200
+```
+
+No Dock icon. No timer. No race condition.
+
+#### Conclusion
+
+The `WebContentsObserver` approach works exactly as designed. Three small changes
+across three files replaced a fragile 2-second `PostDelayedTask` with an
+event-driven `RenderViewReady()` callback. The capturer now attaches ~1.4
+seconds earlier — as soon as the RWHV exists rather than after an arbitrary
+timeout. The 0.68-second remaining delay is genuine startup time (process init,
+renderer spawn, navigation start), not wasted waiting.
