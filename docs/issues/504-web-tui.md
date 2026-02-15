@@ -372,3 +372,37 @@ The mode label uses the same `Color::Gray` as the rest of the status bar.
 #### Result
 
 Builds with no warnings. Ready for interactive testing.
+
+### Experiment 4: Show Ctrl+Esc hint in browse mode
+
+#### Goal
+
+The browse mode status bar currently shows `[esc] control mode`, but `Ctrl+Esc`
+is the guaranteed escape hatch — the one that always works, even when a webpage
+traps `Esc`. Users need to know about it. Add `Ctrl+Esc` to the browse mode hint
+so both options are visible.
+
+#### Changes
+
+##### `web/src/main.rs`
+
+Change the browse mode hint from:
+
+```
+[esc] control mode
+```
+
+to:
+
+```
+[esc] control mode  [ctrl+esc] force exit browse mode
+```
+
+No other changes. Control mode hints remain `[q] quit  [enter] browse`.
+
+#### Pass Criteria
+
+1. Browse mode status bar shows
+   `[esc] control mode  [ctrl+esc] force exit browse mode` on the left.
+2. Control mode status bar is unchanged.
+3. Both `Esc` and `Ctrl+Esc` still switch to control mode (no behavior change).
