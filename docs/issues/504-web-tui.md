@@ -821,3 +821,7 @@ useful information, not decorative — they should use the normal text color.
 2. Key hints in the status bar render in `FG` — clearly readable.
 3. Mode label (right side of status bar) remains `FG` (unchanged).
 4. Profile icon in URL bar remains `COMMENT` (unchanged — it's decorative).
+
+#### Result
+
+Builds with no warnings. Ready for interactive testing.

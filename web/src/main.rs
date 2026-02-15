@@ -141,7 +141,7 @@ fn ui(frame: &mut Frame, url: &str, profile: &str, mode: &Mode) {
     );
     let viewport = Paragraph::new(viewport_text)
         .alignment(Alignment::Center)
-        .style(Style::default().fg(COMMENT).bg(BG))
+        .style(Style::default().fg(FG).bg(BG))
         .block(viewport_block);
     frame.render_widget(viewport, layout[1]);
 
@@ -158,7 +158,7 @@ fn ui(frame: &mut Frame, url: &str, profile: &str, mode: &Mode) {
     };
 
     let hints_widget = Paragraph::new(hints)
-        .style(Style::default().fg(COMMENT).bg(BG));
+        .style(Style::default().fg(FG).bg(BG));
     frame.render_widget(hints_widget, status_layout[0]);
 
     let label_widget = Paragraph::new(label)
