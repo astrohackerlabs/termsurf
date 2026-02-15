@@ -12,9 +12,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 // Tokyo Night palette.
 const BG: Color = Color::Rgb(0x1a, 0x1b, 0x26);
 const FG: Color = Color::Rgb(0xc0, 0xca, 0xf5);
-const COMMENT: Color = Color::Rgb(0x56, 0x5f, 0x89);
+const COMMENT: Color = Color::Rgb(0x73, 0x7a, 0xa2);
 const CYAN: Color = Color::Rgb(0x7d, 0xcf, 0xff);
-const BORDER: Color = Color::Rgb(0x3b, 0x42, 0x61);
+const BORDER: Color = Color::Rgb(0x56, 0x5f, 0x89);
 
 #[derive(PartialEq)]
 enum Mode {

@@ -739,3 +739,7 @@ No renaming, no logic changes — just two color values bumped up.
    to foreground text.
 3. The visual hierarchy is preserved: active accent > foreground > muted text >
    inactive border > background.
+
+#### Result
+
+Builds with no warnings. Ready for interactive testing.
