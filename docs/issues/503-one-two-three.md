@@ -111,6 +111,39 @@ The compositor (Swift app) connects to profile servers via XPC. Each connection
 represents one tab. A profile server can accept an unlimited number of
 connections, creating a new WebContents and capturer for each.
 
+### XPC connection model: one connection per tab
+
+Two options were considered:
+
+**Option A: One XPC connection per tab.** The compositor opens a new connection
+to the profile server for each tab it wants. The profile server's listener fires
+once per connection, creating a WebContents and capturer for each.
+
+**Option B: One shared connection, multiplexed.** The compositor opens a single
+connection to the profile server. All messages include a tab identifier. Frames
+for all tabs flow over the same pipe.
+
+**Decision: Option A.** Three reasons:
+
+1. **Lifecycle is free.** Closing a connection = closing a tab. The profile
+   server sees the connection die and tears down the WebContents + capturer. No
+   need for explicit "close tab" messages or lifecycle protocol.
+
+2. **No head-of-line blocking.** Each XPC connection has its own dispatch queue.
+   If one tab's IOSurface Mach port transfer is slow, it doesn't delay another
+   tab's frame delivery. With a shared connection, all tabs compete for the same
+   pipe.
+
+3. **Natural XPC model.** When the compositor creates two connections to the
+   same Mach service, the profile server's listener fires twice with two
+   separate `xpc_connection_t` peers. Each peer naturally maps to one
+   WebContents. The existing single-tab code already handles one connection —
+   multiple connections is a generalization, not a new abstraction.
+
+The shared-connection approach would require adding a tab identifier to every
+message, demuxing on both sides, and explicit lifecycle commands — all
+complexity that XPC's connection model provides for free.
+
 ### What changes in the Chromium Profile Server
 
 Currently, the profile server creates one WebContents at startup:
