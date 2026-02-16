@@ -915,7 +915,7 @@ fragment float4 overlay_fragment(
   OverlayVertexOut in [[stage_in]],
   texture2d<float> tex [[texture(0)]]
 ) {
-  constexpr sampler s(mag_filter::linear, min_filter::linear);
+  constexpr sampler s(mag_filter::nearest, min_filter::nearest);
   return tex.sample(s, in.texcoord);
 }
 

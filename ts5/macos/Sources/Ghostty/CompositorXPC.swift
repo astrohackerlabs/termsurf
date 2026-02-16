@@ -29,8 +29,12 @@ class CompositorXPC {
     /// Weak reference to the app delegate for surface lookup.
     private weak var appDelegate: GhosttyAppDelegate?
 
-    /// Test IOSurface for Issue 507 Experiment 1 (must be retained).
+    /// Test IOSurface for Issue 507 (must be retained).
     private var testSurface: IOSurface?
+
+    /// Current overlay dimensions in grid cells (to detect resize).
+    private var overlayGridWidth: UInt32 = 0
+    private var overlayGridHeight: UInt32 = 0
 
     private init() {}
 
@@ -150,14 +154,7 @@ class CompositorXPC {
             let peerId = ObjectIdentifier(peer as AnyObject)
             peerPaneIds[peerId] = uuid
 
-            // Create test IOSurface once (Issue 507, Experiment 1).
-            if self.testSurface == nil {
-                self.testSurface = Self.createCheckerboardSurface()
-                fputs("[Compositor] Created checkerboard test IOSurface\n", stderr)
-            }
-
             // Look up the surface and set the overlay.
-            let ioSurface = self.testSurface
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let surface = self.appDelegate?.findSurface(forUUID: uuid),
@@ -167,8 +164,24 @@ class CompositorXPC {
                 }
                 ghostty_surface_set_overlay(cSurface, col, row, width, height)
 
+                // Recreate test IOSurface when overlay size changes (Experiment 2).
+                if self.testSurface == nil || width != self.overlayGridWidth || height != self.overlayGridHeight {
+                    var cellWidth: UInt32 = 0
+                    var cellHeight: UInt32 = 0
+                    ghostty_surface_get_cell_size(cSurface, &cellWidth, &cellHeight)
+
+                    let pixelWidth = Int(width) * Int(cellWidth)
+                    let pixelHeight = Int(height) * Int(cellHeight)
+                    self.testSurface = Self.createCheckerboardSurface(
+                        width: pixelWidth, height: pixelHeight,
+                        cellWidth: Int(cellWidth), cellHeight: Int(cellHeight))
+                    self.overlayGridWidth = width
+                    self.overlayGridHeight = height
+                    fputs("[Compositor] Created \(pixelWidth)x\(pixelHeight) checkerboard (cell \(cellWidth)x\(cellHeight))\n", stderr)
+                }
+
                 // Pass the IOSurface to the renderer (Issue 507).
-                if let ioSurface = ioSurface {
+                if let ioSurface = self.testSurface {
                     let ptr = Unmanaged.passUnretained(ioSurface).toOpaque()
                     ghostty_surface_set_overlay_iosurface(cSurface, ptr)
                 }
@@ -179,15 +192,20 @@ class CompositorXPC {
         }
     }
 
-    // MARK: - Test IOSurface (Issue 507, Experiment 1)
+    // MARK: - Test IOSurface (Issue 507)
 
-    /// Create a 256x256 checkerboard IOSurface (blue/dark, 8x8 grid).
-    private static func createCheckerboardSurface() -> IOSurface? {
+    /// Create a checkerboard IOSurface at the given pixel dimensions.
+    /// Each checker cell is one terminal cell (cellWidth x cellHeight pixels).
+    private static func createCheckerboardSurface(
+        width: Int, height: Int,
+        cellWidth: Int, cellHeight: Int
+    ) -> IOSurface? {
+        guard width > 0 && height > 0 else { return nil }
         guard let surface = IOSurface(properties: [
-            .width: 256,
-            .height: 256,
+            .width: width,
+            .height: height,
             .bytesPerElement: 4,
-            .bytesPerRow: 256 * 4,
+            .bytesPerRow: width * 4,
             .pixelFormat: 0x42475241  // 'BGRA'
         ] as [IOSurfacePropertyKey: Any]) else {
             fputs("[Compositor] Failed to create test IOSurface\n", stderr)
@@ -197,10 +215,10 @@ class CompositorXPC {
         surface.lock(options: [], seed: nil)
         let base = surface.baseAddress
         let bpr = surface.bytesPerRow
-        for y in 0..<256 {
-            for x in 0..<256 {
-                let cellX = x / 32
-                let cellY = y / 32
+        for y in 0..<height {
+            for x in 0..<width {
+                let cellX = x / max(cellWidth, 1)
+                let cellY = y / max(cellHeight, 1)
                 let isLight = (cellX + cellY) % 2 == 0
                 let offset = y * bpr + x * 4
                 // BGRA byte order: B, G, R, A

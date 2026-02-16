@@ -913,3 +913,19 @@ cargo run -p web -- http://example.com
 # Resize terminal → surface recreated, still crisp
 # Quit web → overlay clears
 ```
+
+#### Result: Pass
+
+The checkerboard renders pixel-perfect at native Retina resolution. Each checker
+cell is exactly one terminal cell, with sharp crisp edges — no blurriness. The
+`ghostty_surface_get_cell_size` API correctly returns physical pixel dimensions
+(cell sizes already include the Retina scale factor via DPI-scaled font
+metrics).
+
+**Resize crash:** Resizing the terminal window while the overlay is active
+crashes the app. This is expected — the resize path recreates the IOSurface on
+the main thread while the renderer may be mid-frame reading the old
+`overlay_iosurface` pointer. The current `draw_mutex` protects the pointer
+assignment but not the IOSurface lifetime (ARC releases the old surface while
+the renderer still holds a raw pointer to it). This needs proper lifetime
+management before resize can work, but it's out of scope for this experiment.

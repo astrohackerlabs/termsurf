@@ -2452,6 +2452,14 @@ pub fn setOverlayIOSurface(self: *Surface, iosurface: ?*anyopaque) void {
     self.queueRender() catch {};
 }
 
+/// Return the cell size in physical pixels (Issue 507, Experiment 2).
+pub fn getCellSize(self: *Surface, width: *u32, height: *u32) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+    width.* = self.renderer.grid_metrics.cell_width;
+    height.* = self.renderer.grid_metrics.cell_height;
+}
+
 pub fn sizeCallback(self: *Surface, size: apprt.SurfaceSize) !void {
     // Crash metadata in case we crash in here
     crash.sentry.thread_state = self.crashThreadState();

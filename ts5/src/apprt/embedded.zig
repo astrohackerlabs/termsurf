@@ -1696,6 +1696,15 @@ pub const CAPI = struct {
         surface.core_surface.setOverlayIOSurface(iosurface);
     }
 
+    /// Return the cell size in physical pixels (Issue 507, Experiment 2).
+    export fn ghostty_surface_get_cell_size(
+        surface: *Surface,
+        width: *u32,
+        height: *u32,
+    ) void {
+        surface.core_surface.getCellSize(width, height);
+    }
+
     /// Return the size information a surface has.
     export fn ghostty_surface_size(surface: *Surface) SurfaceSize {
         const grid_size = surface.core_surface.size.grid();
