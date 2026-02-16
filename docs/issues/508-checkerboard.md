@@ -503,7 +503,177 @@ renderer's `drawFrame()` does not hold the mutex when it reads
 4. Old IOSurface's last retain is gone (Swift ARC + Zig CFRelease)
 5. Renderer calls `Texture.fromIOSurface(old)` → dangling pointer
 
-**Diagnosis:** The IOSurface pointer must be snapshotted under the `draw_mutex`
-at the beginning of `drawFrame()`, alongside the other critical state. The
-snapshot should include a CFRetain so the surface stays alive for the entire
-frame. CFRelease the snapshot at the end of the frame.
+**Diagnosis (INCORRECT — see Experiment 2):** The IOSurface pointer must be
+snapshotted under the `draw_mutex` at the beginning of `drawFrame()`, alongside
+the other critical state. The snapshot should include a CFRetain so the surface
+stays alive for the entire frame. CFRelease the snapshot at the end of the
+frame.
+
+**Correction:** On closer inspection, `drawFrame()` holds `draw_mutex` for its
+entire duration (`lock()` at line 1420, `defer unlock()` at line 1421). The race
+condition described above cannot happen — the mutex serializes the pointer read
+in `drawFrame()` with the pointer swap in `setOverlayIOSurface()`. The actual
+crash cause is unknown because macOS rate-limited the crash report.
+
+### Experiment 2: Diagnostic Logging
+
+The Experiment 1 failure diagnosis was wrong. Rather than guess at another fix,
+this experiment adds logging at every critical point in the overlay path to
+identify the actual crash cause when resize is attempted.
+
+No code changes to the overlay logic — only `fputs`/`log.warn` instrumentation.
+
+#### Changes
+
+**1. Zig logging in `drawFrame()` — `ts5/src/renderer/generic.zig`**
+
+Add logging inside the overlay block (after line 1665) to trace every frame
+where the overlay renders:
+
+```zig
+// Overlay (Issue 508 / Issue 505 fallback).
+if (self.pink_overlay.grid_width > 0 and
+    self.pink_overlay.grid_height > 0)
+{
+    log.warn("[overlay] frame: grid=({d},{d} {d}x{d}) iosurface={?}", .{
+        @as(u32, @intFromFloat(self.pink_overlay.grid_col)),
+        @as(u32, @intFromFloat(self.pink_overlay.grid_row)),
+        @as(u32, @intFromFloat(self.pink_overlay.grid_width)),
+        @as(u32, @intFromFloat(self.pink_overlay.grid_height)),
+        @as(?usize, if (self.overlay_iosurface) |p| @intFromPtr(p) else null),
+    });
+
+    if (Buffer(shaderpkg.PinkOverlay).initFill( ... )) |*buf| {
+        defer buf.deinit();
+        if (self.overlay_iosurface) |iosurface| {
+            const tex_result = Texture.fromIOSurface(self.api.device, iosurface);
+            log.warn("[overlay] fromIOSurface: success={}", .{tex_result != null});
+            if (tex_result) |tex| {
+                defer tex.deinit();
+                log.warn("[overlay] texture: {d}x{d}", .{tex.width, tex.height});
+                pass.step( ... );
+                log.warn("[overlay] step submitted", .{});
+            }
+        } else {
+            log.warn("[overlay] pink fallback", .{});
+            pass.step( ... );
+        }
+    } else |err| {
+        log.warn("[overlay] buffer error: {}", .{err});
+    }
+}
+```
+
+This tells us: (a) whether the overlay was active when the crash happened, (b)
+the IOSurface pointer value, (c) whether `fromIOSurface` succeeded, (d) the
+texture dimensions, (e) whether the step was submitted.
+
+**2. Zig logging in Surface methods — `ts5/src/Surface.zig`**
+
+Add logging to `setOverlayIOSurface`, `clearOverlay`, and `getCellSize`:
+
+```zig
+pub fn setOverlayIOSurface(self: *Surface, iosurface: ?*anyopaque) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    const old_ptr: ?usize = if (self.renderer.overlay_iosurface) |p| @intFromPtr(p) else null;
+    const new_ptr: ?usize = if (iosurface) |p| @intFromPtr(p) else null;
+    log.warn("[overlay] setIOSurface: old={?} new={?}", .{old_ptr, new_ptr});
+
+    if (self.renderer.overlay_iosurface) |old| { CFRelease(old); }
+    if (iosurface) |new| { CFRetain(new); }
+    self.renderer.overlay_iosurface = iosurface;
+    self.queueRender() catch {};
+}
+
+pub fn clearOverlay(self: *Surface) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    const ptr: ?usize = if (self.renderer.overlay_iosurface) |p| @intFromPtr(p) else null;
+    log.warn("[overlay] clearOverlay: ptr={?}", .{ptr});
+
+    if (self.renderer.overlay_iosurface) |old| { CFRelease(old); }
+    self.renderer.overlay_iosurface = null;
+    self.renderer.pink_overlay = .{};
+    self.queueRender() catch {};
+}
+
+pub fn getCellSize(self: *Surface, width: *u32, height: *u32) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+    width.* = self.renderer.grid_metrics.cell_width;
+    height.* = self.renderer.grid_metrics.cell_height;
+    log.warn("[overlay] getCellSize: {d}x{d}", .{width.*, height.*});
+}
+```
+
+**3. Zig logging in renderer `deinit` — `ts5/src/renderer/generic.zig`**
+
+Log if overlay_iosurface is non-null at destruction time (would indicate a
+leak):
+
+```zig
+pub fn deinit(self: *Self) void {
+    if (self.overlay_iosurface) |ptr| {
+        log.warn("[overlay] deinit: leaked IOSurface ptr={}", .{@intFromPtr(ptr)});
+    }
+    // ... existing deinit code ...
+}
+```
+
+**4. Swift logging in CompositorXPC — already present but augment**
+
+The existing `fputs` calls cover most of the Swift path. Add one line to log
+when the dimension cache prevents rebuild:
+
+```swift
+if let existing = self.currentSurfaces[uuid],
+   IOSurfaceGetWidth(existing) == pixelWidth,
+   IOSurfaceGetHeight(existing) == pixelHeight {
+    fputs("[Compositor] Dimension cache hit, skipping rebuild\n", stderr)
+    return
+}
+```
+
+#### Files
+
+| File                                            | Change                                                                 |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `ts5/src/renderer/generic.zig`                  | Add `log.warn` in overlay block + `deinit`                             |
+| `ts5/src/Surface.zig`                           | Add `log.warn` in `setOverlayIOSurface`, `clearOverlay`, `getCellSize` |
+| `ts5/macos/Sources/Ghostty/CompositorXPC.swift` | Add `fputs` for dimension cache hit                                    |
+
+#### Build & Reproduce
+
+```bash
+cd ts5 && zig build
+open ts5/zig-out/TermSurf.app
+
+# In a TermSurf pane:
+cargo run -p web -- http://example.com
+
+# 1. Verify checkerboard appears
+# 2. Resize the terminal window slowly
+# 3. If it crashes, read ~/dev/termsurf/logs/ for the last overlay log lines
+# 4. Check for a macOS crash report in ~/Library/Logs/DiagnosticReports/
+#    (may need to wait — macOS rate-limits to ~1/day/app)
+```
+
+#### What the logs will tell us
+
+| Log pattern                                                     | Meaning                                       |
+| --------------------------------------------------------------- | --------------------------------------------- |
+| `[overlay] frame:` stops appearing before crash                 | Crash is outside the overlay path             |
+| `[overlay] frame:` appears, then `fromIOSurface: success=false` | MTLTexture creation failed                    |
+| `[overlay] frame:` appears with stale dimensions after resize   | Grid coordinates not updating                 |
+| `[overlay] setIOSurface:` with mismatched old/new pointers      | Unexpected pointer state                      |
+| `[overlay] deinit: leaked`                                      | IOSurface not released on surface destruction |
+| No `[overlay]` logs at all before crash                         | Crash happens before overlay code runs        |
+
+#### Pass Criteria
+
+This experiment passes if we can **identify the crash cause** from the logs. The
+checkerboard doesn't need to survive resize yet — that's for the fix experiment
+that follows.
