@@ -69,6 +69,7 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
     let mut mode = Mode::Browse;
+    let mut last_viewport = Rect::default();
 
     // Event loop.
     loop {
@@ -77,15 +78,19 @@ fn main() -> io::Result<()> {
             viewport_rect = ui(frame, &url, &profile, &mode);
         })?;
 
-        // Send overlay coordinates to compositor.
-        if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
-            conn.send_set_overlay(
-                pid,
-                viewport_rect.x,
-                viewport_rect.y,
-                viewport_rect.width,
-                viewport_rect.height,
-            );
+        // Send overlay coordinates to compositor (only when changed).
+        if viewport_rect != last_viewport {
+            if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+                conn.send_set_overlay(
+                    pid,
+                    viewport_rect.x,
+                    viewport_rect.y,
+                    viewport_rect.width,
+                    viewport_rect.height,
+                    &url,
+                );
+            }
+            last_viewport = viewport_rect;
         }
 
         if event::poll(Duration::from_millis(250))? {

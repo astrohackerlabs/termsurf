@@ -166,7 +166,7 @@ impl CompositorConnection {
     }
 
     /// Send a `set_overlay` message to the app (direct connection).
-    pub fn send_set_overlay(&self, pane_id: &str, col: u16, row: u16, width: u16, height: u16) {
+    pub fn send_set_overlay(&self, pane_id: &str, col: u16, row: u16, width: u16, height: u16, url: &str) {
         let dict = unsafe {
             xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0)
         };
@@ -190,6 +190,10 @@ impl CompositorConnection {
             xpc_dictionary_set_uint64(dict, row_key.as_ptr(), row as u64);
             xpc_dictionary_set_uint64(dict, width_key.as_ptr(), width as u64);
             xpc_dictionary_set_uint64(dict, height_key.as_ptr(), height as u64);
+
+            let url_key = CString::new("url").unwrap();
+            let url_c = CString::new(url).unwrap();
+            xpc_dictionary_set_string(dict, url_key.as_ptr(), url_c.as_ptr());
 
             xpc_connection_send_message(self.raw, dict);
             xpc_release(dict);
