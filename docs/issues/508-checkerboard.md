@@ -677,3 +677,23 @@ cargo run -p web -- http://example.com
 This experiment passes if we can **identify the crash cause** from the logs. The
 checkerboard doesn't need to survive resize yet — that's for the fix experiment
 that follows.
+
+#### Result: Fail
+
+The logging was added to all four files and the build succeeded. The
+checkerboard rendered, and resizing crashed as before. But **none of the logs
+were captured.**
+
+Zig's `log.warn` writes to stderr via `std.debug.print`. Swift's
+`fputs(...,
+stderr)` also writes to stderr. When the app is launched via `open`,
+macOS discards stderr — it is not written to any file or the unified log. The
+crash also didn't produce a new macOS crash report
+(`~/Library/Logs/DiagnosticReports/`) because macOS rate-limits reports to
+roughly one per app per day, and a report from the previous session was already
+on disk.
+
+**The experiment failed to collect any diagnostic data.** The logging
+instrumentation is correct but the output channel is wrong. The next experiment
+must route logs to a file on disk (e.g. `~/dev/termsurf/logs/`) so they survive
+the crash and are readable afterward.
