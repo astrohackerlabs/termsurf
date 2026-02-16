@@ -1020,3 +1020,11 @@ cargo run -p web -- http://localhost:9407 --profile work
 7. Closing Pane C (the last `work` pane) terminates the `work` server process.
 8. Closing Pane B terminates the `personal` server process.
 9. No crashes in the log.
+
+#### Result
+
+**Pass.** Three panes rendered simultaneously at 60fps — two sharing `work`, one
+on `personal`. Exactly two server processes spawned (one per profile). The two
+`work` panes shared a single server process confirmed by matching PIDs in logs.
+Closing one `work` pane left the other rendering. Closing the last pane for each
+profile terminated its server cleanly. No crashes.
