@@ -784,3 +784,43 @@ redirects the C `FILE* stderr`, but Zig's `std.debug.print` writes to fd 2 (the
 POSIX file descriptor) directly, bypassing the C FILE layer. Only Swift `fputs`
 and Metal's internal logging were captured. This is sufficient — the Metal
 assertion told us everything we needed.
+
+### Experiment 4: Reproduce with `open --stderr`
+
+Experiment 3 used `freopen` in Swift to redirect stderr. This works but
+hardcodes a path in the source — unusable for release. A better approach: the
+`open` command has `--stderr` and `--stdout` flags that redirect fd 2 at the OS
+level before the process starts. This captures everything — Zig `log.warn`,
+Swift `fputs`, Metal assertions — with zero code changes.
+
+This experiment removes the `freopen` hack, reproduces the crash using
+`open --stderr`, and confirms we see both Zig and Swift log output.
+
+#### Changes
+
+**1. Remove `freopen` — `ts5/macos/Sources/App/macOS/AppDelegate.swift`**
+
+Delete the `freopen` line added in Experiment 3. No other code changes.
+
+#### Build & Reproduce
+
+```bash
+cd ts5 && zig build
+> ~/dev/termsurf/logs/overlay.log  # truncate previous logs
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+
+# In a TermSurf pane:
+cargo run -p web -- http://example.com
+
+# 1. Verify checkerboard appears
+# 2. Resize the terminal window
+# 3. After crash, read the log:
+tail -100 ~/dev/termsurf/logs/overlay.log
+```
+
+#### Pass Criteria
+
+1. The log file contains **both** Zig `[overlay]` lines and Swift `[Compositor]`
+   lines (confirming `open --stderr` captures fd 2 for both runtimes).
+2. The Metal `bytesPerRow` assertion appears in the log (reproducing the
+   Experiment 3 finding without any `freopen` code).
