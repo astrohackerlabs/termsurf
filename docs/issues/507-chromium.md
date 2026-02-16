@@ -1,4 +1,4 @@
-# Issue 506: Chromium Integration
+# Issue 507: Chromium Integration
 
 ## Background
 
@@ -36,9 +36,14 @@ connect them.
 
 ## Goal
 
-`cargo run -p web -- https://google.com` renders google.com inside a TermSurf
-pane at 60fps, full Retina resolution, composited by the Metal renderer at the
-exact grid coordinates of the viewport.
+`cargo run -p web -- http://localhost:9407` renders the box-demo (blue spinning
+square with FPS counter) inside a TermSurf pane at 60fps, full Retina
+resolution, composited by the Metal renderer at the exact grid coordinates of
+the viewport.
+
+The box-demo (`ts4/box-demo/`) is a Canvas 2D page with a rotating blue square,
+localStorage identity string, and a built-in FPS counter — making 60fps
+verification trivial. Served by Bun on port 9407.
 
 Single default profile only. No multiple profiles for this issue.
 
@@ -171,7 +176,7 @@ The app maps `pane_id` to the correct surface and updates the overlay texture.
 
 ```
 Chromium\ Profile\ Server \
-  --url https://google.com \
+  --url http://localhost:9407 \
   --pane-id <uuid> \
   --xpc-service com.termsurf.xpc-gateway \
   --hidden \
@@ -332,7 +337,7 @@ let server_path = std::env::var("TERMSURF_CHROMIUM_PATH")
         Contents/MacOS/Chromium Profile Server".to_string());
 
 let child = Command::new(&server_path)
-    .args(&[
+    .args([
         "--url", &url,
         "--pane-id", &pane_id,
         "--xpc-service", "com.termsurf.xpc-gateway",
@@ -354,7 +359,7 @@ connection drops, and the app clears the overlay.
 Default profile storage: `~/.config/termsurf/profiles/default/`
 
 This is the Chromium user data directory. It stores cookies, localStorage,
-cache, and all other browser state. One directory per profile. Issue 506 uses
+cache, and all other browser state. One directory per profile. Issue 507 uses
 only the `default` profile.
 
 ## Experiments
@@ -398,11 +403,11 @@ Connect the Chromium Profile Server and render live web content.
 
 **Pass criteria:**
 
-1. `cargo run -p web -- https://google.com` shows google.com in the viewport.
-2. The page renders at 60fps (verify via server's fps logging).
-3. The page is interactive (scrolling, clicking) — deferred if input forwarding
-   is not yet implemented.
-4. Quitting `web` kills the server and clears the overlay.
+1. `cargo run -p web -- http://localhost:9407` shows the box-demo in the
+   viewport — blue square rotating on a dark background.
+2. The page renders at 60fps (verify via the box-demo's built-in FPS counter and
+   the server's fps logging).
+3. Quitting `web` kills the server and clears the overlay.
 
 ### Experiment 3: Retina Resolution and Resize
 
@@ -420,7 +425,7 @@ Match the capture resolution to the viewport's physical pixel size.
 
 **Pass criteria:**
 
-1. Text on google.com is crisp and readable at native Retina resolution.
+1. The blue square is crisp and sharp at native Retina resolution.
 2. Resizing the terminal window updates the rendered content to match the new
    viewport size.
 3. No stretching or blurriness — the IOSurface dimensions match the overlay quad
@@ -443,7 +448,7 @@ Match the capture resolution to the viewport's physical pixel size.
 
 ## Chromium Branch
 
-Create `146.0.7650.0-issue-506` from `146.0.7650.0-issue-503` (which has the
+Create `146.0.7650.0-issue-507` from `146.0.7650.0-issue-503` (which has the
 latest Chromium Profile Server code including dynamic tabs and
 `FrameSinkVideoCapturer`).
 
@@ -463,20 +468,27 @@ cd ts5 && zig build
 
 # Build web
 cd web && cargo build
+
+# Install box-demo deps (if needed)
+cd ts4/box-demo && bun install
 ```
 
 ## Verification
 
 ```bash
+# Start the box-demo server
+cd ts4/box-demo && bun run server.ts &
+
 # Launch the app
 open ts5/zig-out/TermSurf.app
 
 # In a TermSurf pane (set TERMSURF_CHROMIUM_PATH if not using default):
-cargo run -p web -- https://google.com
+cargo run -p web -- http://localhost:9407
 
 # Expected:
-# - URL bar shows "https://google.com"
-# - Viewport renders google.com at full Retina resolution
+# - URL bar shows "http://localhost:9407"
+# - Viewport renders the blue spinning square on a dark background
+# - Box-demo's built-in FPS counter shows 60fps
 # - Server logs 60fps to stderr
 # - Resizing the terminal updates the rendered content
 # - Quitting web (q or Ctrl+C) clears the overlay and kills the server
