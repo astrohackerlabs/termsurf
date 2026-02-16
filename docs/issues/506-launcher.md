@@ -247,3 +247,173 @@ get the endpoint back from the daemon.
    on next launch).
 5. The daemon is invisible to the user — no manual `launchctl` commands needed
    after initial plist registration.
+
+## Experiments
+
+### Experiment 1: Compositor Daemon with Endpoint Relay
+
+Implement the three-process architecture: a standalone Swift daemon owns the
+Mach service, the app registers an anonymous endpoint, and `web` processes claim
+the endpoint to connect directly to the app.
+
+#### Changes
+
+##### Part 1: Compositor Daemon Binary
+
+###### `ts5/compositor-daemon/Package.swift`
+
+Minimal Swift Package Manager executable:
+
+```swift
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "CompositorDaemon",
+    platforms: [.macOS(.v14)],
+    targets: [
+        .executableTarget(name: "compositor-daemon",
+                          path: "Sources")
+    ]
+)
+```
+
+###### `ts5/compositor-daemon/Sources/main.swift`
+
+~60 lines. The daemon:
+
+1. Creates a Mach service listener on `com.termsurf.compositor`.
+2. For each incoming peer connection, sets a message handler.
+3. On `register_app`: stores the endpoint from the app (replacing any previous
+   one).
+4. On `connect`: sends a reply containing the stored endpoint. If no app has
+   registered yet, sends an error string in the reply.
+5. Enters `dispatchMain()` (never returns — launchd manages lifecycle).
+
+Key details:
+
+- Peers and the listener must be stored in global variables to prevent ARC
+  release.
+- Uses `xpc_dictionary_get_value(msg, "endpoint")` to extract the endpoint
+  object and `xpc_dictionary_set_value(reply, "endpoint", endpoint)` to return
+  it. Endpoints are opaque XPC objects — they pass through without
+  interpretation.
+- The `connect` action uses `xpc_dictionary_create_reply(msg)` to create a reply
+  dictionary, which is how XPC request/reply works. The client must use
+  `xpc_connection_send_message_with_reply` (or `_sync`) to receive it.
+
+##### Part 2: Update launchd Plist
+
+###### `ts5/macos/com.termsurf.compositor.plist`
+
+Change `ProgramArguments` to point to the daemon binary:
+
+```xml
+<key>ProgramArguments</key>
+<array>
+    <string>/Users/ryan/dev/termsurf/ts5/compositor-daemon/.build/debug/compositor-daemon</string>
+</array>
+```
+
+##### Part 3: App Connects as Client
+
+###### `ts5/macos/Sources/Ghostty/CompositorXPC.swift`
+
+Replace the Mach service listener with:
+
+1. **Client connection to daemon.** Connect to `com.termsurf.compositor` without
+   the LISTENER flag. Resume the connection.
+
+2. **Anonymous XPC listener.** Create with `xpc_connection_create(nil, queue)`.
+   Set its event handler to accept peer connections from `web` processes. Each
+   peer's message handler calls `handleMessage` (same as today). On disconnect,
+   calls `handleDisconnect` (same as today). Resume the listener.
+
+3. **Register endpoint.** Create an endpoint from the anonymous listener with
+   `xpc_endpoint_create(listener)`. Send `{ action: "register_app", endpoint }`
+   to the daemon.
+
+The `handleMessage` and `handleDisconnect` methods stay unchanged — they already
+handle `set_overlay`, surface lookup, and cleanup.
+
+Key details:
+
+- The anonymous listener must be stored in a strong property (not just a local
+  variable) to prevent ARC release.
+- `xpc_endpoint_create` takes a listener connection and returns a serializable
+  endpoint object that can be sent over XPC to other processes.
+- The daemon connection only carries the `register_app` message at startup. All
+  subsequent traffic flows on the anonymous listener's direct connections.
+
+##### Part 4: `web` Two-Step Connect
+
+###### `web/src/xpc.rs`
+
+Replace `CompositorConnection::connect()` with a two-step flow:
+
+1. Connect to `com.termsurf.compositor` (the daemon).
+2. Send `{ action: "connect", pane_id: "<uuid>" }` using
+   `xpc_connection_send_message_with_reply_sync` to get a reply.
+3. Extract the endpoint from the reply with
+   `xpc_dictionary_get_value(reply,
+   "endpoint")`.
+4. Create a new connection from the endpoint with
+   `xpc_connection_create_from_endpoint(endpoint)`.
+5. Resume the endpoint connection.
+6. Return this connection as the `CompositorConnection`.
+
+The `send_set_overlay` method stays unchanged — it sends on whatever connection
+it holds, which is now the direct connection to the app.
+
+New FFI bindings needed:
+
+```rust
+extern "C" {
+    fn xpc_connection_send_message_with_reply_sync(
+        conn: XpcConnectionT, message: XpcObjectT,
+    ) -> XpcObjectT;
+    fn xpc_dictionary_create_reply(request: XpcObjectT) -> XpcObjectT;
+    fn xpc_dictionary_get_value(dict: XpcObjectT, key: *const c_char) -> XpcObjectT;
+    fn xpc_dictionary_set_value(dict: XpcObjectT, key: *const c_char, value: XpcObjectT);
+    fn xpc_endpoint_create(conn: XpcConnectionT) -> XpcObjectT;
+    fn xpc_connection_create_from_endpoint(endpoint: XpcObjectT) -> XpcConnectionT;
+    fn xpc_retain(object: XpcObjectT) -> XpcObjectT;
+}
+```
+
+The daemon connection can be dropped after the endpoint is received — it's not
+needed for ongoing communication.
+
+#### Build & Test
+
+```bash
+# Build the daemon
+cd ts5/compositor-daemon && swift build
+
+# Build ts5
+cd ts5 && zig build
+
+# Build web TUI
+cargo build -p web
+
+# Clear old launchd registration and re-register with daemon binary
+launchctl bootout gui/$(id -u)/com.termsurf.compositor
+launchctl bootstrap gui/$(id -u) ts5/macos/com.termsurf.compositor.plist
+
+# Launch the app normally
+open ts5/zig-out/TermSurf.app
+
+# In a TermSurf pane:
+cargo run -p web -- https://example.com
+```
+
+#### Pass Criteria
+
+1. `open ts5/zig-out/TermSurf.app` launches the app and the pink overlay works.
+2. No `launchctl kickstart` needed — the daemon auto-starts when the app
+   connects.
+3. The pink overlay appears, resizes correctly, and clears on `web` exit.
+4. Relaunching the app (quit and `open` again) works — the daemon stays running
+   and the app re-registers its endpoint.
+5. The daemon process is visible in Activity Monitor as `compositor-daemon` but
+   requires no user interaction.
