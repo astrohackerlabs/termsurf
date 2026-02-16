@@ -1407,3 +1407,47 @@ cargo run -p web -- http://localhost:9407
 #
 # 8. DO NOT RESIZE the terminal (will crash, known issue).
 ```
+
+#### Result: Fail
+
+The overlay rendered as a solid pink rectangle (the fallback when no IOSurface
+is set). The Chromium Profile Server was spawned but failed to connect to the
+xpc-gateway. The server log showed:
+
+```
+Unable to create data-path directory:
+Invalid size "" given to --content-shell-host-window-size
+[ProfileServer] Gateway error
+[ProfileServer] Gateway returned error
+```
+
+**Root cause:** Chromium's `base::CommandLine` only supports `--flag=value`
+syntax (with `=`), not `--flag value` (space-separated). The `Process.arguments`
+array passed each flag and its value as separate argv entries, so
+`GetSwitchValueASCII()` returned empty strings for all switch values —
+`--xpc-service`, `--user-data-dir`, `--pane-id`, and
+`--content-shell-host-window-size` all had empty values.
+
+The gateway connect failed because `xpc_connection_create_mach_service("")`
+returns an invalid connection. The server never reached the endpoint exchange,
+never sent `server_register`, never received `create_tab`, and never started
+video capture. The app never received `display_surface`, so `overlay_iosurface`
+stayed null, and the renderer fell back to the pink solid-color quad.
+
+The app log (`termsurf-app.log`) was empty — `freopen` succeeded but the app was
+launched before the build completed, so the old binary (without `freopen`) ran.
+The server log captured everything because the server was spawned fresh by the
+new CompositorXPC code.
+
+**Fix for next experiment:** Change `Process.arguments` from space-separated to
+`=`-joined format:
+
+```swift
+// Before (broken):
+["--xpc-service", "com.termsurf.xpc-gateway", "--user-data-dir", "/path"]
+
+// After (correct):
+["--xpc-service=com.termsurf.xpc-gateway", "--user-data-dir=/path"]
+```
+
+Boolean flags like `--hidden` (no value) are unaffected.
