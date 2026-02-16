@@ -47,6 +47,11 @@ const pipeline_descs: []const struct { [:0]const u8, PipelineDescription } =
             .fragment_fn = "pink_overlay_fragment",
             .blending_enabled = false,
         } },
+        .{ "overlay", .{
+            .vertex_fn = "overlay_vertex",
+            .fragment_fn = "overlay_fragment",
+            .blending_enabled = true,
+        } },
     };
 
 /// All the comptime-known info about a pipeline, so that

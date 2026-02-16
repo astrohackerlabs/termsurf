@@ -1688,6 +1688,14 @@ pub const CAPI = struct {
         surface.core_surface.clearOverlay();
     }
 
+    /// Set the IOSurface for the overlay texture (Issue 507).
+    export fn ghostty_surface_set_overlay_iosurface(
+        surface: *Surface,
+        iosurface: ?*anyopaque,
+    ) void {
+        surface.core_surface.setOverlayIOSurface(iosurface);
+    }
+
     /// Return the size information a surface has.
     export fn ghostty_surface_size(surface: *Surface) SurfaceSize {
         const grid_size = surface.core_surface.size.grid();

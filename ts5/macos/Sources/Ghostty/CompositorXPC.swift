@@ -5,6 +5,7 @@
 
 import Foundation
 import GhosttyKit
+import IOSurface
 import os.log
 import ServiceManagement
 
@@ -27,6 +28,9 @@ class CompositorXPC {
 
     /// Weak reference to the app delegate for surface lookup.
     private weak var appDelegate: GhosttyAppDelegate?
+
+    /// Test IOSurface for Issue 507 Experiment 1 (must be retained).
+    private var testSurface: IOSurface?
 
     private init() {}
 
@@ -146,7 +150,14 @@ class CompositorXPC {
             let peerId = ObjectIdentifier(peer as AnyObject)
             peerPaneIds[peerId] = uuid
 
+            // Create test IOSurface once (Issue 507, Experiment 1).
+            if self.testSurface == nil {
+                self.testSurface = Self.createCheckerboardSurface()
+                fputs("[Compositor] Created checkerboard test IOSurface\n", stderr)
+            }
+
             // Look up the surface and set the overlay.
+            let ioSurface = self.testSurface
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let surface = self.appDelegate?.findSurface(forUUID: uuid),
@@ -155,12 +166,59 @@ class CompositorXPC {
                     return
                 }
                 ghostty_surface_set_overlay(cSurface, col, row, width, height)
+
+                // Pass the IOSurface to the renderer (Issue 507).
+                if let ioSurface = ioSurface {
+                    let ptr = Unmanaged.passUnretained(ioSurface).toOpaque()
+                    ghostty_surface_set_overlay_iosurface(cSurface, ptr)
+                }
             }
 
         default:
             fputs("[Compositor] unknown action: \(action)\n", stderr)
         }
     }
+
+    // MARK: - Test IOSurface (Issue 507, Experiment 1)
+
+    /// Create a 256x256 checkerboard IOSurface (blue/dark, 8x8 grid).
+    private static func createCheckerboardSurface() -> IOSurface? {
+        guard let surface = IOSurface(properties: [
+            .width: 256,
+            .height: 256,
+            .bytesPerElement: 4,
+            .bytesPerRow: 256 * 4,
+            .pixelFormat: 0x42475241  // 'BGRA'
+        ] as [IOSurfacePropertyKey: Any]) else {
+            fputs("[Compositor] Failed to create test IOSurface\n", stderr)
+            return nil
+        }
+
+        surface.lock(options: [], seed: nil)
+        let base = surface.baseAddress
+        let bpr = surface.bytesPerRow
+        for y in 0..<256 {
+            for x in 0..<256 {
+                let cellX = x / 32
+                let cellY = y / 32
+                let isLight = (cellX + cellY) % 2 == 0
+                let offset = y * bpr + x * 4
+                // BGRA byte order: B, G, R, A
+                if isLight {
+                    // Blue #4488FF → B=0xFF, G=0x88, R=0x44, A=0xFF
+                    base.storeBytes(of: UInt32(0xFF_44_88_FF), toByteOffset: offset, as: UInt32.self)
+                } else {
+                    // Dark #222222 → B=0x22, G=0x22, R=0x22, A=0xFF
+                    base.storeBytes(of: UInt32(0xFF_22_22_22), toByteOffset: offset, as: UInt32.self)
+                }
+            }
+        }
+        surface.unlock(options: [], seed: nil)
+
+        return surface
+    }
+
+    // MARK: - Disconnect handling
 
     private func handleDisconnect(_ peer: xpc_connection_t) {
         fputs("[Compositor] Web process disconnected\n", stderr)

@@ -190,6 +190,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// Zero width means no overlay.
         pink_overlay: shaderpkg.PinkOverlay = .{},
 
+        /// IOSurfaceRef for the overlay texture (Issue 507).
+        /// When non-null, drawFrame() creates an MTLTexture from it and
+        /// renders with the overlay pipeline instead of pink_overlay.
+        /// Set from Swift via the C API. Protected by draw_mutex.
+        overlay_iosurface: ?*anyopaque = null,
+
         /// Graphics API state.
         api: GraphicsAPI,
 
@@ -1656,7 +1662,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .overlay,
                 );
 
-                // Pink overlay (Issue 505).
+                // Overlay (Issue 505 pink, Issue 507 IOSurface texture).
                 if (self.pink_overlay.grid_width > 0 and
                     self.pink_overlay.grid_height > 0)
                 {
@@ -1665,15 +1671,39 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                         &.{self.pink_overlay},
                     )) |*buf| {
                         defer buf.deinit();
-                        pass.step(.{
-                            .pipeline = self.shaders.pipelines.pink_overlay,
-                            .uniforms = frame.uniforms.buffer,
-                            .buffers = &.{buf.buffer},
-                            .draw = .{
-                                .type = .triangle_strip,
-                                .vertex_count = 4,
-                            },
-                        });
+
+                        if (self.overlay_iosurface) |iosurface| {
+                            // IOSurface texture overlay (Issue 507).
+                            if (Texture.initFromIOSurface(
+                                self.api.device,
+                                iosurface,
+                            )) |tex| {
+                                defer tex.deinit();
+                                pass.step(.{
+                                    .pipeline = self.shaders.pipelines.overlay,
+                                    .uniforms = frame.uniforms.buffer,
+                                    .buffers = &.{buf.buffer},
+                                    .textures = &.{tex},
+                                    .draw = .{
+                                        .type = .triangle_strip,
+                                        .vertex_count = 4,
+                                    },
+                                });
+                            } else |err| {
+                                log.warn("IOSurface texture failed err={}", .{err});
+                            }
+                        } else {
+                            // Fallback: pink overlay (Issue 505).
+                            pass.step(.{
+                                .pipeline = self.shaders.pipelines.pink_overlay,
+                                .uniforms = frame.uniforms.buffer,
+                                .buffers = &.{buf.buffer},
+                                .draw = .{
+                                    .type = .triangle_strip,
+                                    .vertex_count = 4,
+                                },
+                            });
+                        }
                     } else |err| {
                         log.warn("error creating pink overlay buffer err={}", .{err});
                     }

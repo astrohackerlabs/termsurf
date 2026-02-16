@@ -82,6 +82,45 @@ pub fn init(
     return self;
 }
 
+/// Create a texture from an IOSurfaceRef (zero-copy, Issue 507).
+/// The IOSurface memory is shared with the GPU — no data copy occurs.
+/// The caller must ensure the IOSurface outlives this texture.
+pub fn initFromIOSurface(device: objc.Object, iosurface: *anyopaque) Error!Self {
+    // Create MTLTextureDescriptor.
+    const desc = init: {
+        const Class = objc.getClass("MTLTextureDescriptor").?;
+        const id_alloc = Class.msgSend(objc.Object, objc.sel("alloc"), .{});
+        const id_init = id_alloc.msgSend(objc.Object, objc.sel("init"), .{});
+        break :init id_init;
+    };
+    defer desc.release();
+
+    // Read dimensions from the IOSurface.
+    const iosurface_obj = objc.Object.fromId(iosurface);
+    const io_width = iosurface_obj.msgSend(c_ulong, objc.sel("width"), .{});
+    const io_height = iosurface_obj.msgSend(c_ulong, objc.sel("height"), .{});
+
+    // BGRA8Unorm_sRGB = 81
+    desc.setProperty("pixelFormat", @as(c_ulong, 81));
+    desc.setProperty("width", io_width);
+    desc.setProperty("height", io_height);
+    desc.setProperty("usage", @as(c_ulong, 0x0001)); // ShaderRead
+
+    // Create MTLTexture backed by the IOSurface.
+    const id = device.msgSend(
+        ?*anyopaque,
+        objc.sel("newTextureWithDescriptor:iosurface:plane:"),
+        .{ desc, iosurface, @as(c_ulong, 0) },
+    ) orelse return error.MetalFailed;
+
+    return .{
+        .texture = objc.Object.fromId(id),
+        .width = @intCast(io_width),
+        .height = @intCast(io_height),
+        .bpp = 4,
+    };
+}
+
 pub fn deinit(self: Self) void {
     self.texture.release();
 }

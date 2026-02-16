@@ -883,3 +883,39 @@ fragment float4 pink_overlay_fragment() {
   return float4(1.0, 0.41, 0.71, 1.0);
 }
 
+//-------------------------------------------------------------------
+// IOSurface Texture Overlay (Issue 507)
+//-------------------------------------------------------------------
+#pragma mark - IOSurface Texture Overlay
+
+struct OverlayVertexOut {
+  float4 position [[position]];
+  float2 texcoord;
+};
+
+vertex OverlayVertexOut overlay_vertex(
+  uint vid [[vertex_id]],
+  constant PinkOverlayIn& params [[buffer(0)]],
+  constant Uniforms& uniforms [[buffer(1)]]
+) {
+  float2 origin = float2(params.grid_col, params.grid_row) * uniforms.cell_size;
+  float2 size = float2(params.grid_width, params.grid_height) * uniforms.cell_size;
+
+  float2 corner;
+  corner.x = float(vid == 1 || vid == 3);
+  corner.y = float(vid == 2 || vid == 3);
+
+  OverlayVertexOut out;
+  out.position = uniforms.projection_matrix * float4(origin + size * corner, 0.0f, 1.0f);
+  out.texcoord = corner;
+  return out;
+}
+
+fragment float4 overlay_fragment(
+  OverlayVertexOut in [[stage_in]],
+  texture2d<float> tex [[texture(0)]]
+) {
+  constexpr sampler s(mag_filter::linear, min_filter::linear);
+  return tex.sample(s, in.texcoord);
+}
+

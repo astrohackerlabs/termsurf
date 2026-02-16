@@ -2439,6 +2439,16 @@ pub fn clearOverlay(self: *Surface) void {
     self.renderer.draw_mutex.lock();
     defer self.renderer.draw_mutex.unlock();
     self.renderer.pink_overlay = .{};
+    self.renderer.overlay_iosurface = null;
+    self.queueRender() catch {};
+}
+
+/// Set the IOSurface for the overlay texture (Issue 507).
+/// Pass null to clear the IOSurface (reverts to pink overlay).
+pub fn setOverlayIOSurface(self: *Surface, iosurface: ?*anyopaque) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+    self.renderer.overlay_iosurface = iosurface;
     self.queueRender() catch {};
 }
 
