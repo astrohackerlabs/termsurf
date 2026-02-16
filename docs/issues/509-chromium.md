@@ -302,6 +302,281 @@ cargo run -p web -- http://localhost:9407
 | `chromium/src/.../shell_video_consumer.h`       | Add `SetPaneId()` method                                           |
 | `docs/chromium.md`                              | Add new branch                                                     |
 
+## Experiment 1: End-to-end streaming
+
+### Goal
+
+Box-demo renders at 60fps in a TermSurf pane. This is Idea 1 — reimplementing
+the three Chromium-specific pieces (server lifecycle, gateway connect, URL in
+`set_overlay`) on top of the Issue 508 overlay infrastructure.
+
+### Key insight
+
+The Chromium Profile Server code on branch `146.0.7650.0-issue-507` already
+implements the full two-step gateway connect, `server_register`, `create_tab`,
+`tab_ready`, and `display_surface` protocol. This is identical to the
+`146.0.7650.0-issue-503` branch (zero diff between them). **No Chromium source
+code changes are needed.** Only a build.
+
+The Issue 507 crash was caused by bytesPerRow misalignment and IOSurface
+use-after-free — both fixed in Issue 508. The overlay pipeline
+(`Texture.fromIOSurface`, CFRetain/CFRelease, `draw_mutex`) is already working
+and proven stable with the checkerboard.
+
+### Changes needed
+
+Three files change in the TermSurf repo. Zero files change in Chromium.
+
+#### 1. `web/src/xpc.rs` — Add URL to `send_set_overlay`
+
+Add a `url: &str` parameter and include it in the XPC dictionary.
+
+Current signature (line 169):
+
+```rust
+pub fn send_set_overlay(&self, pane_id: &str, col: u16, row: u16, width: u16, height: u16)
+```
+
+New signature:
+
+```rust
+pub fn send_set_overlay(&self, pane_id: &str, col: u16, row: u16, width: u16, height: u16, url: &str)
+```
+
+Add after the existing `xpc_dictionary_set_uint64` calls (line 192):
+
+```rust
+let url_key = CString::new("url").unwrap();
+let url_c = CString::new(url).unwrap();
+xpc_dictionary_set_string(dict, url_key.as_ptr(), url_c.as_ptr());
+```
+
+#### 2. `web/src/main.rs` — Pass URL to `send_set_overlay`
+
+The call site at line 82 currently passes five arguments. Add `&url` as the
+sixth:
+
+```rust
+conn.send_set_overlay(
+    pid,
+    viewport_rect.x,
+    viewport_rect.y,
+    viewport_rect.width,
+    viewport_rect.height,
+    &url,
+);
+```
+
+#### 3. `ts5/macos/Sources/Ghostty/CompositorXPC.swift` — Server lifecycle
+
+This is the bulk of the work. The current `set_overlay` handler (lines 133–224)
+creates a static checkerboard. Replace it with live Chromium server management.
+
+**New state** (add after `currentSurfaces` at line 33):
+
+```swift
+/// Maps pane UUID → Chromium Profile Server process.
+private var serverProcesses: [UUID: Process] = [:]
+
+/// Maps pane UUID → server control connection (for sending create_tab).
+private var serverControlConnections: [UUID: xpc_connection_t] = [:]
+
+/// Maps pane UUID → URL to load (stored until server registers).
+private var pendingURLs: [UUID: String] = [:]
+
+/// Maps pane UUID → C surface pointer (cached for display_surface handler).
+private var cachedCSurfaces: [UUID: ghostty_surface_t] = [:]
+```
+
+**Modified `set_overlay` handler:**
+
+When `set_overlay` arrives with a `url` field:
+
+1. Store the URL in `pendingURLs[uuid]`.
+2. Set overlay grid coordinates (same as now — `ghostty_surface_set_overlay`).
+3. Cache the `ghostty_surface_t` pointer in `cachedCSurfaces[uuid]`.
+4. Spawn a Chromium Profile Server process.
+
+The server path is the built binary:
+`chromium/src/out/Default/chromium_profile_server`
+
+Process arguments (all `=`-joined per Issue 507's lesson):
+
+```
+--xpc-service=com.termsurf.xpc-gateway
+--pane-id=<uuid>
+--user-data-dir=<profile-path>
+--hidden
+```
+
+The `--user-data-dir` for the default profile is
+`~/.config/termsurf/profiles/default/`.
+
+If `set_overlay` arrives WITHOUT a `url` field, fall back to the existing
+checkerboard behavior. This preserves Issue 508's test path.
+
+**New `server_register` handler:**
+
+When the server connects back to the app through the gateway and sends
+`server_register`:
+
+1. Extract `pane_id` from the message.
+2. Store the peer connection as the control connection:
+   `serverControlConnections[uuid] = peer`.
+3. Look up `pendingURLs[uuid]` to get the URL.
+4. Generate a `tab_id` (new UUID string).
+5. Send `create_tab` on the control connection:
+   ```
+   { action: "create_tab", url: "<url>", tab_id: "<tab_id>" }
+   ```
+6. Remove the URL from `pendingURLs`.
+
+**New `tab_ready` handler:**
+
+When the server creates a new tab, it opens a separate per-tab connection to the
+app and sends `tab_ready` with the `tab_id`. Nothing to do here except log it —
+the `display_surface` messages will arrive on this same connection.
+
+**New `display_surface` handler:**
+
+This arrives at 60fps on the per-tab connection. For each frame:
+
+1. Extract `pane_id` from the message.
+2. Extract the Mach send right:
+   `xpc_dictionary_copy_mach_send(msg, "iosurface_port")`.
+3. Import the IOSurface: `IOSurfaceLookupFromMachPort(port)`.
+4. Deallocate the Mach port: `mach_port_deallocate(mach_task_self_, port)`.
+5. Store in `currentSurfaces[uuid]` (ARC retains new, releases old).
+6. Get the raw pointer: `Unmanaged.passUnretained(surface).toOpaque()`.
+7. Call `ghostty_surface_set_overlay_iosurface(cSurface, ptr)` using the cached
+   C surface pointer from `cachedCSurfaces[uuid]`.
+
+This runs on the XPC serial queue — no dispatch to main needed.
+`ghostty_surface_set_overlay_iosurface` is thread-safe (protected by
+`draw_mutex` on the Zig side). `currentSurfaces` is only accessed from the XPC
+queue.
+
+**Modified `handleDisconnect`:**
+
+When a `web` peer disconnects (the existing handler at line 227):
+
+1. Look up the pane UUID (existing behavior).
+2. Kill the server process: `serverProcesses[uuid]?.terminate()`.
+3. Clean up all state: remove from `serverProcesses`,
+   `serverControlConnections`, `pendingURLs`, `cachedCSurfaces`,
+   `currentSurfaces`.
+4. Clear the overlay (existing behavior — `ghostty_surface_clear_overlay`).
+
+When a server peer disconnects (control or tab connection): log it. The server
+may crash or be killed — the overlay should remain until the `web` process also
+disconnects.
+
+#### 4. Chromium branch
+
+Create `146.0.7650.0-issue-509` from `146.0.7650.0-issue-507`. No source code
+changes — the branch exists for traceability. Build `chromium_profile_server` on
+the new branch.
+
+Update `docs/chromium.md` to add the new branch to the Branches table.
+
+### XPC message flow
+
+```
+web ──set_overlay(coords+url)──▶ App
+                                  │
+                                  ├─ stores coords + URL
+                                  ├─ spawns server --pane-id=UUID
+                                  │
+Server ──(gateway connect)──▶ App
+Server ──server_register──▶ App
+                                  │
+                           App ──create_tab(url)──▶ Server
+                                  │
+Server ──(new connection)──▶ App
+Server ──tab_ready──▶ App
+                                  │
+Server ──display_surface(60fps)──▶ App
+                                  │  ├─ IOSurfaceLookupFromMachPort
+                                  │  ├─ currentSurfaces[uuid] = surface
+                                  │  └─ ghostty_surface_set_overlay_iosurface
+                                  │
+web disconnects ──▶ App
+                     ├─ server.terminate()
+                     ├─ clean up all state
+                     └─ ghostty_surface_clear_overlay
+```
+
+### Build
+
+```bash
+# 1. Create issue-509 branch and build Chromium Profile Server
+cd chromium/src
+git checkout -b 146.0.7650.0-issue-509 146.0.7650.0-issue-507
+export PATH="$(cd ../depot_tools && pwd):$PATH"
+autoninja -C out/Default chromium_profile_server
+
+# 2. Build TermSurf (after CompositorXPC.swift changes)
+cd ts5 && zig build
+
+# 3. Build web (after xpc.rs + main.rs changes)
+cargo build -p web
+```
+
+### Verification
+
+```bash
+# Start the box-demo server
+cd ts4/box-demo && bun run server.ts &
+
+# Launch TermSurf with stderr logging
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+
+# In a TermSurf pane:
+cargo run -p web -- http://localhost:9407
+
+# Expected log output:
+# [Compositor] set_overlay with URL http://localhost:9407
+# [Compositor] Spawning server for pane <uuid>
+# [Compositor] server_register from pane <uuid>
+# [Compositor] Sending create_tab url=http://localhost:9407
+# [Compositor] tab_ready for tab <tab_id>
+# [Compositor] display_surface <width>x<height> for pane <uuid>
+# (repeated at ~60fps)
+
+# Expected visual:
+# - Blue spinning square visible in the viewport area
+# - FPS counter on the page
+# - Stable rendering (no crash after 3 seconds — the Issue 508 fix)
+
+# Quit:
+# Press Esc then q (or Ctrl+C)
+# Expected: overlay clears, server process terminates
+```
+
+### Pass criteria
+
+1. Box-demo renders inside the viewport at any frame rate above 30fps.
+2. No crash for at least 30 seconds (10 seconds would already exceed Issue 507's
+   3-second crash window, but 30 seconds provides confidence).
+3. Quitting `web` clears the overlay and kills the server process.
+4. No orphaned `chromium_profile_server` processes after exit.
+
+### File summary
+
+| File                                            | Action                                             |
+| ----------------------------------------------- | -------------------------------------------------- |
+| `ts5/macos/Sources/Ghostty/CompositorXPC.swift` | Server lifecycle + `display_surface` handler       |
+| `web/src/xpc.rs`                                | Add `url` parameter to `send_set_overlay`          |
+| `web/src/main.rs`                               | Pass `&url` to `send_set_overlay`                  |
+| `docs/chromium.md`                              | Add `146.0.7650.0-issue-509` to Branches table     |
+| Chromium source                                 | No changes (new branch from issue-507, build only) |
+
+### Result
+
+_Not yet run._
+
+---
+
 ## Ideas for Experiments
 
 ### Idea 1: End-to-end streaming
