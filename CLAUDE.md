@@ -79,16 +79,22 @@ Ghostty Fork (Zig + Swift macOS shell)
 │   ├── BrowserContext "work" (Profile 1)
 │   ├── BrowserContext "personal" (Profile 2)
 │   └── BrowserContext "guest" (Profile N)
-├── XPC compositor (com.termsurf.compositor Mach service)
-│   └── Receives overlay coordinates from `web` processes
+├── XPC client (connects to xpc-gateway, registers anonymous listener)
+│   └── Receives overlay coordinates from `web` processes via direct connection
 ├── Metal renderer (inherited from Ghostty)
 │   └── pink_overlay pipeline (Issue 505) — GPU quad at grid coordinates
 ├── Pane/tab/split management (inherited from Ghostty)
 └── Keybindings, configuration (inherited from Ghostty)
 
+xpc-gateway daemon (com.termsurf.xpc-gateway Mach service)
+├── Tiny Swift binary (~80 lines), auto-registered via SMAppService
+├── Stores app's anonymous listener endpoint
+└── Returns endpoint to `web` processes (rendezvous only, no ongoing traffic)
+
 web TUI (Rust/ratatui, runs inside a terminal pane)
 ├── Draws browser chrome (URL bar, viewport border, status bar)
-├── Sends viewport grid coordinates to compositor via XPC
+├── Connects to xpc-gateway, claims app endpoint, then connects directly to app
+├── Sends viewport grid coordinates on the direct connection
 └── TERMSURF_PANE_ID env var identifies which pane it's in
 ```
 
@@ -97,9 +103,14 @@ web TUI (Rust/ratatui, runs inside a terminal pane)
 ts5 is a Ghostty fork (imported via `git subtree add`) with the following
 TermSurf additions:
 
-- **XPC compositor** (`CompositorXPC.swift`) — Mach service listener that
-  receives overlay coordinates from `web` processes and passes them to the
-  renderer via the C API. Registered with launchd as `com.termsurf.compositor`.
+- **XPC gateway** (`xpc-gateway/`) — Tiny Swift daemon that owns the
+  `com.termsurf.xpc-gateway` Mach service. The app registers an anonymous
+  listener endpoint here; `web` processes claim it to connect directly to the
+  app. Auto-registered via SMAppService (Issue 506).
+- **XPC client** (`CompositorXPC.swift`) — Connects to the xpc-gateway as a
+  client, creates an anonymous listener, and registers its endpoint. Receives
+  overlay coordinates from `web` processes on the direct connection and passes
+  them to the renderer via the C API.
 - **Pink overlay pipeline** (`pink_overlay` in `shaders.zig` / `shaders.metal`)
   — Metal shader that renders a solid-color quad at grid coordinates. Proven
   working with correct alignment (Issue 505, Experiments 1–3).
@@ -124,20 +135,26 @@ pink overlay will be replaced with a real IOSurface texture from Chromium.
 - `ts5/src/apprt/embedded.zig` — C API exports
 - `ts5/include/ghostty.h` — libghostty C API headers
 - `ts5/macos/` — Ghostty macOS app (Swift + Xcode)
-- `ts5/macos/Sources/Ghostty/CompositorXPC.swift` — XPC Mach service listener
-- `ts5/macos/Sources/App/macOS/AppDelegate.swift` — Starts compositor on launch
-- `ts5/macos/com.termsurf.compositor.plist` — launchd LaunchAgent plist
+- `ts5/xpc-gateway/` — XPC gateway daemon (Swift, ~80 lines)
+- `ts5/xpc-gateway/Sources/main.swift` — Gateway: owns Mach service, stores/returns app endpoint
+- `ts5/macos/Sources/Ghostty/CompositorXPC.swift` — XPC client (connects to gateway, registers endpoint)
+- `ts5/macos/Sources/App/macOS/AppDelegate.swift` — Starts compositor XPC on launch
+- `ts5/macos/com.termsurf.xpc-gateway.plist` — launchd plist (dev, absolute paths)
+- `ts5/macos/com.termsurf.xpc-gateway.bundle.plist` — launchd plist (bundled, BundleProgram)
 - `ts5/build.zig` — Ghostty build system
 - `ts5/build.zig.zon` — Ghostty dependencies
 - `ts5/pkg/` — Platform packages (Linux, macOS, etc.)
 - `web/` — `web` TUI (Rust/ratatui)
 - `web/src/main.rs` — TUI event loop, layout, XPC overlay sending
-- `web/src/xpc.rs` — Minimal XPC FFI client for compositor connection
+- `web/src/xpc.rs` — Minimal XPC FFI client (two-step connect via gateway)
 
 ### Build Commands
 
 ```bash
-# Build TermSurf (Zig + Metal shaders)
+# Build the xpc-gateway (must be done before zig build)
+cd ts5/xpc-gateway && swift build
+
+# Build TermSurf (Zig + Metal shaders, bundles gateway into app)
 cd ts5 && zig build
 
 # Build web TUI
@@ -146,20 +163,11 @@ cargo build -p web
 
 ### Launching
 
-The app must be launched via launchd (not `open`) because the XPC Mach service
-`com.termsurf.compositor` can only be claimed by the process launchd launched
-for that job.
+The app launches normally via `open`. The xpc-gateway LaunchAgent is
+auto-registered via SMAppService on first launch (Issue 506).
 
 ```bash
-# Register the LaunchAgent (once, after first build):
-launchctl bootstrap gui/$(id -u) ts5/macos/com.termsurf.compositor.plist
-
-# Launch:
-launchctl kickstart gui/$(id -u)/com.termsurf.compositor
-
-# Restart after rebuild:
-launchctl kill SIGTERM gui/$(id -u)/com.termsurf.compositor
-launchctl kickstart gui/$(id -u)/com.termsurf.compositor
+open ts5/zig-out/TermSurf.app
 ```
 
 ### Upstream Merges

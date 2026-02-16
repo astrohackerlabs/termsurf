@@ -54,7 +54,10 @@ logging into Google in one profile doesn't affect the others.
 ### Build
 
 ```bash
-# Build the terminal
+# Build the xpc-gateway (must be done before zig build)
+cd ts5/xpc-gateway && swift build
+
+# Build the terminal (bundles gateway into app)
 cd ts5 && zig build
 
 # Build the web TUI
@@ -63,20 +66,12 @@ cargo build -p web
 
 ### Launch
 
-The app is launched via launchd because it registers an XPC Mach service for
-compositor communication.
-
 ```bash
-# Register the LaunchAgent (once, after first build):
-launchctl bootstrap gui/$(id -u) ts5/macos/com.termsurf.compositor.plist
-
-# Launch:
-launchctl kickstart gui/$(id -u)/com.termsurf.compositor
-
-# Restart after rebuild:
-launchctl kill SIGTERM gui/$(id -u)/com.termsurf.compositor
-launchctl kickstart gui/$(id -u)/com.termsurf.compositor
+open ts5/zig-out/TermSurf.app
 ```
+
+The XPC gateway LaunchAgent is auto-registered on first launch via SMAppService.
+No manual `launchctl` commands needed.
 
 Then in a TermSurf terminal pane:
 
@@ -112,7 +107,8 @@ via the Content API.
 - Terminal emulator (full Ghostty, native Metal rendering)
 - `web` TUI chrome (URL bar, viewport border, status bar via ratatui)
 - GPU overlay pipeline (Metal shader renders at exact grid coordinates)
-- XPC compositor (Mach service receives overlay coordinates from `web` processes)
+- XPC gateway daemon (auto-registered LaunchAgent for compositor rendezvous)
+- XPC overlay pipeline (`web` connects to app via gateway, sends coordinates)
 - Pane identification (each pane sets `TERMSURF_PANE_ID` in the environment)
 
 **Not yet started:**
