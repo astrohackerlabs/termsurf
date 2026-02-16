@@ -866,13 +866,28 @@ viewport, producing visible blur.
 
 ### Solution
 
-The app knows the correct pixel dimensions: `grid_width * cellWidth` and
-`grid_height * cellHeight` (from `ghostty_surface_get_cell_size`, already
-Retina-aware). Pass these to the server so it captures at the right size.
+Two changes:
 
-On resize, `web` already sends `set_overlay` with updated grid coords
-(Experiment 2's dedup). The app computes new pixel dimensions and tells the
-server to update `SetResolutionConstraints`.
+1. **Tell Chromium the correct size.** The app knows the correct pixel
+   dimensions: `grid_width * cellWidth` and `grid_height * cellHeight` (from
+   `ghostty_surface_get_cell_size`, already Retina-aware). Pass these to the
+   server so it captures at the right size. On resize, `web` already sends
+   `set_overlay` with updated grid coords (Experiment 2's dedup). The app
+   computes new pixel dimensions and tells the server to update
+   `SetResolutionConstraints`.
+
+2. **Never stretch the texture.** The overlay quad must be sized to the
+   IOSurface's exact pixel dimensions, not to `grid_width * cell_size`. During
+   resize, the old frame (at the old size) renders at its actual pixel
+   dimensions for ~16ms until the next frame arrives at the new size. This
+   avoids stretching entirely — a slight size mismatch for one frame is
+   imperceptible, while stretching-induced blur is immediately visible.
+
+   The `PinkOverlay` struct gains `pixel_width` and `pixel_height` fields. The
+   Zig renderer reads `tex.width` and `tex.height` from the IOSurface texture
+   each frame and writes them into the params buffer. The `overlay_vertex`
+   shader uses these pixel dimensions directly for the quad size (no
+   multiplication by `cell_size`). The pink fallback shader is unchanged.
 
 ### XPC protocol (complete)
 
@@ -946,7 +961,7 @@ setup:
 
 ### Changes
 
-Four files in the TermSurf repo, three files in the Chromium fork.
+Seven files in the TermSurf repo, three files in the Chromium fork.
 
 #### 1. `ts5/macos/Sources/Ghostty/CompositorXPC.swift`
 
@@ -999,9 +1014,107 @@ if serverProcesses[uuid] != nil {
 }
 ```
 
-#### 2. `shell_browser_main_parts.cc` (Chromium)
+#### 2. `ts5/src/renderer/metal/shaders.zig` — Add pixel dimension fields
 
-**Update `CreateTab` to accept pixel dimensions:**
+Add `pixel_width` and `pixel_height` to the `PinkOverlay` struct:
+
+```zig
+pub const PinkOverlay = extern struct {
+    grid_col: f32 = 0,
+    grid_row: f32 = 0,
+    grid_width: f32 = 0,
+    grid_height: f32 = 0,
+    pixel_width: f32 = 0,
+    pixel_height: f32 = 0,
+};
+```
+
+#### 3. `ts5/src/renderer/shaders/shaders.metal` — Match struct + use pixel dims
+
+Update `PinkOverlayIn` to match the Zig struct:
+
+```metal
+struct PinkOverlayIn {
+  float grid_col;
+  float grid_row;
+  float grid_width;
+  float grid_height;
+  float pixel_width;
+  float pixel_height;
+};
+```
+
+Update `overlay_vertex` to use pixel dimensions directly for quad size:
+
+```metal
+vertex OverlayVertexOut overlay_vertex(
+  uint vid [[vertex_id]],
+  constant PinkOverlayIn& params [[buffer(0)]],
+  constant Uniforms& uniforms [[buffer(1)]]
+) {
+  float2 origin = float2(params.grid_col, params.grid_row) * uniforms.cell_size;
+  float2 size = float2(params.pixel_width, params.pixel_height);
+  // ...rest unchanged...
+}
+```
+
+The origin stays grid-based (correct positioning). The size is pixel-exact from
+the IOSurface. The `pink_overlay_vertex` shader is unchanged (still uses
+`grid_width * cell_size` for the solid color fallback).
+
+#### 4. `ts5/src/renderer/generic.zig` — Write pixel dims from texture
+
+Restructure the overlay draw code. For the IOSurface path, create the texture
+first, read its dimensions, then create the params buffer with pixel dimensions
+filled in:
+
+```zig
+if (self.overlay_iosurface) |iosurface| {
+    const tex_result = Texture.fromIOSurface(self.api.device, iosurface);
+    if (tex_result) |tex| {
+        defer tex.deinit();
+        var overlay_params = self.pink_overlay;
+        overlay_params.pixel_width = @floatFromInt(tex.width);
+        overlay_params.pixel_height = @floatFromInt(tex.height);
+        if (Buffer(shaderpkg.PinkOverlay).initFill(
+            self.api.imageBufferOptions(),
+            &.{overlay_params},
+        )) |*buf| {
+            defer buf.deinit();
+            pass.step(.{
+                .pipeline = self.shaders.pipelines.overlay,
+                .uniforms = frame.uniforms.buffer,
+                .buffers = &.{buf.buffer},
+                .textures = &.{tex},
+                .draw = .{ .type = .triangle_strip, .vertex_count = 4 },
+            });
+        }
+    }
+} else {
+    // Pink fallback — pixel_width/height stay 0, shader uses grid coords.
+    if (Buffer(shaderpkg.PinkOverlay).initFill(
+        self.api.imageBufferOptions(),
+        &.{self.pink_overlay},
+    )) |*buf| {
+        defer buf.deinit();
+        pass.step(.{
+            .pipeline = self.shaders.pipelines.pink_overlay,
+            .uniforms = frame.uniforms.buffer,
+            .buffers = &.{buf.buffer},
+            .draw = .{ .type = .triangle_strip, .vertex_count = 4 },
+        });
+    }
+}
+```
+
+The IOSurface path creates the texture first to read its dimensions, then writes
+`pixel_width`/`pixel_height` into a local copy of the params. The pink fallback
+path is unchanged — `pixel_width`/`pixel_height` default to 0 and the
+`pink_overlay_vertex` shader ignores them.
+
+#### 5. `chromium/.../shell_browser_main_parts.cc`
+
+**Update `CreateTab` to accept pixel dimensions and resize the view:**
 
 ```cpp
 void ShellBrowserMainParts::CreateTab(const GURL& url,
@@ -1009,10 +1122,29 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
                                       int pixel_width,
                                       int pixel_height) {
   // ... existing Shell creation ...
+
+  // Resize WebContents view to match the terminal viewport.
+  // SetSize takes logical pixels; Chromium applies device_scale_factor internally.
+  // We send physical pixels over XPC; derive logical here.
+  if (pixel_width > 0 && pixel_height > 0) {
+    RenderWidgetHostView* view = shell->web_contents()->GetRenderWidgetHostView();
+    if (view) {
+      float scale = view->GetDeviceScaleFactor();
+      gfx::Size logical(static_cast<int>(std::ceil(pixel_width / scale)),
+                         static_cast<int>(std::ceil(pixel_height / scale)));
+      view->SetSize(logical);
+    }
+  }
+
   video_consumer->SetInitialSize(pixel_width, pixel_height);
   // ... rest unchanged ...
 }
 ```
+
+`SetSize` takes logical (CSS) pixels. The view computes
+`logical × device_scale_factor` to get the physical compositor size, which
+matches our capture resolution. CSS layout, media queries, and responsive
+breakpoints all see the correct viewport width.
 
 **Update control connection handler to extract pixel dimensions from
 `create_tab`:**
@@ -1042,21 +1174,35 @@ if (action && std::string_view(action) == "create_tab") {
 }
 ```
 
-**Add `ResizeCapture` method:**
+**Add `ResizeCapture` method — resizes both view and capturer:**
 
 ```cpp
 void ShellBrowserMainParts::ResizeCapture(int pixel_width, int pixel_height) {
-  if (!tabs_.empty()) {
-    tabs_[0]->video_consumer->SetResolution(pixel_width, pixel_height);
+  if (tabs_.empty() || pixel_width <= 0 || pixel_height <= 0)
+    return;
+
+  auto& tab = tabs_[0];
+
+  // Resize the WebContents view (logical pixels).
+  RenderWidgetHostView* view =
+      tab->shell->web_contents()->GetRenderWidgetHostView();
+  if (view) {
+    float scale = view->GetDeviceScaleFactor();
+    gfx::Size logical(static_cast<int>(std::ceil(pixel_width / scale)),
+                       static_cast<int>(std::ceil(pixel_height / scale)));
+    view->SetSize(logical);
   }
+
+  // Resize the capturer (physical pixels).
+  tab->video_consumer->SetResolution(pixel_width, pixel_height);
 }
 ```
 
 (Single-tab for now — `tabs_[0]` is sufficient for the default-profile case.)
 
-#### 3. `shell_browser_main_parts.h` (Chromium)
+#### 6. `chromium/.../shell_browser_main_parts.h`
 
-Update `CreateTab` signature:
+Update `CreateTab` signature and add `ResizeCapture`:
 
 ```cpp
 void CreateTab(const GURL& url, const std::string& tab_id,
@@ -1064,7 +1210,7 @@ void CreateTab(const GURL& url, const std::string& tab_id,
 void ResizeCapture(int pixel_width, int pixel_height);
 ```
 
-#### 4. `shell_video_consumer.cc` (Chromium)
+#### 7. `chromium/.../shell_video_consumer.cc`
 
 **Add `SetInitialSize` — stores dimensions for use in `Attach`:**
 
@@ -1103,7 +1249,7 @@ void ShellVideoConsumer::SetResolution(int width, int height) {
 }
 ```
 
-#### 5. `shell_video_consumer.h` (Chromium)
+#### 8. `chromium/.../shell_video_consumer.h`
 
 Add declarations:
 
@@ -1164,17 +1310,23 @@ cd ts5 && zig build
 ### Pass criteria
 
 1. On launch, the overlay renders at the viewport's exact physical pixel
-   dimensions — no blur, no stretching.
+   dimensions — no blur, no stretching. Text on the webpage is crisp at Retina
+   resolution.
 2. On terminal resize, the overlay updates to the new resolution within ~1
-   second (time for server to adjust capturer + deliver new frames).
+   second. During the transition, the old frame renders at its actual pixel
+   dimensions (no stretching) — slightly wrong size for ~16ms, then corrected.
 3. No crash during or after resize.
-4. Text on the webpage is crisp at Retina resolution.
+4. The texture is **never** stretched. The overlay quad always matches the
+   IOSurface's exact pixel dimensions.
 
 ### File summary
 
 | File                                            | Action                                                |
 | ----------------------------------------------- | ----------------------------------------------------- |
 | `ts5/macos/Sources/Ghostty/CompositorXPC.swift` | Compute pixel dims, send in `create_tab` and `resize` |
+| `ts5/src/renderer/metal/shaders.zig`            | Add `pixel_width`/`pixel_height` to `PinkOverlay`     |
+| `ts5/src/renderer/shaders/shaders.metal`        | Match struct, use pixel dims in `overlay_vertex`      |
+| `ts5/src/renderer/generic.zig`                  | Write `tex.width`/`tex.height` into params buffer     |
 | `chromium/.../shell_browser_main_parts.cc`      | Extract pixel dims, handle `resize`, pass to consumer |
 | `chromium/.../shell_browser_main_parts.h`       | Update `CreateTab` signature, add `ResizeCapture`     |
 | `chromium/.../shell_video_consumer.cc`          | `SetInitialSize`, `SetResolution` methods             |
