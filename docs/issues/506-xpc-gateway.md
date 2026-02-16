@@ -435,3 +435,57 @@ cargo run -p web -- https://example.com
    and the app re-registers its endpoint.
 5. The gateway process is visible in Activity Monitor as `xpc-gateway` but
    requires no user interaction.
+
+#### Result: PASS
+
+All five pass criteria met. `open ts5/zig-out/TermSurf.app` launches the app
+normally, the gateway auto-starts via launchd, the pink overlay appears and
+resizes correctly, and quitting `web` clears it. No `launchctl kickstart`
+needed.
+
+## Conclusion
+
+### What Was Built
+
+| File                                            | Role                                                           |
+| ----------------------------------------------- | -------------------------------------------------------------- |
+| `ts5/xpc-gateway/Package.swift`                 | SwiftPM package for the gateway daemon                         |
+| `ts5/xpc-gateway/Sources/main.swift`            | Gateway: owns Mach service, stores/returns app endpoint        |
+| `ts5/macos/com.termsurf.xpc-gateway.plist`      | launchd plist for the gateway                                  |
+| `ts5/macos/Sources/Ghostty/CompositorXPC.swift` | App: connects as client, registers anonymous listener endpoint |
+| `web/src/xpc.rs`                                | `web`: two-step connect (gateway → endpoint → direct to app)   |
+
+### What Was Proven
+
+1. **The three-process endpoint relay works.** The gateway owns the Mach
+   service, the app registers an anonymous listener endpoint, and `web`
+   processes claim the endpoint to connect directly to the app. No relay hop for
+   ongoing overlay messages.
+
+2. **`open` works.** The app launches normally via `open` instead of
+   `launchctl
+   kickstart`. The gateway handles Mach service ownership, freeing
+   the app from launchd identity constraints.
+
+3. **Anonymous XPC listeners work for direct connections.** The app creates an
+   anonymous listener with `xpc_connection_create(nil, queue)`, extracts an
+   endpoint with `xpc_endpoint_create`, and sends it through the gateway. `web`
+   processes use `xpc_connection_create_from_endpoint` to connect directly. This
+   is the same pattern ts3 used for IOSurface Mach port transfer.
+
+4. **The gateway is ~80 lines of Swift.** It handles two message types
+   (`register_app`, `connect`) and carries no ongoing traffic. It could crash
+   and restart without interrupting active `web` sessions.
+
+### What Remains
+
+- **Automatic plist registration.** The gateway plist must be registered with
+  launchd via `launchctl bootstrap` (one-time setup). Apple's `SMAppService` API
+  (macOS 13+) can automate this — the plist ships inside the app bundle at
+  `Contents/Library/LaunchAgents/` and the app calls
+  `SMAppService.agent
+  (plistName:).register()` on first launch.
+
+- **Chromium texture swap.** The pink overlay will be replaced with a real
+  IOSurface texture from Chromium. The direct connection established here is the
+  same channel that will carry IOSurface Mach ports at 60fps.
