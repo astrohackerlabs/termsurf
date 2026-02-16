@@ -137,4 +137,343 @@ already does the lookup — passing the result with proper retain is cleaner.
 
 ## Experiments
 
-_To be designed._
+### Experiment 1: IOSurface Checkerboard with CFRetain Lifetime
+
+Reimplement the Issue 507 checkerboard (experiments 1+2) in a single experiment,
+with the CFRetain/CFRelease fix for IOSurface lifetime. This combines:
+
+- IOSurface texture overlay pipeline (507 Exp 1)
+- Retina-correct resolution via cell size query (507 Exp 2)
+- **New:** CFRetain/CFRelease on the Zig side to prevent use-after-free
+
+#### Changes
+
+**1. Metal shaders — `ts5/src/renderer/shaders/shaders.metal`**
+
+Add `overlay_vertex` and `overlay_fragment` after the pink overlay section. The
+vertex shader reuses `PinkOverlayIn` for grid coordinates and outputs texture
+coordinates. The fragment shader samples the IOSurface texture with
+nearest-neighbor filtering (1:1 pixel mapping at Retina resolution).
+
+```metal
+struct OverlayVertexOut {
+    float4 position [[position]];
+    float2 texcoord;
+};
+
+vertex OverlayVertexOut overlay_vertex(
+    uint vid [[vertex_id]],
+    constant PinkOverlayIn& params [[buffer(0)]],
+    constant Uniforms& uniforms [[buffer(1)]]
+) {
+    float2 origin = float2(params.grid_col, params.grid_row) * uniforms.cell_size;
+    float2 size = float2(params.grid_width, params.grid_height) * uniforms.cell_size;
+
+    float2 corner;
+    corner.x = float(vid == 1 || vid == 3);
+    corner.y = float(vid == 2 || vid == 3);
+
+    OverlayVertexOut out;
+    out.position = uniforms.projection_matrix * float4(origin + size * corner, 0.0, 1.0);
+    out.texcoord = corner;
+    return out;
+}
+
+fragment float4 overlay_fragment(
+    OverlayVertexOut in [[stage_in]],
+    texture2d<float> tex [[texture(0)]]
+) {
+    constexpr sampler s(mag_filter::nearest, min_filter::nearest);
+    return tex.sample(s, in.texcoord);
+}
+```
+
+**2. Pipeline — `ts5/src/renderer/metal/shaders.zig`**
+
+Add `overlay` pipeline alongside `pink_overlay`:
+
+```zig
+.{ "overlay", .{
+    .vertex_fn = "overlay_vertex",
+    .fragment_fn = "overlay_fragment",
+    .blending_enabled = true,
+} },
+```
+
+**3. IOSurface texture import — `ts5/src/renderer/metal/Texture.zig`**
+
+Add a function to create an MTLTexture from an IOSurfaceRef. This is zero-copy —
+the texture is a view into the same GPU memory. Creating it per-frame is the
+correct pattern (the IOSurface contents change between frames).
+
+```zig
+pub fn fromIOSurface(device: objc.Object, iosurface: *anyopaque) ?Texture {
+    const desc = objc.Class.named("MTLTextureDescriptor").?
+        .msgSend(objc.Object, objc.sel("new"), .{});
+    defer desc.release();
+
+    // Query IOSurface dimensions.
+    const width: c_ulong = @intCast(IOSurfaceGetWidth(iosurface));
+    const height: c_ulong = @intCast(IOSurfaceGetHeight(iosurface));
+
+    desc.setProperty("pixelFormat", @intFromEnum(mtl.MTLPixelFormat.bgra8unorm_srgb));
+    desc.setProperty("width", width);
+    desc.setProperty("height", height);
+    desc.setProperty("usage", @as(c_ulong, 0x0004)); // ShaderRead
+
+    const texture = device.msgSend(
+        ?objc.Object,
+        objc.sel("newTextureWithDescriptor:iosurface:plane:"),
+        .{ desc, iosurface, @as(c_ulong, 0) },
+    ) orelse return null;
+
+    return .{ .texture = texture };
+}
+```
+
+Needs `extern "c"` declarations for `IOSurfaceGetWidth` and `IOSurfaceGetHeight`
+(both take `*anyopaque`, return `usize`).
+
+**4. Renderer state + drawFrame — `ts5/src/renderer/generic.zig`**
+
+Add field alongside `pink_overlay`:
+
+```zig
+/// IOSurfaceRef for the overlay texture (Issue 508).
+/// Retained via CFRetain — caller must pair with CFRelease.
+/// When non-null, drawFrame() creates an MTLTexture from it and
+/// renders with the overlay pipeline instead of pink_overlay.
+overlay_iosurface: ?*anyopaque = null,
+```
+
+In `drawFrame()`, modify the pink overlay block. When `overlay_iosurface` is
+set, create an MTLTexture from it and render with the `overlay` pipeline.
+Otherwise fall back to the pink pipeline:
+
+```zig
+// Overlay (Issue 508 / Issue 505 fallback).
+if (self.pink_overlay.grid_width > 0 and
+    self.pink_overlay.grid_height > 0)
+{
+    if (Buffer(shaderpkg.PinkOverlay).initFill(
+        self.api.imageBufferOptions(),
+        &.{self.pink_overlay},
+    )) |*buf| {
+        defer buf.deinit();
+        if (self.overlay_iosurface) |iosurface| {
+            // IOSurface texture path.
+            if (Texture.fromIOSurface(self.api.device, iosurface)) |tex| {
+                defer tex.deinit();
+                pass.step(.{
+                    .pipeline = self.shaders.pipelines.overlay,
+                    .uniforms = frame.uniforms.buffer,
+                    .buffers = &.{buf.buffer},
+                    .textures = &.{tex},
+                    .draw = .{ .type = .triangle_strip, .vertex_count = 4 },
+                });
+            }
+        } else {
+            // Pink fallback (no IOSurface).
+            pass.step(.{
+                .pipeline = self.shaders.pipelines.pink_overlay,
+                .uniforms = frame.uniforms.buffer,
+                .buffers = &.{buf.buffer},
+                .draw = .{ .type = .triangle_strip, .vertex_count = 4 },
+            });
+        }
+    } else |err| {
+        log.warn("error creating overlay buffer err={}", .{err});
+    }
+}
+```
+
+**5. Surface methods with CFRetain/CFRelease — `ts5/src/Surface.zig`**
+
+This is the critical new code. `setOverlayIOSurface` retains the new surface and
+releases the old one under `draw_mutex`. `clearOverlay` releases the current
+surface.
+
+```zig
+const CFRetain = macos.foundation.CFRetain;
+const CFRelease = macos.foundation.CFRelease;
+
+pub fn setOverlayIOSurface(self: *Surface, iosurface: ?*anyopaque) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    // Release old surface (Zig's retain).
+    if (self.renderer.overlay_iosurface) |old| {
+        CFRelease(old);
+    }
+
+    // Retain new surface (Zig takes ownership stake).
+    if (iosurface) |new| {
+        CFRetain(new);
+    }
+
+    self.renderer.overlay_iosurface = iosurface;
+    self.queueRender() catch {};
+}
+
+pub fn clearOverlay(self: *Surface) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    // Release Zig's retain on the IOSurface.
+    if (self.renderer.overlay_iosurface) |old| {
+        CFRelease(old);
+    }
+
+    self.renderer.overlay_iosurface = null;
+    self.renderer.pink_overlay = .{};
+    self.queueRender() catch {};
+}
+```
+
+Note: `CFRetain`/`CFRelease` are already declared in
+`ts5/pkg/macos/foundation/type.zig` as `extern "c"` functions taking
+`*anyopaque`. The renderer imports `macos` conditionally on `.macos`.
+
+**6. Cell size query — `ts5/src/Surface.zig`**
+
+```zig
+pub fn getCellSize(self: *Surface, width: *u32, height: *u32) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+    width.* = self.renderer.grid_metrics.cell_width;
+    height.* = self.renderer.grid_metrics.cell_height;
+}
+```
+
+**7. C API — `ts5/include/ghostty.h`**
+
+```c
+void ghostty_surface_set_overlay_iosurface(ghostty_surface_t, void* iosurface_ref);
+void ghostty_surface_get_cell_size(ghostty_surface_t,
+                                    uint32_t* width, uint32_t* height);
+```
+
+**8. Exports — `ts5/src/apprt/embedded.zig`**
+
+```zig
+export fn ghostty_surface_set_overlay_iosurface(
+    surface: *Surface,
+    iosurface: ?*anyopaque,
+) void {
+    surface.core_surface.setOverlayIOSurface(iosurface);
+}
+
+export fn ghostty_surface_get_cell_size(
+    surface: *Surface,
+    width: *u32,
+    height: *u32,
+) void {
+    surface.core_surface.getCellSize(width, height);
+}
+```
+
+**9. Checkerboard — `ts5/macos/Sources/Ghostty/CompositorXPC.swift`**
+
+In `handleMessage` for `set_overlay`, after calling
+`ghostty_surface_set_overlay()` with grid coordinates:
+
+1. Query cell size via `ghostty_surface_get_cell_size()`
+2. Compute physical pixel dimensions: `pixelWidth = width * cellWidth`,
+   `pixelHeight = height * cellHeight`
+3. If dimensions match the cached surface, skip (no rebuild needed)
+4. Otherwise, create a new IOSurface at the exact pixel dimensions
+5. Fill with blue (#4488FF) / dark (#222222) checkerboard where each checker
+   cell is `cellWidth x cellHeight` (one terminal cell)
+6. Call `ghostty_surface_set_overlay_iosurface(cSurface, ptr)` — the Zig side
+   will CFRetain it
+
+Store the current IOSurface on `CompositorXPC` alongside existing pane tracking.
+ARC keeps the Swift reference alive; the Zig CFRetain keeps the surface alive
+independently. Either side can release without affecting the other.
+
+```swift
+// In handleMessage, after ghostty_surface_set_overlay():
+var cellWidth: UInt32 = 0
+var cellHeight: UInt32 = 0
+ghostty_surface_get_cell_size(cSurface, &cellWidth, &cellHeight)
+
+let pixelWidth = Int(width) * Int(cellWidth)
+let pixelHeight = Int(height) * Int(cellHeight)
+
+// Skip if dimensions unchanged.
+if let existing = self.currentSurfaces[uuid],
+   IOSurfaceGetWidth(existing) == pixelWidth,
+   IOSurfaceGetHeight(existing) == pixelHeight {
+    return
+}
+
+let testSurface = IOSurface(properties: [
+    .width: pixelWidth,
+    .height: pixelHeight,
+    .bytesPerElement: 4,
+    .bytesPerRow: pixelWidth * 4,
+    .pixelFormat: 0x42475241  // 'BGRA'
+] as [IOSurfacePropertyKey: Any])!
+
+testSurface.lock(options: [], seed: nil)
+let base = testSurface.baseAddress
+let bpr = testSurface.bytesPerRow
+let cw = Int(cellWidth)
+let ch = Int(cellHeight)
+for y in 0..<pixelHeight {
+    for x in 0..<pixelWidth {
+        let cellX = x / cw
+        let cellY = y / ch
+        let isLight = (cellX + cellY) % 2 == 0
+        let offset = y * bpr + x * 4
+        if isLight {
+            base.storeBytes(of: UInt32(0xFF_FF_88_44), toByteOffset: offset, as: UInt32.self)
+        } else {
+            base.storeBytes(of: UInt32(0xFF_22_22_22), toByteOffset: offset, as: UInt32.self)
+        }
+    }
+}
+testSurface.unlock(options: [], seed: nil)
+
+self.currentSurfaces[uuid] = testSurface
+let ptr = Unmanaged.passUnretained(testSurface).toOpaque()
+ghostty_surface_set_overlay_iosurface(cSurface, ptr)
+```
+
+#### Pass Criteria
+
+1. `cargo run -p web -- http://example.com` shows a blue/dark checkerboard at
+   Retina resolution in the viewport area. Each checker cell is exactly one
+   terminal cell with sharp crisp edges.
+2. **Resizing the terminal window does not crash.** The checkerboard recreates
+   at the new size and remains pixel-perfect after resize.
+3. Quitting `web` clears the overlay.
+4. No crash during normal operation.
+
+#### Files
+
+| File                                            | Change                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------ |
+| `ts5/src/renderer/shaders/shaders.metal`        | Add `overlay_vertex` + `overlay_fragment` (nearest sampling) |
+| `ts5/src/renderer/metal/shaders.zig`            | Add `overlay` pipeline                                       |
+| `ts5/src/renderer/metal/Texture.zig`            | Add `fromIOSurface()` (MTLTexture from IOSurfaceRef)         |
+| `ts5/src/renderer/generic.zig`                  | Add `overlay_iosurface` field, texture render in `drawFrame` |
+| `ts5/src/Surface.zig`                           | `setOverlayIOSurface` (CFRetain/CFRelease), `getCellSize`    |
+| `ts5/src/apprt/embedded.zig`                    | Export two new C functions                                   |
+| `ts5/include/ghostty.h`                         | Declare two new C functions                                  |
+| `ts5/macos/Sources/Ghostty/CompositorXPC.swift` | Retina checkerboard, dimension caching, cell size query      |
+
+#### Build & Verify
+
+```bash
+cd ts5 && zig build
+open ts5/zig-out/TermSurf.app
+
+# In a TermSurf pane:
+cargo run -p web -- http://example.com
+
+# Expected:
+# - Blue/dark checkerboard at viewport, each square = one terminal cell
+# - Resize terminal → checkerboard recreates, still crisp, NO CRASH
+# - Quit web → overlay clears
+```
