@@ -54,6 +54,7 @@ extern "C" {
 /// Messages received from the compositor.
 pub enum CompositorMessage {
     ModeChanged { browsing: bool },
+    UrlChanged { url: String },
 }
 
 /// A direct connection to the TermSurf app via its anonymous XPC listener.
@@ -176,6 +177,16 @@ impl CompositorConnection {
                 let browsing_key = CString::new("browsing").unwrap();
                 let browsing = unsafe { xpc_dictionary_get_bool(event, browsing_key.as_ptr()) };
                 let _ = tx.send(CompositorMessage::ModeChanged { browsing });
+            } else if action == "url_changed" {
+                let url_key = CString::new("url").unwrap();
+                let url_ptr = unsafe { xpc_dictionary_get_string(event, url_key.as_ptr()) };
+                if !url_ptr.is_null() {
+                    let url = unsafe { std::ffi::CStr::from_ptr(url_ptr) }
+                        .to_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let _ = tx.send(CompositorMessage::UrlChanged { url });
+                }
             }
         });
         unsafe {

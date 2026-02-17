@@ -62,6 +62,13 @@ class CompositorXPC {
     /// Maps pane UUID → web peer connection (for sending mode_changed back).
     private var webPeersForPane: [UUID: xpc_connection_t] = [:]
 
+    /// Maps pane UUID → overlay geometry (grid coords + cell size in physical pixels).
+    private var overlayGeometry: [UUID: (col: UInt32, row: UInt32,
+        width: UInt32, height: UInt32, cellW: UInt32, cellH: UInt32)] = [:]
+
+    /// Maps pane UUID → SurfaceView (for mouse hit-testing).
+    private var paneSurfaceViews: [UUID: Ghostty.SurfaceView] = [:]
+
     /// Serial queue for all XPC state.
     private let xpcQueue = DispatchQueue(label: "com.termsurf.compositor.xpc")
 
@@ -121,6 +128,108 @@ class CompositorXPC {
             }
 
             return consumed ? nil : event
+        }
+
+        // Register local event monitor for mouse clicks (Issue 514).
+        // Routes clicks to the correct browsing pane via hit-testing.
+        NSEvent.addLocalMonitorForEvents(matching: [
+            .leftMouseDown, .leftMouseUp,
+            .rightMouseDown, .rightMouseUp
+        ]) { [weak self] event in
+            guard let self = self else { return event }
+
+            // Must have an active window.
+            guard let window = event.window else { return event }
+
+            // Hit-test against all panes with SurfaceViews.
+            let windowLocation = event.locationInWindow
+
+            // Check all browsing panes (must dispatch to XPC queue for state reads).
+            let result: (uuid: UUID, relX: Double, relY: Double, scale: CGFloat)? = self.xpcQueue.sync {
+                for (uuid, surfaceView) in self.paneSurfaceViews {
+                    // Only intercept if the pane is in browse mode.
+                    guard self.paneBrowsing[uuid] == true else { continue }
+
+                    // Convert click to SurfaceView local coordinates.
+                    let mouseInView = surfaceView.convert(windowLocation, from: nil)
+                    guard surfaceView.bounds.contains(mouseInView) else { continue }
+
+                    // Get overlay geometry for this pane.
+                    guard let geo = self.overlayGeometry[uuid] else { continue }
+
+                    // SurfaceView is NOT flipped (Y=0 at bottom). Flip to top-left origin.
+                    let flippedY = surfaceView.bounds.height - mouseInView.y
+                    let scale = surfaceView.window?.backingScaleFactor ?? 2.0
+
+                    // Scale to physical pixels.
+                    let physX = mouseInView.x * scale
+                    let physY = flippedY * scale
+
+                    // Compute overlay-relative physical coordinates.
+                    let overlayOriginX = Double(geo.col) * Double(geo.cellW)
+                    let overlayOriginY = Double(geo.row) * Double(geo.cellH)
+                    let relPhysX = physX - overlayOriginX
+                    let relPhysY = physY - overlayOriginY
+
+                    // Hit test: is the click inside the overlay?
+                    let overlayW = Double(geo.width) * Double(geo.cellW)
+                    let overlayH = Double(geo.height) * Double(geo.cellH)
+                    guard relPhysX >= 0, relPhysY >= 0,
+                          relPhysX < overlayW, relPhysY < overlayH else { continue }
+
+                    // Convert to logical pixels for Chromium.
+                    let chromiumX = relPhysX / Double(scale)
+                    let chromiumY = relPhysY / Double(scale)
+
+                    return (uuid: uuid, relX: chromiumX, relY: chromiumY, scale: scale)
+                }
+                return nil
+            }
+
+            guard let hit = result else { return event }
+
+            // Determine event type and button.
+            let typeStr: String
+            let buttonStr: String
+            switch event.type {
+            case .leftMouseDown:
+                typeStr = "down"; buttonStr = "left"
+            case .leftMouseUp:
+                typeStr = "up"; buttonStr = "left"
+            case .rightMouseDown:
+                typeStr = "down"; buttonStr = "right"
+            case .rightMouseUp:
+                typeStr = "up"; buttonStr = "right"
+            default:
+                return event
+            }
+
+            // Map modifier flags (shift=1, ctrl=2, alt=4, cmd=8).
+            var mods: UInt64 = 0
+            if event.modifierFlags.contains(.shift)   { mods |= 1 }
+            if event.modifierFlags.contains(.control)  { mods |= 2 }
+            if event.modifierFlags.contains(.option)   { mods |= 4 }
+            if event.modifierFlags.contains(.command)  { mods |= 8 }
+
+            // Send mouse_event via XPC to the Chromium server.
+            self.xpcQueue.async {
+                guard let profile = self.paneProfiles[hit.uuid],
+                      let controlConn = self.serverControlConnections[profile] else { return }
+
+                let msg = xpc_dictionary_create(nil, nil, 0)
+                xpc_dictionary_set_string(msg, "action", "mouse_event")
+                xpc_dictionary_set_string(msg, "pane_id", hit.uuid.uuidString)
+                xpc_dictionary_set_string(msg, "type", typeStr)
+                xpc_dictionary_set_double(msg, "x", hit.relX)
+                xpc_dictionary_set_double(msg, "y", hit.relY)
+                xpc_dictionary_set_string(msg, "button", buttonStr)
+                xpc_dictionary_set_int64(msg, "click_count", Int64(event.clickCount))
+                xpc_dictionary_set_uint64(msg, "modifiers", mods)
+                xpc_connection_send_message(controlConn, msg)
+            }
+
+            // Consume the event (prevent terminal from receiving it).
+            return nil
         }
 
         // Step 1: Create anonymous listener for direct web connections.
@@ -206,6 +315,9 @@ class CompositorXPC {
         case "mode_changed":
             handleModeChanged(msg, from: peer)
 
+        case "url_changed":
+            handleUrlChanged(msg, from: peer)
+
         default:
             fputs("[Compositor] unknown action: \(action)\n", stderr)
         }
@@ -256,6 +368,8 @@ class CompositorXPC {
                     var cellWidth: UInt32 = 0
                     var cellHeight: UInt32 = 0
                     ghostty_surface_get_cell_size(cSurface, &cellWidth, &cellHeight)
+                    overlayGeometry[uuid] = (col: col, row: row, width: width,
+                        height: height, cellW: cellWidth, cellH: cellHeight)
                     let pixelWidth = UInt64(width) * UInt64(cellWidth)
                     let pixelHeight = UInt64(height) * UInt64(cellHeight)
 
@@ -274,10 +388,14 @@ class CompositorXPC {
 
             fputs("[Compositor] set_overlay with URL \(url) for pane \(paneIdStr) profile \(profile)\n", stderr)
 
-            // Get the C surface pointer from main (synchronous — safe from XPC queue).
+            // Get the C surface pointer and SurfaceView from main (synchronous — safe from XPC queue).
             var cSurfaceOpt: ghostty_surface_t? = nil
+            var surfaceViewOpt: Ghostty.SurfaceView? = nil
             DispatchQueue.main.sync { [weak self] in
-                cSurfaceOpt = self?.appDelegate?.findSurface(forUUID: uuid)?.surface
+                if let surface = self?.appDelegate?.findSurface(forUUID: uuid) {
+                    cSurfaceOpt = surface.surface
+                    surfaceViewOpt = surface
+                }
             }
 
             guard let cSurface = cSurfaceOpt else {
@@ -288,6 +406,11 @@ class CompositorXPC {
             // Cache the C surface pointer for display_surface handler.
             cachedCSurfaces[uuid] = cSurface
 
+            // Cache the SurfaceView for mouse hit-testing (Issue 514).
+            if let sv = surfaceViewOpt {
+                paneSurfaceViews[uuid] = sv
+            }
+
             // Set overlay grid coordinates (thread-safe via draw_mutex).
             ghostty_surface_set_overlay(cSurface, col, row, width, height)
 
@@ -295,6 +418,8 @@ class CompositorXPC {
             var cellWidth: UInt32 = 0
             var cellHeight: UInt32 = 0
             ghostty_surface_get_cell_size(cSurface, &cellWidth, &cellHeight)
+            overlayGeometry[uuid] = (col: col, row: row, width: width,
+                height: height, cellW: cellWidth, cellH: cellHeight)
             let pixelWidth = UInt64(width) * UInt64(cellWidth)
             let pixelHeight = UInt64(height) * UInt64(cellHeight)
             pendingPixelSizes[uuid] = (pixelWidth, pixelHeight)
@@ -480,6 +605,26 @@ class CompositorXPC {
         xpc_connection_send_message(peer, msg)
     }
 
+    // MARK: - URL synchronization (Issue 514)
+
+    private func handleUrlChanged(_ msg: xpc_object_t, from peer: xpc_connection_t) {
+        guard let paneIdPtr = xpc_dictionary_get_string(msg, "pane_id") else { return }
+        let paneIdStr = String(cString: paneIdPtr)
+        guard let uuid = UUID(uuidString: paneIdStr) else { return }
+
+        guard let urlPtr = xpc_dictionary_get_string(msg, "url") else { return }
+        let url = String(cString: urlPtr)
+
+        fputs("[Compositor] url_changed: \(url) for pane \(paneIdStr)\n", stderr)
+
+        // Forward to the web TUI peer for this pane.
+        guard let webPeer = webPeersForPane[uuid] else { return }
+        let fwd = xpc_dictionary_create(nil, nil, 0)
+        xpc_dictionary_set_string(fwd, "action", "url_changed")
+        xpc_dictionary_set_string(fwd, "url", url)
+        xpc_connection_send_message(webPeer, fwd)
+    }
+
     // MARK: - Server spawning
 
     private func spawnServer(forProfile profile: String) {
@@ -530,6 +675,8 @@ class CompositorXPC {
             pendingTabs.removeValue(forKey: uuid)
             paneBrowsing.removeValue(forKey: uuid)
             webPeersForPane.removeValue(forKey: uuid)
+            overlayGeometry.removeValue(forKey: uuid)
+            paneSurfaceViews.removeValue(forKey: uuid)
             if let cSurface = cachedCSurfaces.removeValue(forKey: uuid) {
                 ghostty_surface_clear_overlay(cSurface)
             }

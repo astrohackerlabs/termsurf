@@ -52,7 +52,7 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    let url = url.unwrap_or_else(|| {
+    let mut url = url.unwrap_or_else(|| {
         eprintln!("Usage: web <url> [--profile <name>]");
         std::process::exit(1);
     });
@@ -142,6 +142,9 @@ fn main() -> io::Result<()> {
                 match msg {
                     xpc::CompositorMessage::ModeChanged { browsing } => {
                         mode = if browsing { Mode::Browse } else { Mode::Control };
+                    }
+                    xpc::CompositorMessage::UrlChanged { url: new_url } => {
+                        url = new_url;
                     }
                 }
             }
