@@ -1051,8 +1051,8 @@ correctly as the mouse moves over the page. Drag events (`.leftMouseDragged`,
 
 **Not working:** Cursor appearance does not change. The cursor stays as an
 I-beam (from the terminal's SurfaceView) regardless of what Chromium thinks the
-cursor should be. Mouse move forwarding tells Chromium *where* the cursor is,
-but cursor *appearance* requires a reverse channel — Chromium sending cursor
+cursor should be. Mouse move forwarding tells Chromium _where_ the cursor is,
+but cursor _appearance_ requires a reverse channel — Chromium sending cursor
 type changes back through XPC so the app can call `NSCursor.set()`. This is a
 separate experiment.
 
@@ -1064,3 +1064,258 @@ and hover (Experiment 4). Cursor appearance is a follow-up — it requires a new
 `cursor_changed` message from Chromium back to the app, which is a different
 architectural pattern (server → app notification) than the input forwarding
 built so far (app → server commands).
+
+### Experiment 5: Cursor appearance sync
+
+When hovering over a link, Chromium knows the cursor should be a pointing hand.
+But this information is discarded — the Shell window is hidden, and macOS shows
+the terminal's I-beam instead. This experiment adds a reverse XPC channel:
+Chromium sends cursor type changes back to the app, which sets `NSCursor`
+accordingly.
+
+#### Cursor change path in Chromium
+
+```
+Blink renderer detects hover over <a> tag
+    ↓
+ChromeClientImpl::SetCursor(ui::Cursor{kHand})
+    ↓
+WidgetBase::SetCursor() → Mojo IPC to browser process
+    ↓
+RenderWidgetHostImpl::SetCursor(cursor)   ← hook point
+    ↓
+view_->UpdateCursor(cursor)
+    ↓
+RenderWidgetHostViewMac::DisplayCursor()  (discarded — window hidden)
+```
+
+The hook point is `RenderWidgetHostImpl::SetCursor()`. This is where the browser
+process receives cursor changes from the renderer. We add a callback here that
+notifies our `ShellVideoConsumer`, which sends the cursor type via XPC.
+
+#### Cursor type mapping
+
+`ui::mojom::CursorType` enum values map to integer IDs. We send the raw integer
+over XPC and map to `NSCursor` on the app side. Only the common cursors need
+explicit mapping — everything else defaults to arrow.
+
+| CursorType      | Value | NSCursor               |
+| --------------- | ----- | ---------------------- |
+| `kPointer`      | 0     | `.arrow`               |
+| `kHand`         | 2     | `.pointingHand`        |
+| `kIBeam`        | 3     | `.iBeam`               |
+| `kCross`        | 1     | `.crosshair`           |
+| `kMove`         | 31    | `.openHand`            |
+| `kGrab`         | 43    | `.openHand`            |
+| `kGrabbing`     | 44    | `.closedHand`          |
+| `kNotAllowed`   | 40    | `.operationNotAllowed` |
+| `kNone`         | 39    | hide cursor            |
+| Everything else | —     | `.arrow`               |
+
+#### Gating and state
+
+CompositorXPC stores the last cursor type per pane:
+
+```swift
+private var paneCursorTypes: [UUID: Int64] = [:]
+```
+
+Cursor is applied when ALL of these are true:
+
+1. Pane is in browse mode (`paneBrowsing[uuid] == true`)
+2. Mouse is over the overlay (hitTestOverlay succeeds)
+3. A cursor type has been received from Chromium
+
+The cursor is set in two places:
+
+- **On `cursor_changed` receipt** — if the mouse is currently over this pane's
+  overlay (check via stored last-hit pane UUID).
+- **On mouse move** — when entering an overlay, apply the stored cursor type.
+
+When the mouse leaves the overlay or mode switches to control, stop overriding.
+The terminal's tracking area reasserts the I-beam automatically. If this turns
+out not to be reliable (cursor sticks after leaving the overlay), the fix is to
+explicitly call `NSCursor.arrow.set()` when `hitTestOverlay` returns nil and
+`lastHitPaneUUID` was previously set.
+
+#### XPC message
+
+```
+{
+    action: "cursor_changed",
+    pane_id: "<uuid>",
+    cursor_type: <int64>    // ui::mojom::CursorType raw value
+}
+```
+
+#### Changes
+
+##### render_widget_host_impl.h (upstream file, minimal change)
+
+Add a callback member and setter inside the class (after the existing
+`SetCursor` override declaration):
+
+```cpp
+// Cursor change callback for out-of-process embedders (TermSurf).
+using CursorChangedCallback =
+    base::RepeatingCallback<void(const ui::Cursor&)>;
+void SetCursorChangedCallback(CursorChangedCallback callback);
+
+CursorChangedCallback cursor_changed_callback_;
+```
+
+##### render_widget_host_impl.cc (upstream file, minimal change)
+
+Add the setter method and invoke the callback in `SetCursor`:
+
+```cpp
+void RenderWidgetHostImpl::SetCursorChangedCallback(
+    CursorChangedCallback callback) {
+  cursor_changed_callback_ = std::move(callback);
+}
+
+void RenderWidgetHostImpl::SetCursor(const ui::Cursor& cursor) {
+  if (cursor_changed_callback_)
+    cursor_changed_callback_.Run(cursor);
+  if (view_) {
+    view_->UpdateCursor(cursor);
+  }
+}
+```
+
+##### shell_video_consumer.h
+
+Add cursor change handler and include:
+
+```cpp
+#include "ui/base/cursor/cursor.h"
+
+void OnCursorChanged(const ui::Cursor& cursor);
+```
+
+##### shell_video_consumer.cc
+
+Send cursor type via XPC:
+
+```cpp
+void ShellVideoConsumer::OnCursorChanged(const ui::Cursor& cursor) {
+#if BUILDFLAG(IS_MAC)
+  if (!xpc_connection_)
+    return;
+  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+  xpc_dictionary_set_string(msg, "action", "cursor_changed");
+  xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
+  xpc_dictionary_set_int64(msg, "cursor_type",
+                           static_cast<int64_t>(cursor.type()));
+  xpc_connection_send_message(xpc_connection_, msg);
+  xpc_release(msg);
+#endif
+}
+```
+
+##### shell_browser_main_parts.cc
+
+In `CreateTab`, after `video_consumer->ObserveContents()`, register the cursor
+callback on the RenderWidgetHost:
+
+```cpp
+#include "content/browser/renderer_host/render_widget_host_impl.h"
+
+// In CreateTab, after ObserveContents:
+if (auto* rwh = shell->web_contents()->GetRenderWidgetHostView()
+                    ->GetRenderWidgetHost()) {
+  auto* rwhi = static_cast<RenderWidgetHostImpl*>(rwh);
+  rwhi->SetCursorChangedCallback(base::BindRepeating(
+      &ShellVideoConsumer::OnCursorChanged,
+      base::Unretained(video_consumer.get())));
+}
+```
+
+Note: `RenderWidgetHostImpl` is internal to `content/` but accessible from our
+`content/chromium_profile_server/` code since it's in the same module.
+
+##### CompositorXPC.swift
+
+New state:
+
+```swift
+private var paneCursorTypes: [UUID: Int64] = [:]
+private var lastHitPaneUUID: UUID? = nil
+```
+
+Add `cursor_changed` case to `handleMessage` switch. New handler:
+
+```swift
+private func handleCursorChanged(_ msg: xpc_object_t, from peer: xpc_connection_t) {
+    guard let paneIdPtr = xpc_dictionary_get_string(msg, "pane_id") else { return }
+    let paneIdStr = String(cString: paneIdPtr)
+    guard let uuid = UUID(uuidString: paneIdStr) else { return }
+
+    let cursorType = xpc_dictionary_get_int64(msg, "cursor_type")
+    paneCursorTypes[uuid] = cursorType
+
+    // If this pane is currently under the mouse, apply immediately.
+    if lastHitPaneUUID == uuid {
+        DispatchQueue.main.async {
+            Self.applyCursor(cursorType)
+        }
+    }
+}
+
+private static func applyCursor(_ cursorType: Int64) {
+    let cursor: NSCursor
+    switch cursorType {
+    case 0:  cursor = .arrow              // kPointer
+    case 1:  cursor = .crosshair          // kCross
+    case 2:  cursor = .pointingHand       // kHand
+    case 3:  cursor = .iBeam              // kIBeam
+    case 31: cursor = .openHand           // kMove
+    case 39: NSCursor.hide(); return      // kNone
+    case 40: cursor = .operationNotAllowed // kNotAllowed
+    case 43: cursor = .openHand           // kGrab
+    case 44: cursor = .closedHand         // kGrabbing
+    default: cursor = .arrow
+    }
+    NSCursor.unhide()
+    cursor.set()
+}
+```
+
+Update the mouse move monitor to track `lastHitPaneUUID` and apply cursor:
+
+```swift
+// In the mouseMoved/drag monitor, after hitTestOverlay:
+self.xpcQueue.async {
+    self.lastHitPaneUUID = hit.uuid
+}
+// On main thread, apply stored cursor:
+if let cursorType = self.xpcQueue.sync(execute: {
+    self.paneCursorTypes[hit.uuid]
+}) {
+    DispatchQueue.main.async { Self.applyCursor(cursorType) }
+}
+```
+
+When `hitTestOverlay` returns nil (mouse left overlay), clear `lastHitPaneUUID`:
+
+```swift
+// In the mouseMoved/drag monitor, when hit is nil:
+self.xpcQueue.async { self.lastHitPaneUUID = nil }
+```
+
+Clean up `paneCursorTypes` in `handleDisconnect`.
+
+#### Verification
+
+```bash
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# In a TermSurf pane:
+cargo run -p web -- https://news.ycombinator.com
+```
+
+Hover over a link in browse mode. The cursor should change from arrow to
+pointing hand. Hover over text — cursor should become I-beam. Move off the
+overlay into the URL bar or terminal — cursor should revert to terminal I-beam.
+
+Pass: cursor changes to pointing hand over links, arrow over non-interactive
+elements, and reverts when leaving the overlay.
