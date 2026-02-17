@@ -376,3 +376,23 @@ per second per pane instead of 60). For a handful of panes this is negligible.
 If it becomes a concern at scale, the demand-driven pull model (idea #3) or
 in-process Chromium (idea #4) would eliminate the overhead. For now, 120fps
 oversampling is good enough.
+
+## Conclusion
+
+The correct long-term solution is Chromium's own approach: a single vsync source
+of truth owned by the main app (TermSurf's CVDisplayLink), with Chromium's frame
+production driven by BeginFrame signals originating from that clock. This would
+require rearchitecting the communication protocol between TermSurf and the
+Chromium Profile Server — and possibly making significant changes inside
+Chromium itself to wire the capturer into the BeginFrame pipeline. That work
+will happen eventually.
+
+But the visual difference would be marginal. The 120fps oversampling solution
+already looks identical to native Chromium. The single-clock approach would
+reduce wasted GPU blits and XPC traffic, not improve perceived smoothness. It is
+an efficiency optimization, not a quality one.
+
+Meanwhile, there are far more fundamental problems to solve: keyboard and mouse
+input forwarding, scrolling, navigation, tab management, DevTools, downloads,
+permissions, and every other feature a browser needs. Perfecting the vsync
+solution can wait until those are in place. This issue is resolved for now.
