@@ -225,6 +225,44 @@ class CompositorXPC {
             return nil
         }
 
+        // Register local event monitor for mouse move/drag (Issue 514 Experiment 4).
+        // Enables hover states, cursor changes, and text selection in browse mode.
+        NSEvent.addLocalMonitorForEvents(matching: [
+            .mouseMoved, .leftMouseDragged, .rightMouseDragged
+        ]) { [weak self] event in
+            guard let self = self else { return event }
+
+            let hit = self.xpcQueue.sync { self.hitTestOverlay(event: event) }
+            guard let hit = hit else { return event }
+
+            // Map modifier flags (shift=1, ctrl=2, alt=4, cmd=8).
+            var mods: UInt64 = 0
+            if event.modifierFlags.contains(.shift)   { mods |= 1 }
+            if event.modifierFlags.contains(.control)  { mods |= 2 }
+            if event.modifierFlags.contains(.option)   { mods |= 4 }
+            if event.modifierFlags.contains(.command)  { mods |= 8 }
+            // Add button-down flags for drag events.
+            if event.type == .leftMouseDragged  { mods |= 32 }   // kLeftButtonDown
+            if event.type == .rightMouseDragged { mods |= 512 }   // kRightButtonDown
+
+            // Send mouse_move via XPC to the Chromium server.
+            self.xpcQueue.async {
+                guard let profile = self.paneProfiles[hit.uuid],
+                      let controlConn = self.serverControlConnections[profile] else { return }
+
+                let msg = xpc_dictionary_create(nil, nil, 0)
+                xpc_dictionary_set_string(msg, "action", "mouse_move")
+                xpc_dictionary_set_string(msg, "pane_id", hit.uuid.uuidString)
+                xpc_dictionary_set_double(msg, "x", hit.x)
+                xpc_dictionary_set_double(msg, "y", hit.y)
+                xpc_dictionary_set_uint64(msg, "modifiers", mods)
+                xpc_connection_send_message(controlConn, msg)
+            }
+
+            // Consume the event (prevent terminal from receiving it).
+            return nil
+        }
+
         // Step 1: Create anonymous listener for direct web connections.
         let listener = xpc_connection_create(nil, xpcQueue)
         anonymousListener = listener

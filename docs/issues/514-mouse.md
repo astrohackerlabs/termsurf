@@ -1041,4 +1041,26 @@ Move the mouse over links in browse mode. Links should highlight on hover and
 the cursor should change to a pointer. Drag to select text (left-click hold +
 move).
 
-Pass: links highlight on hover, cursor changes over clickable elements.
+Pass: links highlight on hover.
+
+**Result:** Pass
+
+Links highlight on hover on news.ycombinator.com. CSS `:hover` states fire
+correctly as the mouse moves over the page. Drag events (`.leftMouseDragged`,
+`.rightMouseDragged`) are also forwarded with button-down modifiers.
+
+**Not working:** Cursor appearance does not change. The cursor stays as an
+I-beam (from the terminal's SurfaceView) regardless of what Chromium thinks the
+cursor should be. Mouse move forwarding tells Chromium *where* the cursor is,
+but cursor *appearance* requires a reverse channel — Chromium sending cursor
+type changes back through XPC so the app can call `NSCursor.set()`. This is a
+separate experiment.
+
+#### Conclusion
+
+Mouse move forwarding enables hover states, completing the mouse input pipeline:
+clicks (Experiment 1), post-nav sizing (Experiment 2), scrolling (Experiment 3),
+and hover (Experiment 4). Cursor appearance is a follow-up — it requires a new
+`cursor_changed` message from Chromium back to the app, which is a different
+architectural pattern (server → app notification) than the input forwarding
+built so far (app → server commands).
