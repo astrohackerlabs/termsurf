@@ -533,3 +533,20 @@ Click on a link in the box-demo page. The page should navigate, and the URL bar
 in the `web` TUI should update to show the new URL.
 
 Pass: clicking a link navigates the page and the URL bar updates.
+
+**Result:** Pass
+
+Tested with news.ycombinator.com. Clicked a link in browse mode — the page
+navigated to the new URL and the `web` TUI URL bar updated to reflect the
+change. The full pipeline works end-to-end: NSEvent monitor → hit-test →
+coordinate transform → XPC mouse_event → Chromium ForwardMouseEvent → navigation
+→ DidFinishNavigation → url_changed XPC → CompositorXPC forward → web TUI URL
+bar update.
+
+#### Conclusion
+
+Mouse clicks work. The hit-testing, coordinate transformation, and XPC message
+pipeline are all functional. URL synchronization via `DidFinishNavigation` keeps
+the TUI URL bar in sync with Chromium's actual navigation state. This is the
+first interactive input flowing from TermSurf into the browser — prior to this,
+the browser pane was view-only.
