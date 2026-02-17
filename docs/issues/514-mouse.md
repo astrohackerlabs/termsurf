@@ -849,3 +849,20 @@ Scroll down with trackpad or mouse wheel in browse mode. The page should scroll.
 Trackpad momentum (flick and release) should also work.
 
 Pass: page scrolls smoothly with both trackpad and mouse wheel.
+
+**Result:** Pass
+
+Scrolling works on news.ycombinator.com in browse mode. Trackpad scrolling is
+smooth with proper momentum (flick and release coasts naturally). The
+`hitTestOverlay` refactor simplified the mouse click monitor and gave the scroll
+monitor identical gating for free — both check browse mode and overlay bounds
+before forwarding.
+
+#### Conclusion
+
+Scroll wheel forwarding completes the basic input trilogy: clicks (Experiment
+1), post-navigation sizing (Experiment 2), and scrolling (Experiment 3). The
+phase mapping required zero translation — NSEvent and Chromium use identical
+bitmask values. The `hitTestOverlay` helper extracted from the click monitor
+made adding the scroll monitor trivial (same hit-test, different XPC payload).
+Pages are now navigable and scrollable in browse mode.
