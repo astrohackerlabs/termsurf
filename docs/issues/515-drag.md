@@ -249,12 +249,155 @@ However, when pressing Esc to exit browse mode, the blinking cursor persists.
 The page stays focused because we only set focus once at tab creation and never
 send unfocus. The focus lifecycle needs to track mode changes:
 
-- **Enter browse mode** (or focus a pane already in browse mode) → tell
-  Chromium the view is focused and active.
-- **Exit browse mode** (or focus a different pane) → tell Chromium the view
-  lost focus and is inactive.
+- **Enter browse mode** (or focus a pane already in browse mode) → tell Chromium
+  the view is focused and active.
+- **Exit browse mode** (or focus a different pane) → tell Chromium the view lost
+  focus and is inactive.
 
 This requires a new XPC message (`focus_changed`) from CompositorXPC to the
 Chromium server, triggered by mode transitions and pane focus changes. The
 `CreateTab` focus call should be removed — focus should only be set when the
 user is actually interacting with the page, not unconditionally at creation.
+
+### Experiment 2: Focus/unfocus lifecycle
+
+Add a `focus_changed` XPC message so CompositorXPC can tell the Chromium server
+when a pane gains or loses focus. Four trigger points in CompositorXPC, one new
+handler in the Chromium server.
+
+#### Trigger points
+
+Focus should be sent (`focused: true`) when:
+
+1. **`mode_changed` from web with `browsing=true`** — The TUI entered browse
+   mode. The user is now interacting with the page.
+2. **`mode_changed` from web with `browsing=false`** — The TUI exited browse
+   mode (e.g., user pressed `i` to enter control mode). Send `focused: false`.
+3. **Ctrl+Esc exit** — The Ctrl+Esc handler in CompositorXPC sets
+   `paneBrowsing[uuid] = false`. Send `focused: false` here too.
+
+Pane focus changes (switching between split panes) are not handled yet — this
+would require observing Ghostty's first-responder changes, which is a separate
+concern. For now, mode transitions cover the primary use case.
+
+#### XPC message
+
+```
+{
+    action: "focus_changed",
+    pane_id: "<uuid>",
+    focused: <bool>
+}
+```
+
+Sent from CompositorXPC to the Chromium server on the control connection.
+
+#### Changes
+
+##### CompositorXPC.swift
+
+Add a helper method to send the focus message:
+
+```swift
+private func sendFocusChanged(paneUUID: UUID, focused: Bool) {
+    guard let profile = paneProfiles[paneUUID],
+          let controlConn = serverControlConnections[profile] else { return }
+    let msg = xpc_dictionary_create(nil, nil, 0)
+    xpc_dictionary_set_string(msg, "action", "focus_changed")
+    xpc_dictionary_set_string(msg, "pane_id", paneUUID.uuidString)
+    xpc_dictionary_set_bool(msg, "focused", focused)
+    xpc_connection_send_message(controlConn, msg)
+}
+```
+
+Call it from three places:
+
+1. **`handleModeChanged`** — after updating `paneBrowsing[uuid]`:
+   ```swift
+   sendFocusChanged(paneUUID: uuid, focused: browsing)
+   ```
+
+2. **Ctrl+Esc handler** — inside the `xpcQueue.sync` block, after setting
+   `paneBrowsing[uuid] = false`:
+   ```swift
+   self.sendFocusChanged(paneUUID: uuid, focused: false)
+   ```
+
+3. **`handleSetOverlay`** — after storing initial `paneBrowsing[uuid]`, if
+   browsing is true at connection time:
+   ```swift
+   if browsing {
+       sendFocusChanged(paneUUID: uuid, focused: true)
+   }
+   ```
+   This handles the case where the TUI connects already in browse mode.
+
+##### shell_browser_main_parts.cc
+
+Remove the `Focus()` + `SetActive(true)` calls from `CreateTab` (added in
+Experiment 1). Focus is now driven by the XPC message, not by tab creation.
+
+Add `"focus_changed"` case to the XPC handler in `StartDynamicMode`:
+
+```cpp
+} else if (action && std::string_view(action) == "focus_changed") {
+    const char* pane = xpc_dictionary_get_string(event, "pane_id");
+    bool focused = xpc_dictionary_get_bool(event, "focused");
+    std::string s_pane(pane ? pane : "");
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(&ShellBrowserMainParts::HandleFocusChanged,
+                       base::Unretained(self), s_pane, focused));
+}
+```
+
+New method `HandleFocusChanged`:
+
+```cpp
+void ShellBrowserMainParts::HandleFocusChanged(
+    const std::string& pane_id, bool focused) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+    TabState* tab = nullptr;
+    for (auto& t : tabs_) {
+        if (t->pane_id == pane_id) { tab = t.get(); break; }
+    }
+    if (!tab) return;
+
+    auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+    if (!view) return;
+
+    if (focused) {
+        view->Focus();
+        view->SetActive(true);
+    } else {
+        view->SetActive(false);
+    }
+
+    LOG(INFO) << "[ProfileServer] Focus " << (focused ? "gained" : "lost")
+              << " for pane " << pane_id;
+}
+```
+
+##### shell_browser_main_parts.h
+
+Add inside the `#if BUILDFLAG(IS_MAC)` block:
+
+```cpp
+void HandleFocusChanged(const std::string& pane_id, bool focused);
+```
+
+#### Verification
+
+```bash
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# In a TermSurf pane:
+cargo run -p web -- https://google.com
+```
+
+1. Enter browse mode — Google search input shows blinking cursor and focus ring.
+2. Press Esc (exit browse mode) — blinking cursor and focus ring disappear.
+3. Enter browse mode again — blinking cursor returns.
+4. Press Ctrl+Esc — blinking cursor disappears.
+
+Pass: focus ring and caret appear on browse entry, disappear on browse exit.
