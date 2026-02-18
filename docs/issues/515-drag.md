@@ -444,3 +444,290 @@ CompositorXPC doesn't observe.
    gains focus. If there's a C API callback for surface focus changes, we could
    observe it from Swift. This would be the most architecturally clean approach
    but requires understanding Ghostty's focus propagation.
+
+### Experiment 3: Pane-switch focus via first-responder tracking
+
+Track which pane currently has Chromium focus. On every mouse click and mouse
+move, check `NSApp.keyWindow?.firstResponder` — if the focused SurfaceView
+changed, send focus/unfocus accordingly. This covers mouse-driven pane switches
+immediately and keyboard-driven switches on the next mouse event.
+
+#### Design
+
+New state property:
+
+```swift
+/// The pane that currently has Chromium focus (at most one at a time).
+private var chromiumFocusedPane: UUID? = nil
+```
+
+New helper method (runs on xpcQueue, called from main thread context):
+
+```swift
+/// Check the current first responder and update Chromium focus if needed.
+/// Must be called with first-responder UUID already resolved on main thread.
+private func updatePaneFocus(currentResponderUUID: UUID?) {
+    // Nothing changed.
+    if chromiumFocusedPane == currentResponderUUID { return }
+
+    // Unfocus the old pane (if it was browsing).
+    if let old = chromiumFocusedPane {
+        sendFocusChanged(paneUUID: old, focused: false)
+    }
+
+    // Focus the new pane (only if it's browsing).
+    if let new_ = currentResponderUUID, paneBrowsing[new_] == true {
+        sendFocusChanged(paneUUID: new_, focused: true)
+        chromiumFocusedPane = new_
+    } else {
+        chromiumFocusedPane = nil
+    }
+}
+```
+
+The first-responder check happens on the main thread (where `NSApp.keyWindow` is
+valid). The UUID is passed into `updatePaneFocus` on the xpcQueue:
+
+```swift
+/// Resolve the focused pane UUID from the current first responder.
+/// Must be called on the main thread.
+private func focusedPaneUUID() -> UUID? {
+    guard let window = NSApp.keyWindow,
+          let surfaceView = window.firstResponder as? Ghostty.SurfaceView
+    else { return nil }
+    return surfaceView.id
+}
+```
+
+#### Call sites
+
+**1. Click monitor** — at the very top, before `hitTestOverlay`. Every click
+(including clicks outside the overlay that switch pane focus) triggers a check:
+
+```swift
+// Check pane focus on every click (covers pane switching).
+let responderUUID = self.focusedPaneUUID()
+self.xpcQueue.async { self.updatePaneFocus(currentResponderUUID: responderUUID) }
+```
+
+This goes right after `guard event.window != nil else { return event }`, before
+the `hitTestOverlay` call. It doesn't consume the event or change the click
+routing — it's a side effect that runs asynchronously.
+
+**2. Move monitor** — at the very top, before `hitTestOverlay`. Every mouse move
+updates the focus check:
+
+```swift
+let responderUUID = self.focusedPaneUUID()
+self.xpcQueue.async { self.updatePaneFocus(currentResponderUUID: responderUUID) }
+```
+
+Same placement: after `guard let self = self else { return event }`, before the
+`hitTestOverlay` call.
+
+#### Interaction with existing triggers
+
+The mode-change triggers from Experiment 2 still work. When the TUI toggles
+browse mode, `handleModeChanged` sends focus/unfocus AND now also sets
+`chromiumFocusedPane`. The `updatePaneFocus` helper needs to stay in sync:
+
+- `handleModeChanged` with `browsing=true`: also set
+  `chromiumFocusedPane = uuid`.
+- `handleModeChanged` with `browsing=false`: also set
+  `chromiumFocusedPane = nil`.
+- Ctrl+Esc handler: also set `chromiumFocusedPane = nil`.
+- `handleSetOverlay` with `browsing=true`: also set
+  `chromiumFocusedPane = uuid`.
+
+This ensures `updatePaneFocus` sees the correct state and doesn't send duplicate
+or conflicting messages.
+
+#### Limitations
+
+Keyboard-only pane switches (e.g., Cmd+] to move to next split) won't trigger
+until the next mouse event. This is acceptable for now — the mouse is the
+primary input device in browse mode.
+
+#### Changes
+
+##### CompositorXPC.swift
+
+- Add `chromiumFocusedPane` state property.
+- Add `focusedPaneUUID()` (main thread) and `updatePaneFocus()` (xpcQueue).
+- Add focus check at top of click monitor and move monitor.
+- Update `handleModeChanged`, Ctrl+Esc handler, and `handleSetOverlay` to
+  maintain `chromiumFocusedPane`.
+
+No Chromium changes — the `focus_changed` XPC handler from Experiment 2 is
+reused as-is.
+
+#### Verification
+
+```bash
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# Open two panes side by side, both running:
+cargo run -p web -- https://google.com
+```
+
+1. Enter browse mode in pane A — blinking cursor appears.
+2. Click on pane B (also in browse mode) — pane A's cursor stops blinking, pane
+   B's cursor starts blinking.
+3. Click back on pane A — pane B stops, pane A starts.
+4. Click on a terminal pane (not browsing) — browsing pane's cursor stops.
+5. Move mouse back to the browsing pane — cursor starts again on next move.
+
+Pass: at most one pane has Chromium focus at a time, and it tracks pane
+switches.
+
+### Experiment 3: Pane focus via NSNotification
+
+Use Ghostty's existing `focusDidChange` hook to broadcast an NSNotification when
+a SurfaceView gains or loses focus. CompositorXPC observes it and sends
+`focus_changed` to Chromium. This covers all pane-switch mechanisms — mouse
+clicks, keyboard shortcuts, splits, focus-follows-mouse — because they all flow
+through `becomeFirstResponder`/`resignFirstResponder` → `focusDidChange`.
+
+#### How Ghostty tracks focus
+
+```
+User clicks pane B / presses Ctrl+L / etc.
+    ↓
+macOS calls pane A: resignFirstResponder() → focusDidChange(false)
+macOS calls pane B: becomeFirstResponder() → focusDidChange(true)
+    ↓
+ghostty_surface_set_focus(surface, focused)
+    ↓
+Zig Surface.focusCallback() updates renderer + app state
+```
+
+`focusDidChange` (SurfaceView_AppKit.swift:430) is the single point where all
+focus changes are processed. It's called after the `focused` guard check, so it
+only fires on actual state changes (no duplicates).
+
+#### Changes
+
+##### SurfaceView_AppKit.swift (Ghostty modification)
+
+Post an NSNotification from `focusDidChange`, right after
+`ghostty_surface_set_focus`:
+
+```swift
+func focusDidChange(_ focused: Bool) {
+    guard let surface = self.surface else { return }
+    guard self.focused != focused else { return }
+    self.focused = focused
+    ghostty_surface_set_focus(surface, focused)
+
+    // Notify observers (e.g. CompositorXPC) of pane focus changes.
+    NotificationCenter.default.post(
+        name: .surfaceFocusDidChange,
+        object: self,
+        userInfo: ["focused": focused])
+
+    // ... rest of existing code unchanged ...
+}
+```
+
+Add the notification name as an extension (at the top of the file or in a shared
+location):
+
+```swift
+extension Notification.Name {
+    static let surfaceFocusDidChange = Notification.Name("SurfaceFocusDidChange")
+}
+```
+
+Two lines of functional code added to Ghostty. The notification carries the
+SurfaceView as `object` (so the observer can read its `id`) and the focus state
+in `userInfo`.
+
+##### CompositorXPC.swift
+
+New state property:
+
+```swift
+/// The pane that currently has Chromium focus (at most one at a time).
+private var chromiumFocusedPane: UUID? = nil
+```
+
+Register the observer in `start()`, alongside the existing event monitors:
+
+```swift
+NotificationCenter.default.addObserver(
+    forName: .surfaceFocusDidChange,
+    object: nil,
+    queue: nil
+) { [weak self] notification in
+    guard let self = self else { return }
+    guard let surfaceView = notification.object as? Ghostty.SurfaceView,
+          let focused = notification.userInfo?["focused"] as? Bool
+    else { return }
+
+    let uuid = surfaceView.id
+    self.xpcQueue.async {
+        guard self.paneBrowsing[uuid] != nil else { return }
+        self.updatePaneFocus(paneUUID: uuid, focused: focused)
+    }
+}
+```
+
+The `paneBrowsing[uuid] != nil` guard ensures we only react to panes that have a
+web overlay. Focus changes on terminal-only panes are ignored.
+
+New helper on xpcQueue:
+
+```swift
+private func updatePaneFocus(paneUUID: UUID, focused: Bool) {
+    if focused {
+        // Unfocus the old pane first (at most one at a time).
+        if let old = chromiumFocusedPane, old != paneUUID {
+            sendFocusChanged(paneUUID: old, focused: false)
+        }
+        // Only focus if the pane is actually in browse mode.
+        if paneBrowsing[paneUUID] == true {
+            sendFocusChanged(paneUUID: paneUUID, focused: true)
+            chromiumFocusedPane = paneUUID
+        } else {
+            chromiumFocusedPane = nil
+        }
+    } else {
+        // Pane lost focus — unfocus if it was the active one.
+        if chromiumFocusedPane == paneUUID {
+            sendFocusChanged(paneUUID: paneUUID, focused: false)
+            chromiumFocusedPane = nil
+        }
+    }
+}
+```
+
+Update the existing mode-change triggers to also maintain `chromiumFocusedPane`:
+
+- **`handleModeChanged`**: after `sendFocusChanged`, set
+  `chromiumFocusedPane = browsing ? uuid : nil`.
+- **Ctrl+Esc handler**: after `sendFocusChanged`, set
+  `chromiumFocusedPane = nil`.
+- **`handleSetOverlay`**: after `sendFocusChanged` (when `browsing` is true),
+  set `chromiumFocusedPane = uuid`.
+
+No Chromium changes — the `focus_changed` XPC handler from Experiment 2 is
+reused as-is.
+
+#### Verification
+
+```bash
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# Open two panes side by side (Cmd+D), both running:
+cargo run -p web -- https://google.com
+```
+
+1. Enter browse mode in pane A — blinking cursor appears.
+2. Press Ctrl+L (or your keybinding) to switch to pane B — pane A's cursor stops
+   blinking.
+3. Enter browse mode in pane B — pane B's cursor starts blinking.
+4. Press Ctrl+H to switch back to pane A — pane B stops, pane A starts (already
+   in browse mode).
+5. Press Esc in pane A — cursor stops (mode exit, same as Experiment 2).
+6. Click on a terminal-only pane — browsing pane's cursor stops.
+
+Pass: focus tracks pane switches via keyboard shortcuts, mouse clicks, and all
+other mechanisms. At most one pane has Chromium focus at a time.
