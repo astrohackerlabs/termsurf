@@ -613,6 +613,10 @@ class CompositorXPC {
         for (uuid, pending) in pendingTabs {
             if pending.profile == profile {
                 sendCreateTab(peer, paneId: uuid.uuidString, url: pending.url, uuid: uuid)
+                // Send deferred focus if this pane was supposed to be focused.
+                if chromiumFocusedPane == uuid {
+                    sendFocusChanged(paneUUID: uuid, focused: true)
+                }
             }
         }
         pendingTabs = pendingTabs.filter { $0.value.profile != profile }

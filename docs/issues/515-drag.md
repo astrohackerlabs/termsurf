@@ -752,3 +752,86 @@ Combined with Experiments 1–2, the full focus lifecycle is now:
 
 All three feed into `updatePaneFocus`, which enforces single-pane-at-a-time
 Chromium focus via the `chromiumFocusedPane` state variable.
+
+### Experiment 4: Focus on initial tab creation
+
+#### Problem
+
+When first opening a web page (`cargo run -p web -- https://google.com`), the
+webview doesn't receive focus. The user must press Esc then re-enter browse mode
+for the Google search box to show a blinking cursor.
+
+Root cause: in `handleSetOverlay`, the `sendFocusChanged` call fires before the
+Chromium server has registered. The guard in `sendFocusChanged` checks
+`paneProfiles[uuid]` (not yet set) and `serverControlConnections[profile]` (not
+yet connected), so the message is silently dropped. `chromiumFocusedPane` is set
+to the UUID, but the focus never reaches Chromium.
+
+#### Changes
+
+##### CompositorXPC.swift
+
+In `handleServerRegister`, after sending `create_tab` for each pending tab, also
+send focus if that pane is the `chromiumFocusedPane`:
+
+```swift
+// Flush all pending tabs for this profile.
+for (uuid, pending) in pendingTabs {
+    if pending.profile == profile {
+        sendCreateTab(peer, paneId: uuid.uuidString, url: pending.url, uuid: uuid)
+        // Send deferred focus if this pane was supposed to be focused.
+        if chromiumFocusedPane == uuid {
+            sendFocusChanged(paneUUID: uuid, focused: true)
+        }
+    }
+}
+```
+
+This is the first moment the server can receive the message — right after
+`create_tab`. No other changes needed.
+
+#### Verification
+
+```bash
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# In a pane:
+cargo run -p web -- https://google.com
+```
+
+Pass: Google search box shows blinking cursor immediately after the page loads,
+without needing to toggle browse mode.
+
+#### Result: Partial pass
+
+Single pane works perfectly — opens focused, Esc loses focus, Enter regains it.
+But opening a second pane on the same profile reveals deeper issues:
+
+1. **Second pane blinks once then stops.** The `sendFocusChanged` call in
+   `handleSetOverlay` fires before `paneProfiles[uuid]` is set (line ~449), so
+   it always silently fails — for every pane, not just the first. The Experiment
+   4 fix only covered the `handleServerRegister` path (first tab on a new
+   server). When a second tab uses an already-registered server, it takes the
+   direct `sendCreateTab` path in `handleSetOverlay`, which has no deferred
+   focus. The one blink comes from the NSNotification (pane B gains AppKit
+   focus), but the focus state is confused because...
+
+2. **Pane A is never unfocused.** `chromiumFocusedPane` was set to B (in the
+   broken early assignment) before A lost AppKit focus, so `updatePaneFocus`'s
+   guard (`chromiumFocusedPane == A`) fails and the unfocus message is skipped.
+   Both tabs end up focused simultaneously in Chromium.
+
+3. **Double-speed blinking after closing pane A.** After the first pane's web
+   process disconnects, the second pane blinks at 2x speed — likely two
+   focus/blink sources applying to the remaining tab because pane A was never
+   properly cleaned up in Chromium.
+
+Root cause: the `sendFocusChanged` + `chromiumFocusedPane` assignment in
+`handleSetOverlay` is fundamentally broken — it runs before `paneProfiles` is
+set so the message never reaches Chromium, but `chromiumFocusedPane` is updated,
+corrupting the focus tracking state.
+
+Fix for next experiment: remove the broken early `sendFocusChanged` from
+`handleSetOverlay` entirely. Instead, call `updatePaneFocus` after every
+`sendCreateTab` (both the direct path in `handleSetOverlay` and the deferred
+path in `handleServerRegister`). This sends focus only after the tab exists,
+with proper single-pane enforcement.
