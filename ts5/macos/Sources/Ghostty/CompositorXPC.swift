@@ -129,6 +129,7 @@ class CompositorXPC {
                 guard self.paneBrowsing[uuid] == true else { return false }
                 self.paneBrowsing[uuid] = false
                 self.sendModeChanged(paneUUID: uuid, browsing: false)
+                self.sendFocusChanged(paneUUID: uuid, focused: false)
                 fputs("[Compositor] Ctrl+Esc: exit browse for pane \(uuid)\n", stderr)
                 return true
             }
@@ -412,6 +413,11 @@ class CompositorXPC {
         paneBrowsing[uuid] = browsing
         webPeersForPane[uuid] = peer
 
+        // If already in browse mode at connection time, tell Chromium to focus.
+        if browsing {
+            sendFocusChanged(paneUUID: uuid, focused: true)
+        }
+
         // Check for URL field — if present, spawn or reuse Chromium server.
         let urlPtr = xpc_dictionary_get_string(msg, "url")
         if let urlPtr = urlPtr {
@@ -656,6 +662,7 @@ class CompositorXPC {
         guard let uuid = UUID(uuidString: paneIdStr) else { return }
 
         paneBrowsing[uuid] = browsing
+        sendFocusChanged(paneUUID: uuid, focused: browsing)
         fputs("[Compositor] mode_changed from web: browsing=\(browsing) for pane \(paneIdStr)\n", stderr)
     }
 
@@ -665,6 +672,16 @@ class CompositorXPC {
         xpc_dictionary_set_string(msg, "action", "mode_changed")
         xpc_dictionary_set_bool(msg, "browsing", browsing)
         xpc_connection_send_message(peer, msg)
+    }
+
+    private func sendFocusChanged(paneUUID: UUID, focused: Bool) {
+        guard let profile = paneProfiles[paneUUID],
+              let controlConn = serverControlConnections[profile] else { return }
+        let msg = xpc_dictionary_create(nil, nil, 0)
+        xpc_dictionary_set_string(msg, "action", "focus_changed")
+        xpc_dictionary_set_string(msg, "pane_id", paneUUID.uuidString)
+        xpc_dictionary_set_bool(msg, "focused", focused)
+        xpc_connection_send_message(controlConn, msg)
     }
 
     // MARK: - URL synchronization (Issue 514)

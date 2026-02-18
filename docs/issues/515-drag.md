@@ -401,3 +401,46 @@ cargo run -p web -- https://google.com
 4. Press Ctrl+Esc — blinking cursor disappears.
 
 Pass: focus ring and caret appear on browse entry, disappear on browse exit.
+
+#### Result: Partial pass
+
+Mode-driven focus works correctly within a single pane:
+
+- Enter browse mode → blinking cursor appears (focus gained).
+- Press Esc → blinking cursor stops (focus lost).
+- Press Ctrl+Esc → blinking cursor stops (focus lost).
+- Re-enter browse mode → blinking cursor returns.
+
+However, pane switching does not trigger focus changes:
+
+- **Leave a pane in browse mode** (click another pane or use keybinding to
+  switch focus) → the webview keeps its blinking cursor. Chromium still thinks
+  it's focused.
+- **Return to a pane in browse mode** → the webview doesn't regain focus because
+  no `focus_changed` message is sent. The TUI didn't toggle browse mode — it was
+  already browsing — so `handleModeChanged` never fires.
+
+The three current trigger points (Ctrl+Esc, `handleModeChanged`,
+`handleSetOverlay`) all key off mode transitions. Pane focus changes happen
+outside the mode system — they're a Ghostty first-responder change that
+CompositorXPC doesn't observe.
+
+#### Ideas for fixing pane focus
+
+1. **Observe `NSWindow.firstResponder` changes.** When the first responder
+   changes to a different SurfaceView, check if the old pane was browsing (send
+   unfocus) and if the new pane is browsing (send focus). This could use KVO on
+   the window's `firstResponder` property, or a periodic check on the mouse move
+   monitor (which already runs on every mouse event).
+
+2. **Use the mouse move monitor as a proxy.** The move monitor already knows
+   which pane the mouse is over (`hitTestOverlay` returns the UUID). If the pane
+   under the mouse changes and the new pane is browsing, send focus. If the old
+   pane was browsing and no longer under the mouse, send unfocus. This doesn't
+   cover keyboard-driven pane switches but handles the common case.
+
+3. **Hook into Ghostty's focus notification.** Ghostty calls
+   `ghostty_surface_mouse_button` and similar C API functions when a surface
+   gains focus. If there's a C API callback for surface focus changes, we could
+   observe it from Swift. This would be the most architecturally clean approach
+   but requires understanding Ghostty's focus propagation.
