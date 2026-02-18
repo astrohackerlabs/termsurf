@@ -1344,3 +1344,70 @@ next experiment.
 
 Commits: Chromium `d583c5f` (callback + XPC send), main `0fa925d` (CompositorXPC
 cursor handling).
+
+### Experiment 6: Cursor reset on overlay exit
+
+Experiment 5 syncs the cursor while hovering over the overlay, but the cursor
+sticks when the mouse leaves. The terminal's tracking area does not reassert the
+I-beam because `NSCursor.set()` (called by Experiment 5) pushes onto the cursor
+stack and overrides the tracking area's cursor.
+
+The fix: when `hitTestOverlay` returns nil and the mouse was previously over an
+overlay (`lastHitPaneUUID` was set), explicitly call `NSCursor.arrow.set()` to
+clear the override. This covers two exit paths:
+
+1. **Mouse moves off the overlay** — `hitTestOverlay` returns nil because the
+   coordinates are outside the overlay bounds.
+2. **Mode switches to control** — `hitTestOverlay` returns nil because
+   `paneBrowsing[uuid]` is false. The Ctrl+Esc handler already clears browse
+   mode; the mouse move monitor picks up the change on the next event.
+
+#### Changes
+
+##### CompositorXPC.swift
+
+In the mouse move monitor, where `hitTestOverlay` returns nil (line ~243),
+replace:
+
+```swift
+guard let hit = hit else {
+    // Mouse left the overlay — clear tracking state.
+    self.xpcQueue.async { self.lastHitPaneUUID = nil }
+    return event
+}
+```
+
+With:
+
+```swift
+guard let hit = hit else {
+    // Mouse left the overlay — reset cursor if we were over one.
+    let wasOverOverlay = self.xpcQueue.sync { () -> Bool in
+        let was = self.lastHitPaneUUID != nil
+        self.lastHitPaneUUID = nil
+        return was
+    }
+    if wasOverOverlay {
+        DispatchQueue.main.async { NSCursor.arrow.set() }
+    }
+    return event
+}
+```
+
+No Chromium changes needed. Single file, single code path.
+
+#### Verification
+
+```bash
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# In a TermSurf pane:
+cargo run -p web -- https://news.ycombinator.com
+```
+
+1. Enter browse mode, hover over a link — cursor becomes pointing hand.
+2. Move mouse off the overlay into the URL bar — cursor should revert to arrow.
+3. Move mouse into terminal area below the viewport — cursor should revert.
+4. While hovering over a link, press Ctrl+Esc to exit browse mode — cursor
+   should revert.
+
+Pass: cursor reverts to arrow on all four exit paths.
