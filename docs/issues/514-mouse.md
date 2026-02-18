@@ -1792,3 +1792,33 @@ cargo run -p web -- http://localhost:9408/test-mouse.html
 4. Click and drag over the event log text — should select across elements.
 
 Pass: text selection works via click-and-drag.
+
+#### Result: Fail
+
+The button field fix is correct but insufficient. Logs show mouseDown and
+mouseUp at different coordinates (proving drags happen) with **no mouse move
+events between them**:
+
+```
+Mouse down at (71.418,75.8984)
+Mouse up at (233.402,81.0938)
+```
+
+The user dragged 160+ pixels, but Chromium only received down and up — no
+intermediate `kMouseMove` events with `kLeftButtonDown`. Without those, Chromium
+never extends the selection.
+
+**Root cause:** The click monitor consumes mouseDown by returning `nil`. This
+prevents the event from reaching the SurfaceView's responder chain. macOS
+doesn't generate `.leftMouseDragged` events because no view started a drag
+tracking session — the mouseDown was swallowed before it could reach one.
+
+The move monitor listens for `.leftMouseDragged`, but those events are never
+posted because the originating mouseDown was consumed.
+
+**Fix for next experiment:** Don't consume mouseDown — return the event instead
+of `nil` for mouseDown events so it reaches the SurfaceView and macOS starts
+generating `.leftMouseDragged` events. Since the pane has mouse capture enabled,
+the terminal receives the click as a captured mouse event rather than starting
+terminal text selection. The button field fix from this experiment is still
+correct and should be kept.
