@@ -1411,3 +1411,20 @@ cargo run -p web -- https://news.ycombinator.com
    should revert.
 
 Pass: cursor reverts to arrow on all four exit paths.
+
+#### Result: Fail
+
+The cursor still sticks when leaving the overlay. The `wasOverOverlay` guard
+means `NSCursor.arrow.set()` is called only **once** — on the first mouse move
+after leaving the overlay. After that, `lastHitPaneUUID` is nil, so
+`wasOverOverlay` is false and subsequent moves don't retry the reset.
+
+Experiment 5's cursor setting works because `applyCursor` is called on **every**
+mouse move over the overlay (60+ times per second). If one call doesn't stick
+due to macOS cursor management timing, the next one does. The one-time reset
+doesn't get that retry — if it doesn't take effect, nothing corrects it.
+
+**Fix for next experiment:** remove the `wasOverOverlay` optimization entirely.
+Always call `NSCursor.arrow.set()` when outside the overlay, mirroring how
+`applyCursor` is called continuously when inside. This is slightly wasteful but
+matches the pattern that works.
