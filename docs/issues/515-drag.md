@@ -1094,3 +1094,71 @@ Combined with the focus lifecycle (Experiments 1–5), all prerequisites for tex
 selection are now met: focus is active (Blink paints highlights), drag events
 are delivered (macOS generates them), and button state is correct (Blink knows
 the left button is held).
+
+## Conclusion
+
+Text selection via click-and-drag is working. Both problems identified at the
+start of this issue are solved.
+
+### What we built
+
+**Focus lifecycle** (Experiments 1–5): Chromium's `FocusController::IsActive()`
+must be true for Blink to paint selection highlights, carets, and focus rings.
+We implemented a complete focus lifecycle that tracks:
+
+- **Tab creation**: `updatePaneFocus` after `sendCreateTab` (both new-server and
+  existing-server paths)
+- **Mode transitions**: `handleModeChanged` sends focus on enter, unfocus on
+  exit; Ctrl+Esc handler does the same
+- **Pane switches**: NSNotification from Ghostty's `focusDidChange` (covers
+  keyboard shortcuts, mouse clicks, splits, and all other mechanisms)
+
+At most one pane has Chromium focus at a time, enforced by
+`updatePaneFocus`/`chromiumFocusedPane`.
+
+**Drag event delivery** (Experiment 6): Left mouse events are no longer consumed
+by the monitor. Instead, they're returned to the responder chain with a
+`suppressMouseForOverlay` flag on SurfaceView that prevents the terminal from
+processing them. This preserves macOS drag tracking — `.leftMouseDragged` events
+are generated naturally and forwarded to Chromium by the existing move/drag
+monitor.
+
+**Modifier fix** (Experiment 6): The button-down flags for drag events used
+wrong values (`32`/`512` instead of `64`/`256`). This mapped to `kIsAutoRepeat`
+and `kCapsLockOn` instead of `kLeftButtonDown` and `kRightButtonDown`, so
+Chromium treated every drag as a plain move.
+
+### Experiments
+
+| # | Description                              | Result                              |
+| - | ---------------------------------------- | ----------------------------------- |
+| 1 | Focus + SetActive on tab creation        | Partial (never unfocuses)           |
+| 2 | Focus lifecycle tied to mode changes     | Partial (pane switches not tracked) |
+| 3 | Pane focus via NSNotification            | Pass                                |
+| 4 | Deferred focus after create_tab          | Partial (only first tab)            |
+| 5 | Fix focus after create_tab (both paths)  | Pass                                |
+| 6 | Drag via flag suppression + modifier fix | Pass                                |
+
+### Files changed
+
+**Ghostty (2 files):**
+
+- `SurfaceView_AppKit.swift` — `Notification.Name.surfaceFocusDidChange`,
+  notification post in `focusDidChange`, `suppressMouseForOverlay` flag with
+  guards in `mouseDown`/`mouseUp`/`mouseDragged`
+- `CompositorXPC.swift` — `chromiumFocusedPane` state, NSNotification observer,
+  `updatePaneFocus` helper, deferred focus after `sendCreateTab`, flag
+  suppression for left mouse events, corrected Blink modifier values
+
+**Chromium (branch `146.0.7650.0-issue-515`):**
+
+- `shell_browser_main_parts.cc` — `focus_changed` XPC handler,
+  `HandleFocusChanged` method
+- `shell_browser_main_parts.h` — `HandleFocusChanged` declaration
+
+### What's next
+
+- **Keyboard input** (Issue 516?) — typing in input fields, keyboard shortcuts
+- **Copy/paste** — Cmd+C to copy selected text
+- **Triple-click** — select full line/paragraph
+- **Drag outside overlay bounds** — selection while dragging past the edge
