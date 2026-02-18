@@ -1914,3 +1914,51 @@ for mouseDown in the click monitor. This lets the drag events flow through the
 responder chain while still being forwarded to Chromium. The SurfaceView sees
 the drags and mouse capture forwards them harmlessly to the TUI as escape
 sequences.
+
+### Experiment 12: Let drag events propagate
+
+Experiments 10 and 11 established that both mouseDown and mouseDragged must
+propagate to the SurfaceView for macOS drag tracking to work. Experiment 11
+fixed mouseDown but still consumed mouseDragged. This experiment completes the
+fix by letting drag events propagate too.
+
+#### Changes
+
+##### CompositorXPC.swift
+
+In the move monitor (line ~297), change from unconditional `return nil` to
+conditional based on event type:
+
+```swift
+// Let drag events propagate so macOS maintains drag tracking.
+// Consume mouseMoved to prevent terminal hover interference.
+switch event.type {
+case .leftMouseDragged, .rightMouseDragged:
+    return event
+default:
+    return nil
+}
+```
+
+`.mouseMoved` still returns `nil` — it doesn't need to propagate and consuming
+it prevents the terminal from processing hover events in browse mode.
+
+No Chromium changes needed. Single file, single code path.
+
+#### Verification
+
+```bash
+cd html && python3 -m http.server 9408 &
+open ts5/zig-out/TermSurf.app --stderr ~/dev/termsurf/logs/overlay.log
+# In a TermSurf pane:
+cargo run -p web -- http://localhost:9408/test-mouse.html
+```
+
+1. Enter browse mode, click and drag over the "Mouse Event Test" heading — text
+   should highlight as you drag.
+2. Release — selection should persist.
+3. Double-click a word — should select the whole word.
+4. Verify buttons still work (click counter increments).
+5. Verify no terminal text selection appears.
+
+Pass: text selection works via click-and-drag.
