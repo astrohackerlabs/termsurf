@@ -693,17 +693,37 @@ the new viewport dimensions. Logs show `sent resize` messages.
 
 **Pass.** Resize works end-to-end. Dragging the window edge sends updated
 `set_overlay` messages from `web`, Ghost detects the pixel dimension change,
-sends `resize` to the Chromium server, and the server adjusts capture resolution.
-New IOSurface frames arrive at the new size and the overlay quad scales
-automatically.
+sends `resize` to the Chromium server, and the server adjusts capture
+resolution. New IOSurface frames arrive at the new size and the overlay quad
+scales automatically.
 
 Files changed:
 
 - `ghost/src/apprt/xpc.zig` — `sendResize()` helper, dimension change detection
   in `handleSetOverlay`
 
-## Ideas for future experiments
+## Conclusion
 
-4. **Mouse forwarding** — Click and scroll events forwarded to Chromium via XPC.
-5. **Keyboard forwarding** — Key events forwarded to Chromium via XPC.
-6. **Navigation** — URL bar in `web` TUI navigates the Chromium tab.
+Issue 603 is complete. Ghost renders live Chromium frames in the terminal at
+60fps with dynamic resize — the full pipeline from `web` TUI to IOSurface
+overlay, built entirely in Zig.
+
+Three experiments, each building on the last:
+
+1. **IOSurface texture pipeline** — Proved zero-copy Metal textures from
+   IOSurface work in Zig. A programmatic blue checkerboard rendered at the
+   correct grid coordinates, replacing the pink quad from Issue 602.
+2. **Chromium server lifecycle** — Full end-to-end streaming. Ghost spawns the
+   Chromium Profile Server, handles the XPC protocol (`server_register` →
+   `create_tab` → `display_surface`), and composites live frames. A disconnect
+   race condition (two XPC threads calling `handleDisconnect` concurrently) was
+   fixed with a per-pane mutex — a design that scales to multi-webview.
+3. **Dynamic resize** — One `sendResize` helper. The server adjusts capture
+   resolution, new frames arrive at the new size, and the overlay shader scales
+   automatically.
+
+### What's next
+
+Mouse forwarding, keyboard forwarding, and navigation are natural next steps
+(Issue 604+). The XPC protocol and Chromium server already support all three —
+Ghost just needs to send the messages.
