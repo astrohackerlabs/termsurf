@@ -153,11 +153,254 @@ peers: `web` processes (send `set_overlay`) and Chromium servers (send
 `server_register`). The listener handler must distinguish them by the first
 message received.
 
-## Ideas for experiments
+## Experiment 1: IOSurface texture pipeline
 
-1. **IOSurface texture pipeline** — Add the textured overlay shader, pipeline,
-   `fromIOSurface()`, and renderer state. Test with a programmatically created
-   IOSurface (no Chromium needed). Proves the texture path works in Zig.
+### Goal
+
+Prove the IOSurface → Metal texture path works in Zig. A programmatically
+created blue checkerboard IOSurface renders at the correct grid coordinates,
+replacing the pink quad. No Chromium needed — isolates the texture pipeline from
+server lifecycle.
+
+### Changes
+
+**1. `ghost/src/renderer/shaders/shaders.metal` — Textured overlay shaders**
+
+Add `pixel_width` and `pixel_height` to `PinkOverlayIn` (the pink overlay shader
+ignores them, but both shaders share the same buffer layout). Add
+`OverlayVertexOut`, `overlay_vertex`, and `overlay_fragment`:
+
+```metal
+struct PinkOverlayIn {
+  float grid_col;
+  float grid_row;
+  float grid_width;
+  float grid_height;
+  float pixel_width;   // NEW
+  float pixel_height;  // NEW
+};
+
+struct OverlayVertexOut {
+  float4 position [[position]];
+  float2 texcoord;
+};
+
+vertex OverlayVertexOut overlay_vertex(
+  uint vid [[vertex_id]],
+  constant PinkOverlayIn& params [[buffer(0)]],
+  constant Uniforms& uniforms [[buffer(1)]]
+) {
+  float2 origin = float2(params.grid_col, params.grid_row) * uniforms.cell_size;
+  float2 size = float2(params.pixel_width, params.pixel_height);
+
+  float2 corner;
+  corner.x = float(vid == 1 || vid == 3);
+  corner.y = float(vid == 2 || vid == 3);
+
+  OverlayVertexOut out;
+  out.position = uniforms.projection_matrix * float4(origin + size * corner, 0.0, 1.0);
+  out.texcoord = corner;
+  return out;
+}
+
+fragment float4 overlay_fragment(
+  OverlayVertexOut in [[stage_in]],
+  texture2d<float> tex [[texture(0)]]
+) {
+  constexpr sampler s(mag_filter::nearest, min_filter::nearest);
+  return tex.sample(s, in.texcoord);
+}
+```
+
+The vertex shader sizes the quad using `pixel_width`/`pixel_height` from the
+IOSurface dimensions (not `grid_width * cell_size`), so the texture renders at
+its native resolution. The fragment shader samples the bound texture at UV
+coordinates.
+
+**2. `ghost/src/renderer/metal/shaders.zig` — Overlay pipeline and params**
+
+Extend `PinkOverlay` with pixel dimensions:
+
+```zig
+pub const PinkOverlay = extern struct {
+    grid_col: f32 = 0,
+    grid_row: f32 = 0,
+    grid_width: f32 = 0,
+    grid_height: f32 = 0,
+    pixel_width: f32 = 0,   // NEW
+    pixel_height: f32 = 0,  // NEW
+};
+```
+
+Add `overlay` pipeline entry (after `pink_overlay`):
+
+```zig
+.{ "overlay", .{
+    .vertex_fn = "overlay_vertex",
+    .fragment_fn = "overlay_fragment",
+    .blending_enabled = true,
+} },
+```
+
+**3. `ghost/src/renderer/metal/Texture.zig` — `fromIOSurface()`**
+
+Add a method that creates a zero-copy MTLTexture view into IOSurface GPU memory:
+
+```zig
+pub fn fromIOSurface(device: objc.Object, iosurface: *anyopaque) ?Self {
+    const width: usize = IOSurfaceGetWidth(iosurface);
+    const height: usize = IOSurfaceGetHeight(iosurface);
+
+    const desc = init: {
+        const Class = objc.getClass("MTLTextureDescriptor").?;
+        const id_alloc = Class.msgSend(objc.Object, objc.sel("alloc"), .{});
+        const id_init = id_alloc.msgSend(objc.Object, objc.sel("init"), .{});
+        break :init id_init;
+    };
+    defer desc.release();
+
+    desc.setProperty("pixelFormat", @intFromEnum(mtl.MTLPixelFormat.bgra8unorm));
+    desc.setProperty("width", @as(c_ulong, width));
+    desc.setProperty("height", @as(c_ulong, height));
+    desc.setProperty("usage", @as(c_ulong, 0x0004)); // MTLTextureUsageShaderRead
+
+    const id = device.msgSend(
+        ?*anyopaque,
+        objc.sel("newTextureWithDescriptor:iosurface:plane:"),
+        .{ desc, iosurface, @as(c_ulong, 0) },
+    ) orelse return null;
+
+    return .{
+        .texture = objc.Object.fromId(id),
+        .width = width,
+        .height = height,
+        .bpp = 4,
+    };
+}
+
+extern "c" fn IOSurfaceGetWidth(iosurface: *anyopaque) usize;
+extern "c" fn IOSurfaceGetHeight(iosurface: *anyopaque) usize;
+```
+
+**4. `ghost/src/renderer/generic.zig` — IOSurface state and render path**
+
+Add fields (after `pink_overlay`):
+
+```zig
+overlay_iosurface: ?*anyopaque = null,
+overlay_surface_changed: bool = false,
+```
+
+In `drawFrame()`, replace the pink overlay render step with a branch:
+
+```zig
+if (self.pink_overlay.grid_width > 0 and
+    self.pink_overlay.grid_height > 0)
+{
+    if (self.overlay_iosurface) |iosurface| {
+        // IOSurface texture path.
+        if (Texture.fromIOSurface(self.api.device, iosurface)) |tex| {
+            defer tex.deinit();
+            var overlay_params = self.pink_overlay;
+            overlay_params.pixel_width = @floatFromInt(tex.width);
+            overlay_params.pixel_height = @floatFromInt(tex.height);
+            if (Buffer(shaderpkg.PinkOverlay).initFill(
+                self.api.imageBufferOptions(),
+                &.{overlay_params},
+            )) |*buf| {
+                defer buf.deinit();
+                pass.step(.{
+                    .pipeline = self.shaders.pipelines.overlay,
+                    .uniforms = frame.uniforms.buffer,
+                    .buffers = &.{buf.buffer},
+                    .textures = &.{tex},
+                    .draw = .{ .type = .triangle_strip, .vertex_count = 4 },
+                });
+            } else |_| {}
+        }
+    } else {
+        // Pink fallback (no IOSurface).
+        if (Buffer(shaderpkg.PinkOverlay).initFill(
+            self.api.imageBufferOptions(),
+            &.{self.pink_overlay},
+        )) |*buf| {
+            defer buf.deinit();
+            pass.step(.{
+                .pipeline = self.shaders.pipelines.pink_overlay,
+                .uniforms = frame.uniforms.buffer,
+                .buffers = &.{buf.buffer},
+                .draw = .{ .type = .triangle_strip, .vertex_count = 4 },
+            });
+        } else |_| {}
+    }
+}
+```
+
+**5. `ghost/src/Surface.zig` — `setOverlayIOSurface()`, update
+`clearOverlay()`**
+
+Add `setOverlayIOSurface()` with `CFRetain`/`CFRelease` under `draw_mutex`:
+
+```zig
+extern "c" fn CFRetain(*anyopaque) void;
+extern "c" fn CFRelease(*anyopaque) void;
+
+pub fn setOverlayIOSurface(self: *Surface, iosurface: ?*anyopaque) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    if (self.renderer.overlay_iosurface) |old| CFRelease(old);
+    if (iosurface) |new| CFRetain(new);
+
+    self.renderer.overlay_iosurface = iosurface;
+    self.renderer.overlay_surface_changed = true;
+    self.queueRender() catch {};
+}
+```
+
+Update `clearOverlay()` to release IOSurface:
+
+```zig
+pub fn clearOverlay(self: *Surface) void {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    if (self.renderer.overlay_iosurface) |old| CFRelease(old);
+    self.renderer.overlay_iosurface = null;
+    self.renderer.pink_overlay = .{};
+    self.queueRender() catch {};
+}
+```
+
+**6. `ghost/src/apprt/xpc.zig` — Test IOSurface**
+
+In `handleSetOverlay()`, create a 200×200 blue checkerboard IOSurface
+programmatically and pass it to the renderer. Uses raw CoreFoundation extern
+declarations (temporary test code, replaced by Chromium frames in Experiment 2):
+
+```zig
+fn createTestIOSurface() ?*anyopaque {
+    // Create CFDictionary with width=200, height=200, BGRA, 4 bpe
+    // IOSurfaceCreate → lock → fill blue checkerboard → unlock
+    // Return IOSurfaceRef
+}
+```
+
+After calling `surface.setOverlay()`, call
+`surface.setOverlayIOSurface(createTestIOSurface())`.
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/overlay.log
+# In a Ghost pane:
+cargo run -p web -- http://example.com
+```
+
+Pass: Blue checkerboard renders at correct grid coordinates. Pink quad replaced.
+
+## Ideas for future experiments
 
 2. **Chromium server lifecycle** — Spawn the server, handle `server_register`,
    send `create_tab`, handle `display_surface`. Box demo renders in the terminal
