@@ -154,3 +154,30 @@ Verify Ghostty opens normally as a terminal emulator.
 
 Pass. `ghost/zig-out/Ghostty.app` builds and runs as a standard Ghostty
 terminal. No crashes, no missing resources, terminal input/output works.
+
+## Conclusion
+
+Ghost is forked and building. The foundation is in place for a Zig-first rewrite
+of all browser integration logic that ts5 proved out in Swift.
+
+Five generations of experiments (ts1–ts5, Issues 100–515) established every
+piece of the architecture: IOSurface overlay compositing, XPC communication
+protocols, Chromium Profile Server lifecycle, mouse and keyboard forwarding,
+focus management, text selection, and vsync. Ghost takes these validated designs
+and implements them where they belong — in Zig, alongside Ghostty's existing
+input handling, Metal renderer, and surface management.
+
+### Files changed
+
+| File                                | Change                             |
+| ----------------------------------- | ---------------------------------- |
+| `ghost/`                            | New directory (Ghostty subtree)    |
+| `.gitignore`                        | Added ghost/ build output patterns |
+| `CLAUDE.md`                         | Added Ghost section, updated ts5   |
+| `docs/issues/600-termsurf-ghost.md` | This issue                         |
+
+### What's next
+
+Issue 601+ will build browser integration in Zig, starting with the XPC gateway
+connection and working up through IOSurface textures, Chromium server lifecycle,
+input forwarding, and vsync.
