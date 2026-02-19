@@ -396,6 +396,48 @@ suitable for `xpc_dictionary_set_string`.
 
 #### Files changed
 
-| File                      | Change                                         |
-| ------------------------- | ---------------------------------------------- |
-| `ghost/src/apprt/xpc.zig` | Store peer, send url_changed back to web       |
+| File                      | Change                                   |
+| ------------------------- | ---------------------------------------- |
+| `ghost/src/apprt/xpc.zig` | Store peer, send url_changed back to web |
+
+## Conclusion
+
+XPC works from Zig. The full `web` protocol — gateway connection, anonymous
+listener, endpoint registration, message parsing, and bidirectional
+communication — runs in ~160 lines of Zig with zero Swift involvement.
+
+Three techniques made this possible:
+
+1. **Manual `extern "c"` declarations** instead of `@cImport("xpc/xpc.h")`. The
+   XPC header uses C block types in function signatures that Zig's translate-c
+   may not handle. Declaring each function with `?*anyopaque` for all XPC opaque
+   types sidesteps this entirely.
+
+2. **`objc.Block` for event handlers.** XPC's `xpc_connection_set_event_handler`
+   expects a C block, which has the same ABI as an Objective-C block. Ghostty's
+   `zig-objc` dependency constructs these in pure Zig. The XPC runtime copies
+   them correctly.
+
+3. **`extern const` symbols for type comparison.** XPC type constants
+   (`XPC_TYPE_CONNECTION`, `XPC_TYPE_DICTIONARY`, `XPC_TYPE_ERROR`) and error
+   sentinels (`XPC_ERROR_CONNECTION_INVALID`) are extern globals compared by
+   address identity. `@constCast` bridges the const/mutable pointer mismatch.
+
+This validates the core premise of Ghost: all browser integration logic belongs
+in Zig. CompositorXPC.swift's 500 lines of Swift were never necessary — XPC is a
+C API, and Zig calls C natively.
+
+### Files changed
+
+| File                                         | Change                                       |
+| -------------------------------------------- | -------------------------------------------- |
+| `ghost/src/apprt/xpc.zig`                    | New — full web XPC protocol in Zig           |
+| `ghost/src/apprt/embedded.zig`               | Call `xpc.init()` / `xpc.deinit()`           |
+| `ghost/xpc-gateway/`                         | Copied from ts5 (Package.swift + main.swift) |
+| `ghost/macos/com.termsurf.xpc-gateway.plist` | Dev launchd plist for ghost                  |
+
+### What's next
+
+Issue 602+ will add the Chromium half of the XPC protocol: `server_register`,
+`create_tab`, `tab_ready`, `display_surface`, and IOSurface Mach port transfer —
+all in Zig.
