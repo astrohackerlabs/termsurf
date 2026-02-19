@@ -1,4 +1,4 @@
-// XPC communication for TermSurf Ghost (Issue 601, Experiment 1).
+// XPC communication for TermSurf Ghost (Issue 601).
 //
 // Connects to the xpc-gateway, creates an anonymous listener, registers its
 // endpoint, and handles connections from `web` processes.
@@ -26,11 +26,15 @@ extern "c" fn xpc_endpoint_create(connection: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_dictionary_create(keys: xpc_object_t, values: xpc_object_t, count: usize) xpc_object_t;
 extern "c" fn xpc_dictionary_set_string(xdict: xpc_object_t, key: [*:0]const u8, string: [*:0]const u8) void;
 extern "c" fn xpc_dictionary_set_value(xdict: xpc_object_t, key: [*:0]const u8, value: xpc_object_t) void;
+extern "c" fn xpc_dictionary_get_string(xdict: xpc_object_t, key: [*:0]const u8) ?[*:0]const u8;
+extern "c" fn xpc_dictionary_get_uint64(xdict: xpc_object_t, key: [*:0]const u8) u64;
+extern "c" fn xpc_dictionary_get_bool(xdict: xpc_object_t, key: [*:0]const u8) bool;
 extern "c" fn xpc_get_type(object: xpc_object_t) xpc_object_t;
 
 // XPC type/error constants (compared by address identity).
 extern const _xpc_type_connection: anyopaque;
 extern const _xpc_type_error: anyopaque;
+extern const _xpc_type_dictionary: anyopaque;
 extern const _xpc_error_connection_invalid: anyopaque;
 
 /// Cast a const extern symbol address to xpc_object_t for identity comparison.
@@ -107,9 +111,54 @@ fn listenerHandler(_: *const EventBlock.Context, event: xpc_object_t) callconv(.
 }
 
 fn peerHandler(_: *const EventBlock.Context, event: xpc_object_t) callconv(.c) void {
-    if (xpc_get_type(event) == xpcPtr(&_xpc_type_error)) {
+    if (xpc_get_type(event) == xpcPtr(&_xpc_type_dictionary)) {
+        handleMessage(event);
+    } else if (xpc_get_type(event) == xpcPtr(&_xpc_type_error)) {
         if (event == xpcPtr(&_xpc_error_connection_invalid)) {
             log.info("peer disconnected", .{});
         }
     }
+}
+
+fn handleMessage(msg: xpc_object_t) void {
+    const action = xpc_dictionary_get_string(msg, "action") orelse {
+        log.warn("message missing 'action'", .{});
+        return;
+    };
+    const action_str = std.mem.span(action);
+
+    if (std.mem.eql(u8, action_str, "set_overlay")) {
+        handleSetOverlay(msg);
+    } else if (std.mem.eql(u8, action_str, "mode_changed")) {
+        handleModeChanged(msg);
+    } else {
+        log.warn("unknown action: {s}", .{action_str});
+    }
+}
+
+fn handleSetOverlay(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const url = str(xpc_dictionary_get_string(msg, "url"));
+    const profile = str(xpc_dictionary_get_string(msg, "profile"));
+    const col = xpc_dictionary_get_uint64(msg, "col");
+    const row = xpc_dictionary_get_uint64(msg, "row");
+    const width = xpc_dictionary_get_uint64(msg, "width");
+    const height = xpc_dictionary_get_uint64(msg, "height");
+    const browsing = xpc_dictionary_get_bool(msg, "browsing");
+
+    log.info("set_overlay pane={s} col={} row={} width={} height={} url={s} profile={s} browsing={}", .{
+        pane_id, col, row, width, height, url, profile, browsing,
+    });
+}
+
+fn handleModeChanged(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const browsing = xpc_dictionary_get_bool(msg, "browsing");
+
+    log.info("mode_changed pane={s} browsing={}", .{ pane_id, browsing });
+}
+
+/// Convert a nullable C string to a Zig slice, defaulting to "(null)".
+fn str(ptr: ?[*:0]const u8) []const u8 {
+    return if (ptr) |p| std.mem.span(p) else "(null)";
 }

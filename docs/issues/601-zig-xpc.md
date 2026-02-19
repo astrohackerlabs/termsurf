@@ -289,3 +289,23 @@ cargo run -p web -- https://example.com
 Pass: Ghost logs show the parsed field values from `set_overlay` (pane_id, col,
 row, width, height, url, profile, browsing) and `mode_changed` (pane_id,
 browsing). Values match what `web` sends.
+
+#### Result
+
+Pass. Both message types parsed correctly:
+
+```
+info(xpc): set_overlay pane=9F96D529-... col=1 row=4 width=120 height=32 url=https://example.com profile=default browsing=true
+info(xpc): mode_changed pane=9F96D529-... browsing=false
+```
+
+All dictionary accessor functions work from Zig: `xpc_dictionary_get_string`
+(returns `?[*:0]const u8`), `xpc_dictionary_get_uint64`, and
+`xpc_dictionary_get_bool`. String comparison via `std.mem.span` +
+`std.mem.eql` for action dispatch.
+
+#### Files changed
+
+| File                      | Change                                          |
+| ------------------------- | ----------------------------------------------- |
+| `ghost/src/apprt/xpc.zig` | Parse set_overlay and mode_changed, log values  |
