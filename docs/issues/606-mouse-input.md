@@ -716,3 +716,166 @@ Moving off the overlay restores the terminal's cursor. Cursor changes are
 instant with no flicker. The `performAction(.mouse_shape)` pipeline works
 through Ghostty's existing `documentCursor` system — no `NSCursor.set()` hack,
 no `invalidateCursorRects` needed. Three ts5 experiments collapsed into one.
+
+## Experiment 5: Text selection
+
+### Goal
+
+Click and drag to select text in the Chromium overlay. Double-click to select a
+word. Triple-click to select a line. Shift+click to extend a selection. The
+selection highlight renders in real time as the user drags.
+
+### Background
+
+Text selection was ts5's white whale — Experiments 10, 11, and 12 of Issue 514
+all failed. The root cause was architectural: ts5 used an NSEvent local monitor
+(before the responder chain) that consumed events by returning nil. Consuming
+the mouseDown event prevented AppKit from starting drag tracking, so
+mouseDragged events never fired. Three attempts to work around this all failed.
+
+Ghost's architecture avoids this entirely. Mouse events go through the responder
+chain to SurfaceView, which calls Zig's `mouseButtonCallback` and
+`cursorPosCallback`. The callbacks intercept overlay hits and forward via XPC,
+but the NSEvents propagate normally through AppKit — nothing is consumed at the
+NSEvent level. `mouseDragged` events arrive as `cursorPosCallback` calls with
+the left button held, exactly as they would for terminal text selection.
+
+The forwarding pieces are already in place:
+
+- mouseDown → `sendMouseEvent` with type "down" (Experiment 1)
+- mouseDragged → `sendMouseMove` with leftButtonDown=64 modifier (Experiment 3)
+- mouseUp → `sendMouseEvent` with type "up" (Experiment 1)
+
+Chromium's `HandleMouseEvent` and `HandleMouseMove` both accept the full
+modifier bitmask and construct `blink::WebMouseEvent` objects that the renderer
+processes. Selection highlight is rendered by Chromium's compositor and appears
+in the IOSurface frames we already receive at 120fps.
+
+Two gaps exist in the current forwarding that could affect selection quality:
+
+1. **Keyboard modifiers on mouse move.** `sendMouseMove` only sends button-down
+   flags (leftButtonDown=64, rightButtonDown=256). It doesn't forward
+   shift/ctrl/alt/cmd. This means Shift+drag to extend a selection won't work.
+   Chromium's `HandleMouseMove` casts the modifier bitmask straight through to
+   `web_modifiers`, so adding keyboard mods is trivial.
+
+2. **Click count.** `sendMouseEvent` hardcodes `click_count` to 1. Chromium uses
+   click count to distinguish single-click (caret), double-click (word select),
+   and triple-click (line select). Ghostty already tracks `left_click_count`
+   (1–3) in the Mouse struct with proper timing and distance thresholds. We just
+   need to forward it.
+
+### Design
+
+**Phase 1: Add keyboard modifiers to `sendMouseMove`.**
+
+Add `mods: input.Mods` parameter to `sendMouseMove` in xpc.zig. Encode keyboard
+modifiers the same way `sendMouseEvent` does:
+
+```zig
+pub fn sendMouseMove(
+    surface: *CoreSurface,
+    mods: input.Mods,
+    overlay_x: f64,
+    overlay_y: f64,
+) void {
+    ...
+    var modifiers: i64 = 0;
+    if (mods.shift) modifiers |= 1;
+    if (mods.ctrl) modifiers |= 2;
+    if (mods.alt) modifiers |= 4;
+    if (mods.super) modifiers |= 8;
+    const left_idx = @intFromEnum(input.MouseButton.left);
+    const right_idx = @intFromEnum(input.MouseButton.right);
+    if (surface.mouse.click_state[left_idx] == .press) modifiers |= 64;
+    if (surface.mouse.click_state[right_idx] == .press) modifiers |= 256;
+    xpc_dictionary_set_int64(msg, "modifiers", modifiers);
+    ...
+}
+```
+
+Update the call site in `cursorPosCallback` to pass mods. `cursorPosCallback`
+receives `mods: ?input.Mods` — use `mods orelse self.mouse.mods` to fall back to
+the last known modifiers when the apprt doesn't provide them (same pattern
+Ghostty uses elsewhere in the function):
+
+```zig
+xpc.sendMouseMove(self, mods orelse self.mouse.mods, overlay_pos.x, overlay_pos.y);
+```
+
+**Phase 2: Forward click count.**
+
+Replace the hardcoded `click_count` of 1 in `sendMouseEvent`. Add a
+`click_count` parameter:
+
+```zig
+pub fn sendMouseEvent(
+    surface: *CoreSurface,
+    action: input.MouseButtonState,
+    button: input.MouseButton,
+    mods: input.Mods,
+    click_count: u8,
+    overlay_x: f64,
+    overlay_y: f64,
+) void {
+    ...
+    xpc_dictionary_set_int64(msg, "click_count", @intCast(click_count));
+    ...
+}
+```
+
+Update the call site in `mouseButtonCallback`. For left button press, use
+`self.mouse.left_click_count`. But there's a subtlety: Ghostty updates
+`left_click_count` _after_ the overlay check returns. We need to compute the
+click count before forwarding.
+
+Move the click count logic (timing check, increment, cap at 3) to happen before
+the overlay check. The existing code at lines 4220–4235 computes click count
+based on time elapsed since last click and distance moved. Extract this into a
+helper or inline it before the overlay block:
+
+```zig
+// Compute click count for left button press (before overlay check,
+// so the count is available for Chromium forwarding — Issue 606).
+if (button == .left and action == .press) {
+    if (std.time.Instant.now()) |now| {
+        if (self.mouse.left_click_count > 0) {
+            const since = now.since(self.mouse.left_click_time);
+            if (since > self.config.mouse_interval) {
+                self.mouse.left_click_count = 0;
+            }
+        }
+        self.mouse.left_click_time = now;
+        self.mouse.left_click_count += 1;
+        if (self.mouse.left_click_count > 3) self.mouse.left_click_count = 1;
+    } else |_| {
+        self.mouse.left_click_count = 1;
+    }
+}
+```
+
+Then pass `self.mouse.left_click_count` (or 1 for non-left buttons) as the
+click_count argument. For release events, pass the same count as the press
+(Chromium expects matching press/release counts).
+
+Note: the existing terminal click-count code below the overlay check will still
+run for terminal clicks. For overlay clicks we return early, so there's no
+double-counting.
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Pass criteria:
+
+- Click and drag selects text (blue highlight visible in overlay)
+- Releasing the mouse button ends selection (highlight stays)
+- Double-click selects a word
+- Triple-click selects a line/paragraph
+- Shift+click extends an existing selection
+- Selection highlight updates in real time during drag (no lag or flicker)
+- Clicking elsewhere clears the selection
