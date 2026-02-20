@@ -1848,6 +1848,34 @@ pub const CAPI = struct {
         );
     }
 
+    /// TermSurf macOS-specific scroll API (Issue 606).
+    /// Carries both processed values (for terminal) and raw NSEvent values
+    /// (for Chromium forwarding). The termsurf_ prefix avoids collision with
+    /// Ghostty's ghostty_ namespace.
+    export fn termsurf_macos_surface_mouse_scroll(
+        surface: *Surface,
+        x: f64,
+        y: f64,
+        scroll_mods: c_int,
+        raw_delta_x: f64,
+        raw_delta_y: f64,
+        raw_phase: u64,
+        raw_momentum_phase: u64,
+    ) void {
+        // Store raw values on the core surface for browser forwarding.
+        const mods: input.ScrollMods = @bitCast(@as(u8, @truncate(@as(c_uint, @bitCast(scroll_mods)))));
+        surface.core_surface.raw_scroll = .{
+            .delta_x = raw_delta_x,
+            .delta_y = raw_delta_y,
+            .phase = raw_phase,
+            .momentum_phase = raw_momentum_phase,
+            .precise = mods.precision,
+        };
+
+        // Call existing scroll processing with the processed values.
+        surface.scrollCallback(x, y, mods);
+    }
+
     export fn ghostty_surface_mouse_pressure(
         surface: *Surface,
         stage_raw: u32,

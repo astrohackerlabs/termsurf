@@ -1093,6 +1093,13 @@ void ghostty_surface_mouse_scroll(ghostty_surface_t,
                                   double,
                                   double,
                                   ghostty_input_scroll_mods_t);
+// TermSurf macOS-specific scroll API (Issue 606).
+// Carries processed values (for terminal) and raw NSEvent values (for Chromium).
+void termsurf_macos_surface_mouse_scroll(ghostty_surface_t,
+                                         double, double,
+                                         ghostty_input_scroll_mods_t,
+                                         double, double,
+                                         uint64_t, uint64_t);
 void ghostty_surface_mouse_pressure(ghostty_surface_t, uint32_t, double);
 void ghostty_surface_ime_point(ghostty_surface_t, double*, double*, double*, double*);
 void ghostty_surface_request_close(ghostty_surface_t);

@@ -67,6 +67,16 @@ app: *App,
 /// Unique pane identifier, propagated as TERMSURF_PANE_ID to child processes.
 pane_id: [36:0]u8 = undefined,
 
+/// Raw macOS scroll data for browser forwarding (Issue 606).
+/// Set by termsurf_macos_surface_mouse_scroll, read by scrollCallback.
+raw_scroll: struct {
+    delta_x: f64 = 0,
+    delta_y: f64 = 0,
+    phase: u64 = 0,
+    momentum_phase: u64 = 0,
+    precise: bool = false,
+} = .{},
+
 /// The windowing system surface and app.
 rt_app: *apprt.runtime.App,
 rt_surface: *apprt.runtime.Surface,
@@ -3471,6 +3481,16 @@ pub fn scrollCallback(
     // Crash metadata in case we crash in here
     crash.sentry.thread_state = self.crashThreadState();
     defer crash.sentry.thread_state = null;
+
+    // Check if scroll is in a browser overlay (Issue 606).
+    {
+        const cursor = try self.rt_surface.getCursorPos();
+        if (self.hitTestOverlay(@floatCast(cursor.x), @floatCast(cursor.y))) |overlay_pos| {
+            const xpc = @import("apprt/xpc.zig");
+            xpc.sendScrollEvent(self, overlay_pos.x, overlay_pos.y);
+            return;
+        }
+    }
 
     // Always show the mouse again if it is hidden
     if (self.mouse.hidden) self.showMouse();

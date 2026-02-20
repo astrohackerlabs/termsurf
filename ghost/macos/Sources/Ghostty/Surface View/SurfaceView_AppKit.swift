@@ -984,7 +984,7 @@ extension Ghostty {
         }
 
         override func scrollWheel(with event: NSEvent) {
-            guard let surfaceModel else { return }
+            guard let surface = self.surface else { return }
 
             var x = event.scrollingDeltaX
             var y = event.scrollingDeltaY
@@ -998,12 +998,22 @@ extension Ghostty {
                 // TODO(mitchellh): do we have to scale the x/y here by window scale factor?
             }
 
-            let scrollEvent = Ghostty.Input.MouseScrollEvent(
-                x: x,
-                y: y,
-                mods: .init(precision: precision, momentum: .init(event.momentumPhase))
+            let scrollMods = Ghostty.Input.ScrollMods(
+                precision: precision,
+                momentum: .init(event.momentumPhase)
             )
-            surfaceModel.sendMouseScroll(scrollEvent)
+
+            // Issue 606: pass both processed values (for terminal) and raw
+            // NSEvent values (for Chromium browser forwarding).
+            termsurf_macos_surface_mouse_scroll(
+                surface,
+                x, y,
+                scrollMods.cScrollMods,
+                event.scrollingDeltaX,
+                event.scrollingDeltaY,
+                UInt64(event.phase.rawValue),
+                UInt64(event.momentumPhase.rawValue)
+            )
         }
 
         override func pressureChange(with event: NSEvent) {

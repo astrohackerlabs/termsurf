@@ -36,6 +36,7 @@ extern "c" fn xpc_dictionary_get_bool(xdict: xpc_object_t, key: [*:0]const u8) b
 extern "c" fn xpc_dictionary_set_uint64(xdict: xpc_object_t, key: [*:0]const u8, value: u64) void;
 extern "c" fn xpc_dictionary_set_int64(xdict: xpc_object_t, key: [*:0]const u8, value: i64) void;
 extern "c" fn xpc_dictionary_set_double(xdict: xpc_object_t, key: [*:0]const u8, value: f64) void;
+extern "c" fn xpc_dictionary_set_bool(xdict: xpc_object_t, key: [*:0]const u8, value: bool) void;
 extern "c" fn xpc_dictionary_get_remote_connection(msg: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_get_type(object: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_retain(object: xpc_object_t) xpc_object_t;
@@ -626,6 +627,56 @@ pub fn sendMouseEvent(
         if (button == .right) modifiers |= 256; // 1 << 8
     }
     xpc_dictionary_set_int64(msg, "modifiers", modifiers);
+
+    xpc_connection_send_message(server.peer, msg);
+}
+
+/// Called from Surface.scrollCallback when a scroll hits the overlay.
+/// Reads raw scroll data from surface.raw_scroll (set by
+/// termsurf_macos_surface_mouse_scroll) and forwards to Chromium.
+pub fn sendScrollEvent(
+    surface: *CoreSurface,
+    overlay_x: f64,
+    overlay_y: f64,
+) void {
+    const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse {
+        log.warn("sendScrollEvent: no pane for surface", .{});
+        return;
+    };
+    const p = panes.get(pane_id_key) orelse return;
+    const server = p.server orelse return;
+    if (server.peer == null) return;
+
+    const raw = surface.raw_scroll;
+
+    const msg = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_string(msg, "action", "scroll_event");
+
+    // Pane ID (null-terminated).
+    if (pane_id_key.len > 0 and pane_id_key.len <= 36) {
+        var pane_z: [37]u8 = undefined;
+        @memcpy(pane_z[0..pane_id_key.len], pane_id_key);
+        pane_z[pane_id_key.len] = 0;
+        xpc_dictionary_set_string(msg, "pane_id", @ptrCast(&pane_z));
+    }
+
+    // Overlay-relative logical coordinates.
+    xpc_dictionary_set_double(msg, "x", overlay_x);
+    xpc_dictionary_set_double(msg, "y", overlay_y);
+
+    // Raw NSEvent scroll deltas (unmodified).
+    xpc_dictionary_set_double(msg, "delta_x", raw.delta_x);
+    xpc_dictionary_set_double(msg, "delta_y", raw.delta_y);
+
+    // Raw NSEvent phase bitmasks.
+    xpc_dictionary_set_uint64(msg, "phase", raw.phase);
+    xpc_dictionary_set_uint64(msg, "momentum_phase", raw.momentum_phase);
+
+    // Precision flag (trackpad vs mouse wheel).
+    xpc_dictionary_set_bool(msg, "precise", raw.precise);
+
+    // Modifiers (not typically used for scroll events).
+    xpc_dictionary_set_uint64(msg, "modifiers", 0);
 
     xpc_connection_send_message(server.peer, msg);
 }

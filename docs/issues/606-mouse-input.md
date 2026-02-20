@@ -401,3 +401,13 @@ Pass criteria:
 - Mouse wheel scrolling works
 - Scrolling outside the overlay scrolls the terminal as normal
 - No jitter or reverse-direction scroll
+
+### Result: Pass
+
+Scrolling works perfectly. The `termsurf_macos_surface_mouse_scroll` C API
+carries raw NSEvent values (unmodified deltas, bitmask phases) alongside
+Ghostty's processed values. Zig stores the raw data on the surface, hit-tests
+the overlay in `scrollCallback`, and forwards the raw values to Chromium via
+XPC. The Chromium server receives identical input to what ts5 sent from its
+NSEvent monitor — no remapping, no scaling corrections. Trackpad smooth scroll,
+momentum scrolling, and terminal fallback all work correctly.
