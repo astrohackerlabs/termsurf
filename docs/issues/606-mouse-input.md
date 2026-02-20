@@ -224,3 +224,12 @@ Pass criteria:
 - Right click works (context menu or right-click handler fires)
 - Clicks outside the overlay go to the terminal as normal
 - No crash on rapid clicking
+
+### Result: Pass
+
+Clicking links on Hacker News navigates correctly. The hit-test and coordinate
+transformation pipeline works: `hitTestOverlay` on the Surface checks overlay
+bounds in physical pixels, converts to logical pixels via content scale, and
+`sendMouseEvent` in xpc.zig forwards the XPC `mouse_event` to the Chromium
+server's control connection. Clicks outside the overlay go to the terminal as
+normal.

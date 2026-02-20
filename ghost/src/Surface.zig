@@ -2429,6 +2429,31 @@ fn queueRender(self: *Surface) !void {
     try self.renderer_thread.wakeup.notify();
 }
 
+/// Check if a point (physical pixels) is inside the browser overlay.
+/// Returns overlay-relative logical coordinates, or null if outside.
+/// Thread-safe via draw_mutex (Issue 606).
+pub fn hitTestOverlay(self: *Surface, phys_x: f64, phys_y: f64) ?struct { x: f64, y: f64 } {
+    self.renderer.draw_mutex.lock();
+    defer self.renderer.draw_mutex.unlock();
+
+    const overlay = self.renderer.pink_overlay;
+    if (overlay.grid_width == 0) return null;
+
+    const cell_w: f64 = @floatFromInt(self.renderer.grid_metrics.cell_width);
+    const cell_h: f64 = @floatFromInt(self.renderer.grid_metrics.cell_height);
+    const ox: f64 = @as(f64, overlay.grid_col) * cell_w;
+    const oy: f64 = @as(f64, overlay.grid_row) * cell_h;
+    const ow: f64 = @as(f64, overlay.grid_width) * cell_w;
+    const oh: f64 = @as(f64, overlay.grid_height) * cell_h;
+
+    const rel_x = phys_x - ox;
+    const rel_y = phys_y - oy;
+    if (rel_x < 0 or rel_y < 0 or rel_x >= ow or rel_y >= oh) return null;
+
+    const scale = self.rt_surface.getContentScale() catch return null;
+    return .{ .x = rel_x / @as(f64, scale.x), .y = rel_y / @as(f64, scale.y) };
+}
+
 /// Set the pink overlay rectangle in grid coordinates (Issue 602).
 /// Called from XPC on a background queue. Thread-safe via draw_mutex.
 pub fn setOverlay(self: *Surface, col: u32, row: u32, width: u32, height: u32) void {
@@ -3936,6 +3961,16 @@ pub fn mouseButtonCallback(
     defer crash.sentry.thread_state = null;
 
     // log.debug("mouse action={} button={} mods={}", .{ action, button, mods });
+
+    // Check if click is in a browser overlay (Issue 606).
+    {
+        const cursor = try self.rt_surface.getCursorPos();
+        if (self.hitTestOverlay(@floatCast(cursor.x), @floatCast(cursor.y))) |overlay_pos| {
+            const xpc = @import("apprt/xpc.zig");
+            xpc.sendMouseEvent(self, action, button, mods, overlay_pos.x, overlay_pos.y);
+            return true;
+        }
+    }
 
     // If we have an inspector, we always queue a render
     if (self.inspector != null) {

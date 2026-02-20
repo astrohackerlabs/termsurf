@@ -11,6 +11,7 @@ const std = @import("std");
 const objc = @import("objc");
 const CoreApp = @import("../App.zig");
 const CoreSurface = @import("../Surface.zig");
+const input = @import("../input.zig");
 
 const log = std.log.scoped(.xpc);
 const alloc = std.heap.page_allocator;
@@ -33,6 +34,8 @@ extern "c" fn xpc_dictionary_get_string(xdict: xpc_object_t, key: [*:0]const u8)
 extern "c" fn xpc_dictionary_get_uint64(xdict: xpc_object_t, key: [*:0]const u8) u64;
 extern "c" fn xpc_dictionary_get_bool(xdict: xpc_object_t, key: [*:0]const u8) bool;
 extern "c" fn xpc_dictionary_set_uint64(xdict: xpc_object_t, key: [*:0]const u8, value: u64) void;
+extern "c" fn xpc_dictionary_set_int64(xdict: xpc_object_t, key: [*:0]const u8, value: i64) void;
+extern "c" fn xpc_dictionary_set_double(xdict: xpc_object_t, key: [*:0]const u8, value: f64) void;
 extern "c" fn xpc_dictionary_get_remote_connection(msg: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_get_type(object: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_retain(object: xpc_object_t) xpc_object_t;
@@ -104,6 +107,9 @@ var peer_to_pane: std.AutoHashMap(usize, []const u8) = undefined;
 /// Reverse lookup: connection address (usize) → profile name.
 var peer_to_profile: std.AutoHashMap(usize, []const u8) = undefined;
 
+/// Reverse lookup: CoreSurface pointer address → pane UUID string (Issue 606).
+var surface_to_pane: std.AutoHashMap(usize, []const u8) = undefined;
+
 // -- Block types --
 
 /// Block with no captures (gateway, listener handlers).
@@ -127,6 +133,7 @@ pub fn init(core_app: *CoreApp) void {
     servers = std.StringHashMap(*Server).init(alloc);
     peer_to_pane = std.AutoHashMap(usize, []const u8).init(alloc);
     peer_to_profile = std.AutoHashMap(usize, []const u8).init(alloc);
+    surface_to_pane = std.AutoHashMap(usize, []const u8).init(alloc);
 
     // Connect to the xpc-gateway Mach service.
     gateway = xpc_connection_create_mach_service("com.termsurf.xpc-gateway", null, 0);
@@ -177,6 +184,7 @@ pub fn deinit() void {
 
     peer_to_pane.deinit();
     peer_to_profile.deinit();
+    surface_to_pane.deinit();
 
     if (listener != null) {
         xpc_connection_cancel(listener);
@@ -323,6 +331,9 @@ fn handleSetOverlay(msg: xpc_object_t) void {
         p.overlay_surface = surface.core();
         p.pending_pixel_w = new_pixel_w;
         p.pending_pixel_h = new_pixel_h;
+
+        // Register surface → pane reverse lookup (Issue 606, mouse input).
+        surface_to_pane.put(@intFromPtr(surface.core()), pane_id_key) catch {};
 
         // Store pending URL.
         if (url.len > 0 and url.len <= p.pending_url_buf.len) {
@@ -550,6 +561,75 @@ fn sendResize(p: *Pane, server: *Server) void {
     });
 }
 
+// -- Mouse input (Issue 606) --
+
+/// Called from Surface.mouseButtonCallback when a click hits the overlay.
+/// Looks up the pane by CoreSurface pointer, constructs an XPC mouse_event
+/// message, and sends it on the server's control connection.
+pub fn sendMouseEvent(
+    surface: *CoreSurface,
+    action: input.MouseButtonState,
+    button: input.MouseButton,
+    mods: input.Mods,
+    overlay_x: f64,
+    overlay_y: f64,
+) void {
+    const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse {
+        log.warn("sendMouseEvent: no pane for surface", .{});
+        return;
+    };
+    const p = panes.get(pane_id_key) orelse return;
+    const server = p.server orelse return;
+    if (server.peer == null) return;
+
+    const msg = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_string(msg, "action", "mouse_event");
+
+    // Pane ID (null-terminated).
+    if (pane_id_key.len > 0 and pane_id_key.len <= 36) {
+        var pane_z: [37]u8 = undefined;
+        @memcpy(pane_z[0..pane_id_key.len], pane_id_key);
+        pane_z[pane_id_key.len] = 0;
+        xpc_dictionary_set_string(msg, "pane_id", @ptrCast(&pane_z));
+    }
+
+    // Event type: down or up.
+    xpc_dictionary_set_string(msg, "type", switch (action) {
+        .press => "down",
+        .release => "up",
+    });
+
+    // Button name.
+    xpc_dictionary_set_string(msg, "button", switch (button) {
+        .left => "left",
+        .right => "right",
+        .middle => "middle",
+        else => "left",
+    });
+
+    // Overlay-relative logical coordinates.
+    xpc_dictionary_set_double(msg, "x", overlay_x);
+    xpc_dictionary_set_double(msg, "y", overlay_y);
+
+    // Click count (1 for now — double-click support in a later experiment).
+    xpc_dictionary_set_int64(msg, "click_count", 1);
+
+    // Modifier bitmask: shift=1, ctrl=2, alt=4, cmd=8.
+    // For mouse down, also set button-down flags: left=64, right=256.
+    var modifiers: i64 = 0;
+    if (mods.shift) modifiers |= 1;
+    if (mods.ctrl) modifiers |= 2;
+    if (mods.alt) modifiers |= 4;
+    if (mods.super) modifiers |= 8;
+    if (action == .press) {
+        if (button == .left) modifiers |= 64; // 1 << 6
+        if (button == .right) modifiers |= 256; // 1 << 8
+    }
+    xpc_dictionary_set_int64(msg, "modifiers", modifiers);
+
+    xpc_connection_send_message(server.peer, msg);
+}
+
 // -- Disconnect handling --
 
 fn handleDisconnect(peer_addr: usize) void {
@@ -558,7 +638,10 @@ fn handleDisconnect(peer_addr: usize) void {
         log.info("web peer disconnected pane={s}", .{pane_id_key});
 
         if (panes.get(pane_id_key)) |p| {
-            if (p.overlay_surface) |surface| surface.clearOverlay();
+            if (p.overlay_surface) |surface| {
+                surface.clearOverlay();
+                _ = surface_to_pane.remove(@intFromPtr(surface));
+            }
 
             // Decrement server pane count; kill if last.
             if (p.server) |server| {
@@ -601,7 +684,10 @@ fn handleDisconnect(peer_addr: usize) void {
             while (it.next()) |entry| {
                 const p = entry.value_ptr.*;
                 if (p.server == server and count < keys_buf.len) {
-                    if (p.overlay_surface) |surface| surface.clearOverlay();
+                    if (p.overlay_surface) |surface| {
+                        surface.clearOverlay();
+                        _ = surface_to_pane.remove(@intFromPtr(surface));
+                    }
                     addrs_buf[count] = if (p.web_peer) |wp| @intFromPtr(wp) else 0;
                     if (p.web_peer) |wp| xpc_release(wp);
                     keys_buf[count] = entry.key_ptr.*;
