@@ -1010,3 +1010,137 @@ mouse clicks, but it doesn't. Overlay clicks are intercepted by Ghost's
 sees them. Control panel clicks go to the terminal but the `web` TUI doesn't
 handle mouse clicks for mode switching. Mouse-driven mode switching needs
 additional work in a follow-up experiment.
+
+## Experiment 6: Mouse-driven focus
+
+### Goal
+
+Click on the Chromium overlay while in control mode to switch to browse mode and
+focus the tab. Click on the control panel (URL bar area) while in browse mode to
+switch to control mode and unfocus the tab.
+
+### Background
+
+Experiment 5 proved keyboard-driven focus works — Enter/Esc toggles mode, pane
+switches transfer focus. But mouse-driven mode switching failed because:
+
+1. **Overlay clicks are invisible to the `web` TUI.** Ghost's
+   `mouseButtonCallback` intercepts overlay hits and forwards them to Chromium
+   via `sendMouseEvent`. The `web` TUI never sees these clicks, so it can't
+   trigger `mode_changed`.
+
+2. **Control panel clicks don't trigger mode changes.** Clicks outside the
+   overlay reach the terminal and the `web` TUI, but the TUI doesn't handle
+   mouse events for mode switching — it only uses Enter/Esc.
+
+The solution: Ghost drives mode switching on mouse clicks and notifies the `web`
+TUI by sending `mode_changed` messages back on `p.web_peer`. The `web` TUI
+already handles incoming `mode_changed` messages — it updates its local mode
+state (URL bar styling, status indicator) without echoing back. No feedback
+loop.
+
+XPC connections are bidirectional. Ghost already stores the `web` TUI's
+connection as `p.web_peer` (retained from `xpc_dictionary_get_remote_connection`
+in `handleSetOverlay`). Sending `xpc_connection_send_message(p.web_peer, msg)`
+delivers to the `web` TUI's event handler, which dispatches
+`CompositorMessage::ModeChanged` into the TUI's event loop.
+
+### Design
+
+**Phase 1: Add `sendModeToWeb` helper in xpc.zig.**
+
+```zig
+fn sendModeToWeb(p: *Pane, browsing: bool) void {
+    if (p.web_peer == null) return;
+    const msg = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_string(msg, "action", "mode_changed");
+    xpc_dictionary_set_bool(msg, "browsing", browsing);
+    xpc_connection_send_message(p.web_peer, msg);
+}
+```
+
+**Phase 2: Add `notifyOverlayClicked` and `notifyNonOverlayClicked` in
+xpc.zig.**
+
+```zig
+/// Called from mouseButtonCallback when a left-click hits the overlay.
+/// If the pane is in control mode, switches to browse mode and focuses.
+pub fn notifyOverlayClicked(surface: *CoreSurface) void {
+    const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse return;
+    const p = panes.get(pane_id_key) orelse return;
+    if (p.browsing) return;
+
+    p.browsing = true;
+    sendModeToWeb(p, true);
+    sendFocusChanged(pane_id_key, true);
+}
+
+/// Called from mouseButtonCallback when a left-click misses the overlay.
+/// If the pane is in browse mode, switches to control mode and unfocuses.
+pub fn notifyNonOverlayClicked(surface: *CoreSurface) void {
+    const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse return;
+    const p = panes.get(pane_id_key) orelse return;
+    if (!p.browsing) return;
+
+    p.browsing = false;
+    sendModeToWeb(p, false);
+    sendFocusChanged(pane_id_key, false);
+}
+```
+
+These are called from the main thread but access XPC state directly — same
+pattern as the existing `sendMouseEvent`, `sendMouseMove`, and
+`sendScrollEvent`. The state mutation (`p.browsing`) is safe because mouse
+clicks and keyboard mode changes are user-driven and don't race.
+
+**Phase 3: Call from `mouseButtonCallback` in Surface.zig.**
+
+Expand the overlay check block. On left-click press that hits the overlay, call
+`notifyOverlayClicked` before forwarding the click. On left-click press that
+misses the overlay, call `notifyNonOverlayClicked` and let the click fall
+through to normal terminal handling:
+
+```zig
+// Check if click is in a browser overlay (Issue 606).
+{
+    const cursor = try self.rt_surface.getCursorPos();
+    if (self.hitTestOverlay(@floatCast(cursor.x), @floatCast(cursor.y))) |overlay_pos| {
+        const xpc = @import("apprt/xpc.zig");
+        // Switch to browse mode on overlay click if in control mode (Exp 6).
+        if (button == .left and action == .press) {
+            xpc.notifyOverlayClicked(self);
+        }
+        xpc.sendMouseEvent(self, action, button, mods, overlay_pos.x, overlay_pos.y);
+        return true;
+    }
+    // Click missed overlay — switch to control if browsing (Exp 6).
+    if (button == .left and action == .press) {
+        const xpc = @import("apprt/xpc.zig");
+        xpc.notifyNonOverlayClicked(self);
+    }
+}
+```
+
+The `notifyNonOverlayClicked` call is a no-op if the surface has no overlay
+(returns early when `surface_to_pane.get` fails) or is already in control mode.
+The click always falls through to normal terminal processing regardless.
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Pass criteria:
+
+- In control mode, clicking on the overlay switches to browse mode (URL bar
+  styling updates) and focuses Chromium (`focus_changed focused=true` in log)
+- The click that triggered the mode switch also activates the clicked element
+  (e.g., clicking a link navigates)
+- In browse mode, clicking on the URL bar area switches to control mode and
+  unfocuses Chromium (`focus_changed focused=false` in log)
+- Right-clicks don't trigger mode switching (only left-click press)
+- Keyboard mode switching (Enter/Esc) still works alongside mouse switching
+- No feedback loop — `web` TUI doesn't echo `mode_changed` back
