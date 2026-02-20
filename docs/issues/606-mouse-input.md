@@ -242,13 +242,111 @@ Scroll a web page in the Chromium overlay. Trackpad two-finger scroll and mouse
 wheel both work. Momentum scrolling (inertial flick) works. Scrolling outside
 the overlay scrolls the terminal as normal.
 
+### Background
+
+Ghostty's `scrollWheel` handler in `SurfaceView_AppKit.swift` modifies raw
+NSEvent scroll data before passing it to Zig:
+
+1. **Delta values are doubled** for precision (trackpad) scrolls — a "feels
+   better" UX choice for terminal scrolling speed
+2. **Momentum phase is remapped** from NSEvent bitmask values (1,2,4,8,16,32) to
+   a compact sequential enum (1,2,3,4,5,6) for cross-platform abstraction
+3. **Gesture phase (`NSEvent.phase`) is dropped** entirely — terminals don't
+   need it
+
+Chromium needs the raw values. ts5 solved this trivially because the scroll
+monitor had direct NSEvent access. Ghost's architecture routes scroll events
+through the Zig C API, which loses the raw data.
+
+The solution: a new `termsurf_macos_surface_mouse_scroll` C API function that
+carries both the processed values (for terminal) and the raw NSEvent values (for
+Chromium). The `termsurf_` prefix provides a namespace separate from Ghostty's
+`ghostty_` APIs, guaranteeing compatibility with upstream changes. The `_macos_`
+infix makes the platform specificity explicit — Linux will get
+`termsurf_linux_surface_mouse_scroll` with its own raw values.
+
 ### Design
 
-Same pattern as Experiment 1: intercept `scrollCallback` in Surface.zig,
-hit-test the overlay, forward via XPC. The Chromium server's `HandleScrollEvent`
-already exists from ts5 Issue 514.
+**Phase 1: New C API — `termsurf_macos_surface_mouse_scroll`.**
 
-**Phase 1: Intercept scrolls in `scrollCallback`.**
+Add to `embedded.zig`:
+
+```zig
+export fn termsurf_macos_surface_mouse_scroll(
+    surface: *Surface,
+    x: f64,           // processed delta (2x multiplied for trackpad)
+    y: f64,           // processed delta
+    scroll_mods: c_int, // existing ScrollMods (precision + momentum enum)
+    raw_delta_x: f64,   // NSEvent.scrollingDeltaX (unmodified)
+    raw_delta_y: f64,   // NSEvent.scrollingDeltaY (unmodified)
+    raw_phase: u64,      // NSEvent.phase.rawValue (bitmask)
+    raw_momentum_phase: u64, // NSEvent.momentumPhase.rawValue (bitmask)
+) void
+```
+
+This function stores the raw values on the surface, then calls the existing
+`scrollCallback(x, y, scroll_mods)`. The terminal path runs unchanged with the
+processed values. The browser path (hit-test in `scrollCallback`) reads the
+stored raw values.
+
+Raw values stored on `CoreSurface`:
+
+```zig
+/// Raw macOS scroll data for browser forwarding (Issue 606).
+/// Set by termsurf_macos_surface_mouse_scroll, read by scrollCallback.
+raw_scroll: struct {
+    delta_x: f64 = 0,
+    delta_y: f64 = 0,
+    phase: u64 = 0,
+    momentum_phase: u64 = 0,
+    precise: bool = false,
+} = .{},
+```
+
+The `precise` field is copied from `scroll_mods.precision` — this value is
+correct (not remapped), just convenient to have alongside the other raw fields.
+
+**Phase 2: Swift — call new API.**
+
+In `SurfaceView_AppKit.swift`'s `scrollWheel(with:)`, replace the call to
+`surfaceModel.sendMouseScroll(scrollEvent)` with a direct call to the new C API:
+
+```swift
+override func scrollWheel(with event: NSEvent) {
+    guard let surface = self.surface else { return }
+
+    var x = event.scrollingDeltaX
+    var y = event.scrollingDeltaY
+    let precision = event.hasPreciseScrollingDeltas
+
+    if precision {
+        x *= 2
+        y *= 2
+    }
+
+    let scrollMods = Ghostty.Input.ScrollMods(
+        precision: precision,
+        momentum: .init(event.momentumPhase)
+    )
+
+    termsurf_macos_surface_mouse_scroll(
+        surface,
+        x, y,
+        scrollMods.cScrollMods,
+        event.scrollingDeltaX,          // raw, unmodified
+        event.scrollingDeltaY,          // raw, unmodified
+        UInt64(event.phase.rawValue),   // bitmask: 0,1,2,4,8,16,32
+        UInt64(event.momentumPhase.rawValue) // bitmask: 0,1,2,4,8,16,32
+    )
+}
+```
+
+The existing `sendMouseScroll` code path is no longer called from `scrollWheel`.
+All scroll events go through the new function. Non-overlay scrolls behave
+identically — the processed values reach `scrollCallback` the same way they
+always did.
+
+**Phase 3: Intercept scrolls in `scrollCallback`.**
 
 At the top of `scrollCallback`, before any terminal processing:
 
@@ -258,47 +356,35 @@ At the top of `scrollCallback`, before any terminal processing:
     const cursor = try self.rt_surface.getCursorPos();
     if (self.hitTestOverlay(@floatCast(cursor.x), @floatCast(cursor.y))) |overlay_pos| {
         const xpc = @import("apprt/xpc.zig");
-        xpc.sendScrollEvent(self, xoff, yoff, scroll_mods, overlay_pos.x, overlay_pos.y);
+        xpc.sendScrollEvent(self, overlay_pos.x, overlay_pos.y);
         return;
     }
 }
 ```
 
 `scrollCallback` returns `!void`, so `return` is enough to suppress terminal
-processing.
+processing. The `sendScrollEvent` reads `self.raw_scroll` for the raw values.
 
-**Phase 2: `sendScrollEvent` in `xpc.zig`.**
+**Phase 4: `sendScrollEvent` in `xpc.zig`.**
 
-Add `sendScrollEvent` that constructs an XPC `scroll_event` dictionary:
+Add `sendScrollEvent` that constructs an XPC `scroll_event` dictionary using the
+raw values stored on the surface:
 
 ```
 action:         "scroll_event"
 pane_id:        UUID string
 x, y:           overlay-relative logical pixels (from hitTestOverlay)
-delta_x:        horizontal scroll offset (xoff from scrollCallback)
-delta_y:        vertical scroll offset (yoff from scrollCallback)
-phase:          scroll phase (0 = none for non-trackpad)
-momentum_phase: momentum phase from ScrollMods.momentum
-precise:        true if ScrollMods.precision is set
+delta_x:        raw_scroll.delta_x (NSEvent.scrollingDeltaX, unmodified)
+delta_y:        raw_scroll.delta_y (NSEvent.scrollingDeltaY, unmodified)
+phase:          raw_scroll.phase (NSEvent.phase.rawValue bitmask)
+momentum_phase: raw_scroll.momentum_phase (NSEvent.momentumPhase.rawValue bitmask)
+precise:        raw_scroll.precise (hasPreciseScrollingDeltas)
 modifiers:      0 (scroll events rarely carry modifiers)
 ```
 
-Ghost's `scrollCallback` receives `xoff`/`yoff` as pixel deltas when
-`scroll_mods.precision` is true (trackpad), or as wheel tick counts when false
-(mouse wheel). Chromium's `ForwardWheelEvent` expects pixel deltas. For
-non-precision scrolls, multiply by a cell height to convert ticks to pixels
-(matching Ghost's own `yoff_adjusted` logic). For precision scrolls, pass
-through directly.
-
-The `momentum` field from `ScrollMods` maps to macOS `NSEvent.momentumPhase`:
-`none=0`, `began=1`, `stationary=2`, `changed=3`, `ended=4`, `cancelled=5`,
-`may_begin=6`. Pass as `momentum_phase` in the XPC message. Chromium uses this
-for inertial scrolling.
-
-Ghost doesn't expose `NSEvent.phase` (the gesture phase) in `ScrollMods` — only
-`momentum`. Set `phase` to 0 in the XPC message. The Chromium server handles
-this correctly — it only uses phase for gesture-begin/end detection, which
-momentum already covers.
+These are the exact same values ts5 sent. No remapping, no scaling corrections.
+The Chromium server's `HandleScrollEvent` receives identical input to what it
+received from ts5's NSEvent monitor.
 
 ### Verification
 
