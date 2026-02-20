@@ -411,3 +411,115 @@ the overlay in `scrollCallback`, and forwards the raw values to Chromium via
 XPC. The Chromium server receives identical input to what ts5 sent from its
 NSEvent monitor — no remapping, no scaling corrections. Trackpad smooth scroll,
 momentum scrolling, and terminal fallback all work correctly.
+
+## Experiment 3: Mouse move forwarding
+
+### Goal
+
+Hover over a link in the Chromium overlay and see it highlight. Move the mouse
+across the page and see Chromium's hover states respond. Drag with left button
+held and see text selection begin (visual feedback only — full selection support
+is a later experiment).
+
+### Background
+
+Unlike scrolling, mouse move has no raw-vs-processed data issue. The coordinates
+Ghost receives in `cursorPosCallback` are straightforward — already in physical
+pixels via `cursorPosToPixels`, same coordinate space as `hitTestOverlay`. No
+`termsurf_macos_` API needed.
+
+The one subtlety: **button state during drag.** ts5 inferred button state from
+`NSEvent.type` — `.leftMouseDragged` sets `kLeftButtonDown` (bit 6 = 64) in the
+modifier bitmask. Chromium's `HandleMouseMove` reads this to distinguish hover
+from drag-select. Ghost routes `mouseMoved`, `mouseDragged`, and
+`rightMouseDragged` through the same `cursorPosCallback` with no distinction.
+
+The fix: track overlay button state on the Surface. When `mouseButtonCallback`
+forwards a press to the overlay, record which button is down. When it forwards a
+release, clear it. `cursorPosCallback` reads this to set the button-down
+modifier bits in the `mouse_move` XPC message.
+
+This also requires moving the `click_state` update in `mouseButtonCallback` to
+before the overlay check, so the standard button tracking still works for
+overlay clicks.
+
+### Design
+
+**Phase 1: Track overlay button state.**
+
+In `mouseButtonCallback`, move the `click_state` update to before the overlay
+check:
+
+```zig
+// Always record our latest mouse state (moved up for overlay tracking).
+self.mouse.click_state[@intCast(@intFromEnum(button))] = action;
+
+// Check if click is in a browser overlay (Issue 606).
+{
+    const cursor = try self.rt_surface.getCursorPos();
+    if (self.hitTestOverlay(...)) |overlay_pos| {
+        xpc.sendMouseEvent(self, action, button, mods, overlay_pos.x, overlay_pos.y);
+        return true;
+    }
+}
+```
+
+Now `click_state` reflects button state regardless of whether the click was in
+the overlay or the terminal.
+
+**Phase 2: Intercept mouse moves in `cursorPosCallback`.**
+
+At the top of `cursorPosCallback`, before any terminal processing:
+
+```zig
+// Check if mouse is in a browser overlay (Issue 606).
+if (self.hitTestOverlay(@floatCast(pos.x), @floatCast(pos.y))) |overlay_pos| {
+    const xpc = @import("apprt/xpc.zig");
+    xpc.sendMouseMove(self, overlay_pos.x, overlay_pos.y);
+    return;
+}
+```
+
+`cursorPosCallback` returns `!void`, so `return` suppresses terminal processing.
+
+**Phase 3: `sendMouseMove` in `xpc.zig`.**
+
+Add `sendMouseMove` that constructs an XPC `mouse_move` dictionary:
+
+```
+action:    "mouse_move"
+pane_id:   UUID string
+x, y:      overlay-relative logical pixels (from hitTestOverlay)
+modifiers: bitmask with button-down flags from click_state
+```
+
+The modifier bitmask includes button-down flags read from
+`surface.mouse.click_state`:
+
+```zig
+var modifiers: i64 = 0;
+const left_idx = @intFromEnum(input.MouseButton.left);
+const right_idx = @intFromEnum(input.MouseButton.right);
+if (surface.mouse.click_state[left_idx] == .press) modifiers |= 64;   // kLeftButtonDown
+if (surface.mouse.click_state[right_idx] == .press) modifiers |= 256; // kRightButtonDown
+```
+
+This is how Chromium distinguishes hover (no button-down flags) from drag (left
+button-down flag set). The Chromium server's `HandleMouseMove` reads these bits
+to set `blink::WebPointerProperties::Button`.
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://news.ycombinator.com
+```
+
+Pass criteria:
+
+- Hovering over a link shows a highlight/underline (Chromium CSS hover state)
+- Moving mouse across the page triggers hover states on different elements
+- Mouse moves outside the overlay still work for terminal (selection, etc.)
+- Left-click drag in the overlay sends button-down flag (visible in logs)
+- No crash or lag from high-frequency mouse move events
