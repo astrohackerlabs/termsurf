@@ -533,3 +533,178 @@ button-down flags from `click_state`. Moving `click_state` update before the
 overlay check in `mouseButtonCallback` ensures button state is tracked for both
 overlay and terminal clicks, so drag events carry the correct `kLeftButtonDown`
 (64) modifier. No crashes from high-frequency mouse move events.
+
+## Experiment 4: Cursor appearance sync
+
+### Goal
+
+Hover over a link in the Chromium overlay and see the cursor change to a
+pointing hand. Move over text and see an I-beam. Move off the overlay and see
+the terminal's cursor restored. The cursor tracks Chromium's actual cursor state
+in real time.
+
+### Background
+
+The Chromium Profile Server already sends `cursor_changed` XPC messages — this
+was built in ts5's Issue 514 Experiment 5. When Chromium's renderer detects a
+cursor change (e.g., hovering over an `<a>` tag), the change flows through
+`RenderWidgetHostImpl::SetCursor` → `ShellVideoConsumer::OnCursorChanged` → XPC
+message with the `ui::mojom::CursorType` integer value.
+
+Ghost currently ignores these messages — `handleMessage` in xpc.zig logs
+"unknown action: cursor_changed" and drops them.
+
+Ghostty already has a cursor pipeline: terminal escape sequences dispatch
+`performAction(.mouse_shape, shape)`, which sets `pointerStyle` on the
+SurfaceView model. A Combine subscriber in SurfaceScrollView picks this up and
+sets `scrollView.documentCursor = style.cursor`. macOS then shows that cursor
+over the scroll view via the cursor rect system.
+
+This experiment reuses that pipeline. When the mouse is over the overlay,
+`cursorPosCallback` overrides `mouse_shape` with the Chromium cursor. When the
+mouse leaves the overlay, it restores the terminal's cursor. The override
+happens on every mouse move event (60-120Hz), matching the pattern ts5 proved
+works — continuous setting is the only approach that sticks on macOS.
+
+ts5 learned three lessons across Experiments 5-7:
+
+1. **Continuous setting works** — calling `NSCursor.set()` on every mouse move
+   while over the overlay keeps the cursor correct. One-time calls get swallowed
+   by macOS cursor management.
+2. **One-time reset doesn't work** — Experiment 6 tried resetting once on exit,
+   but macOS timing swallows it. The cursor sticks.
+3. **`invalidateCursorRects` is the correct reset** — Experiment 7 called
+   `window.invalidateCursorRects(for: hitView)` which tells macOS to re-evaluate
+   cursor rects and pick up `documentCursor`.
+
+Ghost's approach is simpler: since we use Ghostty's
+`performAction(.mouse_shape)` pipeline (which sets `documentCursor`), we don't
+fight the cursor rect system — we work through it. Setting `mouse_shape` while
+over the overlay changes `documentCursor` to the Chromium cursor. Restoring
+`mouse_shape` when leaving restores it. The Combine subscriber dispatches to
+main thread automatically.
+
+### Design
+
+**Phase 1: Handle `cursor_changed` in xpc.zig.**
+
+Add `cursor_changed` case to `handleMessage`:
+
+```zig
+} else if (std.mem.eql(u8, action_str, "cursor_changed")) {
+    handleCursorChanged(msg);
+}
+```
+
+New handler that stores the cursor type on both the Pane and the CoreSurface:
+
+```zig
+fn handleCursorChanged(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const cursor_type = xpc_dictionary_get_int64(msg, "cursor_type");
+
+    if (panes.get(pane_id)) |p| {
+        if (p.overlay_surface) |surface| {
+            surface.overlay_cursor_type = cursor_type;
+        }
+    }
+}
+```
+
+Need to add the `xpc_dictionary_get_int64` extern declaration (it's not there
+yet — we have `set_int64` but not `get_int64`):
+
+```zig
+extern "c" fn xpc_dictionary_get_int64(xdict: xpc_object_t, key: [*:0]const u8) i64;
+```
+
+**Phase 2: Add state to Surface.**
+
+Add `overlay_cursor_type` field to CoreSurface (`Surface.zig`). This is written
+by the XPC handler (serial queue) and read by `cursorPosCallback` (main thread).
+A plain `i64` is fine — worst case we see a one-frame stale value.
+
+```zig
+/// Chromium cursor type for overlay (Issue 606).
+/// Set by XPC cursor_changed handler, read by cursorPosCallback.
+/// Values are ui::mojom::CursorType integers from Chromium.
+overlay_cursor_type: i64 = 0,
+```
+
+**Phase 3: Set cursor in `cursorPosCallback`.**
+
+Expand the overlay check in `cursorPosCallback` to also set the cursor:
+
+```zig
+// Check if mouse is in a browser overlay (Issue 606).
+if (self.hitTestOverlay(@floatCast(pos.x), @floatCast(pos.y))) |overlay_pos| {
+    const xpc = @import("apprt/xpc.zig");
+    xpc.sendMouseMove(self, overlay_pos.x, overlay_pos.y);
+
+    // Set cursor from Chromium's cursor type.
+    const shape = mapChromiumCursor(self.overlay_cursor_type);
+    _ = try self.rt_app.performAction(
+        .{ .surface = self },
+        .mouse_shape,
+        shape,
+    );
+    self.mouse.over_overlay = true;
+    return;
+}
+
+// Restore terminal cursor when leaving the overlay.
+if (self.mouse.over_overlay) {
+    self.mouse.over_overlay = false;
+    _ = try self.rt_app.performAction(
+        .{ .surface = self },
+        .mouse_shape,
+        self.io.terminal.mouse_shape,
+    );
+}
+```
+
+Add `over_overlay: bool = false` to the mouse state struct in Surface.zig
+(alongside the existing `over_link`, `click_state`, etc.).
+
+**Phase 4: Cursor type mapping.**
+
+Map Chromium's `ui::mojom::CursorType` integers to Ghostty's `MouseShape` enum.
+Only the common cursors need explicit mapping — everything else defaults to
+`.default` (arrow).
+
+```zig
+const MouseShape = @import("terminal/main.zig").MouseShape;
+
+fn mapChromiumCursor(cursor_type: i64) MouseShape {
+    return switch (cursor_type) {
+        0 => .default,       // kPointer (arrow)
+        1 => .crosshair,     // kCross
+        2 => .pointer,       // kHand
+        3 => .text,          // kIBeam
+        31 => .move,         // kMove
+        39 => .default,      // kNone (hide cursor — use default for now)
+        40 => .not_allowed,  // kNotAllowed
+        43 => .grab,         // kGrab
+        44 => .grabbing,     // kGrabbing
+        else => .default,
+    };
+}
+```
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://news.ycombinator.com
+```
+
+Pass criteria:
+
+- Hovering over a link shows pointing hand cursor
+- Hovering over text shows I-beam cursor
+- Hovering over non-interactive areas shows arrow
+- Moving off the overlay restores the terminal's cursor (arrow from `web` TUI
+  mouse capture)
+- Cursor transitions are instant (no flicker or stuck cursor)
+- Rapid movement between overlay and terminal doesn't leave the wrong cursor
