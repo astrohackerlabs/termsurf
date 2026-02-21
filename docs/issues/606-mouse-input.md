@@ -1994,3 +1994,101 @@ The activation flag mechanism (set in `paneFocusChanged`, cleared on release) is
 sound. The real fix for text selection was Experiment 13's XPC type mismatch
 correction. No code changes needed from this experiment — the debug logs were
 added and removed as a diagnostic tool only.
+
+## Experiment 15: Double-click word selection
+
+### Goal
+
+Enable double-click to select a word and triple-click to select a line in
+Chromium overlays.
+
+### Background
+
+`sendMouseEvent` hardcodes `click_count` to `1` (xpc.zig line 766). Chromium
+reads this and passes it to `WebMouseEvent`. For double-click word selection
+Chromium needs `click_count=2`; for triple-click line selection,
+`click_count=3`.
+
+Ghostty already tracks multi-click state in `mouse.left_click_count` (1, 2, or
+3) with timing and distance checks. But the overlay block in
+`mouseButtonCallback` returns early at line 4050 (`return true`), so Ghostty's
+click count computation at line 4258+ never runs for overlay clicks.
+
+We need to replicate the multi-click detection for overlay clicks. The logic is:
+
+1. On left press, check time since last left press
+2. If within `config.mouse_interval` (default 500ms) and cursor hasn't moved
+   more than one cell width, increment count
+3. If too slow or too far, reset to 1
+4. Cap at 3 (triple-click), wrap back to 1
+
+We can reuse the existing `left_click_count`, `left_click_time`, and position
+fields on `mouse` since the overlay block runs before the terminal click
+processing and returns early.
+
+### Design
+
+**Phase 1: Compute click count for overlay clicks (Surface.zig).**
+
+Inside the overlay forwarding block, before the `sendMouseEvent` call, add
+multi-click detection for left press events:
+
+```zig
+// Compute click count for overlay (mirrors logic at line 4258).
+var click_count: u8 = 1;
+if (button == .left and action == .press) {
+    const cursor = try self.rt_surface.getCursorPos();
+    // Distance check — reset if cursor moved too far.
+    if (self.mouse.left_click_count > 0) {
+        const max_distance: f64 = @floatFromInt(self.size.cell.width);
+        const distance = @sqrt(
+            std.math.pow(f64, cursor.x - self.mouse.left_click_xpos, 2) +
+                std.math.pow(f64, cursor.y - self.mouse.left_click_ypos, 2),
+        );
+        if (distance > max_distance) self.mouse.left_click_count = 0;
+    }
+    // Timing check — reset if too slow.
+    if (std.time.Instant.now()) |now| {
+        if (self.mouse.left_click_count > 0) {
+            const since = now.since(self.mouse.left_click_time);
+            if (since > self.config.mouse_interval) {
+                self.mouse.left_click_count = 0;
+            }
+        }
+        self.mouse.left_click_time = now;
+        self.mouse.left_click_count += 1;
+        if (self.mouse.left_click_count > 3) self.mouse.left_click_count = 1;
+    } else |_| {
+        self.mouse.left_click_count = 1;
+    }
+    self.mouse.left_click_xpos = cursor.x;
+    self.mouse.left_click_ypos = cursor.y;
+    click_count = self.mouse.left_click_count;
+}
+```
+
+**Phase 2: Pass click count to `sendMouseEvent` (xpc.zig).**
+
+Add `click_count: u8` parameter to `sendMouseEvent` signature. Replace the
+hardcoded `1`:
+
+```zig
+xpc_dictionary_set_int64(msg, "click_count", @intCast(click_count));
+```
+
+Update the call site in `mouseButtonCallback` to pass `click_count`.
+
+### Verification
+
+```bash
+cd ghost && zig build
+GHOSTTY_LOG=stderr open ghost/zig-out/Ghostty.app --stdout ~/dev/termsurf/logs/ghost.log --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Pass criteria:
+
+- Double-click a word: the word highlights
+- Triple-click: the entire line/paragraph highlights
+- Single click still works (places caret, no selection)
+- Click and drag still works (text selection)
