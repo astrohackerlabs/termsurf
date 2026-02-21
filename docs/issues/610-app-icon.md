@@ -411,3 +411,94 @@ open ghost/zig-out/Ghostty.app
 3. **Debug build dock icon:** The green wave debug icon still appears (runtime
    override from Experiment 1).
 4. **No old Ghostty ghost visible:** The `>_` ghost silhouette does not appear.
+
+**Result:** Fail
+
+The build produces the correct `.icns` — extracting it with
+`iconutil -c iconset` confirms the surfing ghost is composited onto the dark
+blue screen with gloss and bevel. But the app still displays the old Ghostty
+icon when launched. Clearing the Xcode DerivedData cache fixed the build output;
+the remaining problem is macOS displaying a cached icon.
+
+#### Conclusion
+
+The Icon Composer changes are correct. The `icon.json` edits (swap image
+references, remove position offsets) and the new `surfing-ghost.png` in
+`Assets/` produce the intended composited icon. The build pipeline works. But
+macOS icon services caches app icons aggressively, and the old icon persists at
+launch.
+
+Clearing the cache with
+`sudo rm -rf /Library/Caches/com.apple.iconservices.store` and `killall Dock`
+did not fix it. macOS may cache icons in additional locations
+(`/private/var/folders/`, per-user icon caches, LaunchServices database) or the
+cache may require a logout/reboot to fully clear.
+
+### Experiment 4: Clean build with cache clearing
+
+#### Goal
+
+The surfing ghost icon (from Experiment 3's `Ghostty.icon` modification) is
+visible when launching the app.
+
+#### Description
+
+Experiment 3 proved the `.icon` modification is correct — the built `.icns`
+contains the surfing ghost (verified by extraction with `iconutil`). The icon
+didn't appear because macOS was serving a cached version. But Experiment 3 also
+didn't start from a fully clean state — stale Xcode DerivedData was discovered
+mid-experiment and had to be purged.
+
+This experiment starts completely clean: delete all Xcode build caches and local
+build artifacts **before** building, so `actool` compiles `Ghostty.icon` fresh
+with no possibility of stale output.
+
+The `Ghostty.icon` modifications from Experiment 3 are already in place
+(uncommitted). No additional code or asset changes are needed — this is purely a
+clean rebuild.
+
+#### Steps
+
+1. Delete Xcode DerivedData for all Ghostty builds:
+
+```bash
+rm -rf ~/Library/Developer/Xcode/DerivedData/Ghostty-*
+```
+
+2. Delete the local build directory:
+
+```bash
+rm -rf ghost/macos/build/
+```
+
+3. Rebuild:
+
+```bash
+cd ghost && zig build
+```
+
+4. Verify the built `.icns` contains the surfing ghost:
+
+```bash
+mkdir /tmp/icon-check
+cp ghost/zig-out/Ghostty.app/Contents/Resources/AppIcon.icns /tmp/icon-check/
+cd /tmp/icon-check && iconutil -c iconset AppIcon.icns
+open /tmp/icon-check/AppIcon.iconset/icon_512x512@2x.png
+```
+
+5. Launch the app:
+
+```bash
+open ghost/zig-out/Ghostty.app
+```
+
+#### Verification
+
+1. **Extracted `.icns`:** The 1024px PNG from the iconset shows the surfing
+   ghost on the dark blue screen background (not the old Ghostty ghost).
+2. **Dock icon:** The surfing ghost icon appears in the dock when the app
+   launches.
+3. **Finder:** `ghost/zig-out/Ghostty.app` shows the surfing ghost icon.
+4. **App switcher (Cmd+Tab):** Shows the surfing ghost icon.
+
+**Result:** (pending)
