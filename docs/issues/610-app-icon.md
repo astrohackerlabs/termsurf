@@ -501,4 +501,19 @@ open ghost/zig-out/Ghostty.app
 3. **Finder:** `ghost/zig-out/Ghostty.app` shows the surfing ghost icon.
 4. **App switcher (Cmd+Tab):** Shows the surfing ghost icon.
 
-**Result:** (pending)
+**Result:** Fail
+
+The built `Ghostty.icns` contains the surfing ghost (verified by extraction with
+`iconutil`). But macOS still displays the old Ghostty icon at launch, before the
+debug runtime override replaces it. The clean build with full cache clearing did
+not solve the problem — macOS icon services continues to serve a cached icon for
+this bundle identifier.
+
+#### Conclusion
+
+Deleting Xcode DerivedData and `macos/build/` ensures `actool` compiles the
+`.icon` fresh, producing a correct `.icns`. But the macOS icon cache operates at
+a layer beyond the build system. The old icon is cached by macOS against the
+app's bundle identifier (`com.mitchellh.ghostty`), and no combination of build
+cache clearing has forced macOS to re-read the actual `.icns` file from the app
+bundle.
