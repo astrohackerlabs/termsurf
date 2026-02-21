@@ -320,3 +320,175 @@ section predicted this — several fields are unset:
    the follow-up `kChar` event — Cmd shortcuts should only produce
    `kRawKeyDown` + `kKeyUp`, never `kChar`. This may not be the primary cause
    but is still incorrect behavior that should be fixed.
+
+### Experiment 3: Populate missing NativeWebKeyboardEvent fields
+
+#### Goal
+
+Cmd+A, Cmd+C, Cmd+V, Cmd+X, and Cmd+Z work in Chromium overlays. Experiment 2
+proved the Ghost-side bypass works (events reach Chromium with correct VK codes
+and modifiers), but Chromium doesn't interpret them as shortcuts because the
+`NativeWebKeyboardEvent` is missing fields that Chromium's command dispatch
+requires.
+
+#### Description
+
+Studying Chromium's own Mac input path (`WebKeyboardEventBuilder::Build()` in
+`components/input/web_input_event_builders_mac.mm`) revealed that the normal
+constructor sets several fields our `HandleKeyEvent` omits:
+
+- **`is_system_key`** — `true` for all Cmd+key except Cmd+B and Cmd+I. Tells
+  Blink to route the event through the system command path.
+- **`dom_code`** — USB HID usage code (e.g., `DomCode::US_A`). Some shortcut
+  dispatch paths check this.
+- **`dom_key`** — DOM key value (e.g., `DomKey::FromCharacter('a')`). Some
+  command matching uses this.
+
+Testing confirmed that the modifier bits ARE sent correctly — pressing Cmd+A
+does not type 'a' (Chromium sees the Meta modifier and suppresses text input),
+but it also doesn't trigger "select all" because the event is missing the fields
+above.
+
+Chromium provides `ui::UsLayoutKeyboardCodeToDomCode()` which maps Windows VK
+codes to `DomCode` assuming US layout. Since we already send the VK code, we can
+derive `dom_code` without adding the native macOS keycode to the XPC message.
+From `dom_code`, `ui::DomCodeToUsLayoutDomKey()` gives us the `dom_key`.
+
+This experiment also skips the `kChar` event for Cmd+key combinations. In
+Chromium's normal Mac input path, Cmd shortcuts produce only `kRawKeyDown` +
+`kKeyUp`, never `kChar`.
+
+#### Chromium branch
+
+Create `146.0.7650.0-issue-609` from `146.0.7650.0-issue-608`.
+
+#### Changes
+
+**`chromium/src/content/chromium_profile_server/browser/shell_browser_main_parts.cc`**
+— Update `HandleKeyEvent`:
+
+Add includes:
+
+```cpp
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/dom/dom_key.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+```
+
+Replace the `HandleKeyEvent` body with:
+
+```cpp
+void ShellBrowserMainParts::HandleKeyEvent(
+    const std::string& pane_id, const std::string& type,
+    int windows_key_code, const std::string& utf8_text,
+    uint64_t modifiers) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  TabState* tab = nullptr;
+  for (auto& t : tabs_) {
+    if (t->pane_id == pane_id) { tab = t.get(); break; }
+  }
+  if (!tab) return;
+
+  int web_modifiers = static_cast<int>(modifiers & 0xF);
+  bool has_meta = (web_modifiers & blink::WebInputEvent::kMetaKey) != 0;
+
+  auto event_type = blink::WebInputEvent::Type::kRawKeyDown;
+  if (type == "up")
+    event_type = blink::WebInputEvent::Type::kKeyUp;
+
+  input::NativeWebKeyboardEvent key_event(
+      event_type, web_modifiers, base::TimeTicks::Now());
+  key_event.windows_key_code = windows_key_code;
+
+  // Populate dom_code from VK code (assumes US layout).
+  key_event.dom_code = static_cast<int>(
+      ui::UsLayoutKeyboardCodeToDomCode(
+          static_cast<ui::KeyboardCode>(windows_key_code)));
+
+  // Populate dom_key from dom_code.
+  ui::DomKey dom_key;
+  ui::KeyboardCode dummy_vkey;
+  if (ui::DomCodeToUsLayoutDomKey(
+          static_cast<ui::DomCode>(key_event.dom_code),
+          web_modifiers, &dom_key, &dummy_vkey)) {
+    key_event.dom_key = static_cast<int>(dom_key.ToBase());
+  }
+
+  // Mark Cmd+key as system key (except Cmd+B and Cmd+I, following Chromium's
+  // IsSystemKeyEvent logic).
+  if (has_meta &&
+      windows_key_code != ui::VKEY_B &&
+      windows_key_code != ui::VKEY_I) {
+    key_event.is_system_key = true;
+  }
+
+  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+  if (!view) {
+    LOG(WARNING) << "[ProfileServer] Key view is null for pane=" << pane_id;
+    return;
+  }
+
+  view->GetRenderWidgetHost()->ForwardKeyboardEvent(key_event);
+
+  // For key down with text, send a Char event — but NOT for Cmd+key shortcuts,
+  // which should only produce kRawKeyDown + kKeyUp.
+  if (type != "up" && !utf8_text.empty() && !has_meta) {
+    input::NativeWebKeyboardEvent char_event(
+        blink::WebInputEvent::Type::kChar, web_modifiers,
+        base::TimeTicks::Now());
+    char_event.windows_key_code = windows_key_code;
+
+    std::u16string text16 = base::UTF8ToUTF16(utf8_text);
+    if (!text16.empty()) {
+      char_event.text[0] = text16[0];
+      char_event.unmodified_text[0] = text16[0];
+    }
+
+    view->GetRenderWidgetHost()->ForwardKeyboardEvent(char_event);
+  }
+
+  LOG(INFO) << "[ProfileServer] Key " << type << " vk=0x" << std::hex
+            << windows_key_code << std::dec
+            << " mods=" << web_modifiers
+            << " system=" << key_event.is_system_key
+            << " pane=" << pane_id;
+}
+```
+
+Three changes from the current code:
+
+1. **`is_system_key = true`** when Meta modifier is set (except Cmd+B, Cmd+I).
+2. **`dom_code` and `dom_key` populated** from the Windows VK code using
+   `UsLayoutKeyboardCodeToDomCode` and `DomCodeToUsLayoutDomKey`.
+3. **`kChar` event skipped** when Meta is held.
+4. **Log now includes modifiers and system key flag** for diagnostics.
+
+No Ghost-side changes — Experiment 2's `performKeyEquivalent` bypass is already
+in place.
+
+#### Verification
+
+```bash
+# Build Chromium (branch 146.0.7650.0-issue-609)
+cd chromium/src
+export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+autoninja -C out/Default chromium_profile_server
+
+# Launch
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://lite.duckduckgo.com
+```
+
+Click the search box to enter browse mode and focus the text field. Test:
+
+| # | Test                       | Steps                                              | Expected                       |
+| - | -------------------------- | -------------------------------------------------- | ------------------------------ |
+| 1 | Cmd+A selects all          | Type "hello", Cmd+A, type "X"                      | "X" — all text replaced        |
+| 2 | Cmd+C / Cmd+V              | Type "hello", Cmd+A, Cmd+C, click new field, Cmd+V | "hello" pasted into new field  |
+| 3 | Cmd+X cuts                 | Type "hello", Cmd+A, Cmd+X                         | Text field empty               |
+| 4 | Cmd+Z undoes               | Type "hello", Cmd+A, type "X", Cmd+Z               | "hello" restored               |
+| 5 | Regular typing still works | Type "hello"                                       | "hello" appears                |
+| 6 | Ctrl+Esc still works       | Press Ctrl+Esc                                     | Exits browse mode              |
+| 7 | Cmd+A outside browse mode  | Exit browse mode, press Cmd+A                      | Selects terminal text (normal) |
