@@ -269,3 +269,54 @@ Click the search box to enter browse mode and focus the text field. Test:
 | 6 | Cmd+A outside browse mode | Exit browse mode, press Cmd+A                      | Selects terminal text (normal) |
 
 Test 6 is a regression check — Cmd+A must still work normally when not browsing.
+
+**Result:** Fail
+
+The `performKeyEquivalent` bypass works — Cmd+key events now reach Chromium via
+the forwarding pipeline. The logs confirm key down/up events arriving with the
+correct VK codes (0x41 for A, 0x43 for C, 0x58 for X). However, none of the Cmd
+shortcuts produce their expected behavior in the webpage. Cmd+A does not select
+text, Cmd+C does not copy, etc. The events arrive but Chromium does not
+interpret them as shortcuts.
+
+The Ghost-side fix (routing Cmd+key events past `performKeyEquivalent` into
+`keyDown` → `keyCallback` → XPC) is correct and should be kept. The problem is
+on the Chromium side: `HandleKeyEvent` constructs a `NativeWebKeyboardEvent`
+with `windows_key_code` and `modifiers` (meta bit), but this is not sufficient
+for Chromium to recognize Cmd shortcuts. The issue document's "Potential issues"
+section predicted this — several fields are unset:
+
+- **`is_system_key`** — On macOS, Cmd+key events should have this set so
+  Chromium routes them through the editing command system.
+- **`dom_code`** — USB HID usage code. Chromium's shortcut handling may check
+  this.
+- **`dom_key`** — DOM key enum. Some command dispatch paths may rely on this.
+- **`native_key_code`** — macOS keycode. Some platform-specific paths may need
+  this.
+
+#### Ideas for next steps
+
+1. **Add diagnostic logging on the Chromium side.** Log the modifier bits
+   arriving in `HandleKeyEvent` to confirm they're actually set (the current log
+   only prints VK code, not modifiers). This rules out a modifier encoding bug.
+
+2. **Set `is_system_key = true` for Cmd+key events.** This is the most likely
+   fix. On macOS, Chromium uses `is_system_key` to distinguish shortcuts from
+   regular typing. When `modifiers & 8` (meta) is set, set
+   `key_event.is_system_key = true`.
+
+3. **Populate `dom_code` and `dom_key`.** If `is_system_key` alone doesn't fix
+   it, these fields may be needed. The VK code can be mapped to `dom_code`
+   (e.g., `ui::DomCode::US_A` for VK 0x41) and `dom_key` (e.g.,
+   `ui::DomKey::FromCharacter('a')`).
+
+4. **Study how Chromium's own Mac input path constructs
+   `NativeWebKeyboardEvent`.** Look at `RenderWidgetHostViewMac::HandleKeyEvent`
+   or the `NativeWebKeyboardEvent` Mac-specific constructor that takes an
+   `NSEvent*`. This would reveal exactly which fields Chromium sets for Cmd+key
+   events on macOS.
+
+5. **Skip `kChar` event for Cmd+key.** When the meta modifier is set, don't send
+   the follow-up `kChar` event — Cmd shortcuts should only produce
+   `kRawKeyDown` + `kKeyUp`, never `kChar`. This may not be the primary cause
+   but is still incorrect behavior that should be fixed.
