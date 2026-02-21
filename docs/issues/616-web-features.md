@@ -524,3 +524,52 @@ section.
 7. **Slow page visual**: Navigate to `http://localhost:9616/slow?seconds=10`.
    Both Ghostty's progress bar and the page's own progress indicator should
    advance together over 10 seconds.
+
+**Result:** Partial
+
+The cold-start pulse, safety timeout, clean exit, and test page all work
+correctly. Two issues remain:
+
+1. **Slow page progress stalls at ~33%.** On the `/slow?seconds=10` page, the
+   Ghostty progress bar advances to roughly one-third and then stops moving
+   until the page finishes loading. The in-page progress bar continues advancing
+   normally. This happens because Chromium's `LoadProgressChanged` reflects an
+   internal loading heuristic, not bytes received. For a single chunked HTTP
+   response, Chromium considers the connection and initial headers as
+   significant progress (~33%), then reports little additional progress while
+   the same response continues streaming. The bar jumps to ~33%, stalls for the
+   remaining seconds, then disappears when `DidStopLoading` fires. During
+   Chromium cold start the bar keeps moving because Chromium goes through
+   multiple internal loading phases (process init, DNS, connection, headers,
+   rendering) that each contribute progress.
+
+2. **Back navigation leaves bar stuck at 100%.** Right-clicking a page and
+   selecting "Back" causes the progress bar to fill to 100% and stay there
+   permanently (until the 30-second safety timeout clears it). This likely
+   happens because Chromium restores the page from the back/forward cache
+   (bfcache). When bfcache is used, `DidStartLoading` fires and
+   `LoadProgressChanged` quickly reaches 100%, but `DidStopLoading` may not fire
+   because the page is restored rather than loaded. Without the "done" signal,
+   the bar remains active.
+
+#### Conclusion
+
+The cold-start gap from Experiment 2 is solved — the progress bar now pulses
+from the moment the user runs `web <url>`. The safety timeout and clean exit
+work as designed.
+
+The two remaining issues are both on the Chromium side of the pipeline:
+
+- The **slow page stall** is a fundamental limitation of Chromium's progress
+  heuristic. The TUI and XPC pipeline are working correctly — the problem is
+  that Chromium simply doesn't report granular progress for single chunked
+  responses. A future experiment could switch to indeterminate mode when
+  progress hasn't changed for more than 2–3 seconds, giving the user a visual
+  cue that loading is still in progress.
+
+- The **back navigation stuck bar** needs investigation in the Chromium Profile
+  Server. The fix is likely to observe an additional Chromium callback (e.g.,
+  `RenderFrameHost::IsInBackForwardCache`, `DidFinishNavigation`, or
+  `NavigationEntryCommitted`) and send "done" when a bfcache restore completes.
+  Alternatively, the TUI could treat reaching 100% progress as equivalent to
+  "done" after a short delay.

@@ -1,7 +1,7 @@
 mod xpc;
 
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
@@ -85,6 +85,9 @@ fn main() -> io::Result<()> {
 
     let mut mode = Mode::Browse;
     let mut last_viewport = Rect::default();
+    let mut loading_bar_active = false;
+    let mut loading_bar_start: Option<Instant> = None;
+    const LOADING_TIMEOUT: Duration = Duration::from_secs(30);
 
     // Event loop.
     loop {
@@ -95,6 +98,7 @@ fn main() -> io::Result<()> {
 
         // Send overlay coordinates to compositor (only when changed).
         if viewport_rect != last_viewport {
+            let first_overlay = last_viewport == Rect::default();
             if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
                 conn.send_set_overlay(
                     pid,
@@ -108,6 +112,15 @@ fn main() -> io::Result<()> {
                 );
             }
             last_viewport = viewport_rect;
+
+            // Emit indeterminate pulse immediately on first overlay (cold-start coverage).
+            if first_overlay {
+                let mut stdout = io::stdout();
+                let _ = write!(stdout, "\x1b]9;4;3\x1b\\");
+                let _ = stdout.flush();
+                loading_bar_active = true;
+                loading_bar_start = Some(Instant::now());
+            }
         }
 
         if event::poll(Duration::from_millis(250))? {
@@ -157,10 +170,25 @@ fn main() -> io::Result<()> {
                     xpc::CompositorMessage::LoadingState { state, progress } => {
                         let mut stdout = io::stdout();
                         let _ = match state.as_str() {
-                            "loading" => write!(stdout, "\x1b]9;4;3\x1b\\"),
-                            "progress" => write!(stdout, "\x1b]9;4;1;{}\x1b\\", progress),
-                            "done" => write!(stdout, "\x1b]9;4;0\x1b\\"),
-                            "error" => write!(stdout, "\x1b]9;4;2\x1b\\"),
+                            "loading" => {
+                                loading_bar_active = true;
+                                loading_bar_start = Some(Instant::now());
+                                write!(stdout, "\x1b]9;4;3\x1b\\")
+                            }
+                            "progress" => {
+                                loading_bar_active = true;
+                                write!(stdout, "\x1b]9;4;1;{}\x1b\\", progress)
+                            }
+                            "done" => {
+                                loading_bar_active = false;
+                                loading_bar_start = None;
+                                write!(stdout, "\x1b]9;4;0\x1b\\")
+                            }
+                            "error" => {
+                                loading_bar_active = false;
+                                loading_bar_start = None;
+                                write!(stdout, "\x1b]9;4;2\x1b\\")
+                            }
                             _ => Ok(()),
                         };
                         let _ = stdout.flush();
@@ -168,6 +196,29 @@ fn main() -> io::Result<()> {
                 }
             }
         }
+
+        // Safety timeout: clear stuck loading bar after 30 seconds (Issue 616).
+        if loading_bar_active {
+            if let Some(start) = loading_bar_start {
+                if start.elapsed() >= LOADING_TIMEOUT {
+                    let mut stdout = io::stdout();
+                    let _ = write!(stdout, "\x1b]9;4;2\x1b\\");
+                    let _ = stdout.flush();
+                    std::thread::sleep(Duration::from_millis(500));
+                    let _ = write!(stdout, "\x1b]9;4;0\x1b\\");
+                    let _ = stdout.flush();
+                    loading_bar_active = false;
+                    loading_bar_start = None;
+                }
+            }
+        }
+    }
+
+    // Clear loading bar on exit (Issue 616).
+    if loading_bar_active {
+        let mut stdout = io::stdout();
+        let _ = write!(stdout, "\x1b]9;4;0\x1b\\");
+        let _ = stdout.flush();
     }
 
     // Restore terminal. The compositor connection drops here, which closes
