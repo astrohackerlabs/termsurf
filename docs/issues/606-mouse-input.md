@@ -1538,3 +1538,109 @@ Check `~/dev/termsurf/logs/ghost.log` for the sequence. The log should reveal:
 - What `isOverlayForwarding` returns at press time and why
 - Whether `notifyOverlayClicked` is reached or skipped
 - The full press → release sequence with all state at each step
+
+### Result: Pass
+
+Chromium server logs confirmed the hypothesis. In both test clicks, focus fires
+1-4ms before the mouse event:
+
+```
+040612.965848  Focus gained for pane 4C35F212
+040612.967241  Mouse down — 1.4ms later, press forwarded
+040613.056259  Mouse up — release forwarded
+040613.131111  URL changed — link navigated
+```
+
+`paneFocusChanged` sets `focused_pane` before `mouseButtonCallback` runs, so
+`isOverlayForwarding` returns true and both press and release go straight to
+Chromium.
+
+## Experiment 10: Set activation flag in paneFocusChanged
+
+### Goal
+
+Suppress the activation click when clicking on an inactive pane's overlay.
+Remove the Experiment 9 debug logs.
+
+### Background
+
+Experiment 9 confirmed that `paneFocusChanged` fires before
+`mouseButtonCallback`. Experiment 8's approach — setting `overlay_activation` in
+`notifyOverlayClicked` — failed because `notifyOverlayClicked` is in the
+`else if` branch that's never reached (the pane is already forwarding by press
+time).
+
+The fix: set the flag earlier, in `paneFocusChanged` itself. Since
+`paneFocusChanged` fires before the mouse callback, the flag will already be
+true when `mouseButtonCallback` runs. The forwarding path checks the flag and
+suppresses both press and release.
+
+This matches standard macOS behavior: clicking an inactive window activates it
+without clicking through. The first click on a freshly-focused pane's overlay is
+always consumed as activation, whether the focus came from a mouse click or a
+keyboard shortcut.
+
+### Design
+
+**Phase 1: Set activation flag in `paneFocusChanged` (Surface.zig).**
+
+When a pane gains focus, set the flag. Remove Experiment 9 log.
+
+```zig
+pub fn paneFocusChanged(self: *Surface, focused: bool) void {
+    if (focused) {
+        self.mouse.overlay_activation = true;
+    }
+    const xpc = @import("apprt/xpc.zig");
+    xpc.handlePaneFocusChanged(self, focused);
+}
+```
+
+**Phase 2: Clear flag on non-overlay clicks (Surface.zig).**
+
+After the overlay hit block in `mouseButtonCallback`, clear the flag. This
+handles keyboard-driven focus changes where the subsequent click lands outside
+the overlay:
+
+```zig
+    // Click missed overlay — switch to control if browsing (Exp 6).
+    if (button == .left and action == .press) {
+        const xpc = @import("apprt/xpc.zig");
+        xpc.notifyNonOverlayClicked(self);
+    }
+    // Clear activation flag — click landed outside overlay (Exp 10).
+    self.mouse.overlay_activation = false;
+}
+```
+
+The overlay hit path (which returns true) keeps the flag alive for release
+suppression. The miss path clears it.
+
+**Phase 3: Remove Experiment 9 debug logs.**
+
+Remove all `log.info` calls added in Experiment 9 from:
+
+- `paneFocusChanged` in Surface.zig
+- `mouseButtonCallback` overlay hit in Surface.zig
+- `notifyOverlayClicked` in xpc.zig
+- `isOverlayForwarding` in xpc.zig
+
+Restore these functions to their pre-Experiment 9 form (with Experiment 8's
+suppression logic intact in `mouseButtonCallback`).
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Pass criteria:
+
+- Clicking a link on an inactive pane activates the pane but does NOT navigate
+- The link navigates on the next click (after activation)
+- Keyboard pane switch followed by overlay click: first click is absorbed
+- Mouse moves and scroll still gated (no regression from Exp 7)
+- Keyboard mode switching (Enter/Esc) still works
+- No debug log noise in ghost.log
