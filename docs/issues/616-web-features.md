@@ -1069,3 +1069,101 @@ The Content Shell context menu was a debugging artifact that didn't belong in
 TermSurf's architecture. Commenting out `ShowContextMenu` eliminates the focus
 issue. Back, forward, reload, and inspect will be implemented as TUI keybindings
 via XPC in future experiments.
+
+### Experiment 10: Back/forward/reload keybindings
+
+#### Goal
+
+Add Cmd+[ (back), Cmd+] (forward), and Cmd+R (reload) keybindings in Browse
+mode. These replace the context menu actions removed in Experiment 9.
+
+#### Background
+
+Experiment 9 removed the Content Shell context menu, which was the only way to
+navigate back/forward/reload. These are standard browser keybindings that users
+expect. The implementation intercepts these Cmd+key combinations in Chromium's
+`HandleKeyEvent` before they reach the renderer.
+
+The existing key forwarding pipeline already delivers Cmd+key events to
+Chromium. In `performKeyEquivalent` (SurfaceView_AppKit.swift line 1210), browse
+mode forwards all Cmd+key events to `keyDown`, which reaches Zig's
+`sendKeyEvent`, which sends an XPC `key_event` to Chromium. Chromium's
+`HandleKeyEvent` already has a Cmd+key switch statement for editing commands
+(Cmd+A/C/V/X/Z). The navigation commands go in the same place.
+
+#### Changes
+
+##### Chromium Profile Server (`shell_browser_main_parts.cc`)
+
+**Branch: `146.0.7650.0-issue-616`**
+
+In `HandleKeyEvent`, add navigation handling in the existing `has_meta` block
+before forwarding the key to the renderer. When a navigation command is
+recognized, execute it and return early (don't forward to the renderer):
+
+```cpp
+// Navigation commands — intercept before forwarding to renderer.
+if (has_meta && type != "up") {
+  bool handled = true;
+  switch (windows_key_code) {
+    case ui::VKEY_OEM_4:  // [ — back
+      if (tab->shell->web_contents()->GetController().CanGoBack())
+        tab->shell->web_contents()->GetController().GoBack();
+      break;
+    case ui::VKEY_OEM_6:  // ] — forward
+      if (tab->shell->web_contents()->GetController().CanGoForward())
+        tab->shell->web_contents()->GetController().GoForward();
+      break;
+    case ui::VKEY_R:  // reload
+      tab->shell->web_contents()->GetController().Reload(
+          content::ReloadType::NORMAL, false);
+      break;
+    default:
+      handled = false;
+      break;
+  }
+  if (handled) return;
+}
+```
+
+This block goes after the tab lookup and `has_meta` computation (line 614), but
+before the key event construction (line 616). `VKEY_OEM_4` is `[` and
+`VKEY_OEM_6` is `]` in the Windows virtual key code mapping (already used by
+`keyToWindowsVK` in xpc.zig: `bracket_left => 0xDB`, `bracket_right => 0xDD`).
+
+Wait — the VK codes in xpc.zig are `0xDB` and `0xDD`, which are `VK_OEM_4` and
+`VK_OEM_6` respectively. Let me use the numeric values directly to be safe.
+
+##### TUI (`tui/src/main.rs`)
+
+Update the Browse mode status bar hint to show the new keybindings:
+
+```
+[cmd+[] back  [cmd+]] fwd  [cmd+r] reload  [ctrl+esc] exit
+```
+
+##### Keybindings doc (`docs/keybindings.md`)
+
+Add a new "Browser navigation" section under GUI keybindings:
+
+| Key   | Mode   | Action  | Notes                                  |
+| ----- | ------ | ------- | -------------------------------------- |
+| Cmd+[ | Browse | Back    | Intercepted in Chromium HandleKeyEvent |
+| Cmd+] | Browse | Forward | Intercepted in Chromium HandleKeyEvent |
+| Cmd+R | Browse | Reload  | Intercepted in Chromium HandleKeyEvent |
+
+##### No GUI changes
+
+The GUI already forwards all Cmd+key events to Chromium in browse mode. No
+changes needed.
+
+#### Verification
+
+1. Launch TermSurf, run `web http://localhost:9616`
+2. Click a link to navigate to a subpage
+3. Press Cmd+[ — should navigate back to the index
+4. Press Cmd+] — should navigate forward to the subpage
+5. Press Cmd+R — page should reload (loading pulse appears briefly)
+6. Cmd+[ on the first page (no history) — should do nothing (no crash)
+7. Cmd+] with no forward history — should do nothing
+8. Status bar in Browse mode shows the new keybindings
