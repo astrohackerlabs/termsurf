@@ -368,4 +368,33 @@ cd ghost && zig build
 6. **CLI version:** `ghost/zig-out/TermSurf.app/Contents/MacOS/ghostty +version`
    prints `TermSurf {version}`
 
-**Result:** (pending)
+**Result:** Pass
+
+All verification checks passed:
+
+- `TermSurf.app` appears in `zig-out/`
+- Menu bar reads "TermSurf"
+- About view shows "TermSurf" with the TermSurf GitHub link
+- Bundle identifier is `com.termsurf` (release) / `com.termsurf.debug` (debug)
+- CLI prints `TermSurf 1.3.0-main+...`
+- Icon verification deferred to Issue 610 (the icon asset changes were not part
+  of this experiment)
+
+#### Conclusion
+
+The rename required changes to 11 files — 4 Zig source files for config paths, 3
+Swift files for user-facing strings, the Xcode project, the Info.plist, the
+build system, and 2 renamed files. No new code was added. The existing
+`ghostty_config_load_default_files` function continues to work because the
+underlying hardcoded paths changed.
+
+## Conclusion
+
+TermSurf now has its own identity: distinct bundle identifier (`com.termsurf`),
+config directory (`~/.config/termsurf/`), and display name. It can coexist with
+upstream Ghostty without icon collisions (Issue 610) or config collisions.
+
+Internal identifiers (`GhosttyKit`, `Ghostty.*` Swift namespaces, `ghostty_*` C
+API) remain unchanged for upstream merge safety. A future issue may explore a
+full find/replace approach with a reproducible transform applied to upstream
+before merging.

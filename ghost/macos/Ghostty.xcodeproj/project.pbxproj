@@ -56,13 +56,13 @@
 		A54F45F32E1F047A0046BD5C /* GhosttyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GhosttyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A553F4122E06EB1600257779 /* Ghostty.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; name = Ghostty.icon; path = ../images/Ghostty.icon; sourceTree = SOURCE_ROOT; };
 		A56B880A2A840447007A0E29 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
-		A571AB1C2A206FC600248498 /* Ghostty-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Ghostty-Info.plist"; sourceTree = "<group>"; };
+		A571AB1C2A206FC600248498 /* TermSurf-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "TermSurf-Info.plist"; sourceTree = "<group>"; };
 		A586167B2B7703CC009BDB1D /* fish */ = {isa = PBXFileReference; lastKnownFileType = folder; name = fish; path = "../zig-out/share/fish"; sourceTree = "<group>"; };
 		A5985CE52C33060F00C57AD3 /* man */ = {isa = PBXFileReference; lastKnownFileType = folder; name = man; path = "../zig-out/share/man"; sourceTree = "<group>"; };
 		A5A1F8842A489D6800D1E8BC /* terminfo */ = {isa = PBXFileReference; lastKnownFileType = folder; name = terminfo; path = "../zig-out/share/terminfo"; sourceTree = "<group>"; };
 		A5B30531299BEAAA0047F10C /* Ghostty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ghostty.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5B30538299BEAAB0047F10C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ghostty.entitlements; sourceTree = "<group>"; };
+		A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TermSurf.entitlements; sourceTree = "<group>"; };
 		A5D4499D2B53AE7B000F5B83 /* Ghostty-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ghostty-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = GhosttyKit.xcframework; sourceTree = "<group>"; };
 		FC5218F92D10FFC7004C93E0 /* zsh */ = {isa = PBXFileReference; lastKnownFileType = folder; name = zsh; path = "../zig-out/share/zsh"; sourceTree = "<group>"; };
@@ -267,10 +267,10 @@
 		A5B30528299BEAAA0047F10C = {
 			isa = PBXGroup;
 			children = (
-				A571AB1C2A206FC600248498 /* Ghostty-Info.plist */,
+				A571AB1C2A206FC600248498 /* TermSurf-Info.plist */,
 				A5B30538299BEAAB0047F10C /* Assets.xcassets */,
 				A553F4122E06EB1600257779 /* Ghostty.icon */,
-				A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */,
+				A5B3053D299BEAAB0047F10C /* TermSurf.entitlements */,
 				A51BFC282B30F26D00E92F16 /* GhosttyDebug.entitlements */,
 				3B39CAA42B33949B00DABEB8 /* GhosttyReleaseLocal.entitlements */,
 				81F82BC72E82815D001EDFA7 /* Sources */,
@@ -609,26 +609,26 @@
 				EXECUTABLE_NAME = ghostty;
 				GCC_OPTIMIZATION_LEVEL = fast;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "Ghostty-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = Ghostty;
+				INFOPLIST_FILE = "TermSurf-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = TermSurf;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within Ghostty would like to use AppleScript.";
-				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "A program running within Ghostty would like to access your system's audio.";
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "A program running within Ghostty would like to use Bluetooth.";
-				INFOPLIST_KEY_NSCalendarsUsageDescription = "A program running within Ghostty would like to access your Calendar.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "A program running within Ghostty would like to use the camera.";
-				INFOPLIST_KEY_NSContactsUsageDescription = "A program running within Ghostty would like to access your Contacts.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within TermSurf would like to use AppleScript.";
+				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "A program running within TermSurf would like to access your system's audio.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "A program running within TermSurf would like to use Bluetooth.";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "A program running within TermSurf would like to access your Calendar.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "A program running within TermSurf would like to use the camera.";
+				INFOPLIST_KEY_NSContactsUsageDescription = "A program running within TermSurf would like to access your Contacts.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A program running within Ghostty would like to access the local network.";
-				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within Ghostty would like to use your location temporarily.";
-				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within Ghostty would like to access your location information.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A program running within TermSurf would like to access the local network.";
+				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within TermSurf would like to use your location temporarily.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within TermSurf would like to access your location information.";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within Ghostty would like to use your microphone.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within Ghostty would like to access motion data.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within Ghostty would like to access your Photo Library.";
-				INFOPLIST_KEY_NSRemindersUsageDescription = "A program running within Ghostty would like to access your reminders.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within Ghostty would like to use speech recognition.";
-				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within Ghostty requires elevated privileges.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within TermSurf would like to use your microphone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within TermSurf would like to access motion data.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within TermSurf would like to access your Photo Library.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "A program running within TermSurf would like to access your reminders.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within TermSurf would like to use speech recognition.";
+				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within TermSurf requires elevated privileges.";
 				INFOPLIST_PREPROCESS = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -637,8 +637,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.ghostty;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.termsurf;
+				PRODUCT_NAME = TermSurf;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
 				SWIFT_VERSION = 5.0;
@@ -918,25 +918,25 @@
 				ENABLE_PREVIEWS = YES;
 				EXECUTABLE_NAME = ghostty;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "Ghostty-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "Ghostty[DEBUG]";
+				INFOPLIST_FILE = "TermSurf-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "TermSurf[DEBUG]";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within Ghostty would like to use AppleScript.";
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "A program running within Ghostty would like to use Bluetooth.";
-				INFOPLIST_KEY_NSCalendarsUsageDescription = "A program running within Ghostty would like to access your Calendar.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "A program running within Ghostty would like to use the camera.";
-				INFOPLIST_KEY_NSContactsUsageDescription = "A program running within Ghostty would like to access your Contacts.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within TermSurf would like to use AppleScript.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "A program running within TermSurf would like to use Bluetooth.";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "A program running within TermSurf would like to access your Calendar.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "A program running within TermSurf would like to use the camera.";
+				INFOPLIST_KEY_NSContactsUsageDescription = "A program running within TermSurf would like to access your Contacts.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A program running within Ghostty would like to access the local network.";
-				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within Ghostty would like to use your location temporarily.";
-				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within Ghostty would like to access your location information.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A program running within TermSurf would like to access the local network.";
+				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within TermSurf would like to use your location temporarily.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within TermSurf would like to access your location information.";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within Ghostty would like to use your microphone.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within Ghostty would like to access motion data.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within Ghostty would like to access your Photo Library.";
-				INFOPLIST_KEY_NSRemindersUsageDescription = "A program running within Ghostty would like to access your reminders.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within Ghostty would like to use speech recognition.";
-				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within Ghostty requires elevated privileges.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within TermSurf would like to use your microphone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within TermSurf would like to access motion data.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within TermSurf would like to access your Photo Library.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "A program running within TermSurf would like to access your reminders.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within TermSurf would like to use speech recognition.";
+				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within TermSurf requires elevated privileges.";
 				INFOPLIST_PREPROCESS = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -945,8 +945,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.ghostty.debug;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.termsurf.debug;
+				PRODUCT_NAME = TermSurf;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -961,7 +961,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = Ghostty.entitlements;
+				CODE_SIGN_ENTITLEMENTS = TermSurf.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -973,25 +973,25 @@
 				EXECUTABLE_NAME = ghostty;
 				GCC_OPTIMIZATION_LEVEL = fast;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "Ghostty-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = Ghostty;
+				INFOPLIST_FILE = "TermSurf-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = TermSurf;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within Ghostty would like to use AppleScript.";
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "A program running within Ghostty would like to use Bluetooth.";
-				INFOPLIST_KEY_NSCalendarsUsageDescription = "A program running within Ghostty would like to access your Calendar.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "A program running within Ghostty would like to use the camera.";
-				INFOPLIST_KEY_NSContactsUsageDescription = "A program running within Ghostty would like to access your Contacts.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within TermSurf would like to use AppleScript.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "A program running within TermSurf would like to use Bluetooth.";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "A program running within TermSurf would like to access your Calendar.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "A program running within TermSurf would like to use the camera.";
+				INFOPLIST_KEY_NSContactsUsageDescription = "A program running within TermSurf would like to access your Contacts.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A program running within Ghostty would like to access the local network.";
-				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within Ghostty would like to use your location temporarily.";
-				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within Ghostty would like to access your location information.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "A program running within TermSurf would like to access the local network.";
+				INFOPLIST_KEY_NSLocationTemporaryUsageDescriptionDictionary = "A program running within TermSurf would like to use your location temporarily.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "A program running within TermSurf would like to access your location information.";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within Ghostty would like to use your microphone.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within Ghostty would like to access motion data.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within Ghostty would like to access your Photo Library.";
-				INFOPLIST_KEY_NSRemindersUsageDescription = "A program running within Ghostty would like to access your reminders.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within Ghostty would like to use speech recognition.";
-				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within Ghostty requires elevated privileges.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "A program running within TermSurf would like to use your microphone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "A program running within TermSurf would like to access motion data.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "A program running within TermSurf would like to access your Photo Library.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "A program running within TermSurf would like to access your reminders.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "A program running within TermSurf would like to use speech recognition.";
+				INFOPLIST_KEY_NSSystemAdministrationUsageDescription = "A program running within TermSurf requires elevated privileges.";
 				INFOPLIST_PREPROCESS = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1000,8 +1000,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.ghostty;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.termsurf;
+				PRODUCT_NAME = TermSurf;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
 				SWIFT_VERSION = 5.0;
