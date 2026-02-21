@@ -1179,8 +1179,86 @@ Navigation keybindings implemented in Chromium's `HandleKeyEvent` by
 intercepting Cmd+key combinations before they reach the renderer. No GUI changes
 needed — the existing browse mode Cmd+key forwarding pipeline handles delivery.
 
-A separate issue was observed: keyboard input sometimes stops working or
-modifier state becomes inconsistent after closing and reopening the `web` TUI.
-This appears to be a pre-existing focus/modifier state synchronization problem,
-not caused by the navigation changes. Needs investigation in a separate
-experiment.
+A separate issue was observed: keyboard input sometimes stops working after
+pressing Ctrl+Esc. This is a pre-existing bug from Issue 607 — Ctrl gets stuck
+in Chromium's renderer. Fixed in Experiment 11.
+
+### Experiment 11: Fix stuck Ctrl after Ctrl+Esc
+
+#### Goal
+
+Prevent the Ctrl modifier from getting stuck in Chromium's renderer when the
+user presses Ctrl+Esc to exit browse mode.
+
+#### Background
+
+When the user presses Ctrl+Esc to exit browse mode, the following happens:
+
+1. User presses **Ctrl down** → Ghostty fires `keyCallback` with
+   `key=control_left, action=press`. `isOverlayForwarding` is true, so it's
+   forwarded to Chromium as `key_down VK_CONTROL` (0x11).
+2. User presses **Esc** (while holding Ctrl) → `keyCallback` fires with
+   `key=escape, mods.ctrl=true`. The Ctrl+Esc check in Surface.zig matches,
+   calls `notifyNonOverlayClicked`, switches to Control mode, returns
+   `.consumed`. **Esc is NOT forwarded to Chromium.**
+3. User releases **Ctrl** → `keyCallback` fires with
+   `key=control_left,
+   action=release`. But `isOverlayForwarding` is now
+   **false** (mode just changed), so the event goes to the terminal, **NOT to
+   Chromium**.
+4. **Chromium never receives the Ctrl key-up.** Its renderer thinks Ctrl is
+   permanently held.
+
+When the user re-enters browse mode, every keystroke is interpreted as Ctrl+key.
+Text input doesn't work. Esc alone acts like Ctrl+Esc (from Chromium's
+perspective, Ctrl is still down).
+
+#### Changes
+
+##### GUI (`gui/src/Surface.zig`)
+
+In the Ctrl+Esc handler (line 2747), after detecting the Ctrl+Esc press but
+**before** calling `notifyNonOverlayClicked` (which switches modes), send a
+synthetic Ctrl key-up to Chromium:
+
+```zig
+// Ctrl+Esc exits browse mode (Issue 607 Experiment 1).
+if (event.key == .escape and event.mods.ctrl and event.action == .press) {
+    const xpc = @import("apprt/xpc.zig");
+    if (xpc.isOverlayForwarding(self)) {
+        // Send Ctrl key-up to Chromium before switching modes,
+        // otherwise Chromium never receives the release and Ctrl
+        // gets stuck (Issue 616 Experiment 11).
+        xpc.sendKeyEvent(self, .release, .control_left, .{}, "");
+        xpc.notifyNonOverlayClicked(self);
+        return .consumed;
+    }
+}
+```
+
+The `sendKeyEvent` call sends a key-up for `control_left` (VK 0x11) with no
+modifiers and no text. This reaches Chromium's `HandleKeyEvent` which forwards
+it to the renderer, clearing the stuck Ctrl state.
+
+##### xpc.zig (`keyToWindowsVK`)
+
+Add `control_left` and `control_right` to the VK mapping so `sendKeyEvent` can
+send them:
+
+```zig
+.control_left => 0x11,   // VK_CONTROL
+.control_right => 0x11,  // VK_CONTROL
+```
+
+##### No Chromium or TUI changes
+
+#### Verification
+
+1. Launch TermSurf, run `web http://localhost:9616`
+2. Click on a text input field on the page
+3. Type some text — should work normally
+4. Press Ctrl+Esc to exit browse mode
+5. Press Enter to re-enter browse mode
+6. Click on the text input field again
+7. **Pass criterion**: Typing still works normally — Ctrl is not stuck
+8. Repeat steps 4–7 several times to confirm consistency
