@@ -695,12 +695,41 @@ cargo run -p web -- https://lite.duckduckgo.com
 
 Click the search box to enter browse mode and focus the text field. Test:
 
-| # | Test                       | Steps                                              | Expected                       |
-| - | -------------------------- | -------------------------------------------------- | ------------------------------ |
-| 1 | Cmd+A selects all          | Type "hello", Cmd+A, type "X"                      | "X" — all text replaced        |
-| 2 | Cmd+C / Cmd+V              | Type "hello", Cmd+A, Cmd+C, click new field, Cmd+V | "hello" pasted into new field  |
-| 3 | Cmd+X cuts                 | Type "hello", Cmd+A, Cmd+X                         | Text field empty               |
-| 4 | Cmd+Z undoes               | Type "hello", Cmd+A, type "X", Cmd+Z               | "hello" restored               |
-| 5 | Regular typing still works | Type "hello"                                       | "hello" appears                |
-| 6 | Ctrl+Esc still works       | Press Ctrl+Esc                                     | Exits browse mode              |
-| 7 | Cmd+A outside browse mode  | Exit browse mode, press Cmd+A                      | Selects terminal text (normal) |
+| # | Test                       | Steps                                              | Expected                       | Result |
+| - | -------------------------- | -------------------------------------------------- | ------------------------------ | ------ |
+| 1 | Cmd+A selects all          | Type "hello", Cmd+A, type "X"                      | "X" — all text replaced        | y      |
+| 2 | Cmd+C / Cmd+V              | Type "hello", Cmd+A, Cmd+C, click new field, Cmd+V | "hello" pasted into new field  | y      |
+| 3 | Cmd+X cuts                 | Type "hello", Cmd+A, Cmd+X                         | Text field empty               | y      |
+| 4 | Cmd+Z undoes               | Type "hello", Cmd+A, type "X", Cmd+Z               | "hello" restored               | y      |
+| 5 | Regular typing still works | Type "hello"                                       | "hello" appears                | y      |
+| 6 | Ctrl+Esc still works       | Press Ctrl+Esc                                     | Exits browse mode              | y      |
+| 7 | Cmd+A outside browse mode  | Exit browse mode, press Cmd+A                      | Selects terminal text (normal) | y      |
+
+**Result:** Pass
+
+All 7 tests pass. Cmd+A selects all text, Cmd+C copies, Cmd+V pastes, Cmd+X
+cuts, Cmd+Z undoes, regular typing still works, Ctrl+Esc still exits browse
+mode, and Cmd+A outside browse mode still selects terminal text.
+
+#### Conclusion
+
+The fix required two pieces working together:
+
+1. **Ghost side (Experiment 2):** Bypass `performKeyEquivalent` in browse mode
+   so Cmd+key events reach the Zig forwarding block instead of being consumed by
+   Ghostty bindings or the macOS menu system.
+
+2. **Chromium side (Experiment 4):** Use `ForwardKeyboardEventWithCommands`
+   instead of `ForwardKeyboardEvent`, attaching explicit editing commands
+   (`"selectAll"`, `"copy"`, `"paste"`, `"cut"`, `"undo"`) for Cmd+key
+   combinations. This matches how Chromium's own Mac input path works — the
+   renderer applies editing commands directly rather than re-interpreting raw
+   keyboard events.
+
+Experiments 2 and 3 were necessary steps: Experiment 2 proved the Ghost-side
+bypass works, and Experiment 3 proved that populating event fields alone is
+insufficient — the renderer needs explicit editing commands.
+
+The remaining keyboard issue from Experiment 1 is Tab not moving focus between
+form fields (test 4). This is unrelated to the Cmd shortcut problem and can be
+addressed in a separate experiment.

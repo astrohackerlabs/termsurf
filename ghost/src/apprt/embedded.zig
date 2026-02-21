@@ -1742,6 +1742,16 @@ pub const CAPI = struct {
         return @intCast(@as(input.Mods.Backing, @bitCast(result)));
     }
 
+    /// Returns true if the surface's pane is in browse mode and focused,
+    /// meaning Cmd+key events should be forwarded to Chromium instead of
+    /// being consumed by Ghostty bindings or the macOS menu system.
+    /// (Issue 609 Experiment 2.)
+    export fn ghostty_surface_is_overlay_forwarding(
+        surface: *Surface,
+    ) bool {
+        return xpc.isOverlayForwarding(&surface.core_surface);
+    }
+
     /// Send this for raw keypresses (i.e. the keyDown event on macOS).
     /// This will handle the keymap translation and send the appropriate
     /// key and char events.

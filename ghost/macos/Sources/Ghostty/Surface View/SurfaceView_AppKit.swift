@@ -1206,7 +1206,16 @@ extension Ghostty {
             if (!focused) {
                 return false
             }
-            
+
+            // In browse mode, forward all Cmd+key events to keyDown so they
+            // reach the Zig forwarding block instead of being consumed by
+            // Ghostty bindings or the macOS menu system (Issue 609 Experiment 2).
+            if let surface = self.surface,
+               ghostty_surface_is_overlay_forwarding(surface) {
+                self.keyDown(with: event)
+                return true
+            }
+
             // Get information about if this is a binding.
             let bindingFlags = surfaceModel.flatMap { surface in
                 var ghosttyEvent = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
