@@ -40,17 +40,17 @@ is simply "TermSurf".
 
 ### Naming convention
 
-| Context                   | Value                                               |
-| ------------------------- | --------------------------------------------------- |
-| App name                  | TermSurf                                            |
-| Bundle identifier         | com.termsurf.ghost                                  |
-| Bundle identifier (debug) | com.termsurf.ghost.debug                            |
-| Config directory          | `~/.config/termsurf/`                               |
-| Config fallback (macOS)   | `~/Library/Application Support/com.termsurf.ghost/` |
-| CLI binary name           | `ghostty` (unchanged)                               |
-| CLI usage text            | `termsurf`                                          |
-| CLI version output        | `TermSurf {version}`                                |
-| Custom icon path          | `~/.config/termsurf/TermSurf.icns`                  |
+| Context                   | Value                                         |
+| ------------------------- | --------------------------------------------- |
+| App name                  | TermSurf                                      |
+| Bundle identifier         | com.termsurf                                  |
+| Bundle identifier (debug) | com.termsurf.debug                            |
+| Config directory          | `~/.config/termsurf/`                         |
+| Config fallback (macOS)   | `~/Library/Application Support/com.termsurf/` |
+| CLI binary name           | `ghostty` (unchanged)                         |
+| CLI usage text            | `termsurf`                                    |
+| CLI version output        | `TermSurf {version}`                          |
+| Custom icon path          | `~/.config/termsurf/TermSurf.icns`            |
 
 The CLI binary stays `ghostty` because renaming it requires changes to the Zig
 build system, shell completions, and the `ghostty` symlink in the app bundle. A
@@ -62,14 +62,14 @@ future issue can tackle that.
 
 In `ghost/macos/Ghostty.xcodeproj/project.pbxproj`:
 
-| Setting                                     | Old                                      | New                        |
-| ------------------------------------------- | ---------------------------------------- | -------------------------- |
-| `PRODUCT_BUNDLE_IDENTIFIER`                 | `com.mitchellh.ghostty`                  | `com.termsurf.ghost`       |
-| `PRODUCT_BUNDLE_IDENTIFIER` (debug)         | `com.mitchellh.ghostty.debug`            | `com.termsurf.ghost.debug` |
-| `INFOPLIST_KEY_CFBundleDisplayName`         | `Ghostty`                                | `TermSurf`                 |
-| `INFOPLIST_KEY_CFBundleDisplayName` (debug) | `Ghostty[DEBUG]`                         | `TermSurf[DEBUG]`          |
-| `PRODUCT_NAME`                              | `$(TARGET_NAME)` → resolves to `Ghostty` | `TermSurf`                 |
-| Permission dialog strings                   | `within Ghostty`                         | `within TermSurf`          |
+| Setting                                     | Old                                      | New                  |
+| ------------------------------------------- | ---------------------------------------- | -------------------- |
+| `PRODUCT_BUNDLE_IDENTIFIER`                 | `com.mitchellh.ghostty`                  | `com.termsurf`       |
+| `PRODUCT_BUNDLE_IDENTIFIER` (debug)         | `com.mitchellh.ghostty.debug`            | `com.termsurf.debug` |
+| `INFOPLIST_KEY_CFBundleDisplayName`         | `Ghostty`                                | `TermSurf`           |
+| `INFOPLIST_KEY_CFBundleDisplayName` (debug) | `Ghostty[DEBUG]`                         | `TermSurf[DEBUG]`    |
+| `PRODUCT_NAME`                              | `$(TARGET_NAME)` → resolves to `Ghostty` | `TermSurf`           |
+| Permission dialog strings                   | `within Ghostty`                         | `within TermSurf`    |
 
 Rename files in `ghost/macos/`:
 
@@ -119,8 +119,8 @@ paths after these changes.
 
 In `ghost/src/`:
 
-- `build_config.zig:58` — `"com.mitchellh.ghostty"` → `"com.termsurf.ghost"`
-  (controls macOS App Support and cache paths)
+- `build_config.zig:58` — `"com.mitchellh.ghostty"` → `"com.termsurf"` (controls
+  macOS App Support and cache paths)
 - `config/file_load.zig:14` — `"ghostty/config.ghostty"` →
   `"termsurf/config.ghostty"` (XDG config path)
 - `config/file_load.zig:23` — `"ghostty/config"` → `"termsurf/config"` (legacy
@@ -151,7 +151,7 @@ In `ghost/src/build/GhosttyXcodebuild.zig`:
 ### 7. Icon (from Issue 610)
 
 The `Ghostty.icon` modification from Issue 610 is already in place
-(uncommitted). Once the bundle identifier changes to `com.termsurf.ghost`, macOS
+(uncommitted). Once the bundle identifier changes to `com.termsurf`, macOS
 Launch Services will treat this as a new app with no cached icon, and the
 surfing ghost should display correctly.
 
@@ -187,9 +187,8 @@ changes manually if upstream restructures build settings.
 
 `cd ghost && zig build` produces `TermSurf.app`. The menu bar reads "TermSurf",
 the About view shows "TermSurf", the CLI prints "TermSurf {version}", config
-loads from `~/.config/termsurf/`, and the bundle identifier is
-`com.termsurf.ghost`. The surfing ghost icon (from Issue 610) displays
-correctly.
+loads from `~/.config/termsurf/`, and the bundle identifier is `com.termsurf`.
+The surfing ghost icon (from Issue 610) displays correctly.
 
 #### Approach
 
@@ -207,11 +206,11 @@ These four changes redirect all config, cache, and App Support paths:
 **`ghost/src/build_config.zig:58`:**
 
 ```
-"com.mitchellh.ghostty" → "com.termsurf.ghost"
+"com.mitchellh.ghostty" → "com.termsurf"
 ```
 
-This controls macOS App Support
-(`~/Library/Application Support/com.termsurf.ghost/`) and cache paths.
+This controls macOS App Support (`~/Library/Application Support/com.termsurf/`)
+and cache paths.
 
 **`ghost/src/config/file_load.zig:14`:**
 
@@ -259,8 +258,8 @@ In `ghost/macos/Ghostty.xcodeproj/project.pbxproj`:
 
 **Bundle identifiers:**
 
-- `com.mitchellh.ghostty` → `com.termsurf.ghost` (release, all 3 configs)
-- `com.mitchellh.ghostty.debug` → `com.termsurf.ghost.debug`
+- `com.mitchellh.ghostty` → `com.termsurf` (release, all 3 configs)
+- `com.mitchellh.ghostty.debug` → `com.termsurf.debug`
 
 **Display names:**
 
@@ -363,7 +362,7 @@ cd ghost && zig build
    GitHub repo
 4. **Bundle identifier:**
    `defaults read ghost/zig-out/TermSurf.app/Contents/Info.plist CFBundleIdentifier`
-   returns `com.termsurf.ghost`
+   returns `com.termsurf`
 5. **Icon:** The surfing ghost icon appears in the dock (no cached old icon,
    since the bundle identifier is new)
 6. **CLI version:** `ghost/zig-out/TermSurf.app/Contents/MacOS/ghostty +version`
