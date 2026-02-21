@@ -42,6 +42,7 @@ issue-specific branches.
 | `146.0.7650.0-issue-603` | [Issue 603](issues/603-box-demo.md)         | Box demo in Ghost            |
 | `146.0.7650.0-issue-607` | [Issue 607](issues/607-keyboard-input.md)   | Keyboard input               |
 | `146.0.7650.0-issue-608` | [Issue 608](issues/608-search-input.md)     | Search input                 |
+| `146.0.7650.0-issue-609` | [Issue 609](issues/609-keyboard-input-2.md) | Keyboard input (continued)   |
 
 ## Local Setup
 
