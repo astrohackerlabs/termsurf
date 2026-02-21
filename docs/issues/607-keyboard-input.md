@@ -430,7 +430,7 @@ The likely root cause: when a page navigates, Chromium swaps the
    produced and the overlay shows a stale image.
 
 This is a navigation lifecycle problem, not a keyboard problem. It must be
-solved before keyboard input can be fully tested. See Issue 608.
+solved before keyboard input can be fully tested. See Issue 608 (search input).
 
 ## Conclusion
 
@@ -479,7 +479,7 @@ input can be fully validated.
 
 ### Next steps
 
-- **Issue 608: Navigation lifecycle.** Add a `WebContentsObserver` to each tab
-  that re-focuses the view and re-targets the capturer after navigation commits.
-  Once navigation works, return to Issue 607 to complete keyboard testing
-  (Backspace, Tab, arrows, Cmd+C/V/A, Enter on navigating pages).
+- **Issue 608: Search input.** Investigate and fix why search form submissions
+  freeze the overlay on Google and lite.duckduckgo.com. Once search works,
+  return to Issue 607 to complete keyboard testing (Backspace, Tab, arrows,
+  Cmd+C/V/A, Enter on navigating pages).
