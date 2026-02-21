@@ -2105,3 +2105,116 @@ so we replicated the timing + distance logic inline. The existing
 since the overlay path and the terminal path are mutually exclusive. The click
 count is passed through `sendMouseEvent` → XPC `click_count` field → Chromium's
 `WebMouseEvent`, where Chromium handles word/line selection natively.
+
+## Experiment 16: Fix spurious activation flag on initial focus
+
+### Goal
+
+The first click on the overlay after launching the app is always consumed. Fix
+it so the first click works.
+
+### Background
+
+`paneFocusChanged(true)` sets `overlay_activation = true` unconditionally. This
+flag is designed to suppress the activation click when switching between panes —
+the click that caused the focus change shouldn't pass through to Chromium.
+
+But `paneFocusChanged` also fires when the app launches and the pane gets
+initial focus. At that point there's no overlay, no browse mode, and no click to
+suppress. The flag persists until a mouse release on the overlay clears it. This
+means the release of the user's first real overlay click is suppressed,
+requiring an extra click before anything forwards.
+
+The same problem occurs when focus changes via keyboard (e.g., Cmd+] to switch
+panes). There's no mouse click to suppress, but the flag is set and eats the
+next click.
+
+The fix: only set `overlay_activation` when the surface is already in overlay
+forwarding state. If the pane isn't in browse mode (or doesn't have an overlay),
+there's no click to suppress and the flag should stay false.
+
+### Design
+
+**Phase 1: Gate activation flag on forwarding state (Surface.zig).**
+
+In `paneFocusChanged`, check `isOverlayForwarding` before setting the flag:
+
+```zig
+pub fn paneFocusChanged(self: *Surface, focused: bool) void {
+    if (focused) {
+        const xpc = @import("apprt/xpc.zig");
+        if (xpc.isOverlayForwarding(self)) {
+            self.mouse.overlay_activation = true;
+        }
+        xpc.handlePaneFocusChanged(self, focused);
+    } else {
+        const xpc = @import("apprt/xpc.zig");
+        xpc.handlePaneFocusChanged(self, focused);
+    }
+}
+```
+
+This is safe because `isOverlayForwarding` checks `p.browsing` and
+`focused_pane == pane_id`. When the pane is gaining initial focus (app launch),
+`focused_pane` hasn't been updated yet (it's updated by `handlePaneFocusChanged`
+which we call after), so `isOverlayForwarding` returns false and the flag is not
+set. When switching panes by clicking an already-browsing overlay,
+`focused_pane` was set from the previous focus cycle, and `p.browsing` is true,
+so `isOverlayForwarding` returns true and the flag IS set — exactly the case we
+want to suppress.
+
+**Wait — there's a subtlety.** `isOverlayForwarding` checks that `focused_pane`
+matches this surface's pane ID. But at the moment `paneFocusChanged(true)`
+fires, `focused_pane` still points to the _old_ pane (the one losing focus). So
+`isOverlayForwarding` would return false even for the pane-switch case.
+
+We need a different check. The right question is: "does this surface have an
+overlay in browse mode?" That's just `p.browsing` — we don't need the focus
+check because we already know focus is being gained.
+
+Revised approach — check `p.browsing` directly:
+
+```zig
+pub fn paneFocusChanged(self: *Surface, focused: bool) void {
+    const xpc = @import("apprt/xpc.zig");
+    if (focused) {
+        if (xpc.isOverlayBrowsing(self)) {
+            self.mouse.overlay_activation = true;
+        }
+    }
+    xpc.handlePaneFocusChanged(self, focused);
+}
+```
+
+**Phase 2: Add `isOverlayBrowsing` query (xpc.zig).**
+
+```zig
+/// Returns true if the surface has an overlay in browse mode.
+/// Unlike isOverlayForwarding, this does not check pane focus.
+pub fn isOverlayBrowsing(surface: *CoreSurface) bool {
+    const pane_id = surface_to_pane.get(@intFromPtr(surface)) orelse return false;
+    const p = panes.get(pane_id) orelse return false;
+    return p.browsing;
+}
+```
+
+This returns true only when the pane has an active overlay in browse mode. On
+initial app launch, no pane has `p.browsing = true`, so the flag is not set. On
+keyboard pane switch (Cmd+]), if the overlay isn't in browse mode, the flag is
+not set. Only when clicking into a pane that's already in browse mode does the
+flag get set — the exact case we want to suppress.
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Pass criteria:
+
+- First click on a link after app launch navigates immediately (no wasted click)
+- Switching panes by clicking an already-browsing overlay still suppresses the
+  activation click (no accidental link navigation)
+- Keyboard pane switch (Cmd+]) followed by a click works on the first try
