@@ -492,3 +492,35 @@ Click the search box to enter browse mode and focus the text field. Test:
 | 5 | Regular typing still works | Type "hello"                                       | "hello" appears                |
 | 6 | Ctrl+Esc still works       | Press Ctrl+Esc                                     | Exits browse mode              |
 | 7 | Cmd+A outside browse mode  | Exit browse mode, press Cmd+A                      | Selects terminal text (normal) |
+
+**Result:** Fail
+
+The logs confirm all three fields are set correctly: `mods=8` (kMetaKey),
+`system=1` (is_system_key), and dom_code/dom_key populated. Cmd+key events
+arrive at Chromium with the right data. Yet no Cmd shortcuts produce their
+expected behavior.
+
+#### Conclusion
+
+The experiment was based on a wrong mental model. We assumed Chromium's renderer
+interprets raw keyboard events and matches them to editing commands internally.
+It doesn't — at least not on macOS.
+
+Chromium's actual Mac input path works differently. When a Cmd+key event arrives
+at `RenderWidgetHostViewCocoa`, it calls `interpretKeyEvents:` on the NSEvent.
+Cocoa's input system recognizes the shortcut and calls `doCommandBySelector:`
+with the appropriate selector (e.g., `selectAll:` for Cmd+A). The
+`doCommandBySelector:` implementation converts the selector to an editing
+command string (`"selectAll"`) and pushes it into an `_editCommands` vector.
+Then `ForwardKeyboardEventWithCommands` sends both the raw key event AND the
+editing commands to the renderer.
+
+The renderer applies the editing commands directly. It never re-interprets the
+raw key event to figure out which editing command to run. The `is_system_key`
+flag actually makes this worse — it tells Blink to defer to the browser's
+editing command system, but we never provide editing commands because we use
+`ForwardKeyboardEvent` (the plain version without commands).
+
+The fix is to use `ForwardKeyboardEventWithCommands` and attach the correct
+editing commands for each Cmd+key combination. This matches how Chromium's own
+Mac input path works (`render_widget_host_view_cocoa.mm` lines 1430-1431).
