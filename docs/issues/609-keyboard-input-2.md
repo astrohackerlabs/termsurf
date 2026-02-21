@@ -107,21 +107,21 @@ cargo run -p web -- https://lite.duckduckgo.com
 Click the search box to enter browse mode and focus the text field. Run through
 each test and record pass/fail:
 
-| #  | Test                       | Steps                                              | Expected                             | Result |
-| -- | -------------------------- | -------------------------------------------------- | ------------------------------------ | ------ |
-| 1  | Character typing           | Type "hello"                                       | "hello" appears in text field        |        |
-| 2  | Enter submits              | Type "test", press Enter                           | Search results page loads            |        |
-| 3  | Backspace deletes          | Type "helloo", press Backspace                     | Last "o" deleted, "hello" remains    |        |
-| 4  | Tab moves focus            | Press Tab from search box                          | Focus moves to next element          |        |
-| 5  | Arrow left/right           | Type "hello", press Left 3x, type "X"              | "heXllo" — cursor moved, then insert |        |
-| 6  | Arrow up/down              | In a multi-line textarea, press Up/Down            | Cursor moves between lines           |        |
-| 7  | Home / End                 | Type "hello", press Home, type "X"                 | "Xhello" — cursor at start           |        |
-| 8  | Shift+arrow selects        | Type "hello", Shift+Left 3x, type "X"              | "heX" — selection replaced           |        |
-| 9  | Cmd+A selects all          | Type "hello", Cmd+A, type "X"                      | "X" — all text replaced              |        |
-| 10 | Cmd+C / Cmd+V              | Type "hello", Cmd+A, Cmd+C, click new field, Cmd+V | "hello" pasted into new field        |        |
-| 11 | Cmd+X cuts                 | Type "hello", Cmd+A, Cmd+X                         | Text field empty, clipboard has text |        |
-| 12 | Cmd+Z undoes               | Type "hello", Cmd+A, type "X", Cmd+Z               | "hello" restored                     |        |
-| 13 | Ctrl+Esc exits browse mode | Press Ctrl+Esc                                     | Exits browse mode (regression check) |        |
+| #  | Test                       | Steps                                              | Expected                             | Result | Description                                                         |
+| -- | -------------------------- | -------------------------------------------------- | ------------------------------------ | ------ | ------------------------------------------------------------------- |
+| 1  | Character typing           | Type "hello"                                       | "hello" appears in text field        | y      |                                                                     |
+| 2  | Enter submits              | Type "test", press Enter                           | Search results page loads            | y      |                                                                     |
+| 3  | Backspace deletes          | Type "helloo", press Backspace                     | Last "o" deleted, "hello" remains    | y      |                                                                     |
+| 4  | Tab moves focus            | Press Tab from search box                          | Focus moves to next element          | n      |                                                                     |
+| 5  | Arrow left/right           | Type "hello", press Left 3x, type "X"              | "heXllo" — cursor moved, then insert | y      |                                                                     |
+| 6  | Arrow up/down              | In a multi-line textarea, press Up/Down            | Cursor moves between lines           | y      |                                                                     |
+| 7  | Home / End                 | Type "hello", press Home, type "X"                 | "Xhello" — cursor at start           | y      |                                                                     |
+| 8  | Shift+arrow selects        | Type "hello", Shift+Left 3x, type "X"              | "heX" — selection replaced           | y      |                                                                     |
+| 9  | Cmd+A selects all          | Type "hello", Cmd+A, type "X"                      | "X" — all text replaced              | n      | Cmd+A selects the terminal contents instead of the webpage contents |
+| 10 | Cmd+C / Cmd+V              | Type "hello", Cmd+A, Cmd+C, click new field, Cmd+V | "hello" pasted into new field        | n      |                                                                     |
+| 11 | Cmd+X cuts                 | Type "hello", Cmd+A, Cmd+X                         | Text field empty, clipboard has text | n      |                                                                     |
+| 12 | Cmd+Z undoes               | Type "hello", Cmd+A, type "X", Cmd+Z               | "hello" restored                     | n      |                                                                     |
+| 13 | Ctrl+Esc exits browse mode | Press Ctrl+Esc                                     | Exits browse mode (regression check) | y      |                                                                     |
 
 For tests 6 and 10, if lite.duckduckgo.com doesn't have a suitable multi-line
 textarea or second field, use a different site (e.g., a form test page or
