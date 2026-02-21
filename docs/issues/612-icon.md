@@ -99,3 +99,103 @@ or resizing needed.
    from `"BlueprintImage"` to `"TermSurfDebugIcon"`.
 5. **`ghost/macos/Assets.xcassets/AppIconImage.imageset/`** — Replace PNGs with
    TermSurf icon (used by runtime icon-switching system, not the bundle icon).
+
+## Experiments
+
+### Experiment 1: Replace icon using ts1 approach
+
+#### Goal
+
+`cd ghost && zig build` produces `TermSurf.app` with the TermSurf surfing ghost
+icon (cyan wave) in Finder and the dock. Debug builds show the green wave debug
+icon in the dock.
+
+#### Approach
+
+Copy ts1's icon files into Ghost's asset catalog and switch the Xcode project
+from Icon Composer (`Ghostty.icon`) to a traditional `AppIcon.appiconset/`. This
+is the same approach ts1 uses, with the same image files.
+
+#### Steps
+
+##### Step 1: Copy `AppIcon.appiconset/` from ts1
+
+Copy the entire appiconset directory (7 PNGs + `Contents.json`) from ts1 into
+Ghost's asset catalog:
+
+```bash
+cp -R ts1/termsurf-macos/Assets.xcassets/AppIcon.appiconset/ \
+      ghost/macos/Assets.xcassets/AppIcon.appiconset/
+```
+
+This creates `ghost/macos/Assets.xcassets/AppIcon.appiconset/` with pre-rendered
+icons at all standard macOS sizes (16px–1024px).
+
+##### Step 2: Copy `TermSurfDebugIcon.imageset/` from ts1
+
+```bash
+cp -R ts1/termsurf-macos/Assets.xcassets/TermSurfDebugIcon.imageset/ \
+      ghost/macos/Assets.xcassets/TermSurfDebugIcon.imageset/
+```
+
+This adds the green wave debug icon as a named imageset.
+
+##### Step 3: Change `ASSETCATALOG_COMPILER_APPICON_NAME` in `project.pbxproj`
+
+In `ghost/macos/Ghostty.xcodeproj/project.pbxproj`, change from `Ghostty` to
+`AppIcon` in the 3 macOS build configurations only:
+
+- Line 596 (ReleaseLocal)
+- Line 905 (Debug)
+- Line 960 (Release)
+
+Do NOT change the 3 iOS configurations (lines 1014, 1053, 1092) — not our
+platform.
+
+##### Step 4: Change debug icon in `AppDelegate.swift`
+
+In `ghost/macos/Sources/App/macOS/AppDelegate.swift`, line 1003:
+
+```
+"BlueprintImage" → "TermSurfDebugIcon"
+```
+
+This changes the `#if DEBUG` runtime override to use the green wave icon instead
+of Ghostty's blueprint icon.
+
+##### Step 5: Replace `AppIconImage.imageset/` PNGs
+
+Replace the 3 PNGs in `ghost/macos/Assets.xcassets/AppIconImage.imageset/` with
+TermSurf icon versions. Copy from the appiconset (already the right sizes):
+
+```bash
+cp ts1/termsurf-macos/Assets.xcassets/AppIcon.appiconset/icon-256.png \
+   ghost/macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-256px-128pt@2x.png
+
+cp ts1/termsurf-macos/Assets.xcassets/AppIcon.appiconset/icon-512.png \
+   ghost/macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-512px.png
+
+cp ts1/termsurf-macos/Assets.xcassets/AppIcon.appiconset/icon-1024.png \
+   ghost/macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-1024px.png
+```
+
+No changes to `Contents.json` — filenames are preserved.
+
+##### Step 6: Build and verify
+
+```bash
+rm -rf ~/Library/Developer/Xcode/DerivedData/Ghostty-*
+rm -rf ghost/macos/build/
+cd ghost && zig build
+```
+
+#### Verification
+
+1. **App name:** `ls ghost/zig-out/` shows `TermSurf.app`
+2. **Finder icon:** `ghost/zig-out/TermSurf.app` shows the TermSurf surfing
+   ghost icon (cyan wave on CRT) in Finder
+3. **Dock icon:** Launch the app — the surfing ghost icon appears in the dock.
+   In a debug build, the green wave debug icon appears (runtime override).
+4. **App switcher (Cmd+Tab):** Shows the surfing ghost icon
+5. **No Ghostty icon:** The old blue rounded-square Ghostty icon does not appear
+   anywhere
