@@ -448,3 +448,29 @@ Check `~/dev/termsurf/logs/chromium-server.log` for:
 1. `PrimaryPageChanged: host changed` log appears for the frozen cases
 2. FPS logs continue after the navigation (no gap)
 3. Wikipedia link clicks do NOT trigger re-attach (host unchanged)
+
+**Result:** Pass
+
+All three test cases passed. Lite DuckDuckGo and Google search submissions now
+navigate to the results page, the overlay renders the new content, and input
+continues normally. Wikipedia link clicks and search still work (no regression).
+
+#### Conclusion
+
+Recreating the capturer in `PrimaryPageChanged` when the `RenderWidgetHost`
+changes fixes the search input freeze. The pattern matches Electron's
+battle-tested approach and ensures clean capturer state after any navigation
+that swaps the renderer process.
+
+## Conclusion
+
+Search form submissions work on all tested sites. The root cause was a stale
+`FrameSinkVideoCapturer` target — POST form submissions (and other navigations
+that trigger renderer process swaps) change the `RenderWidgetHostView` and
+`FrameSinkId`, but the capturer was never re-targeted.
+
+The fix follows Electron's `FrameSubscriber::PrimaryPageChanged()` pattern:
+detect when the `RenderWidgetHost` changes after a page commit, destroy the old
+capturer, and create a fresh one attached to the new host. This is implemented
+in `ShellVideoConsumer::PrimaryPageChanged()` which delegates to the existing
+`Attach()` method.
