@@ -80,3 +80,63 @@ sips -z 256 256 input.png --out output-256.png
   icon imageset (1 PNG + Contents.json)
 - `ghost/macos/Sources/App/macOS/AppDelegate.swift` — Debug icon override (line
   1003: `NSImage(named: "BlueprintImage")`)
+
+## Experiments
+
+### Experiment 1: Replace both icons
+
+#### Goal
+
+The dock shows the TermSurf Ghost surfing icon for both release and debug
+builds. Release shows the cyan wave, debug shows the green wave.
+
+#### Description
+
+This is a straightforward asset replacement. No code changes — only image files
+are swapped. The asset catalog's `Contents.json` files and the Swift code that
+references `BlueprintImage` by name remain unchanged.
+
+#### Changes
+
+**Release icon — `ghost/macos/Assets.xcassets/AppIconImage.imageset/`:**
+
+Generate the three required sizes from `assets/termsurf-ghost-black.png`:
+
+```bash
+cp assets/termsurf-ghost-black.png \
+   ghost/macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-1024px.png
+
+sips -z 512 512 assets/termsurf-ghost-black.png --out \
+   ghost/macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-512px.png
+
+sips -z 256 256 assets/termsurf-ghost-black.png --out \
+   ghost/macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-256px-128pt@2x.png
+```
+
+No changes to `Contents.json` — the filenames are preserved.
+
+**Debug icon —
+`ghost/macos/Assets.xcassets/Alternate Icons/BlueprintImage.imageset/`:**
+
+```bash
+cp assets/termsurf-ghost-alt-black.png \
+   "ghost/macos/Assets.xcassets/Alternate Icons/BlueprintImage.imageset/macOS-AppIcon-1024px.png"
+```
+
+No changes to `Contents.json` or `AppDelegate.swift` — the asset name
+`BlueprintImage` is preserved, only the underlying PNG changes.
+
+#### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app
+```
+
+1. **Dock icon:** The dock shows the CRT-with-surfing-ghost icon. In a debug
+   build, the wave is green. In a release build, the wave is cyan.
+2. **App switcher (Cmd+Tab):** Shows the same icon.
+3. **Finder:** `ghost/zig-out/Ghostty.app` shows the new icon in Finder. (May
+   require `touch ghost/zig-out/Ghostty.app` to bust the icon cache.)
+4. **No Ghostty icon visible:** The old blue rounded-square Ghostty icon does
+   not appear anywhere.
