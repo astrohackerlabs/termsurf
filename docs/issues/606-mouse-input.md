@@ -1416,3 +1416,125 @@ Pass criteria:
 - Mouse moves and scroll still correctly gated (no regression from Exp 7)
 - Keyboard mode switching still works
 - Right-clicks on an inactive overlay don't activate or forward
+
+### Result: Fail
+
+The activation flag was never checked because Ghostty's pane focus switch
+happens before `mouseButtonCallback` runs. When clicking on an inactive pane's
+overlay:
+
+1. macOS delivers mouseDown to the SurfaceView
+2. SurfaceView becomes first responder → `focusDidChange` fires →
+   `handlePaneFocusChanged` sets `focused_pane = pane_id`
+3. `mouseButtonCallback` runs — by now `isOverlayForwarding` returns true (pane
+   is browsing + just became focused), so the press goes straight through
+   `sendMouseEvent` to Chromium
+4. Release also forwards normally
+
+The `overlay_activation` flag is only set in the `else if` branch (when
+`isOverlayForwarding` is false), but the pane is already forwarding by the time
+the callback runs. The flag is never set, so the suppression never triggers.
+
+**Root cause:** The assumption that `isOverlayForwarding` would be false during
+the activation press was wrong. Ghostty's focus change races ahead of the mouse
+callback.
+
+## Experiment 9: Trace activation click sequence
+
+### Goal
+
+Add temporary logging to determine the exact event ordering when clicking on an
+inactive pane's overlay. Identify why the Experiment 8 activation flag fails to
+suppress the click.
+
+### Background
+
+Experiment 8 failed but the root cause is speculative. We hypothesized that
+`focusDidChange` fires before `mouseButtonCallback`, making
+`isOverlayForwarding` true by the time the click handler runs. But we haven't
+verified this. The actual sequence could be different — there may be another
+path entirely.
+
+### Design
+
+**Phase 1: Log in `paneFocusChanged` (Surface.zig).**
+
+Add a log line at the entry of `paneFocusChanged`:
+
+```zig
+pub fn paneFocusChanged(self: *Surface, focused: bool) void {
+    log.info("paneFocusChanged focused={} addr={x}", .{ focused, @intFromPtr(self) });
+    const xpc = @import("apprt/xpc.zig");
+    xpc.handlePaneFocusChanged(self, focused);
+}
+```
+
+**Phase 2: Log in `mouseButtonCallback` overlay hit (Surface.zig).**
+
+Log the state at the decision point — what `isOverlayForwarding` returns and
+whether `overlay_activation` is set:
+
+```zig
+if (self.hitTestOverlay(@floatCast(cursor.x), @floatCast(cursor.y))) |overlay_pos| {
+    const xpc = @import("apprt/xpc.zig");
+    const forwarding = xpc.isOverlayForwarding(self);
+    log.info("overlay click action={s} button={s} forwarding={} activation={}",
+        .{ @tagName(action), @tagName(button), forwarding, self.mouse.overlay_activation });
+    // ... rest of logic
+```
+
+**Phase 3: Log in `notifyOverlayClicked` (xpc.zig).**
+
+Log whether the function activates or returns early:
+
+```zig
+pub fn notifyOverlayClicked(surface: *CoreSurface) void {
+    const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse return;
+    const p = panes.get(pane_id_key) orelse return;
+    if (p.browsing) {
+        log.info("notifyOverlayClicked: already browsing, skipped", .{});
+        return;
+    }
+    log.info("notifyOverlayClicked: activating", .{});
+    // ... rest of activation
+```
+
+**Phase 4: Log in `isOverlayForwarding` (xpc.zig).**
+
+Log the components of the decision:
+
+```zig
+pub fn isOverlayForwarding(surface: *CoreSurface) bool {
+    const pane_id = surface_to_pane.get(@intFromPtr(surface)) orelse return false;
+    const p = panes.get(pane_id) orelse return false;
+    if (!p.browsing) {
+        log.info("isOverlayForwarding: not browsing", .{});
+        return false;
+    }
+    const fp = focused_pane orelse {
+        log.info("isOverlayForwarding: no focused pane", .{});
+        return false;
+    };
+    const result = std.mem.eql(u8, fp, pane_id);
+    if (!result) {
+        log.info("isOverlayForwarding: wrong pane focused", .{});
+    }
+    return result;
+}
+```
+
+### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Test: switch to a different pane, then click on a link in the overlay pane.
+Check `~/dev/termsurf/logs/ghost.log` for the sequence. The log should reveal:
+
+- Whether `paneFocusChanged` fires before or after `mouseButtonCallback`
+- What `isOverlayForwarding` returns at press time and why
+- Whether `notifyOverlayClicked` is reached or skipped
+- The full press → release sequence with all state at each step
