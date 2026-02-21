@@ -199,3 +199,28 @@ cd ghost && zig build
 4. **App switcher (Cmd+Tab):** Shows the surfing ghost icon
 5. **No Ghostty icon:** The old blue rounded-square Ghostty icon does not appear
    anywhere
+
+**Result:** Partial
+
+The debug icon works — the green wave surfer appears in the dock via the
+`#if DEBUG` runtime override. But the release/bundle icon still shows the old
+Ghostty icon, which flashes briefly before the debug override replaces it.
+
+#### Conclusion
+
+The `AppIcon.appiconset`, `TermSurfDebugIcon.imageset`, `AppIconImage.imageset`
+replacements, and the `AppDelegate.swift` debug override all work correctly. The
+remaining problem is the bundle icon.
+
+`Ghostty.icon` (the Icon Composer document at `ghost/images/Ghostty.icon/`) is
+still referenced in `project.pbxproj` as a direct resource. Xcode compiles it
+into `Ghostty.icns` in the app bundle's `Contents/Resources/` regardless of what
+`ASSETCATALOG_COMPILER_APPICON_NAME` points to. The generated `Info.plist` still
+has `CFBundleIconName = Ghostty` (matching the Icon Composer document), so macOS
+reads the old Ghostty icon from `Assets.car` or the compiled `.icns` instead of
+the new `AppIcon` appiconset.
+
+The next experiment should remove the `Ghostty.icon` reference from the Xcode
+project so it stops being compiled into the app bundle. With only
+`AppIcon.appiconset` remaining, `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`
+should control the bundle icon.
