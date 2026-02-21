@@ -870,3 +870,62 @@ One-line fix in Chromium: skip `SendLoadingState` when `pct >= 100` since
 `DidStopLoading` already sends `"done"`. Fixing at the source was the right call
 — simpler than a TUI state machine workaround, and eliminates the race condition
 rather than tolerating it.
+
+### Experiment 7: Multi-resource slow page for progress bar testing
+
+#### Goal
+
+Replace the single-stream `/slow` test page with a multi-resource version that
+loads many separate subresources, each with a server-side delay. This exercises
+Chromium's `LoadProgressChanged` heuristic properly and verifies that the
+progress bar advances smoothly from 0% to 100%.
+
+#### Background
+
+The existing `/slow?seconds=N` page streams a single chunked HTTP response.
+Chromium's progress heuristic treats this as one resource — it jumps to ~33%
+(connection + headers) and then stalls until the stream finishes. This is not a
+bug; it's just a poor match for the heuristic.
+
+Real websites load dozens of separate subresources (images, CSS, JS). Chromium
+tracks each completed subresource as progress, producing smooth advancement.
+This experiment creates a test page that mimics that pattern.
+
+#### Changes
+
+##### Test server (`test-html/server.ts`)
+
+Add a `/slow-resource` route that accepts `?id=N&delay=S` query parameters. The
+server sleeps for `S` seconds (using `Bun.sleep()`), then returns a 1x1 PNG
+image. Each request is an independent HTTP response, so Chromium counts each as
+a separate subresource.
+
+Replace the existing `/slow` route. The new `/slow?seconds=N&count=C` route
+returns a complete HTML page immediately (not streamed). The page contains `C`
+`<img>` tags (default 20), each pointing to `/slow-resource?id=N&delay=D` where
+`D` is `seconds / count` (distributes the total time evenly across resources).
+
+The page itself shows a progress indicator updated via `<img>` `onload` handlers
+— each time an image loads, JavaScript increments a counter and updates the
+display. This lets the user see both:
+
+1. Ghostty's blue progress bar (from Chromium's heuristic)
+2. The page's own resource-completion counter
+
+##### Index page (`test-html/public/index.html`)
+
+Update the Loading section links to use the new parameters:
+
+- `Slow Load (10s)` → `/slow?seconds=10`
+- `Slow Load (3s)` → `/slow?seconds=3`
+- Add `Slow Load (10s, 40 resources)` → `/slow?seconds=10&count=40`
+
+#### Verification
+
+1. Launch TermSurf, run `web http://localhost:9616`
+2. Click "Slow Load (10s)" — the Ghostty progress bar should advance smoothly
+   from 0% to 100% over ~10 seconds, not stall at 33%
+3. The in-page counter should show resources loading one by one
+4. The bar should clear when all resources finish
+5. Repeat with "Slow Load (3s)" — same smooth behavior, faster
+6. Repeat with "Slow Load (10s, 40 resources)" — even smoother granularity
