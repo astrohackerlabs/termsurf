@@ -577,4 +577,97 @@ open ghost/zig-out/Ghostty.app
 3. **Finder:** `ghost/zig-out/Ghostty.app` shows the surfing ghost icon.
 4. **App switcher (Cmd+Tab):** Shows the surfing ghost icon.
 
-**Result:** (pending)
+**Result:** Fail
+
+The release build still shows the old Ghostty icon. The `.icns` file is correct,
+but macOS isn't reading it. The real icon source is `Assets.car`.
+
+#### Conclusion
+
+The `.icns` file is a red herring. `Info.plist` declares both
+`CFBundleIconFile
+= Ghostty` and `CFBundleIconName = Ghostty`. When
+`CFBundleIconName` is present, macOS reads the icon from the compiled asset
+catalog (`Assets.car`), not the `.icns` file. The `.icns` is only a fallback for
+systems that don't support asset catalogs.
+
+`Assets.car` contains a full set of pre-rendered "Ghostty" icon images (16px
+through 512px) compiled by `actool` from the `Ghostty.icon` bundle. These images
+show the old Ghostty ghost — meaning `actool` is either:
+
+1. **Caching**: Reading a stale compiled version of `Ghostty.icon` from
+   somewhere we haven't cleared.
+2. **Failing silently**: Unable to composite our modified `icon.json` (different
+   image, no position offsets) and falling back to a previously compiled
+   version.
+3. **Working correctly**: Compiling our modified `.icon` but the resulting
+   images in `Assets.car` still look like the old icon for some reason (wrong
+   layer order, transparency issue, etc.).
+
+The `.icns` file (which we've been verifying) is compiled separately and does
+contain the surfing ghost. But it's irrelevant — macOS uses `Assets.car`. The
+next experiment should focus on inspecting or replacing the icon inside
+`Assets.car`.
+
+## Conclusion
+
+**Status:** Blocked — deferring to Issue 611 (rename app).
+
+The `Ghostty.icon` modification is correct. The `icon.json` edits (swap image
+references, remove position offsets) and `surfing-ghost.png` in `Assets/`
+produce the intended composited icon — verified by extracting the built
+`Ghostty.icns` with `iconutil`, which shows the surfing ghost on the dark blue
+screen with gloss and bevel intact.
+
+The icon never displayed because macOS Launch Services caches app icons by
+bundle identifier. Our app ships with `com.mitchellh.ghostty` — the same bundle
+identifier as the official Ghostty installed at `/Applications/Ghostty.app`.
+macOS sees five apps registered with this identifier:
+
+```
+/Applications/Ghostty.app
+/Users/ryan/dev/termsurf/ghost/zig-out/Ghostty.app
+/Users/ryan/dev/termsurf/ghost/macos/build/ReleaseLocal/Ghostty.app
+/Users/ryan/dev/termsurf/ts1/zig-out/Ghostty.app
+/Users/ryan/dev/termsurf/ts1/macos/build/ReleaseLocal/Ghostty.app
+```
+
+Launch Services resolves the icon from the first-registered app with that bundle
+identifier — the official Ghostty — and serves its icon for all five. No amount
+of build cache clearing, DerivedData purging, or icon service cache flushing can
+override this. The icon in our app bundle is correct but macOS never reads it.
+
+The fix is to change the bundle identifier to something unique (e.g.
+`com.termsurf.ghost`). This is part of renaming the app from "Ghostty" to
+"TermSurf Ghost" (Issue 611). Once the app has its own identity, the icon
+modification from Experiment 3 should take effect immediately.
+
+### What's already done
+
+The `Ghostty.icon` modification is in place (uncommitted):
+
+- `ghost/images/Ghostty.icon/icon.json` — Both ghost layers reference
+  `surfing-ghost.png`, position blocks removed for centering.
+- `ghost/images/Ghostty.icon/Assets/surfing-ghost.png` — New ghost image.
+- `ghost/images/Ghostty.icon/Assets/Ghostty.png` — Deleted.
+
+These changes should be committed as part of Issue 611's rename work and
+retested once the bundle identifier changes.
+
+### Key learnings
+
+1. **macOS resolves icons by bundle identifier, not by app path.** Multiple apps
+   with the same bundle ID share a cached icon from whichever was registered
+   first.
+2. **`CFBundleIconName` takes priority over `CFBundleIconFile`.** When both are
+   present, macOS reads from `Assets.car` (compiled asset catalog), not the
+   `.icns` file.
+3. **`Ghostty.icns` is a fallback.** The `.icns` file in the app bundle is only
+   used on systems that don't support asset catalogs. Modern macOS always uses
+   `Assets.car`.
+4. **Icon Composer `.icon` bundles work.** Swapping layer images and removing
+   position offsets in `icon.json` produces the expected composited result. The
+   format is straightforward once you understand the layer structure.
+5. **Xcode DerivedData caches compiled icons.** Always delete
+   `~/Library/Developer/Xcode/DerivedData/Ghostty-*` when changing icon assets,
+   or `actool` may serve stale output.
