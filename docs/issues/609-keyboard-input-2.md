@@ -176,3 +176,96 @@ problems are:
    code mapping, a Ghostty binding consuming Tab, or Chromium needing additional
    fields on the keyboard event. Investigate separately from the Cmd shortcut
    problem.
+
+### Experiment 2: Forward Cmd+key in browse mode
+
+#### Goal
+
+Cmd+A, Cmd+C, Cmd+V, Cmd+X, and Cmd+Z work in Chromium overlays when in browse
+mode.
+
+#### Description
+
+Cmd+key events never reach the Zig `keyCallback` because macOS intercepts them
+at the AppKit level. The interception path:
+
+1. macOS calls `performKeyEquivalent` on the view for any Cmd+key press.
+2. `performKeyEquivalent` checks if the key is a Ghostty binding (e.g., Cmd+A →
+   `select_all`). If yes, it calls `keyDown` which routes to Ghostty's binding
+   system.
+3. If not a binding, the macOS menu system checks `MainMenu.xib` for matching
+   menu items (e.g., Cmd+A → `selectAll:` IBAction on the responder chain).
+
+Either way, the event is consumed before our Zig forwarding block sees it.
+
+The fix: add a browse mode check at the top of `performKeyEquivalent`. When the
+surface is in browse mode, route the event directly to `keyDown` — bypassing
+both the Ghostty binding check and the menu system. `keyDown` calls
+`ghostty_surface_key`, which calls `keyCallback`, where our forwarding block
+sends the event to Chromium via XPC.
+
+This requires exposing `isOverlayForwarding` to Swift via a new C API function.
+
+#### Chromium branch
+
+No Chromium changes. Continue on `146.0.7650.0-issue-608` (read-only — no new
+commits to this branch). The VK codes and meta modifier bit are already sent
+correctly by the existing `HandleKeyEvent`.
+
+#### Changes
+
+**`ghost/src/apprt/embedded.zig`** — Add a new C API export:
+
+```zig
+export fn ghostty_surface_is_overlay_forwarding(
+    surface: *Surface,
+) bool {
+    const xpc = @import("xpc.zig");
+    return xpc.isOverlayForwarding(&surface.core_surface);
+}
+```
+
+**`ghost/include/ghostty.h`** — Add the declaration:
+
+```c
+bool ghostty_surface_is_overlay_forwarding(ghostty_surface_t);
+```
+
+**`ghost/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`** — At the
+top of `performKeyEquivalent`, after the `focused` check, add a browse mode
+bypass:
+
+```swift
+// In browse mode, forward all Cmd+key events to keyDown so they
+// reach the Zig forwarding block instead of being consumed by
+// Ghostty bindings or the macOS menu system (Issue 609 Experiment 2).
+if let surface = self.surface,
+   ghostty_surface_is_overlay_forwarding(surface) {
+    self.keyDown(with: event)
+    return true
+}
+```
+
+This goes after the `if (!focused) { return false }` guard (line 1206-1208) and
+before the `keyIsBinding` check (line 1211).
+
+#### Verification
+
+```bash
+cd ghost && zig build
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+cargo run -p web -- https://lite.duckduckgo.com
+```
+
+Click the search box to enter browse mode and focus the text field. Test:
+
+| # | Test                      | Steps                                              | Expected                       |
+| - | ------------------------- | -------------------------------------------------- | ------------------------------ |
+| 1 | Cmd+A selects all         | Type "hello", Cmd+A, type "X"                      | "X" — all text replaced        |
+| 2 | Cmd+C / Cmd+V             | Type "hello", Cmd+A, Cmd+C, click new field, Cmd+V | "hello" pasted into new field  |
+| 3 | Cmd+X cuts                | Type "hello", Cmd+A, Cmd+X                         | Text field empty               |
+| 4 | Cmd+Z undoes              | Type "hello", Cmd+A, type "X", Cmd+Z               | "hello" restored               |
+| 5 | Ctrl+Esc still works      | Press Ctrl+Esc                                     | Exits browse mode              |
+| 6 | Cmd+A outside browse mode | Exit browse mode, press Cmd+A                      | Selects terminal text (normal) |
+
+Test 6 is a regression check — Cmd+A must still work normally when not browsing.
