@@ -733,3 +733,72 @@ insufficient — the renderer needs explicit editing commands.
 The remaining keyboard issue from Experiment 1 is Tab not moving focus between
 form fields (test 4). This is unrelated to the Cmd shortcut problem and can be
 addressed in a separate experiment.
+
+## Conclusion
+
+All 13 tests from the Experiment 1 matrix pass. Characters, Enter, Backspace,
+Tab, arrow keys, Home/End, Shift+arrow selection, Cmd+A/C/V/X/Z, and Ctrl+Esc
+all work correctly in Chromium overlays. The issue goal is fully satisfied.
+
+### What was built
+
+Two changes, one on each side of the pipeline:
+
+1. **Ghost side:** A browse mode bypass in `performKeyEquivalent`
+   (`SurfaceView_AppKit.swift`). When the surface is in browse mode, Cmd+key
+   events route to `keyDown` instead of being consumed by Ghostty bindings or
+   the macOS menu system. A new C API function
+   (`ghostty_surface_is_overlay_forwarding`) exposes the browse mode state to
+   Swift.
+
+2. **Chromium side:** `HandleKeyEvent` uses `ForwardKeyboardEventWithCommands`
+   instead of `ForwardKeyboardEvent`, attaching explicit editing commands for
+   Cmd+key shortcuts (`"selectAll"`, `"copy"`, `"paste"`, `"cut"`, `"undo"`). It
+   also populates `dom_code` and `dom_key` from the VK code using
+   `UsLayoutKeyboardCodeToDomCode` and `DomCodeToUsLayoutDomKey`, and skips the
+   `kChar` event for Cmd+key combinations.
+
+### Key learnings
+
+**Chromium's renderer does not re-interpret raw keyboard events.** On macOS,
+Chromium's input path works like this: NSEvent → `interpretKeyEvents:` → Cocoa
+calls `doCommandBySelector:` with the appropriate selector → the selector is
+converted to an editing command string → `ForwardKeyboardEventWithCommands`
+sends the key event AND the editing commands to the renderer. The renderer
+applies the commands directly. It never looks at the raw key event to figure out
+which command to run. This is the single most important learning from this
+issue.
+
+**`is_system_key` without editing commands creates a dead zone.** Setting
+`is_system_key = true` tells Blink to defer to the browser's editing command
+system. If no editing commands are attached (because we used
+`ForwardKeyboardEvent` instead of `ForwardKeyboardEventWithCommands`), the event
+falls into a void — modified enough to suppress text input, but missing the
+commands to trigger any shortcut. This was Experiment 3's failure mode.
+
+**macOS `performKeyEquivalent` intercepts Cmd+key before `keyDown`.** AppKit
+calls `performKeyEquivalent` for any Cmd+key press. Ghostty's implementation
+checks bindings first, then falls through to the menu system. Either way, the
+event never reaches `keyDown` or `keyCallback`. The browse mode bypass must go
+at the top of `performKeyEquivalent`, before both checks.
+
+**Ctrl+key events follow a different path.** Unlike Cmd+key, Ctrl+key events go
+through `keyDown` (not `performKeyEquivalent`), so they already reach the Zig
+forwarding block without any bypass. Only Cmd+key needed special handling.
+
+**Tab worked without any changes.** Despite failing in Experiment 1's initial
+test, Tab now works for moving focus between form fields. The `dom_code` and
+`dom_key` fields added in Experiment 3 (and kept in Experiment 4) likely fixed
+this — Chromium may need `dom_code` to distinguish Tab-as-focus-move from
+Tab-as-character.
+
+### Files changed
+
+- `ghost/src/apprt/embedded.zig` — `ghostty_surface_is_overlay_forwarding`
+  export
+- `ghost/include/ghostty.h` — C declaration
+- `ghost/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` — browse
+  mode bypass in `performKeyEquivalent`
+- `chromium/src/content/chromium_profile_server/browser/shell_browser_main_parts.cc`
+  — `HandleKeyEvent` with `ForwardKeyboardEventWithCommands` and editing
+  commands
