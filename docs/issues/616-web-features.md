@@ -856,3 +856,17 @@ Also verify the normal cases still work:
 6. Cold start shows indeterminate pulse → determinate progress → clear
 7. Navigating to `/slow?seconds=5` shows progress → clear
 8. Ctrl+C during loading clears the bar
+
+**Result:** Pass
+
+Back navigation no longer leaves the bar stuck at 100%. Suppressing
+`progress
+100` at the source eliminates the race condition entirely — no
+straggler message is ever sent.
+
+#### Conclusion
+
+One-line fix in Chromium: skip `SendLoadingState` when `pct >= 100` since
+`DidStopLoading` already sends `"done"`. Fixing at the source was the right call
+— simpler than a TUI state machine workaround, and eliminates the race condition
+rather than tolerating it.
