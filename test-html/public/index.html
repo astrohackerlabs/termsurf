@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TermSurf Test Pages</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1b26;
+  color: #c0caf5;
+  font-family: system-ui, -apple-system, sans-serif;
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 40px 20px;
+}
+h1 { color: #7aa2f7; margin-bottom: 8px; }
+.subtitle { color: #565f89; margin-bottom: 32px; }
+h2 { color: #bb9af7; margin: 24px 0 12px; font-size: 18px; }
+ul { list-style: none; }
+li { margin: 6px 0; }
+a {
+  color: #7dcfff;
+  text-decoration: none;
+  padding: 6px 12px;
+  display: inline-block;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+a:hover { background: #24283b; }
+.status { color: #565f89; font-size: 14px; margin-left: 8px; }
+</style>
+</head>
+<body>
+<h1>TermSurf Test Pages</h1>
+<p class="subtitle">Issue 616 — browser feature testing</p>
+
+<h2>Rendering &amp; Performance</h2>
+<ul>
+  <li><a href="/test-box-demo.html">Box Demo</a><span class="status">— canvas animation, FPS counter, localStorage identity</span></li>
+</ul>
+
+<h2>Input</h2>
+<ul>
+  <li><a href="/test-mouse.html">Mouse Events</a><span class="status">— clicks, checkbox, text input focus</span></li>
+  <li><a href="/test-zoom.html">Page Zoom</a><span class="status">— Cmd+=/-/0 zoom behavior</span></li>
+</ul>
+
+<h2>Navigation</h2>
+<ul>
+  <li><a href="/test-target-blank.html">target="_blank"</a><span class="status">— links that request new windows</span></li>
+</ul>
+
+<h2>Dialogs &amp; Auth</h2>
+<ul>
+  <li><a href="/test-dialogs.html">JavaScript Dialogs</a><span class="status">— alert, confirm, prompt</span></li>
+  <li><a href="/test-auth.html">HTTP Basic Auth</a><span class="status">— password-protected pages</span></li>
+</ul>
+
+<h2>File I/O</h2>
+<ul>
+  <li><a href="/test-download.html">Downloads</a><span class="status">— file downloads, blob downloads</span></li>
+  <li><a href="/test-upload.html">File Uploads</a><span class="status">— single, multiple, directory uploads</span></li>
+</ul>
+
+</body>
+</html>
