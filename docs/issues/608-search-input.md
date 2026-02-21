@@ -313,3 +313,138 @@ The capturer continues watching the old frame sink and receives no frames.
 
 The fix is to re-target the capturer in `DidFinishNavigation` when the
 `FrameSinkId` changes. This should be Experiment 2.
+
+### Experiment 2: Recreate capturer on page change
+
+#### Goal
+
+After a navigation that swaps the `RenderWidgetHostView` (e.g., POST form
+submissions), the capturer re-attaches to the new frame sink and frames continue
+flowing.
+
+#### Description
+
+Experiment 1 showed that POST form submissions change both the
+`RenderWidgetHostView` and the `FrameSinkId`. The capturer stays pointed at the
+old frame sink, so no frames arrive and the overlay freezes.
+
+Two approaches were considered:
+
+- **Approach A: `ChangeTarget()` in `DidFinishNavigation`.** Keep the existing
+  capturer alive and call `ChangeTarget()` with the new `FrameSinkId`. Minimal
+  code, but risks stale capturer configuration (resolution constraints, format)
+  if the new view has different properties (e.g., different device scale
+  factor).
+
+- **Approach B: Recreate the capturer in `PrimaryPageChanged`.** Destroy the old
+  capturer and create a fresh one from the new view. This is how Electron solves
+  the same problem in `FrameSubscriber::PrimaryPageChanged()` (see
+  `vendor/electron/shell/browser/api/frame_subscriber.cc:77-83`). Electron
+  compares the `RenderWidgetHost` pointer — if it changed, it calls
+  `DetachFromHost()` then `AttachToHost()`, which destroys the old capturer and
+  creates a new one with full configuration.
+
+We follow Approach B because:
+
+1. It is the battle-tested pattern used by Electron across all navigation types.
+2. Recreating the capturer guarantees clean state — no stale resolution
+   constraints, format, or target from the previous view.
+3. We already have an `Attach()` method that performs the full capturer setup.
+   Calling it again after a host swap reuses existing code.
+4. `PrimaryPageChanged` fires after commit when the new page is fully
+   established, which is the right time to attach.
+
+#### Chromium branch
+
+Continue on `146.0.7650.0-issue-608`.
+
+#### Changes
+
+**`shell_video_consumer.h`** — Add a `PrimaryPageChanged` override and a
+`RenderWidgetHost*` member to track the current host:
+
+```cpp
+// WebContentsObserver:
+void PrimaryPageChanged(Page& page) override;
+
+// ...
+
+RenderWidgetHost* current_host_ = nullptr;
+```
+
+Also add the `Page` include:
+
+```cpp
+#include "content/public/browser/page.h"
+```
+
+**`shell_video_consumer.cc`** — Implement `PrimaryPageChanged`:
+
+```cpp
+void ShellVideoConsumer::PrimaryPageChanged(Page& page) {
+  RenderWidgetHost* new_host =
+      page.GetMainDocument().GetMainFrame()->GetRenderWidgetHost();
+  if (new_host == current_host_)
+    return;
+
+  LOG(INFO) << "[ShellVideoConsumer] PrimaryPageChanged: host changed, "
+            << "re-attaching capturer (pane " << pane_id_ << ")";
+  Attach(web_contents());
+}
+```
+
+**`shell_video_consumer.cc`** — In `Attach()`, store the current host and reset
+the old capturer before creating a new one:
+
+```cpp
+void ShellVideoConsumer::Attach(WebContents* web_contents) {
+  RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+  if (!view) { /* ... */ }
+
+  RenderWidgetHost* host = view->GetRenderWidgetHost();
+  if (!host) { /* ... */ }
+
+  // Destroy old capturer before creating a new one.
+  capturer_.reset();
+  current_host_ = host;
+
+  // ... rest of existing Attach() logic unchanged ...
+}
+```
+
+#### Verification
+
+```bash
+cd ~/dev/termsurf/chromium/src && export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH" && autoninja -C out/Default chromium_profile_server
+open ghost/zig-out/Ghostty.app --stderr ~/dev/termsurf/logs/ghost.log
+```
+
+Test 1 — lite.duckduckgo.com (previously frozen):
+
+```
+cargo run -p web -- https://lite.duckduckgo.com
+# Click search box, type "test search", click Search button
+# Expected: results page renders, overlay updates, input continues
+```
+
+Test 2 — Google (previously frozen):
+
+```
+cargo run -p web -- https://www.google.com
+# Click search box, type "hello", click Search button
+# Expected: results page renders, overlay updates, input continues
+```
+
+Test 3 — Wikipedia (regression check):
+
+```
+cargo run -p web -- https://en.wikipedia.org/wiki/Terminal_emulator
+# Click a link, then use the search box
+# Expected: both still work
+```
+
+Check `~/dev/termsurf/logs/chromium-server.log` for:
+
+1. `PrimaryPageChanged: host changed` log appears for the frozen cases
+2. FPS logs continue after the navigation (no gap)
+3. Wikipedia link clicks do NOT trigger re-attach (host unchanged)
