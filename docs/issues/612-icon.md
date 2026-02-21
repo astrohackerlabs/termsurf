@@ -315,20 +315,58 @@ The `zig-out/` stale file issue is a pre-existing quirk of the build system's
 `cp -R` step — not specific to this change. Cleaning `zig-out/` before building
 avoids it.
 
-## Conclusion
+### Experiment 3: Generate icons from new source image
 
-TermSurf now has its own icon. The release icon shows a surfing ghost on a cyan
-wave, and debug builds show a green wave variant in the dock. The icon comes
-from a traditional `AppIcon.appiconset/` with pre-rendered PNGs at all standard
-macOS sizes, copied from ts1. The Icon Composer document (`Ghostty.icon`) is no
-longer part of the build.
+#### Goal
 
-Changes across both experiments:
+The release icon shows `assets/termsurf-2-black.png` at all sizes. The debug
+icon remains unchanged (green wave).
 
-1. `AppIcon.appiconset/` — 7 PNGs + `Contents.json` copied from ts1
-2. `TermSurfDebugIcon.imageset/` — Debug icon copied from ts1
-3. `AppIconImage.imageset/` — PNGs replaced with TermSurf icon
-4. `project.pbxproj` — `ASSETCATALOG_COMPILER_APPICON_NAME` changed to
-   `AppIcon`, `Ghostty.icon` references removed
-5. `AppDelegate.swift` — Debug icon changed from `"BlueprintImage"` to
-   `"TermSurfDebugIcon"`
+#### Approach
+
+Copy the `generate-icons.sh` script from ts1 into Ghost, adapt it for Ghost's
+directory structure, and run it with `assets/termsurf-2-black.png` as the source
+image. This generates all 7 icon sizes in `AppIcon.appiconset/` and replaces the
+3 PNGs in `AppIconImage.imageset/`. Then rebuild and verify the new icon loads.
+
+#### Steps
+
+##### Step 1: Copy and adapt `generate-icons.sh`
+
+Copy `ts1/scripts/generate-icons.sh` to `ghost/scripts/generate-icons.sh` and
+update paths:
+
+- Source image: `assets/termsurf-2-black.png` (relative to repo root)
+- `AppIcon.appiconset`: `ghost/macos/Assets.xcassets/AppIcon.appiconset/`
+- `AppIconImage.imageset`: `ghost/macos/Assets.xcassets/AppIconImage.imageset/`
+- No debug icon changes — only generate release icon sizes
+
+The script should also update the 3 PNGs in `AppIconImage.imageset/` (used by
+the runtime icon-switching system) by copying the 256, 512, and 1024 sizes with
+the expected filenames.
+
+##### Step 2: Run the script
+
+```bash
+chmod +x ghost/scripts/generate-icons.sh
+ghost/scripts/generate-icons.sh
+```
+
+##### Step 3: Build and verify
+
+```bash
+rm -rf ghost/zig-out/
+rm -rf ~/Library/Developer/Xcode/DerivedData/Ghostty-*
+rm -rf ghost/macos/build/
+cd ghost && zig build
+```
+
+#### Verification
+
+1. **Build succeeds**
+2. **Finder icon:** `ghost/macos/build/Debug/TermSurf.app` shows the
+   `termsurf-2-black.png` icon — visually distinct from the previous cyan wave
+   surfer
+3. **Dock icon (debug):** The green wave debug icon still appears (unchanged)
+4. **No old icon:** Neither the Ghostty icon nor the previous cyan wave surfer
+   appears as the release icon
