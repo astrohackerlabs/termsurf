@@ -540,3 +540,41 @@ not.
 If both ~2fps: rAF + multiple windows is sufficient. BrowserContext is
 irrelevant and the problem is in the scheduler or compositor handling of
 multiple concurrent rAF loops within one renderer process.
+
+**Result:** Both 60fps
+
+Both windows rendered the spinning blue square at 60fps. On first launch,
+identity strings differed due to a race condition — both windows loaded
+simultaneously and called `localStorage.getItem()` before either wrote. On
+second launch, both windows displayed the same identity string, confirming they
+share the same BrowserContext and localStorage. 4 renderer processes total (2
+active + 2 spare). Same profile, same origin, same rAF loop — both smooth.
+
+This is the definitive fork:
+
+| Configuration                | rAF   | FPS     | Experiment |
+| ---------------------------- | ----- | ------- | ---------- |
+| 2 BrowserContexts, 2 windows | yes   | 2 + 2   | 621.5      |
+| 1 BrowserContext, 2 windows  | yes   | 60 + 60 | 622.3      |
+| 2 BrowserContexts, CSS only  | no JS | 60 + 60 | 621.4      |
+
+**The 2fps requires BOTH conditions: multiple BrowserContexts AND JavaScript.**
+Multiple windows with rAF in the same BrowserContext is fine. Multiple
+BrowserContexts with CSS-only is fine. Only the combination triggers the
+degradation.
+
+This eliminates the GPU/Viz process as the sole bottleneck — if GPU contention
+were the cause, same-profile two-window rAF would also degrade (both
+configurations have separate renderer processes submitting frames to the same
+GPU process). The problem is specific to the multi-BrowserContext code path.
+
+#### Conclusion
+
+The 2fps degradation requires multi-BrowserContext + JavaScript. Same-profile
+rAF is 60fps. The bottleneck is not in the renderer process (each has its own
+threads), not in the GPU/Viz process (both configurations share it), and not in
+the scheduler state machine (same behavior in both cases). It must be in
+**browser-process-level coordination** that differs between
+single-BrowserContext and multi-BrowserContext — something in how the browser
+process manages frame scheduling, BeginFrame distribution, or compositor frame
+sink setup when multiple BrowserContexts exist.
