@@ -452,3 +452,91 @@ The remaining suspects:
 The next experiment should instrument the scheduler state machine to trace why
 frames are being dropped — specifically `ShouldSendBeginMainFrame()`,
 `ShouldDraw()`, and `has_pending_tree_` state at each BeginFrame.
+
+### Experiment 3: Two windows, same profile, JS box demo
+
+Before instrumenting the scheduler, there's a simpler experiment that could
+change the entire investigation. Issue 620 Experiment 11 tested two windows in
+the **same** BrowserContext with google.com and got 60fps. But that was with
+google.com — we never tested same-profile with the JS box demo specifically.
+
+This experiment creates two windows in one BrowserContext (no second profile),
+both loading the JS box demo. It answers: **is the 2fps caused by multiple
+BrowserContexts, or by multiple windows with rAF?**
+
+The distinction matters because:
+
+- **Two BrowserContexts** → two renderer processes (separate main threads,
+  separate compositor threads). The contention would be in a shared resource
+  outside the renderers (GPU/Viz process).
+- **One BrowserContext, two windows** → the two windows may share a renderer
+  process (same origin, same profile). The contention would be intra-process
+  (scheduler state machine, main thread serialization).
+
+If same-profile is 60fps: the problem is specifically multi-BrowserContext.
+Something about having two separate renderer processes causes contention in the
+shared GPU/Viz process that doesn't happen when windows share a renderer.
+
+If same-profile is 2fps: the problem is multi-window with rAF regardless of
+profile. BrowserContext is irrelevant and the bottleneck is in how Chromium
+handles two concurrent rAF loops (possibly intra-process scheduler contention).
+
+#### Changes
+
+**`content_api_shim.mm`** — revert to single BrowserContext, open two windows:
+
+```cpp
+// One profile, two windows, JS box demo (requestAnimationFrame).
+const char* kWindowAUrl = "http://localhost:9616/test-box-demo.html";
+const char* kWindowBUrl = "http://localhost:9616/test-box-demo.html";
+
+class TsBrowserMainParts : public content::ShellBrowserMainParts {
+ protected:
+  void InitializeMessageLoopContext() override {
+    content::Shell::CreateNewWindow(browser_context(), GURL(kWindowAUrl),
+                                    nullptr, gfx::Size());
+    content::Shell::CreateNewWindow(browser_context(), GURL(kWindowBUrl),
+                                    nullptr, gfx::Size());
+  }
+};
+```
+
+No `InitializeBrowserContexts` override, no second BrowserContext, no
+`PostMainMessageLoopRun` override. Parent class handles all profile setup. Two
+windows share the default profile.
+
+#### Build
+
+```bash
+cd ~/dev/termsurf/chromium/src
+export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+autoninja -C out/Default zig_content_shell
+```
+
+#### Verification
+
+1. Start the Bun server (if not already running):
+   ```bash
+   cd ~/dev/termsurf/test-html && bun run server.ts
+   ```
+2. Launch the app:
+   ```bash
+   open out/Default/Zig\ Content\ Shell.app
+   ```
+3. Two Content Shell windows appear, each showing a spinning blue square with
+   FPS counter
+4. Observe:
+   - Are both spinning smoothly (FPS counter shows ~60)?
+   - Are both stuttering (FPS counter shows ~2)?
+   - Do the identity strings match (confirming same profile)?
+5. Also count processes: `ps aux | grep "Zig Content Shell"` — how many
+   renderers?
+6. Close both windows — process exits cleanly
+
+If both ~60fps: multi-BrowserContext is the trigger. Two separate renderer
+processes contend in the GPU/Viz process in a way that one shared renderer does
+not.
+
+If both ~2fps: rAF + multiple windows is sufficient. BrowserContext is
+irrelevant and the problem is in the scheduler or compositor handling of
+multiple concurrent rAF loops within one renderer process.
