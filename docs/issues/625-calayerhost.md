@@ -1283,4 +1283,45 @@ the borderless window.
 The major positioning bugs are fixed. The CALayerHost content renders near the
 correct position — a massive improvement from the ~400px offset. A small ~10px Y
 and ~3px X residual offset remains, likely from grid padding or view insets.
-Experiment 7 should fine-tune this last offset.
+
+## Conclusion
+
+Issue 625 replaced `FrameSinkVideoCapturer` with `CALayerHost`. The core
+pipeline works: Chromium sends a `ca_context_id` once over XPC, the GUI creates
+a `CALayerHost` sublayer, and Window Server composites directly from GPU VRAM.
+No per-frame IPC, no pixel copies, no Metal shader compositing.
+
+**What was accomplished:**
+
+- Deleted the entire `FrameSinkVideoCapturer` pipeline (~460 lines of capturer
+  code, IOSurface Mach port transfer, Metal overlay shaders)
+- Chromium side: added `CALayerParams` callback on `RenderWidgetHostViewMac`,
+  sends `ca_context_id` once per tab over XPC
+- GUI side: creates `CALayerHost` as sublayer of IOSurfaceLayer with
+  `geometryFlipped = YES` and `anchorPoint = CGPointZero`
+- GUI side: converts grid coordinates to logical points (divides by
+  `contentsScale`) for the CALayerHost frame
+- Chromium side: borderless window with hidden toolbar to eliminate phantom
+  offsets in the CAContext layer tree
+- Moved `WebContentsObserver` notifications to a lightweight `ShellTabObserver`
+
+**What was NOT tested:**
+
+The positioning bug consumed all six experiments (2–6 were positioning fixes,
+plus Experiment 1 was research). The CALayerHost content now renders near the
+correct position (~10px Y, ~3px X residual offset), but this offset prevented
+thorough testing of:
+
+- Scrolling responsiveness and latency improvement vs the capturer
+- Text selection tracking
+- Pane resize behavior
+- Multiple panes with different profiles
+- CALayerHost cleanup on pane close
+- Input latency comparison with native Chrome
+
+**Follow-up issues needed:**
+
+1. Fix the remaining ~10px Y / ~3px X positioning offset (likely grid padding or
+   Chromium view insets)
+2. Verify the full CALayerHost pipeline once positioning is pixel-perfect
+3. Measure input latency improvement vs the old capturer pipeline
