@@ -280,3 +280,77 @@ command buffer contention or swap chain scheduling explains the 2fps
 degradation. The key question is why CSS animations (which also go through the
 Viz process) are unaffected while JavaScript animations are not — the difference
 must be in what the renderer submits, not how the Viz process handles it.
+
+### Experiment 2: Verify process isolation empirically
+
+Experiment 1 was a code analysis — it showed two BrowserContexts _should_ get
+separate renderer processes. But we haven't verified this empirically. If our
+Zig Content Shell shim is accidentally running in single-process mode (e.g., a
+command line flag, an initialization order issue, or Content Shell defaulting
+differently than expected), the code analysis is irrelevant and two rAF loops
+would be fighting for one main thread.
+
+This experiment has two parts: verify the process architecture, then investigate
+the actual difference between CSS and JS frame submission.
+
+#### Part A: Count processes
+
+While the two-profile rAF box demo is running (Experiment 5 from Issue 621),
+count the running processes.
+
+1. Start the Bun server and launch the app with two profiles loading the JS box
+   demo
+2. Run `ps aux | grep "Zig Content Shell"` to list all processes
+3. Count:
+   - How many "Zig Content Shell Helper" processes exist? (these are renderer
+     processes)
+   - Is there a GPU process?
+   - Is there a utility/network process?
+
+**Expected if multi-process:** At least 4 processes — 1 browser, 2 renderers
+(one per BrowserContext), 1 GPU. Possibly more (network, utility).
+
+**Expected if single-process:** Only 1 process (or 1 browser + 1 GPU, no
+separate renderers).
+
+If single-process: the Experiment 1 code analysis was wrong for our case, and
+the fix is to ensure multi-process mode. Design Experiment 3 to force
+`--no-single-process` or fix the shim.
+
+#### Part B: Research CSS vs JS frame submission
+
+If Part A confirms multi-process, the mystery deepens. The next question is:
+what does a CSS-animation renderer submit to Viz vs what does a JS-rAF renderer
+submit?
+
+CSS animations run entirely in the compositor thread. The compositor can produce
+new CompositorFrames without waiting for the main thread — it interpolates
+transform/opacity values on its own and submits directly to Viz.
+
+JS rAF requires a **BeginMainFrame → main thread work → commit** cycle. The
+compositor sends BeginMainFrame to the main thread, waits for JS to execute and
+layout/paint to complete, then the main thread commits the result back to the
+compositor, which then produces a CompositorFrame for Viz.
+
+The commit step is the key difference. Research:
+
+- `cc/trees/proxy_main.cc` — the commit path after BeginMainFrame completes.
+  Does it block the compositor thread?
+- `cc/trees/proxy_impl.cc` — how the compositor handles pending commits. Does it
+  stop requesting BeginFrames while waiting for a commit?
+- `cc/scheduler/scheduler.cc` — the state machine that decides when to send
+  BeginMainFrame vs when to draw. Does `COMMIT_STATE_WAITING_FOR_FIRST_DRAW` or
+  similar block new BeginFrames?
+
+The hypothesis: when the main thread is involved, the compositor-to-Viz
+submission rate drops because the compositor blocks waiting for commits. With
+two renderers both in this state, some shared resource (Viz frame scheduling,
+BeginFrame source) sees both as "slow" and throttles them. With CSS-only, the
+compositor never blocks, so the shared resource never sees contention.
+
+#### Verification
+
+Part A is complete when the process count is known. Part B is complete when the
+commit-blocking behavior is understood with file paths and line numbers.
+Together they determine whether Experiment 3 should fix the process model, fix a
+commit bottleneck, or investigate the Viz process further.
