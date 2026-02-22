@@ -244,9 +244,14 @@ pub fn updateCALayerHostFrame(
     // Convert physical pixels to logical points. Add padding so the overlay
     // aligns with the terminal grid (which starts at padding offset).
     const x: f64 = @as(f64, grid_col) * cw / scale + pl / scale;
-    const y: f64 = @as(f64, grid_row) * ch / scale + pt / scale;
+    const y_from_top: f64 = @as(f64, grid_row) * ch / scale + pt / scale;
     const w: f64 = @as(f64, grid_width) * cw / scale;
     const h: f64 = @as(f64, grid_height) * ch / scale;
+
+    // The IOSurfaceLayer has geometryFlipped=false (Y=0 at bottom).
+    // Flip Y so the flipped_layer is positioned from the bottom.
+    const parent_bounds = self.layer.layer.getProperty(macos.graphics.Rect, "bounds");
+    const y: f64 = parent_bounds.size.height - y_from_top - h;
 
     const frame = macos.graphics.Rect{
         .origin = .{ .x = x, .y = y },

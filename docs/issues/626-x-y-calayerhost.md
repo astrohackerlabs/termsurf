@@ -644,3 +644,47 @@ Also remove the Experiment 5 diagnostic log.
 Run the app. The web content should align pixel-perfectly with the TUI viewport
 in both X and Y. The ~10px Y offset should be gone. If it works, also verify
 that the content stays aligned after a browser navigation (page load).
+
+#### Results
+
+**Pass.** The web content aligns pixel-perfectly with the TUI viewport in both X
+and Y. The ~10px Y offset is gone.
+
+#### Conclusion
+
+The Y-flip formula `y = parent_height - y_from_top - h` corrects for the
+IOSurfaceLayer's bottom-origin coordinate system. Combined with Experiment 3's
+intermediate flipped layer (which fixed X), the overlay is now pixel-perfect.
+
+## Conclusion
+
+The CALayerHost X/Y offset had two root causes:
+
+1. **Missing intermediate flipped layer** (fixed in Experiment 3). Chromium's
+   `DisplayCALayerTree` uses a `maybe_flipped_layer_` with `geometryFlipped=YES`
+   between the root layer and the CALayerHost. We were attaching the CALayerHost
+   directly to the IOSurfaceLayer with `geometryFlipped` on the wrong layer.
+
+2. **Bottom-origin Y coordinates** (fixed in Experiment 6). The IOSurfaceLayer
+   has `geometryFlipped=false` — Y=0 is at the bottom. Our frame calculation
+   assumed Y=0 at the top. The fix is a single Y-flip:
+   `y = parent_height - y_from_top - h`.
+
+Six experiments were needed to fix what amounted to two coordinate system bugs.
+The actual code changes are trivial — an intermediate CALayer and a one-line
+Y-flip. The debugging took longer than building the entire CALayerHost pipeline
+in Issue 625.
+
+### Remaining work
+
+Pixel-perfect positioning is done, but the broader CALayerHost integration still
+needs testing. These were deferred while the offset blocked all verification:
+
+- **Resize** — The overlay does not update when the pane resizes. Known broken.
+- **Scrolling** — Responsiveness and latency untested.
+- **Text selection** — Drag tracking untested.
+- **Multi-pane** — Multiple overlays in split panes untested.
+- **CALayerHost cleanup** — Layer removal on pane close untested.
+- **Input latency** — Comparison with native Chrome untested.
+
+These will be tracked in a follow-up issue.
