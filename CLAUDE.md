@@ -98,7 +98,10 @@ IOSurface overlay pipeline with pink texture proof-of-concept (Issue 602), live
 Chromium streaming at 60fps with dynamic resize (Issue 603), multi-pane
 multi-profile server reuse (Issues 604–605), mouse input forwarding with cursor
 changes and text selection (Issue 606), keyboard input forwarding with Cmd+key
-bypass (Issues 607–609), TermSurf branding and app icon (Issues 611–612).
+bypass (Issues 607–609), TermSurf branding and app icon (Issues 611–612),
+directory rename from ghost/web to gui/tui (Issue 613), XDG directory compliance
+(Issue 615), loading progress indicator and browser navigation keybindings
+(Issue 616).
 
 ### Directory Structure
 

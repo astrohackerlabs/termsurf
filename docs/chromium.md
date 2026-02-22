@@ -43,7 +43,7 @@ issue-specific branches.
 | `146.0.7650.0-issue-607` | [Issue 607](issues/607-keyboard-input.md)   | Keyboard input               |
 | `146.0.7650.0-issue-608` | [Issue 608](issues/608-search-input.md)     | Search input                 |
 | `146.0.7650.0-issue-609` | [Issue 609](issues/609-keyboard-input-2.md) | Keyboard input (continued)   |
-| `146.0.7650.0-issue-616` | [Issue 616](issues/616-web-features.md)     | Loading state indicator       |
+| `146.0.7650.0-issue-616` | [Issue 616](issues/616-web-features.md)     | Web features (loading, nav, context menu) |
 
 ## Local Setup
 

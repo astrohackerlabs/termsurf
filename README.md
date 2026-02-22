@@ -106,12 +106,13 @@ logic in Zig.
 - Multi-pane, multi-profile server reuse
 - Mouse input forwarding (clicks, drag, scroll, cursor changes, text selection)
 - Keyboard input forwarding (key events, Cmd+key bypass, clipboard)
+- Browser navigation (Cmd+[ back, Cmd+] forward, Cmd+R reload)
+- Loading progress indicator (indeterminate pulse during page load)
 - XPC communication (Zig ↔ `web` TUI ↔ Chromium server)
 
 **Not yet started:**
 
 - In-process Chromium embedding (currently out-of-process streaming over XPC)
-- Navigation (back, forward, reload)
 
 macOS only for now.
 
