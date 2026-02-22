@@ -89,41 +89,74 @@ On resize, `parent_bounds.height` changes (the IOSurfaceLayer resizes with the
 window). The grid coordinates, cell dimensions, and padding may also change. All
 of these must be current when `updateCALayerHostFrame()` runs.
 
+### What was accidentally removed
+
+The Issue 625 CALayerHost commit (`3313dd352688e`) removed two pieces of the
+resize pipeline that were working:
+
+**GUI side (`gui/src/apprt/xpc.zig`):**
+
+- `sendResize()` — sent `"resize"` XPC action with `pixel_width`/`pixel_height`
+  to Chromium when an existing pane's overlay dimensions changed.
+- The call to `sendResize()` in the existing-pane path of `handleSetOverlay()`.
+
+**Chromium side (`shell_browser_main_parts.cc`):**
+
+- The `"resize"` XPC action handler that dispatched to `ResizeCapture()`.
+- `ResizeCapture()` — looked up the tab by pane_id, called
+  `view->SetSize(logical)` to resize the WebContents, and resized the capturer
+  via `SetResolution()`.
+
+The capturer resize (`SetResolution()`) is no longer needed — there's no
+capturer with CALayerHost. But `view->SetSize()` is still essential. It tells
+Chromium to re-render at the new dimensions, and the CAContext automatically
+reflects the new size via Window Server compositing.
+
 ## Experiments
 
-### Experiment 1: Update flipped_layer frame on size change in drawFrame
+### Experiment 1: Restore resize pipeline and update flipped_layer on size change
 
-The `drawFrame()` loop in `generic.zig` already detects size changes
-(`size_changed` at line 1486). When the surface size changes, it updates
-`self.size.screen` and GPU uniforms — but never calls
-`updateCALayerHostFrame()`. This means the `flipped_layer` frame stays at the
-old position even though the IOSurfaceLayer has resized underneath it.
+Two things are broken:
 
-The `setOverlay()` path does call `updateCALayerHostFrame()`, and the TUI does
-send updated `set_overlay` messages on resize. But there's a timing problem: the
-`set_overlay` XPC arrives on a background queue and calls
-`updateCALayerHostFrame()` with the new grid coordinates. However, the Y-flip
-formula reads `parent_bounds.height` from the IOSurfaceLayer. If the
-IOSurfaceLayer hasn't finished resizing when the XPC arrives, the parent bounds
-are stale and the Y calculation is wrong.
+1. **Chromium doesn't know about resizes.** The `sendResize()` function and
+   Chromium's `"resize"` handler were removed in the CALayerHost commit. The GUI
+   stores updated pixel dimensions but never sends them to Chromium.
 
-The fix: call `updateCALayerHostFrame()` in `drawFrame()` whenever
-`size_changed` is true and an overlay is active. At that point,
-`self.size.screen` has just been updated and the IOSurfaceLayer bounds are
-current. This mirrors the old pipeline's behavior — the overlay position is
-recalculated every frame that the size changes.
+2. **The flipped_layer frame doesn't update on window resize.** The
+   `drawFrame()` loop detects `size_changed` and updates screen uniforms, but
+   never calls `updateCALayerHostFrame()`. The `setOverlay()` XPC path does call
+   it, but the IOSurfaceLayer's parent bounds may be stale at that point due to
+   timing.
 
 #### Changes
 
+**Chromium branch:** Create `146.0.7650.0-issue-627` from
+`146.0.7650.0-issue-625`. Update `docs/chromium.md`.
+
+**`chromium/src/content/chromium_profile_server/browser/shell_browser_main_parts.cc`:**
+
+- Restore the `"resize"` XPC action handler in `StartDynamicMode()`. Dispatch to
+  `ResizeTab()` (renamed from `ResizeCapture` — no capturer to resize).
+- Add `ResizeTab()`: look up the tab by pane_id, call `view->SetSize(logical)`.
+  No capturer resize needed.
+
+**`gui/src/apprt/xpc.zig`:**
+
+- Restore `sendResize()`: send `"resize"` action with pane_id, pixel_width,
+  pixel_height to the Chromium server.
+- Restore the call in `handleSetOverlay()`'s existing-pane path: if the tab has
+  been sent and dimensions changed, call `sendResize()`.
+
 **`gui/src/renderer/generic.zig`:**
 
-- In `drawFrame()`, after the `size_changed` block (after line 1546
-  `self.updateScreenSizeUniforms()`), add a call to
-  `self.updateCALayerHostFrame()`. The method already guards on
-  `ca_layer_flipped` being non-null, so it's a no-op when there's no overlay.
+- In `drawFrame()`, after the `size_changed` block (after
+  `self.updateScreenSizeUniforms()`), add `self.updateCALayerHostFrame()`. The
+  method guards on `ca_layer_flipped` being non-null, so it's a no-op without an
+  overlay.
 
 #### Verification
 
 Run the app, open a browser overlay, then resize the window. The web content
-should resize and reposition to match the TUI viewport border at all times. Test
-both horizontal and vertical resize, and window maximize/restore.
+should resize and reposition to match the TUI viewport border. Chromium should
+log `Resized pane ... to ...` on each resize. Test horizontal resize, vertical
+resize, and window maximize/restore.

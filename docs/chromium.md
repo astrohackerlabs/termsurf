@@ -10,7 +10,7 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Branch: `146.0.7650.0-issue-503`
+- Branch: `146.0.7650.0-issue-627`
 - Base version: `146.0.7650.0` (tracking Electron's Chromium version)
 
 ## Branch Strategy
@@ -51,6 +51,7 @@ find the most relevant recent branch, create a new branch from it
 | `146.0.7650.0-issue-620` | [Issue 620](issues/620-zig-content-shell.md) | Zig Content Shell                         |
 | `146.0.7650.0-issue-621` | [Issue 621](issues/621-single-process.md)    | Single process multi-profile performance  |
 | `146.0.7650.0-issue-625` | [Issue 625](issues/625-calayerhost.md)       | CALayerHost                               |
+| `146.0.7650.0-issue-627` | [Issue 627](issues/627-resize-calayerhost.md) | CALayerHost resize                        |
 
 ## Local Setup
 
