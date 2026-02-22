@@ -973,3 +973,96 @@ Two viable approaches:
 Either approach deletes ~460 lines of capturer code and adds ~50 lines of
 interception code. The hard question is not feasibility — it's which approach
 gives better results for TermSurf's compositor architecture.
+
+### Experiment 3: How does Electron display Chromium content?
+
+Before implementing CALayerHost, study how Electron solves the same problem.
+Electron embeds Chromium content inside its own window management — exactly what
+TermSurf does. Understanding Electron's approach will confirm whether
+CALayerHost is the right path, reveal pitfalls we haven't considered, and
+potentially surface a better integration pattern.
+
+Research the Electron source at `vendor/electron/`.
+
+#### Q1: How does Electron display a BrowserWindow's web content?
+
+Electron's `BrowserWindow` shows Chromium-rendered web content inside an
+Electron-managed NSWindow. How does the rendered content reach the screen?
+
+**Where to look:**
+
+- `vendor/electron/shell/browser/native_window_mac.mm` — Electron's macOS window
+  implementation. How is the content view set up? Is there a CALayerHost?
+- `vendor/electron/shell/browser/api/electron_api_web_contents.cc` — how
+  WebContents are created and attached to windows.
+- Search for `CALayerHost`, `ca_context_id`, `CALayerParams`,
+  `AcceleratedWidgetCALayerParamsUpdated` — does Electron intercept or override
+  any of these?
+
+**Key question:** Does Electron use CALayerHost (like Chrome's browser process),
+or does it do something different?
+
+#### Q2: Does Electron use off-screen rendering?
+
+Electron has an `offscreen` option for `BrowserWindow`. How does it work? Does
+the standard (non-offscreen) path use the normal Chromium display pipeline?
+
+**Where to look:**
+
+- `vendor/electron/shell/browser/osr/` — off-screen rendering directory. What
+  classes exist? How does OSR capture frames?
+- `vendor/electron/shell/browser/native_window.h` — does the window abstraction
+  have an offscreen vs onscreen mode?
+- Search for `FrameSinkVideoCapturer` — does Electron use the same capturer API
+  we use? Only for OSR, or also for normal rendering?
+
+**Key question:** Is Electron's normal (non-OSR) display path the standard
+Chromium CALayerParams pipeline, unmodified?
+
+#### Q3: How does Electron handle the RenderWidgetHostView?
+
+`RenderWidgetHostView` is where the display pipeline terminates on the browser
+side. Electron may customize or replace it.
+
+**Where to look:**
+
+- Search for `RenderWidgetHostView` in `vendor/electron/` — does Electron
+  subclass or wrap `RenderWidgetHostViewMac`?
+- `vendor/electron/shell/browser/osr/osr_render_widget_host_view_mac.mm` — the
+  OSR variant. How does this differ from the standard view?
+- Search for `AcceleratedWidgetMac`, `BrowserCompositorMac` — does Electron
+  modify the compositor chain?
+
+**Key question:** Does Electron's non-OSR path use the standard
+`RenderWidgetHostViewMac` → `BrowserCompositorMac` → `AcceleratedWidgetMac` →
+`CALayerParams` chain unmodified?
+
+#### Q4: What can we learn from Electron's OSR implementation?
+
+Even if Electron's normal path is standard Chromium, their OSR implementation is
+directly relevant — it's the closest existing solution to what TermSurf does
+(rendering Chromium content into a texture for external compositing).
+
+**Where to look:**
+
+- `vendor/electron/shell/browser/osr/osr_video_consumer.cc` — does Electron use
+  `FrameSinkVideoCapturer` for OSR? What is their frame delivery path?
+- `vendor/electron/shell/browser/osr/osr_render_widget_host_view_mac.mm` — how
+  does the OSR view handle frame output on macOS?
+- `vendor/electron/shell/browser/osr/osr_host_display_client.cc` — does Electron
+  customize the display client for OSR?
+- Search for `IOSurface`, `Mach port`, `CALayerParams` in the OSR directory.
+
+**Key question:** Does Electron's OSR use the capturer (like us), CALayerParams,
+or something else entirely? What frame delivery mechanism do they use?
+
+#### Verification
+
+Research is complete when we can answer:
+
+1. Whether Electron's normal display path is standard Chromium (CALayerParams →
+   CALayerHost, unmodified)
+2. Whether Electron customizes `RenderWidgetHostView` or the compositor chain
+3. How Electron's OSR captures and delivers frames
+4. Whether Electron's approach reveals a better pattern than CALayerHost for
+   TermSurf's use case
