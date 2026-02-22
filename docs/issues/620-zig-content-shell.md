@@ -395,3 +395,119 @@ boundary — the framework exports `ContentMain` as `extern "C"`, and the launch
 calls it via `dlsym`. The three-class subclassing pattern (`TsMainDelegate` →
 `TsContentBrowserClient` → `TsBrowserMainParts`) cleanly overrides the
 initialization chain while reusing all of Content Shell's infrastructure.
+
+### Experiment 2: Two profiles, two windows
+
+Prove that two `BrowserContext` instances with different storage paths can
+coexist in the same process. This is the critical experiment — if both windows
+render and are interactive, in-process browser embedding is viable and the
+entire multi-process architecture (xpc-gateway, profile server spawning, XPC
+connections, IOSurface Mach port transfer, frame capture, 120fps oversampling)
+goes away.
+
+ts4 proved this works in native C++ (Issues 406–413). This experiment confirms
+it works through the C shim boundary.
+
+#### Changes
+
+**`chromium/src/content/zig_content_shell/content_api_shim.mm`:**
+
+1. Add include for `content/shell/common/shell_paths.h`
+2. Replace `kInitialUrl` with two URL constants:
+   - `kProfileAUrl = "https://google.com"`
+   - `kProfileBUrl = "https://example.com"`
+3. Add profile path constants using `~/.config/termsurf/zig-content-shell/`:
+   - Profile A: `~/.config/termsurf/zig-content-shell/profile-a/`
+   - Profile B: `~/.config/termsurf/zig-content-shell/profile-b/`
+4. Add `browser_context_b_` member to `TsBrowserMainParts`
+5. Override `InitializeBrowserContexts()`:
+   ```cpp
+   void InitializeBrowserContexts() override {
+     // Profile A
+     base::FilePath home;
+     base::PathService::Get(base::DIR_HOME, &home);
+     base::FilePath base_path = home.Append(".config")
+                                    .Append("termsurf")
+                                    .Append("zig-content-shell");
+
+     base::PathService::Override(
+         SHELL_DIR_USER_DATA, base_path.Append("profile-a"));
+     set_browser_context(new content::ShellBrowserContext(false));
+
+     // Profile B
+     base::PathService::Override(
+         SHELL_DIR_USER_DATA, base_path.Append("profile-b"));
+     browser_context_b_.reset(new content::ShellBrowserContext(false));
+   }
+   ```
+6. Modify `InitializeMessageLoopContext()` to create two windows:
+   ```cpp
+   void InitializeMessageLoopContext() override {
+     content::Shell::CreateNewWindow(browser_context(),
+                                     GURL(kProfileAUrl),
+                                     nullptr, gfx::Size());
+     content::Shell::CreateNewWindow(browser_context_b_.get(),
+                                     GURL(kProfileBUrl),
+                                     nullptr, gfx::Size());
+   }
+   ```
+7. Override `PostMainMessageLoopRun()` to destroy profile B context before
+   parent cleanup:
+   ```cpp
+   void PostMainMessageLoopRun() override {
+     browser_context_b_.reset();
+     ShellBrowserMainParts::PostMainMessageLoopRun();
+   }
+   ```
+
+No changes to `BUILD.gn`, `content_api_shim.h`, or the plist files.
+
+#### Verification
+
+1. Build and run:
+   ```bash
+   cd ~/dev/termsurf/chromium/src
+   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+   autoninja -C out/Default zig_content_shell
+   open out/Default/Zig\ Content\ Shell.app
+   ```
+2. Two windows appear — one showing google.com, one showing example.com
+3. Both windows are interactive (scrolling, clicking, typing work in both)
+4. Both render without obvious stuttering or freezing
+5. Profile storage directories were created:
+   ```bash
+   ls ~/.config/termsurf/zig-content-shell/profile-a/
+   ls ~/.config/termsurf/zig-content-shell/profile-b/
+   ```
+6. Closing both windows exits the process
+
+If both windows render and are interactive, multi-profile in-process embedding
+works through the C shim. This confirms the architecture direction: the GUI
+binary becomes the browser process, eliminating the entire out-of-process
+streaming stack.
+
+#### Result
+
+**Pass.**
+
+Two windows appeared — google.com in one, example.com in the other. Both
+rendered and were interactive. The process spawned the full multi-process
+architecture: main browser, GPU, network, storage, and four renderer processes
+(two per profile). Both profile directories were created with isolated storage:
+
+```
+~/.config/termsurf/zig-content-shell/profile-a/   (13 entries)
+~/.config/termsurf/zig-content-shell/profile-b/   (10 entries)
+```
+
+Each has its own Code Cache, Local Storage, GPUCache, DIPS database, etc. No
+stuttering or freezing observed.
+
+#### Conclusion
+
+Two `BrowserContext` instances with different storage paths coexist in the same
+process through the C shim. This confirms the ts4 finding (Issues 406–413) and
+answers the critical architecture question: **in-process embedding is viable.**
+The GUI binary can become the browser process, eliminating the entire
+out-of-process stack (xpc-gateway, profile server, XPC connections, IOSurface
+Mach port transfer, FrameSinkVideoCapturer, 120fps oversampling).
