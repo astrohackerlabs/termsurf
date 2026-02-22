@@ -943,3 +943,79 @@ issue. The pixel/point fix is straightforward. The ~400px offset needs further
 investigation — either on the Chromium side (why the GPU process positions
 content at that offset) or by probing the remote layer tree's geometry from the
 GUI side.
+
+### Experiment 5: Find the source of the CAContext offset
+
+The CALayerHost frame works — changing Y moves the content — but the remote
+CAContext from Chromium's GPU process positions web content at a ~400px Y offset
+and a smaller X offset. This experiment investigates the Chromium side to find
+where these offsets come from.
+
+#### Theory
+
+In normal Chrome, the GPU process creates a CAContext for the entire window. The
+web content is not at (0, 0) in that CAContext — it's offset below the browser
+chrome (tab strip ~36px, toolbar ~40px, bookmarks bar ~28px, etc.). The
+CALayerHost fills the entire NSView, so these internal offsets are correct
+because the NSView IS the window.
+
+The Chromium Profile Server uses content_shell, which creates its own NSWindow
+with a shell toolbar (URL bar). Even though we don't display this window to the
+user, the GPU process still creates a CAContext with the full window geometry.
+The web content sits below the shell toolbar and window title bar within the
+CAContext's layer tree. That's the ~400px offset.
+
+The X offset is likely from window padding or the shell's view insets.
+
+#### Research
+
+Search the Chromium source for how content_shell sets up its window, views, and
+web content positioning. The goal is to understand exactly what creates the
+offset, and whether we can eliminate it.
+
+**R1: Shell window creation.**
+
+How does content_shell create its NSWindow? What size is it? Does it have a
+title bar? Look at `Shell::CreateShell()` and platform-specific
+`Shell::PlatformCreateWindow()` in `content/shell/browser/shell_mac.mm`.
+
+**R2: Shell view hierarchy.**
+
+What NSViews exist inside the shell window? Is there a toolbar view, URL bar, or
+status bar that offsets the web content view? Look at
+`Shell::PlatformSetContents()` and how the `WebContents` view is added to the
+window.
+
+**R3: RenderWidgetHostViewMac positioning.**
+
+How is the `RenderWidgetHostViewMac` (the view that hosts web content)
+positioned within the shell window? What is its frame relative to the window?
+This offset is what the GPU process uses when building the CAContext layer tree.
+
+**R4: CAContext layer tree structure.**
+
+How does the GPU process build the CAContext? Does it use the window's full
+frame or just the content view's frame? Look at `ui::CARendererLayerTree` and
+`BrowserCompositorMac` to understand what coordinates the CAContext's layers
+use.
+
+**R5: Can we eliminate the offset?**
+
+Options to investigate:
+
+- Make the shell window have no title bar and no toolbar (so the web content
+  view is at (0, 0) in the window)
+- Create a minimal NSWindow/NSView just for the RenderWidgetHostViewMac with no
+  parent chrome
+- Set the RenderWidgetHostViewMac's frame origin to (0, 0) in its superview
+- Intercept the CAContext layer tree and reposition the content layer
+
+#### Verification
+
+Research is complete when we can answer:
+
+1. What is the exact shell window size and configuration?
+2. What views exist between the window and the web content view, and what are
+   their frames?
+3. Where in the code are these views and offsets created?
+4. Which of the R5 options is the most practical fix?
