@@ -108,3 +108,87 @@ answering the critical architectural question: do two BrowserContexts share a
 renderer process? The answer determines the entire investigation direction.
 
 If a likely culprit is identified, design experiments to confirm and fix it.
+
+## Experiments
+
+### Experiment 1: Research renderer process allocation and rAF scheduling
+
+A source code research experiment — no code changes, no builds. Read the
+Chromium source to answer three questions that determine the investigation
+direction.
+
+#### Question 1: Do two BrowserContexts share a renderer process?
+
+This is the most important question. If two BrowserContexts loading different
+origins share a single renderer process, there is literally one Blink main
+thread running both `requestAnimationFrame` loops. The 2fps would be explained
+by a single thread alternating between two rAF callbacks with scheduling
+overhead.
+
+If they get separate renderer processes (each with their own Blink main thread),
+the contention must be in a shared resource outside the renderer — the browser
+process, GPU process, or inter-process scheduling.
+
+**Where to look:**
+
+- `content/browser/renderer_host/render_process_host_impl.cc` —
+  `GetProcessHostForSiteInstance()` or similar method that decides process
+  allocation
+- `content/browser/site_instance_impl.cc` — how SiteInstances map to processes
+- `content/browser/renderer_host/render_process_host_impl.cc` —
+  `GetProcessCount()` or process limit logic
+- Content Shell's process model — does it use `--single-process`,
+  `--process-per-site`, or default multi-process?
+
+**Expected outcome:** Two BrowserContexts with different origins should get
+separate renderer processes by default. But Content Shell might override this.
+
+#### Question 2: How does BeginMainFrame reach the Blink main thread?
+
+When the compositor thread decides it's time for a new frame, it sends a
+BeginMainFrame signal to the Blink main thread. This triggers rAF callbacks,
+style recalc, layout, and paint. If this dispatch mechanism has any
+serialization or throttling across multiple contexts, it would explain the 2fps.
+
+**Where to look:**
+
+- `cc/trees/proxy_main.cc` — `BeginMainFrame()` method
+- `cc/trees/single_thread_proxy.cc` — single-threaded alternative (Content Shell
+  might use this)
+- `third_party/blink/renderer/platform/widget/compositing/layer_tree_view.cc` —
+  Blink's interface to cc
+- `third_party/blink/renderer/core/frame/local_frame_view.cc` —
+  `ServiceScriptedAnimations()` which runs rAF callbacks
+
+**Expected outcome:** Each renderer process has its own compositor thread and
+main thread. BeginMainFrame should be per-renderer-process. But if Content Shell
+uses single-threaded compositing, both contexts might share one thread.
+
+#### Question 3: Does Content Shell use single-threaded compositing?
+
+Content Shell is a minimal embedder. It might use `--single-process` mode or
+single-threaded compositing by default, which would put both BrowserContexts'
+compositor and main thread work on the same thread.
+
+**Where to look:**
+
+- `content/shell/browser/shell_content_browser_client.cc` — process model
+  overrides
+- `content/shell/app/shell_main_delegate.cc` — command line flags
+- `content/shell/common/shell_switches.cc` — Content Shell-specific switches
+- The Zig Content Shell launch to see if `--single-process` is passed
+
+**Expected outcome:** Content Shell likely uses multi-process by default (it's a
+testing tool for the Content API). But this must be verified.
+
+#### Verification
+
+Research is complete when all three questions have clear answers with specific
+file paths and line numbers from the Chromium source. The answers will determine
+what Experiment 2 should be:
+
+- If processes are shared → Experiment 2 forces separate processes
+- If processes are separate but compositing is single-threaded → Experiment 2
+  enables threaded compositing
+- If processes are separate and compositing is threaded → the contention is
+  deeper and Experiment 2 instruments the Blink scheduler
