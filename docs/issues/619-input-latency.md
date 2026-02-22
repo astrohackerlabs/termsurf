@@ -36,13 +36,13 @@ IOSurface → XPC to GUI → next CVDisplayLink vsync → Metal composites
 
 | Stage                       | Latency    | Notes                                   |
 | --------------------------- | ---------- | --------------------------------------- |
-| Input → XPC to Chromium     | ~1–3ms     | Async dispatch queue scheduling         |
-| Chromium processes input    | ~2–5ms     | Layout, paint, composite                |
+| Input → XPC to Chromium     | 1–3ms      | Async dispatch queue scheduling         |
+| Chromium processes input    | 2–5ms      | Layout, paint, composite                |
 | Wait for next capture cycle | **0–8ms**  | Capturer on 120fps timer, not on-demand |
-| Captured frame → XPC to GUI | ~1–3ms     | Another async dispatch queue hop        |
+| Captured frame → XPC to GUI | 1–3ms      | Another async dispatch queue hop        |
 | Wait for next vsync         | **0–16ms** | CVDisplayLink tick                      |
 
-Worst case: ~35ms. Average: ~15–25ms. That's 1–2 frames of extra latency versus
+Worst case: 35ms. Average: 15–25ms. That's 1–2 frames of extra latency versus
 native Chrome.
 
 ### Three sources of lag
@@ -86,7 +86,7 @@ shared memory.
 | **GPU/Viz** (1)   | All GPU calls, display compositing, rasterization                  |
 
 Renderers never touch the GPU directly. Every graphics call crosses a process
-boundary to the GPU/Viz process. Yet Chrome still achieves ~1–2 frame latency.
+boundary to the GPU/Viz process. Yet Chrome still achieves 1–2 frame latency.
 
 ### Shared memory, not message passing
 
@@ -151,7 +151,7 @@ exposes `RequestRefreshFrame()`. We never call it — the capturer relies entire
 on its 120fps timer. Calling `RequestRefreshFrame()` after input events would
 force an immediate capture instead of waiting up to 8ms for the next timer tick.
 Combined with XPC delivery jitter reduction (high-priority dispatch queues), we
-could shave ~5–10ms off the average round-trip.
+could shave 5–10ms off the average round-trip.
 
 ### What is fixable (long-term)
 
@@ -285,3 +285,229 @@ All three options eliminate the `FrameSinkVideoCapturer` entirely, removing the
 GPU readback cost, the capture timer latency, and the decoupled timing. The
 Chromium Profile Server would produce frames on the display compositor's vsync
 clock, not on a recording timer.
+
+### Research 2: Thought experiment — in-process vs out-of-process
+
+The goal is performance equivalent to (or better than) native Chrome. There are
+two architectural paths to get there.
+
+#### Option 1: In-process Content API embedding
+
+Write a thin Zig embedder that calls the Content API via C bindings — analogous
+to Content Shell's 2000 lines of C++. The GUI process becomes the "browser
+process." Chromium still spawns its own renderer and GPU sub-processes
+internally, but the coordinator — the part that receives input, hosts the
+compositor, and displays output — lives inside the GUI.
+
+This is what ts4 proved: in-process Content API, multiple profiles, 60fps (Issue
+406–413). The GUI would receive `CALayerParams` directly from its own GPU
+sub-process, create a `CALayerHost`, and the Window Server composites it. Input
+goes directly to the compositor thread. Zero IPC for either direction. The
+absolute lowest possible latency — identical to Chrome.
+
+Downsides:
+
+- Tightly coupled to Chromium's C++ API surface.
+- Chromium's threading model lives in the GUI process (main thread, IO thread,
+  compositor threads).
+- A Chromium crash takes down the terminal.
+- Every rendering engine (Gecko, WebKit) would need its own in-process
+  integration.
+
+#### Option 2: Out-of-process with shared memory
+
+Keep Chromium in a separate process, but replace the recording API and
+message-passing with Chrome's own cross-process patterns. Chrome's GPU process
+is already separate from the browser process, yet Chrome achieves 1-frame
+latency. The transport (Mach ports) is the same as XPC. What matters is what
+travels over it.
+
+Concretely: the Chromium server produces a `ca_context_id` (as it normally
+does), sends the ID once over XPC, and the GUI creates a `CALayerHost`. The
+Window Server composites it at vsync — zero pixel copying, zero GPU readback.
+Input uses a shared memory ring buffer with a lightweight Mach port signal. One
+extra process boundary versus Option 1, but it's the same boundary Chrome has
+internally between its browser and GPU processes.
+
+Downsides:
+
+- One extra hop for input dispatch (GUI → Chromium).
+- More architectural complexity for shared memory plumbing.
+
+But these are the same costs Chrome pays internally and still achieves 1-frame
+latency.
+
+#### Option 3: CALayerHost overlay without shared memory
+
+A simpler variant of Option 2. The Chromium server runs normally, produces its
+`ca_context_id`, sends it to the GUI once per tab. The GUI overlays a
+`CALayerHost` as a sublayer of its Metal view's backing layer. Input forwarding
+stays over XPC (not shared memory) but with high-priority dispatch queues. This
+is the lowest-effort path that eliminates the capturer entirely. It won't match
+Chrome exactly — the XPC input hop adds 2–3ms — but it eliminates the dominant
+source of latency (the capturer's 0–8ms timer + GPU readback).
+
+#### Recommendation: Option 2
+
+Three reasons:
+
+1. **Performance parity with Chrome is achievable.** Chrome's own architecture
+   crosses the same process boundary (browser → GPU) and achieves 1-frame
+   latency. If TermSurf mirrors that pattern — `CALayerHost` for display, shared
+   memory for input — the latency ceiling is the same. The extra input hop (GUI
+   → Chromium) with shared memory is microseconds, not milliseconds.
+2. **Engine flexibility.** Supporting Gecko or WebKit as alternative engines
+   becomes possible. Each engine runs in its own process with a shared protocol
+   for frame delivery and input. In-process embedding means writing and
+   maintaining a separate C++ integration layer for each engine's API surface.
+3. **Process isolation.** A Chromium crash kills a browser tab, not the entire
+   application. This matters for a terminal emulator where people have work
+   open.
+
+The one thing in-process gives that out-of-process doesn't: compositor-thread
+input handling with zero dispatch latency. But Chrome's own numbers show that
+the process boundary cost for input (with shared memory) is sub-millisecond. The
+difference is imperceptible.
+
+The current latency problem isn't the process boundary — it's that we bolted a
+recording API onto the side of a display pipeline and used message-passing where
+Chrome uses shared memory. Fix those two things and the out-of-process
+architecture matches Chrome's own internal architecture.
+
+### Research 3: Feasibility of a Zig Content Shell
+
+Can the Content Shell embedder be rewritten in Zig? What would it take? What do
+we actually use from Content Shell's 13,000 lines?
+
+#### What we modify
+
+Of the 13,000 lines in Content Shell, the Chromium Profile Server modifies
+exactly 4 files and adds 2 new files:
+
+| File                          | Lines   | What it does                                          |
+| ----------------------------- | ------- | ----------------------------------------------------- |
+| `shell_browser_main_parts.h`  | +40     | TabState struct, XPC methods, event handlers          |
+| `shell_browser_main_parts.cc` | +590    | XPC gateway, tab lifecycle, input routing, navigation |
+| `shell_video_consumer.h`      | 113 new | Capturer + observer class declaration                 |
+| `shell_video_consumer.cc`     | 347 new | Frame capture, IOSurface transfer, loading/URL sync   |
+
+Total TermSurf-specific code: about 1,050 lines. Everything else — the other
+100+ files — is copied verbatim from Content Shell.
+
+#### What we actually use
+
+**Used now:**
+
+- `ContentMain()` — entry point (1 call)
+- `ContentMainDelegate` — app init (subclass with 5 overrides)
+- `ContentBrowserClient` — browser config (subclass with 55 overrides, most are
+  defaults)
+- `BrowserMainParts` — init pipeline (8 overrides)
+- `BrowserContext` / `ShellBrowserContext` — profile storage
+- `Shell` — WebContents lifecycle (`CreateNewWindow`, `Close`, `Shutdown`)
+- `WebContents` — `GetRenderWidgetHostView()`, `GetController()`, `LoadURL()`
+- `RenderWidgetHost` — `ForwardMouseEvent()`, `ForwardWheelEvent()`,
+  `ForwardKeyboardEventWithCommands()`
+- `NavigationController` — `GoBack()`, `GoForward()`, `Reload()`
+- `WebContentsObserver` — `DidFinishNavigation`, `DidStartLoading`,
+  `LoadProgressChanged`, etc.
+- `ClientFrameSinkVideoCapturer` — frame capture (will be eliminated by this
+  issue)
+- `ShellPlatformDelegate` — native window management
+
+**Needed for TODO items:**
+
+- `WebContentsDelegate::AddNewContents()` — target="_blank"
+- `JavaScriptDialogManager` — alert/confirm/prompt
+- `DownloadManager` / `DownloadManagerDelegate` — downloads
+- `FileSelectHelper` / `RunFileChooser()` — file uploads
+- `HostZoomMap` — page zoom
+- `LoginHandler` — HTTP Basic Auth
+- `PermissionController` — camera/mic
+- `DevToolsManagerDelegate` — Web Inspector (already partially set up)
+
+**Not needed (can strip):**
+
+- Web test infrastructure (`IsRunWebTestsSwitchPresent()` paths) — roughly 30%
+  of Content Shell
+- Android, iOS, Fuchsia, ChromeOS platform code — macOS only
+- Aura/Ozone UI — macOS doesn't use these
+
+#### The C++ problem
+
+The Content API is C++. Every interface is a C++ abstract class with virtual
+methods:
+
+```cpp
+class ContentMainDelegate { virtual ... };     // 20 virtual methods
+class ContentBrowserClient { virtual ... };    // 356 virtual methods (override 10)
+class BrowserMainParts { virtual ... };        // 10 virtual methods
+class WebContentsDelegate { virtual ... };     // 30 virtual methods
+class WebContentsObserver { virtual ... };     // 40 virtual methods
+```
+
+You cannot subclass a C++ virtual class from Zig. The Content API uses virtual
+dispatch, templates, `std::string`, `std::unique_ptr`, `base::OnceCallback`,
+etc. Zig's `@cImport` handles C headers, not C++.
+
+#### The simplest path: thin C++ shim + Zig logic
+
+The same pattern Ghostty uses for Objective-C: a thin wrapper that bridges
+between C++ and Zig.
+
+```
+content_api_shim.h    — C header (Zig-callable)
+content_api_shim.cc   — C++ implementation (800–1200 lines)
+├── Subclasses ContentMainDelegate, forwards to C callbacks
+├── Subclasses ContentBrowserClient, forwards to C callbacks
+├── Subclasses BrowserMainParts, forwards to C callbacks
+├── Subclasses WebContentsDelegate/Observer, forwards to C callbacks
+├── Exposes C functions: ts_create_web_contents(), ts_load_url(),
+│   ts_forward_mouse_event(), ts_go_back(), ts_go_forward(), etc.
+└── Mechanical glue — no logic
+
+embedder.zig          — Zig implementation (500–800 lines)
+├── Tab lifecycle management
+├── XPC or shared memory communication
+├── Input event routing
+├── Navigation commands
+└── Profile management
+```
+
+The C++ shim is mechanical forwarding. All logic lives in Zig. When a new
+Content API feature is needed (downloads, file picker, permissions), add one C
+function to the shim and implement the logic in Zig.
+
+This replaces all 100+ Content Shell files with two files (shim + Zig) plus
+`ShellBrowserContext` (150 lines, or rewritten via the shim).
+
+#### In-process vs out-of-process implications
+
+**Out-of-process:** The Zig Content Shell runs as a separate binary. The C++
+shim links against `libcontent` and exposes a C API. Zig calls it. The binary
+communicates with the GUI via shared memory. Straightforward — cleaner version
+of what we have now.
+
+**In-process:** The C++ shim becomes a library linked into the GUI. Zig calls
+`ts_content_main()` on a dedicated thread. The Content API's browser process
+runs inside the GUI process. No IPC for frames or input — direct function calls.
+This is where the Zig rewrite pays off: the embedder logic integrates with the
+GUI's existing Zig code (Surface, Metal renderer, XPC gateway).
+
+#### Assessment
+
+The Chromium Profile Server currently carries 14,000 lines: 13,000 of unmodified
+Content Shell boilerplate + 1,050 of TermSurf logic. The Zig approach replaces
+all of that with about 1,400 lines: an 800-line C++ shim (mechanical forwarding,
+no logic) + 600 lines of Zig (all the actual decisions). The C++ shim is
+unavoidable — the Content API is C++ and will always be C++ — but it contains
+zero logic.
+
+The value:
+
+1. **In-process becomes possible.** The Zig embedder lives inside the GUI binary
+   and shares state directly.
+2. **Cleaner than forking.** No more carrying 100+ unmodified Content Shell
+   files. Just the shim + Zig logic.
+3. **Incremental.** Each TODO item (downloads, dialogs, permissions) adds one C
+   function to the shim + Zig logic.
