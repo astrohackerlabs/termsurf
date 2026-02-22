@@ -19,6 +19,10 @@ Track the same Chromium version as Electron. Branches are named
 `{version}-termsurf` for the main working branch and `{version}-issue-{N}` for
 issue-specific branches.
 
+**Every issue gets its own branch.** When modifying Chromium for a new issue,
+find the most relevant recent branch, create a new branch from it
+(`{version}-issue-{N}`), and add it to the Branches table below.
+
 ## Branches
 
 | Branch                   | Issue                                        | Description                               |

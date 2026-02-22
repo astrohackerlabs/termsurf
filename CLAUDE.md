@@ -26,6 +26,19 @@ messages would add complexity for zero benefit.
 
 This was proven in ts3 (Issues 303, 325–350) and ts4 (Issues 403, 407).
 
+### Every Chromium issue gets its own branch
+
+When modifying the Chromium fork (`chromium/src/`), ALWAYS create a new branch
+for the current issue. Never commit directly to an existing issue's branch.
+
+1. Find the most relevant recent branch (usually the one with the latest
+   TermSurf modifications).
+2. Create a new branch from it: `{version}-issue-{N}` (e.g.,
+   `146.0.7650.0-issue-625`).
+3. Add the new branch to the Branches table in `docs/chromium.md`.
+
+This keeps every issue's Chromium changes isolated and traceable.
+
 ## Project Overview
 
 TermSurf is a terminal emulator with an integrated web browser. Users type

@@ -105,6 +105,10 @@ The Chromium fork at `chromium/src` uses branches named
 `146.0.7650.0-issue-414`). These are built as commits on top of the vanilla
 Chromium version tag.
 
+**ALWAYS create a new branch for every issue.** Never commit to an existing
+issue's branch. Find the most relevant recent branch, fork it to the new issue
+number, and add the new branch to the Branches table in `docs/chromium.md`.
+
 ## Branch and Version Tracking
 
 `docs/chromium.md` tracks the current branch, commit, and a complete list of all
