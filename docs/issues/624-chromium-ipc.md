@@ -680,3 +680,118 @@ is:
 3. **Per-frame Mach port transfer** — TermSurf sends a new IOSurface Mach port
    every frame. Chrome sends `ca_context_id` once and the Window Server handles
    the rest.
+
+### Experiment 2: CALayerParams feasibility study
+
+A source code research experiment — no code changes, no builds. Determine what
+it would take to replace the `FrameSinkVideoCapturer` with the normal
+`CALayerParams` display path in the Chromium Profile Server. The capturer is the
+single biggest source of latency (~5-7ms per frame from timer wait + GPU
+readback). Eliminating it is the highest-impact change available.
+
+#### Q1: Does the Chromium Profile Server already produce CALayerParams?
+
+The normal Chromium display path produces `CALayerParams` through
+`AcceleratedWidgetMac`. Our Chromium Profile Server uses Content Shell's
+windowed mode — it creates real NSWindows. Does the normal display path run
+alongside the capturer, or does the capturer replace it?
+
+**Where to look:**
+
+- `content/shell/browser/shell_platform_delegate_mac.mm` — how Content Shell
+  creates its window and sets up the WebContents view. Does `SetContents()`
+  still install the normal `RenderWidgetHostViewMac` → `BrowserCompositorMac` →
+  `AcceleratedWidgetMac` chain?
+- Our `shell_browser_main_parts.cc` modifications — do we do anything that would
+  suppress the normal display path?
+- `content/browser/renderer_host/render_widget_host_view_mac.mm` — does creating
+  a `FrameSinkVideoCapturer` on the same frame sink disable or interfere with
+  the normal `CALayerParams` output?
+- `components/viz/service/frame_sinks/compositor_frame_sink_support.cc` — does
+  attaching a capturer to a frame sink change the display compositor's behavior?
+
+**Key question:** Are `CALayerParams` already being produced and we're just
+ignoring them? Or does attaching the capturer suppress them?
+
+#### Q2: Where is AcceleratedWidgetMacNSView implemented for Content Shell?
+
+`AcceleratedWidgetMac` calls back to `AcceleratedWidgetMacNSView` when
+`CALayerParams` arrive. In full Chrome, this goes through `ui::Views`. Content
+Shell has a simpler path.
+
+**Where to look:**
+
+- `content/browser/renderer_host/browser_compositor_view_mac.mm` — the
+  `BrowserCompositorMac` that creates the compositor. How does it receive
+  `CALayerParams`?
+- `ui/accelerated_widget_mac/accelerated_widget_mac.mm` —
+  `AcceleratedWidgetMacNSView` protocol. Who implements it in Content Shell?
+- `content/browser/renderer_host/render_widget_host_view_mac.mm` — search for
+  `AcceleratedWidgetCALayerParamsUpdated`. This callback fires when new
+  `CALayerParams` arrive. What does Content Shell do with it?
+
+**Key question:** Can we override or hook into
+`AcceleratedWidgetCALayerParamsUpdated` to intercept `CALayerParams` and forward
+them over XPC instead of letting them go to the NSView?
+
+#### Q3: Can CALayerHost work inside our Metal renderer?
+
+TermSurf's GUI uses a Metal renderer (Ghostty's `Metal.zig`) that composites
+into its own `CAMetalDrawable`. The browser overlay is currently an IOSurface
+texture composited by our Metal shader pipeline.
+
+If we use `ca_context_id`, we'd create a `CALayerHost` — but `CALayerHost` is a
+CoreAnimation layer that needs to be in an NSView's layer tree for the Window
+Server to composite it.
+
+**Where to look:**
+
+- `ui/accelerated_widget_mac/display_ca_layer_tree.mm:123-153` —
+  `GotCALayerFrame()`. How is `CALayerHost` inserted into the view hierarchy? Is
+  it a sublayer of the view's backing layer?
+- Research whether a `CALayerHost` can be overlaid on top of a `CAMetalLayer`.
+  Can two CALayers (one Metal, one remote CAContext) coexist as siblings in the
+  same NSView's layer tree?
+- Alternative: if `CALayerHost` won't work with our Metal renderer, can we use
+  the IOSurface direct path (`io_surface_mach_port`) from `CALayerParams`
+  instead? This gives us an IOSurface from the normal display path — no
+  capturer, no GPU readback — that we can import as a Metal texture just like we
+  do now.
+
+**Key question:** Do we need `CALayerHost` (zero-copy, Window Server
+composites), or can we use the IOSurface from `CALayerParams` (still zero-copy
+from GPU, but we composite it ourselves in Metal)?
+
+#### Q4: What's the minimal change to receive CALayerParams?
+
+Assuming the normal display path is already running, what code changes are
+needed to:
+
+1. Intercept `CALayerParams` in the Chromium Profile Server
+2. Extract the `ca_context_id` or `io_surface_mach_port`
+3. Send it to the GUI over XPC
+4. Remove the `FrameSinkVideoCapturer` and `ShellVideoConsumer`
+
+**Where to look:**
+
+- Our `shell_video_consumer.h` / `shell_video_consumer.cc` — what does the
+  capturer setup look like? What would we replace it with?
+- `content/browser/renderer_host/render_widget_host_view_mac.mm` — the
+  `AcceleratedWidgetCALayerParamsUpdated` callback. Can we subclass or override
+  this to forward params over XPC?
+- `ui/gfx/ca_layer_params.h` — what fields does `CALayerParams` have? What needs
+  to be serialized for XPC?
+
+**Key question:** Is this a ~50-line change (hook one callback, extract two
+fields, send via XPC) or does it require deeper surgery?
+
+#### Verification
+
+Research is complete when we can answer:
+
+1. Whether `CALayerParams` are already being produced in our Chromium Profile
+   Server
+2. Where to intercept them (specific callback, file, line number)
+3. Whether `CALayerHost` or IOSurface-from-CALayerParams is the right approach
+   for our Metal renderer
+4. A concrete list of files to modify and approximate line count
