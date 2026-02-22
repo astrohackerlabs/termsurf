@@ -782,3 +782,34 @@ Helper apps keep using `shell_main_mac.cc` unchanged.
 The key proof: application logic (which profiles, which URLs) lives entirely in
 the launcher. The framework is a generic Content API service layer. A Zig
 launcher would use the identical dlsym pattern.
+
+#### Result
+
+**Pass.**
+
+Two windows appeared (google.com + example.com), both interactive. The custom
+launcher (`ts_main.mm`) uses only system C headers — zero Chromium `#include`s.
+All application logic (profile paths, URLs) lives in the launcher's callbacks.
+The framework is a generic service layer: dlopen it, dlsym six symbols, register
+two callbacks, call ContentMain.
+
+Profile directories:
+
+```
+~/.config/termsurf/zig-content-shell/profile-a/   (13 entries)
+~/.config/termsurf/zig-content-shell/profile-b/   (10 entries)
+~/.config/termsurf/zig-content-shell/default/      (DevTools only)
+```
+
+8 processes running: main + GPU + network + storage + 4 renderers. No crashes on
+window close.
+
+#### Conclusion
+
+The full external-control pattern works. A launcher with zero Chromium knowledge
+can drive the Content API entirely through dlsym'd C function pointers:
+`ContentMain`, `ts_set_on_initialized`, `ts_set_on_shutdown`,
+`ts_create_browser_context`, `ts_destroy_browser_context`, `ts_create_tab`. The
+`on_initialized` callback fires after the message loop is ready; the
+`on_shutdown` callback fires before teardown. Zig does exactly this — `@cImport`
+the header (or just declare the externs) and call the same six functions.
