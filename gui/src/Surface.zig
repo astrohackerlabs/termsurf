@@ -2455,20 +2455,19 @@ fn queueRender(self: *Surface) !void {
 
 /// Check if a point (physical pixels) is inside the browser overlay.
 /// Returns overlay-relative logical coordinates, or null if outside.
-/// Thread-safe via draw_mutex (Issue 606).
+/// Thread-safe via draw_mutex (Issue 625).
 pub fn hitTestOverlay(self: *Surface, phys_x: f64, phys_y: f64) ?struct { x: f64, y: f64 } {
     self.renderer.draw_mutex.lock();
     defer self.renderer.draw_mutex.unlock();
 
-    const overlay = self.renderer.pink_overlay;
-    if (overlay.grid_width == 0) return null;
+    if (self.renderer.overlay_grid_width == 0) return null;
 
     const cell_w: f64 = @floatFromInt(self.renderer.grid_metrics.cell_width);
     const cell_h: f64 = @floatFromInt(self.renderer.grid_metrics.cell_height);
-    const ox: f64 = @as(f64, overlay.grid_col) * cell_w;
-    const oy: f64 = @as(f64, overlay.grid_row) * cell_h;
-    const ow: f64 = @as(f64, overlay.grid_width) * cell_w;
-    const oh: f64 = @as(f64, overlay.grid_height) * cell_h;
+    const ox: f64 = @as(f64, self.renderer.overlay_grid_col) * cell_w;
+    const oy: f64 = @as(f64, self.renderer.overlay_grid_row) * cell_h;
+    const ow: f64 = @as(f64, self.renderer.overlay_grid_width) * cell_w;
+    const oh: f64 = @as(f64, self.renderer.overlay_grid_height) * cell_h;
 
     const rel_x = phys_x - ox;
     const rel_y = phys_y - oy;
@@ -2494,17 +2493,17 @@ fn mapChromiumCursor(cursor_type: i64) terminal.MouseShape {
     };
 }
 
-/// Set the pink overlay rectangle in grid coordinates (Issue 602).
+/// Set the overlay rectangle in grid coordinates (Issue 625).
+/// Updates the CALayerHost frame if one exists.
 /// Called from XPC on a background queue. Thread-safe via draw_mutex.
 pub fn setOverlay(self: *Surface, col: u32, row: u32, width: u32, height: u32) void {
     self.renderer.draw_mutex.lock();
     defer self.renderer.draw_mutex.unlock();
-    self.renderer.pink_overlay = .{
-        .grid_col = @floatFromInt(col),
-        .grid_row = @floatFromInt(row),
-        .grid_width = @floatFromInt(width),
-        .grid_height = @floatFromInt(height),
-    };
+    self.renderer.overlay_grid_col = @floatFromInt(col);
+    self.renderer.overlay_grid_row = @floatFromInt(row);
+    self.renderer.overlay_grid_width = @floatFromInt(width);
+    self.renderer.overlay_grid_height = @floatFromInt(height);
+    self.renderer.updateCALayerHostFrame();
     self.queueRender() catch {};
 }
 
@@ -2519,33 +2518,27 @@ pub fn getCellSize(self: *Surface) struct { width: u32, height: u32 } {
     };
 }
 
-extern "c" fn CFRetain(*anyopaque) void;
-extern "c" fn CFRelease(*anyopaque) void;
-
-/// Set the overlay IOSurface (Issue 603).
-/// CFRetains the new surface and CFReleases the old one.
+/// Set the CALayerHost context ID for the browser overlay (Issue 625).
+/// Creates or updates a CALayerHost sublayer on the IOSurfaceLayer.
 /// Thread-safe via draw_mutex.
-pub fn setOverlayIOSurface(self: *Surface, iosurface: ?*anyopaque) void {
+pub fn setCAContextId(self: *Surface, context_id: u32) void {
     self.renderer.draw_mutex.lock();
     defer self.renderer.draw_mutex.unlock();
-
-    if (self.renderer.overlay_iosurface) |old| CFRelease(old);
-    if (iosurface) |new| CFRetain(new);
-
-    self.renderer.overlay_iosurface = iosurface;
-    self.renderer.overlay_surface_changed = true;
-    self.queueRender() catch {};
+    self.renderer.setCALayerHostContextId(context_id);
+    self.renderer.updateCALayerHostFrame();
 }
 
-/// Clear the overlay (Issue 602 / Issue 603). Called on peer disconnect.
-/// Releases the IOSurface if one is held.
+/// Clear the overlay (Issue 625). Called on peer disconnect.
+/// Removes and releases the CALayerHost sublayer.
 pub fn clearOverlay(self: *Surface) void {
     self.renderer.draw_mutex.lock();
     defer self.renderer.draw_mutex.unlock();
 
-    if (self.renderer.overlay_iosurface) |old| CFRelease(old);
-    self.renderer.overlay_iosurface = null;
-    self.renderer.pink_overlay = .{};
+    self.renderer.removeCALayerHost();
+    self.renderer.overlay_grid_col = 0;
+    self.renderer.overlay_grid_row = 0;
+    self.renderer.overlay_grid_width = 0;
+    self.renderer.overlay_grid_height = 0;
     self.queueRender() catch {};
 }
 

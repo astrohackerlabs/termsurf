@@ -161,6 +161,78 @@ pub fn deinit(self: *Metal) void {
     self.layer.release();
 }
 
+/// Create or update a CALayerHost for browser overlay (Issue 625).
+/// The CALayerHost displays the remote CAContext from Chromium's GPU process.
+/// Window Server composites directly from GPU VRAM — zero per-frame IPC.
+pub fn setCALayerHostContextId(self: *Metal, context_id: u32, ca_layer_host_ptr: *?*anyopaque) void {
+    const CALayerHost = objc.getClass("CALayerHost") orelse {
+        log.warn("CALayerHost class not found", .{});
+        return;
+    };
+
+    if (ca_layer_host_ptr.*) |existing| {
+        // Update existing CALayerHost's contextId.
+        const host = objc.Object.fromId(existing);
+        host.setProperty("contextId", @as(u32, context_id));
+        log.info("updated CALayerHost contextId={}", .{context_id});
+    } else {
+        // Create new CALayerHost, set contextId, add as sublayer.
+        const host_id = CALayerHost.msgSend(objc.c.id, objc.sel("layer"), .{});
+        const host = objc.Object.fromId(host_id).retain();
+        host.setProperty("contextId", @as(u32, context_id));
+
+        // Add as sublayer of our IOSurfaceLayer.
+        self.layer.layer.msgSend(void, objc.sel("addSublayer:"), .{host.value});
+
+        ca_layer_host_ptr.* = host.value;
+        log.info("created CALayerHost contextId={}", .{context_id});
+    }
+}
+
+/// Update the CALayerHost frame to match overlay grid coordinates (Issue 625).
+pub fn updateCALayerHostFrame(
+    self: *Metal,
+    host_ptr: *anyopaque,
+    grid_col: f32,
+    grid_row: f32,
+    grid_width: f32,
+    grid_height: f32,
+    cell_width: u32,
+    cell_height: u32,
+) void {
+    _ = self;
+    const host = objc.Object.fromId(host_ptr);
+    const cw: f64 = @floatFromInt(cell_width);
+    const ch: f64 = @floatFromInt(cell_height);
+
+    // The layer bounds are in the parent layer's coordinate space.
+    // IOSurfaceLayer uses default CALayer geometry (origin = bottom-left, Y up).
+    // Compute pixel origin and size from grid coordinates.
+    const x: f64 = @as(f64, grid_col) * cw;
+    const y: f64 = @as(f64, grid_row) * ch;
+    const w: f64 = @as(f64, grid_width) * cw;
+    const h: f64 = @as(f64, grid_height) * ch;
+
+    // CALayer frame: {{x, y}, {width, height}}.
+    // On macOS, CALayer Y=0 is at the bottom. The IOSurfaceLayer is
+    // set up with contentsGravity = kCAGravityTopLeft and the view
+    // is flipped (wantsLayer), so the coordinate system matches:
+    // origin is top-left, Y increases downward.
+    const frame = macos.graphics.Rect{
+        .origin = .{ .x = x, .y = y },
+        .size = .{ .width = w, .height = h },
+    };
+    host.setProperty("frame", frame);
+}
+
+/// Remove and release a CALayerHost sublayer (Issue 625).
+pub fn removeCALayerHost(self: *Metal, host_ptr: *anyopaque) void {
+    _ = self;
+    const host = objc.Object.fromId(host_ptr);
+    host.msgSend(void, objc.sel("removeFromSuperlayer"), .{});
+    host.release();
+}
+
 pub fn loopEnter(self: *Metal) void {
     const renderer: *align(1) Renderer = @fieldParentPtr("api", self);
     self.layer.setDisplayCallback(

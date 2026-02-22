@@ -55,13 +55,6 @@ extern "c" fn dispatch_queue_create(label: [*:0]const u8, attr: ?*anyopaque) ?*a
 extern "c" fn dispatch_async_f(queue: ?*anyopaque, context: ?*anyopaque, work: *const fn (?*anyopaque) callconv(.c) void) void;
 extern "c" fn xpc_connection_set_target_queue(connection: xpc_object_t, queue: ?*anyopaque) void;
 
-// -- Mach port / IOSurface C API --
-
-extern "c" fn xpc_dictionary_copy_mach_send(xdict: xpc_object_t, key: [*:0]const u8) u32;
-extern "c" fn IOSurfaceLookupFromMachPort(port: u32) ?*anyopaque;
-extern "c" fn mach_port_deallocate(task: u32, name: u32) i32;
-extern const mach_task_self_: u32;
-extern "c" fn CFRelease(cf: *anyopaque) void;
 
 /// Cast a const extern symbol address to xpc_object_t for identity comparison.
 inline fn xpcPtr(ptr: *const anyopaque) xpc_object_t {
@@ -247,12 +240,12 @@ fn handleMessage(msg: xpc_object_t) void {
         handleSetOverlay(msg);
     } else if (std.mem.eql(u8, action_str, "server_register")) {
         handleServerRegister(msg);
-    } else if (std.mem.eql(u8, action_str, "display_surface")) {
-        handleDisplaySurface(msg);
     } else if (std.mem.eql(u8, action_str, "tab_ready")) {
         handleTabReady(msg);
     } else if (std.mem.eql(u8, action_str, "mode_changed")) {
         handleModeChanged(msg);
+    } else if (std.mem.eql(u8, action_str, "ca_context")) {
+        handleCAContext(msg);
     } else if (std.mem.eql(u8, action_str, "cursor_changed")) {
         handleCursorChanged(msg);
     } else if (std.mem.eql(u8, action_str, "loading_state")) {
@@ -298,9 +291,7 @@ fn handleSetOverlay(msg: xpc_object_t) void {
     const new_pixel_h = height * @as(u64, cell.height);
 
     if (panes.get(pane_id)) |p| {
-        // Existing pane — resize path.
-        const old_w = p.pending_pixel_w;
-        const old_h = p.pending_pixel_h;
+        // Existing pane — update path.
         p.pending_pixel_w = new_pixel_w;
         p.pending_pixel_h = new_pixel_h;
         p.browsing = browsing;
@@ -314,14 +305,6 @@ fn handleSetOverlay(msg: xpc_object_t) void {
             pane_id, new_pixel_w, new_pixel_h,
         });
 
-        // Send resize if tab is active and dimensions changed.
-        if (p.tab_sent) {
-            if (p.server) |server| {
-                if (server.peer != null and (new_pixel_w != old_w or new_pixel_h != old_h)) {
-                    sendResize(p, server);
-                }
-            }
-        }
     } else {
         // New pane.
         const p = alloc.create(Pane) catch {
@@ -412,27 +395,17 @@ fn handleServerRegister(msg: xpc_object_t) void {
     }
 }
 
-fn handleDisplaySurface(msg: xpc_object_t) void {
-    const port = xpc_dictionary_copy_mach_send(msg, "iosurface_port");
-    if (port == 0) return;
-
-    const iosurface = IOSurfaceLookupFromMachPort(port) orelse {
-        _ = mach_port_deallocate(mach_task_self_, port);
-        return;
-    };
-    _ = mach_port_deallocate(mach_task_self_, port);
-
-    // Route by pane_id.
+fn handleCAContext(msg: xpc_object_t) void {
     const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const context_id: u32 = @intCast(xpc_dictionary_get_uint64(msg, "ca_context_id"));
+
+    log.info("ca_context pane={s} context_id={}", .{ pane_id, context_id });
+
     if (panes.get(pane_id)) |p| {
         if (p.overlay_surface) |surface| {
-            surface.setOverlayIOSurface(iosurface);
+            surface.setCAContextId(context_id);
         }
     }
-
-    // IOSurfaceLookupFromMachPort returns +1 ref; setOverlayIOSurface
-    // CFRetains, so we CFRelease our lookup reference.
-    CFRelease(iosurface);
 }
 
 fn handleTabReady(msg: xpc_object_t) void {
@@ -753,26 +726,6 @@ fn sendCreateTab(p: *Pane, server: *Server) void {
     p.tab_sent = true;
 
     log.info("sent create_tab pane={s} pixel={d}x{d}", .{
-        p.pane_id_key, p.pending_pixel_w, p.pending_pixel_h,
-    });
-}
-
-fn sendResize(p: *Pane, server: *Server) void {
-    const msg = xpc_dictionary_create(null, null, 0);
-    xpc_dictionary_set_string(msg, "action", "resize");
-
-    if (p.pane_id_key.len > 0 and p.pane_id_key.len <= 36) {
-        var pane_z: [37]u8 = undefined;
-        @memcpy(pane_z[0..p.pane_id_key.len], p.pane_id_key);
-        pane_z[p.pane_id_key.len] = 0;
-        xpc_dictionary_set_string(msg, "pane_id", @ptrCast(&pane_z));
-    }
-
-    xpc_dictionary_set_uint64(msg, "pixel_width", p.pending_pixel_w);
-    xpc_dictionary_set_uint64(msg, "pixel_height", p.pending_pixel_h);
-
-    xpc_connection_send_message(server.peer, msg);
-    log.info("sent resize pane={s} pixel={d}x{d}", .{
         p.pane_id_key, p.pending_pixel_w, p.pending_pixel_h,
     });
 }

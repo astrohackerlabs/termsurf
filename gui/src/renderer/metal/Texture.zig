@@ -82,43 +82,6 @@ pub fn init(
     return self;
 }
 
-/// Create an MTLTexture from an IOSurfaceRef (Issue 603).
-/// Zero-copy: the texture is a view into the same GPU memory.
-/// The caller must deinit the returned texture when done.
-pub fn fromIOSurface(device: objc.Object, iosurface: *anyopaque) ?Self {
-    const width: usize = IOSurfaceGetWidth(iosurface);
-    const height: usize = IOSurfaceGetHeight(iosurface);
-
-    const desc = init: {
-        const Class = objc.getClass("MTLTextureDescriptor").?;
-        const id_alloc = Class.msgSend(objc.Object, objc.sel("alloc"), .{});
-        const id_init = id_alloc.msgSend(objc.Object, objc.sel("init"), .{});
-        break :init id_init;
-    };
-    defer desc.release();
-
-    desc.setProperty("pixelFormat", @intFromEnum(mtl.MTLPixelFormat.bgra8unorm));
-    desc.setProperty("width", @as(c_ulong, width));
-    desc.setProperty("height", @as(c_ulong, height));
-    desc.setProperty("usage", @as(c_ulong, 0x0004)); // MTLTextureUsageShaderRead
-
-    const id = device.msgSend(
-        ?*anyopaque,
-        objc.sel("newTextureWithDescriptor:iosurface:plane:"),
-        .{ desc, iosurface, @as(c_ulong, 0) },
-    ) orelse return null;
-
-    return .{
-        .texture = objc.Object.fromId(id),
-        .width = width,
-        .height = height,
-        .bpp = 4,
-    };
-}
-
-extern "c" fn IOSurfaceGetWidth(iosurface: *anyopaque) usize;
-extern "c" fn IOSurfaceGetHeight(iosurface: *anyopaque) usize;
-
 pub fn deinit(self: Self) void {
     self.texture.release();
 }
