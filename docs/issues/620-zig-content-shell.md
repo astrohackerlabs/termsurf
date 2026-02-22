@@ -813,3 +813,177 @@ can drive the Content API entirely through dlsym'd C function pointers:
 `on_initialized` callback fires after the message loop is ready; the
 `on_shutdown` callback fires before teardown. Zig does exactly this — `@cImport`
 the header (or just declare the externs) and call the same six functions.
+
+### Experiment 5: Direct WebContents with launcher-created windows
+
+Stop using `Shell::CreateNewWindow`. Create `WebContents` directly via the
+Content API and render it in an NSWindow created by the launcher. The framework
+becomes a headless WebContents factory — the launcher owns all window
+management.
+
+This is the key architectural shift. Shell provides an NSWindow + toolbar +
+navigation buttons. We don't want any of that. We want the raw `WebContents`
+NSView, which we attach to our own window (and in the future, to a Zig-managed
+Metal surface).
+
+#### Changes
+
+**`content_api_shim.h`** — Add new types and functions:
+
+```c
+// Opaque handle for a WebContents (page).
+typedef void* ts_web_contents_t;
+
+// Create a WebContents in the given profile, loading the URL.
+// Does NOT create a window — caller must attach the native view
+// to their own window via ts_get_native_view.
+ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
+                                         const char* url);
+
+// Get the native view (NSView* on macOS) for a WebContents.
+// The returned pointer is a valid NSView* that can be added as a
+// subview to any NSWindow's contentView.
+void* ts_get_native_view(ts_web_contents_t contents);
+
+// Destroy a WebContents.
+void ts_destroy_web_contents(ts_web_contents_t contents);
+
+// Quit the message loop. Call this when all windows are closed.
+void ts_quit(void);
+```
+
+Keep `ts_create_tab` for backward compatibility (it still uses Shell
+internally).
+
+**`content_api_shim.mm`** — Implement the new functions:
+
+1. Capture the quit closure. Override `WillRunMainMessageLoop` in
+   `TsBrowserMainParts` to store the run loop's quit closure in a global:
+
+   ```cpp
+   static base::OnceClosure g_quit_closure;
+
+   void WillRunMainMessageLoop(
+       std::unique_ptr<base::RunLoop>& run_loop) override {
+     g_quit_closure = run_loop->QuitClosure();
+     ShellBrowserMainParts::WillRunMainMessageLoop(run_loop);
+   }
+   ```
+
+2. `ts_create_web_contents(ctx, url)` — Create a `WebContents` directly:
+
+   ```cpp
+   auto* browser_context = static_cast<ShellBrowserContext*>(ctx);
+   WebContents::CreateParams params(browser_context);
+   auto* wc = WebContents::Create(params).release();
+   // Load URL via NavigationController
+   NavigationController::LoadURLParams load_params(GURL(url));
+   load_params.transition_type = ui::PAGE_TRANSITION_TYPED;
+   wc->GetController().LoadURLWithParams(load_params);
+   return static_cast<ts_web_contents_t>(wc);
+   ```
+
+3. `ts_get_native_view(contents)` — Extract the NSView:
+
+   ```cpp
+   auto* wc = static_cast<WebContents*>(contents);
+   return (__bridge void*)wc->GetNativeView().GetNativeNSView();
+   ```
+
+4. `ts_destroy_web_contents(contents)` — Delete:
+
+   ```cpp
+   delete static_cast<WebContents*>(contents);
+   ```
+
+5. `ts_quit()` — Run the stored quit closure:
+
+   ```cpp
+   if (g_quit_closure)
+     std::move(g_quit_closure).Run();
+   ```
+
+New includes needed: `content/public/browser/navigation_controller.h`,
+`ui/base/page_transition_types.h`.
+
+**`ts_main.mm`** — Create NSWindows and attach WebContents views:
+
+1. Add `#import <Cocoa/Cocoa.h>` (system header, not Chromium).
+
+2. Define an NSWindowDelegate that tracks open window count:
+
+   ```objc
+   static int g_open_windows = 0;
+   static void (*g_quit_fn)(void) = NULL;
+
+   @interface TsWindowDelegate : NSObject <NSWindowDelegate>
+   @end
+
+   @implementation TsWindowDelegate
+   - (void)windowWillClose:(NSNotification*)notification {
+     if (--g_open_windows == 0 && g_quit_fn)
+       g_quit_fn();
+   }
+   @end
+   ```
+
+3. Add dlsym for the new symbols: `ts_create_web_contents`,
+   `ts_get_native_view`, `ts_destroy_web_contents`, `ts_quit`.
+
+4. Replace the `on_initialized` callback: instead of calling `ts_create_tab`
+   (which creates Shell windows), call `ts_create_web_contents` to get handles,
+   `ts_get_native_view` to get NSViews, create NSWindows manually, and attach:
+
+   ```objc
+   static void on_initialized(void) {
+     // ... build profile paths ...
+     ctx_a = g_create_ctx(path_a);
+     ctx_b = g_create_ctx(path_b);
+
+     wc_a = g_create_web_contents(ctx_a, "https://google.com");
+     wc_b = g_create_web_contents(ctx_b, "https://example.com");
+
+     create_window(g_get_native_view(wc_a), "Profile A");
+     create_window(g_get_native_view(wc_b), "Profile B");
+   }
+   ```
+
+   `create_window` creates an NSWindow, sets the TsWindowDelegate, adds the
+   NSView as a subview, and makes the window key.
+
+5. Update `on_shutdown` to destroy WebContents before BrowserContexts:
+
+   ```objc
+   static void on_shutdown(void) {
+     g_destroy_web_contents(wc_b);
+     g_destroy_web_contents(wc_a);
+     g_destroy_ctx(ctx_b);
+     g_destroy_ctx(ctx_a);
+   }
+   ```
+
+**`BUILD.gn`** — Add Cocoa framework link for the launcher:
+
+```gn
+mac_app_bundle("zig_content_shell") {
+  ...
+  frameworks = [ "Cocoa.framework" ]
+}
+```
+
+#### Verification
+
+1. Two windows appear — one showing google.com, one showing example.com
+2. Window titles say "Profile A" and "Profile B" (not "Content Shell")
+3. No Content Shell toolbar, URL bar, or navigation buttons — just the web page
+4. Both windows are interactive (scrolling, clicking, typing)
+5. Closing one window leaves the other running
+6. Closing the last window exits the process cleanly
+7. `ts_main.mm` still has zero Chromium `#include`s — only system headers
+   (`<dlfcn.h>`, `<Cocoa/Cocoa.h>`, etc.)
+
+The key proof: window management lives entirely in the launcher. The framework
+creates WebContents and hands back an NSView. The launcher decides where and how
+to display it. A Zig launcher would do the same thing — create an NSWindow via
+`@cImport("Cocoa/Cocoa.h")`, get an NSView from the framework, add it as a
+subview.
