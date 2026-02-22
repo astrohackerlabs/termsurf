@@ -90,37 +90,51 @@ boundary to the GPU/Viz process. Yet Chrome still achieves ~1–2 frame latency.
 
 ### Shared memory, not message passing
 
-The critical difference from TermSurf's architecture:
+The critical difference from TermSurf's architecture (verified from
+`chromium/src/`):
 
 **GPU Command Buffer** — Renderers write GL-equivalent commands into a shared
-memory ring buffer. Hundreds of commands batch up before a single lightweight
-IPC notification tells the GPU process to consume them. No per-call kernel
-transition. No serialization overhead.
+memory ring buffer (`gpu/command_buffer/client/cmd_buffer_helper.h`). The
+`CommandBufferHelper` manages put/get pointers over `SharedMemoryBufferBacking`
+(actual cross-process shared memory). Hundreds of commands batch up before a
+single lightweight IPC notification tells the GPU process to consume them. No
+per-call kernel transition. No serialization overhead.
 
-**CompositorFrames are metadata, not pixels** — When a renderer submits a frame
-to Viz, it sends a small struct describing quads that reference textures already
-in GPU memory (IOSurface on macOS). The heavy pixel data never crosses the
-process boundary — it was rasterized directly into GPU memory via the command
-buffer.
+**CompositorFrames are metadata, not pixels** — A `CompositorFrame`
+(`components/viz/common/quads/compositor_frame.h`) has three fields: `metadata`,
+`resource_list` (GPU mailbox texture references via `TransferableResource`), and
+`render_pass_list` (draw quads). Zero pixel data crosses the process boundary —
+textures are already in GPU memory (IOSurface on macOS).
 
 **Sync tokens** — Instead of blocking to wait for raster to complete, the
 compositor submits frames with non-blocking sync tokens. The GPU resolves them
 before drawing. The pipeline never stalls.
 
-**Compositor-thread input handling** — Scroll and selection don't need the main
-thread. The compositor thread receives input, applies scroll offsets to the
-existing layer tree, and submits a new frame — all without touching JavaScript
-or layout. This is why scrolling stays smooth even when JS is blocked.
+**Compositor-thread input handling** — The `InputHandler` (`cc/input/`) runs on
+the compositor thread. `ScrollBegin` and `ScrollUpdate` in `input_handler.cc`
+default to `kScrollOnImplThread` — no main thread needed. Scroll offsets are
+applied directly to the layer tree, and the main thread is notified later via
+commit. This is why scrolling stays smooth even when JS is blocked.
+
+### Mojo uses Mach ports on macOS
+
+Chromium's Mojo IPC uses **Mach ports** on macOS, not Unix domain sockets (which
+are Linux/Android only). The `MOJO_USE_APPLE_CHANNEL` buildflag in
+`mojo/features.gni` gates this at compile time. `platform_channel.cc` creates
+Mach ports via `base::apple::CreateMachPort()`, and `channel_mac.cc` implements
+the transport using `mach_msg`. This means Mojo's macOS transport uses the same
+kernel mechanism as XPC — the difference is not the transport layer but what
+travels over it (shared memory references vs full message payloads).
 
 ### TermSurf vs Chrome: the architectural gap
 
-| Aspect                | Chrome                                       | TermSurf                                     |
-| --------------------- | -------------------------------------------- | -------------------------------------------- |
-| Graphics commands     | Shared memory ring buffer (zero copy)        | N/A (capturer does the rendering)            |
-| Frame submission      | Small metadata struct (quads + texture refs) | Full IOSurface Mach port transfer via XPC    |
-| Input → compositor    | Mojo to compositor thread (same process)     | XPC to Chromium process (kernel hop)         |
-| Frame synchronization | BeginFrame from single vsync clock           | Two independent clocks (120fps oversampling) |
-| Scroll/selection      | Compositor thread handles directly           | Full Chromium render + capture round-trip    |
+| Aspect                | Chrome                                       | TermSurf                                        |
+| --------------------- | -------------------------------------------- | ----------------------------------------------- |
+| Graphics commands     | Shared memory ring buffer (zero copy)        | N/A (capturer does the rendering)               |
+| Frame submission      | Small metadata struct (quads + texture refs) | Full IOSurface Mach port transfer via XPC       |
+| Input → compositor    | Mojo/Mach ports to compositor thread         | XPC to Chromium process (same kernel mechanism) |
+| Frame synchronization | BeginFrame from single vsync clock           | Two independent clocks (120fps oversampling)    |
+| Scroll/selection      | Compositor thread handles directly           | Full Chromium render + capture round-trip       |
 
 The fundamental gap: TermSurf uses a recording API (`FrameSinkVideoCapturer`) on
 top of message-passing IPC (XPC), whereas Chrome uses shared memory command
@@ -131,21 +145,39 @@ the same process, often within the same frame.
 
 ### What is fixable (short-term)
 
-The capturer timer is the most actionable target. Chromium's
-`FrameSinkVideoCapturer` supports `RequestRefreshFrame()` — it forces an
-immediate capture on demand. If we triggered this after receiving input events,
-we would eliminate the 0–8ms capture wait. Combined with XPC delivery jitter
-reduction (high-priority dispatch queues), we could shave ~5–10ms off the
-average round-trip.
+The capturer timer is the most actionable target. Our `ShellVideoConsumer` holds
+a `ClientFrameSinkVideoCapturer` (`client_frame_sink_video_capturer.h:97`) which
+exposes `RequestRefreshFrame()`. We never call it — the capturer relies entirely
+on its 120fps timer. Calling `RequestRefreshFrame()` after input events would
+force an immediate capture instead of waiting up to 8ms for the next timer tick.
+Combined with XPC delivery jitter reduction (high-priority dispatch queues), we
+could shave ~5–10ms off the average round-trip.
 
-### What is not fixable (without in-process embedding)
+### What is fixable (long-term)
 
-The XPC async latency and double-vsync penalty are inherent to the
-out-of-process streaming architecture. They cannot be eliminated without
-in-process Chromium embedding — the long-term endgame described in
-`docs/vsync.md`. In-process embedding would give TermSurf access to Chrome's own
-compositor thread for input handling, shared memory for frame submission, and a
-single BeginFrame clock for synchronization.
+Chromium proves that cross-process rendering can be fast — its renderer and
+GPU/Viz processes are separate, yet latency stays at 1–2 frames. The key is
+shared memory, not message passing. Chromium uses shared memory ring buffers for
+graphics commands and shared GPU textures (IOSurface) for frame data. Mojo on
+macOS uses Mach ports — the same kernel mechanism as XPC. The transport is not
+the bottleneck. What matters is what travels over it.
+
+TermSurf can adopt the same approach without in-process embedding:
+
+- **Shared memory for frame data.** Instead of transferring IOSurface Mach ports
+  per frame via XPC, allocate a shared IOSurface pool up front and share it
+  once. The Chromium server renders into the shared surfaces, and the GUI reads
+  from them — no per-frame XPC message needed. Synchronization via atomics or
+  lightweight signals.
+- **Shared memory for input events.** Instead of sending each mouse/key event as
+  an XPC message, write events into a shared ring buffer. The Chromium server
+  polls or gets a lightweight wakeup signal. Eliminates per-event kernel hops.
+- **Single vsync clock.** The GUI's CVDisplayLink could signal the Chromium
+  server (via shared memory flag or Mach port notification) at each vsync,
+  giving it a BeginFrame-like deadline to produce the next frame.
+
+These are the same patterns Chrome uses across its own process boundaries. The
+out-of-process architecture is not the problem — the message-passing pattern is.
 
 ## Investigation plan
 
