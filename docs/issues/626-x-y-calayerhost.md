@@ -528,8 +528,8 @@ IOSurfaceLayer
    └─ CALayerHost (explicit frame at overlay rect, no auto-resize mask)
 ```
 
-This matches Chromium: `maybe_flipped_layer_` fills the parent,
-`remote_layer_` sits inside it.
+This matches Chromium: `maybe_flipped_layer_` fills the parent, `remote_layer_`
+sits inside it.
 
 #### Changes
 
@@ -537,8 +537,8 @@ This matches Chromium: `maybe_flipped_layer_` fills the parent,
 
 - In `setCALayerHostContextId`: Remove `autoresizingMask` from the CALayerHost
   (we will set an explicit frame on it instead of relying on pinning).
-- In `updateCALayerHostFrame`: Set the frame on the CALayerHost (not the
-  flipped layer). The flipped layer fills the parent and is never repositioned.
+- In `updateCALayerHostFrame`: Set the frame on the CALayerHost (not the flipped
+  layer). The flipped layer fills the parent and is never repositioned.
 
 **`gui/src/renderer/generic.zig`:**
 
@@ -549,3 +549,29 @@ This matches Chromium: `maybe_flipped_layer_` fills the parent,
 
 Run the app. The web content should align pixel-perfectly with the TUI viewport
 in both X and Y. The ~10px Y offset should be gone.
+
+#### Results
+
+**Fail.** The web browser does not appear at all. The CALayerHost is completely
+invisible — no web content renders anywhere on screen. This is a catastrophic
+regression from Experiment 3, which at least showed the content with correct X
+and only ~10px Y offset.
+
+#### Conclusion
+
+Setting an explicit frame on the CALayerHost does not work. In Chromium's
+`DisplayCALayerTree`, the CALayerHost never has an explicit frame — it sits at
+(0, 0) and renders the remote CAContext at its intrinsic size. CALayerHost is
+not a normal CALayer: it mirrors a remote layer tree from another process via
+Window Server. Setting a frame on it likely clips or displaces the remote
+content in a way that makes it invisible.
+
+This means Experiment 3's architecture was closer to correct: the
+`flipped_layer` must be the one with the explicit frame, and the CALayerHost
+must sit at (0, 0) inside it with no explicit frame. The ~10px Y offset in
+Experiment 3 was NOT caused by the `autoresizingMask` conflict — that hypothesis
+was wrong. The actual cause of the Y offset must be something else.
+
+Experiment 5 should revert to Experiment 3's architecture (frame on the
+`flipped_layer`, CALayerHost at origin) and investigate the Y offset through
+other means.
