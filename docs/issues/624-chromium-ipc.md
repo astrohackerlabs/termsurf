@@ -318,3 +318,365 @@ Both diagrams should reference specific source files and line numbers. The
 diagrams should make it clear which steps use message passing (and could be
 replaced with shared memory) and which already use shared memory or zero-copy
 GPU textures.
+
+#### Results
+
+##### A1: Process tree
+
+The process that calls `ContentMain()` IS the browser process. It spawns all
+children.
+
+```
+Content Shell (Browser Process)
+├── GPU/Viz Process (out-of-process by default)
+│   └── All GPU calls, display compositing, rasterization
+├── Renderer Process (one per site/BrowserContext)
+│   ├── Main thread (Blink, JavaScript, DOM)
+│   ├── Compositor thread (layer tree, animations, scroll)
+│   └── Worker threads (WebWorkers)
+├── Network Service (utility process)
+└── Storage Service (utility process)
+```
+
+**Process creation:**
+
+| Process  | Created by                           | File                                                        | Line |
+| -------- | ------------------------------------ | ----------------------------------------------------------- | ---- |
+| GPU/Viz  | `GpuProcessHost::LaunchGpuProcess()` | `content/browser/gpu/gpu_process_host.cc`                   | 1261 |
+| Renderer | `RenderProcessHostImpl::Init()`      | `content/browser/renderer_host/render_process_host_impl.cc` | 1780 |
+| Utility  | `UtilityProcessHost::StartProcess()` | `content/browser/service_host/utility_process_host.cc`      | 310  |
+
+**Flags:**
+
+- `--single-process` — runs browser, renderer, and GPU in one process
+- `--in-process-gpu` — runs GPU in-process with browser, renderer stays separate
+- `--no-sandbox` — disables sandboxing for child processes
+
+For Content Shell with one tab: browser process + GPU process + 1 renderer
+process + network service = **4 processes minimum**.
+
+##### A2: IPC stack on macOS
+
+Four layers from kernel to application:
+
+```
+Application Layer
+  OutgoingInvitation / IncomingInvitation (process bootstrap)
+  AttachMessagePipe() / ExtractMessagePipe() (named pipe exchange)
+      │
+Mojo System Layer
+  ScopedMessagePipeHandle (two-ended pipe)
+  MojoWriteMessage() / MojoReadMessage()
+  DataPipe (streaming), SharedBuffer (shared memory)
+      │
+Mojo Core / Transport Layer
+  ChannelMac (channel_mac.cc)
+  mach_msg_header_t construction
+  mach_msg_port_descriptor_t (Mach port transfer in messages)
+  Handshake protocol (kChannelMacHandshakeMsgId = 'mjhs')
+      │
+macOS Kernel Primitives
+  mach_msg() system call (MACH_SEND_MSG / MACH_RCV_MSG)
+  mach_port_t (send rights, receive rights)
+  vm_allocate() for message buffers
+```
+
+**Bootstrap sequence:**
+
+1. Parent creates `PlatformChannel` — creates Mach port pair (send + receive)
+2. Parent creates `OutgoingInvitation`, attaches named message pipes
+3. Parent launches child via `ChildProcessLauncher`, passes remote endpoint on
+   command line
+4. Child calls `IncomingInvitation::Accept()` with the endpoint
+5. Child extracts named pipes — direct IPC connection established
+
+**Key files:**
+
+| Component        | File                                          | What it does                         |
+| ---------------- | --------------------------------------------- | ------------------------------------ |
+| macOS channel    | `mojo/core/channel_mac.cc`                    | `mach_msg()` send/receive, handshake |
+| Platform handle  | `mojo/public/cpp/platform/platform_handle.h`  | Wraps `mach_port_t` send/receive     |
+| Platform channel | `mojo/public/cpp/platform/platform_channel.h` | Creates entangled endpoint pair      |
+| Message pipes    | `mojo/public/cpp/system/message_pipe.h`       | Two-ended pipe abstraction           |
+| Invitations      | `mojo/public/cpp/system/invitation.h`         | Process bootstrap (attach/extract)   |
+| Child launcher   | `content/browser/child_process_launcher.cc`   | Spawns child, sends Mojo invitation  |
+
+##### A3: Mojo interfaces on the rendering hot path
+
+**Frame submission (renderer → Viz):**
+
+`viz.mojom.CompositorFrameSink` — `compositor_frame_sink.mojom:61-116`
+
+- `SubmitCompositorFrame(LocalSurfaceId, CompositorFrame, ...)` — primary hot
+  path. CompositorFrame contains metadata + resource references (mailboxes), not
+  pixels. Marked `[UnlimitedSize]`.
+- `SetNeedsBeginFrame(bool)` — signal need for frames
+- `DidNotProduceFrame(BeginFrameAck)` — acknowledge without producing
+
+`viz.mojom.CompositorFrameSinkClient` — `compositor_frame_sink.mojom:119-153`
+
+- `OnBeginFrame(BeginFrameArgs, ...)` — vsync signal from Viz to renderer
+- `DidReceiveCompositorFrameAck(array<ReturnedResource>)` — backpressure ack
+- `ReclaimResources(array<ReturnedResource>)` — resource lifecycle
+
+**Input dispatch (browser → renderer):**
+
+`blink.mojom.WidgetInputHandler` — `input_handler.mojom:464-571`
+
+- `DispatchEvent(Event, Event?) => (...)` — primary input hot path. Blocking
+  call with response callback. Carries full event structure (mouse, key, touch,
+  gesture).
+- `DispatchNonBlockingEvent(Event)` — one-way, no callback
+
+`blink.mojom.WidgetInputHandlerHost` — `input_handler.mojom:246-301`
+
+- `DidOverscroll(DidOverscrollParams)` — overscroll feedback
+- `SetMouseCapture(bool)` — mouse capture state
+
+**Widget lifecycle (browser ↔ renderer):**
+
+`blink.mojom.WidgetHost` — `platform_widget.mojom:30-89`
+
+- `CreateFrameSink(...)` — creates the CompositorFrameSink and input channels
+
+`blink.mojom.Widget` — `platform_widget.mojom:93-133`
+
+- `UpdateVisualProperties(VisualProperties)` — size, scale, surface ID
+
+##### A4: Shared memory catalog
+
+| What                    | How created                          | Transfer method               | Access pattern                               |
+| ----------------------- | ------------------------------------ | ----------------------------- | -------------------------------------------- |
+| GPU command ring buffer | `CreateTransferBuffer()`             | Shared memory mapping         | Renderer writes put ptr, GPU reads get ptr   |
+| GPU transfer buffers    | `CreateTransferBuffer()`             | Shared memory mapping         | Renderer writes data, GPU reads; IPC for ID  |
+| IOSurface (macOS)       | Native IOSurface API                 | Mach port via Mojo            | GPU renders, Mach port enables cross-process |
+| SharedImage / Mailbox   | `gpu::Mailbox` registry              | Mailbox ID in CompositorFrame | GPU resolves mailbox → texture handle        |
+| CPU staging buffers     | `UnsafeSharedMemoryRegion::Create()` | Shared region handle via Mojo | Renderer CPU writes, GPU copies to VRAM      |
+| Foreground time         | `ReadOnlySharedMemoryRegion`         | Shared region via Mojo (once) | Atomic TimeTicks, no per-update IPC          |
+
+**GPU command buffer** — the core shared memory hot path:
+
+- `cmd_buffer_helper.cc:83-104` — `AllocateRingBuffer()` creates shared memory
+  via `CreateTransferBuffer()`
+- `cmd_buffer_common.h:43-98` — `CommandBufferEntry` is a 4-byte union (header,
+  uint32, int32, float)
+- Renderer writes hundreds of GPU commands into the ring. A single lightweight
+  IPC notification tells the GPU process to consume them. No per-command kernel
+  transition.
+- Synchronization: put/get pointer offsets. `InsertToken()` for sync points.
+  `WaitForAvailableEntries()` for backpressure.
+
+**IOSurface on macOS:**
+
+- `iosurface_image_backing.h:131-150` — `IOSurfaceImageBacking` wraps native
+  IOSurface
+- Cross-process: `IOSurfaceCreateMachPort()` → Mach port via Mojo →
+  `IOSurfaceLookupFromMachPort()` in receiver
+- Zero-copy: GPU renders directly to IOSurface, receiver maps same GPU memory
+
+**Platform shared memory on macOS:**
+
+- `platform_shared_memory_region.h:109-128` — `CreateWritable()`,
+  `CreateUnsafe()`
+- Uses `mach_vm_allocate` on macOS (referenced via error enum at line 97)
+
+**Key insight: input events do NOT use shared memory.** They are serialized in
+Mojo messages. Only GPU commands and textures use shared memory.
+
+##### A5: Input path — mouse click
+
+```
+macOS kernel delivers NSEvent
+  │
+  ▼ [Browser Process, Main Thread]
+RenderWidgetHostViewCocoa::mouseEvent()
+  render_widget_host_view_cocoa.mm:975
+  │
+  ├─ WebMouseEventBuilder::Build(theEvent) → WebMouseEvent
+  │    line 1079
+  │
+  └─ _hostHelper->RouteOrProcessMouseEvent(event)
+       line 1118
+       │
+       ▼
+  RenderWidgetHostViewMac::RouteOrProcessMouseEvent()
+    render_widget_host_view_mac.mm:1884-1895
+       │
+       └─ GetInputEventRouter()->RouteMouseEvent()
+            line 1890
+            │
+            ▼
+  InputRouterImpl::SendMouseEvent()
+    input_router_impl.cc:107
+       │
+       └─ FilterAndSendWebInputEvent()
+            line 622
+            │
+            └─ client_->GetWidgetInputHandler()->DispatchEvent()
+                 line 696
+                 │
+  ═══════════════╪══════════════════════════════════════════
+  MOJO IPC       │  blink.mojom.WidgetInputHandler::DispatchEvent()
+  (message pipe) │  input_handler.mojom:526-531
+  ═══════════════╪══════════════════════════════════════════
+                 │
+                 ▼ [Renderer Process, Mojo/IO Thread]
+  WidgetInputHandlerImpl::DispatchEvent()
+    widget_input_handler_impl.cc:178
+       │
+       └─ input_handler_manager_->DispatchEvent()
+            line 188
+            │
+            ▼ [Renderer Process, Compositor Thread]
+  InputHandlerProxy::RouteToTypeSpecificHandler()
+    input_handler_proxy.cc:873-985
+       │
+       ├─ kMouseDown  → DID_NOT_HANDLE (line 943)
+       ├─ kMouseUp    → DID_NOT_HANDLE (line 952)
+       ├─ kMouseMove  → DID_NOT_HANDLE (line 968)
+       └─ kMouseLeave → DID_NOT_HANDLE (line 973)
+            │
+            ▼ [Renderer Process, Main Thread]
+  MainThreadEventQueue → Blink EventHandler → JavaScript
+```
+
+**Key findings:**
+
+- **Single IPC hop** — browser → renderer via Mojo message pipe
+- **No shared memory** for input — event data serialized in Mojo message
+- **Mouse events skip the compositor** — always forwarded to main thread
+  (`DID_NOT_HANDLE`). Only scroll/pinch/gesture events get compositor handling.
+- **Latency:** ~2-20ms (Mojo IPC ~0.5-2ms, rest is thread scheduling)
+
+##### A6: Frame path — rasterization to screen
+
+```
+[Renderer Process, Compositor Thread]
+LayerTreeHostImpl produces CompositorFrame
+  cc/trees/layer_tree_frame_sink.h:125-126
+     │
+     ├─ CompositorFrame contains:
+     │    metadata + TransferableResource[] (mailbox refs) + render passes
+     │    NO pixel data — only GPU texture references
+     │
+═════╪═══════════════════════════════════════════════════
+MOJO │  viz.mojom.CompositorFrameSink::SubmitCompositorFrame()
+IPC  │  compositor_frame_sink.mojom:88-92
+═════╪═══════════════════════════════════════════════════
+     │
+     ▼ [GPU/Viz Process, Viz Thread]
+CompositorFrameSinkImpl::SubmitCompositorFrame()
+  compositor_frame_sink_impl.cc:156-180
+     │
+     └─ Surface stores frame
+          │
+          ▼
+SurfaceAggregator::Aggregate()
+  surface_aggregator.cc
+  Merges frames from all surfaces, resolves Mailbox → GPU texture
+     │
+     ▼ [GPU/Viz Process, GPU Thread]
+SkiaRenderer::DrawFrame()
+  skia_renderer.cc
+  Renders aggregated quads into output IOSurface (Metal/GL)
+     │
+     ▼
+ImageTransportSurfaceOverlayMacEGL::Present()
+  image_transport_surface_overlay_mac.h:61-63
+     │
+     └─ CALayerTreeCoordinator::CommitPresentedFrameToCA()
+          ca_layer_tree_coordinator.mm:171-250
+          │
+          ├─ Creates CAContext (ca_layer_tree_coordinator.mm:54-57)
+          │    CAContext contextWithCGSConnection:CGSMainConnectionID()
+          │
+          └─ Populates CALayerParams (lines 206-221):
+               ├─ ca_context_id (uint32) — OR —
+               ├─ io_surface_mach_port (Mach port)
+               ├─ pixel_size
+               └─ scale_factor
+                    │
+═══════════════════════╪═════════════════════════════════
+MOJO IPC               │  CALayerParams (tiny struct)
+(ca_context_id: uint32 │  ca_layer_params_mojom_traits.cc
+or IOSurface Mach port)│
+═══════════════════════╪═════════════════════════════════
+                       │
+                       ▼ [Browser Process, UI Thread]
+AcceleratedWidgetMac::UpdateCALayerTree()
+  accelerated_widget_mac.mm:82-93
+     │
+     └─ DisplayCALayerTree::UpdateCALayerTree()
+          display_ca_layer_tree.mm:66-121
+          │
+          ├─ PATH A: Remote CAContext (preferred, line 84-86)
+          │    GotCALayerFrame(ca_context_id)
+          │    display_ca_layer_tree.mm:123-153
+          │    Creates CALayerHost with contextId
+          │    Window Server composites GPU process's CAContext directly
+          │    ZERO COPY — GPU VRAM → screen
+          │
+          └─ PATH B: IOSurface direct (fallback, line 91-98)
+               IOSurfaceLookupFromMachPort(mach_port)
+               GotIOSurfaceFrame(io_surface, dip_size, scale_factor)
+               display_ca_layer_tree.mm:155-188
+               CALayer.contents = (__bridge id)io_surface
+               Window Server reads IOSurface GPU memory
+               ZERO COPY — GPU VRAM → screen
+     │
+     ▼ [macOS Window Server]
+CATransaction flush → GPU composites → display scanout
+```
+
+**Key findings:**
+
+- **No pixel data crosses any process boundary.** CompositorFrames carry mailbox
+  references. CALayerParams carry a uint32 context ID or a Mach port. Everything
+  is GPU memory references.
+- **Two display paths on macOS:**
+  - **Remote CAContext** (preferred): GPU process creates CAContext, sends
+    `contextId` (uint32). Browser creates `CALayerHost`. Window Server
+    composites GPU process's layers directly from VRAM.
+  - **IOSurface direct** (fallback): GPU process creates IOSurface, sends Mach
+    port. Browser creates CALayer with IOSurface as contents.
+- **Both paths are zero-copy.** The Window Server reads directly from GPU VRAM.
+- **Two IPC hops:** Renderer → GPU/Viz (CompositorFrame via Mojo), GPU/Viz →
+  Browser (CALayerParams via Mojo). Neither carries pixel data.
+
+#### Conclusion
+
+The full IPC architecture is now mapped. The critical insight for TermSurf:
+
+**Chrome's input path uses Mojo message passing, not shared memory.** Input
+events are serialized in Mojo messages with a single hop from browser to
+renderer. There is no shared memory ring buffer for input. Chrome achieves low
+input latency not through shared memory but through a short path: one Mojo
+message, compositor thread receives it, and for scroll/gesture events the
+compositor handles it directly without touching the main thread. Mouse events
+always go to the main thread.
+
+**Chrome's frame path uses zero-copy GPU memory references.** No pixel data
+crosses any process boundary. The renderer sends mailbox IDs, the GPU process
+resolves them and renders into IOSurface, and the browser receives either a
+`ca_context_id` (4 bytes) or an IOSurface Mach port. The Window Server reads
+directly from GPU VRAM.
+
+**What TermSurf currently does differently:**
+
+1. **Input:** XPC message per event (similar to Chrome's Mojo message, but with
+   an extra process hop: GUI → Chromium server → Chromium's internal browser →
+   renderer). Chrome's browser process IS the one receiving OS events.
+2. **Frames:** FrameSinkVideoCapturer with GPU readback + IOSurface Mach port
+   per frame via XPC. Chrome uses `ca_context_id` (sent once) or IOSurface Mach
+   port (sent per frame but from the normal display path, no capturer).
+
+**The architectural gap is not shared memory vs message passing for input.** It
+is:
+
+1. **Extra process hop for input** — TermSurf has GUI → Chromium server →
+   internal renderer. Chrome has browser → renderer (one hop).
+2. **Capturer vs display path for frames** — TermSurf uses a recording API.
+   Chrome uses the native display compositor output (`CALayerParams`).
+3. **Per-frame Mach port transfer** — TermSurf sends a new IOSurface Mach port
+   every frame. Chrome sends `ca_context_id` once and the Window Server handles
+   the rest.
