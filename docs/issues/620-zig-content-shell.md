@@ -987,3 +987,55 @@ creates WebContents and hands back an NSView. The launcher decides where and how
 to display it. A Zig launcher would do the same thing — create an NSWindow via
 `@cImport("Cocoa/Cocoa.h")`, get an NSView from the framework, add it as a
 subview.
+
+#### Result
+
+**Partial.** Windows appear, pages load, both profiles have isolated storage,
+input works (typing, clicking, scrolling). But rendering runs at ~2fps — classic
+Chromium background throttling.
+
+The 2fps was introduced in this experiment. Experiments 1–4 all used
+`Shell::CreateNewWindow`, which handles visibility and focus management
+internally, and rendered at full speed. The direct `WebContents::Create` path
+bypasses Shell entirely, and Chromium throttles the compositor because it
+believes the content is in a background state.
+
+Attempted fix: calling `wc->WasShown()` immediately after `WebContents::Create`
+and `LoadURLWithParams`. This did not resolve the throttling.
+
+#### Conclusion
+
+Creating `WebContents` directly works — pages load, input is handled, profiles
+are isolated. But Shell provides visibility/focus management that we haven't
+replicated. Without it, Chromium's compositor throttles to ~2fps.
+
+The throttling is not a mutex or lock contention issue. It is Chromium's
+intentional power-saving behavior for content it considers "not visible" or
+"background." `WasShown()` alone is not sufficient — Shell does more than just
+signal visibility.
+
+**Ideas for next steps:**
+
+1. **Study what Shell does for visibility.** Shell implements
+   `WebContentsDelegate` which has methods like `ActivateContents`,
+   `IsNeverComposited`, `ShouldCreateWebContents`. One of these may control
+   compositor throttling. Compare what Shell's delegate does vs having no
+   delegate.
+
+2. **Set a minimal WebContentsDelegate.** Create a `TsWebContentsDelegate` in
+   the shim that inherits from `WebContentsDelegate` and implements the bare
+   minimum. Attach it to each WebContents. This may be all that's needed to
+   convince Chromium the content is foreground.
+
+3. **Check RenderWidgetHostView visibility.** The `RenderWidgetHostView` (the
+   actual rendering surface) has its own visibility state independent of
+   `WebContents`. Shell may be doing something to the RWHV that we're not.
+
+4. **Compare with Shell::CreateNewWindow path.** Instrument both paths — the
+   Shell path (which works at 60fps) and our direct path — to see exactly which
+   visibility/focus calls differ. The delta is the fix.
+
+5. **Check `WebContentsViewMac` visibility notifications.** The Cocoa view
+   bridge should detect when the NSView moves into a visible window and
+   propagate visibility. Investigate whether this propagation is failing or
+   happening too late.
