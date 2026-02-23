@@ -662,3 +662,201 @@ navigated page never appears instead of appearing after 10 seconds. This
 suggests the hidden window's `DisplayCALayerTree` may be necessary for the
 compositor pipeline to function, not just a redundant consumer of the
 `CAContext`. The code changes from this experiment should be reverted.
+
+### Experiment 4: Audit all 10-second delays and CALayer-related timing in Chromium
+
+#### Problem
+
+The ~10-second blank is suspiciously consistent. Issue 628 Experiment 8 found
+and modified one 10-second delay (the CALayerParams dedup gate in
+`root_compositor_frame_sink_impl.cc`) but it had no effect. There may be other
+10-second delays in Chromium that explain the behavior. Additionally, there may
+be CALayer-related delays or hidden-window compositor throttling that contribute
+to the problem.
+
+#### Research questions
+
+**R1: Where are ALL the 10-second delays in Chromium?**
+
+Comprehensive search for `base::Seconds(10)`,
+`base::TimeDelta::FromSeconds(10)`, and related patterns across the rendering,
+compositing, and display pipelines.
+
+**R2: Where are ALL the CALayer-related delays?**
+
+Any delays, timeouts, or throttling in files related to `CALayerHost`,
+`CAContext`, `CALayerParams`, `DisplayCALayerTree`, or `AcceleratedWidgetMac`.
+
+**R3: Does the hidden window cause compositor detachment or throttling?**
+
+Trace how a hidden NSWindow (`[window orderOut:nil]`) affects the compositor
+pipeline. Does it trigger `SetRenderWidgetHostIsHidden(true)`? Does it detach
+the compositor? Does it invalidate surface IDs during navigation?
+
+#### Results
+
+**R1: Two 10-second delays found in the rendering pipeline.**
+
+**Delay 1: CALayerParams dedup gate (ALREADY TESTED — NO EFFECT)**
+
+File:
+`components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc:912`
+
+```cpp
+next_forced_ca_layer_params_update_time_ =
+    base::TimeTicks::Now() + base::Seconds(10);
+```
+
+Suppresses identical `CALayerParams` for 10 seconds. Periodically forces an
+update to detect dynamic vsync changes. Tested in Issue 628 Experiment 8 —
+reducing to 100ms had no effect on the blank.
+
+**Delay 2: Temporary surface reference expiration (NEW — UNTESTED)**
+
+File: `components/viz/service/surfaces/surface_manager.cc:39`
+
+```cpp
+constexpr base::TimeDelta kExpireInterval = base::Seconds(10);
+```
+
+The `SurfaceManager` runs `ExpireOldTemporaryReferences()` every 10 seconds.
+When a new surface is created, a temporary reference is added. The expectation
+is that the parent compositor will claim the surface quickly by replacing the
+temporary reference with a proper one. If the parent never claims it:
+
+1. **First timer fire (10s):** If the surface is marked for destruction,
+   `marked_as_old = true`.
+2. **Second timer fire (20s):** Old references are deleted and surfaces are
+   garbage collected.
+
+The comment at line 467 reads: _"The temporary reference has existed for more
+than 10 seconds, a surface reference should have replaced it by now. To avoid
+permanently leaking memory delete the temporary reference."_
+
+This is suspicious: if the hidden window's compositor doesn't properly claim the
+new surface after navigation, the temporary reference could expire, causing the
+surface to be garbage collected. However, the timing doesn't perfectly match —
+the blank is ~10 seconds, not ~20 seconds. The two-phase system means surfaces
+survive 10-20 seconds, depending on when the timer happens to fire relative to
+surface creation.
+
+**Other 10-second delays found (less relevant):**
+
+- `viz/host/gpu_host_impl.cc:664` — GPU shutdown timeout
+  (`kShutDownTimeout = base::Seconds(10)`). Only affects GPU process shutdown,
+  not rendering.
+- `gpu/ipc/service/gpu_watchdog_thread.cc:71` — GPU watchdog adjustment.
+  Windows-only.
+- `viz/service/frame_sinks/video_capture/shared_memory_video_frame_pool.h:86` —
+  Logging rate limit.
+
+**R2: CALayer-related delays are all short.**
+
+| Delay                      | File                                                                      | Duration | Purpose                             |
+| -------------------------- | ------------------------------------------------------------------------- | -------- | ----------------------------------- |
+| CATransaction post-commit  | `ui/accelerated_widget_mac/ca_transaction_observer.mm:34`                 | 50ms     | Wait for post-commit observers      |
+| Metal backpressure polling | `ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm:128`              | 1ms/poll | Poll Metal fences between frames    |
+| GPU command buffer polling | `gpu/ipc/service/command_buffer_stub.cc:70-74`                            | 1-2ms    | Prevent fast/slow frame alternation |
+| Delayed GPU task           | `viz/service/display_embedder/skia_output_surface_dependency_impl.cc:170` | 2ms      | GPU thread task scheduling          |
+| Frame interval timeout     | `viz/service/display/frame_interval_matchers.h:116`                       | 100ms    | Avoid blips during rate switching   |
+| Overlay reclaim            | `viz/service/display_embedder/skia_output_device_buffer_queue.h:130`      | 1s       | Batch overlay resource reclamation  |
+| Gr cache cleanup (macOS)   | `gpu/command_buffer/service/gr_cache_controller.cc:76`                    | 5s       | Free unused GPU resources           |
+
+None of these match the 10-second blank. The longest is the 5-second macOS GPU
+resource cleanup, which only frees idle resources and wouldn't cause a blank.
+
+**R3: Hidden window compositor behavior — potentially critical.**
+
+The hidden NSWindow may trigger `render_widget_host_is_hidden_ = true`, which
+has severe consequences for the compositor pipeline:
+
+**Compositor detachment** (`browser_compositor_view_mac.mm:191-204`):
+
+```cpp
+void BrowserCompositorMac::UpdateState() {
+  if (parent_ui_layer_) {
+    TransitionToState(UseParentLayerCompositor);
+    return;
+  }
+  if (!render_widget_host_is_hidden_) {
+    TransitionToState(HasOwnCompositor);
+    return;
+  }
+  // Otherwise put the compositor up for recycling.
+  TransitionToState(HasNoCompositor);
+}
+```
+
+When `render_widget_host_is_hidden_` is true and there's no parent UI layer
+(content_shell doesn't use Views), the compositor transitions to
+`HasNoCompositor` — the entire rendering pipeline is torn down.
+
+**Surface ID invalidation on navigation**
+(`browser_compositor_view_mac.mm:341-361`):
+
+```cpp
+void BrowserCompositorMac::DidNavigate() {
+  if (render_widget_host_is_hidden_) {
+    dfh_local_surface_id_allocator_.Invalidate();
+  } else {
+    dfh_local_surface_id_allocator_.GenerateId();
+    delegated_frame_host_->EmbedSurface(...);
+    client_->OnBrowserCompositorSurfaceIdChanged();
+  }
+}
+```
+
+When `render_widget_host_is_hidden_` is true during navigation, the surface ID
+allocator is **invalidated**. No new surface ID is generated. No surface is
+embedded. The comment says: _"Navigating while hidden should not allocate a new
+LocalSurfaceID. Once sizes are ready, or we begin to Show, we can then allocate
+the new LocalSurfaceId."_
+
+**How the hidden flag is set** (`render_widget_host_view_mac.mm:491-581`):
+
+```
+Hide() → WasOccluded() → SetRenderWidgetHostIsHidden(true)
+ShowWithVisibility() → SetRenderWidgetHostIsHidden(false)
+```
+
+`Hide()` is called when the view becomes invisible. `WasOccluded()` is called
+when the window is occluded. The hidden NSWindow (`orderOut:nil`) could trigger
+either of these paths.
+
+**This is a strong lead.** If the hidden window causes
+`render_widget_host_is_hidden_` to be true, then during navigation:
+
+1. The compositor is in `HasNoCompositor` state — no rendering pipeline.
+2. `DidNavigate()` invalidates the surface ID — no new surface is created.
+3. No frames are submitted for the new page.
+4. The only thing that eventually triggers rendering is some timeout or recovery
+   mechanism — potentially the 10-second surface expiration or a periodic
+   compositor check.
+
+However, this contradicts Issue 628 Experiment 7's finding that the new
+`ca_context_id` arrives within 100ms. If the compositor were truly detached, no
+`ca_context_id` would be produced. This needs verification: was Experiment 7 run
+with the Issue 628 code (which included `RenderViewHostChanged` and may have
+triggered `WasShown`)?
+
+#### Conclusion
+
+Two new leads emerged from this research:
+
+1. **Surface Manager temporary reference expiration**
+   (`kExpireInterval =
+   base::Seconds(10)`). If the hidden window's compositor
+   doesn't properly claim new surfaces after navigation, temporary references
+   expire after 10 seconds. This is the only untested 10-second delay that could
+   affect rendering.
+
+2. **Hidden window compositor detachment.** The `render_widget_host_is_hidden_`
+   flag may be true for the hidden window, causing the compositor to be detached
+   and surface IDs to be invalidated during navigation. This would explain why
+   the new page takes so long to appear — the rendering pipeline is torn down
+   and needs to be reconstructed.
+
+The next experiment should determine whether `render_widget_host_is_hidden_` is
+true in the Chromium Profile Server. Add diagnostic logging to
+`BrowserCompositorMac::DidNavigate()` and `UpdateState()` to confirm whether the
+compositor is detached and surface IDs are invalidated during navigation.
