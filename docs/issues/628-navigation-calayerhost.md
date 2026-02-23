@@ -846,3 +846,22 @@ Run the app, open a browser overlay at `google.com`, click a search result. The
 old page should stay visible until the new page renders — no blank gap. Test
 same-site navigation (staying on google.com) and cross-site navigation (Google
 to Wikipedia). Both should show the old content during the transition.
+
+#### Results
+
+**Fail.** The overlay still vanishes on navigation and reappears several seconds
+later. Setting the fallback surface had no effect.
+
+#### Conclusion
+
+The missing fallback surface hypothesis was wrong, or the fallback mechanism
+does not prevent the blank in our setup. The viz compositor may be outputting
+blank frames for a different reason — possibly the CAContext's layer tree is
+being cleared during the surface switch regardless of the fallback, or the
+compositor is not running at all during the transition.
+
+The ~seconds-long delay before reappearance is too long for normal page
+rendering. Something is fundamentally blocking or delaying the compositor output
+pipeline during navigation. The next experiment needs empirical data — add
+logging to trace exactly what happens: when does the compositor stop producing
+frames, when does it resume, and what triggers the resume.
