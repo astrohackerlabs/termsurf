@@ -317,3 +317,75 @@ The fix needs a different hook point — one that fires on every navigation, not
 just view swaps. The CALayerParams callback itself is a candidate: when a new
 `ca_context_id` arrives (meaning a new compositor surface was created), re-apply
 the stored size to the current view.
+
+### Experiment 3: Research how Electron handles resize across navigation
+
+#### Problem
+
+After navigation, the new page renders at the original creation size instead of
+the current resized size. Experiment 2 tried re-applying the size in
+`RenderViewHostChanged`, but that hook doesn't fire for same-site navigations.
+We need a different approach.
+
+Electron's `BrowserWindow` handles this correctly — you can resize a window and
+navigate, and the new page renders at the current size. Electron uses the same
+Chromium Content API that we do. Understanding how Electron maintains size
+across navigations will reveal the correct approach.
+
+#### Research questions
+
+**R1: Does Electron call `view->SetSize()` at all?**
+
+Electron's `BrowserWindow` has a fixed window frame. Does it ever explicitly
+call `SetSize()` on the `RenderWidgetHostView`, or does the view automatically
+inherit the window/NSView size? If the view auto-sizes to its parent NSView, the
+resize problem doesn't exist for Electron — the view always matches the window.
+
+Look in `vendor/electron/shell/browser/` for calls to `SetSize`, `Resize`, or
+`SetBounds` on `RenderWidgetHostView`.
+
+**R2: How does Chromium's normal display path handle view sizing?**
+
+In stock Chromium (not content_shell), how does the `RenderWidgetHostView` get
+its size? Is it set explicitly, or does it follow the NSView frame? When the
+window resizes, does something call `SetSize()`, or does the view observe its
+parent's bounds change?
+
+Look in
+`chromium/src/content/browser/renderer_host/render_widget_host_view_mac.mm` for
+sizing logic — `setFrameSize`, `viewDidChangeBackingProperties`,
+`boundsDidChange`, or similar NSView layout methods.
+
+**R3: Why does content_shell need explicit `SetSize()` calls?**
+
+Our Profile Server is based on content_shell. Content_shell creates a hidden
+NSWindow with a `WebContentsViewCocoa`. The `RenderWidgetHostView` lives inside
+that view hierarchy. When we call `view->SetSize()`, we're setting the view's
+frame explicitly because the hidden window doesn't have normal window
+management.
+
+Is there an alternative? Could we resize the hidden NSWindow instead, letting
+the normal NSView layout propagate the size to the `RenderWidgetHostView`? Would
+that survive navigation automatically?
+
+Look in
+`chromium/src/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm`
+and `chromium/src/content/shell/browser/shell_platform_delegate_mac.mm` for how
+the window and web contents view are set up.
+
+**R4: Does the `RenderWidgetHostView` survive same-site navigation?**
+
+Confirm or refute the Experiment 2 hypothesis. After a same-site navigation
+(e.g., clicking a link on google.com that stays on google.com), is the
+`RenderWidgetHostView` the same object? If so, the `SetSize()` from
+`ResizeTab()` should still be in effect, and the problem is elsewhere — perhaps
+the compositor creates a new surface at a default size before the view's size
+takes effect.
+
+Look at `RenderWidgetHostViewMac` lifecycle during navigation.
+
+#### Verification
+
+Research is complete when we can answer all four questions and propose a
+concrete fix based on how Electron/Chromium maintains view size across
+navigation.
