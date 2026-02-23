@@ -186,10 +186,31 @@ pub fn setCALayerHostContextId(
     };
 
     if (ca_layer_host_ptr.*) |existing| {
-        // Update existing CALayerHost's contextId.
-        const host = objc.Object.fromId(existing);
-        host.setProperty("contextId", @as(u32, context_id));
-        log.info("updated CALayerHost contextId={}", .{context_id});
+        // Replace existing CALayerHost with a new one (Issue 628).
+        // Chromium's DisplayCALayerTree always creates a new CALayerHost
+        // when the ca_context_id changes — updating contextId on an
+        // existing host may not rebind Window Server compositing.
+        const old_host = objc.Object.fromId(existing);
+        old_host.msgSend(void, objc.sel("removeFromSuperlayer"), .{});
+        old_host.release();
+
+        const kCALayerMaxXMargin: c_uint = 1 << 2; // 4
+        const kCALayerMaxYMargin: c_uint = 1 << 5; // 32
+
+        const new_host_id = CALayerHost.msgSend(objc.c.id, objc.sel("layer"), .{});
+        const new_host = objc.Object.fromId(new_host_id).retain();
+        new_host.setProperty("contextId", @as(u32, context_id));
+        new_host.setProperty("anchorPoint", macos.graphics.Point{ .x = 0, .y = 0 });
+        new_host.setProperty("autoresizingMask", kCALayerMaxXMargin | kCALayerMaxYMargin);
+
+        // Add to positioning_layer (must exist if we had an existing host).
+        if (ca_layer_positioning_ptr.*) |pos_ptr| {
+            const pos = objc.Object.fromId(pos_ptr);
+            pos.msgSend(void, objc.sel("addSublayer:"), .{new_host.value});
+        }
+        ca_layer_host_ptr.* = new_host.value;
+
+        log.info("replaced CALayerHost contextId={}", .{context_id});
     } else {
         // CAAutoresizingMask constants from QuartzCore.
         const kCALayerWidthSizable: c_uint = 1 << 1; // 2

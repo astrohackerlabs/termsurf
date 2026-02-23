@@ -219,3 +219,35 @@ Run the app, open a browser overlay at `google.com`, search for something. The
 search results page should render — the overlay should not vanish. Test clicking
 links on the results page. Test navigating back with Cmd+[. Test cross-site
 navigation (e.g., clicking a link from Google to Wikipedia).
+
+#### Results
+
+**Partial.** Navigation works — clicking a link no longer permanently kills the
+overlay. The new page renders after navigation. But two issues remain:
+
+1. **New page renders at stale size.** If the pane was resized before clicking a
+   link, the new page renders at the original size (from tab creation), not the
+   current size. Resizing the window again fixes it. The likely cause: when
+   `RenderViewHostChanged` fires and the callback re-registers on the new view,
+   the new `RenderWidgetHostView` has its default size, not the size that was
+   set on the old view. The resize needs to be re-applied to the new view.
+
+2. **Blank gap between pages.** When navigating, the old page vanishes
+   completely (the old CALayerHost is destroyed when the new `ca_context_id`
+   arrives), then there is a visible blank period before the new page loads. A
+   normal browser keeps the old page visible until the new one is ready. The old
+   `CALayerHost` should be kept alive until the new `ca_context_id` arrives,
+   rather than being destroyed as soon as the `RenderViewHost` swaps.
+
+#### Conclusion
+
+The core fix works: `RenderViewHostChanged` re-registers the CALayerParams
+callback on the new view, and the GUI replaces the `CALayerHost` when the new
+`ca_context_id` arrives. Navigation no longer kills the overlay permanently.
+
+The two remaining issues need separate fixes:
+
+- **Stale size:** Re-apply the current pixel dimensions to the new
+  `RenderWidgetHostView` in `RenderViewHostChanged`.
+- **Blank gap:** Defer destruction of the old `CALayerHost` until the
+  replacement `ca_context_id` arrives, rather than destroying it eagerly.
