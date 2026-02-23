@@ -251,3 +251,51 @@ The two remaining issues need separate fixes:
   `RenderWidgetHostView` in `RenderViewHostChanged`.
 - **Blank gap:** Defer destruction of the old `CALayerHost` until the
   replacement `ca_context_id` arrives, rather than destroying it eagerly.
+
+### Experiment 2: Re-apply size to new RenderWidgetHostView after navigation
+
+#### Problem
+
+After navigation triggers a `RenderViewHostChanged`, the new
+`RenderWidgetHostView` has its default size, not the size that was applied via
+`ResizeTab()`. If the pane was resized between tab creation and navigation, the
+new page renders at the original creation size.
+
+`ResizeTab()` calls `view->SetSize(logical)` on the current RWHV, but that view
+is destroyed on cross-site navigation. The new RWHV knows nothing about the
+previous resize.
+
+#### Solution
+
+Store the last pixel dimensions in `ShellTabObserver`. When `ResizeTab()` is
+called, update the stored dimensions on the observer (via a new setter). When
+`RenderViewHostChanged()` fires, re-apply the stored dimensions to the new view
+— the same `view->SetSize(logical)` call that `ResizeTab()` uses.
+
+This is a Chromium-only change. No GUI changes needed.
+
+#### Changes
+
+**`chromium/.../shell_tab_observer.h`:**
+
+- Add `void SetLastPixelSize(int width, int height)`.
+- Add `int last_pixel_width_ = 0` and `int last_pixel_height_ = 0` members.
+
+**`chromium/.../shell_tab_observer.cc`:**
+
+- Implement `SetLastPixelSize`: store width and height.
+- In `RenderViewHostChanged`: after `RegisterCALayerParamsCallback()`, get the
+  new `RenderWidgetHostView`, compute logical size from stored pixel dimensions
+  and `view->GetDeviceScaleFactor()`, call `view->SetSize(logical)`.
+
+**`chromium/.../shell_browser_main_parts.cc`:**
+
+- In `CreateTab()`: after the initial `view->SetSize()`, call
+  `tab_observer->SetLastPixelSize(pixel_width, pixel_height)`.
+- In `ResizeTab()`: after `view->SetSize()`, call
+  `tab->tab_observer->SetLastPixelSize(pixel_width, pixel_height)`.
+
+#### Verification
+
+Run the app, open a browser overlay, resize the window, then click a link. The
+new page should render at the current pane size, not the original creation size.
