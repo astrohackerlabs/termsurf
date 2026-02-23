@@ -774,3 +774,75 @@ blank.
 The next experiment should add logging to confirm this hypothesis: check whether
 `DelegatedFrameHostIsVisible()` returns false during navigation, and whether the
 fallback surface is properly set up.
+
+Further research after Experiment 5 refined the hypothesis.
+`DelegatedFrameHostIsVisible()` returns `state_ != HasNoCompositor`, which
+checks compositor state, not window visibility. Since the page renders
+initially, the compositor is running and the state is `HasOwnCompositor`. The
+visibility check is not the issue.
+
+The real issue is the **missing fallback surface**. During same-site navigation,
+`BrowserCompositorMac::DidNavigate()` generates a new `LocalSurfaceId` and calls
+`EmbedSurface()` with the new primary surface. But `SurfaceRange.start()` (the
+fallback) is never set. The compositor tries to render the new primary (no frame
+yet) and has no fallback to show, so it outputs blank content into the
+CAContext. The CALayerHost shows the blank.
+
+`SetOldestAcceptableFallback()` sets `SurfaceRange.start()` — exactly the
+fallback the compositor needs. Chromium calls it for BFCache restoration and
+cross-site view swaps, but never for normal same-site navigation. This is the
+gap.
+
+### Experiment 6: Set fallback surface before navigation
+
+#### Problem
+
+When `BrowserCompositorMac::DidNavigate()` generates a new `LocalSurfaceId` and
+embeds the new primary surface, the viz compositor has no fallback. The
+`SurfaceRange` is `(nullopt, new_primary)`. The compositor tries the primary (no
+frame yet), finds nothing, and outputs blank content. The CAContext goes blank,
+and the CALayerHost shows nothing until the renderer produces the new page's
+first frame.
+
+In Chromium's normal browser, this blank may be imperceptible (the compositor
+runs at vsync rate and the renderer produces frames quickly). But in our setup,
+the blank is visible through the CALayerHost overlay and persists until the new
+page renders.
+
+#### Solution
+
+Set the current primary surface as the fallback before generating the new
+`LocalSurfaceId`. This makes the `SurfaceRange` be `(old_primary, new_primary)`.
+The compositor renders the old content while waiting for the new primary to
+produce its first frame — exactly how a normal browser keeps the old page
+visible during navigation.
+
+#### Changes
+
+**`chromium/src/content/browser/renderer_host/browser_compositor_view_mac.mm`:**
+
+In `BrowserCompositorMac::DidNavigate()`, before the
+`dfh_local_surface_id_allocator_.GenerateId()` call, add:
+
+```cpp
+// Set the current surface as fallback so the compositor shows old content
+// while waiting for the new page's first frame (Issue 628).
+const viz::SurfaceId* current_primary =
+    DelegatedFrameHostGetLayer()->GetSurfaceId();
+if (current_primary) {
+    DelegatedFrameHostGetLayer()->SetOldestAcceptableFallback(
+        *current_primary);
+}
+```
+
+This is the same pattern Chromium uses for BFCache restoration
+(`DelegatedFrameHost::EmbedSurface`, line 336) and cross-site view swaps
+(`TakeFallbackContentFrom`, line 696). We're applying it to same-site
+navigation, where it was missing.
+
+#### Verification
+
+Run the app, open a browser overlay at `google.com`, click a search result. The
+old page should stay visible until the new page renders — no blank gap. Test
+same-site navigation (staying on google.com) and cross-site navigation (Google
+to Wikipedia). Both should show the old content during the transition.
