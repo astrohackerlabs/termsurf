@@ -54,6 +54,7 @@ find the most relevant recent branch, create a new branch from it
 | `146.0.7650.0-issue-627` | [Issue 627](issues/627-resize-calayerhost.md) | CALayerHost resize                        |
 | `146.0.7650.0-issue-628` | [Issue 628](issues/628-navigation-calayerhost.md) | CALayerHost navigation                    |
 | `146.0.7650.0-issue-629` | [Issue 629](issues/629-understand-nav-calayerhost.md) | Understand CALayerHost navigation blank    |
+| `146.0.7650.0-issue-630` | [Issue 630](issues/630-nav-calayerhost-6.md)          | Fix navigation blank                      |
 
 ## Local Setup
 

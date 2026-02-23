@@ -108,3 +108,31 @@ audit (Experiment 5).
       CALayerParams callback and the cursor callback on the new view.
 
 ## Experiments
+
+### Experiment 1: Create Chromium branch
+
+#### Purpose
+
+Create the `146.0.7650.0-issue-630` branch for this issue's Chromium changes.
+
+#### Steps
+
+1. Create the branch from `146.0.7650.0-issue-629` (which has Experiment 3's
+   `DisableDisplay()` changes reverted — clean state):
+
+   ```bash
+   cd chromium/src
+   git checkout 146.0.7650.0-issue-629
+   git checkout -b 146.0.7650.0-issue-630
+   ```
+
+2. Add the new branch to the Branches table in `docs/chromium.md`:
+
+   ```
+   | `146.0.7650.0-issue-630` | [Issue 630](issues/630-nav-calayerhost-6.md) | Fix navigation blank |
+   ```
+
+#### Verification
+
+`git branch --show-current` prints `146.0.7650.0-issue-630` and the branch table
+in `docs/chromium.md` includes the new entry.
