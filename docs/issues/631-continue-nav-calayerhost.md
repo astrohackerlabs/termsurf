@@ -660,23 +660,28 @@ CALayerHost swap when the context ID is unchanged had no effect on the flicker.
 
 #### Conclusion
 
-The flicker persists, but the experiment is inconclusive. The code added an
-early return when the incoming `ca_context_id` matched the existing host's
-`contextId`. However, Zig logs currently go nowhere — we never confirmed whether
-the "skipping swap" path actually executed. If same-site navigations produce a
-new `ca_context_id` (because the `CALayerTreeCoordinator` is recreated), the
-early return never triggered, and this experiment tested nothing.
+The skip path never fired. Chromium server logs (`logs/chromium-server.log`)
+show that every navigation produces a new `ca_context_id`:
 
-Two possibilities remain:
+```
+Sent ca_context_id=912947617 ...
+Sent ca_context_id=927833480 ...
+Sent ca_context_id=3761875988 ...
+```
 
-1. **Same-site navigations keep the same ID.** The skip path fired, but the
-   flicker is Chromium-side — the CAContext's content tree goes blank during
-   navigation regardless of what the GUI does.
-2. **Same-site navigations produce a new ID.** The skip path never fired. The
-   GUI still did a full host swap. Smell #1 was never actually tested.
+Three navigations, three different IDs. The `CALayerTreeCoordinator` is
+recreated on every navigation, even same-site. Because the ID always changes,
+the early-return condition (`current_id == context_id`) was never true, and the
+experiment tested nothing — the GUI still did a full host swap every time.
 
-The next experiment needs observability first. We need to see the actual
-`ca_context_id` values during navigation — whether they change or stay the same
-— before we can draw conclusions about which side owns the flicker.
+This eliminates smell #1 as a factor. The ID genuinely changes, so the
+CALayerHost swap is necessary. The flicker comes from the gap between: (a) the
+old host being removed and (b) the new host's CAContext having content to
+display. The new CAContext exists but its content tree is empty until the
+Chromium compositor submits the first frame on the new surface.
+
+Relevant smells for the next experiment: #2 (CAContext content gap during
+surface transition), #6 (old host removed before new host has content), #9 (no
+fallback content during transition).
 
 Code changes reverted.
