@@ -290,6 +290,31 @@ impl CompositorConnection {
         self.rx.try_recv().ok()
     }
 
+    /// Tell the compositor to navigate to a new URL.
+    pub fn send_navigate(&self, pane_id: &str, url: &str) {
+        let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
+        if dict.is_null() {
+            return;
+        }
+
+        unsafe {
+            let action_key = CString::new("action").unwrap();
+            let action_val = CString::new("navigate").unwrap();
+            xpc_dictionary_set_string(dict, action_key.as_ptr(), action_val.as_ptr());
+
+            let pane_key = CString::new("pane_id").unwrap();
+            let pane_val = CString::new(pane_id).unwrap();
+            xpc_dictionary_set_string(dict, pane_key.as_ptr(), pane_val.as_ptr());
+
+            let url_key = CString::new("url").unwrap();
+            let url_val = CString::new(url).unwrap();
+            xpc_dictionary_set_string(dict, url_key.as_ptr(), url_val.as_ptr());
+
+            xpc_connection_send_message(self.raw, dict);
+            xpc_release(dict);
+        }
+    }
+
     /// Notify the compositor of a mode change.
     pub fn send_mode_changed(&self, pane_id: &str, browsing: bool) {
         let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };

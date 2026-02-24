@@ -188,10 +188,9 @@ fn main() -> io::Result<()> {
                             url = new_url;
                             mode = Mode::Browse;
                             if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+                                conn.send_navigate(pid, &url);
                                 conn.send_mode_changed(pid, true);
                             }
-                            // Force viewport update to send new URL.
-                            last_viewport = Rect::default();
                         }
                         _ => {
                             // Pass everything else to edtui (including Escape).

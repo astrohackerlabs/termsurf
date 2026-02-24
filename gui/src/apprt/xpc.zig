@@ -253,6 +253,8 @@ fn handleMessage(msg: xpc_object_t) void {
         handleLoadingState(msg);
     } else if (std.mem.eql(u8, action_str, "url_changed")) {
         handleUrlChanged(msg);
+    } else if (std.mem.eql(u8, action_str, "navigate")) {
+        handleNavigate(msg);
     } else {
         log.warn("unknown action: {s}", .{action_str});
     }
@@ -492,6 +494,41 @@ fn handleUrlChanged(msg: xpc_object_t) void {
     xpc_dictionary_set_string(fwd, "action", "url_changed");
     xpc_dictionary_set_string(fwd, "url", url);
     xpc_connection_send_message(p.web_peer, fwd);
+}
+
+fn handleNavigate(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const url = str(xpc_dictionary_get_string(msg, "url"));
+
+    log.info("navigate pane={s} url={s}", .{ pane_id, url });
+
+    const p = panes.get(pane_id) orelse {
+        log.warn("navigate: no pane for {s}", .{pane_id});
+        return;
+    };
+    const server = p.server orelse return;
+    if (server.peer == null) return;
+
+    const fwd = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_string(fwd, "action", "navigate");
+
+    // Null-terminate pane_id.
+    var pane_z: [37]u8 = undefined;
+    if (p.pane_id_key.len > 0 and p.pane_id_key.len <= 36) {
+        @memcpy(pane_z[0..p.pane_id_key.len], p.pane_id_key);
+        pane_z[p.pane_id_key.len] = 0;
+        xpc_dictionary_set_string(fwd, "pane_id", @ptrCast(&pane_z));
+    }
+
+    // Null-terminate URL.
+    var url_z: [2049]u8 = undefined;
+    if (url.len > 0 and url.len < url_z.len) {
+        @memcpy(url_z[0..url.len], url);
+        url_z[url.len] = 0;
+        xpc_dictionary_set_string(fwd, "url", @ptrCast(&url_z));
+    }
+
+    xpc_connection_send_message(server.peer, fwd);
 }
 
 // -- Focus lifecycle (Issue 606 Experiment 5) --
