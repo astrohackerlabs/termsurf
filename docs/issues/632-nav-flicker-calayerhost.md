@@ -862,3 +862,154 @@ Research the Chromium source at `chromium/src/`. Trace the following:
 The research determines whether adopting `UseParentLayerCompositor` in the
 profile server is feasible, and if so, provides enough detail to design an
 implementation experiment.
+
+### Results
+
+#### Answer 1: What triggers UseParentLayerCompositor?
+
+The decision is in `BrowserCompositorMac::UpdateState()`
+(`browser_compositor_view_mac.mm` line 191):
+
+```cpp
+void BrowserCompositorMac::UpdateState() {
+  if (parent_ui_layer_) {
+    TransitionToState(UseParentLayerCompositor);
+    return;
+  }
+  if (!render_widget_host_is_hidden_) {
+    TransitionToState(HasOwnCompositor);
+    return;
+  }
+  TransitionToState(HasNoCompositor);
+}
+```
+
+If `parent_ui_layer_` is non-null, `UseParentLayerCompositor` is always chosen.
+The layer is set via `BrowserCompositorMac::SetParentUiLayer()` (line 363),
+which has a DCHECK that the layer must already have a `ui::Compositor` attached.
+
+#### Answer 2: What is parent_ui_layer_?
+
+Ownership chain traced from top to bottom:
+
+1. `WebContentsViewMac::CreateViewForWidget()` (line 416) calls
+   `view->SetParentUiLayer(views_host_->GetUiLayer())` — but only if
+   `views_host_` is non-null.
+2. `views_host_` is a `ViewsHostableView::Host*` (interface in
+   `ui/base/cocoa/views_hostable.h`), implemented by `NativeViewHostMac`.
+3. `NativeViewHostMac::GetUiLayer()` returns `host_->layer()` — the `ui::Layer`
+   of the `NativeViewHost` view.
+4. This layer is part of the window's `ui::Layer` tree, whose root has a
+   `ui::Compositor` attached.
+
+**In content_shell, `views_host_` is always null, so `parent_ui_layer_` is never
+set, and `HasOwnCompositor` is always used.**
+
+#### Answer 3: Chrome's persistent compositor
+
+Chrome creates the persistent compositor in
+`NativeWidgetMacNSWindowHost::CreateCompositor()` (line 627 of
+`native_widget_mac_ns_window_host.mm`):
+
+```cpp
+compositor_ = std::make_unique<ui::RecyclableCompositorMac>(context_factory);
+compositor_->widget()->SetNSView(this);
+compositor_->compositor()->SetRootLayer(layer());
+```
+
+The structure is:
+
+- `NativeWidgetMacNSWindowHost` owns a `RecyclableCompositorMac` (persistent)
+- `RecyclableCompositorMac` bundles a `ui::Compositor` + `AcceleratedWidgetMac`
+- The `ui::Compositor` has one `FrameSinkId`, one output surface, one
+  `CALayerTreeCoordinator`, one `CAContext`
+- Web content's `BrowserCompositorMac::root_layer_` is added as a child of the
+  window's layer tree — they share the same compositor
+- Navigation only changes which surfaces are embedded within the compositor,
+  never the compositor itself
+
+#### Answer 4: Can we create a minimal parent_ui_layer_?
+
+**Yes.** All required types are in `ui/compositor` and
+`ui/accelerated_widget_mac` — not in `ui/views`. The `content` layer already
+depends on `ui/compositor` (`content/browser/BUILD.gn` line 318).
+
+Minimal setup:
+
+```cpp
+// 1. Create AcceleratedWidgetMac (bridge to CALayerParams).
+auto widget_mac = std::make_unique<ui::AcceleratedWidgetMac>();
+
+// 2. Create ui::Compositor with a persistent FrameSinkId.
+ui::ContextFactory* context_factory = content::GetContextFactory();
+auto compositor = std::make_unique<ui::Compositor>(
+    context_factory->AllocateFrameSinkId(),
+    context_factory,
+    base::SingleThreadTaskRunner::GetCurrentDefault(),
+    false /* enable_pixel_canvas */);
+compositor->SetAcceleratedWidget(widget_mac->accelerated_widget());
+
+// 3. Create root layer.
+auto root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+root_layer->SetBounds(gfx::Rect(size_dip));
+compositor->SetRootLayer(root_layer.get());
+
+// 4. Set surface size.
+compositor->SetScaleAndSize(scale_factor, size_pixels, local_surface_id);
+
+// 5. Pass to BrowserCompositorMac via RenderWidgetHostViewMac.
+rwhv_mac->SetParentUiLayer(root_layer.get());
+```
+
+To receive the `ca_context_id`, implement the `AcceleratedWidgetMacNSView`
+interface on our own class and register it via `widget_mac->SetNSView(this)`.
+The `AcceleratedWidgetCALayerParamsUpdated()` callback will fire with the stable
+`ca_context_id`.
+
+#### Answer 5: What changes in UseParentLayerCompositor mode?
+
+In `TransitionToState()` (line 245):
+
+```cpp
+if (new_state == UseParentLayerCompositor) {
+    parent_ui_layer_->Add(root_layer_.get());
+    parent_ui_layer_->AddObserver(this);
+    state_ = UseParentLayerCompositor;
+}
+```
+
+No `RecyclableCompositorMac` is created. The `root_layer_` is simply added as a
+child of the parent layer. During navigation, `DidNavigate()` generates a new
+`LocalSurfaceId` and re-embeds the surface — but the `root_layer_` stays
+parented, the compositor persists, and **the CAContext never changes**.
+
+#### Answer 6: Where does the CALayerParams callback fire?
+
+In `UseParentLayerCompositor` mode,
+`BrowserCompositorMac::GetLastCALayerParams()` returns null (no
+`recyclable_compositor_`). The callback fires on the **parent compositor's**
+`AcceleratedWidgetMac` owner — in Chrome, that's `NativeWidgetMacNSWindowHost`.
+
+For the profile server, we would implement `AcceleratedWidgetMacNSView` on our
+own class, receive the callback, and send the `ca_context_id` via XPC. The ID is
+stable — it only needs to be sent **once** after initial setup, not per frame.
+
+### Conclusion
+
+**Adopting `UseParentLayerCompositor` is feasible.** The profile server can
+create a minimal persistent compositor using only `ui::Compositor`, `ui::Layer`,
+and `AcceleratedWidgetMac` — all available in `ui/compositor` and
+`ui/accelerated_widget_mac`, no `ui/views` dependency needed.
+
+The implementation requires:
+
+1. Create a persistent `RecyclableCompositorMac` (or equivalent) in the profile
+   server, owned by the `Shell` or `ShellBrowserMainParts`
+2. Create a root `ui::Layer` on that compositor
+3. Call `rwhv_mac->SetParentUiLayer(root_layer)` for each new
+   `RenderWidgetHostViewMac` (in `ShellTabObserver::RenderViewHostChanged` and
+   at initial tab creation)
+4. Implement `AcceleratedWidgetMacNSView` to receive `ca_context_id` and send it
+   via XPC
+5. The `ca_context_id` will be stable across navigations — send it once, no
+   per-navigation updates needed
