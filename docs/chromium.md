@@ -56,6 +56,7 @@ find the most relevant recent branch, create a new branch from it
 | `146.0.7650.0-issue-629` | [Issue 629](issues/629-understand-nav-calayerhost.md) | Understand CALayerHost navigation blank   |
 | `146.0.7650.0-issue-630` | [Issue 630](issues/630-nav-calayerhost-6.md)          | Fix navigation blank                      |
 | `146.0.7650.0-issue-631` | [Issue 631](issues/631-continue-nav-calayerhost.md)   | Disable compositor recycling              |
+| `146.0.7650.0-issue-633` | [Issue 633](issues/633-persistent-compositor.md)       | Persistent compositor for stable CAContext |
 
 ## Local Setup
 

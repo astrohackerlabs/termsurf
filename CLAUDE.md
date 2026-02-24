@@ -704,7 +704,9 @@ as a testbed before ts1 integration. Changes made to the example:
   fixes)
 - `docs/issues/631-continue-nav-calayerhost.md` — Navigation flicker
   investigation
-- `docs/issues/632-nav-flicker-calayerhost.md` — Navigation flicker fix (design)
+- `docs/issues/632-nav-flicker-calayerhost.md` — Navigation flicker diagnosis
+- `docs/issues/633-persistent-compositor.md` — Persistent compositor for stable
+  CAContext
 - `docs/xdg.md` — XDG directory pattern and conventions
 
 ### TermSurf 5.0

@@ -1013,3 +1013,46 @@ The implementation requires:
    via XPC
 5. The `ca_context_id` will be stable across navigations — send it once, no
    per-navigation updates needed
+
+## Conclusion
+
+### Summary of progress
+
+Four experiments across this issue:
+
+1. **Experiment 1 (FAIL): Two-phase swap.** Deferred old CALayerHost removal to
+   the next `drawFrame`. Failed — dead CAContexts render as transparent, not as
+   their last frame. The old host provides no visual cover.
+
+2. **Experiment 2 (research): How Chromium handles CAContext transitions.**
+   Discovered that normal Chromium's CAContext **persists** across navigations.
+   Content changes happen within the existing CAContext's sublayer tree. The
+   `ca_context_id` simply doesn't change.
+
+3. **Experiment 3 (research): Why the CALayerTreeCoordinator is recreated.**
+   Traced the full destruction chain. BackForwardCache proactive
+   BrowsingInstance swapping creates a new `RenderWidgetHostViewMac` →
+   `BrowserCompositorMac` → `RecyclableCompositorMac` → `CAContext` on every
+   navigation. This is standard content_shell behavior (`HasOwnCompositor`
+   mode). Chrome avoids it via `UseParentLayerCompositor` mode, where a
+   persistent window-level compositor owns the CAContext. Confirmed by testing:
+   content_shell flickers, Chrome does not.
+
+4. **Experiment 4 (research): How to adopt UseParentLayerCompositor.** Found
+   that all required types (`ui::Compositor`, `ui::Layer`,
+   `AcceleratedWidgetMac`) are in `ui/compositor` and
+   `ui/accelerated_widget_mac` — available to content embedders without
+   `ui/views`. The profile server can create a minimal persistent compositor and
+   pass its root layer as `parent_ui_layer_` to `BrowserCompositorMac`,
+   switching it to `UseParentLayerCompositor` mode. The `ca_context_id` becomes
+   stable across navigations.
+
+### The fix
+
+The root cause is that the profile server uses `HasOwnCompositor` mode (like
+content_shell), which creates a new `CAContext` per navigation. The fix is to
+switch to `UseParentLayerCompositor` mode by creating a persistent compositor in
+the profile server. This is what Chrome does — we just need to set it up without
+Chrome's views framework.
+
+**Continued in [Issue 633](633-persistent-compositor.md).**
