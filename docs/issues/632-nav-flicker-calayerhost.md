@@ -319,8 +319,8 @@ The hypothesis was wrong. The flicker is not caused by removing the old host in
 the same transaction as adding the new one. Even with the old host kept in the
 layer tree underneath the new one, the flash still occurs. This means:
 
-1. **The old host is not covering the gap.** Either its dead CAContext renders as
-   transparent (not as the last frame), or Window Server doesn't composite a
+1. **The old host is not covering the gap.** Either its dead CAContext renders
+   as transparent (not as the last frame), or Window Server doesn't composite a
    host whose CAContext has been destroyed — it just shows nothing regardless of
    whether the host is in the layer tree.
 
@@ -329,11 +329,11 @@ layer tree underneath the new one, the flash still occurs. This means:
    frame into it. No amount of layer tree manipulation on the GUI side can fix
    this — the content simply doesn't exist yet.
 
-3. **One `drawFrame` cycle may not be enough.** The delay between add and removal
-   was tied to `drawFrame` (~16ms at 60Hz), but if the new CAContext needs
-   multiple frames to produce content, a longer delay would be needed. However,
-   since the old host isn't providing cover anyway (point 1), a longer delay
-   wouldn't help.
+3. **One `drawFrame` cycle may not be enough.** The delay between add and
+   removal was tied to `drawFrame` (~16ms at 60Hz), but if the new CAContext
+   needs multiple frames to produce content, a longer delay would be needed.
+   However, since the old host isn't providing cover anyway (point 1), a longer
+   delay wouldn't help.
 
 ### Next steps
 
@@ -353,8 +353,8 @@ don't render anything useful. Future experiments should explore:
   recreation.
 
 - **Chromium-side: pre-composite before sending ID.** Delay sending the new
-  `ca_context_id` until the new CAContext has at least one composited frame.
-  The old page stays visible (via the old host) until the new one is ready. This
+  `ca_context_id` until the new CAContext has at least one composited frame. The
+  old page stays visible (via the old host) until the new one is ready. This
   requires a way to detect "first frame composited" on the Chromium side.
 
 - **Accept and mask.** Set the positioning layer's `backgroundColor` to white so
