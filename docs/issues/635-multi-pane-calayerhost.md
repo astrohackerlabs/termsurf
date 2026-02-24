@@ -159,7 +159,7 @@ tab->bridge = std::make_unique<PersistentCompositorBridge>(
     tab->widget_mac.get());
 ```
 
-#### 3. Set parent_ui_layer_ using the tab's own root layer
+#### 3. Set parent*ui_layer* using the tab's own root layer
 
 Replace `SetParentUiLayerOnView(view, persistent_root_layer_.get())` with:
 
@@ -252,3 +252,18 @@ assignments stay where they are.
 - Navigation in one pane does not affect the other
 - Each pane has its own `ca_context_id` in the logs
 - No flicker on navigation (persistent compositor still works per-tab)
+
+### Result: PASS
+
+Per-tab persistent compositors work. Each pane gets its own `ca_context_id`,
+displays its own page independently, and navigation in one pane does not affect
+the other. No flicker on navigation.
+
+## Conclusion
+
+The regression was caused by a single persistent compositor shared across all
+tabs. Moving the compositor members (`AcceleratedWidgetMac`, `ui::Compositor`,
+`ui::Layer`, `PersistentCompositorBridge`) from process-level into per-tab
+`TabState` gives each tab its own `CAContext` and `ca_context_id`. The GUI
+creates independent `CALayerHost` instances per pane, restoring full multi-tab
+isolation within a single profile. Fixed in one experiment.
