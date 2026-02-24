@@ -361,183 +361,186 @@ don't render anything useful. Future experiments should explore:
   the flash shows white instead of the terminal background. Doesn't eliminate
   the flash but makes it far less jarring.
 
-## Experiment 2: Delay ca_context_id until content is composited
+## Experiment 2: Research how Chromium handles CAContext transitions
 
-### Hypothesis
+### Question
 
-The flash occurs because the GUI swaps to a new CALayerHost whose CAContext
-hasn't produced visible content yet. The XPC `ca_context` message is sent on the
-**first** CALayerParams callback with the new ID — but that first callback may
-arrive before the renderer has painted real web content into the new compositor.
-If we delay sending the new `ca_context_id` by several frames, the new CAContext
-will have real content when the GUI finally swaps to it.
+Chromium must display content via CALayerHost internally. When the
+`ca_context_id` changes (e.g., GPU process crash, cross-process navigation), how
+does Chromium avoid a visible flicker?
 
-### Background
+### Method
 
-The `ca_context_id` is sent over XPC from a `CALayerParams` callback registered
-on the `RenderWidgetHostViewMac`. The callback is in
-`shell_browser_main_parts.cc` lines 399–431 (inside `CreateTab()`):
+Searched the Chromium source at `chromium/src/` for the browser-side CALayerHost
+management, compositor lifecycle, and navigation transition logic.
+
+### Key files examined
+
+- `ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm` — GPU-side CAContext
+  owner
+- `ui/accelerated_widget_mac/display_ca_layer_tree.mm` — Browser-side
+  CALayerHost manager
+- `content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm` — NSView
+  layer tree setup
+- `content/browser/renderer_host/browser_compositor_view_mac.mm` —
+  BrowserCompositorMac
+- `content/browser/renderer_host/render_widget_host_view_mac.mm` —
+  RenderWidgetHostViewMac
+- `content/browser/renderer_host/delegated_frame_host.cc` — Surface fallback
+  system
+
+### Finding 1: The CAContext does NOT change during normal navigation
+
+In normal Chromium, the `CALayerTreeCoordinator` creates **one** `CAContext` in
+its constructor and keeps it for the entire lifetime of the output surface:
 
 ```cpp
-auto ca_layer_callback = base::BindRepeating(
-    [](const std::string& pane_id, xpc_connection_t conn,
-       uint32_t* last_id, const gfx::CALayerParams& params) {
-      if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
-        return;
-      *last_id = params.ca_context_id;
-      // ... send XPC message immediately ...
-    },
-    cb_pane_id, cb_conn,
-    base::Owned(last_id));
+// ca_layer_tree_coordinator.mm, constructor
+CGSConnectionID connection_id = CGSMainConnectionID();
+ca_context_ = [CAContext contextWithCGSConnection:connection_id options:@{}];
+ca_context_.layer = root_ca_layer_;
 ```
 
-When a new `ca_context_id` appears (different from `*last_id`), the XPC message
-is sent immediately on that same callback invocation. The GPU process has
-committed a frame to the CAContext (the callback only fires when
-`CALayerParams.is_empty == false`), but the committed content may be a blank
-compositor fallback — not the rendered web page. The renderer needs several more
-frames to paint real content.
-
-### Design
-
-**Change:** In the `ca_layer_callback` lambda, when a new `ca_context_id` is
-detected, don't send the XPC message immediately. Instead, start a frame
-counter. Continue counting callbacks with the same `ca_context_id`. After N
-callbacks (N = 3 to start, tunable), send the XPC message.
-
-During the delay:
-
-- The GUI still has the **old** CALayerHost pointing at the old (dead)
-  CAContext.
-- The old host shows nothing (confirmed by Experiment 1).
-- The delay means the flash of blank content is still visible for the same
-  duration. But the swap itself — when it happens — should be clean: the new
-  CAContext will have N frames of real content by then.
-
-**Wait — this doesn't help.** If the old CAContext is dead and shows nothing
-during the delay, then delaying the send just makes the blank period _longer_,
-not shorter. The flash still happens. The only way this approach works is if the
-blank flash is caused by the GUI swapping to a CAContext with no content — not
-by the old CAContext dying.
-
-**Revised hypothesis:** The flash might be caused by BOTH:
-
-1. The old CAContext dying (unavoidable), AND
-2. The new CAContext not having content when swapped to
-
-If #2 is a factor, delaying the send would eliminate the second blank — reducing
-the total flash duration. If #1 is the sole cause and #2 contributes nothing,
-then delaying the send won't help.
-
-**This is worth testing because we don't know the relative contribution of each
-factor.** The test will tell us.
-
-### Chromium branch
-
-`146.0.7650.0-issue-632` (forked from `146.0.7650.0-issue-631`)
-
-### Code changes
-
-**`shell_browser_main_parts.cc` — modify the `ca_layer_callback` lambda:**
-
-Add two new shared variables alongside `last_id`:
+The `ca_context_id` is read from this permanent object every frame:
 
 ```cpp
-auto* last_id = new uint32_t(0);
-auto* pending_id = new uint32_t(0);    // New: ID waiting to be sent
-auto* pending_count = new int(0);       // New: frames seen with pending ID
-const int kFrameDelay = 3;              // New: frames to wait before sending
+// ca_layer_tree_coordinator.mm, line 211
+params.ca_context_id = [ca_context_ contextId];
 ```
 
-Replace the lambda body:
+Content changes happen by swapping **sublayers** of `root_ca_layer_` via
+`CommitScheduledCALayers` — the CAContext itself persists. The browser-side
+`DisplayCALayerTree::GotCALayerFrame()` has an early-out when the ID hasn't
+changed:
 
 ```cpp
-[](const std::string& pane_id, xpc_connection_t conn,
-   uint32_t* last_id, uint32_t* pending_id, int* pending_count,
-   int frame_delay, const gfx::CALayerParams& params) {
-  if (params.ca_context_id == 0)
-    return;
-
-  // New ID detected — start counting frames.
-  if (params.ca_context_id != *last_id &&
-      params.ca_context_id != *pending_id) {
-    *pending_id = params.ca_context_id;
-    *pending_count = 0;
-  }
-
-  // Increment count if we're waiting on a pending ID.
-  if (*pending_id != 0 && params.ca_context_id == *pending_id) {
-    (*pending_count)++;
-    if (*pending_count >= frame_delay) {
-      // Enough frames have been composited — send the ID.
-      *last_id = *pending_id;
-      *pending_id = 0;
-      *pending_count = 0;
-
-      xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
-      xpc_dictionary_set_string(msg, "action", "ca_context");
-      xpc_dictionary_set_uint64(msg, "ca_context_id",
-                                params.ca_context_id);
-      xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
-      xpc_dictionary_set_uint64(msg, "pixel_width",
-                                params.pixel_size.width());
-      xpc_dictionary_set_uint64(msg, "pixel_height",
-                                params.pixel_size.height());
-      xpc_connection_send_message(conn, msg);
-      xpc_release(msg);
-    }
-  }
+// display_ca_layer_tree.mm
+void DisplayCALayerTree::GotCALayerFrame(uint32_t ca_context_id) {
+  if (remote_layer_.contextId == ca_context_id)
+    return;  // Common case — no swap needed
+  // ...
 }
 ```
 
-Update the `base::BindRepeating` to pass the new variables:
+**This is the fundamental difference from TermSurf.** In our profile server, the
+`CALayerTreeCoordinator` is destroyed and recreated on every navigation,
+creating a new `CAContext` each time. Normal Chromium doesn't do this.
 
-```cpp
-auto ca_layer_callback = base::BindRepeating(
-    [](/* ... */),
-    cb_pane_id, cb_conn,
-    base::Owned(last_id), base::Owned(pending_id),
-    base::Owned(pending_count), kFrameDelay);
+### Finding 2: Chromium's layer tree has a background color layer
+
+The NSView layer tree is structured as:
+
+```
+NSView.layer
+  └── background_layer_ (solid color, set by SetBackgroundColor)
+        └── maybe_flipped_layer_ (from DisplayCALayerTree)
+              └── remote_layer_ (CALayerHost, displays GPU content)
 ```
 
-The `ShellTabObserver::DidFinishNavigation` dedup gate reset
-(`*last_ca_context_id_ = 0`) remains unchanged — it still resets `last_id`. The
-`pending_id` and `pending_count` handle the delay logic independently.
+The `background_layer_` acts as a fallback behind the remote layer. Its color is
+set **only after** a frame swap completes — not before:
 
-### Test
+```cpp
+// render_widget_host_view_mac.mm
+void RenderWidgetHostViewMac::AcceleratedWidgetCALayerParamsUpdated() {
+  // Note: background is set only AFTER the swap has completed,
+  // so that the background is not set before the frame is up.
+  SetBackgroundLayerColor(last_frame_root_background_color_);
+  // ...
+}
+```
 
-1. Create Chromium branch: `146.0.7650.0-issue-632` from
-   `146.0.7650.0-issue-631`
-2. Apply the code change to `shell_browser_main_parts.cc`
-3. Build: `autoninja -C out/Default chromium_profile_server`
-4. Build GUI: `cd gui && zig build`
-5. Launch: `open gui/zig-out/TermSurf.app`
-6. Navigate between pages — observe flash behavior
-7. If flash is reduced, try tuning `kFrameDelay` (1, 2, 3, 5)
-8. If flash is unchanged, the delay doesn't help
+### Finding 3: Transparent root layer prevents flash during navigation
 
-### Success criteria
+The compositor's root layer is explicitly transparent:
 
-Navigation between pages has no visible flash, or the flash is significantly
-reduced compared to the current behavior.
+```cpp
+// browser_compositor_view_mac.mm, lines 59-62
+root_layer_ = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+// Ensure that this layer draws nothing when it does not have delegated
+// content (otherwise this solid color will be flashed during navigation).
+root_layer_->SetColor(SK_ColorTRANSPARENT);
+```
 
-### Failure modes
+The comment is telling — Chromium explicitly prevents a solid color from
+flashing during the gap between old content being evicted and new content
+arriving.
 
-- **Flash unchanged:** The flash is entirely caused by the old CAContext dying
-  (factor #1), and the new CAContext already has content when it arrives. The
-  delay just makes the blank period longer. In this case, the flash cannot be
-  fixed from either the GUI or the Chromium callback — it's inherent to the
-  CAContext lifecycle.
-- **Flash longer:** The delay adds latency to the swap without reducing the
-  blank. Worse UX than before. Revert immediately.
-- **Navigation feels sluggish:** The N-frame delay adds perceived latency to
-  page transitions. May need to tune N down or abandon this approach.
+### Finding 4: Cross-process navigation uses TakeFallbackContentFrom
 
-### If this fails
+During cross-process navigations (site isolation, process swap), the new
+`RenderWidgetHostViewMac` **copies the old view's CALayerParams** so it
+immediately displays the same content:
 
-Fall back to **Experiment 3: snapshot fallback** (GUI-side). Before swapping the
-CALayerHost, capture the current positioning layer's visible content as a bitmap
-via `CALayer.renderInContext:` or the `contents` property. Place the bitmap on a
-static `CALayer` that covers the gap while the new CAContext produces its first
-frame. This approach doesn't prevent the blank — it masks it with a static image
-of the previous page, which is visually seamless.
+```cpp
+// render_widget_host_view_mac.mm
+void RenderWidgetHostViewMac::TakeFallbackContentFrom(
+    RenderWidgetHostView* view) {
+  RenderWidgetHostViewMac* view_mac =
+      static_cast<RenderWidgetHostViewMac*>(view);
+  ScopedCAActionDisabler disabler;
+  // Copy background color from old view.
+  std::optional<SkColor> color = view_mac->GetBackgroundColor();
+  if (color)
+    SetBackgroundColor(*color);
+  // Make this view's NSView display the same content as the old view.
+  const gfx::CALayerParams* ca_layer_params =
+      view_mac->browser_compositor_->GetLastCALayerParams();
+  if (ca_layer_params)
+    ns_view_->SetCALayerParams(*ca_layer_params);
+  browser_compositor_->TakeFallbackContentFrom(
+      view_mac->browser_compositor_.get());
+}
+```
+
+The new view's CALayerHost is set to the **same** `ca_context_id` as the old
+view's — both CALayerHosts briefly point to the same CAContext. Window Server
+handles this seamlessly. The old CAContext isn't destroyed until the old view is
+torn down, by which time the new view already has its own content.
+
+### Finding 5: DelegatedFrameHost maintains surface fallbacks
+
+The `DelegatedFrameHost` has a sophisticated fallback system:
+
+- `pre_navigation_local_surface_id_` — cached before navigation so old content
+  can be restored if navigation fails
+- `first_local_surface_id_after_navigation_` — first valid surface after
+  navigation
+- `stale_content_layer_` — a **texture copy** of old content, used when surfaces
+  are evicted
+
+### Finding 6: Add-before-remove for the rare ID change case
+
+When the `ca_context_id` does change (GPU process crash/restart), the swap in
+`DisplayCALayerTree::GotCALayerFrame()` uses add-before-remove:
+
+```cpp
+// display_ca_layer_tree.mm
+[maybe_flipped_layer_ addSublayer:new_remote_layer];  // New first
+[remote_layer_ removeFromSuperlayer];                   // Old second
+remote_layer_ = new_remote_layer;
+```
+
+All mutations are wrapped in `ScopedCAActionDisabler` (disables implicit CALayer
+animations).
+
+### Finding 7: ScopedCAActionDisabler for atomic updates
+
+Every CALayer mutation in Chromium uses `ScopedCAActionDisabler`, which wraps
+`[CATransaction begin]` with `kCATransactionDisableActions`. All changes within
+scope are committed atomically. No fade-in/fade-out animations.
+
+### Conclusion
+
+Chromium avoids the flicker because **the CAContext persists across
+navigations**. The `ca_context_id` simply doesn't change in the normal case.
+Content updates happen within the existing CAContext's sublayer tree.
+
+For TermSurf, the `ca_context_id` changes on every navigation because the
+profile server's `CALayerTreeCoordinator` is destroyed and recreated. The root
+cause is not the GUI's swap logic — it's the server destroying the CAContext.
+
+The most promising path forward is to investigate **why** the profile server
+recreates the `CALayerTreeCoordinator` on navigation and whether it can be made
+to persist, matching normal Chromium's behavior. If the `ca_context_id` stops
+changing, the flicker disappears entirely — no GUI-side workaround needed.
