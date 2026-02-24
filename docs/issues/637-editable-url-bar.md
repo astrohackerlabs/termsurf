@@ -401,6 +401,19 @@ Adding a `navigate` action that flows from the TUI through the GUI to the
 Chromium server will make the editable URL bar actually navigate the browser
 when Enter is pressed.
 
+### XPC messages
+
+```
+TUI → GUI:
+{ action: "navigate", pane_id: "<uuid>", url: "<url>" }
+
+GUI → Chromium server:
+{ action: "navigate", pane_id: "<uuid>", url: "<url>" }
+```
+
+The message is identical on both hops. The GUI receives it from the TUI, looks
+up the pane's Chromium server, and forwards it.
+
 ### Changes
 
 #### 1. Chromium server: add `navigate` action (`shell_browser_main_parts.cc`)
