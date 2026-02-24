@@ -577,3 +577,78 @@ equals the current host's `contextId`. This eliminates steps 8–13 entirely for
 same-site navigation. For cross-site navigation where the ID genuinely changes,
 the swap is still needed, but delaying old host removal (deferred transaction or
 `dispatch_after`) would eliminate the content gap.
+
+### Experiment 2: Skip CALayerHost swap when context ID is unchanged
+
+#### Purpose
+
+Address the primary finding from Experiment 1 — smell #1: unnecessary
+CALayerHost swap on same ID. When the GUI receives a `ca_context_id` via XPC
+that matches the existing CALayerHost's `contextId`, it currently destroys the
+old host and creates a new one pointing at the exact same CAContext. This
+produces a blank frame for no reason.
+
+The fix: read the existing host's `contextId` property and skip the replacement
+when the IDs match. This is a GUI-only change — no Chromium modifications.
+
+#### Hypothesis
+
+Same-site navigations (clicking a link on the same origin) keep the same
+`CALayerTreeCoordinator` and the same `ca_context_id`. The dedup reset (C3 from
+Issue 630) forces Chromium to re-send the ID, but the ID hasn't changed. By
+skipping the swap, the CALayerHost stays in the layer tree undisturbed and
+Window Server continues compositing the remote content without interruption.
+
+If this hypothesis is correct, same-site navigations will have zero flicker.
+Cross-site navigations (where the `RenderViewHost` changes and a new CAContext
+is created) will still flicker because the ID genuinely changes and a swap is
+needed — but that is a separate problem for a future experiment.
+
+#### Changes
+
+**`gui/src/renderer/Metal.zig` — `setCALayerHostContextId()`**
+
+In the existing-host branch (line 198), before the swap logic, add a contextId
+comparison:
+
+```zig
+if (ca_layer_host_ptr.*) |existing| {
+    // Skip swap when context ID hasn't changed (Issue 631, smell #1).
+    // Same-site navigation keeps the same CAContext — the dedup reset
+    // (C3) re-sends the same ID, but no swap is needed.
+    const existing_obj = objc.Object.fromId(existing);
+    const current_id = existing_obj.getProperty(u32, "contextId");
+    if (current_id == context_id) {
+        log.info("CALayerHost contextId={} unchanged, skipping swap", .{context_id});
+        CATx.msgSend(void, objc.sel("commit"), .{});
+        return;
+    }
+
+    // Replace existing CALayerHost with a new one (Issue 628).
+    // ... existing swap logic unchanged ...
+}
+```
+
+This is the only code change. No Chromium modifications. The Chromium side still
+resets the dedup gate and re-sends the ID — but the GUI now ignores it when the
+ID hasn't changed.
+
+#### Verification
+
+1. Build TermSurf: `cd gui && zig build`
+2. Launch: `open gui/zig-out/TermSurf.app`
+3. Open a web page:
+   `cargo run -p web -- https://en.wikipedia.org/wiki/Main_Page`
+4. **Same-site navigation test**: Click any link on Wikipedia (stays on
+   `en.wikipedia.org`). Observe whether the overlay flickers.
+   - **Pass**: No visible flicker. Log shows "contextId=N unchanged, skipping
+     swap."
+   - **Fail**: Flicker persists, or the overlay breaks (goes blank permanently,
+     wrong content, etc.).
+5. **Cross-site navigation test**: Navigate to a different origin (e.g., type a
+   new URL in the address bar, or click a link to an external site). Observe
+   that the overlay still works after the cross-site navigation.
+   - **Pass**: Overlay appears with correct content after a brief transition.
+   - **Fail**: Overlay goes blank or breaks after cross-site navigation.
+6. Check the TermSurf log for "skipping swap" messages during same-site
+   navigation and "replaced CALayerHost" messages during cross-site navigation.
