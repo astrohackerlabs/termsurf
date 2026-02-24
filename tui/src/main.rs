@@ -170,7 +170,10 @@ fn main() -> io::Result<()> {
                     xpc::CompositorMessage::UrlChanged { url: new_url } => {
                         url = new_url;
                     }
-                    xpc::CompositorMessage::LoadingState { state, _progress: _ } => {
+                    xpc::CompositorMessage::LoadingState {
+                        state,
+                        _progress: _,
+                    } => {
                         let mut stdout = io::stdout();
                         let _ = match state.as_str() {
                             "loading" => {
@@ -262,7 +265,7 @@ fn ui(frame: &mut Frame, url: &str, profile: &str, mode: &Mode) -> Rect {
     let url_bar = Paragraph::new(url).style(Style::default().fg(FG)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" URL ")
+            .title(" Chromium ")
             .title_top(profile_title.alignment(Alignment::Right))
             .border_style(Style::default().fg(url_border).bg(BG))
             .title_style(Style::default().fg(url_border))
