@@ -401,24 +401,27 @@ frames to paint real content.
 ### Design
 
 **Change:** In the `ca_layer_callback` lambda, when a new `ca_context_id` is
-detected, don't send the XPC message immediately. Instead, start a frame counter.
-Continue counting callbacks with the same `ca_context_id`. After N callbacks
-(N = 3 to start, tunable), send the XPC message.
+detected, don't send the XPC message immediately. Instead, start a frame
+counter. Continue counting callbacks with the same `ca_context_id`. After N
+callbacks (N = 3 to start, tunable), send the XPC message.
 
 During the delay:
-- The GUI still has the **old** CALayerHost pointing at the old (dead) CAContext.
+
+- The GUI still has the **old** CALayerHost pointing at the old (dead)
+  CAContext.
 - The old host shows nothing (confirmed by Experiment 1).
 - The delay means the flash of blank content is still visible for the same
   duration. But the swap itself — when it happens — should be clean: the new
   CAContext will have N frames of real content by then.
 
 **Wait — this doesn't help.** If the old CAContext is dead and shows nothing
-during the delay, then delaying the send just makes the blank period *longer*,
+during the delay, then delaying the send just makes the blank period _longer_,
 not shorter. The flash still happens. The only way this approach works is if the
 blank flash is caused by the GUI swapping to a CAContext with no content — not
 by the old CAContext dying.
 
 **Revised hypothesis:** The flash might be caused by BOTH:
+
 1. The old CAContext dying (unavoidable), AND
 2. The new CAContext not having content when swapped to
 
@@ -497,13 +500,14 @@ auto ca_layer_callback = base::BindRepeating(
     base::Owned(pending_count), kFrameDelay);
 ```
 
-The `ShellTabObserver::DidFinishNavigation` dedup gate reset (`*last_ca_context_id_ = 0`)
-remains unchanged — it still resets `last_id`. The `pending_id` and
-`pending_count` handle the delay logic independently.
+The `ShellTabObserver::DidFinishNavigation` dedup gate reset
+(`*last_ca_context_id_ = 0`) remains unchanged — it still resets `last_id`. The
+`pending_id` and `pending_count` handle the delay logic independently.
 
 ### Test
 
-1. Create Chromium branch: `146.0.7650.0-issue-632` from `146.0.7650.0-issue-631`
+1. Create Chromium branch: `146.0.7650.0-issue-632` from
+   `146.0.7650.0-issue-631`
 2. Apply the code change to `shell_browser_main_parts.cc`
 3. Build: `autoninja -C out/Default chromium_profile_server`
 4. Build GUI: `cd gui && zig build`
