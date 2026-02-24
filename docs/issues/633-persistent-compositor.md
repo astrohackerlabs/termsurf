@@ -658,3 +658,32 @@ The `UseParentLayerCompositor` mode with a persistent `ui::Compositor` and
 `PersistentCompositorBridge` implementing `AcceleratedWidgetMacNSView` is the
 correct architecture. The per-view `SetCALayerParamsCallback` is now dead code
 (harmless — it never fires in this mode).
+
+## Conclusion
+
+Navigation flicker is eliminated. The profile server now matches Chrome's own
+compositor architecture: a persistent `ui::Compositor` owns a single `CAContext`
+whose `ca_context_id` never changes across navigations. The GUI creates one
+`CALayerHost` at startup and never swaps it.
+
+Two experiments got us here:
+
+1. **Experiment 1** created the persistent compositor and switched
+   `BrowserCompositorMac` to `UseParentLayerCompositor` mode via
+   `SetParentUiLayer`. The mode switch worked, but the `ca_context_id` never
+   reached the GUI — the per-view `SetCALayerParamsCallback` is dead in this
+   mode because no `RecyclableCompositorMac` exists per view.
+
+2. **Experiment 2** added `PersistentCompositorBridge`, a class implementing
+   `AcceleratedWidgetMacNSView`. It registers with the persistent
+   `AcceleratedWidgetMac` via `SetNSView` and receives
+   `AcceleratedWidgetCALayerParamsUpdated` callbacks whenever the GPU process
+   renders a frame. The bridge extracts the stable `ca_context_id` from
+   `GetCALayerParams()` and sends it to the GUI via XPC.
+
+The key insight from this issue: content_shell's `HasOwnCompositor` mode creates
+a new `CAContext` per navigation, which is fine for a throwaway test shell but
+fatal for an embedding that needs stable compositing. Chrome avoids this with
+`UseParentLayerCompositor`, and now the profile server does too. The persistent
+compositor outlives all navigations, and the bridge provides the callback path
+that content_shell never needed.
