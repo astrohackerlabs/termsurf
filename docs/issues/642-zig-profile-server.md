@@ -93,6 +93,30 @@ is spread across:
 | `browser/shell_compositor_bridge_mac.mm` | ~60   | Persistent compositor bridge                              |
 | Various                                  | ~50   | Dock hiding, focus, auto-exit                             |
 
+## Chromium Branch
+
+`146.0.7650.0-issue-642` — forked from the vanilla `146.0.7650.0` tag, NOT from
+`issue-639` or any other TermSurf branch.
+
+The whole point of the Zig Profile Server is to eliminate the Content Shell fork.
+The current profile server (`chromium_profile_server`) carries 42 patches from
+`termsurf` through `issue-639` — most of which modify Content Shell internals.
+The new branch starts clean: just 3 new files in
+`content/zig_profile_server/` (BUILD.gn, header, implementation). No
+modifications to existing Chromium source.
+
+This means:
+
+- **Tiny patch set.** Three new files vs 42 inherited patches.
+- **Trivial upgrades.** Rebasing 3 new files onto a new Chromium tag is easy.
+  Rebasing 42 patches that touch Content Shell internals is fragile.
+- **No contamination.** The branch doesn't carry persistent compositor hacks,
+  XPC gateway wiring, dock icon patches, or any other Content Shell
+  modifications. Those all move to Zig.
+
+For reference during implementation, the old profile server's logic is preserved
+in `chromium/patches/issue-639/` and the `146.0.7650.0-issue-639` branch.
+
 ## Architecture
 
 ### C++ shim (inside `chromium/src/`)
