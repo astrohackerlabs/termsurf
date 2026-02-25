@@ -443,3 +443,132 @@ The Zig-to-Chromium bridge works. A Zig `main()` can drive the entire Chromium
 Content API through dlopen/dlsym with zero Chromium headers. The C++ shim is 3
 new files on a vanilla Chromium tag — no Content Shell modifications. This
 validates the architecture for the full Zig Profile Server rewrite.
+
+### Experiment 2: Direct WebContents + CAContext ID
+
+Prove that Zig can create a WebContents directly (no Shell window), set up a
+persistent compositor for stable CAContext IDs, and receive the CAContext ID via
+callback.
+
+Experiment 1 used `ts_create_tab` which opens a Content Shell window with
+chrome/toolbar. The production Zig Profile Server creates WebContents directly —
+the GUI owns the windows, the profile server just reports CAContext IDs. This
+experiment proves that pipeline.
+
+#### Chromium side
+
+Two commits on the `146.0.7650.0-issue-642` branch:
+
+**Commit 1: `SetCALayerParamsCallback` on `RenderWidgetHostViewMac`.**
+
+The same patch from Issue 625/633 (patch 0031), applied to the vanilla tag. Adds
+a `CALayerParamsCallback` member and `SetCALayerParamsCallback()` method to
+`RenderWidgetHostViewMac`. When the GPU process delivers new `CALayerParams`
+(containing `ca_context_id`), the callback fires in
+`AcceleratedWidgetCALayerParamsUpdated()`.
+
+Files modified:
+- `content/browser/renderer_host/render_widget_host_view_mac.h` — add include,
+  callback type alias, method declaration, member variable
+- `content/browser/renderer_host/render_widget_host_view_mac.mm` — implement
+  `SetCALayerParamsCallback`, fire callback in
+  `AcceleratedWidgetCALayerParamsUpdated`
+
+**Commit 2: Extend C++ shim with direct WebContents creation.**
+
+Five new exports added to `content_api_shim.h/.mm`:
+
+```c
+ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
+                                         const char* url,
+                                         int pixel_width, int pixel_height);
+void ts_destroy_web_contents(ts_web_contents_t wc);
+void ts_set_view_size(ts_web_contents_t wc, int pixel_width, int pixel_height);
+typedef void (*ts_ca_context_callback_t)(ts_web_contents_t wc,
+                                         unsigned int ca_context_id);
+void ts_set_on_ca_context_id_changed(ts_ca_context_callback_t callback);
+```
+
+Implementation details:
+
+- **Persistent compositor** (created once, on first `ts_create_web_contents`):
+  `ui::AcceleratedWidgetMac` + `ui::Compositor` + `ui::Layer` (root, transparent).
+  A `PersistentCompositorBridge` class implements
+  `AcceleratedWidgetMacNSView`, receives `AcceleratedWidgetCALayerParamsUpdated`,
+  extracts `ca_context_id`, and fires the Zig callback.
+- **`ts_create_web_contents`**: creates `WebContents::Create(params)`, sets a
+  minimal `WebContentsDelegate`, navigates via `LoadURLWithParams`, connects to
+  the persistent compositor via `SetParentUiLayer(root_layer)`, registers
+  `SetCALayerParamsCallback` on the view, calls `WasShown()`.
+- **`ts_set_view_size`**: converts pixel→logical, calls `view->SetSize()`,
+  updates persistent compositor bounds.
+- All persistent objects are raw pointers (intentionally leaked — process
+  lifetime). `PersistentCompositorBridge` is `final` to satisfy Chromium's
+  `-Wdelete-non-abstract-non-virtual-dtor`.
+
+New BUILD.gn deps: `//ui/accelerated_widget_mac`, `//ui/compositor`,
+`//content/public/browser`.
+
+#### Zig side
+
+Updated `browser/src/main.zig`:
+
+- New function pointer types: `CreateWebContentsFn`, `DestroyWebContentsFn`,
+  `SetViewSizeFn`, `CAContextCallbackFn`, `SetOnCAContextChangedFn`
+- `onInitialized` calls `ts_create_web_contents(ctx, "https://google.com", 1280, 720)`
+  instead of `ts_create_tab`
+- New `onCAContextChanged` callback prints `ca_context_id=N` to stderr
+- `onShutdown` calls `ts_destroy_web_contents` before `ts_destroy_browser_context`
+
+#### Build and test
+
+```bash
+cd chromium/src && autoninja -C out/Default zig_profile_server
+cd browser && zig build
+cp browser/zig-out/bin/zig_profile_server \
+   "chromium/src/out/Default/Zig Profile Server.app/Contents/MacOS/Zig Profile Server"
+codesign --force --deep -s - "chromium/src/out/Default/Zig Profile Server.app"
+```
+
+#### Issues encountered
+
+1. **Exit-time destructors.** Chromium's `-Wexit-time-destructors` rejects
+   `static std::unique_ptr<>` globals. Fixed by using raw pointers
+   (intentionally leaked — these are process-lifetime objects).
+2. **Non-virtual destructor on non-final class.** `PersistentCompositorBridge`
+   inherits from `AcceleratedWidgetMacNSView` which has a non-virtual
+   destructor. `std::unique_ptr::~unique_ptr` triggers
+   `-Wdelete-non-abstract-non-virtual-dtor`. Fixed by marking the class `final`
+   and removing `override` from the destructor.
+3. **Storage service path conflict.** Using a different profile path
+   (`profile-a`) than the default context (`default`) caused a FATAL crash in
+   the storage service's filesystem proxy — it couldn't make `profile-a/` paths
+   relative to `default/`. Fixed by using the same path for both contexts. This
+   is fine for the experiment; production will handle multi-profile properly.
+4. **Code signature invalidation.** Copying the Zig binary into the app bundle
+   invalidates the code signature from `autoninja`. Fixed by re-codesigning:
+   `codesign --force --deep -s -`.
+
+#### Result: Pass
+
+```
+[ZigProfileServer] Created persistent compositor
+[ZigProfileServer] Set parent_ui_layer_ on view
+[ZigProfileServer] Created WebContents, navigating to https://google.com
+ca_context_id=1704182908
+```
+
+All verification criteria met:
+
+1. **No Shell window** — no Content Shell chrome/toolbar appeared
+2. **`ca_context_id=1704182908`** — nonzero, printed to stderr by Zig callback
+3. **No crash** — app stayed running, killed cleanly after 10 seconds
+4. **Persistent compositor working** — GPU process rendering frames offscreen
+
+#### Conclusion
+
+Zig can create WebContents directly without Shell windows and receive stable
+CAContext IDs from the persistent compositor. The GUI can use this ID with
+`CALayerHost` to display the content — that integration happens in Stage 3
+(XPC). The C++ shim grew from 3 exports (Experiment 1) to 8, still under 400
+lines. The Zig launcher remains under 150 lines with zero Chromium headers.

@@ -1,7 +1,8 @@
 // Zig launcher for the Chromium Profile Server.
 //
-// dlopen's the framework, resolves 6 C API symbols, registers lifecycle
-// callbacks, and calls ContentMain. Proves Zig can drive Chromium end-to-end.
+// dlopen's the framework, resolves C API symbols, registers lifecycle
+// callbacks, and calls ContentMain. Creates WebContents directly (no Shell
+// window) and receives the CAContext ID via callback.
 
 const std = @import("std");
 
@@ -30,16 +31,24 @@ const SetCallbackFn = *const fn (CallbackFn) callconv(.c) void;
 const CreateContextFn = *const fn ([*:0]const u8) callconv(.c) ?*anyopaque;
 const DestroyContextFn = *const fn (?*anyopaque) callconv(.c) void;
 const CreateTabFn = *const fn (?*anyopaque, [*:0]const u8) callconv(.c) void;
+const CreateWebContentsFn = *const fn (?*anyopaque, [*:0]const u8, c_int, c_int) callconv(.c) ?*anyopaque;
+const DestroyWebContentsFn = *const fn (?*anyopaque) callconv(.c) void;
+const SetViewSizeFn = *const fn (?*anyopaque, c_int, c_int) callconv(.c) void;
+const CAContextCallbackFn = *const fn (?*anyopaque, u32) callconv(.c) void;
+const SetOnCAContextChangedFn = *const fn (CAContextCallbackFn) callconv(.c) void;
 
 // -- dlsym'd function pointers (set in main, used by callbacks) --
 
 var g_create_ctx: ?CreateContextFn = null;
 var g_destroy_ctx: ?DestroyContextFn = null;
 var g_create_tab: ?CreateTabFn = null;
+var g_create_web_contents: ?CreateWebContentsFn = null;
+var g_destroy_web_contents: ?DestroyWebContentsFn = null;
 
-// -- Context handles (created in onInitialized, destroyed in onShutdown) --
+// -- Context and WebContents handles --
 
 var ctx_a: ?*anyopaque = null;
+var wc_a: ?*anyopaque = null;
 
 // -- Lifecycle callbacks --
 
@@ -50,18 +59,27 @@ fn onInitialized() callconv(.c) void {
     };
 
     var path_buf: [1024]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/termsurf/zig-profile-server/profile-a", .{home}) catch {
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/termsurf/zig-profile-server/default", .{home}) catch {
         std.debug.print("path too long\n", .{});
         std.process.abort();
     };
 
     ctx_a = g_create_ctx.?(path.ptr);
-    g_create_tab.?(ctx_a, "https://google.com");
+    wc_a = g_create_web_contents.?(ctx_a, "https://google.com", 1280, 720);
 }
 
 fn onShutdown() callconv(.c) void {
+    if (wc_a != null) {
+        g_destroy_web_contents.?(wc_a);
+        wc_a = null;
+    }
     g_destroy_ctx.?(ctx_a);
     ctx_a = null;
+}
+
+fn onCAContextChanged(wc: ?*anyopaque, ca_context_id: u32) callconv(.c) void {
+    _ = wc;
+    std.debug.print("ca_context_id={d}\n", .{ca_context_id});
 }
 
 // -- Symbol resolution helper --
@@ -124,8 +142,13 @@ pub fn main() void {
     g_create_ctx = resolveSymbol(CreateContextFn, library, "ts_create_browser_context");
     g_destroy_ctx = resolveSymbol(DestroyContextFn, library, "ts_destroy_browser_context");
     g_create_tab = resolveSymbol(CreateTabFn, library, "ts_create_tab");
+    g_create_web_contents = resolveSymbol(CreateWebContentsFn, library, "ts_create_web_contents");
+    g_destroy_web_contents = resolveSymbol(DestroyWebContentsFn, library, "ts_destroy_web_contents");
+    _ = resolveSymbol(SetViewSizeFn, library, "ts_set_view_size");
+    const set_on_ca_context_changed = resolveSymbol(SetOnCAContextChangedFn, library, "ts_set_on_ca_context_id_changed");
 
     // Register callbacks and run.
+    set_on_ca_context_changed(&onCAContextChanged);
     set_on_initialized(&onInitialized);
     set_on_shutdown(&onShutdown);
 

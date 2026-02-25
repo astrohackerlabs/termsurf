@@ -1,0 +1,339 @@
+From 2853c4fb535715f42e79fbb1ab2b782c6c3d51de Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 25 Feb 2026 08:02:38 -0600
+Subject: [PATCH 3/3] Add direct WebContents with persistent compositor
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+No Shell, no window, no chrome in view—
+WebContents stands naked, the shim grew.
+A compositor persists through thick and thin,
+The bridge catches context IDs rolling in.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/zig_profile_server/BUILD.gn           |   5 +-
+ content/zig_profile_server/content_api_shim.h |  28 +++
+ .../zig_profile_server/content_api_shim.mm    | 214 +++++++++++++++++-
+ 3 files changed, 242 insertions(+), 5 deletions(-)
+
+diff --git a/content/zig_profile_server/BUILD.gn b/content/zig_profile_server/BUILD.gn
+index 8bcef06baa83d..5ddb4f1e57ef8 100644
+--- a/content/zig_profile_server/BUILD.gn
++++ b/content/zig_profile_server/BUILD.gn
+@@ -85,10 +85,13 @@ mac_framework_bundle("zig_profile_server_framework") {
+   ]
+ 
+   deps = [
+-    "//content/shell:content_shell_app",
+     "//content/public/app",
++    "//content/public/browser",
+     "//content/public/common",
++    "//content/shell:content_shell_app",
+     "//third_party/icu:icudata",
++    "//ui/accelerated_widget_mac",
++    "//ui/compositor",
+   ]
+ 
+   if (!use_static_angle) {
+diff --git a/content/zig_profile_server/content_api_shim.h b/content/zig_profile_server/content_api_shim.h
+index a12e204dfad87..40ede76c8773a 100644
+--- a/content/zig_profile_server/content_api_shim.h
++++ b/content/zig_profile_server/content_api_shim.h
+@@ -33,6 +33,34 @@ void ts_destroy_browser_context(ts_browser_context_t ctx);
+ __attribute__((visibility("default")))
+ void ts_create_tab(ts_browser_context_t ctx, const char* url);
+ 
++// Opaque handle for a WebContents (page).
++typedef void* ts_web_contents_t;
++
++// Create a WebContents directly (no Shell window).
++// Sets up persistent compositor, navigates to URL.
++__attribute__((visibility("default")))
++ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
++                                         const char* url,
++                                         int pixel_width,
++                                         int pixel_height);
++
++// Destroy a WebContents.
++__attribute__((visibility("default")))
++void ts_destroy_web_contents(ts_web_contents_t wc);
++
++// Resize a WebContents.
++__attribute__((visibility("default")))
++void ts_set_view_size(ts_web_contents_t wc,
++                      int pixel_width, int pixel_height);
++
++// Callback type for CAContext ID changes.
++typedef void (*ts_ca_context_callback_t)(ts_web_contents_t wc,
++                                         unsigned int ca_context_id);
++
++// Register callback for CAContext ID changes.
++__attribute__((visibility("default")))
++void ts_set_on_ca_context_id_changed(ts_ca_context_callback_t callback);
++
+ // Callback type for lifecycle events.
+ typedef void (*ts_callback_t)(void);
+ 
+diff --git a/content/zig_profile_server/content_api_shim.mm b/content/zig_profile_server/content_api_shim.mm
+index a199dc3db87cd..4cefb575db418 100644
+--- a/content/zig_profile_server/content_api_shim.mm
++++ b/content/zig_profile_server/content_api_shim.mm
+@@ -1,22 +1,33 @@
+ // Copyright 2025 TermSurf. All rights reserved.
+ //
+ // Thin C++ shim that drives the Content API through a C function boundary.
+-// Exports C functions for profile and tab lifecycle. The framework exports
+-// ContentMain() which the Zig launcher calls via dlsym, plus
+-// ts_create_browser_context / ts_destroy_browser_context / ts_create_tab
+-// which the launcher uses to control the browser.
++// Exports C functions for profile, tab, and WebContents lifecycle. The
++// framework exports ContentMain() which the Zig launcher calls via dlsym,
++// plus functions to create/destroy profiles, tabs, and WebContents.
+ 
+ #include "content/zig_profile_server/content_api_shim.h"
+ 
++#include <cmath>
+ #include <string>
+ 
+ #include "base/apple/bundle_locations.h"
+ #include "base/apple/foundation_util.h"
+ #include "base/base_paths.h"
++#include "base/functional/callback.h"
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/path_service.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "build/build_config.h"
++#include "components/viz/common/surfaces/local_surface_id.h"
++#include "content/browser/renderer_host/render_widget_host_view_mac.h"
+ #include "content/public/app/content_main.h"
++#include "content/public/browser/context_factory.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/common/content_paths.h"
+ #include "content/shell/app/shell_main_delegate.h"
+ #include "content/shell/browser/shell.h"
+@@ -24,6 +35,11 @@
+ #include "content/shell/browser/shell_browser_main_parts.h"
+ #include "content/shell/browser/shell_content_browser_client.h"
+ #include "content/shell/common/shell_paths.h"
++#include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/compositor/compositor.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/ca_layer_params.h"
+ #include "url/gurl.h"
+ 
+ namespace {
+@@ -102,6 +118,63 @@ void TsOverrideBundleID() {
+ 
+ static ts_callback_t g_on_initialized = nullptr;
+ static ts_callback_t g_on_shutdown = nullptr;
++static ts_ca_context_callback_t g_on_ca_context_id_changed = nullptr;
++
++// ---------------------------------------------------------------------------
++// Persistent compositor (created once, on first ts_create_web_contents)
++// ---------------------------------------------------------------------------
++
++// Raw pointers — intentionally leaked (process-lifetime objects).
++static ui::AcceleratedWidgetMac* g_persistent_widget = nullptr;
++static ui::Compositor* g_persistent_compositor = nullptr;
++static ui::Layer* g_persistent_root_layer = nullptr;
++
++// PersistentCompositorBridge — receives CALayerParams from the persistent
++// AcceleratedWidgetMac and forwards the ca_context_id via callback.
++class PersistentCompositorBridge final
++    : public ui::AcceleratedWidgetMacNSView {
++ public:
++  explicit PersistentCompositorBridge(ui::AcceleratedWidgetMac* widget)
++      : widget_(widget) {
++    widget_->SetNSView(this);
++  }
++
++  ~PersistentCompositorBridge() {
++    widget_->ResetNSView();
++  }
++
++  PersistentCompositorBridge(const PersistentCompositorBridge&) = delete;
++  PersistentCompositorBridge& operator=(const PersistentCompositorBridge&) = delete;
++
++  void SetWebContents(content::WebContents* wc) { web_contents_ = wc; }
++
++  // ui::AcceleratedWidgetMacNSView:
++  void AcceleratedWidgetCALayerParamsUpdated() override {
++    const auto* params = widget_->GetCALayerParams();
++    if (!params || params->ca_context_id == 0)
++      return;
++    if (params->ca_context_id == last_ca_context_id_)
++      return;
++    last_ca_context_id_ = params->ca_context_id;
++    if (g_on_ca_context_id_changed && web_contents_) {
++      g_on_ca_context_id_changed(
++          static_cast<ts_web_contents_t>(web_contents_),
++          params->ca_context_id);
++    }
++  }
++
++ private:
++  raw_ptr<ui::AcceleratedWidgetMac> widget_;
++  raw_ptr<content::WebContents> web_contents_ = nullptr;
++  uint32_t last_ca_context_id_ = 0;
++};
++
++static PersistentCompositorBridge* g_persistent_bridge = nullptr;
++
++// Minimal WebContentsDelegate — needed for navigation to work.
++class TsWebContentsDelegate final : public content::WebContentsDelegate {};
++
++static TsWebContentsDelegate* g_web_contents_delegate = nullptr;
+ 
+ // ---------------------------------------------------------------------------
+ // Content API subclasses
+@@ -198,6 +271,139 @@ void ts_create_tab(ts_browser_context_t ctx, const char* url) {
+                                   gfx::Size());
+ }
+ 
++ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
++                                         const char* url,
++                                         int pixel_width,
++                                         int pixel_height) {
++  auto* browser_context =
++      static_cast<content::ShellBrowserContext*>(ctx);
++
++  // Create WebContents directly (no Shell window).
++  content::WebContents::CreateParams create_params(browser_context);
++  auto wc = content::WebContents::Create(create_params);
++  auto* wc_ptr = wc.release();
++
++  // Set a minimal delegate (needed for navigation).
++  if (!g_web_contents_delegate) {
++    g_web_contents_delegate = new TsWebContentsDelegate();
++  }
++  wc_ptr->SetDelegate(g_web_contents_delegate);
++
++  // Navigate to URL.
++  content::NavigationController::LoadURLParams load_params{GURL(url)};
++  load_params.transition_type = ui::PAGE_TRANSITION_TYPED;
++  wc_ptr->GetController().LoadURLWithParams(load_params);
++
++  // Create persistent compositor on first call.
++  if (!g_persistent_compositor) {
++    g_persistent_widget = new ui::AcceleratedWidgetMac();
++    ui::ContextFactory* context_factory = content::GetContextFactory();
++    g_persistent_compositor = new ui::Compositor(
++        context_factory->AllocateFrameSinkId(),
++        context_factory,
++        base::SingleThreadTaskRunner::GetCurrentDefault(),
++        false /* enable_pixel_canvas */);
++    g_persistent_compositor->SetAcceleratedWidget(
++        g_persistent_widget->accelerated_widget());
++
++    g_persistent_root_layer = new ui::Layer(ui::LAYER_SOLID_COLOR);
++    g_persistent_root_layer->SetColor(SK_ColorTRANSPARENT);
++
++    g_persistent_compositor->SetRootLayer(g_persistent_root_layer);
++    g_persistent_compositor->SetVisible(true);
++
++    // Register bridge to receive CALayerParams from persistent compositor.
++    g_persistent_bridge = new PersistentCompositorBridge(
++        g_persistent_widget);
++
++    LOG(INFO) << "[ZigProfileServer] Created persistent compositor";
++  }
++
++  // Size the persistent compositor.
++  auto* view = wc_ptr->GetRenderWidgetHostView();
++  float scale = view ? view->GetDeviceScaleFactor() : 2.0f;
++  gfx::Size size_pixels(pixel_width, pixel_height);
++  gfx::Size size_dip(
++      static_cast<int>(std::ceil(pixel_width / scale)),
++      static_cast<int>(std::ceil(pixel_height / scale)));
++  g_persistent_root_layer->SetBounds(gfx::Rect(size_dip));
++  viz::LocalSurfaceId local_surface_id =
++      viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++  g_persistent_compositor->SetScaleAndSize(
++      scale, size_pixels, local_surface_id);
++
++  // Connect view to persistent compositor via SetParentUiLayer.
++  if (view) {
++    auto* mac_view =
++        static_cast<content::RenderWidgetHostViewMac*>(view);
++    mac_view->SetParentUiLayer(g_persistent_root_layer);
++    LOG(INFO) << "[ZigProfileServer] Set parent_ui_layer_ on view";
++  }
++
++  // Register CALayerParams callback on the view (fires for per-view
++  // compositor updates — belt-and-suspenders with persistent bridge).
++  if (view) {
++    auto* mac_view =
++        static_cast<content::RenderWidgetHostViewMac*>(view);
++    mac_view->SetCALayerParamsCallback(base::BindRepeating(
++        [](content::WebContents* wc, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0)
++            return;
++          if (g_on_ca_context_id_changed) {
++            g_on_ca_context_id_changed(
++                static_cast<ts_web_contents_t>(wc),
++                params.ca_context_id);
++          }
++        },
++        base::Unretained(wc_ptr)));
++  }
++
++  // Tell the persistent bridge about this WebContents.
++  if (g_persistent_bridge) {
++    g_persistent_bridge->SetWebContents(wc_ptr);
++  }
++
++  // Mark as shown (fixes 2fps from Issue 620 Exp 5).
++  wc_ptr->WasShown();
++
++  LOG(INFO) << "[ZigProfileServer] Created WebContents, navigating to "
++            << url;
++
++  return static_cast<ts_web_contents_t>(wc_ptr);
++}
++
++void ts_destroy_web_contents(ts_web_contents_t handle) {
++  delete static_cast<content::WebContents*>(handle);
++}
++
++void ts_set_view_size(ts_web_contents_t handle,
++                      int pixel_width, int pixel_height) {
++  auto* wc = static_cast<content::WebContents*>(handle);
++  auto* view = wc->GetRenderWidgetHostView();
++  if (!view)
++    return;
++
++  float scale = view->GetDeviceScaleFactor();
++  gfx::Size logical(
++      static_cast<int>(std::ceil(pixel_width / scale)),
++      static_cast<int>(std::ceil(pixel_height / scale)));
++  view->SetSize(logical);
++
++  // Update persistent compositor.
++  if (g_persistent_compositor && g_persistent_root_layer) {
++    g_persistent_root_layer->SetBounds(gfx::Rect(logical));
++    gfx::Size size_pixels(pixel_width, pixel_height);
++    viz::LocalSurfaceId local_surface_id =
++        viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++    g_persistent_compositor->SetScaleAndSize(
++        scale, size_pixels, local_surface_id);
++  }
++}
++
++void ts_set_on_ca_context_id_changed(ts_ca_context_callback_t callback) {
++  g_on_ca_context_id_changed = callback;
++}
++
+ void ts_set_on_initialized(ts_callback_t callback) {
+   g_on_initialized = callback;
+ }
+-- 
+2.50.1 (Apple Git-155)
+

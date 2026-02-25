@@ -1,0 +1,85 @@
+From 4eef7dd3e57613a5c2d26342438cd015f05a34ba Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 25 Feb 2026 08:02:29 -0600
+Subject: [PATCH 2/3] Add SetCALayerParamsCallback to RenderWidgetHostViewMac
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The view held its params close to its chest,
+No outsider knew when a frame was its best.
+A callback now peeks at each layer update—
+The context ID flies through Chromium's gate.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../renderer_host/render_widget_host_view_mac.h        |  9 +++++++++
+ .../renderer_host/render_widget_host_view_mac.mm       | 10 +++++++++-
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index 367834e678f44..a8969adb385d9 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -29,6 +29,7 @@
+ #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
+ #include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom-forward.h"
+ #include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
++#include "ui/gfx/ca_layer_params.h"
+ #include "ui/base/cocoa/accessibility_focus_overrider.h"
+ #include "ui/base/cocoa/remote_layer_api.h"
+ #include "ui/base/mojom/attributed_string.mojom-forward.h"
+@@ -103,6 +104,11 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+     return ns_view_;
+   }
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++  void SetCALayerParamsCallback(CALayerParamsCallback callback);
++
+   // |delegate| is used to separate out the logic from the NSResponder delegate.
+   // |delegate| is retained by this class.
+   // |delegate| should be set at most once.
+@@ -708,6 +714,9 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // details.
+   base::OneShotTimer update_windows_timer_;
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  CALayerParamsCallback ca_layer_params_callback_;
++
+   // Factory used to safely scope delayed calls to ShutdownHost().
+   base::WeakPtrFactory<RenderWidgetHostViewMac> weak_factory_;
+ };
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index d93c66c9997db..eab3f28ba4728 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -153,6 +153,11 @@
+ ////////////////////////////////////////////////////////////////////////////////
+ // AcceleratedWidgetMacNSView, public:
+ 
++void RenderWidgetHostViewMac::SetCALayerParamsCallback(
++    CALayerParamsCallback callback) {
++  ca_layer_params_callback_ = std::move(callback);
++}
++
+ void RenderWidgetHostViewMac::AcceleratedWidgetCALayerParamsUpdated() {
+   // Set the background color for the root layer from the frame that just
+   // swapped. See RenderWidgetHostViewAura for more details. Note that this is
+@@ -163,8 +168,11 @@
+   // Update the contents that the NSView is displaying.
+   const gfx::CALayerParams* ca_layer_params =
+       browser_compositor_->GetLastCALayerParams();
+-  if (ca_layer_params)
++  if (ca_layer_params) {
+     ns_view_->SetCALayerParams(*ca_layer_params);
++    if (ca_layer_params_callback_)
++      ca_layer_params_callback_.Run(*ca_layer_params);
++  }
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+-- 
+2.50.1 (Apple Git-155)
+
