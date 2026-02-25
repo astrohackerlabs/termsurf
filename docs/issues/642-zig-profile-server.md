@@ -784,4 +784,54 @@ A clear list of differences between the two signing profiles. From that, we can
 determine exactly which flags/entitlements to use when re-signing the Zig binary
 in Experiment 5.
 
-#### Result:
+#### Result: Pass
+
+The research identified the root cause. The two binaries have fundamentally
+different signing profiles:
+
+| Property             | Original (Chromium-built)      | Zig replacement              |
+| -------------------- | ------------------------------ | ---------------------------- |
+| **flags**            | `0x20002(adhoc,linker-signed)` | `0x2(adhoc)`                 |
+| **hashes**           | `9+0`                          | `77+3`                       |
+| **Info.plist**       | `not bound`                    | `entries=18`                 |
+| **Sealed Resources** | `none`                         | `version=2 rules=13 files=3` |
+| **Internal reqs**    | `none`                         | `count=0 size=12`            |
+| **Entitlements**     | none                           | none                         |
+
+**Root cause: `linker-signed` vs full adhoc signature.**
+
+The original Chromium binary has `linker-signed` (`0x20000`) — a lightweight
+signature embedded by `ld64` at link time. It has no sealed resources, no bound
+Info.plist, no internal requirements. It's the minimal signature macOS requires
+for arm64 binaries.
+
+When we ran `codesign --force --deep -s -` on the Zig Profile Server app bundle,
+it replaced the Zig binary's signature with a **full adhoc signature** that
+seals the Info.plist and Resources into the code directory. This creates a
+mismatch — the sealed resources reference the original bundle structure, but the
+main binary was swapped from the Chromium-built one to the Zig-built one. The
+page hashes in the code directory no longer match the actual binary pages.
+
+Additionally, `--deep` re-signs all nested bundles recursively, potentially
+corrupting the framework's existing signatures from `autoninja`.
+
+**Other differences (not the cause):**
+
+- No entitlements on either binary.
+- No Hardened Runtime on either binary.
+- No Helper app bundles — both use a framework bundle instead.
+- Info.plist differences are cosmetic (display names, version strings). The
+  original also has `LSUIElement=true` (Dock hiding) which the Zig app lacks.
+
+**Fix for Experiment 5:** Don't use `codesign --force --deep -s -`. Instead,
+sign only the main binary without sealing resources:
+
+```bash
+codesign --force -s - \
+  "chromium/src/out/Default/Zig Profile Server.app/Contents/MacOS/Zig Profile Server"
+```
+
+This signs just the executable (replacing its linker signature with an adhoc
+signature that has correct page hashes) without touching the framework or
+sealing bundle resources. The framework retains its original `autoninja`
+signature.
