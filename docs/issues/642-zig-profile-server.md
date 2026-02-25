@@ -468,6 +468,7 @@ a `CALayerParamsCallback` member and `SetCALayerParamsCallback()` method to
 `AcceleratedWidgetCALayerParamsUpdated()`.
 
 Files modified:
+
 - `content/browser/renderer_host/render_widget_host_view_mac.h` — add include,
   callback type alias, method declaration, member variable
 - `content/browser/renderer_host/render_widget_host_view_mac.mm` — implement
@@ -492,10 +493,11 @@ void ts_set_on_ca_context_id_changed(ts_ca_context_callback_t callback);
 Implementation details:
 
 - **Persistent compositor** (created once, on first `ts_create_web_contents`):
-  `ui::AcceleratedWidgetMac` + `ui::Compositor` + `ui::Layer` (root, transparent).
-  A `PersistentCompositorBridge` class implements
-  `AcceleratedWidgetMacNSView`, receives `AcceleratedWidgetCALayerParamsUpdated`,
-  extracts `ca_context_id`, and fires the Zig callback.
+  `ui::AcceleratedWidgetMac` + `ui::Compositor` + `ui::Layer` (root,
+  transparent). A `PersistentCompositorBridge` class implements
+  `AcceleratedWidgetMacNSView`, receives
+  `AcceleratedWidgetCALayerParamsUpdated`, extracts `ca_context_id`, and fires
+  the Zig callback.
 - **`ts_create_web_contents`**: creates `WebContents::Create(params)`, sets a
   minimal `WebContentsDelegate`, navigates via `LoadURLWithParams`, connects to
   the persistent compositor via `SetParentUiLayer(root_layer)`, registers
@@ -515,10 +517,12 @@ Updated `browser/src/main.zig`:
 
 - New function pointer types: `CreateWebContentsFn`, `DestroyWebContentsFn`,
   `SetViewSizeFn`, `CAContextCallbackFn`, `SetOnCAContextChangedFn`
-- `onInitialized` calls `ts_create_web_contents(ctx, "https://google.com", 1280, 720)`
-  instead of `ts_create_tab`
+- `onInitialized` calls
+  `ts_create_web_contents(ctx, "https://google.com", 1280, 720)` instead of
+  `ts_create_tab`
 - New `onCAContextChanged` callback prints `ca_context_id=N` to stderr
-- `onShutdown` calls `ts_destroy_web_contents` before `ts_destroy_browser_context`
+- `onShutdown` calls `ts_destroy_web_contents` before
+  `ts_destroy_browser_context`
 
 #### Build and test
 
@@ -572,3 +576,137 @@ CAContext IDs from the persistent compositor. The GUI can use this ID with
 `CALayerHost` to display the content — that integration happens in Stage 3
 (XPC). The C++ shim grew from 3 exports (Experiment 1) to 8, still under 400
 lines. The Zig launcher remains under 150 lines with zero Chromium headers.
+
+### Experiment 3: XPC Gateway in Zig
+
+Close the loop between the Zig Profile Server and the GUI. Experiments 1–2
+proved standalone Chromium driving. This experiment makes the server receive
+commands from the GUI via XPC and send back CAContext IDs — the production
+communication pattern.
+
+#### What changed
+
+**`browser/build.zig.zon` (new):** Added `zig_objc` dependency (same URL/hash as
+`gui/build.zig.zon`). XPC event handlers require ObjC blocks.
+
+**`browser/build.zig` (modified):** Import `zig_objc` dependency, add `objc`
+module to the executable's imports.
+
+**`browser/src/main.zig` (rewritten):** Major rewrite from ~160 lines to ~290
+lines. Changes:
+
+- **Arg parsing:** `--xpc-service=<name>` and `--user-data-dir=<path>` from
+  `std.os.argv`. If `--xpc-service` is absent, falls back to standalone mode
+  (Experiment 2 behavior).
+- **XPC extern declarations:** Full set of XPC C API functions and type
+  constants, matching `gui/src/apprt/xpc.zig` pattern.
+- **ObjC block type:** `EventBlock` via `objc.Block` from `zig_objc`.
+- **`onInitialized` (XPC mode):** Creates BrowserContext at `--user-data-dir`,
+  connects to XPC gateway via `xpc_connection_create_mach_service` (client
+  mode), sends `server_register` with profile name (basename of data dir).
+- **`xpcEventHandler`:** Dispatches on `action` field. `create_tab` extracts
+  `url`, `pane_id`, `pixel_width`, `pixel_height`, calls
+  `ts_create_web_contents`, stores `wc → pane_id` mapping. All other actions
+  logged and ignored (later stages).
+- **`onCAContextChanged`:** Looks up `pane_id` from `wc_to_pane` map, sends
+  `{ action: "ca_context", pane_id, ca_context_id }` to gateway.
+- **State:** `g_gateway` (XPC connection), `g_browser_ctx` (BrowserContext),
+  `wc_to_pane[16]` (fixed-size tab mapping array).
+
+**`gui/src/apprt/xpc.zig` (1-line change):** Updated `spawnServerProcess` to
+launch `Zig Profile Server.app` instead of `Chromium Profile Server.app`.
+
+#### No Chromium fork changes
+
+The C++ shim from Experiments 1–2 is unchanged. The existing API is sufficient:
+`ts_create_browser_context`, `ts_create_web_contents`,
+`ts_destroy_web_contents`, `ts_set_on_ca_context_id_changed`,
+`ts_set_on_initialized`, `ts_set_on_shutdown`.
+
+#### Build
+
+```bash
+# C++ shim (no changes, but ensure it's built)
+cd chromium/src && autoninja -C out/Default zig_profile_server
+
+# Zig profile server
+cd browser && zig build
+
+# Replace executable + re-sign
+cp browser/zig-out/bin/zig_profile_server \
+   "chromium/src/out/Default/Zig Profile Server.app/Contents/MacOS/Zig Profile Server"
+codesign --force --deep -s - "chromium/src/out/Default/Zig Profile Server.app"
+
+# GUI
+cd gui && zig build
+```
+
+#### Verification
+
+1. `cd gui && zig build && open zig-out/TermSurf.app`
+2. Type `web google.com` in a terminal pane
+3. GUI spawns Zig Profile Server (`ps aux | grep zig_profile_server`)
+4. Server logs: XPC connected, `server_register` sent
+5. GUI logs: `server_register` received, `create_tab` sent
+6. Server logs: `create_tab` received, WebContents created
+7. Server sends `ca_context` → GUI creates CALayerHost
+8. **Google.com renders in the terminal pane**
+9. Page is NOT interactive (no mouse/keyboard — that's Stage 4)
+
+#### Result: Fail
+
+The Zig code compiled and both `browser/` and `gui/` built cleanly. The GUI
+successfully spawned the Zig Profile Server process and its Dock icon appeared.
+However, the server crashed immediately on launch with a code signing error
+before any Zig code executed.
+
+**Crash diagnosis:**
+
+The crash reports
+(`~/Library/Logs/DiagnosticReports/Zig Profile Server-2026-02-25-*.ips`) show:
+
+```
+"exception": {
+  "type": "EXC_BAD_ACCESS",
+  "signal": "SIGKILL (Code Signature Invalid)",
+  "subtype": "UNKNOWN_0x32 at 0x0000000100eb0000"
+}
+"termination": {
+  "namespace": "CODESIGNING",
+  "indicator": "Invalid Page"
+}
+```
+
+The process dies in dyld during `mach_o::Header::isMachO` — before any
+application code runs. The macOS kernel kills it because the code signature on
+the binary's pages doesn't satisfy the validation required for the launch
+context.
+
+**The paradox:** The same binary works fine when launched directly from the
+terminal (`./Zig Profile Server --xpc-service=... --user-data-dir=...`). It
+successfully connects to the XPC gateway, creates a BrowserContext, and sends
+`server_register`. The code signing also verifies correctly with
+`codesign -vv --deep` (both the binary and the full `.app` bundle pass).
+
+The crash only occurs when the GUI spawns the server via `std.process.Child`
+(which uses `posix_spawn`). The Chromium Profile Server (the old C++ binary
+built by `autoninja`) does not have this problem when spawned the same way.
+
+**Likely cause:** The Zig-built binary's ad-hoc signature (`flags=0x2(adhoc)`)
+differs from the Chromium-built binary's signature in a way that macOS code
+signing enforcement rejects when the process is spawned as a child of a signed
+app bundle. The `codesign --force --deep -s -` re-signing may not produce a
+signature that satisfies the kernel's page validation for binaries within
+Chromium's app bundle structure (which includes Helper apps with their own
+entitlements and designated requirements).
+
+**What needs investigation for the next experiment:**
+
+- Compare the code signing flags/entitlements between the old
+  `chromium_profile_server` binary and the new `zig_profile_server` binary
+- Check whether the Zig binary needs specific entitlements
+  (`com.apple.security.cs.disable-library-validation`,
+  `com.apple.security.cs.allow-unsigned-executable-memory`, etc.)
+- Check whether the Helper app bundles inside `Zig Profile Server.app` have
+  designated requirements that conflict with the ad-hoc-signed main executable
+- Try signing with the same entitlements as the original Chromium build
