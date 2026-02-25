@@ -183,3 +183,112 @@ approach for Experiment 3.
 - All three research areas answered with code references
 - Root cause of Experiment 1 failure identified or narrowed down
 - Clear recommendation for the next implementation experiment
+
+### Findings
+
+#### 1. Chromium internals
+
+**Call chain for `target="_blank"`:**
+
+1. Renderer calls `RenderFrameHostImpl::CreateNewWindow()`
+   (`render_frame_host_impl.cc:9930`)
+2. This calls `WebContentsImpl::CreateNewWindow()` (`web_contents_impl.cc:5245`)
+3. A new `WebContents` is created and stored in `pending_contents_`
+4. Renderer later calls `ShowCreatedWindow()` (`web_contents_impl.cc:5605`)
+5. Which calls `delegate_->AddNewContents()` to present the window
+
+**`OpenURLFromTab` vs `AddNewContents`** — these are complementary, not
+alternatives:
+
+- `OpenURLFromTab`: Called for navigation requests within existing pages (e.g.
+  context menu "Open in New Tab"). The delegate chooses where to navigate.
+- `AddNewContents`: Called when Chromium has _already created_ a new
+  `WebContents` (e.g. `window.open()`, `target="_blank"`). The delegate must
+  adopt it or let it be destroyed.
+
+For `target="_blank"` links, the flow goes through `CreateNewWindow` →
+`AddNewContents`, **not** through `OpenURLFromTab`.
+
+**Pre-creation interception**: `IsWebContentsCreationOverridden()` fires
+_before_ the new `WebContents` is created (`web_contents_impl.cc:5282`). If it
+returns `true`, Chromium calls `CreateCustomWebContents()`. If that returns
+`nullptr`, no `WebContents` is created at all — `window.open()` returns `null`
+in the renderer.
+
+There is also `CanCreateWindow()` (`render_frame_host_impl.cc:9978`) which can
+block creation even earlier.
+
+**Discarding WebContents**: Chromium explicitly handles the case where
+`AddNewContents` discards the `unique_ptr` (comment at
+`web_contents_impl.cc:5471`). However, navigating the _source_ WebContents from
+_within_ `AddNewContents` may cause re-entrant navigation while the
+`CreateNewWindow` call chain is still unwinding.
+
+#### 2. Electron
+
+Electron uses `IsWebContentsCreationOverridden()` as its primary interception
+point (`electron_api_web_contents.cc:1223`).
+
+**The flow:**
+
+1. Chromium calls `IsWebContentsCreationOverridden()`
+2. Electron emits `-will-add-new-contents` C++ event
+3. JavaScript `setWindowOpenHandler()` callback decides: `allow` or `deny`
+4. If denied: returns `true` → `CreateCustomWebContents()` returns `nullptr` →
+   no WebContents created, `window.open()` returns `null`
+5. If allowed: returns `false` → Chromium creates WebContents normally →
+   `AddNewContents()` is called → Electron creates a `BrowserWindow` to adopt it
+
+For `OpenURLFromTab` with non-`CURRENT_TAB` disposition, Electron emits
+`-new-window` and returns `nullptr` (`electron_api_web_contents.cc:1327`).
+
+**Key insight**: Electron prevents creation _before_ it happens rather than
+cleaning up afterward. No WebContents is created and then discarded.
+
+#### 3. Our app (TermSurf)
+
+**`Shell::CreateNewWindow` creates an unmanaged Shell**: The new Shell gets its
+own `WebContents`, `RenderWidgetHostView`, `BrowserCompositorMac`, and
+`CAContext`. But it does NOT get a `ShellTabObserver` (only `CreateTab()`
+creates those) and does NOT register with the XPC connection. The new Shell is
+invisible to TermSurf.
+
+**`RenderViewHostChanged`**: When a cross-site navigation happens on an existing
+`WebContents`, a new `RenderViewHost` is created with a new
+`RenderWidgetHostView` and new `CAContext`. `ShellTabObserver` re-registers
+callbacks on the new view (`shell_tab_observer.cc:65`).
+
+**Persistent compositor**: Each tab gets its own `ui::Compositor` +
+`PersistentCompositorBridge` that sends `ca_context_id` via XPC
+(`shell_browser_main_parts.cc:373`).
+
+### Root cause of Experiment 1 failure
+
+The Experiment 1 changes modified both `OpenURLFromTab` and `AddNewContents`.
+For `target="_blank"` links, the flow goes through `CreateNewWindow` →
+`AddNewContents` — not through `OpenURLFromTab`. Our `AddNewContents` discarded
+the pre-created `WebContents` and called `LoadURLWithParams` on the source
+WebContents from _within_ the `AddNewContents` call. This likely caused a
+re-entrant navigation while the `CreateNewWindow` call chain was still
+unwinding, corrupting Chromium's internal state and leaving the source
+WebContents in a broken state where the compositor stopped producing frames.
+
+### Recommendation for Experiment 3
+
+Use Electron's approach: override `IsWebContentsCreationOverridden()` to return
+`true`, and `CreateCustomWebContents()` to return `nullptr`. This suppresses
+WebContents creation entirely — no new window, no cleanup needed.
+
+Then, to navigate the current tab, post a task to navigate the source
+WebContents to the target URL _after_ the `CreateNewWindow` call chain has fully
+unwound. This avoids re-entrant navigation.
+
+For `OpenURLFromTab` with non-`CURRENT_TAB` dispositions, navigate the source
+tab directly (as in Experiment 1) — this path doesn't go through
+`CreateNewWindow` so re-entrancy isn't a concern.
+
+### Result: Success
+
+All three research areas answered with code references. Root cause of Experiment
+1 failure identified (re-entrant navigation from within `AddNewContents`). Clear
+recommendation: use `IsWebContentsCreationOverridden` + deferred navigation.
