@@ -252,3 +252,68 @@ inline logic that:
   since it's already unfocused.
 
 In both cases, return `.consumed` so the key doesn't continue down the pipeline.
+
+### Experiment 4: Implement GUI-side Ctrl+Esc fix
+
+**Goal:** Implement the fix designed in Experiment 3.
+
+#### TUI side: already works
+
+`tui/src/main.rs:210-215` handles `ModeChanged { browsing: false }` by setting
+`mode = Mode::Control`. No TUI changes needed.
+
+#### GUI side: two changes
+
+**1. New function in `gui/src/apprt/xpc.zig`.**
+
+Add `notifyCtrlEsc` next to `notifyNonOverlayClicked` (after line 673). Unlike
+`notifyNonOverlayClicked`, it does not early-return when `browsing` is false:
+
+```zig
+/// Called when Ctrl+Esc is pressed. Always returns to control mode,
+/// regardless of the current browsing state (Issue 646).
+pub fn notifyCtrlEsc(surface: *CoreSurface) void {
+    const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse return;
+    const p = panes.get(pane_id_key) orelse return;
+
+    if (p.browsing) {
+        p.browsing = false;
+        sendFocusChanged(pane_id_key, false);
+    }
+    sendModeToWeb(p, false);
+}
+```
+
+**2. Update `gui/src/Surface.zig:2740-2747`.**
+
+Replace `isOverlayForwarding` with `isOverlayBrowsing` — no, that still checks
+`p.browsing`. Instead, use a simple pane existence check. The simplest approach:
+call `notifyCtrlEsc` which handles both cases, and gate only on whether the
+surface has a pane at all.
+
+Replace:
+
+```zig
+if (xpc.isOverlayForwarding(self)) {
+    xpc.notifyNonOverlayClicked(self);
+    return .consumed;
+}
+```
+
+With:
+
+```zig
+if (xpc.hasOverlayPane(self)) {
+    xpc.notifyCtrlEsc(self);
+    return .consumed;
+}
+```
+
+This requires a third small addition — `hasOverlayPane` in `xpc.zig`:
+
+```zig
+/// Returns true if the surface has an overlay pane registered.
+pub fn hasOverlayPane(surface: *CoreSurface) bool {
+    return surface_to_pane.get(@intFromPtr(surface)) != null;
+}
+```
