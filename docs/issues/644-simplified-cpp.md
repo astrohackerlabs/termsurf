@@ -85,3 +85,63 @@ The key Content API classes to implement:
 
 Everything else — Shell windows, DevTools frontend, JavaScript dialogs, test
 infrastructure — is omitted.
+
+## Experiments
+
+### Experiment 1: Restore the Working C++ Profile Server
+
+Before changing anything, get back to a known-good state. Issues 642–643 left
+behind uncommitted Zig code in the main repo and switched the Chromium fork to
+branches with the `zig_profile_server` target. The existing C++ profile server
+(`chromium_profile_server`) still works — we just need to point at the right
+branch and clean up.
+
+#### Clean up the main repo
+
+Delete all Zig profile server code from Issues 642–643:
+
+**Delete the `browser/` directory entirely.** This was created for the Zig
+profile server and is no longer needed. Committed files (`browser/build.zig`,
+`browser/src/main.zig`) and uncommitted files (`browser/build.zig.zon`,
+`browser/macos/Info.plist`, `browser/macos/PkgInfo`) all go.
+
+**Restore `gui/src/apprt/xpc.zig`.** The uncommitted change points the server
+path at `Zig Profile Server.app`. Revert it to the committed version, which
+points at `Chromium Profile Server.app`:
+
+```
+"{s}/dev/termsurf/chromium/src/out/Default/Chromium Profile Server.app/Contents/MacOS/Chromium Profile Server"
+```
+
+#### Create the Chromium branch
+
+The last branch with a working C++ profile server is `146.0.7650.0-issue-639`
+(open new-tab links in same tab). The `issue-642` and `issue-643` branches have
+the `zig_profile_server` target, not `chromium_profile_server`.
+
+Create `146.0.7650.0-issue-644` from `146.0.7650.0-issue-639`. Add it to
+`docs/chromium.md`.
+
+#### Build and verify
+
+```bash
+cd chromium/src
+git checkout 146.0.7650.0-issue-644
+export PATH="$(cd ../depot_tools && pwd):$PATH"
+autoninja -C out/Default chromium_profile_server
+
+cd ../../gui && zig build
+open zig-out/TermSurf.app
+```
+
+Type `web google.com` in a terminal pane. Expected: web page renders, mouse
+clicks work, keyboard input works, URL bar updates, page title syncs. All
+features that were working before Issues 642–643 should work again.
+
+#### Pass criteria
+
+The C++ profile server works end-to-end with all previously-working features:
+web rendering, mouse input, keyboard input, resize, navigation, URL sync, page
+title sync.
+
+#### Result:
