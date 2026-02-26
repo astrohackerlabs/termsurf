@@ -257,21 +257,95 @@ In both cases, return `.consumed` so the key doesn't continue down the pipeline.
 
 **Goal:** Implement the fix designed in Experiment 3.
 
-#### TUI side: already works
+**Result: Fail.** Reverted. The approach was wrong — it consumed Ctrl+Esc at the
+GUI level even when not in browse mode, preventing it from reaching any TUI.
+Ctrl+Esc should flow through the terminal PTY to the TUI in non-browse modes,
+just like any other key. The GUI should only intercept it in browse mode (to
+prevent it from going to Chromium).
 
-`tui/src/main.rs:210-215` handles `ModeChanged { browsing: false }` by setting
-`mode = Mode::Control`. No TUI changes needed.
+### Experiment 5: Investigate Ctrl+Esc terminal encoding
 
-#### GUI side: two changes
+**Goal:** Understand why the TUI doesn't receive Ctrl+Esc through crossterm when
+not in browse mode, and fix it.
 
-**1. New function in `gui/src/apprt/xpc.zig`.**
+#### What the GUI actually does
 
-Add `notifyCtrlEsc` next to `notifyNonOverlayClicked` (after line 673). Unlike
-`notifyNonOverlayClicked`, it does not early-return when `browsing` is false:
+The existing Ctrl+Esc handler in `Surface.zig:2740-2747` is correct for browse
+mode — it intercepts Ctrl+Esc before it reaches the Chromium forwarding code.
+When not in browse mode, Ctrl+Esc falls through to normal key processing.
+
+The key pipeline after the Ctrl+Esc check:
+
+1. **Line 2749-2756** — Forward to Chromium if `isOverlayForwarding`. Not
+   browsing, so this is skipped.
+2. **Line 2790** — `maybeHandleBinding`. No default Ghostty binding for
+   Ctrl+Esc, so this is skipped.
+3. **Line 2893** — `encodeKey` → calls `legacy()` → calls
+   `pcStyleFunctionKey()`.
+
+#### The encoding
+
+`gui/src/input/function_keys.zig:226` defines Ctrl+Esc as:
+
+```
+.{ .mods = .{ .ctrl = true }, .sequence = "\x1b[27;5;27~" }
+```
+
+This is the xterm `modify_other_keys` CSI 27 sequence. Ghostty encodes it and
+sends it to the PTY. The bytes `\x1b[27;5;27~` DO reach the TUI process.
+
+#### The problem
+
+crossterm likely doesn't parse `\x1b[27;5;27~` as `KeyCode::Esc` with
+`KeyModifiers::CONTROL`. It may drop it, misparse it, or emit it as an
+unrecognized sequence.
+
+#### The fix
+
+Two options:
+
+1. **Parse it in the TUI.** Read raw bytes from the PTY and match
+   `\x1b[27;5;27~` manually before passing to crossterm's event parser. This is
+   fragile and bypasses crossterm's design.
+
+2. **Handle Ctrl+Esc in the GUI for all TUI panes.** The GUI already intercepts
+   Ctrl+Esc in browse mode and sends `mode_changed` via XPC. Extend this to also
+   fire when `browsing` is false — but still only when the surface has an
+   overlay pane (i.e. a `web` TUI is running). This is the same approach as
+   Experiment 3 but with the correct gate: check for pane existence, not
+   forwarding state.
+
+   In non-browse mode, Ctrl+Esc should not be consumed — it should be sent as an
+   XPC message AND allowed to flow through to the terminal. This way the TUI
+   receives the mode change via XPC (reliable) while other TUIs or programs in
+   the terminal can still see the key.
+
+   Wait — that's wrong too. Returning `.consumed` prevents the key from reaching
+   the PTY. We can't both consume and not consume.
+
+   The cleanest fix: send the XPC `mode_changed(false)` message and return
+   `.consumed`. The TUI already handles `ModeChanged` at `main.rs:210-215`.
+   Non-TermSurf terminals won't have a pane registered, so the gate is harmless.
+
+Approach 2 is correct. Same as Experiment 3 but with the right understanding:
+the GUI MUST intercept Ctrl+Esc for panes because the terminal encoding isn't
+reliably parsed by crossterm. The `hasOverlayPane` gate is necessary — not to
+protect non-overlay TUIs (who would receive the raw bytes), but because without
+a pane there's no XPC connection to send to.
+
+Changes (same three as Experiment 4, re-attempted with correct rationale):
+
+**1. `gui/src/apprt/xpc.zig`** — add `hasOverlayPane`:
 
 ```zig
-/// Called when Ctrl+Esc is pressed. Always returns to control mode,
-/// regardless of the current browsing state (Issue 646).
+pub fn hasOverlayPane(surface: *CoreSurface) bool {
+    return surface_to_pane.get(@intFromPtr(surface)) != null;
+}
+```
+
+**2. `gui/src/apprt/xpc.zig`** — add `notifyCtrlEsc`:
+
+```zig
 pub fn notifyCtrlEsc(surface: *CoreSurface) void {
     const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse return;
     const p = panes.get(pane_id_key) orelse return;
@@ -284,36 +358,11 @@ pub fn notifyCtrlEsc(surface: *CoreSurface) void {
 }
 ```
 
-**2. Update `gui/src/Surface.zig:2740-2747`.**
-
-Replace `isOverlayForwarding` with `isOverlayBrowsing` — no, that still checks
-`p.browsing`. Instead, use a simple pane existence check. The simplest approach:
-call `notifyCtrlEsc` which handles both cases, and gate only on whether the
-surface has a pane at all.
-
-Replace:
-
-```zig
-if (xpc.isOverlayForwarding(self)) {
-    xpc.notifyNonOverlayClicked(self);
-    return .consumed;
-}
-```
-
-With:
+**3. `gui/src/Surface.zig:2740-2747`** — replace gate:
 
 ```zig
 if (xpc.hasOverlayPane(self)) {
     xpc.notifyCtrlEsc(self);
     return .consumed;
-}
-```
-
-This requires a third small addition — `hasOverlayPane` in `xpc.zig`:
-
-```zig
-/// Returns true if the surface has an overlay pane registered.
-pub fn hasOverlayPane(surface: *CoreSurface) bool {
-    return surface_to_pane.get(@intFromPtr(surface)) != null;
 }
 ```
