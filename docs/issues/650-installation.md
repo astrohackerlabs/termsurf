@@ -230,16 +230,32 @@ with fallback chain:
 
 ```zig
 // Resolution order: bundle → env var → dev fallback.
-var path_buf: [512]u8 = undefined;
+var path_buf: [std.fs.max_path_bytes]u8 = undefined;
 const server_path = blk: {
     // 1. Check inside app bundle (release/install builds).
-    if (std.posix.getenv("TERMSURF_APP_BUNDLE")) |bundle| {
-        break :blk std.fmt.bufPrintZ(
-            &path_buf,
-            "{s}/Contents/Helpers/Chromium Profile Server.app/Contents/MacOS/Chromium Profile Server",
-            .{bundle},
-        ) catch null;
-    }
+    //    Use std.fs.selfExePath() to discover our own bundle root,
+    //    then look for Contents/Helpers/.
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.selfExePath(&exe_buf)) |exe| {
+        // Walk up 3 components: termsurf → MacOS → Contents → bundle root.
+        var dir: []const u8 = exe;
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            dir = std.fs.path.dirname(dir) orelse break;
+        }
+        if (i == 3) {
+            const helpers_path = std.fmt.bufPrintZ(
+                &path_buf,
+                "{s}/Contents/Helpers/Chromium Profile Server.app/Contents/MacOS/Chromium Profile Server",
+                .{dir},
+            ) catch null;
+            if (helpers_path) |p| {
+                if (std.fs.accessAbsolute(p[0 .. p.len], .{})) {
+                    break :blk helpers_path;
+                } else |_| {}
+            }
+        }
+    } else |_| {}
     // 2. Check environment variable override.
     if (std.posix.getenv("TERMSURF_CHROMIUM_SERVER")) |p| {
         break :blk std.fmt.bufPrintZ(&path_buf, "{s}", .{p}) catch null;
@@ -255,13 +271,6 @@ const server_path = blk: {
     return;
 };
 ```
-
-The app bundle path needs to be discovered at runtime. On macOS, the running
-process can find its own bundle via `NSBundle.mainBundle` or by reading
-`/proc/self/exe` equivalent. We need to check how Ghostty currently discovers
-its own resource paths — it likely already has bundle path resolution that we
-can reuse. If not, we can use `std.fs.selfExePath()` and walk up from
-`Contents/MacOS/termsurf` to the bundle root.
 
 **2. `gui/src/apprt/xpc.zig:771-776`** — Replace hardcoded log path with
 XDG_STATE_HOME:
@@ -320,16 +329,23 @@ to `/Applications`, and symlinks CLI tools.
 
 #### Bundle path discovery
 
-Research needed: how does the running TermSurf process discover its own app
-bundle path? Options:
+**Resolved.** Ghostty already has bundle path discovery in
+`gui/src/os/resourcesdir.zig:68-84`. It calls `std.fs.selfExePath()` (which uses
+`_NSGetExecutablePath` on macOS) and walks up the directory tree looking for
+`Contents/Resources`. We use the same pattern:
 
-- `std.fs.selfExePath()` → returns
-  `/Applications/TermSurf.app/Contents/MacOS/termsurf` → strip last 3 path
-  components to get the bundle root.
-- Check if Ghostty already has bundle path resolution in its macOS apprt code.
+1. `std.fs.selfExePath()` returns e.g.
+   `/Applications/TermSurf.app/Contents/MacOS/termsurf`.
+2. Strip 3 path components (`termsurf` → `MacOS` → `Contents`) to get the bundle
+   root: `/Applications/TermSurf.app`.
+3. Append
+   `Contents/Helpers/Chromium Profile Server.app/Contents/MacOS/Chromium Profile Server`.
+4. Check if the file exists with `std.fs.accessAbsolute()`. If yes, use it. If
+   no (dev build — helpers not bundled), fall through to the next option.
 
-This determines how the Zig code finds `Contents/Helpers/` at runtime without
-needing `TERMSURF_APP_BUNDLE` env var.
+No environment variable needed. The bundle path is discovered purely from the
+executable location at runtime. The `TERMSURF_CHROMIUM_SERVER` env var remains
+as an explicit override for custom setups.
 
 #### Verification
 
@@ -337,7 +353,7 @@ needing `TERMSURF_APP_BUNDLE` env var.
    starts, finds Chromium server via dev fallback, `web` works from PATH.
 2. **Release build**: `cd gui && zig build -Doptimize=ReleaseFast`. App starts
    from `gui/macos/build/ReleaseLocal/TermSurf.app`.
-3. **Install build**: Run `scripts/install.sh`. Verify:
+3. **Install build**: Run `install.sh`. Verify:
    - `/Applications/TermSurf.app` exists and launches from Finder.
    - `termsurf` command works from terminal.
    - `web <url>` command works from terminal.
