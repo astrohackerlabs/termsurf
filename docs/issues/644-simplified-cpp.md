@@ -203,3 +203,293 @@ A written analysis answering all six questions above, with enough detail to
 design Experiment 3 (the simplified implementation). The analysis should make it
 clear exactly which Content API interfaces to implement and what Content Shell
 behavior (if any) needs to be replicated.
+
+#### Analysis
+
+##### 1. What TermSurf files exist?
+
+16 files were modified or created after the initial Content Shell copy. They
+break into three categories:
+
+**Created by TermSurf (6 files):**
+
+| File                             | Purpose                                                                 |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| `shell_tab_observer.h`           | WebContentsObserver that sends nav/loading/title/cursor events over XPC |
+| `shell_tab_observer.cc`          | Implementation (~200 lines)                                             |
+| `shell_ca_layer_bridge_mac.h`    | Bridge to set CALayerParams callback on RenderWidgetHostViewMac         |
+| `shell_ca_layer_bridge_mac.mm`   | Implementation (~17 lines)                                              |
+| `shell_compositor_bridge_mac.h`  | AcceleratedWidgetMacNSView impl for persistent compositor CAContext     |
+| `shell_compositor_bridge_mac.mm` | Implementation + SetParentUiLayerOnView helper (~35 lines)              |
+
+**Heavily modified by TermSurf (4 files):**
+
+| File                          | Lines added | Purpose of modifications                                                             |
+| ----------------------------- | ----------- | ------------------------------------------------------------------------------------ |
+| `shell_browser_main_parts.cc` | ~845        | XPC gateway, tab lifecycle, input forwarding, compositor setup                       |
+| `shell_browser_main_parts.h`  | ~64         | TabState struct, XPC method declarations                                             |
+| `shell.cc`                    | ~70         | Suppress new-window (navigate same tab), disable DevTools                            |
+| `shell.h`                     | ~16         | PrimaryPageChanged override, IsWebContentsCreationOverridden/CreateCustomWebContents |
+
+**Lightly modified by TermSurf (4 files):**
+
+| File                                      | Change                                                                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `BUILD.gn`                                | Added `shell_ca_layer_bridge_mac.*`, `shell_compositor_bridge_mac.*`, `shell_tab_observer.*`, IOSurface framework, ui/compositor deps |
+| `shell_platform_delegate_mac.mm`          | Offscreen window positioning, suppress Shell chrome                                                                                   |
+| `shell_web_contents_view_delegate_mac.mm` | Disable context menu                                                                                                                  |
+| `common/shell_switches.h`                 | Added `kXpcService`, `kHidden`; removed `kSessionId`                                                                                  |
+
+**Deleted by TermSurf (2 files):**
+
+| File                      | Reason                                                  |
+| ------------------------- | ------------------------------------------------------- |
+| `shell_video_consumer.cc` | Replaced by CALayerHost; was the FrameSinkVideoCapturer |
+| `shell_video_consumer.h`  | Same                                                    |
+
+##### 2. What Content Shell files do we depend on?
+
+Our code subclasses or directly uses these Content Shell classes:
+
+| Content Shell class            | How we use it                                                                                                                                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Shell`                        | **Subclass relationship: IS Content Shell's Shell.** We modified it to suppress new-window popups (navigate same tab), disable DevTools, add PrimaryPageChanged. We call `Shell::CreateNewWindow()` to make tabs. |
+| `ShellBrowserMainParts`        | **IS Content Shell's BrowserMainParts subclass.** We added XPC, tab lifecycle, input forwarding, compositor setup. It inherits from `content::BrowserMainParts` (Content API).                                    |
+| `ShellBrowserContext`          | **Used unmodified.** Our `BrowserMainParts` creates `ShellBrowserContext(false)`. It implements `content::BrowserContext` with file-backed storage, download manager, permission manager.                         |
+| `ShellContentBrowserClient`    | **Used unmodified.** Creates `ShellBrowserMainParts`, provides `WebContentsViewDelegate`, configures network context, DevTools.                                                                                   |
+| `ShellMainDelegate`            | **Used unmodified.** The `ContentMainDelegate` — creates all client objects, initializes resource bundles, crash reporting.                                                                                       |
+| `ShellPlatformDelegate`        | **Lightly modified (mac).** Creates NSWindow (we positioned it offscreen), manages Shell chrome (we suppressed it).                                                                                               |
+| `ShellDevToolsManagerDelegate` | **Used unmodified.** Starts/stops DevTools HTTP handler. We don't need this.                                                                                                                                      |
+| `ShellJavaScriptDialogManager` | **Used unmodified.** Handles JS alert/confirm/prompt dialogs. Pulled in via `Shell::GetJavaScriptDialogManager()`.                                                                                                |
+| `ShellDevToolsFrontend`        | **Used unmodified.** DevTools frontend window. Referenced by Shell but never opened in our use case.                                                                                                              |
+| `ShellDownloadManagerDelegate` | **Used unmodified.** Provides download path resolution.                                                                                                                                                           |
+| `ShellPermissionManager`       | **Used unmodified.** Grants all permissions by default.                                                                                                                                                           |
+| `ShellContentClient`           | **Used unmodified.** User agent string, content client.                                                                                                                                                           |
+| `ShellContentRendererClient`   | **Used unmodified.** Renderer process client.                                                                                                                                                                     |
+| `ShellContentGpuClient`        | **Used unmodified.** GPU process client.                                                                                                                                                                          |
+| `ShellContentUtilityClient`    | **Used unmodified.** Utility process client.                                                                                                                                                                      |
+
+##### 3. What Content Shell files are pulled in transitively?
+
+The `chromium_profile_server_lib` static library compiles these source files
+(macOS-relevant only, excluding Android/iOS/Windows/Fuchsia):
+
+**Browser layer (~30 files):**
+
+- `shell.cc/h` — Shell window management, WebContentsDelegate (**modified**)
+- `shell_browser_main_parts.cc/h` + `_mac.mm` — Lifecycle + XPC (**modified**)
+- `shell_browser_context.cc/h` — BrowserContext implementation
+- `shell_content_browser_client.cc/h` — ContentBrowserClient
+- `shell_platform_delegate.cc/h` + `_mac.mm` — Platform window (**modified**)
+- `shell_web_contents_view_delegate.h` + `_mac.mm` — View delegate
+  (**modified**)
+- `shell_devtools_bindings.cc/h` — DevTools bindings (**unnecessary**)
+- `shell_devtools_frontend.cc/h` — DevTools frontend window (**unnecessary**)
+- `shell_devtools_manager_delegate.cc/h` — DevTools HTTP server
+  (**unnecessary**)
+- `shell_download_manager_delegate.cc/h` — Download handling
+- `shell_javascript_dialog.h` + `_mac.mm` — JS dialog UI (**unnecessary**)
+- `shell_javascript_dialog_manager.cc/h` — JS dialog dispatch (**unnecessary**)
+- `shell_permission_manager.cc/h` — Permission grants
+- `shell_content_index_provider.cc/h` — Content index (**unnecessary**)
+- `shell_speech_recognition_manager_delegate.cc/h` — Speech (**unnecessary**)
+- `shell_platform_data_aura.cc/h` — Aura (not used on Mac)
+- `renderer_host/shell_render_widget_host_view_mac_delegate.h/mm` — View
+  delegate
+- `shell_application_mac.h/mm` — NSApplication subclass
+- `protocol/browser_handler.cc/h` — DevTools protocol (**unnecessary**)
+- `protocol/domain_handler.h` — DevTools protocol (**unnecessary**)
+- `protocol/shell_devtools_session.cc/h` — DevTools protocol (**unnecessary**)
+- `shell_tab_observer.cc/h` — XPC notifications (**ours**)
+- `shell_ca_layer_bridge_mac.h/mm` — CALayer callback bridge (**ours**)
+- `shell_compositor_bridge_mac.h/mm` — Persistent compositor bridge (**ours**)
+
+**Common layer (~10 files):**
+
+- `shell_content_client.cc/h` — ContentClient (user agent, etc.)
+- `shell_origin_trial_policy.cc/h` — Origin trials
+- `shell_paths.cc/h` — Path provider
+- `shell_switches.cc/h` — Command-line switches (**modified**)
+- `main_frame_counter_test_impl.cc/h` — Test infra (**unnecessary**)
+- `power_monitor_test_impl.cc/h` — Test infra (**unnecessary**)
+
+**Renderer layer (~4 files):**
+
+- `shell_content_renderer_client.cc/h` — ContentRendererClient
+- `shell_render_frame_observer.cc/h` — Frame observer
+- `render_frame_test_helper.cc/h` — Test infra (**unnecessary**)
+
+**GPU layer (~2 files):**
+
+- `shell_content_gpu_client.cc/h` — ContentGpuClient
+
+**Utility layer (~2 files):**
+
+- `shell_content_utility_client.cc/h` — ContentUtilityClient
+
+**App layer (~8 files):**
+
+- `shell_main.cc` / `shell_main_mac.cc` — Entry point
+- `shell_content_main.cc/h` — Framework entry (mac)
+- `shell_main_delegate.cc/h` + `_mac.h/mm` — ContentMainDelegate
+- `shell_crash_reporter_client.cc/h` — Crash reporting
+- `paths_apple.h/mm` — Apple path overrides
+
+**Build infra:**
+
+- `protocol_config.json` — DevTools protocol codegen (**unnecessary**)
+- `shell_resources.grd` — Resources
+- Mojom files for test interfaces (**unnecessary**)
+
+**Total: ~56 macOS-relevant source files.** Of those, ~16 are marked unnecessary
+(DevTools, test infra, JS dialogs, speech, content index).
+
+##### 4. What Content API interfaces do we actually implement?
+
+| Content API interface        | Implemented by               | Direct or inherited?                 |
+| ---------------------------- | ---------------------------- | ------------------------------------ |
+| `ContentMainDelegate`        | `ShellMainDelegate`          | Inherited (unmodified Content Shell) |
+| `ContentClient`              | `ShellContentClient`         | Inherited (unmodified)               |
+| `ContentBrowserClient`       | `ShellContentBrowserClient`  | Inherited (unmodified)               |
+| `ContentRendererClient`      | `ShellContentRendererClient` | Inherited (unmodified)               |
+| `ContentGpuClient`           | `ShellContentGpuClient`      | Inherited (unmodified)               |
+| `ContentUtilityClient`       | `ShellContentUtilityClient`  | Inherited (unmodified)               |
+| `BrowserMainParts`           | `ShellBrowserMainParts`      | Inherited (**heavily modified**)     |
+| `BrowserContext`             | `ShellBrowserContext`        | Inherited (unmodified)               |
+| `WebContentsDelegate`        | `Shell`                      | Inherited (**modified**)             |
+| `WebContentsObserver`        | `Shell` + `ShellTabObserver` | Shell inherited, TabObserver direct  |
+| `AcceleratedWidgetMacNSView` | `PersistentCompositorBridge` | Direct (**ours**)                    |
+
+All Content API interfaces are implemented **through Content Shell subclasses**,
+not directly. The simplified server would implement them directly.
+
+##### 5. What Content Shell functionality do we rely on?
+
+**Critical functionality we actually use:**
+
+1. **`Shell::CreateNewWindow()`** — Creates a `WebContents`, sets up the
+   delegate chain, creates an NSWindow (offscreen). This is ~50 lines that call
+   `WebContents::Create()`, set the delegate, and call
+   `ShellPlatformDelegate::CreatePlatformWindow()`. Straightforward to
+   replicate.
+
+2. **`ShellBrowserContext`** — Implements `BrowserContext` with file-backed
+   storage. Configures `--user-data-dir` path, creates download manager,
+   permission manager, origin trials delegate. This is ~200 lines. It could be
+   reimplemented, but it's also clean enough to reuse as-is.
+
+3. **`ShellContentBrowserClient`** — Implements `ContentBrowserClient`. Creates
+   the `BrowserMainParts`, configures network context, provides
+   `WebContentsViewDelegate`. Much of it is Content Shell boilerplate (test
+   support, DevTools delegate creation, feature list setup). The essential parts
+   are `CreateBrowserMainParts()`, `ConfigureNetworkContextParams()`, and
+   `GetWebContentsViewDelegate()`. Could be simplified to ~100 lines.
+
+4. **`ShellMainDelegate`** — Implements `ContentMainDelegate`. Initializes
+   resource bundles, crash reporting, creates all client objects. The essential
+   parts are `BasicStartupComplete()`, `PreSandboxStartup()` (resource bundle),
+   and the `Create*Client()` methods. Could be simplified to ~80 lines.
+
+5. **`ShellPlatformDelegate` (Mac)** — Creates an offscreen NSWindow for the
+   WebContents. We need a window because `RenderWidgetHostViewMac` requires one,
+   but we never show it. This is ~30 lines of relevant code.
+
+6. **Resource bundle loading** — `ShellMainDelegate::InitializeResourceBundle()`
+   loads `.pak` files. The `.pak` repack target in BUILD.gn bundles Blink
+   resources, net resources, UI strings, etc. This is build infrastructure, not
+   code — but the simplified server still needs it.
+
+7. **Multi-process architecture** — Content Shell's BUILD.gn and main delegate
+   set up helper processes (GPU, renderer, utility) via the
+   `mac_app_bundle`/`mac_framework_bundle` pattern with helper apps. This is
+   entirely build infrastructure. The simplified server needs the same pattern.
+
+**Functionality we DON'T use but currently carry:**
+
+- DevTools frontend, bindings, manager delegate, protocol handlers (~8 files)
+- JavaScript dialog manager and platform dialog (~3 files)
+- Speech recognition delegate (~2 files)
+- Content index provider (~2 files)
+- Test-specific Mojom interfaces and implementations (~6 files)
+- Shell toolbar / URL bar / navigation buttons (in Shell and platform delegate)
+
+##### 6. Is simplification feasible?
+
+**Yes, with caveats.**
+
+**What's straightforward:**
+
+- Replace `Shell` with a minimal `WebContentsDelegate` that just creates
+  `WebContents` and suppresses popups. Our modifications to `Shell` are small
+  (~70 lines added), and most of `Shell`'s 600+ lines are features we don't use
+  (toolbar, DevTools, file chooser, color chooser, fullscreen, etc.).
+
+- Replace `ShellBrowserMainParts` with a class that only has our XPC/tab/input
+  code. The Content Shell lifecycle methods we override are thin
+  (`InitializeBrowserContexts`, `InitializeMessageLoopContext`,
+  `PreMainMessageLoopRun`). Our ~845 added lines would become the entire class.
+
+- Drop DevTools, JS dialogs, speech, content index, test infra — ~16 files gone
+  with no impact on functionality.
+
+- Implement `ContentMainDelegate`, `ContentBrowserClient`,
+  `ContentRendererClient`, `ContentGpuClient`, `ContentUtilityClient` directly
+  against the Content API. Content Shell's implementations are mostly
+  pass-through with test hooks we don't need.
+
+**What needs care:**
+
+- **`ShellBrowserContext`**: Implements 15+ `BrowserContext` pure virtual
+  methods (download manager, permission controller, storage policy, etc.). Could
+  reuse it as-is or reimplement. Reusing is simpler.
+
+- **Resource bundle / `.pak` repack**: The BUILD.gn `repack()` target that
+  bundles Blink resources is complex but mechanical. We need the same resources.
+  Simplest approach: reference the same resource deps.
+
+- **Mac app bundle structure**: The `mac_app_bundle` + `mac_framework_bundle` +
+  helper apps pattern is ~200 lines of BUILD.gn. This is required for
+  multi-process Chromium on macOS. Can be copied with name changes.
+
+- **`content/browser/` internal headers**: Two of our files
+  (`shell_compositor_bridge_mac.mm` and `shell_ca_layer_bridge_mac.mm`) include
+  `content/browser/renderer_host/render_widget_host_view_mac.h` — an internal
+  header, not part of the public Content API. This works because Content Shell
+  has `check_includes = false` in component builds. A simplified server needs
+  the same escape hatch.
+
+**Estimated file count for simplified server:**
+
+| Category  | Files   | Notes                                                                                                                                   |
+| --------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| App layer | 4-5     | main, delegate, content_main, crash client, paths                                                                                       |
+| Browser   | 8-10    | main_parts, browser_context, browser_client, platform delegate, tab_observer, ca_layer_bridge, compositor_bridge, web_contents_delegate |
+| Common    | 3-4     | content_client, switches, paths                                                                                                         |
+| Renderer  | 2       | renderer_client, frame_observer                                                                                                         |
+| GPU       | 1       | gpu_client                                                                                                                              |
+| Utility   | 1       | utility_client                                                                                                                          |
+| **Total** | **~22** | Down from ~56, minus DevTools/test/dialog/speech                                                                                        |
+
+**Verdict: Feasible and worthwhile.** The simplified server would have \~22
+source files instead of \~56, all purpose-written for TermSurf. No Content Shell
+subclassing — direct Content API implementations. The XPC, compositor, input,
+and observation code (our ~1,050 lines) moves over unchanged. The Content Shell
+boilerplate (DevTools, dialogs, test infra, toolbar) is dropped entirely.
+
+The biggest risk is missing some subtle Content Shell behavior that Chromium
+depends on at runtime. Mitigation: start minimal, test frequently, add back only
+what breaks.
+
+#### Result: Pass
+
+The analysis answers all six questions. Key findings:
+
+- 16 files were modified/created by TermSurf; ~40 files are unmodified Content
+  Shell code, of which ~16 are unnecessary (DevTools, test infra, JS dialogs).
+- All Content API interfaces are implemented through Content Shell subclasses,
+  not directly. The simplified server would implement them directly.
+- `ShellBrowserContext` is the most complex piece to reimplement (15+ pure
+  virtual methods). Recommend reusing it initially.
+- Two files use internal `content/browser/` headers — this is the only tight
+  coupling to Chromium internals.
+- Estimated simplified server: ~22 files vs. ~56 current. All purpose-built.
