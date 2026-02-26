@@ -145,6 +145,12 @@ Ctrl+Esc check that:
 - Notifies the compositor via `send_mode_changed`
 - Is checked before keys are dispatched to edtui
 
+## Key files
+
+- `tui/src/main.rs` — mode enum, key dispatch, status bar rendering
+- `vendor/edtui/src/state/mode.rs` — EditorMode enum
+- `vendor/edtui/src/state.rs` — EditorState struct and initialization
+
 ## Experiments
 
 ### Experiment 1: Change keybinding from `e` to `i`
@@ -161,8 +167,36 @@ Two changes in `tui/src/main.rs`:
    imported.
 3. **Line 410** — change the hint bar text from `"e"` to `"i"`.
 
-## Key files
+**Result: Pass.** Keybinding changed, editor starts in insert mode. Also updated
+`docs/keybindings.md` to document the `i` keybinding and UrlEdit mode.
 
-- `tui/src/main.rs` — mode enum, key dispatch, status bar rendering
-- `vendor/edtui/src/state/mode.rs` — EditorMode enum
-- `vendor/edtui/src/state.rs` — EditorState struct and initialization
+### Experiment 2: Fix Ctrl+Esc exit from UrlEdit
+
+**Goal:** Make Ctrl+Esc exit UrlEdit mode (from either insert or normal) back to
+Control mode. Currently Ctrl+Esc is shown in the hint bar but never handled.
+
+One change in `tui/src/main.rs`. Add a Ctrl+Esc check between the global Ctrl+C
+handler (line 148) and the mode match (line 152):
+
+```rust
+// Ctrl+Esc returns to Control from any mode (Issue 646).
+if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL) {
+    mode = Mode::Control;
+    if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+        conn.send_mode_changed(pid, false);
+    }
+    continue;
+}
+```
+
+This intercepts Ctrl+Esc before edtui ever sees it. It works from any mode —
+Browse, UrlEdit (insert or normal) — and always lands in Control. The `continue`
+skips the per-mode match so the key isn't double-handled.
+
+From Browse mode, Ctrl+Esc duplicates plain Esc (both go to Control). That's
+fine — it's consistent and harmless.
+
+**Result: Fail.** Ctrl+Esc is not received by the TUI at all. The key
+combination doesn't trigger a crossterm `KeyCode::Esc` with
+`KeyModifiers::CONTROL`. The code is correct but the terminal never delivers the
+event. Need to investigate how Ctrl+Esc is encoded by the terminal emulator.
