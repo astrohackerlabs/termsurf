@@ -149,3 +149,57 @@ title sync.
 The C++ profile server works end-to-end. Web rendering, mouse input, keyboard
 input, resize, navigation, URL sync, and page title sync all function correctly.
 We are back to a known-good baseline.
+
+### Experiment 2: Research the Existing Profile Server
+
+Before building anything new, understand what we have. The current
+`chromium_profile_server` is a fork of Content Shell with TermSurf-specific
+modifications layered on top. This experiment maps out what Content Shell
+provides, what TermSurf actually uses, and what can be dropped.
+
+#### Questions to answer
+
+1. **What TermSurf files exist?** List every file in
+   `content/chromium_profile_server/` that we wrote or modified. For each file,
+   summarize what it does in one sentence.
+
+2. **What Content Shell files do we depend on?** Trace the `#include` and
+   subclass chains from our files into `content/shell/`. For each Content Shell
+   file we touch, document why — what base class or function do we use from it?
+
+3. **What Content Shell files are pulled in transitively?** The BUILD.gn target
+   depends on Content Shell sources. Many of those sources pull in more Content
+   Shell code. List the full set of Content Shell files that end up in the
+   build, grouped by category (browser, renderer, DevTools, test infra, UI,
+   etc.).
+
+4. **What Content API interfaces do we actually implement?** List the pure
+   Content API classes (from `content/public/`) that our server needs:
+   `ContentMainDelegate`, `ContentBrowserClient`, `BrowserMainParts`,
+   `BrowserContext`, `WebContentsDelegate`, `WebContentsObserver`, etc. For
+   each, note whether we implement it directly or inherit it through a Content
+   Shell subclass.
+
+5. **What Content Shell functionality do we rely on?** Some Content Shell code
+   may do things we actually need — like setting up the network stack, creating
+   the GPU process, or configuring the compositor. Identify any Content Shell
+   logic that would need to be replicated in a from-scratch implementation.
+
+6. **Is simplification feasible?** Given the answers above, is it realistic to
+   implement a standalone Content API embedder that replaces Content Shell? What
+   are the risks — are there Content Shell behaviors we depend on that would be
+   hard to replicate?
+
+#### Process
+
+Read the source code in `chromium/src/content/chromium_profile_server/` and
+trace its dependencies into `content/shell/` and `content/public/`. Use the
+BUILD.gn files to understand what gets compiled. Read the Content Shell source
+files we subclass to understand what behavior we inherit.
+
+#### Pass criteria
+
+A written analysis answering all six questions above, with enough detail to
+design Experiment 3 (the simplified implementation). The analysis should make it
+clear exactly which Content API interfaces to implement and what Content Shell
+behavior (if any) needs to be replicated.
