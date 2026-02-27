@@ -45,7 +45,7 @@ codesign --force --deep --sign - "$APP"
 # Unregister build tree copies so Spotlight only finds /Applications.
 echo "==> Unregistering build tree copies from Launch Services..."
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-"$LSREGISTER" -u "$REPO_DIR/gui/macos/build/Debug/TermSurf Debug.app" 2>/dev/null || true
+"$LSREGISTER" -u "$REPO_DIR/gui/macos/build/Debug/TermSurf-Debug.app" 2>/dev/null || true
 "$LSREGISTER" -u "$REPO_DIR/gui/macos/build/Debug/TermSurf.app" 2>/dev/null || true
 "$LSREGISTER" -u "$REPO_DIR/gui/macos/build/ReleaseLocal/TermSurf.app" 2>/dev/null || true
 

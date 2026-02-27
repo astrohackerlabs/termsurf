@@ -758,3 +758,46 @@ confirm.
 The debug gateway starts automatically when the debug app launches. Running
 `web https://google.com` in the debug app's terminal connects and loads the
 page. No manual `launchctl` commands needed.
+
+**Result: Partial.**
+
+#### What worked
+
+- **BTM reset alone did not fix it** (step 1). After `sfltool resetbtm`, the
+  debug gateway still failed with exit code 78 after 67 attempts (up from 33).
+  The stale UUID was not the root cause.
+- **Removing the space fixed the debug build** (step 2). Renaming from
+  `TermSurf Debug.app` to `TermSurf-Debug.app` resolved the `BundleProgram` path
+  resolution failure. The debug gateway now starts automatically via
+  SMAppService and `web` loads pages.
+- **Both debug and release gateways run simultaneously.** After the fix, both
+  `com.termsurf.debug.xpc-gateway` and `com.termsurf.xpc-gateway` are running as
+  separate launchd services.
+- Switched SMAppService logging from `fputs` to `os_log` (`Logger`) so
+  registration status is visible in Console.app and the unified log.
+
+#### What didn't work
+
+The installed release build at `/Applications/TermSurf.app` still can't load
+pages. `web` connects to the compositor but pages time out. The debug build
+(from repo) and the release build (from repo) both work — only the installed
+copy fails. This is the same issue observed in Experiment 2.
+
+#### Changes made
+
+- `gui/macos/Ghostty.xcodeproj/project.pbxproj`: `PRODUCT_NAME` changed from
+  `"TermSurf Debug"` to `"TermSurf-Debug"`.
+- `gui/src/build/GhosttyXcodebuild.zig:52`: `app_name` changed from
+  `"TermSurf Debug"` to `"TermSurf-Debug"`.
+- `build-debug.sh:32`: Updated APP path.
+- `install.sh:48`: Updated lsregister unregister path.
+- `gui/macos/Sources/App/macOS/AppDelegate.swift`: Replaced `fputs` with
+  `Logger` for SMAppService registration output.
+
+#### Conclusion
+
+The space in `TermSurf Debug.app` was causing launchd's `BundleProgram`
+resolution to fail with `EX_CONFIG`. The rename to `TermSurf-Debug.app` fixes
+the debug build completely. The installed release build's page loading failure
+is a separate issue unrelated to XPC gateway isolation — it needs its own
+investigation.

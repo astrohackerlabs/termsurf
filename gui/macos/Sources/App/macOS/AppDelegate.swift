@@ -167,11 +167,13 @@ class AppDelegate: NSObject,
         let gatewayService = SMAppService.agent(
             plistName: "com.termsurf.xpc-gateway.plist")
 #endif
+        let logger = Logger(subsystem: "com.termsurf", category: "xpc-gateway")
+        logger.info("Registering xpc-gateway (current status: \(String(describing: gatewayService.status)))")
         do {
             try gatewayService.register()
-            fputs("[TermSurf] Registered xpc-gateway (status: \(gatewayService.status))\n", stderr)
+            logger.info("Registered xpc-gateway (status: \(String(describing: gatewayService.status)))")
         } catch {
-            fputs("[TermSurf] xpc-gateway register error (status: \(gatewayService.status)): \(error)\n", stderr)
+            logger.error("xpc-gateway register failed (status: \(String(describing: gatewayService.status))): \(error)")
         }
 
 #if DEBUG

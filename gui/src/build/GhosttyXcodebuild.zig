@@ -49,7 +49,7 @@ pub fn init(
     };
 
     const env = try std.process.getEnvMap(b.allocator);
-    const app_name = if (config.optimize == .Debug) "TermSurf Debug" else "TermSurf";
+    const app_name = if (config.optimize == .Debug) "TermSurf-Debug" else "TermSurf";
     const app_path = b.fmt("macos/build/{s}/{s}.app", .{ xc_config, app_name });
 
     // Our step to build the Ghostty macOS app.
