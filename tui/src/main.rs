@@ -423,6 +423,9 @@ fn ui(
             Span::raw(submode_text).style(Style::default().fg(PURPLE)),
             Span::raw(" "),
         ]);
+        let url_title = Line::from(vec![
+            Span::raw(" URL ").style(Style::default().fg(url_border))
+        ]);
         let theme = EditorTheme::default()
             .base(Style::default().fg(FG).bg(BG))
             .cursor_style(Style::default().fg(BG).bg(FG))
@@ -432,6 +435,7 @@ fn ui(
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(url_border).bg(BG))
                     .title_style(Style::default().fg(url_border))
+                    .title_top(url_title)
                     .title_top(submode_label.alignment(Alignment::Right))
                     .style(Style::default().bg(BG)),
             )
@@ -441,11 +445,15 @@ fn ui(
             layout[1],
         );
     } else {
+        let url_title = Line::from(vec![
+            Span::raw(" URL ").style(Style::default().fg(url_border))
+        ]);
         let url_bar = Paragraph::new(url).style(Style::default().fg(FG)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(url_border).bg(BG))
                 .title_style(Style::default().fg(url_border))
+                .title_top(url_title)
                 .style(Style::default().bg(BG)),
         );
         frame.render_widget(url_bar, layout[1]);

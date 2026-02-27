@@ -109,3 +109,9 @@ In `tui/src/main.rs`:
 2. Press `Esc` to Control — title still shows, styled in cyan
 3. Press `i` to Edit — title still shows, styled in purple
 4. Press `Enter` to Browse — title still shows, styled in dim border color
+
+### Result
+
+Pass. "URL" title appears in the top-left of the URL bar in all three modes,
+styled to match the border color (dim in Browse, cyan in Control, purple in
+Edit).
