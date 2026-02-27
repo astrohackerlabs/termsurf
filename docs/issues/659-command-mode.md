@@ -192,3 +192,42 @@ Pass. Yellow command bar replaces the URL bar when `:` is pressed. Submode
 indicators display with Nerd Font icons in yellow. `Ctrl+Esc` and `Enter` both
 exit to Control. State is discarded between invocations. URL editor state is
 unaffected.
+
+## Experiment 3: Command dispatch with prefix matching
+
+### Hypothesis
+
+A static command table with prefix-based matching will provide vim-style
+unambiguous command resolution, letting `:q` match `:quit` without requiring the
+full word.
+
+### Changes
+
+In `tui/src/main.rs`:
+
+1. **`CommandResult` enum.** Represents the outcome of a command:
+   - `Quit` — exit the TUI
+   - `None` — unknown or ambiguous command (no-op)
+
+2. **`Command` struct.** Static command definition with a name and a handler
+   function: `fn(args: &[&str]) -> CommandResult`.
+
+3. **`COMMANDS` table.** `const` slice of commands. Starts with one entry:
+   - `quit` — returns `CommandResult::Quit`
+
+4. **`dispatch` function.** Splits input into prefix + args. Filters `COMMANDS`
+   by `name.starts_with(prefix)`. If exactly one match, calls its handler. If
+   zero or multiple matches (ambiguous), returns `CommandResult::None`.
+
+5. **Wire into Command mode.** On `Enter`, extract the command text from
+   `cmd_state`, call `dispatch`, and match on the result:
+   - `Quit` — break the event loop
+   - `None` — return to Control silently
+
+### Test
+
+1. Press `:`, type `quit`, press `Enter` — TUI quits
+2. Relaunch, press `:`, type `q`, press `Enter` — TUI quits (prefix match)
+3. Relaunch, press `:`, type `qu`, press `Enter` — TUI quits
+4. Relaunch, press `:`, type `nonsense`, press `Enter` — returns to Control
+5. Relaunch, press `:`, press `Enter` (empty input) — returns to Control
