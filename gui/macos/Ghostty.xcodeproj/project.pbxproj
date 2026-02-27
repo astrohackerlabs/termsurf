@@ -600,7 +600,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				EXECUTABLE_NAME = ghostty;
+				EXECUTABLE_NAME = termsurf;
 				GCC_OPTIMIZATION_LEVEL = fast;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "TermSurf-Info.plist";
@@ -634,7 +634,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.termsurf;
 				PRODUCT_NAME = TermSurf;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/termsurf-bridging-header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = ReleaseLocal;
@@ -726,7 +726,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/termsurf";
 			};
 			name = Debug;
 		};
@@ -749,7 +749,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/termsurf";
 			};
 			name = Release;
 		};
@@ -772,7 +772,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/termsurf";
 			};
 			name = ReleaseLocal;
 		};
@@ -910,7 +910,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				EXECUTABLE_NAME = ghostty;
+				EXECUTABLE_NAME = termsurf;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "TermSurf-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "TermSurf[DEBUG]";
@@ -942,7 +942,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.termsurf.debug;
 				PRODUCT_NAME = "TermSurf Debug";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/termsurf-bridging-header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 			};
@@ -964,7 +964,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				EXECUTABLE_NAME = ghostty;
+				EXECUTABLE_NAME = termsurf;
 				GCC_OPTIMIZATION_LEVEL = fast;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "TermSurf-Info.plist";
@@ -997,7 +997,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.termsurf;
 				PRODUCT_NAME = TermSurf;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/termsurf-bridging-header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;

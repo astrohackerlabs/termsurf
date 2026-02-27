@@ -82,3 +82,70 @@ functionality or create unnecessary divergence:
 - UTType identifier: `com.mitchellh.ghosttySurfaceId`
 - Library name: `libghostty` (the C library linked by Swift)
 - Resource folder: `zig-out/share/ghostty/`
+
+## Experiments
+
+### Experiment 1: Rename the executable
+
+**Goal:** Change the binary inside the app bundle from `ghostty` to `termsurf`.
+
+#### Changes
+
+**1. `gui/macos/Ghostty.xcodeproj/project.pbxproj`** — Change all three
+`EXECUTABLE_NAME` settings:
+
+- Line 603: `EXECUTABLE_NAME = ghostty;` → `EXECUTABLE_NAME = termsurf;`
+- Line 913: `EXECUTABLE_NAME = ghostty;` → `EXECUTABLE_NAME = termsurf;`
+- Line 967: `EXECUTABLE_NAME = ghostty;` → `EXECUTABLE_NAME = termsurf;`
+
+**2. `gui/macos/Ghostty.xcodeproj/project.pbxproj`** — Update all three bridging
+header references:
+
+- Line 637: `ghostty-bridging-header.h` → `termsurf-bridging-header.h`
+- Line 945: `ghostty-bridging-header.h` → `termsurf-bridging-header.h`
+- Line 1000: `ghostty-bridging-header.h` → `termsurf-bridging-header.h`
+
+**3. Rename the bridging header file:**
+
+```
+gui/macos/Sources/App/macOS/ghostty-bridging-header.h
+→ gui/macos/Sources/App/macOS/termsurf-bridging-header.h
+```
+
+**4. `gui/macos/Ghostty.xcodeproj/project.pbxproj`** — Update test host paths:
+
+- Line 729: `.../ghostty"` → `.../termsurf"`
+- Line 752: `.../ghostty"` → `.../termsurf"`
+- Line 775: `.../ghostty"` → `.../termsurf"`
+
+#### Verification
+
+1. **Debug build**: `cd gui && zig build`. Check that
+   `gui/macos/build/Debug/TermSurf Debug.app/Contents/MacOS/termsurf` exists
+   (not `ghostty`).
+2. **Release build**: `cd gui && zig build -Doptimize=ReleaseFast`. Check that
+   `gui/macos/build/ReleaseLocal/TermSurf.app/Contents/MacOS/termsurf` exists.
+3. **Run**: Launch the debug app. It starts normally — the binary name change
+   doesn't affect functionality.
+4. **Install**: Run `install.sh`. Verify
+   `/Applications/TermSurf.app/Contents/MacOS/termsurf` exists and the
+   `/usr/local/bin/termsurf` symlink works.
+
+**Result: Pass.** Debug build produces `termsurf` binary inside
+`TermSurf Debug.app/Contents/MacOS/`. The app launches and runs normally.
+
+## Conclusion
+
+The CLI binary inside the app bundle is now named `termsurf` instead of
+`ghostty`. Three areas changed in the Xcode project: `EXECUTABLE_NAME` (3
+configs), bridging header references (3 refs + file rename), and test host paths
+(3 refs). The Zig build system (`GhosttyExe.zig`) was already correct from
+Issue 650.
+
+**Remaining issue:** The `web` TUI cannot connect to the installed release app.
+The XPC gateway (`com.termsurf.xpc-gateway`) is a singleton Mach service — both
+debug and release builds register with the same gateway, and the gateway only
+stores one app endpoint. Whichever app registers last wins. Additionally, the
+gateway's launchd plist still points to a stale path
+(`ghost/xpc-gateway/.build/debug/xpc-gateway`). This will be addressed in
+Issue 653.
