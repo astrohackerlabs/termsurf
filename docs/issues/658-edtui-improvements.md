@@ -146,3 +146,48 @@ In `tui/src/main.rs`:
 2. Press `Esc` — status bar still says `EDIT`, URL bar says `NORMAL`
 3. Press `v` — URL bar says `VISUAL`, status bar still `EDIT`
 4. All four submodes show their icon in the URL bar
+
+### Result
+
+Pass. Status bar shows `EDIT` in all editor submodes. URL bar top-right shows
+the submode with its Nerd Font icon. However, copy/paste has a bug — see
+Experiment 3.
+
+## Experiment 3: Fix line-mode yank newline
+
+### Problem
+
+edtui's line-mode yank prepends a newline to copied text. `CopyLine` (`yy`) does
+`String::from('\n') + &line`, and line-mode visual selection (`V` then `y`)
+inserts an empty row at index 0. Both cause a phantom newline at the start of
+pasted text. For a single-line URL editor, this means pasting a yanked URL into
+another application produces `\nhttp://example.com` instead of
+`http://example.com`.
+
+### Solution
+
+edtui exposes `ClipboardTrait` and `EditorState::set_clipboard()`. Implement a
+custom clipboard wrapper that strips leading newlines in `set_text` before
+writing to the system clipboard. This intercepts all clipboard writes without
+modifying vendored edtui source.
+
+### Changes
+
+In `tui/src/main.rs`:
+
+1. **Custom clipboard struct** — `UrlClipboard` wraps `arboard::Clipboard`,
+   implementing edtui's `ClipboardTrait`. `set_text` strips leading newlines.
+   `get_text` passes through unchanged.
+
+2. **Set clipboard on editor state** — After creating `EditorState`, call
+   `editor_state.set_clipboard(UrlClipboard::new())` to install the wrapper.
+
+### Test
+
+1. Press `i` from Control, type a URL, press `Esc`
+2. Press `yy` — yank the line
+3. Paste into an external application — no leading newline
+4. Press `V` then `y` — visual line yank
+5. Paste into an external application — no leading newline
+6. Press `v`, select part of the URL, press `y`
+7. Paste — no leading newline, only selected text

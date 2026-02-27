@@ -389,10 +389,10 @@ fn ui(
     if *mode == Mode::Edit {
         // Submode indicator in top-right of URL bar (Issue 658).
         let submode_text = match editor_state.mode {
-            EditorMode::Normal => "NORMAL",
-            EditorMode::Insert => "INSERT",
-            EditorMode::Visual => "VISUAL",
-            EditorMode::Search => "SEARCH",
+            EditorMode::Normal => "\u{EA85} NORMAL",
+            EditorMode::Insert => "\u{F040} INSERT",
+            EditorMode::Visual => "\u{F14A} VISUAL",
+            EditorMode::Search => "\u{F002} SEARCH",
         };
         let submode_label = Line::from(vec![
             Span::raw(" ").style(Style::default().fg(PURPLE)),
@@ -514,12 +514,7 @@ fn ui(
     let label = match mode {
         Mode::Browse => "\u{F059F} BROWSE".to_string(),
         Mode::Control => "\u{F11C} CONTROL".to_string(),
-        Mode::Edit => match editor_state.mode {
-            EditorMode::Normal => "\u{EA85} NORMAL".to_string(),
-            EditorMode::Insert => "\u{F040} INSERT".to_string(),
-            EditorMode::Visual => "\u{F14A} VISUAL".to_string(),
-            EditorMode::Search => "\u{F002} SEARCH".to_string(),
-        },
+        Mode::Edit => "\u{F044} EDIT".to_string(),
     };
 
     let hints_widget = Paragraph::new(hints);
