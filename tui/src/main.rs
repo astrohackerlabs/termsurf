@@ -25,6 +25,7 @@ const CYAN: Color = Color::Rgb(0x7d, 0xcf, 0xff);
 const BORDER: Color = Color::Rgb(0x56, 0x5f, 0x89);
 const DIM: Color = Color::Rgb(0x90, 0x9a, 0xb8);
 const SELECTION: Color = Color::Rgb(0x28, 0x34, 0x57);
+const PURPLE: Color = Color::Rgb(0xbb, 0x9a, 0xf7);
 
 #[derive(PartialEq)]
 enum Mode {
@@ -312,7 +313,8 @@ fn ui(
     // Border colors based on mode.
     let (url_border, viewport_border) = match mode {
         Mode::Browse => (BORDER, CYAN),
-        Mode::Control | Mode::UrlEdit => (CYAN, BORDER),
+        Mode::Control => (CYAN, BORDER),
+        Mode::UrlEdit => (PURPLE, BORDER),
     };
 
     // URL bar.

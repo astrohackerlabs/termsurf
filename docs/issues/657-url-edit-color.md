@@ -51,3 +51,14 @@ URL bar is being edited vs merely focused.
 3. Press `i` to enter UrlEdit mode — URL bar border should turn purple
 4. Press `Esc` to return to Control — border should return to cyan
 5. Press `Enter` to Browse — URL bar border should be the dim border color
+
+### Result
+
+Pass. All three modes show distinct border colors: dim (Browse), cyan (Control),
+purple (UrlEdit). The purple border makes it immediately obvious when you're in
+an editing mode.
+
+## Conclusion
+
+Purple URL bar border for UrlEdit mode works. Two-line change in
+`tui/src/main.rs`.
