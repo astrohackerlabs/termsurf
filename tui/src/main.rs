@@ -38,6 +38,42 @@ enum Mode {
     Command,
 }
 
+// Command dispatch (Issue 659).
+enum CommandResult {
+    Quit,
+    None,
+}
+
+struct Command {
+    name: &'static str,
+    exec: fn(args: &[&str]) -> CommandResult,
+}
+
+const COMMANDS: &[Command] = &[Command {
+    name: "quit",
+    exec: |_| CommandResult::Quit,
+}];
+
+fn dispatch(input: &str) -> CommandResult {
+    let mut parts = input.trim().splitn(2, ' ');
+    let prefix = parts.next().unwrap_or("");
+    if prefix.is_empty() {
+        return CommandResult::None;
+    }
+    let args: Vec<&str> = parts
+        .next()
+        .map(|s| s.split_whitespace().collect())
+        .unwrap_or_default();
+    let matches: Vec<&Command> = COMMANDS
+        .iter()
+        .filter(|c| c.name.starts_with(prefix))
+        .collect();
+    match matches.len() {
+        1 => (matches[0].exec)(&args),
+        _ => CommandResult::None,
+    }
+}
+
 /// Clipboard wrapper that strips leading newlines from edtui's line-mode yanks
 /// (Issue 658).
 struct UrlClipboard(arboard::Clipboard);
@@ -322,7 +358,16 @@ fn main() -> io::Result<()> {
                             mode = Mode::Control;
                         } else if key.code == KeyCode::Enter && cmd_state.mode != EditorMode::Search
                         {
-                            // Enter exits Command → Control (no dispatch yet).
+                            // Extract command text and dispatch (Issue 659).
+                            let cmd_text: String = cmd_state
+                                .lines
+                                .get(RowIndex::new(0))
+                                .map(|line| line.iter().collect())
+                                .unwrap_or_default();
+                            match dispatch(&cmd_text) {
+                                CommandResult::Quit => break,
+                                CommandResult::None => {}
+                            }
                             mode = Mode::Control;
                         } else {
                             // Pass everything else to command edtui.

@@ -231,3 +231,8 @@ In `tui/src/main.rs`:
 3. Relaunch, press `:`, type `qu`, press `Enter` — TUI quits
 4. Relaunch, press `:`, type `nonsense`, press `Enter` — returns to Control
 5. Relaunch, press `:`, press `Enter` (empty input) — returns to Control
+
+### Result
+
+Pass. Prefix matching works: `:q`, `:qu`, `:qui`, `:quit` all quit. Unknown and
+empty commands return to Control silently. Static command table is extensible.
