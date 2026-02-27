@@ -801,3 +801,90 @@ resolution to fail with `EX_CONFIG`. The rename to `TermSurf-Debug.app` fixes
 the debug build completely. The installed release build's page loading failure
 is a separate issue unrelated to XPC gateway isolation — it needs its own
 investigation.
+
+### Experiment 5: Diagnose installed build page timeout
+
+**Goal:** Determine why `web` can load pages from the debug build and the
+release build (both run from the repo), but NOT from the installed release build
+at `/Applications/TermSurf.app`.
+
+#### Symptom
+
+- Debug build (`gui/macos/build/Debug/TermSurf-Debug.app`): `web` connects and
+  pages load.
+- Release build (`gui/zig-out/TermSurf.app`): `web` connects and pages load.
+- Installed build (`/Applications/TermSurf.app`): `web` connects to the
+  compositor ("Connected to compositor") but pages time out. No error, just
+  hangs.
+
+The XPC gateway works — `web` gets past the gateway and connects directly to the
+app. The problem is somewhere between the compositor receiving the navigate
+request and Chromium rendering the page.
+
+#### Diagnostic steps
+
+1. **Compare the gateway and compositor connections.** Run `web` from both the
+   release repo build and the installed build. Capture the full output of both
+   to compare. Are there differences in the connection flow beyond "Connected to
+   compositor"?
+
+2. **Check if Chromium starts.** After launching the installed app and running
+   `web https://google.com`, check if any Chromium processes are running:
+
+   ```
+   ps aux | grep -i "chromium\|profile.server" | grep -v grep
+   ```
+
+   If no Chromium processes exist, the app can't find or launch the Chromium
+   server. If they exist, the issue is downstream.
+
+3. **Check how the app finds Chromium.** Read the Zig code that launches the
+   Chromium Profile Server to understand how the path is resolved. Is it:
+   - Hardcoded to the build directory (`chromium/src/out/Default/`)?
+   - Relative to the app bundle (`Contents/Helpers/`)?
+   - Read from a config file or environment variable?
+
+   If hardcoded to the build directory, the installed app would still find
+   Chromium (the build dir still exists), so path resolution alone wouldn't
+   explain the failure. But if there's a secondary path used for resources (pak
+   files, locales, v8 snapshot), those might differ.
+
+4. **Check the Chromium server's stderr/stdout.** The Chromium server may be
+   logging errors. Find where its output goes:
+
+   ```
+   /usr/bin/log show --predicate 'process CONTAINS "Chromium"' --last 5m --style compact
+   ```
+
+   Also check if the debug-logs skill has a configured log path for Chromium.
+
+5. **Check environment differences.** When the app runs from the repo directory,
+   the working directory and environment may differ from `/Applications/`.
+   Check:
+   - What is the app's working directory in each case?
+   - Are there environment variables set differently?
+   - Does the app inherit `PATH` or other vars that affect Chromium discovery?
+
+6. **Check code signing impact.** Experiment 2 found that `install.sh` breaks
+   the code signature by adding files to the bundle, and we added
+   `codesign --force --deep --sign -` to re-sign. Verify:
+
+   ```
+   codesign -vvv /Applications/TermSurf.app
+   ```
+
+   Even if the signature is valid, the re-signing might change the app's
+   identity in a way that affects XPC endpoint connections or Chromium IPC.
+
+7. **Test a minimal install.** Copy the release build to `/Applications/`
+   WITHOUT adding Chromium helpers or the web binary — just the bare app bundle.
+   Launch it, then run `web` from the repo's cargo build. If pages load, the
+   issue is caused by `install.sh`'s bundle modifications. If pages still don't
+   load, the issue is the `/Applications/` path itself.
+
+#### Expected outcome
+
+Step 2 will narrow the problem to either "Chromium doesn't start" or "Chromium
+starts but can't render." Step 3 will reveal the path resolution logic. Step 7
+will isolate whether `install.sh` modifications cause the failure or the
+`/Applications/` location itself is the problem.
