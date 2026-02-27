@@ -119,7 +119,8 @@ and app icon (Issues 611–612), directory rename from ghost/web to gui/tui (Iss
 613), XDG directory compliance (Issue 615), loading progress indicator and
 browser navigation keybindings (Issue 616), CALayerHost migration replacing
 FrameSinkVideoCapturer with zero-copy Window Server compositing (Issues
-624–632), reproducible rename script for upstream merges (Issue 656).
+624–632), reproducible rename script for upstream merges (Issue 656), purple Edit
+mode border (Issue 657), vim-like editor modes and keybindings (Issue 658).
 
 ### Source Layout
 
@@ -203,6 +204,10 @@ git subtree pull --prefix=gui upstream main -m "Merge upstream Ghostty into gui"
   CAContext
 - `docs/issues/656-rename-script.md` — Reproducible ghostty→termsurf rename
   script
+- `docs/issues/657-url-edit-color.md` — Purple URL bar border in Edit mode
+- `docs/issues/658-edtui-improvements.md` — Vim-like editor modes, keybindings,
+  clipboard fix
+- `docs/issues/659-command-mode.md` — Vim-style command mode (:q, etc.)
 - `docs/xdg.md` — XDG directory pattern and conventions
 
 ### Early Prototypes (ts1–ts5)

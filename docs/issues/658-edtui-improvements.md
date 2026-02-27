@@ -197,3 +197,28 @@ In `tui/src/main.rs`:
 Pass. Custom `UrlClipboard` strips leading newlines from edtui's line-mode
 yanks. All three copy methods (`yy`, `Vy`, `v` selection `y`) paste cleanly
 without phantom newlines. No changes to vendored edtui source.
+
+## Conclusion
+
+The TUI URL bar editor now feels like a proper vim buffer. Three experiments
+delivered:
+
+1. **Mode hierarchy** — `Mode::UrlEdit` renamed to `Mode::Edit` with submodes
+   (Normal, Insert, Visual, Search) managed by edtui. The TUI tracks a single
+   Edit mode; edtui handles submodes internally. `Ctrl+Esc` exits Edit → Control
+   from any submode.
+
+2. **Six vim keybindings** — `i`, `A`, `I` (Insert), `n` (Normal), `v`, `V`
+   (Visual) enter Edit mode with the expected cursor position and selection
+   state. Persistent `EditorState` preserves cursor across mode transitions.
+
+3. **Mode indicators** — Status bar shows `EDIT` (with pencil icon) for all
+   editor submodes. URL bar top-right shows the active submode with its Nerd
+   Font icon in purple.
+
+4. **Clean clipboard** — Custom `UrlClipboard` strips leading newlines from
+   edtui's line-mode yanks, so copied URLs paste cleanly into external
+   applications. No vendored edtui changes required.
+
+Next: Issue 659 adds vim-style command mode (`:q`, `:w`, etc.) as a new TUI mode
+with its own edtui instance.
