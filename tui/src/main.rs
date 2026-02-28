@@ -109,7 +109,7 @@ impl ClipboardTrait for UrlClipboard {
 }
 
 #[derive(Parser)]
-#[command(name = "web", about = "Terminal browser")]
+#[command(name = "web", about = "TermSurf Web")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

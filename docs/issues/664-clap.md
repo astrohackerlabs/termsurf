@@ -137,3 +137,17 @@ hand-rolled argument loop while preserving both `web url <url>` (new) and
 5. `web https://example.com --profile test` — uses profile "test"
 6. `web` — shows help/error (no URL provided)
 7. `web --help` — shows clap-generated help with subcommands listed
+
+### Result
+
+Pass. All seven test cases verified. clap replaces the manual `while` loop with
+derive macros. Both `web url <url>` and `web <url>` work. `--profile` works as a
+global flag with both syntaxes. `web` shows a usage error and `web --help` shows
+clap-generated help with the `url` subcommand listed.
+
+## Conclusion
+
+One experiment replaced the hand-rolled argument parser with clap. The `web` CLI
+now supports subcommands (`web url <url>`) while preserving backwards
+compatibility (`web <url>`). `--profile` is a global flag available to all
+subcommands. Future subcommands can be added by extending the `Commands` enum.
