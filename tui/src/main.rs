@@ -349,9 +349,8 @@ fn main() -> io::Result<()> {
                         }
                     }
                     Mode::Edit => {
-                        // Ctrl+Esc exits Edit → Control (Issue 658).
-                        if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
+                        // Esc in Normal mode exits Edit → Control (Issue 665).
+                        if key.code == KeyCode::Esc && editor_state.mode == EditorMode::Normal {
                             mode = Mode::Control;
                         } else if key.code == KeyCode::Enter
                             && editor_state.mode != EditorMode::Search
@@ -375,9 +374,8 @@ fn main() -> io::Result<()> {
                         }
                     }
                     Mode::Command => {
-                        // Ctrl+Esc exits Command → Control (Issue 659).
-                        if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
+                        // Esc in Normal mode exits Command → Control (Issue 665).
+                        if key.code == KeyCode::Esc && cmd_state.mode == EditorMode::Normal {
                             mode = Mode::Control;
                         } else if key.code == KeyCode::Enter && cmd_state.mode != EditorMode::Search
                         {
@@ -646,7 +644,7 @@ fn ui(
             Span::styled("fwd  ", d),
             Span::styled("\u{2318}r ", f),
             Span::styled("reload  ", d),
-            Span::styled("\u{2303}esc ", f),
+            Span::styled("esc ", f),
             Span::styled("control", d),
         ]),
         Mode::Control => Line::from(vec![
@@ -660,13 +658,13 @@ fn ui(
         Mode::Edit => Line::from(vec![
             Span::styled("\u{23CE} ", f),
             Span::styled("navigate  ", d),
-            Span::styled("\u{2303}esc ", f),
+            Span::styled("esc ", f),
             Span::styled("control", d),
         ]),
         Mode::Command => Line::from(vec![
             Span::styled("\u{23CE} ", f),
             Span::styled("execute  ", d),
-            Span::styled("\u{2303}esc ", f),
+            Span::styled("esc ", f),
             Span::styled("control", d),
         ]),
     };

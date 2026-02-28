@@ -676,9 +676,9 @@ pub fn notifyOverlayClicked(surface: *CoreSurface) void {
     sendFocusChanged(pane_id_key, true);
 }
 
-/// Called when Ctrl+Esc is pressed. Always returns to control mode,
-/// regardless of the current browsing state (Issue 646).
-pub fn notifyCtrlEsc(surface: *CoreSurface) void {
+/// Called when Esc is pressed. Always returns to control mode,
+/// regardless of the current browsing state (Issue 665).
+pub fn notifyEsc(surface: *CoreSurface) void {
     const pane_id_key = surface_to_pane.get(@intFromPtr(surface)) orelse return;
     const p = panes.get(pane_id_key) orelse return;
 

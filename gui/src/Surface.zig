@@ -2737,11 +2737,13 @@ pub fn keyCallback(
         event.mods = self.config.key_remaps.apply(event_orig.mods);
     }
 
-    // Ctrl+Esc always returns to control mode (Issue 646 Experiment 4).
-    if (event.key == .escape and event.mods.ctrl and event.action == .press) {
+    // Esc in browse mode returns to control mode (Issue 665).
+    // Only intercept when forwarding (browse mode + focused) so that
+    // Edit/Command modes let Esc pass through to the terminal for edtui.
+    if (event.key == .escape and !event.mods.ctrl and event.action == .press) {
         const xpc = @import("apprt/xpc.zig");
-        if (xpc.hasOverlayPane(self)) {
-            xpc.notifyCtrlEsc(self);
+        if (xpc.isOverlayForwarding(self)) {
+            xpc.notifyEsc(self);
             return .consumed;
         }
     }
