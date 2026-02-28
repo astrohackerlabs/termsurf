@@ -96,10 +96,25 @@ gui/scripts/clean-zig.sh
 cd gui && zig build
 ```
 
-### Test
+### Result: PASS
 
-1. `gui/scripts/generate-icons.sh` regenerates all 7 icon sizes + 3 AppIconImage
-   sizes from the new source.
-2. `gui/scripts/clean-zig.sh` runs without errors.
-3. `cd gui && zig build` compiles without errors.
-4. `open gui/zig-out/TermSurf.app` — new icon appears in Finder and dock.
+Icons regenerated from `assets/termsurf-2-black-3.png`. Default updated in
+`generate-icons.sh`. Clean build succeeded. New icon appears in Finder and dock.
+
+## Conclusion
+
+The icon pipeline is fully operational across two iterations:
+
+1. **`gui/scripts/clean-zig.sh`** — clears `zig-out/`, `.zig-cache/`,
+   `macos/build/`, and Xcode DerivedData without touching the Chromium cache.
+2. **`gui/scripts/generate-icons.sh [source]`** — generates all 7 AppIcon sizes
+   - 3 AppIconImage sizes from a source PNG. Defaults to
+     `assets/termsurf-2-black-3.png`.
+
+To update the icon in the future:
+
+```bash
+gui/scripts/generate-icons.sh path/to/new-icon.png
+gui/scripts/clean-zig.sh
+cd gui && zig build
+```
