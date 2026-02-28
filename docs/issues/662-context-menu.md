@@ -289,3 +289,72 @@ Wiring up the actions is a follow-up experiment.
 3. Right-click in the terminal pane — see the normal terminal context menu
 4. Select a menu item — no crash, action logs to console
 5. Menu appears at the cursor position
+
+## Conclusion (Deferred)
+
+Deferred. The research is complete but the implementation is surprisingly
+complex due to AppKit's event ordering. Key findings for when this is revisited:
+
+### Why Chromium can't show its own menu
+
+Chromium runs as a separate process. On macOS, showing an NSMenu activates the
+process that owns it. Chromium's NSMenu was disabled in Issue 616 Experiment 9
+(`shell_web_contents_view_delegate_mac.mm` line 104) because it opened as a
+separate window and stole focus from TermSurf. The context menu must be shown by
+TermSurf's own process.
+
+### How Ghostty's right-click event chain works
+
+1. AppKit calls `menu(for:)` on SurfaceView **before** any mouse events
+2. If `menu(for:)` returns non-nil → AppKit shows the menu and **suppresses**
+   `rightMouseDown`/`rightMouseUp` — Zig never sees the event
+3. If `menu(for:)` returns nil → AppKit calls `rightMouseDown`
+4. `rightMouseDown` calls `termsurf_surface_mouse_button()` → Zig's
+   `mouseButtonCallback()`
+5. If Zig returns `true` (consumed) → Swift returns without calling
+   `super.rightMouseDown()` → no terminal context menu
+6. If Zig returns `false` → Swift calls `super.rightMouseDown()` → AppKit calls
+   `menu(for:)` → terminal context menu appears
+
+This is how neovim suppresses the terminal context menu: neovim enables mouse
+reporting, so Zig consumes the right-click (returns `true`), `super` is never
+called, and `menu(for:)` is never reached.
+
+### The timing problem
+
+For the browser overlay, the right-click goes through `mouseButtonCallback` →
+`hitTestOverlay` → `xpc.sendMouseEvent()` → returns `true`. This means
+`menu(for:)` is never called because `super.rightMouseDown()` is never called.
+Setting a flag in Zig and checking it in `menu(for:)` doesn't work because
+`menu(for:)` runs before `rightMouseDown` in AppKit's normal flow, but only runs
+via `super.rightMouseDown()` in Ghostty's override.
+
+### Two viable approaches
+
+**Approach A: Swift-only via `menu(for:)`.** Check
+`termsurf_surface_is_overlay_forwarding(surface)` inside `menu(for:)` at the top
+of the `.rightMouseDown` case. If browsing, return a browser-specific NSMenu.
+AppKit calls `menu(for:)` before `rightMouseDown`, so the check happens before
+the overlay consumes the event. No Zig changes needed. The right-click would
+show the browser menu and suppress `rightMouseDown` entirely (the overlay never
+sees it). Downside: Chromium never receives the right-click event.
+
+**Approach B: Zig intercept + C API callback.** In `mouseButtonCallback`, when
+`button == .right` and the overlay is hit, don't forward to Chromium. Instead
+call a new C API export that tells Swift to show a browser NSMenu. Challenge:
+Zig runs on a callback thread, NSMenu must be shown on the main thread, and the
+menu positioning needs the original NSEvent coordinates.
+
+### What's needed for navigation
+
+Back/Forward/Reload require new XPC message types (`"go_back"`, `"go_forward"`,
+`"reload"`) and corresponding C++ handlers in the Chromium Profile Server to
+call `WebContents::GetController().GoBack()`, `GoForward()`, and `Reload()`.
+
+### Existing infrastructure
+
+- `termsurf_surface_is_overlay_forwarding()` — already exported to Swift, can be
+  called from `menu(for:)`
+- `SurfaceView_AppKit.swift` `menu(for:)` — already builds terminal context
+  menus, can be extended with a browser branch
+- NSMenu extensions and SF Symbol helpers already exist in the codebase
