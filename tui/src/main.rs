@@ -175,12 +175,12 @@ fn main() -> io::Result<()> {
         .as_ref()
         .and_then(|conn| pane_id.as_ref().and_then(|pid| conn.send_hello(pid)));
 
-    let mut url = match cli.command {
+    let mut url = normalize_url(&match cli.command {
         Some(Commands::Url { url }) => url,
         None => cli.url.unwrap_or_else(|| {
             hello_homepage.unwrap_or_else(|| "https://termsurf.com/welcome".to_string())
         }),
-    };
+    });
 
     // Enter raw mode and alternate screen.
     enable_raw_mode()?;
@@ -388,8 +388,8 @@ fn main() -> io::Result<()> {
                                 .get(RowIndex::new(0))
                                 .map(|line| line.iter().collect())
                                 .unwrap_or_default();
-                            url = new_url.clone();
-                            editor_url = new_url;
+                            url = normalize_url(&new_url);
+                            editor_url = url.clone();
                             mode = Mode::Browse;
                             if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
                                 conn.send_navigate(pid, &url);
@@ -508,6 +508,23 @@ fn main() -> io::Result<()> {
         LeaveAlternateScreen
     )?;
     Ok(())
+}
+
+/// Normalize a URL by prepending a scheme if missing (Issue 676).
+fn normalize_url(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.contains("://") {
+        return trimmed.to_string();
+    }
+    // Extract the host portion (before any path/query).
+    let host = trimmed.split('/').next().unwrap_or(trimmed);
+    if host.ends_with("localhost") || host.contains("localhost:") {
+        return format!("http://{trimmed}");
+    }
+    if trimmed.contains('.') {
+        return format!("https://{trimmed}");
+    }
+    trimmed.to_string()
 }
 
 /// Render the UI and return the viewport inner rect (grid coordinates).

@@ -76,3 +76,17 @@ url = normalize_url(&new_url);
 8. `web file:///tmp/test.html` → still works (file scheme preserved)
 9. Type `github.com` in URL bar, press Enter → `https://github.com`
 10. `web` (no args) → homepage unchanged (already has scheme)
+
+### Result: PASS
+
+Build succeeds. Bare domains get `https://`, localhost variants get `http://`,
+explicit schemes are preserved. Works from both CLI args and the URL bar editor.
+
+## Conclusion
+
+`web` now normalizes URLs automatically. Type `google.com` and get
+`https://google.com`. Type `localhost:3000` or `myapp.localhost:3000` and get
+`http://`. Explicit schemes are never touched.
+
+Single file changed: `tui/src/main.rs` — `normalize_url` function applied at
+both URL entry points (CLI resolution and editor submit).
