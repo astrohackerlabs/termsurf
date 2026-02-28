@@ -40,7 +40,7 @@ function WelcomePage() {
     container.appendChild(renderer.domElement);
 
     // Lights
-    const ambient = new THREE.AmbientLight(0x404040, 0.5);
+    const ambient = new THREE.AmbientLight(0x808080, 1.5);
     scene.add(ambient);
 
     const light1 = new THREE.PointLight(0x00ffff, 80, 50);
@@ -119,7 +119,7 @@ function WelcomePage() {
         subtitleGeo.center();
 
         const subtitleMat = new THREE.MeshStandardMaterial({
-          color: 0x666666,
+          color: 0xaaaaaa,
           metalness: 0.3,
           roughness: 0.7,
         });
