@@ -56,3 +56,33 @@ Initial menu (hardcoded on TermSurf side):
 - **Reload** — reload current page
 
 Future additions (not in scope): Copy Link, Open in New Tab, Inspect Element.
+
+## Experiment 1: Research
+
+### Hypothesis
+
+Before implementation, we need to understand how each layer handles context
+menus today and what modifications are required.
+
+### Research needed
+
+1. **Chromium `HandleContextMenu`** — find where Content Shell implements (or
+   stubs) `WebContentsDelegate::HandleContextMenu()`. Determine what parameters
+   it receives (coordinates, menu model) and what the simplest intercept looks
+   like.
+
+2. **Existing XPC message types** — review the current XPC protocol between
+   Chromium and TermSurf. Determine how to add a new message type for context
+   menu requests (format, keys, naming convention).
+
+3. **Zig → Swift context menu path** — check whether Ghostty already has any
+   context menu or `NSMenu` infrastructure in the Swift layer. Determine what C
+   API export is needed for Zig to trigger a menu popup.
+
+4. **Coordinate mapping** — understand how Chromium's content coordinates map to
+   the macOS window coordinates needed by `NSMenu.popUp(positioning:at:in:)`.
+   Check whether the existing mouse coordinate transform can be reused.
+
+5. **Right-click suppression** — determine whether we need to suppress
+   Chromium's default right-click behavior (since it can't display its own menu)
+   or whether it already fails silently.
