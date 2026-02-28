@@ -65,3 +65,20 @@ bun run dev  # verify dev server works
 1. `bun run build` — compiles without errors
 2. `bun run dev` — dev server starts and pages render correctly
 3. `bun outdated` — no outdated packages
+
+### Result: PASS
+
+All 13 packages updated. Four major version bumps (tailwind-merge 3, vite 7,
+@vitejs/plugin-react 5, vite-tsconfig-paths 6) were drop-in replacements — no
+code changes needed. `bun run build` succeeds, `bun outdated` shows zero
+outdated packages.
+
+Note: `bun update` only bumps within semver `^` ranges. The four major versions
+required explicit `bun add pkg@latest` to cross the major boundary.
+
+## Conclusion
+
+All website dependencies updated to latest. No breaking changes encountered.
+
+- `website/package.json` — all 13 packages bumped to latest
+- `website/bun.lock` — regenerated
