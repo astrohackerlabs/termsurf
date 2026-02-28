@@ -225,3 +225,44 @@ silently. The simplest implementation path may be to intercept right-clicks at
 the Swift/Zig level (before forwarding to Chromium) rather than round-tripping
 through Chromium's `HandleContextMenu` → XPC → Swift. This avoids C++ changes
 and coordinate transform complexity entirely.
+
+## Experiment 2: Browser context menu in Swift
+
+### Hypothesis
+
+AppKit calls `menu(for:)` on the SurfaceView before mouse events reach Zig. By
+checking `termsurf_surface_is_overlay_forwarding()` inside `menu(for:)`, we can
+return a browser-specific NSMenu (Back, Forward, Reload) instead of the terminal
+context menu. No Zig changes needed. No coordinate mapping needed — AppKit
+positions the menu from the original NSEvent automatically.
+
+Navigation actions won't work yet (Back/Forward/Reload need new XPC message
+types and C++ handlers). This experiment proves the menu appears correctly.
+Wiring up the actions is a follow-up experiment.
+
+### Changes
+
+In `gui/macos/Sources/TermSurf/Surface View/SurfaceView_AppKit.swift`:
+
+1. **Check browse state in `menu(for:)`** — at the top of the `.rightMouseDown`
+   case, after the existing guard, check
+   `termsurf_surface_is_overlay_forwarding(surface)`. If true, return a
+   browser-specific menu instead of the terminal menu.
+
+2. **Build browser NSMenu** — create a new menu with three items:
+   - Back (SF Symbol: `chevron.left`)
+   - Forward (SF Symbol: `chevron.right`)
+   - Reload (SF Symbol: `arrow.clockwise`)
+
+3. **Add placeholder action handlers** — `@objc` methods on SurfaceView that log
+   the action for now (e.g., `browserBack`, `browserForward`, `browserReload`).
+   These will be wired to XPC navigation commands in a later experiment.
+
+### Test
+
+1. Launch TermSurf, navigate to a page in browse mode
+2. Right-click in the browser pane — see Back, Forward, Reload menu (not the
+   terminal Copy/Paste/Split menu)
+3. Right-click in the terminal pane — see the normal terminal context menu
+4. Select a menu item — no crash, action logs to console
+5. Menu appears at the cursor position (AppKit handles this automatically)
