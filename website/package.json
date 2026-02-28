@@ -14,11 +14,13 @@
     "@tanstack/react-router": "^1.147.0",
     "@tanstack/react-start": "^1.147.0",
     "@tanstack/router-plugin": "^1.147.1",
+    "@types/three": "^0.183.1",
     "clsx": "^2.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sharp": "^0.34.5",
-    "tailwind-merge": "^2.6.0"
+    "tailwind-merge": "^2.6.0",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
