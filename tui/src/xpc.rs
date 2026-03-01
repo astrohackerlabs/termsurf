@@ -42,6 +42,7 @@ extern "C" {
     fn xpc_dictionary_get_bool(dict: XpcObjectT, key: *const c_char) -> bool;
     fn xpc_dictionary_set_bool(dict: XpcObjectT, key: *const c_char, value: bool);
     fn xpc_dictionary_get_uint64(dict: XpcObjectT, key: *const c_char) -> u64;
+    fn xpc_dictionary_get_int64(dict: XpcObjectT, key: *const c_char) -> i64;
     fn xpc_get_type(object: XpcObjectT) -> *const c_void;
 }
 
@@ -390,6 +391,99 @@ impl CompositorConnection {
         };
         unsafe { xpc_release(reply) };
         result
+    }
+
+    /// Query the GUI for the last active browser pane/tab (Issue 684 Exp 4).
+    pub fn send_query_last(
+        &self,
+        pane_id: &str,
+        profile: &str,
+    ) -> Option<(String, String, i64)> {
+        let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
+        if dict.is_null() {
+            return None;
+        }
+
+        unsafe {
+            let key = CString::new("action").unwrap();
+            let val = CString::new("query_last").unwrap();
+            xpc_dictionary_set_string(dict, key.as_ptr(), val.as_ptr());
+
+            let pk = CString::new("pane_id").unwrap();
+            let pv = CString::new(pane_id).unwrap();
+            xpc_dictionary_set_string(dict, pk.as_ptr(), pv.as_ptr());
+
+            let prof_key = CString::new("profile").unwrap();
+            let prof_val = CString::new(profile).unwrap();
+            xpc_dictionary_set_string(dict, prof_key.as_ptr(), prof_val.as_ptr());
+        }
+
+        let reply = unsafe { xpc_connection_send_message_with_reply_sync(self.raw, dict) };
+        unsafe { xpc_release(dict) };
+
+        if reply.is_null() {
+            return None;
+        }
+
+        let pane_key = CString::new("pane_id").unwrap();
+        let pane_ptr = unsafe { xpc_dictionary_get_string(reply, pane_key.as_ptr()) };
+        if pane_ptr.is_null() {
+            // Print diagnostics from the reply.
+            let count_key = CString::new("pane_count").unwrap();
+            let pane_count = unsafe { xpc_dictionary_get_int64(reply, count_key.as_ptr()) };
+            let has_key = CString::new("has_last").unwrap();
+            let has_last = unsafe { xpc_dictionary_get_bool(reply, has_key.as_ptr()) };
+            let last_key = CString::new("last_pane").unwrap();
+            let last_ptr = unsafe { xpc_dictionary_get_string(reply, last_key.as_ptr()) };
+            let last_str = if !last_ptr.is_null() {
+                unsafe { std::ffi::CStr::from_ptr(last_ptr) }
+                    .to_str()
+                    .unwrap_or("?")
+            } else {
+                "(null)"
+            };
+            let trc_key = CString::new("tab_ready_count").unwrap();
+            let tab_ready_count = unsafe { xpc_dictionary_get_int64(reply, trc_key.as_ptr()) };
+            let fptid_key = CString::new("first_pane_tab_id").unwrap();
+            let first_pane_tab_id = unsafe { xpc_dictionary_get_int64(reply, fptid_key.as_ptr()) };
+            let fpid_key = CString::new("first_pane_id").unwrap();
+            let fpid_ptr = unsafe { xpc_dictionary_get_string(reply, fpid_key.as_ptr()) };
+            let first_pane_id = if !fpid_ptr.is_null() {
+                unsafe { std::ffi::CStr::from_ptr(fpid_ptr) }
+                    .to_str()
+                    .unwrap_or("?")
+            } else {
+                "(null)"
+            };
+            eprintln!(
+                "[web] query_last diag: pane_count={} has_last={} last_pane={} tab_ready_count={} first_pane_id={} first_pane_tab_id={}",
+                pane_count, has_last, last_str, tab_ready_count, first_pane_id, first_pane_tab_id
+            );
+            unsafe { xpc_release(reply) };
+            return None;
+        }
+
+        let pane_str = unsafe { std::ffi::CStr::from_ptr(pane_ptr) }
+            .to_str()
+            .unwrap_or("")
+            .to_string();
+
+        let tab_key = CString::new("tab_id").unwrap();
+        let tab_id = unsafe { xpc_dictionary_get_int64(reply, tab_key.as_ptr()) };
+
+        let prof_key = CString::new("profile").unwrap();
+        let prof_ptr = unsafe { xpc_dictionary_get_string(reply, prof_key.as_ptr()) };
+        let prof_str = if !prof_ptr.is_null() {
+            unsafe { std::ffi::CStr::from_ptr(prof_ptr) }
+                .to_str()
+                .unwrap_or("")
+                .to_string()
+        } else {
+            String::new()
+        };
+
+        unsafe { xpc_release(reply) };
+        Some((prof_str, pane_str, tab_id))
     }
 
     /// Tell the compositor to navigate to a new URL.

@@ -173,6 +173,8 @@ enum Commands {
         /// The URL to open
         url: String,
     },
+    /// Show the last active browser pane/tab
+    Last,
 }
 
 fn main() -> io::Result<()> {
@@ -209,6 +211,25 @@ fn main() -> io::Result<()> {
         _ => {}
     }
 
+    // Handle `web last` subcommand — print last active browser pane and exit (Issue 684 Exp 4).
+    if let Some(Commands::Last) = cli.command {
+        if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+            match conn.send_query_last(pid, &profile) {
+                Some((prof, pane, tab)) => {
+                    println!("profile: {}", prof);
+                    println!("pane_id: {}", pane);
+                    println!("tab_id:  {}", tab);
+                }
+                None => {
+                    println!("No active browser tab found.");
+                }
+            }
+        } else {
+            println!("Not running inside TermSurf.");
+        }
+        return Ok(());
+    }
+
     // Send hello to get live config from the GUI (Issue 675).
     let hello_homepage = compositor
         .as_ref()
@@ -217,6 +238,7 @@ fn main() -> io::Result<()> {
     // Detect devtools://N before normalizing (Issue 684).
     let raw_url = match cli.command {
         Some(Commands::Url { url }) => url,
+        Some(Commands::Last) => unreachable!(), // Handled above.
         None => cli.url.unwrap_or_else(|| {
             hello_homepage.unwrap_or_else(|| "https://termsurf.com/welcome".to_string())
         }),

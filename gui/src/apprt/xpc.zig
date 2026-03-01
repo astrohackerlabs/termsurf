@@ -115,8 +115,11 @@ var surface_to_pane: std.AutoHashMap(usize, []const u8) = undefined;
 /// The pane UUID that currently has Chromium focus (at most one). Issue 606.
 var focused_pane: ?[]const u8 = null;
 
-/// The most recently focused non-DevTools pane (for `web devtools` auto-targeting, Issue 684).
-var last_focused_browser_pane: ?[]const u8 = null;
+/// The most recently active browser pane — updated on tab creation and focus (Issue 684).
+var last_browser_pane: ?[]const u8 = null;
+
+/// Diagnostic counter: how many times handleTabReady has been called.
+var tab_ready_count: i64 = 0;
 
 // -- Block types --
 
@@ -281,6 +284,8 @@ fn handleMessage(msg: xpc_object_t) void {
         handleSetColorScheme(msg);
     } else if (std.mem.eql(u8, action_str, "hello")) {
         handleHello(msg);
+    } else if (std.mem.eql(u8, action_str, "query_last")) {
+        handleQueryLast(msg);
     } else {
         log.warn("unknown action: {s}", .{action_str});
     }
@@ -487,7 +492,7 @@ fn handleSetDevtoolsOverlay(msg: xpc_object_t) void {
 
         // Auto-target: resolve inspected_tab_id from last focused browser pane (Issue 684 Exp 3).
         if (p.inspected_tab_id == 0) {
-            const target_pane_id = last_focused_browser_pane orelse {
+            const target_pane_id = last_browser_pane orelse {
                 log.err("devtools auto-target: no browser pane has been focused", .{});
                 cleanupPane(pane_id_key);
                 return;
@@ -515,7 +520,7 @@ fn handleSetDevtoolsOverlay(msg: xpc_object_t) void {
         // Use the target's server (profile) when auto-targeting, not the --profile argument.
         if (p.inspected_tab_id != inspected_tab_id) {
             // Auto-targeted — use the target pane's server.
-            const target_pane_id = last_focused_browser_pane.?;
+            const target_pane_id = last_browser_pane.?;
             const target = panes.get(target_pane_id).?;
             if (target.server) |target_server| {
                 p.server = target_server;
@@ -610,14 +615,19 @@ fn handleCAContext(msg: xpc_object_t) void {
 }
 
 fn handleTabReady(msg: xpc_object_t) void {
+    tab_ready_count += 1;
     const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
     const tab_id = xpc_dictionary_get_int64(msg, "tab_id");
+    const found_pane = panes.get(pane_id) != null;
 
     if (panes.get(pane_id)) |p| {
         p.tab_id = tab_id;
+        if (tab_id > 0) {
+            last_browser_pane = p.pane_id_key; // heap-allocated, stable
+        }
     }
 
-    log.info("tab_ready pane={s} tab_id={d}", .{ pane_id, tab_id });
+    log.info("tab_ready pane={s} tab_id={d} found={} count={d}", .{ pane_id, tab_id, found_pane, tab_ready_count });
 }
 
 fn handleModeChanged(msg: xpc_object_t) void {
@@ -782,6 +792,87 @@ fn handleHello(msg: xpc_object_t) void {
     }
 }
 
+fn handleQueryLast(msg: xpc_object_t) void {
+    const profile_filter = str(xpc_dictionary_get_string(msg, "profile"));
+    log.info("query_last profile_filter={s}", .{profile_filter});
+
+    const reply = xpc_dictionary_create_reply(msg);
+    if (reply == null) return;
+
+    // If a profile filter is given, check that last_browser_pane matches.
+    // Otherwise use the global last_browser_pane.
+    var target_pane: ?*Pane = null;
+    var target_pane_id: []const u8 = "";
+
+    if (last_browser_pane) |lpid| {
+        if (panes.get(lpid)) |p| {
+            if (profile_filter.len > 0 and !std.mem.eql(u8, profile_filter, "(null)")) {
+                // Profile-filtered: check the pane's server matches.
+                if (p.server) |s| {
+                    if (std.mem.eql(u8, s.profile_key, profile_filter)) {
+                        target_pane = p;
+                        target_pane_id = lpid;
+                    }
+                }
+            } else {
+                target_pane = p;
+                target_pane_id = lpid;
+            }
+        }
+    }
+
+    if (target_pane) |p| {
+        // Null-terminate the pane_id and profile for XPC string fields.
+        var pane_id_z: [128]u8 = undefined;
+        if (target_pane_id.len < pane_id_z.len) {
+            @memcpy(pane_id_z[0..target_pane_id.len], target_pane_id);
+            pane_id_z[target_pane_id.len] = 0;
+            xpc_dictionary_set_string(reply, "pane_id", @ptrCast(&pane_id_z));
+        }
+        xpc_dictionary_set_int64(reply, "tab_id", p.tab_id);
+        if (p.server) |s| {
+            var prof_z: [128]u8 = undefined;
+            if (s.profile_key.len < prof_z.len) {
+                @memcpy(prof_z[0..s.profile_key.len], s.profile_key);
+                prof_z[s.profile_key.len] = 0;
+                xpc_dictionary_set_string(reply, "profile", @ptrCast(&prof_z));
+            }
+        }
+        log.info("query_last result: pane={s} tab_id={d}", .{ target_pane_id, p.tab_id });
+    } else {
+        log.info("query_last result: no matching browser pane", .{});
+        // Diagnostic: report why no match was found.
+        xpc_dictionary_set_int64(reply, "pane_count", @intCast(panes.count()));
+        xpc_dictionary_set_bool(reply, "has_last", last_browser_pane != null);
+        xpc_dictionary_set_int64(reply, "tab_ready_count", tab_ready_count);
+        if (last_browser_pane) |lpid| {
+            var diag_z: [128]u8 = undefined;
+            if (lpid.len < diag_z.len) {
+                @memcpy(diag_z[0..lpid.len], lpid);
+                diag_z[lpid.len] = 0;
+                xpc_dictionary_set_string(reply, "last_pane", @ptrCast(&diag_z));
+            }
+        }
+        // Dump first pane's tab_id for diagnostics.
+        var it = panes.iterator();
+        if (it.next()) |entry| {
+            xpc_dictionary_set_int64(reply, "first_pane_tab_id", entry.value_ptr.*.tab_id);
+            var fpane_z: [128]u8 = undefined;
+            const fpk = entry.key_ptr.*;
+            if (fpk.len < fpane_z.len) {
+                @memcpy(fpane_z[0..fpk.len], fpk);
+                fpane_z[fpk.len] = 0;
+                xpc_dictionary_set_string(reply, "first_pane_id", @ptrCast(&fpane_z));
+            }
+        }
+    }
+
+    const conn = xpc_dictionary_get_remote_connection(msg);
+    if (conn != null) {
+        xpc_connection_send_message(conn, reply);
+    }
+}
+
 // -- Focus lifecycle (Issue 606 Experiment 5) --
 
 /// Send focus_changed to Chromium, enforcing single-pane focus.
@@ -801,7 +892,7 @@ fn sendFocusChanged(pane_id: []const u8, focused: bool) void {
 
         // Track last focused browser (non-DevTools) pane for auto-targeting (Issue 684).
         if (p.inspected_tab_id == 0) {
-            last_focused_browser_pane = pane_id;
+            last_browser_pane = pane_id;
         }
     } else {
         if (focused_pane) |prev| {
@@ -846,7 +937,11 @@ pub fn handlePaneFocusChanged(surface: *CoreSurface, focused: bool) void {
             const pane_id = surface_to_pane.get(surf_addr) orelse return;
             const p = panes.get(pane_id) orelse return;
             if (is_focused) {
-                // Only focus if the web TUI is in browse mode.
+                // Track last browser pane regardless of mode (Issue 684 Exp 4).
+                if (p.inspected_tab_id == 0 and p.tab_id > 0) {
+                    last_browser_pane = p.pane_id_key;
+                }
+                // Only forward focus to Chromium if in browse mode.
                 if (p.browsing) {
                     sendFocusChanged(pane_id, true);
                 }
@@ -1557,10 +1652,10 @@ fn handleDisconnect(peer_addr: usize) void {
                 }
             }
 
-            // Clear last_focused_browser_pane if this pane was it (Issue 684).
-            if (last_focused_browser_pane) |lp| {
+            // Clear last_browser_pane if this pane was it (Issue 684).
+            if (last_browser_pane) |lp| {
                 if (std.mem.eql(u8, lp, pane_id_key)) {
-                    last_focused_browser_pane = null;
+                    last_browser_pane = null;
                 }
             }
 

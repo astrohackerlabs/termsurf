@@ -1084,3 +1084,62 @@ pub fn send_query_last(
    "No active browser tab found."
 7. If `web last` shows correct data, the tracker is working and `web devtools`
    auto-targeting can be built on top of it in the next experiment
+
+### Result: SUCCESS
+
+`web last` correctly reports the most recently active browser pane:
+
+```
+profile: default
+pane_id: 1F208F7C-5B2F-4E24-92BA-9C00427E2D5D
+tab_id:  1
+```
+
+### Conclusion
+
+The experiment required three rounds of diagnostics to get working. Each round
+revealed a deeper bug:
+
+**Round 1 — initial implementation.** `web last` returned "No active browser tab
+found." with `pane_count=1 has_last=false last_pane=(null)`. This told us the
+GUI had one pane registered (created by `handleSetOverlay`) but
+`last_browser_pane` was never set. The `handleTabReady` function should have set
+it when `tab_id > 0`, so either `handleTabReady` never ran or `tab_id` was 0.
+
+**Round 2 — enhanced diagnostics.** Added `tab_ready_count` (how many times
+`handleTabReady` was called) and `first_pane_tab_id` (the tab_id stored on the
+first pane) to the reply. Result: `tab_ready_count=2 first_pane_tab_id=0`. This
+was the critical finding: `handleTabReady` ran twice (once for the browser tab,
+once for some other message), but the pane's `tab_id` was still 0. The handler
+was dispatched correctly — the problem was upstream in Chromium.
+
+**Round 3 — Chromium ordering bug.** Traced the Chromium `CreateTab` flow in
+`shell_browser_main_parts.cc`. Found the root cause: `tab_ready` was sent at
+line 485 with `tab->tab_id`, but `tab->tab_id` wasn't assigned until line 572
+(`tab->tab_id = next_tab_id_++`). The message always sent 0. Fix: moved the
+`tab_id` assignment before the `tab_ready` send. After rebuilding Chromium,
+`web last` returned `tab_id: 1` correctly.
+
+**Key insight.** The Experiment 3 failure was not caused by the `p.browsing`
+gate alone. Even after fixing the tracker to use `handleTabReady` instead of
+`handlePaneFocusChanged`, it still failed because the underlying Chromium
+`tab_ready` message never contained a valid `tab_id`. Two independent bugs
+compounded: the GUI tracked on the wrong event (focus instead of creation), AND
+Chromium sent the ID before assigning it. Both had to be fixed.
+
+**Changes made:**
+
+- **Chromium** (`shell_browser_main_parts.cc`): Moved
+  `tab->tab_id = next_tab_id_++` before the `tab_ready` XPC send in `CreateTab`.
+  Removed the duplicate assignment that was 90 lines too late.
+- **GUI** (`xpc.zig`): Added `tab_ready_count` diagnostic counter.
+  `handleTabReady` logs whether the pane was found. `handleQueryLast` returns
+  `tab_ready_count`, `first_pane_tab_id`, and `first_pane_id` in the failure
+  reply.
+- **TUI** (`xpc.rs`): `send_query_last` prints all diagnostic fields on failure.
+
+The `last_browser_pane` tracker now works correctly. It updates on tab creation
+(in `handleTabReady` when `tab_id > 0`) and on pane focus (in
+`handlePaneFocusChanged` without the `p.browsing` gate, for non-DevTools panes
+with `tab_id > 0`). This is the foundation for `web devtools` auto-targeting in
+the next experiment.
