@@ -1246,6 +1246,32 @@ would explain `web status` failing if there's a separate issue, but doesn't
 explain `web devtools` breaking — devtools doesn't depend on the subcommand
 name.
 
-**Next step.** Apply each of the four changes individually and test after each
-one to isolate the culprit. Start with hypothesis A (remove `tab_ready_count`
-only) since it's the most likely to affect `last_browser_pane` population.
+**Next step.** Apply each change individually, rebuilding and testing after each
+one.
+
+## Experiment 6: Remove `tab_ready_count`
+
+### Goal
+
+Test whether removing the `tab_ready_count` diagnostic counter breaks `web last`
+or `web devtools`. This is Experiment 5 Hypothesis A — isolated.
+
+### Changes
+
+#### GUI (`xpc.zig`): Remove `tab_ready_count` only
+
+1. Delete the global variable declaration (`var tab_ready_count: i64 = 0;`).
+2. Delete the increment (`tab_ready_count += 1;`) from `handleTabReady`.
+3. Delete the `tab_ready_count` field from the `handleQueryLast` failure reply
+   (`xpc_dictionary_set_int64(reply, "tab_ready_count", tab_ready_count);`).
+
+No other changes. `found_pane`, diagnostic fields, TUI code, and subcommand
+names stay exactly as they are.
+
+### Test
+
+1. `cd gui && zig build` — compiles
+2. Rebuild and launch with `build-debug.sh --open`
+3. `web google.com` in a pane
+4. `web last` in a split — should print profile, pane_id, tab_id
+5. `web devtools` in a split — should open DevTools
