@@ -400,3 +400,142 @@ to Chromium's profile server when a pane with `inspected_tab_id != 0` is
 removed. The Chromium-side DevTools session must be fully torn down before a new
 one can be created. This is a prerequisite for the `:devtools` command to work
 reliably.
+
+## Experiment 2: Close Chromium tab on pane cleanup
+
+### Hypothesis
+
+If the GUI retains the profile server's per-tab XPC connection on the Pane
+struct, and cancels it during pane cleanup, then the profile server's existing
+`CloseTab` error handler fires, properly destroying the DevTools tab (Shell,
+WebContents, ShellDevToolsFrontend, InspectorOverlayAgent). Reopening DevTools
+for the same browser tab should work without crashing.
+
+### Background
+
+There are two independent XPC connections per tab:
+
+- **Connection A** (TUI ↔ GUI): The TUI creates this via the gateway. Stored as
+  `web_peer` on the Pane struct. When the TUI exits, this drops, triggering
+  `handleDisconnect` → `cleanupPane`.
+- **Connection B** (Profile Server → GUI): The profile server creates this
+  inside `CreateDevToolsTab` (and `CreateTab`) via
+  `xpc_connection_create_from_endpoint(app_endpoint_)`. Stored as
+  `tab_connection` in the profile server's `TabState`. Messages like
+  `tab_ready`, `ca_context`, `loading_state` arrive on this connection.
+
+When the TUI exits, only Connection A drops. Connection B stays alive because
+nobody cancels it. The profile server has no idea the pane is gone — its
+DevTools tab persists with a live `InspectorOverlayAgent` attached to the
+inspected renderer. Opening a new DevTools creates a duplicate, crashing
+Chromium.
+
+The profile server already handles Connection B closure correctly — its XPC
+error handler calls `CloseTab`, which destroys the Shell, cancels the
+connection, and removes the tab from `tabs_`. The GUI just needs to cancel its
+end of Connection B during pane cleanup.
+
+Currently, `handleTabReady` does not store the server peer. The connection
+reference is available via `xpc_dictionary_get_remote_connection(msg)` on any
+message from the profile server (e.g., `tab_ready`), but it's never retained.
+
+This fix also benefits regular browser tabs — they have the same orphan problem,
+it just doesn't crash because independent tabs don't conflict.
+
+### Changes
+
+#### 1. Pane struct: add `server_peer` field (`xpc.zig`)
+
+Add a new field to the Pane struct:
+
+```zig
+server_peer: xpc_object_t = null, // Profile server's tab connection (Issue 688).
+```
+
+This holds a retained reference to Connection B.
+
+#### 2. `handleTabReady`: retain and store server peer (`xpc.zig`)
+
+After storing `tab_id`, retain the remote connection and store it on the pane:
+
+```zig
+fn handleTabReady(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const tab_id = xpc_dictionary_get_int64(msg, "tab_id");
+
+    if (panes.get(pane_id)) |p| {
+        p.tab_id = tab_id;
+        if (tab_id > 0) {
+            last_browser_pane = p.pane_id_key;
+        }
+
+        // Retain the profile server's tab connection for cleanup (Issue 688).
+        const peer = xpc_dictionary_get_remote_connection(msg);
+        if (peer != null and p.server_peer == null) {
+            p.server_peer = xpc_retain(peer);
+        }
+    }
+
+    log.info("tab_ready pane={s} tab_id={d}", .{ pane_id, tab_id });
+}
+```
+
+The `p.server_peer == null` guard ensures we only retain once (the first
+`tab_ready` message).
+
+#### 3. `cleanupPane`: cancel server peer (`xpc.zig`)
+
+After releasing `web_peer`, cancel and release `server_peer`:
+
+```zig
+fn cleanupPane(pane_id_key: []const u8) void {
+    if (panes.get(pane_id_key)) |p| {
+        if (p.overlay_surface) |surface| {
+            surface.clearOverlay();
+            _ = surface_to_pane.remove(@intFromPtr(surface));
+        }
+        if (p.web_peer) |peer| {
+            _ = peer_to_pane.remove(@intFromPtr(peer));
+            xpc_release(peer);
+        }
+        // Cancel profile server's tab connection (Issue 688).
+        // Triggers CloseTab in the profile server via its error handler.
+        if (p.server_peer) |peer| {
+            xpc_connection_cancel(peer);
+            xpc_release(peer);
+        }
+        _ = panes.remove(pane_id_key);
+        alloc.destroy(p);
+        alloc.free(pane_id_key);
+    }
+}
+```
+
+#### 4. `handleDisconnect`: cancel server peer (`xpc.zig`)
+
+Add the same cancel/release in the web peer disconnect handler, inside the
+`if (panes.get(pane_id_key))` block, before releasing `web_peer`:
+
+```zig
+// Cancel profile server's tab connection (Issue 688).
+if (p.server_peer) |peer| {
+    xpc_connection_cancel(peer);
+    xpc_release(peer);
+}
+```
+
+Also add it in the server peer disconnect handler's pane cleanup loop (the
+`if (p.server == server)` block), before releasing `web_peer`.
+
+### Test
+
+1. Open a browser: `web google.com`
+2. Press `:`, type `devtools right`, press Enter → split opens with DevTools
+3. Close the DevTools pane (`:q` or close the split)
+4. Press `:`, type `devtools left`, press Enter → should open DevTools again
+   without crashing
+5. Close and reopen multiple times → no crash, no orphaned tabs
+6. Test with regular browser tabs too — close a `web` pane, verify the Chromium
+   tab is cleaned up (check profile server logs for "Closing tab" messages)
+7. All error cases from Experiment 1 still work (DevTools-in-DevTools, duplicate
+   detection, invalid direction)
