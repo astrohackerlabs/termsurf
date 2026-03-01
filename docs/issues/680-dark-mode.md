@@ -173,3 +173,8 @@ an active browser pane.
 2. Toggle macOS dark mode in System Settings → Appearance
 3. Page should reactively switch between dark and light styles
 4. Open a new pane in dark mode — it should start in dark mode immediately
+
+### Result: SUCCESS
+
+`prefers-color-scheme` works. Pages respond to the system color scheme both on
+initial load and dynamically when toggling macOS appearance.
