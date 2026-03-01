@@ -103,28 +103,51 @@ This is a DCHECK — it only fires in debug builds. In release builds the same
 condition would silently corrupt the paint state, which could explain the
 "unresponsive but still rendering" symptom.
 
+## Reliable Repro
+
+1. Open a browser tab: `web google.com`
+2. Open two DevTools panes inspecting the same tab: `web devtools://1` twice
+3. Resize the window
+
+Crash occurs immediately on resize. Reproduced 4 times in a row — 100% hit rate.
+
+**Why it crashes:** Both DevTools sessions attach an `InspectorOverlayAgent` to
+the same inspected renderer. Each overlay paints via `RecordForeignLayer`, which
+registers a `DisplayItem::Id` in the `PaintController`'s index map. When a
+resize triggers a repaint, both overlays try to register the same display item
+ID (same foreign layer on the same page). The second registration hits the
+duplicate DCHECK.
+
+All four crashes in the session log are identical — same file, same line, same
+DCHECK, same call chain. Every one is preceded by resize events in the log.
+
 ## What We Know
 
 - The crash is in Blink's paint system, specifically in the DevTools overlay
   paint path (`InspectorOverlayAgent::PaintFrameOverlay`)
 - It happens in the renderer process, not the browser or GPU process
 - It's triggered by a duplicate display item ID during overlay painting
+- The specific trigger is: two DevTools sessions inspecting the same page +
+  resize
 - DevTools sessions are the common factor — the crash consistently involves
   DevTools
 - The crash is in upstream Chromium code
   (`third_party/blink/renderer/platform/graphics/paint/paint_controller.cc`),
   not in our fork code
+- Chromium normally prevents this by only allowing one DevTools frontend per
+  inspected page — TermSurf bypasses that guard by creating separate
+  `ShellDevToolsFrontend` instances for each pane
 
 ## What We Don't Know
 
 - Whether the earlier errors (breakpad crash, Mach port failure, orphaned
   surfaces) are the same bug or separate issues
-- Whether a resize during DevTools overlay painting is the specific trigger, or
-  if it can happen without a resize
-- Whether having multiple DevTools sessions open increases the likelihood
-- Whether this is a known upstream Chromium bug
+- Whether this is a known upstream Chromium bug or unique to our multi-frontend
+  setup
 - Whether switching from debug to release builds would mask the crash but leave
   the underlying paint corruption
+- Whether preventing duplicate DevTools for the same tab (in the GUI or TUI) is
+  sufficient, or whether other scenarios can also trigger the duplicate paint ID
 
 ## Relevant Code
 
