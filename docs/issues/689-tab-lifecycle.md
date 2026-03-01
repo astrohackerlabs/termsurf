@@ -1170,3 +1170,116 @@ Two things made this work:
 2. **`delete shell` before `tabs_.erase()`** — destroys WebContents → RWHV
    first, disconnecting the rendering pipeline from the compositor, so the
    TabState destructor can safely tear down compositor resources.
+
+## Conclusion
+
+**Closed.** Tab lifecycle works. DevTools close/reopen confirmed — no crash.
+
+### What we did
+
+When a GUI pane closes, the TUI's XPC connection drops. The GUI's
+`handleDisconnect` already cleaned up the pane overlay, focus state, and maps —
+but it never told the Chromium profile server that the tab was gone. The tab
+(Shell, WebContents, compositor, renderer process) stayed alive forever, leaking
+memory and GPU resources. For DevTools tabs, the leak was visible: reopening
+DevTools attached a second `InspectorOverlayAgent` to the same renderer, and on
+resize, the duplicate triggered a `PaintController` DCHECK crash (Issue 686).
+
+The fix has three parts across two codebases:
+
+#### 1. GUI sends `close_tab` when a pane disconnects (`xpc.zig`)
+
+In `handleDisconnect`, after the existing pane cleanup but before decrementing
+the pane count, we send a `close_tab` XPC message to the profile server with the
+pane's UUID:
+
+```zig
+// Close the Chromium tab (Issue 689 Exp 5).
+if (p.server) |server| {
+    if (p.tab_sent and server.peer != null) {
+        const close_msg = xpc_dictionary_create(null, null, 0);
+        defer xpc_release(close_msg);
+        xpc_dictionary_set_string(close_msg, "action", "close_tab");
+        // ... set pane_id, send message
+    }
+}
+```
+
+This is the signal the profile server was missing.
+
+#### 2. Profile server tears down the tab in the correct order (`shell_browser_main_parts.cc`)
+
+`CloseTabByPaneId` finds the tab by pane UUID and destroys it in a specific
+order that took four failed experiments to discover:
+
+```cpp
+// 1. Reset observer (stops WebContents navigation callbacks).
+(*it)->tab_observer.reset();
+// 2. Delete Shell FIRST — destroys WebContents → RenderWidgetHostView,
+//    disconnecting the rendering pipeline from the compositor.
+delete (*it)->shell.get();
+(*it)->shell = nullptr;
+// 3. Cancel per-tab XPC connection.
+xpc_connection_cancel((*it)->tab_connection);
+// 4. Erase TabState LAST — compositor, bridge, layer, widget are now
+//    safe to destroy because nothing references them.
+tabs_.erase(it);
+```
+
+**The order is critical.** The Shell owns the WebContents, which owns the
+RenderWidgetHostView (RWHV), which is connected to the compositor pipeline
+(AcceleratedWidgetMac → Compositor → Layer → PersistentCompositorBridge). If you
+destroy the TabState first (which owns the compositor resources), the RWHV tries
+to use a destroyed compositor and the process crashes. Destroying the Shell
+first disconnects the RWHV from the pipeline, making it safe to tear down the
+compositor afterward.
+
+When the last tab is erased, we explicitly call `Shell::Shutdown()` to exit the
+profile server cleanly.
+
+#### 3. `DidCloseLastWindow` becomes a no-op (`shell_platform_delegate.cc`)
+
+Chromium's Shell destructor checks if `windows_` is empty after removing itself,
+and if so, calls `DidCloseLastWindow()`. Our fork's base implementation calls
+`Shell::Shutdown()`, which kills every remaining Shell — a cascade that destroys
+all tabs when any single tab is closed.
+
+We make `DidCloseLastWindow` a no-op because our `CloseTabByPaneId` handles the
+"last tab" case explicitly. This prevents the cascade while still allowing clean
+shutdown.
+
+### How we got here
+
+Six experiments, each isolating one variable:
+
+| Exp | What it tried                     | Result  | What we learned                                     |
+| --- | --------------------------------- | ------- | --------------------------------------------------- |
+| 1   | `web status` command              | SUCCESS | Diagnostic tool works                               |
+| 2   | `shell->Close()` + `tabs_.erase`  | FAILURE | Cascade kills all tabs                              |
+| 3   | No-op DidCloseLastWindow + Close  | FAILURE | Cascade has a deeper source than DidCloseLastWindow |
+| 4   | Orphan Shell, just erase TabState | FAILURE | Crash is in TabState destructor, not Shell          |
+| 5   | Log only, no teardown             | SUCCESS | Proves crash is inside our teardown code            |
+| 6   | `delete shell` THEN `tabs_.erase` | SUCCESS | Correct teardown order solves both problems         |
+
+The key insight came from Experiment 4: even without touching the Shell at all,
+just erasing the TabState crashed the process. That proved the problem was never
+in `Shell::Close()` — it was in the TabState destructor destroying compositor
+resources while the RWHV was still connected to them. Experiment 5 confirmed
+this by doing nothing at all (just logging) and surviving. Experiment 6 applied
+the fix: destroy the Shell first to disconnect the RWHV, then safely destroy the
+TabState.
+
+### Files changed
+
+**Chromium** (branch `146.0.7650.0-issue-689-exp3`):
+
+- `content/chromium_profile_server/browser/shell_platform_delegate.cc` —
+  `DidCloseLastWindow` no-op
+- `content/chromium_profile_server/browser/shell_browser_main_parts.cc` —
+  `CloseTabByPaneId` implementation + `close_tab` action handler
+- `content/chromium_profile_server/browser/shell_browser_main_parts.h` —
+  `CloseTabByPaneId` declaration
+
+**GUI**:
+
+- `gui/src/apprt/xpc.zig` — send `close_tab` in `handleDisconnect`
