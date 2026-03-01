@@ -614,7 +614,6 @@ fn handleCAContext(msg: xpc_object_t) void {
 fn handleTabReady(msg: xpc_object_t) void {
     const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
     const tab_id = xpc_dictionary_get_int64(msg, "tab_id");
-    const found_pane = panes.get(pane_id) != null;
 
     if (panes.get(pane_id)) |p| {
         p.tab_id = tab_id;
@@ -623,7 +622,7 @@ fn handleTabReady(msg: xpc_object_t) void {
         }
     }
 
-    log.info("tab_ready pane={s} tab_id={d} found={}", .{ pane_id, tab_id, found_pane });
+    log.info("tab_ready pane={s} tab_id={d}", .{ pane_id, tab_id });
 }
 
 fn handleModeChanged(msg: xpc_object_t) void {
