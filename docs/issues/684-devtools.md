@@ -611,3 +611,47 @@ In `tui/src/xpc.rs`, add a `send_create_devtools_tab` method.
 6. **Verify hover highlighting:** Hover over an element in the Elements panel —
    the corresponding element on the inspected page should highlight
 7. **Verify keyboard/mouse:** All DevTools panels accept input
+
+### Result: SUCCESS
+
+DevTools renders in a terminal pane via `web devtools://1`. The dedicated
+`create_devtools_tab` XPC action bypasses GURL entirely — the inspected tab ID
+flows as a plain integer through all three components (TUI → GUI → Chromium),
+and the profile server constructs the DevTools frontend URL internally using a
+standard `http://127.0.0.1:...` URL that GURL handles without issue.
+
+The `ShellTabObserver` sends a synthetic `devtools://N` URL back through the XPC
+chain, so the TUI displays the correct URI in the URL bar instead of the
+internal HTTP address.
+
+### What worked
+
+1. **Dedicated XPC action.** Separating `create_devtools_tab` from `create_tab`
+   was the key insight. The inspected tab ID never touches GURL — it's an
+   integer field in the XPC message, looked up server-side.
+
+2. **ShellDevToolsFrontend reuse.** The existing `ShellDevToolsFrontend` class
+   works perfectly without a native window. It observes the DevTools
+   WebContents, waits for `PrimaryMainDocumentElementAvailable`, and calls
+   `Attach()` to connect the Mojo protocol pipes. No modifications to the class
+   were needed beyond making the constructor public (done in Experiment 1).
+
+3. **Synthetic URL in ShellTabObserver.** The `inspected_tab_id_` field on the
+   observer cleanly overrides `DidFinishNavigation` to send `devtools://N`
+   instead of the internal HTTP URL. Internal DevTools sub-navigations (panel
+   switches, resource loads) never leak to the TUI.
+
+4. **Full infrastructure reuse.** The DevTools tab uses the same persistent
+   compositor, CALayerParams callback, cursor callback, XPC tab connection, and
+   `tab_ready` flow as regular browser tabs. `CreateDevToolsTab` is a copy of
+   `CreateTab` with DevTools-specific logic — no refactoring of shared code was
+   needed.
+
+### What remains
+
+- Tab ID display in the viewport border (`[avatar][profileName]/[tabId]`)
+- `web devtools` (no tab ID) auto-targeting the most recent tab
+- Tab ID in the `tab_ready` XPC reply for the GUI/TUI to store
+- Lifecycle handling (inspected tab closes → DevTools tab behavior)
+- Keyboard shortcut (Cmd+I) to open DevTools from a browser pane
+- URL bar DevTools (typing `devtools://1` in an existing pane's URL bar)
