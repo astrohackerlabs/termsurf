@@ -723,3 +723,44 @@ disconnect path (when the server itself dies, all tabs are already gone).
    continues working
 9. All error cases from Experiment 1 still work
 10. Existing `killServer` still works when the last pane on a profile closes
+
+### Result: FAILURE
+
+Crashed on first invocation of `:devtools right` — before any close/reopen
+cycle. All profile server processes were killed before testing. The crash is not
+from orphaned tabs or stale servers.
+
+The approach of sending `close_tab` on the control connection is sound in
+theory, but something in the end-to-end flow — split creation, DevTools tab
+setup, or XPC message routing — is broken in a way that three experiments have
+failed to isolate.
+
+All code changes (Zig, Swift, Chromium) reverted. The Chromium
+`146.0.7650.0-issue-688` branch was deleted.
+
+## Conclusion
+
+Three experiments, three failures:
+
+1. **Experiment 1** built the `:devtools` command end-to-end. It worked on first
+   invocation but crashed on close → reopen because the GUI never told Chromium
+   to close the DevTools tab — the orphaned `InspectorOverlayAgent` caused a
+   duplicate-inspector crash.
+2. **Experiment 2** tried cancelling the profile server's XPC connection per-tab
+   during pane cleanup. It cancelled the shared control connection instead,
+   destroying all tabs on the profile.
+3. **Experiment 3** added an explicit `close_tab` XPC message on the control
+   connection with `CloseTabByPaneId` on the Chromium side. Crashed on first
+   invocation — the root cause was never identified.
+
+The `:devtools <direction>` command is blocked by a more fundamental problem:
+**we cannot reliably close individual Chromium tabs when panes are removed.**
+This affects all tabs, not just DevTools — every closed pane leaks its Chromium
+tab until the profile server process is killed (which only happens when the last
+pane on a profile closes).
+
+**Next step:** Before attempting the split command again, we need a dedicated
+issue to solve tab lifecycle management: reliably closing individual Chromium
+tabs (both browser and DevTools) when their GUI panes are removed. Once that
+works, the `:devtools` command from Experiment 1 can be re-implemented on top of
+it.
