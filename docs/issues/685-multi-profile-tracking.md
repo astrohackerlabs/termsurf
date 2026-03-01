@@ -115,3 +115,44 @@ empty profile as "no filter" (line 804 of `xpc.zig`).
    fixes bare `web last`; per-profile search is a separate experiment)
 5. Run `web last --profile work` — should work
 6. Run `web devtools` — should still auto-target correctly
+
+### Result: SUCCESS
+
+Bare `web last` now returns the most recently active browser pane regardless of
+profile. The fix: `--profile` changed from `default_value = "default"` to
+`Option<String>`. Bare `web last` sends an empty profile string, which the GUI
+treats as "no filter" — returning whatever `last_browser_pane` points to.
+
+`web last --profile default` with multiple profiles still fails (expected —
+per-profile search is a separate experiment).
+
+## Conclusion
+
+Experiment 1 fixed the primary multi-profile bug: bare `web last` now works
+regardless of which profile was most recently active. The root cause was
+`--profile` having `default_value = "default"` in clap, so every `web last` call
+sent a profile filter even when the user didn't ask for one. Changing it to
+`Option<String>` lets bare `web last` send no filter, hitting the GUI's
+unfiltered path.
+
+### What works now
+
+- `web last` — returns the most recently active browser pane across all profiles
+- `web last --profile work` — returns the last pane for a specific profile (if
+  it happens to be the global last)
+- `web devtools` — auto-targets the most recent browser tab
+
+### Known limitations (deferred)
+
+- **Per-profile search.** `web last --profile default` fails when "work" was
+  opened last. The GUI only checks the single `last_browser_pane` global against
+  the filter — it doesn't search all panes. Fix: iterate panes or maintain a
+  per-profile map. Low priority — explicit `web devtools://N` works for this
+  case.
+- **DevTools error feedback.** `web devtools` with no browser tab open hangs
+  forever. The GUI silently cleans up the pane without sending an error back to
+  the TUI. Fix: send an `error` XPC message so the TUI can exit immediately.
+- **Single global tracker.** `last_browser_pane` is a single variable. With many
+  profiles and panes, it only remembers the most recent one. This is sufficient
+  for the common case (inspect the tab you just opened) but not for complex
+  multi-profile workflows.

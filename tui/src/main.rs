@@ -162,8 +162,8 @@ struct Cli {
     url: Option<String>,
 
     /// Browser profile name
-    #[arg(long, default_value = "default", global = true)]
-    profile: String,
+    #[arg(long, global = true)]
+    profile: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -180,7 +180,9 @@ enum Commands {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    let profile = cli.profile;
+    let profile_arg = cli.profile; // Option<String> — None if no --profile given
+    let profile = profile_arg.clone().unwrap_or_else(|| "default".to_string());
+
     // Validate profile name: lowercase alphanumeric, starts with a letter.
     if profile.is_empty()
         || !profile.bytes().next().unwrap().is_ascii_lowercase()
@@ -214,7 +216,7 @@ fn main() -> io::Result<()> {
     // Handle `web last` subcommand — print last active browser pane and exit (Issue 684 Exp 4).
     if let Some(Commands::Last) = cli.command {
         if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
-            match conn.send_query_last(pid, &profile) {
+            match conn.send_query_last(pid, profile_arg.as_deref().unwrap_or("")) {
                 Some((prof, pane, tab)) => {
                     println!("profile: {}", prof);
                     println!("pane_id: {}", pane);
