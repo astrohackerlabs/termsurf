@@ -19,7 +19,59 @@ file. Some messages require the GUI (they touch GUI state like the renderer,
 focus, or input coordinates). Others are pure pass-through — the GUI reads
 fields, rebuilds the message, and forwards it unchanged.
 
-### Pass-Through Messages
+### Complete XPC Message Inventory
+
+#### TUI → GUI (6 messages)
+
+| Message            | Fields                                                   | Purpose                    |
+| ------------------ | -------------------------------------------------------- | -------------------------- |
+| `connect`          | —                                                        | Gateway handshake (sync)   |
+| `hello`            | pane_id                                                  | Get config/homepage (sync) |
+| `set_overlay`      | pane_id, col, row, width, height, url, profile, browsing | Viewport position updates  |
+| `navigate`         | pane_id, url                                             | URL navigation             |
+| `set_color_scheme` | pane_id, scheme                                          | `:colorscheme` command     |
+| `mode_changed`     | pane_id, browsing                                        | Browse/control toggle      |
+
+#### GUI → Chromium (10 messages)
+
+| Message            | Fields                                                                     | Purpose                                |
+| ------------------ | -------------------------------------------------------------------------- | -------------------------------------- |
+| `register_app`     | endpoint                                                                   | Gateway registration                   |
+| `create_tab`       | url, pane_id, pixel_width, pixel_height, dark                              | New browser tab                        |
+| `resize`           | pane_id, pixel_width, pixel_height                                         | Pane dimension change                  |
+| `navigate`         | pane_id, url                                                               | URL navigation (forwarded)             |
+| `set_color_scheme` | pane_id, dark                                                              | Color scheme (forwarded or system KVO) |
+| `focus_changed`    | pane_id, focused                                                           | Pane focus state                       |
+| `mouse_event`      | pane_id, type, button, x, y, click_count, modifiers                        | Mouse clicks                           |
+| `scroll_event`     | pane_id, x, y, delta_x, delta_y, phase, momentum_phase, precise, modifiers | Scroll wheel                           |
+| `mouse_move`       | pane_id, x, y, modifiers                                                   | Hover/drag                             |
+| `key_event`        | pane_id, type, windows_key_code, utf8, modifiers                           | Keyboard input                         |
+
+#### Chromium → GUI (8 messages)
+
+| Message           | Fields                                            | Purpose                     |
+| ----------------- | ------------------------------------------------- | --------------------------- |
+| `connect`         | —                                                 | Gateway handshake (sync)    |
+| `server_register` | profile                                           | Profile server ready        |
+| `tab_ready`       | pane_id                                           | Tab created                 |
+| `ca_context`      | pane_id, ca_context_id, pixel_width, pixel_height | GPU surface for compositing |
+| `cursor_changed`  | pane_id, cursor_type                              | Cursor type update          |
+| `url_changed`     | pane_id, url                                      | Navigation committed        |
+| `loading_state`   | pane_id, state, progress                          | Page load progress          |
+| `title_changed`   | pane_id, title                                    | Page title update           |
+
+#### GUI → TUI (4 messages)
+
+| Message         | Fields          | Purpose                          |
+| --------------- | --------------- | -------------------------------- |
+| `mode_changed`  | browsing        | Browse/control state sync        |
+| `url_changed`   | url             | URL change from Chromium         |
+| `loading_state` | state, progress | Page load progress from Chromium |
+| `title_changed` | title           | Page title from Chromium         |
+
+Plus the `hello` reply (sync): `homepage`.
+
+### Pass-Through Analysis
 
 **TUI → GUI → Chromium** (GUI just relays):
 
