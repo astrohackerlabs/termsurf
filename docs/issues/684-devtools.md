@@ -1377,3 +1377,31 @@ No other changes.
 
 Removing the diagnostic `eprintln!` does not break anything. Hypothesis C ruled
 out.
+
+## Experiment 10: Rename `Last` → `Status`
+
+### Goal
+
+Test whether renaming the `Last` subcommand to `Status` breaks `web devtools`.
+This is Experiment 5 Hypothesis D — the only remaining suspect. Experiments 6–9
+each passed individually, so if the Experiment 5 regression was caused by a
+single change, this must be it.
+
+### Changes
+
+#### TUI (`main.rs`): Rename `Last` → `Status`
+
+1. Change `Last,` to `Status,` in the `Commands` enum.
+2. Update the doc comment from "Show the last active browser pane/tab" to "Show
+   the active browser pane status".
+3. Change `Commands::Last` to `Commands::Status` in both match arms.
+
+No other changes. The command becomes `web status` instead of `web last`.
+
+### Test
+
+1. `cd tui && cargo build` — compiles
+2. Rebuild and launch with `build-debug.sh --open`
+3. `web google.com` in a pane
+4. `web status` in a split — should print profile, pane_id, tab_id
+5. `web devtools` in a split — should open DevTools
