@@ -270,6 +270,8 @@ fn handleMessage(msg: xpc_object_t) void {
         handleTitleChanged(msg);
     } else if (std.mem.eql(u8, action_str, "navigate")) {
         handleNavigate(msg);
+    } else if (std.mem.eql(u8, action_str, "set_color_scheme")) {
+        handleSetColorScheme(msg);
     } else if (std.mem.eql(u8, action_str, "hello")) {
         handleHello(msg);
     } else {
@@ -558,6 +560,50 @@ fn handleNavigate(msg: xpc_object_t) void {
     }
 
     xpc_connection_send_message(server.peer, fwd);
+}
+
+fn handleSetColorScheme(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const scheme = str(xpc_dictionary_get_string(msg, "scheme"));
+
+    log.info("set_color_scheme pane={s} scheme={s}", .{ pane_id, scheme });
+
+    const p = panes.get(pane_id) orelse {
+        log.warn("set_color_scheme: no pane for {s}", .{pane_id});
+        return;
+    };
+    if (!p.tab_sent) return;
+    const server = p.server orelse return;
+    if (server.peer == null) return;
+
+    // Resolve scheme to dark bool.
+    const dark: bool = if (std.mem.eql(u8, scheme, "dark"))
+        true
+    else if (std.mem.eql(u8, scheme, "light"))
+        false
+    else if (std.mem.eql(u8, scheme, "system"))
+        // Read current system theme from the surface.
+        if (p.overlay_surface) |surface|
+            surface.config_conditional_state.theme == .dark
+        else
+            true // default to dark
+    else
+        return; // unknown scheme, ignore
+
+    // Forward to Chromium.
+    const fwd = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_string(fwd, "action", "set_color_scheme");
+
+    var pane_z: [37]u8 = undefined;
+    if (p.pane_id_key.len > 0 and p.pane_id_key.len <= 36) {
+        @memcpy(pane_z[0..p.pane_id_key.len], p.pane_id_key);
+        pane_z[p.pane_id_key.len] = 0;
+        xpc_dictionary_set_string(fwd, "pane_id", @ptrCast(&pane_z));
+    }
+
+    xpc_dictionary_set_bool(fwd, "dark", dark);
+    xpc_connection_send_message(server.peer, fwd);
+    log.info("forwarded set_color_scheme pane={s} dark={}", .{ pane_id, dark });
 }
 
 fn handleHello(msg: xpc_object_t) void {

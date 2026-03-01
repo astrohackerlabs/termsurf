@@ -59,6 +59,7 @@ enum LoopEvent {
 // Command dispatch (Issue 659).
 enum CommandResult {
     Quit,
+    SetColorScheme(String),
     None,
 }
 
@@ -67,10 +68,21 @@ struct Command {
     exec: fn(args: &[&str]) -> CommandResult,
 }
 
-const COMMANDS: &[Command] = &[Command {
-    name: "quit",
-    exec: |_| CommandResult::Quit,
-}];
+const COMMANDS: &[Command] = &[
+    Command {
+        name: "quit",
+        exec: |_| CommandResult::Quit,
+    },
+    Command {
+        name: "colorscheme",
+        exec: |args| match args.first().map(|s| *s) {
+            Some("dark" | "d") => CommandResult::SetColorScheme("dark".into()),
+            Some("light" | "l") => CommandResult::SetColorScheme("light".into()),
+            Some("system" | "s") => CommandResult::SetColorScheme("system".into()),
+            _ => CommandResult::None,
+        },
+    },
+];
 
 fn dispatch(input: &str) -> CommandResult {
     let mut parts = input.trim().splitn(2, ' ');
@@ -414,6 +426,13 @@ fn main() -> io::Result<()> {
                                 .unwrap_or_default();
                             match dispatch(&cmd_text) {
                                 CommandResult::Quit => break,
+                                CommandResult::SetColorScheme(scheme) => {
+                                    if let (Some(ref conn), Some(ref pid)) =
+                                        (&compositor, &pane_id)
+                                    {
+                                        conn.send_set_color_scheme(pid, &scheme);
+                                    }
+                                }
                                 CommandResult::None => {}
                             }
                             mode = Mode::Control;

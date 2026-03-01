@@ -283,3 +283,8 @@ from Experiment 1.
 3. Type `:col d` — page switches back to dark styles (prefix matching)
 4. Type `:colorscheme system` — page follows current macOS appearance
 5. Verify `:colorscheme` with no argument or invalid argument is a no-op
+
+### Result: SUCCESS
+
+`:colorscheme dark`, `:col l`, and `:col s` all work. The browser pane switches
+color scheme immediately via TUI → GUI → Chromium XPC chain.

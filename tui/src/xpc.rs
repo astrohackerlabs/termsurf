@@ -367,6 +367,31 @@ impl CompositorConnection {
         }
     }
 
+    /// Send a color scheme override to the compositor (Issue 680).
+    pub fn send_set_color_scheme(&self, pane_id: &str, scheme: &str) {
+        let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
+        if dict.is_null() {
+            return;
+        }
+
+        unsafe {
+            let action_key = CString::new("action").unwrap();
+            let action_val = CString::new("set_color_scheme").unwrap();
+            xpc_dictionary_set_string(dict, action_key.as_ptr(), action_val.as_ptr());
+
+            let pane_key = CString::new("pane_id").unwrap();
+            let pane_val = CString::new(pane_id).unwrap();
+            xpc_dictionary_set_string(dict, pane_key.as_ptr(), pane_val.as_ptr());
+
+            let scheme_key = CString::new("scheme").unwrap();
+            let scheme_val = CString::new(scheme).unwrap();
+            xpc_dictionary_set_string(dict, scheme_key.as_ptr(), scheme_val.as_ptr());
+
+            xpc_connection_send_message(self.raw, dict);
+            xpc_release(dict);
+        }
+    }
+
     /// Notify the compositor of a mode change.
     pub fn send_mode_changed(&self, pane_id: &str, browsing: bool) {
         let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
