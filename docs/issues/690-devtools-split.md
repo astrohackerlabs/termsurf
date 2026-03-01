@@ -506,3 +506,58 @@ the shell):
 12. `:devtools down` → split below
 13. `:devtools right` when DevTools already open → red command bar with
     duplicate error from `query_devtools`
+
+### Result: FAILURE (partial success)
+
+The `:devtools` command works on first invocation — the split opens, DevTools
+auto-targets the browser tab, error validation works (red bar for
+DevTools-in-DevTools, invalid direction, duplicate detection), and errors clear
+on keystroke.
+
+The failure is on the second invocation. After closing the DevTools pane and
+typing `:devtools` again, the entire app crashes with runaway audio (GPU process
+dies mid-frame, audio buffers loop). This is not a Chromium orphan problem —
+`web devtools` can be opened and closed repeatedly from the command line without
+issues. The crash only happens when the split is created via the `:devtools` TUI
+command a second time.
+
+**Key observation:** The crash is NOT in Chromium. Running `web devtools`
+manually in a split (created via the normal Cmd+D keybinding) works
+indefinitely. The crash only occurs when the split is created programmatically
+via the `open_split` → `termsurf_surface_split_with_input` path.
+
+**Hypotheses:**
+
+1. **`@fieldParentPtr` on a stale CoreSurface pointer.** After the first
+   DevTools pane closes, the original browser pane's Surface may have been
+   reallocated (the split tree reorganizes when a split is removed). The
+   `overlay_surface` pointer in the Pane struct still points to the old
+   CoreSurface address, but the memory may have been reused or the Surface
+   struct moved. `@fieldParentPtr("core_surface", surface)` then computes a
+   garbage Surface pointer, and calling `termsurf_surface_split_with_input` on
+   it corrupts memory.
+
+2. **Pending input leak.** If the first `termsurf_surface_split_with_input`
+   stores a pending input pointer but the Swift side fails to consume it (e.g.,
+   a race condition between the XPC dispatch queue and the main thread where
+   `newSplit` runs), the second call overwrites `pending_initial_input` without
+   freeing the first allocation. This is a memory leak, not a crash — but if the
+   stale pointer is read after the memory is freed, it's use-after-free.
+
+3. **Thread safety of `pending_initial_input`.** The variable is set on the XPC
+   serial queue (via `handleOpenSplit`) and read on the main thread (via Swift's
+   `newSplit` notification handler). There's no synchronization. If the second
+   `open_split` arrives while Swift is still processing the first notification,
+   the pending input could be overwritten mid-read.
+
+4. **Split tree corruption.** The split tree manipulation in
+   `BaseTerminalController.newSplit()` may not handle programmatic splits
+   correctly when the source surface has changed since the last split operation.
+   The `surfaceTree.inserting()` call uses the `oldView` reference, which may be
+   invalid if the view hierarchy was restructured after the first DevTools pane
+   was removed.
+
+Hypothesis 1 is the most likely — the `overlay_surface` pointer going stale
+after a split is removed is a known risk in the pane tracking architecture. The
+pointer is set once in `handleSetOverlay` and never updated when the split tree
+changes.
