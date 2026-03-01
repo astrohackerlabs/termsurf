@@ -1281,3 +1281,29 @@ names stay exactly as they are.
 Removing `tab_ready_count` does not break anything. `web last` and
 `web devtools` both work. This rules out Experiment 5 Hypothesis A — the counter
 was not the culprit.
+
+## Experiment 7: Remove `found_pane` from `handleTabReady`
+
+### Goal
+
+Test whether removing the `found_pane` debug variable breaks `web last` or
+`web devtools`. This isolates the second part of Experiment 5 Hypothesis A.
+
+### Changes
+
+#### GUI (`xpc.zig`): Remove `found_pane` only
+
+1. Delete `const found_pane = panes.get(pane_id) != null;` from
+   `handleTabReady`.
+2. Simplify the log to `log.info("tab_ready pane={s} tab_id={d}", ...)` — remove
+   `found={}` from the format string.
+
+No other changes.
+
+### Test
+
+1. `cd gui && zig build` — compiles
+2. Rebuild and launch with `build-debug.sh --open`
+3. `web google.com` in a pane
+4. `web last` in a split — should print profile, pane_id, tab_id
+5. `web devtools` in a split — should open DevTools
