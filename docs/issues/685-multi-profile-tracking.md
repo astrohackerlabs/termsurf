@@ -33,10 +33,85 @@ The single global breaks with multiple profiles:
    `last_browser_pane` global, so it can only target the single most recent
    browser pane.
 
+## Root Cause
+
+The `--profile` flag is defined with `default_value = "default"` and
+`global = true` (line 165 of `main.rs`). It always has a value. So bare
+`web last` sends `profile = "default"` to `handleQueryLast`. The GUI sees a
+non-empty profile filter and takes the filtered path. If `last_browser_pane`
+points to the "work" pane, the filter rejects it. The unfiltered path in the GUI
+is unreachable from the TUI.
+
 ## Relevant Code
 
 - `gui/src/apprt/xpc.zig` — `last_browser_pane` global (line 119),
   `handleTabReady` (line 614), `handlePaneFocusChanged` (line 900),
   `handleQueryLast` (line 790), DevTools auto-targeting (line 490)
-- `tui/src/main.rs` — `Commands::Last` subcommand
+- `tui/src/main.rs` — `Commands::Last` subcommand, `Cli` struct (line 155),
+  profile usage (lines 217, 315, 336, 347)
 - `tui/src/xpc.rs` — `send_query_last`
+
+## Experiment 1: Make `--profile` optional
+
+### Hypothesis
+
+If `--profile` is changed from `default_value = "default"` to `Option<String>`,
+then bare `web last` sends no profile filter and the GUI returns whatever
+`last_browser_pane` points to — regardless of profile. `web last --profile work`
+still filters. The overlay and DevTools paths default to `"default"` in code
+instead of in clap.
+
+### Changes
+
+#### 1. TUI (`main.rs`): Change `profile` to `Option<String>`
+
+```rust
+/// Browser profile name
+#[arg(long, global = true)]
+profile: Option<String>,
+```
+
+#### 2. TUI (`main.rs`): Derive the working profile after parsing
+
+Replace the current profile validation block (lines 183–193) with:
+
+```rust
+let profile_arg = cli.profile; // Option<String>
+let profile = profile_arg.clone().unwrap_or_else(|| "default".to_string());
+
+// Validate profile name: lowercase alphanumeric, starts with a letter.
+if profile.is_empty()
+    || !profile.bytes().next().unwrap().is_ascii_lowercase()
+    || !profile
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+{
+    eprintln!("Error: profile name must be lowercase alphanumeric, starting with a letter");
+    std::process::exit(1);
+}
+```
+
+`profile` (with default) is used by overlay paths (lines 315, 336, 347) — no
+changes needed there. `profile_arg` (the raw option) is used by `web last`.
+
+#### 3. TUI (`main.rs`): Pass raw option to `send_query_last`
+
+Change the `web last` handler (line 217):
+
+```rust
+match conn.send_query_last(pid, profile_arg.as_deref().unwrap_or("")) {
+```
+
+This sends an empty string when no `--profile` was given (bare `web last`), and
+the explicit profile name when `--profile` was given. The GUI already treats
+empty profile as "no filter" (line 804 of `xpc.zig`).
+
+### Test
+
+1. Open TermSurf, run `web google.com` (default profile)
+2. Open a split, run `web --profile work example.com`
+3. Open a split, run `web last` — should return work profile info (most recent)
+4. Run `web last --profile default` — **expected to fail** (this experiment only
+   fixes bare `web last`; per-profile search is a separate experiment)
+5. Run `web last --profile work` — should work
+6. Run `web devtools` — should still auto-target correctly
