@@ -27,6 +27,7 @@ extern "c" fn xpc_connection_set_event_handler(connection: xpc_object_t, handler
 extern "c" fn xpc_connection_resume(connection: xpc_object_t) void;
 extern "c" fn xpc_connection_cancel(connection: xpc_object_t) void;
 extern "c" fn xpc_connection_send_message(connection: xpc_object_t, message: xpc_object_t) void;
+extern "c" fn xpc_connection_send_message_with_reply_sync(connection: xpc_object_t, message: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_connection_create(name: ?[*:0]const u8, targetq: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_endpoint_create(connection: xpc_object_t) xpc_object_t;
 extern "c" fn xpc_dictionary_create(keys: xpc_object_t, values: xpc_object_t, count: usize) xpc_object_t;
@@ -285,6 +286,8 @@ fn handleMessage(msg: xpc_object_t) void {
         handleQueryLast(msg);
     } else if (std.mem.eql(u8, action_str, "query_devtools")) {
         handleQueryDevtools(msg);
+    } else if (std.mem.eql(u8, action_str, "query_tabs")) {
+        handleQueryTabs(msg);
     } else {
         log.warn("unknown action: {s}", .{action_str});
     }
@@ -912,6 +915,86 @@ fn handleQueryDevtools(msg: xpc_object_t) void {
     const conn = xpc_dictionary_get_remote_connection(msg);
     if (conn != null) xpc_connection_send_message(conn, reply);
     log.info("query_devtools: ok tab_id={d}", .{resolved_tab_id});
+}
+
+/// Synchronous query: return Chromium tab inventory for a profile (Issue 689).
+/// Counts GUI panes, forwards query to the Chromium profile server, and
+/// combines both into the reply sent back to the TUI.
+fn handleQueryTabs(msg: xpc_object_t) void {
+    const profile_str = str(xpc_dictionary_get_string(msg, "profile"));
+    log.info("query_tabs profile={s}", .{profile_str});
+
+    const reply = xpc_dictionary_create_reply(msg);
+    if (reply == null) return;
+
+    // Count GUI panes for this profile.
+    var gui_pane_count: i64 = 0;
+    {
+        var it = panes.iterator();
+        while (it.next()) |entry| {
+            const p = entry.value_ptr.*;
+            if (p.server) |s| {
+                if (std.mem.eql(u8, s.profile_key, profile_str)) {
+                    gui_pane_count += 1;
+                }
+            }
+        }
+    }
+    xpc_dictionary_set_int64(reply, "gui_panes", gui_pane_count);
+
+    // Look up the profile server.
+    const server = servers.get(profile_str);
+    if (server == null or server.?.peer == null) {
+        // No server running for this profile — return zeros.
+        xpc_dictionary_set_int64(reply, "chromium_tabs", 0);
+        xpc_dictionary_set_int64(reply, "chromium_browser", 0);
+        xpc_dictionary_set_int64(reply, "chromium_devtools", 0);
+        const conn = xpc_dictionary_get_remote_connection(msg);
+        if (conn != null) xpc_connection_send_message(conn, reply);
+        log.info("query_tabs: no server for profile={s}", .{profile_str});
+        return;
+    }
+
+    // Forward synchronous query to Chromium.
+    const fwd = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_string(fwd, "action", "query_tabs");
+    const chromium_reply = xpc_connection_send_message_with_reply_sync(server.?.peer, fwd);
+    xpc_release(fwd);
+
+    if (chromium_reply != null) {
+        // Copy Chromium's reply fields into the TUI reply.
+        const chromium_tabs = xpc_dictionary_get_int64(chromium_reply, "chromium_tabs");
+        const chromium_browser = xpc_dictionary_get_int64(chromium_reply, "chromium_browser");
+        const chromium_devtools = xpc_dictionary_get_int64(chromium_reply, "chromium_devtools");
+        xpc_dictionary_set_int64(reply, "chromium_tabs", chromium_tabs);
+        xpc_dictionary_set_int64(reply, "chromium_browser", chromium_browser);
+        xpc_dictionary_set_int64(reply, "chromium_devtools", chromium_devtools);
+
+        // Copy per-tab summary strings (tab_0, tab_1, ...).
+        var i: i64 = 0;
+        while (i < chromium_tabs) : (i += 1) {
+            var key_buf: [16]u8 = undefined;
+            const key = std.fmt.bufPrint(&key_buf, "tab_{d}", .{i}) catch continue;
+            // Null-terminate the key.
+            if (key.len < key_buf.len) {
+                key_buf[key.len] = 0;
+                const key_z: [*:0]const u8 = @ptrCast(&key_buf);
+                const val = xpc_dictionary_get_string(chromium_reply, key_z);
+                if (val != null) {
+                    xpc_dictionary_set_string(reply, key_z, val.?);
+                }
+            }
+        }
+        xpc_release(chromium_reply);
+    } else {
+        xpc_dictionary_set_int64(reply, "chromium_tabs", 0);
+        xpc_dictionary_set_int64(reply, "chromium_browser", 0);
+        xpc_dictionary_set_int64(reply, "chromium_devtools", 0);
+    }
+
+    const conn = xpc_dictionary_get_remote_connection(msg);
+    if (conn != null) xpc_connection_send_message(conn, reply);
+    log.info("query_tabs: replied gui_panes={d}", .{gui_pane_count});
 }
 
 // -- Focus lifecycle (Issue 606 Experiment 5) --

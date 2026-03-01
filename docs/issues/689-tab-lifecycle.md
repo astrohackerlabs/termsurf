@@ -292,36 +292,67 @@ git checkout -b 146.0.7650.0-issue-689
 Build with `autoninja -C out/Default chromium_profile_server`. After
 verification, generate patches and update `docs/chromium.md`.
 
-### Test
+### Result: SUCCESS
 
-1. Open `web google.com` in a terminal pane
-2. In another pane, run `web status`
-3. Expected output:
+The `web status` command works. Three tests confirm the orphan leak:
 
-   ```
-   Chromium tabs (profile: default):
-     [1] https://google.com/          pane=abc-123
-     ---
-     browser: 1  devtools: 0  total: 1
+**Test 1: DevTools orphans.** Opened one browser tab, then opened and closed
+DevTools three times. `web status` showed 4 Chromium tabs (1 browser + 3
+devtools) but only 2 GUI panes. Each DevTools close leaked an orphan.
 
-   GUI panes: 1
-   ```
+```
+Chromium tabs (profile: default):
+  id=1 inspected=0 pane=C0C286D0-... url=https://ryanxcharles.com/
+  id=0 inspected=1 pane=C06D2EC5-... url=http://127.0.0.1:.../devtools/...
+  id=0 inspected=1 pane=C06D2EC5-... url=http://127.0.0.1:.../devtools/...
+  id=0 inspected=1 pane=C06D2EC5-... url=http://127.0.0.1:.../devtools/...
+  ---
+  browser: 1  devtools: 3  total: 4
 
-4. Open DevTools: `web devtools` in a split
-5. Run `web status` again:
+GUI panes: 2
+```
 
-   ```
-   Chromium tabs (profile: default):
-     [1] https://google.com/          pane=abc-123
-     [0] devtools://1                 pane=def-456  (inspecting tab 1)
-     ---
-     browser: 1  devtools: 1  total: 2
+**Test 2: Browser tab orphans.** Opened one browser tab, then opened and closed
+additional browser tabs in the same pane (navigating away). `web status` showed
+5 Chromium tabs but only 2 GUI panes. All the "intermediate" tabs leaked — same
+pane ID, different tab IDs.
 
-   GUI panes: 2
-   ```
+```
+Chromium tabs (profile: default):
+  id=1 inspected=0 pane=8A5A71D9-... url=https://ryanxcharles.com/
+  id=2 inspected=0 pane=936A2645-... url=https://ryanxcharles.com/
+  id=3 inspected=0 pane=936A2645-... url=https://ryanxcharles.com/
+  id=4 inspected=0 pane=936A2645-... url=https://ryanxcharles.com/
+  id=5 inspected=0 pane=936A2645-... url=https://ryanxcharles.com/
+  ---
+  browser: 5  devtools: 0  total: 5
 
-6. Close the DevTools pane (`:q`)
-7. Run `web status` again — **this is the key test**:
-   - If orphan exists: `Chromium: 2 tabs, GUI: 1 pane` (bug confirmed)
-   - If clean: `Chromium: 1 tab, GUI: 1 pane` (no leak)
-8. The output makes the orphan visible and tells us exactly which tab leaked
+GUI panes: 2
+```
+
+**Test 3: Last-tab cleanup.** When the last GUI pane closes, `killServer` kills
+the entire profile server process, destroying all tabs (orphaned or not). After
+reopening, `web status` showed a clean slate: 1 tab, 1 pane.
+
+```
+Chromium tabs (profile: default):
+  id=1 inspected=0 pane=8A5A71D9-... url=https://ryanxcharles.com/
+  ---
+  browser: 1  devtools: 0  total: 1
+
+GUI panes: 1
+```
+
+### Findings
+
+1. **No tabs are ever closed.** Closing a GUI pane does not close the Chromium
+   tab. Tabs accumulate for the lifetime of the profile server process.
+2. **`killServer` masks the leak.** When the last pane on a profile closes, the
+   entire server is killed, destroying all orphans. This is why single-tab
+   workflows never notice the leak.
+3. **Both browser and DevTools tabs leak.** The orphan problem is universal, not
+   DevTools-specific. DevTools orphans are just more visible because they crash
+   on reopen (duplicate `InspectorOverlayAgent`).
+4. **The fix is Phase 2:** Send an explicit `close_tab` message from the GUI to
+   Chromium when a pane is cleaned up. This is the same direction as Issue 688
+   Experiment 3, but now we can verify the fix with `web status`.

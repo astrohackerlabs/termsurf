@@ -506,6 +506,94 @@ impl CompositorConnection {
         Ok(tab_id)
     }
 
+    /// Query the GUI for the Chromium tab inventory (Issue 689).
+    pub fn send_query_tabs(&self, pane_id: &str, profile: &str) -> Result<String, String> {
+        let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
+        if dict.is_null() {
+            return Err("Failed to create XPC message".to_string());
+        }
+
+        unsafe {
+            let key = CString::new("action").unwrap();
+            let val = CString::new("query_tabs").unwrap();
+            xpc_dictionary_set_string(dict, key.as_ptr(), val.as_ptr());
+
+            let pk = CString::new("pane_id").unwrap();
+            let pv = CString::new(pane_id).unwrap();
+            xpc_dictionary_set_string(dict, pk.as_ptr(), pv.as_ptr());
+
+            let prof_key = CString::new("profile").unwrap();
+            let prof_val = CString::new(profile).unwrap();
+            xpc_dictionary_set_string(dict, prof_key.as_ptr(), prof_val.as_ptr());
+        }
+
+        let reply = unsafe { xpc_connection_send_message_with_reply_sync(self.raw, dict) };
+        unsafe { xpc_release(dict) };
+
+        if reply.is_null() {
+            return Err("No reply from compositor".to_string());
+        }
+
+        // Check for error field.
+        let error_key = CString::new("error").unwrap();
+        let error_ptr = unsafe { xpc_dictionary_get_string(reply, error_key.as_ptr()) };
+        if !error_ptr.is_null() {
+            let err = unsafe { std::ffi::CStr::from_ptr(error_ptr) }
+                .to_str()
+                .unwrap_or("Unknown error")
+                .to_string();
+            unsafe { xpc_release(reply) };
+            return Err(err);
+        }
+
+        let gui_panes = unsafe {
+            let k = CString::new("gui_panes").unwrap();
+            xpc_dictionary_get_int64(reply, k.as_ptr())
+        };
+        let chromium_tabs = unsafe {
+            let k = CString::new("chromium_tabs").unwrap();
+            xpc_dictionary_get_int64(reply, k.as_ptr())
+        };
+        let chromium_browser = unsafe {
+            let k = CString::new("chromium_browser").unwrap();
+            xpc_dictionary_get_int64(reply, k.as_ptr())
+        };
+        let chromium_devtools = unsafe {
+            let k = CString::new("chromium_devtools").unwrap();
+            xpc_dictionary_get_int64(reply, k.as_ptr())
+        };
+
+        // Collect per-tab summaries.
+        let mut tab_lines = Vec::new();
+        for i in 0..chromium_tabs {
+            let key_str = format!("tab_{}", i);
+            let key_c = CString::new(key_str).unwrap();
+            let val_ptr = unsafe { xpc_dictionary_get_string(reply, key_c.as_ptr()) };
+            if !val_ptr.is_null() {
+                let val = unsafe { std::ffi::CStr::from_ptr(val_ptr) }
+                    .to_str()
+                    .unwrap_or("")
+                    .to_string();
+                tab_lines.push(val);
+            }
+        }
+
+        unsafe { xpc_release(reply) };
+
+        // Format output.
+        let mut out = format!("Chromium tabs (profile: {}):\n", profile);
+        for line in &tab_lines {
+            out.push_str(&format!("  {}\n", line));
+        }
+        out.push_str("  ---\n");
+        out.push_str(&format!(
+            "  browser: {}  devtools: {}  total: {}\n",
+            chromium_browser, chromium_devtools, chromium_tabs
+        ));
+        out.push_str(&format!("\nGUI panes: {}", gui_panes));
+        Ok(out)
+    }
+
     /// Tell the compositor to navigate to a new URL.
     pub fn send_navigate(&self, pane_id: &str, url: &str) {
         let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };

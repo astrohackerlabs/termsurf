@@ -175,6 +175,8 @@ enum Commands {
     },
     /// Show the last active browser pane/tab
     Last,
+    /// Show Chromium tab inventory for the current profile
+    Status,
 }
 
 fn main() -> io::Result<()> {
@@ -232,6 +234,19 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // Handle `web status` — print tab inventory and exit (Issue 689).
+    if let Some(Commands::Status) = cli.command {
+        if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+            match conn.send_query_tabs(pid, &profile) {
+                Ok(status) => println!("{}", status),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        } else {
+            println!("Not running inside TermSurf.");
+        }
+        return Ok(());
+    }
+
     // Send hello to get live config from the GUI (Issue 675).
     let hello_homepage = compositor
         .as_ref()
@@ -240,7 +255,7 @@ fn main() -> io::Result<()> {
     // Detect devtools://N before normalizing (Issue 684).
     let raw_url = match cli.command {
         Some(Commands::Url { url }) => url,
-        Some(Commands::Last) => unreachable!(), // Handled above.
+        Some(Commands::Last) | Some(Commands::Status) => unreachable!(), // Handled above.
         None => cli.url.unwrap_or_else(|| {
             hello_homepage.unwrap_or_else(|| "https://termsurf.com/welcome".to_string())
         }),
