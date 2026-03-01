@@ -1405,3 +1405,21 @@ No other changes. The command becomes `web status` instead of `web last`.
 3. `web google.com` in a pane
 4. `web status` in a split — should print profile, pane_id, tab_id
 5. `web devtools` in a split — should open DevTools
+
+### Result: SUCCESS (not applied)
+
+The rename compiles and works — both `web status` and `web devtools` function
+correctly. Hypothesis D ruled out: the rename was not the Experiment 5 culprit.
+
+However, `last` is the better name. This command reports the last active browser
+pane — it's not a general-purpose status command. "Last" is more precise and
+descriptive. The rename was stashed and will not be applied.
+
+### Experiment 5 retrospective
+
+All four changes passed individually (Experiments 6–10), yet they broke when
+applied together in Experiment 5. This means the regression was caused by an
+interaction between two or more changes, not by any single one. The exact
+interaction remains unidentified. Since all debug scaffolding has now been
+removed incrementally (Experiments 6–9) without issue, the cleanup is complete
+and the mystery is moot.
