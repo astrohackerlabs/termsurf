@@ -366,3 +366,37 @@ sends it after the PTY is ready.
 9. `:devtools` (no direction) → defaults to right
 10. `:devtools banana` → red command bar: `"Unknown direction: banana"`
 11. Type any character after seeing error → error clears, bar returns to yellow
+
+### Result: FAILURE
+
+`:devtools right` works on the first invocation — the split opens,
+`web devtools` runs, and DevTools auto-targets the browser tab correctly. The
+command bar error display also works: `:devtools` in a DevTools pane shows the
+red bar, `:devtools banana` shows the direction error, and errors clear on the
+next keystroke.
+
+The failure is in the close → reopen cycle. After closing the DevTools pane and
+typing `:devtools left`, Chromium crashes with runaway audio (GPU process dies
+mid-frame, audio buffers loop), requiring a force kill of the profile server.
+
+**Root cause:** Closing a DevTools pane removes it from the GUI's `panes` map
+(`cleanupPane` clears the overlay and deletes the pane entry), but does not tell
+Chromium's profile server to close the DevTools tab. The orphaned DevTools
+session stays alive inside Chromium, still attached to the browser tab's
+renderer via its `InspectorOverlayAgent`.
+
+When a new `:devtools` command runs, `query_devtools` checks the `panes` map for
+duplicates — but the old pane was already removed, so no duplicate is detected.
+The new `web devtools` creates a second DevTools tab for the same inspected tab.
+Two `InspectorOverlayAgent` instances attach to one renderer, triggering the
+same `PaintController` DCHECK crash from Issue 686.
+
+This is the Issue 686 crash resurfacing through a code path that Issue 687's
+validation cannot catch: the duplicate isn't visible in the `panes` map because
+the tracking was cleaned up while the Chromium session persisted.
+
+**What needs to happen:** `cleanupPane` must send a "close DevTools tab" message
+to Chromium's profile server when a pane with `inspected_tab_id != 0` is
+removed. The Chromium-side DevTools session must be fully torn down before a new
+one can be created. This is a prerequisite for the `:devtools` command to work
+reliably.
