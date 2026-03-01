@@ -283,6 +283,8 @@ fn handleMessage(msg: xpc_object_t) void {
         handleHello(msg);
     } else if (std.mem.eql(u8, action_str, "query_last")) {
         handleQueryLast(msg);
+    } else if (std.mem.eql(u8, action_str, "query_devtools")) {
+        handleQueryDevtools(msg);
     } else {
         log.warn("unknown action: {s}", .{action_str});
     }
@@ -842,6 +844,74 @@ fn handleQueryLast(msg: xpc_object_t) void {
     if (conn != null) {
         xpc_connection_send_message(conn, reply);
     }
+}
+
+/// Synchronous query: validate a DevTools request before the TUI launches (Issue 687).
+/// Resolves auto-target, checks for duplicate DevTools on the same tab, and
+/// replies with the resolved tab_id or an error string.
+fn handleQueryDevtools(msg: xpc_object_t) void {
+    const inspected_tab_id = xpc_dictionary_get_int64(msg, "inspected_tab_id");
+    const profile_str = str(xpc_dictionary_get_string(msg, "profile"));
+    log.info("query_devtools inspected_tab_id={d} profile={s}", .{ inspected_tab_id, profile_str });
+
+    const reply = xpc_dictionary_create_reply(msg);
+    if (reply == null) return;
+
+    var resolved_tab_id: i64 = inspected_tab_id;
+
+    // Resolve auto-target (inspected_tab_id == 0).
+    if (resolved_tab_id == 0) {
+        const target_pane_id = last_browser_pane orelse {
+            xpc_dictionary_set_string(reply, "error", "No browser tab found");
+            const conn = xpc_dictionary_get_remote_connection(msg);
+            if (conn != null) xpc_connection_send_message(conn, reply);
+            log.info("query_devtools: no last_browser_pane", .{});
+            return;
+        };
+        const target = panes.get(target_pane_id) orelse {
+            xpc_dictionary_set_string(reply, "error", "No browser tab found");
+            const conn = xpc_dictionary_get_remote_connection(msg);
+            if (conn != null) xpc_connection_send_message(conn, reply);
+            log.info("query_devtools: target pane not found", .{});
+            return;
+        };
+        if (target.tab_id == 0) {
+            xpc_dictionary_set_string(reply, "error", "No browser tab found");
+            const conn = xpc_dictionary_get_remote_connection(msg);
+            if (conn != null) xpc_connection_send_message(conn, reply);
+            log.info("query_devtools: target pane has no tab_id", .{});
+            return;
+        }
+        resolved_tab_id = target.tab_id;
+    }
+
+    // Check for duplicate: any existing pane already inspecting this tab?
+    var it = panes.iterator();
+    while (it.next()) |entry| {
+        const p = entry.value_ptr.*;
+        if (p.inspected_tab_id == resolved_tab_id) {
+            // Format error message with the tab ID.
+            var err_buf: [64]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "Tab {d} already has DevTools open", .{resolved_tab_id}) catch "DevTools already open for this tab";
+            // Null-terminate for XPC.
+            var err_z: [128]u8 = undefined;
+            if (err_msg.len < err_z.len) {
+                @memcpy(err_z[0..err_msg.len], err_msg);
+                err_z[err_msg.len] = 0;
+                xpc_dictionary_set_string(reply, "error", @ptrCast(&err_z));
+            }
+            const conn = xpc_dictionary_get_remote_connection(msg);
+            if (conn != null) xpc_connection_send_message(conn, reply);
+            log.info("query_devtools: duplicate — tab {d} already has devtools", .{resolved_tab_id});
+            return;
+        }
+    }
+
+    // Success: reply with resolved tab_id.
+    xpc_dictionary_set_int64(reply, "tab_id", resolved_tab_id);
+    const conn = xpc_dictionary_get_remote_connection(msg);
+    if (conn != null) xpc_connection_send_message(conn, reply);
+    log.info("query_devtools: ok tab_id={d}", .{resolved_tab_id});
 }
 
 // -- Focus lifecycle (Issue 606 Experiment 5) --

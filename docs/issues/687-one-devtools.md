@@ -217,3 +217,12 @@ is the third reinforcing signal.
 7. `web devtools://999` (nonexistent tab) → should print error and exit
 8. `web devtools` with no browser open → should print
    `"Error: No browser tab found"` and exit
+
+### Result: SUCCESS
+
+All test cases pass. The launch-time `query_devtools` check correctly rejects
+duplicate DevTools and missing tabs with immediate error messages. Navigation
+keys are locked in DevTools mode — `i`, `A`, `I`, `n`, `v`, `V` are ignored. The
+viewport title shows `DevTools · profile/tab_id`, and the status bar shows only
+the available keys. The URL bar remains read-only with the `devtools://N`
+indicator.

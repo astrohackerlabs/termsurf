@@ -394,11 +394,7 @@ impl CompositorConnection {
     }
 
     /// Query the GUI for the last active browser pane/tab (Issue 684 Exp 4).
-    pub fn send_query_last(
-        &self,
-        pane_id: &str,
-        profile: &str,
-    ) -> Option<(String, String, i64)> {
+    pub fn send_query_last(&self, pane_id: &str, profile: &str) -> Option<(String, String, i64)> {
         let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
         if dict.is_null() {
             return None;
@@ -453,6 +449,61 @@ impl CompositorConnection {
 
         unsafe { xpc_release(reply) };
         Some((prof_str, pane_str, tab_id))
+    }
+
+    /// Validate a DevTools request before launching the TUI (Issue 687).
+    /// Returns Ok(resolved_tab_id) on success, Err(error_message) on failure.
+    pub fn send_query_devtools(
+        &self,
+        pane_id: &str,
+        inspected_tab_id: i64,
+        profile: &str,
+    ) -> Result<i64, String> {
+        let dict = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
+        if dict.is_null() {
+            return Err("Failed to create XPC message".to_string());
+        }
+
+        unsafe {
+            let key = CString::new("action").unwrap();
+            let val = CString::new("query_devtools").unwrap();
+            xpc_dictionary_set_string(dict, key.as_ptr(), val.as_ptr());
+
+            let pk = CString::new("pane_id").unwrap();
+            let pv = CString::new(pane_id).unwrap();
+            xpc_dictionary_set_string(dict, pk.as_ptr(), pv.as_ptr());
+
+            let tid_key = CString::new("inspected_tab_id").unwrap();
+            xpc_dictionary_set_int64(dict, tid_key.as_ptr(), inspected_tab_id);
+
+            let prof_key = CString::new("profile").unwrap();
+            let prof_val = CString::new(profile).unwrap();
+            xpc_dictionary_set_string(dict, prof_key.as_ptr(), prof_val.as_ptr());
+        }
+
+        let reply = unsafe { xpc_connection_send_message_with_reply_sync(self.raw, dict) };
+        unsafe { xpc_release(dict) };
+
+        if reply.is_null() {
+            return Err("No reply from compositor".to_string());
+        }
+
+        // Check for error field first.
+        let error_key = CString::new("error").unwrap();
+        let error_ptr = unsafe { xpc_dictionary_get_string(reply, error_key.as_ptr()) };
+        if !error_ptr.is_null() {
+            let err = unsafe { std::ffi::CStr::from_ptr(error_ptr) }
+                .to_str()
+                .unwrap_or("Unknown error")
+                .to_string();
+            unsafe { xpc_release(reply) };
+            return Err(err);
+        }
+
+        let tab_key = CString::new("tab_id").unwrap();
+        let tab_id = unsafe { xpc_dictionary_get_int64(reply, tab_key.as_ptr()) };
+        unsafe { xpc_release(reply) };
+        Ok(tab_id)
     }
 
     /// Tell the compositor to navigate to a new URL.

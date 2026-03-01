@@ -245,7 +245,7 @@ fn main() -> io::Result<()> {
             hello_homepage.unwrap_or_else(|| "https://termsurf.com/welcome".to_string())
         }),
     };
-    let inspected_tab_id: i64 = if raw_url.starts_with("devtools://") {
+    let mut inspected_tab_id: i64 = if raw_url.starts_with("devtools://") {
         raw_url["devtools://".len()..].parse::<i64>().unwrap_or(0)
     } else if raw_url == "devtools" {
         0 // Auto-target: GUI resolves to most recent browser tab (Issue 684 Exp 3).
@@ -258,6 +258,21 @@ fn main() -> io::Result<()> {
     } else {
         normalize_url(&raw_url)
     };
+
+    // Validate DevTools request before entering the UI (Issue 687).
+    if is_devtools {
+        if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+            match conn.send_query_devtools(pid, inspected_tab_id, &profile) {
+                Ok(resolved_tab_id) => {
+                    inspected_tab_id = resolved_tab_id;
+                }
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    return Ok(());
+                }
+            }
+        }
+    }
 
     // Enter raw mode and alternate screen.
     enable_raw_mode()?;
@@ -319,6 +334,8 @@ fn main() -> io::Result<()> {
                 &mut editor_state,
                 &mut cmd_state,
                 &page_title,
+                is_devtools,
+                inspected_tab_id,
             );
         })?;
 
@@ -398,7 +415,8 @@ fn main() -> io::Result<()> {
                                 *mode = Mode::Edit;
                             };
                         match key.code {
-                            KeyCode::Char('i') => {
+                            // Edit mode keys are disabled in DevTools (Issue 687).
+                            KeyCode::Char('i') if !is_devtools => {
                                 // Insert mode, cursor at last position (Issue 658).
                                 enter_edit(&mut editor_state, &mut editor_url, &url, &mut mode);
                                 editor_state.mode = EditorMode::Insert;
@@ -406,7 +424,7 @@ fn main() -> io::Result<()> {
                                     conn.send_mode_changed(pid, false);
                                 }
                             }
-                            KeyCode::Char('A') => {
+                            KeyCode::Char('A') if !is_devtools => {
                                 // Insert mode, cursor at end of line (Issue 658).
                                 enter_edit(&mut editor_state, &mut editor_url, &url, &mut mode);
                                 editor_state.cursor.col =
@@ -416,7 +434,7 @@ fn main() -> io::Result<()> {
                                     conn.send_mode_changed(pid, false);
                                 }
                             }
-                            KeyCode::Char('I') => {
+                            KeyCode::Char('I') if !is_devtools => {
                                 // Insert mode, cursor at start of line (Issue 658).
                                 enter_edit(&mut editor_state, &mut editor_url, &url, &mut mode);
                                 editor_state.cursor = edtui::Index2::new(0, 0);
@@ -425,7 +443,7 @@ fn main() -> io::Result<()> {
                                     conn.send_mode_changed(pid, false);
                                 }
                             }
-                            KeyCode::Char('n') => {
+                            KeyCode::Char('n') if !is_devtools => {
                                 // Normal mode, cursor at last position (Issue 658).
                                 enter_edit(&mut editor_state, &mut editor_url, &url, &mut mode);
                                 editor_state.mode = EditorMode::Normal;
@@ -434,7 +452,7 @@ fn main() -> io::Result<()> {
                                     conn.send_mode_changed(pid, false);
                                 }
                             }
-                            KeyCode::Char('v') => {
+                            KeyCode::Char('v') if !is_devtools => {
                                 // Visual mode, cursor at last position (Issue 658).
                                 enter_edit(&mut editor_state, &mut editor_url, &url, &mut mode);
                                 SwitchMode(EditorMode::Visual).execute(&mut editor_state);
@@ -442,7 +460,7 @@ fn main() -> io::Result<()> {
                                     conn.send_mode_changed(pid, false);
                                 }
                             }
-                            KeyCode::Char('V') => {
+                            KeyCode::Char('V') if !is_devtools => {
                                 // Visual mode, entire line selected (Issue 658).
                                 enter_edit(&mut editor_state, &mut editor_url, &url, &mut mode);
                                 SelectLine.execute(&mut editor_state);
@@ -472,6 +490,8 @@ fn main() -> io::Result<()> {
                             mode = Mode::Control;
                         } else if key.code == KeyCode::Enter
                             && editor_state.mode != EditorMode::Search
+                            && !is_devtools
+                        // Safety guard: no navigation in DevTools (Issue 687).
                         {
                             // Extract URL from editor, navigate, switch to Browse.
                             let new_url: String = editor_state
@@ -506,8 +526,7 @@ fn main() -> io::Result<()> {
                             match dispatch(&cmd_text) {
                                 CommandResult::Quit => break,
                                 CommandResult::SetColorScheme(scheme) => {
-                                    if let (Some(ref conn), Some(ref pid)) =
-                                        (&compositor, &pane_id)
+                                    if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id)
                                     {
                                         conn.send_set_color_scheme(pid, &scheme);
                                     }
@@ -634,6 +653,8 @@ fn ui(
     editor_state: &mut EditorState,
     cmd_state: &mut EditorState,
     page_title: &str,
+    is_devtools: bool,
+    inspected_tab_id: i64,
 ) -> Rect {
     // Paint full background.
     frame.render_widget(
@@ -745,7 +766,9 @@ fn ui(
         Span::raw("\u{F007} ").style(Style::default().fg(COMMENT)),
         Span::raw(profile).style(Style::default().fg(FG)),
     ]);
-    let viewport_title = if page_title.is_empty() {
+    let viewport_title = if is_devtools {
+        format!("DevTools \u{00B7} {}/{}", profile, inspected_tab_id) // Issue 687.
+    } else if page_title.is_empty() {
         "Viewport".to_string()
     } else {
         page_title.to_string()
@@ -789,14 +812,26 @@ fn ui(
             Span::styled("esc ", f),
             Span::styled("control", d),
         ]),
-        Mode::Control => Line::from(vec![
-            Span::styled(":q\u{23CE} ", f),
-            Span::styled("quit  ", d),
-            Span::styled("i ", f),
-            Span::styled("edit url  ", d),
-            Span::styled("\u{23CE} ", f),
-            Span::styled("browse", d),
-        ]),
+        Mode::Control => {
+            if is_devtools {
+                // DevTools: no edit keys (Issue 687).
+                Line::from(vec![
+                    Span::styled(":q\u{23CE} ", f),
+                    Span::styled("quit  ", d),
+                    Span::styled("\u{23CE} ", f),
+                    Span::styled("browse", d),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(":q\u{23CE} ", f),
+                    Span::styled("quit  ", d),
+                    Span::styled("i ", f),
+                    Span::styled("edit url  ", d),
+                    Span::styled("\u{23CE} ", f),
+                    Span::styled("browse", d),
+                ])
+            }
+        }
         Mode::Edit => Line::from(vec![
             Span::styled("\u{23CE} ", f),
             Span::styled("navigate  ", d),
