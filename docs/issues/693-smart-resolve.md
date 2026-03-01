@@ -172,7 +172,75 @@ resolution is already done.
 Step 2 (DevTools) is already handled by the existing `devtools://` / bare
 `devtools` checks after the match block. Those stay as-is.
 
-## Test
+## Experiment 1: Replace `normalize_url` with `resolve_input`
+
+### Hypothesis
+
+If we replace `normalize_url` with `resolve_input` (returning `Option<String>`),
+the smart 7-step algorithm handles all inputs correctly: files are opened when
+they exist, URLs are normalized when they look like URLs, and garbage inputs
+produce clear errors instead of silently navigating to nonsense.
+
+### Changes
+
+All in `tui/src/main.rs`.
+
+#### 1. Replace `normalize_url` with `resolve_input`
+
+Delete `normalize_url` (line 705) and replace with `resolve_input` returning
+`Option<String>`, implementing the 7-step algorithm from the design section.
+
+#### 2. Update CLI path (line 274–300)
+
+The `None` arm of the match already produces `raw_url`. The devtools check
+(step 2) happens after the match at line 288. The `normalize_url` call is at
+line 299. Replace that call:
+
+```rust
+let mut url = if is_devtools {
+    raw_url
+} else {
+    match resolve_input(&raw_url) {
+        Some(resolved) => resolved,
+        None => {
+            eprintln!("Error: '{}' is not a URL, file, or command", raw_url);
+            std::process::exit(1);
+        }
+    }
+};
+```
+
+#### 3. Update Edit mode path (line 550)
+
+Replace `normalize_url(&new_url)` with `resolve_input` and handle `None`:
+
+```rust
+match resolve_input(&new_url) {
+    Some(resolved) => {
+        url = resolved;
+        editor_url = url.clone();
+        mode = Mode::Browse;
+        if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+            conn.send_navigate(pid, &url);
+            conn.send_mode_changed(pid, true);
+        }
+    }
+    None => {
+        command_error = Some(format!(
+            "'{}' is not a URL or file", new_url
+        ));
+        mode = Mode::Command;
+    }
+}
+```
+
+On `None`, show the error in the command bar (red border, error text) and switch
+to Command mode so the user sees the feedback. The existing `command_error`
+infrastructure from Issue 690 handles the display.
+
+### Test
+
+Same as the issue-level test plan:
 
 1. `web google.com` → `https://google.com`
 2. `web localhost:3000` → `http://localhost:3000`
