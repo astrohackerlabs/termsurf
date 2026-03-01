@@ -229,3 +229,151 @@ C++: ~40–60 lines.
 All Chromium paths relative to
 `chromium/src/content/chromium_profile_server/browser/` (profile server) or
 `chromium/src/content/shell/browser/` (upstream shell).
+
+## Experiment 1: DevTools via `devtools://` URL hijack
+
+### Hypothesis
+
+If the profile server intercepts `devtools://N` URLs in the existing
+`create_tab` path, creates a DevTools WebContents with `ShellDevToolsBindings`
+pointing at tab N, and renders it as a CALayerHost overlay, then:
+
+1. The DevTools frontend will render and be interactive in a terminal pane
+2. Hover highlighting will draw on the live inspected page (not a screenshot)
+3. All standard DevTools features (Elements, Console, Network) will work
+
+This proves the core architectural bet with zero TUI or GUI changes.
+
+### Why this experiment first
+
+The riskiest assumption is whether `ShellDevToolsBindings` + CALayerHost work
+together. Everything else in the DevTools plan — tab IDs, URL parsing, viewport
+borders, dedicated XPC actions — is straightforward plumbing. If DevTools can't
+render through CALayerHost, or if hover highlighting doesn't work in-process
+without a native window, the entire approach needs rethinking. This experiment
+answers that question before investing in any plumbing.
+
+### Plan
+
+**Chromium profile server only.** No TUI or GUI changes. The user types
+`web devtools://1` and it flows through the existing `create_tab` path.
+
+#### 1. Add auto-incrementing tab ID to `TabState`
+
+In `shell_browser_main_parts.h`, add a `tab_id` field to `TabState` and a
+`next_tab_id_` counter to `ShellBrowserMainParts`:
+
+```cpp
+struct TabState {
+  int tab_id = 0;  // auto-incrementing, 1-based
+  // ... existing fields ...
+};
+
+int next_tab_id_ = 1;
+```
+
+In `CreateTab`, assign `tab->tab_id = next_tab_id_++;` before storing the tab.
+
+#### 2. Detect `devtools://` URLs in `CreateTab`
+
+At the top of `CreateTab`, before creating the Shell, check if the URL starts
+with `devtools://`:
+
+```cpp
+void ShellBrowserMainParts::CreateTab(const GURL& url, ...) {
+  // Check for devtools:// URL.
+  bool is_devtools = url.scheme() == "devtools";
+  int inspected_tab_id = 0;
+  WebContents* inspected_contents = nullptr;
+
+  if (is_devtools) {
+    // Parse tab ID from host (devtools://3 → host is "3").
+    base::StringToInt(url.host(), &inspected_tab_id);
+    // Find inspected tab.
+    for (auto& t : tabs_) {
+      if (t->tab_id == inspected_tab_id) {
+        inspected_contents = t->shell->web_contents();
+        break;
+      }
+    }
+    if (!inspected_contents) {
+      LOG(ERROR) << "DevTools: tab " << inspected_tab_id << " not found";
+      return;
+    }
+  }
+```
+
+#### 3. Load DevTools frontend URL instead of user URL
+
+Replace the URL loaded into the Shell:
+
+```cpp
+GURL load_url = is_devtools
+    ? GURL(base::StringPrintf(
+          "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
+          ShellDevToolsManagerDelegate::GetHttpHandlerPort()))
+    : url;
+shell->LoadURL(load_url);
+```
+
+#### 4. Create `ShellDevToolsBindings`
+
+After the Shell and WebContents are created, if this is a DevTools tab, wire up
+the bindings. `ShellDevToolsFrontend::Show()` normally does this, but it creates
+a native Shell window. We skip that and create the bindings directly:
+
+```cpp
+if (is_devtools) {
+  // ShellDevToolsFrontend manages the bindings lifecycle and observes
+  // the DevTools WebContents for PrimaryMainDocumentElementAvailable
+  // (which triggers Attach).
+  auto* devtools_frontend = new ShellDevToolsFrontend(
+      shell, inspected_contents);
+  // Store reference for cleanup.
+  tab->devtools_frontend = devtools_frontend;
+}
+```
+
+Note: `ShellDevToolsFrontend` already observes the WebContents via
+`WebContentsObserver` and calls `Attach()` when the DOM loads. We reuse it as-is
+— it doesn't actually need a native window, just a Shell with a WebContents.
+
+#### 5. Skip tab ID for DevTools tabs
+
+DevTools tabs don't get an auto-incrementing ID:
+
+```cpp
+if (!is_devtools) {
+  tab->tab_id = next_tab_id_++;
+}
+// tab_id stays 0 for DevTools tabs.
+```
+
+### Test
+
+1. Open TermSurf, navigate to a page: `web example.com`
+2. Open a Ghostty split pane
+3. Type `web devtools://1` — this should open DevTools for tab 1
+4. **Verify rendering:** DevTools frontend renders in the new pane
+5. **Verify interaction:** Click Elements panel, expand DOM nodes, type in
+   Console
+6. **Verify hover highlighting:** Hover over an element in the Elements panel —
+   the corresponding element on the inspected page (in the other pane) should
+   highlight with blue/green overlays in real time
+7. **Verify keyboard/mouse:** All DevTools panels accept input — Network tab
+   shows requests, Console accepts JavaScript, Sources shows files
+
+### What success looks like
+
+DevTools renders in a terminal pane like any other webpage, fully interactive,
+with live hover highlighting on the inspected page. No native windows, no
+external browser, no screenshots.
+
+### What failure looks like
+
+- DevTools frontend loads but can't connect to the inspected page (bindings
+  broken without native Shell)
+- Hover highlighting doesn't appear on the inspected page (CALayerHost rendering
+  limitation)
+- DevTools crashes or shows blank content (compositor/GPU process issue with two
+  WebContents in one profile server)
