@@ -1423,3 +1423,64 @@ interaction between two or more changes, not by any single one. The exact
 interaction remains unidentified. Since all debug scaffolding has now been
 removed incrementally (Experiments 6–9) without issue, the cleanup is complete
 and the mystery is moot.
+
+## Conclusion
+
+Issue 684 delivered two new TUI commands and the underlying GUI infrastructure
+to support them:
+
+### What works
+
+1. **`web devtools`** — auto-targets the most recently active browser tab and
+   opens Chrome DevTools in a split pane. Uses in-process
+   `ShellDevToolsBindings` for full element inspection, hover highlighting, and
+   live DOM manipulation.
+2. **`web devtools://N`** — explicit tab targeting. Works for any tab ID.
+3. **`web last`** — diagnostic command that prints the profile, pane ID, and tab
+   ID of the most recently active browser pane.
+4. **`web last --profile <name>`** — profile-filtered variant.
+5. **`last_browser_pane` tracker** — GUI tracks the most recently active browser
+   pane via two paths: `handleTabReady` (on tab creation when `tab_id > 0`) and
+   `handlePaneFocusChanged` (on focus gain, without the `p.browsing` gate, for
+   non-DevTools panes with `tab_id > 0`).
+
+### What doesn't work (multi-profile)
+
+The tracker uses a single global variable (`last_browser_pane`). This breaks
+with multiple profiles:
+
+1. **`web last` fails entirely with multiple profiles open.** Open a browser
+   with the default profile, then open another with the "work" profile.
+   `web last` (no filter) returns "No active browser tab found." instead of the
+   work profile's pane info. The root cause needs investigation — the global
+   should point to the most recent pane regardless of profile.
+2. **`web last --profile default` fails when "work" was opened last.** The
+   profile filter only checks `last_browser_pane`. If that pane belongs to
+   "work", the filter rejects it and returns nothing. It does not search other
+   panes.
+3. **`web last --profile work` works** because the global happens to point to
+   the work pane (most recently created).
+4. **`web devtools` auto-targeting has the same limitation.** It uses the same
+   `last_browser_pane` global, so it can only target the single most recent
+   browser pane. With multiple profiles, it may target the wrong one or fail.
+
+The fix requires per-profile tracking — either a map of profile →
+last-browser-pane, or iterating all panes to find the most recent one matching
+the requested profile. This is deferred to the next issue.
+
+### Chromium bug fixed
+
+Experiment 4 uncovered a Chromium ordering bug in `CreateTab`
+(`shell_browser_main_parts.cc`): the `tab_ready` XPC message was sent before
+`tab->tab_id` was assigned, so `tab_id` was always 0. Fixed by moving the
+assignment before the send.
+
+### Changes across all experiments
+
+- **Chromium** (`shell_browser_main_parts.cc`): `tab_id` assignment ordering fix
+  in `CreateTab`.
+- **GUI** (`xpc.zig`): `last_browser_pane` global, `handleTabReady` tracker,
+  `handlePaneFocusChanged` tracker (without `p.browsing` gate),
+  `handleQueryLast` request/reply handler, `cleanupPane` clears tracker.
+- **TUI** (`main.rs`): `Last` subcommand, `send_query_last` XPC call.
+- **TUI** (`xpc.rs`): `send_query_last` implementation.
