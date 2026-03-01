@@ -11,16 +11,18 @@ starts with the typed prefix, it executes. If zero or multiple match, it's a
 no-op. Adding `quitall` to the COMMANDS table would make `:q` ambiguous (matches
 both `quit` and `quitall`) and break `:q`.
 
-## Solution: Shortest-Match Priority
+## Solution: Subsequence Matching + Shortest-Match Priority
 
-When multiple commands match a prefix:
+Replace prefix matching (`starts_with`) with subsequence matching: every
+character in the input must appear in the command name in order, but not
+necessarily contiguously. This is how vim handles abbreviations like `:qa` for
+`:quitall` — the `q` and `a` appear in order in **q**uit**a**ll.
 
-1. **Exact match** wins (`:quit` → `quit`, even if `quitall` also exists)
+When multiple commands match:
+
+1. **Exact match** wins (`:quit` → `quit`, even if `quitall` also matches)
 2. **Shortest name** wins (`:q` → `quit` over `quitall`)
-3. **Unique prefix** works as before (`:col` → `colorscheme`)
-
-This matches vim's behavior where shorter commands take priority over longer
-variants, and scales as more commands are added.
+3. **Unique match** works as before (`:col` → `colorscheme`)
 
 ## Experiment 1: Shortest-match dispatch + quitall
 
@@ -32,11 +34,33 @@ and `:quitall` all work.
 
 ### Changes
 
-#### 1. Update dispatch logic (`tui/src/main.rs`)
-
-Replace the ambiguity check with shortest-match priority:
+#### 1. Add subsequence matcher (`tui/src/main.rs`)
 
 ```rust
+fn is_subsequence(needle: &str, haystack: &str) -> bool {
+    let mut hay = haystack.chars();
+    for c in needle.chars() {
+        loop {
+            match hay.next() {
+                Some(h) if h == c => break,
+                Some(_) => continue,
+                None => return false,
+            }
+        }
+    }
+    true
+}
+```
+
+#### 2. Update dispatch logic (`tui/src/main.rs`)
+
+Replace `starts_with` with `is_subsequence`, add shortest-match tiebreaker:
+
+```rust
+let matches: Vec<&Command> = COMMANDS
+    .iter()
+    .filter(|c| is_subsequence(prefix, c.name))
+    .collect();
 match matches.len() {
     0 => CommandResult::None,
     1 => (matches[0].exec)(&args),
@@ -51,7 +75,7 @@ match matches.len() {
 }
 ```
 
-#### 2. Add `quitall` command (`tui/src/main.rs`)
+#### 3. Add `quitall` command (`tui/src/main.rs`)
 
 ```rust
 Command {
@@ -62,9 +86,28 @@ Command {
 
 ### Test
 
-1. `:q` → quits (shortest match: `quit` over `quitall`)
-2. `:qa` → quits (only matches `quitall`)
-3. `:quit` → quits (exact match)
-4. `:quitall` → quits (exact match)
-5. `:col d` → still works (unique prefix, unaffected)
-6. `:colorscheme light` → still works (exact match)
+1. `:q` → quits (subsequence of `quit` and `quitall`, shortest wins)
+2. `:qa` → quits (subsequence of `quitall` only)
+3. `:qall` → quits (subsequence of `quitall` only)
+4. `:quit` → quits (exact match)
+5. `:quita` → quits (subsequence of `quitall` only)
+6. `:quitall` → quits (exact match)
+7. `:col d` → still works (subsequence of `colorscheme`)
+
+### Result: SUCCESS
+
+All vim-style abbreviations work. `:q`, `:qa`, `:qall`, `:quit`, `:quita`, and
+`:quitall` all quit. `:col d` still switches to dark mode.
+
+## Conclusion
+
+Command dispatch now uses subsequence matching instead of prefix matching. Any
+ordered character sequence from a command name is a valid abbreviation — `:qa`
+matches `quitall` because **q**uit**a**ll. When multiple commands match, exact
+matches win first, then the shortest command name wins. This matches vim
+conventions and scales naturally as new commands are added.
+
+### Files changed
+
+- `tui/src/main.rs` — `is_subsequence` function, updated `dispatch` with
+  subsequence filter and shortest-match tiebreaker, added `quitall` command

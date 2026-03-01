@@ -74,6 +74,10 @@ const COMMANDS: &[Command] = &[
         exec: |_| CommandResult::Quit,
     },
     Command {
+        name: "quitall",
+        exec: |_| CommandResult::Quit,
+    },
+    Command {
         name: "colorscheme",
         exec: |args| match args.first().map(|s| *s) {
             Some("dark" | "d") => CommandResult::SetColorScheme("dark".into()),
@@ -83,6 +87,20 @@ const COMMANDS: &[Command] = &[
         },
     },
 ];
+
+fn is_subsequence(needle: &str, haystack: &str) -> bool {
+    let mut hay = haystack.chars();
+    for c in needle.chars() {
+        loop {
+            match hay.next() {
+                Some(h) if h == c => break,
+                Some(_) => continue,
+                None => return false,
+            }
+        }
+    }
+    true
+}
 
 fn dispatch(input: &str) -> CommandResult {
     let mut parts = input.trim().splitn(2, ' ');
@@ -96,11 +114,20 @@ fn dispatch(input: &str) -> CommandResult {
         .unwrap_or_default();
     let matches: Vec<&Command> = COMMANDS
         .iter()
-        .filter(|c| c.name.starts_with(prefix))
+        .filter(|c| is_subsequence(prefix, c.name))
         .collect();
     match matches.len() {
+        0 => CommandResult::None,
         1 => (matches[0].exec)(&args),
-        _ => CommandResult::None,
+        _ => {
+            // Exact match wins, then shortest name wins (Issue 681).
+            if let Some(cmd) = matches.iter().find(|c| c.name == prefix) {
+                (cmd.exec)(&args)
+            } else {
+                let shortest = matches.iter().min_by_key(|c| c.name.len()).unwrap();
+                (shortest.exec)(&args)
+            }
+        }
     }
 }
 
