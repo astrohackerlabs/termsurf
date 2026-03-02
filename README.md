@@ -146,7 +146,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git chromium/depot_tools
 ```
 
-### 2. Fetch Chromium source
+### 2. Fetch and build Chromium
 
 This is the big one. The initial fetch downloads ~50 GB of source code and the
 first build takes ~1.5 hours. After that, incremental builds take 15–20 seconds.
@@ -155,27 +155,31 @@ first build takes ~1.5 hours. After that, incremental builds take 15–20 second
 cd chromium
 export PATH="$(pwd)/depot_tools:$PATH"
 
-# Shallow clone (no git history — faster, saves ~9 GB)
-caffeinate fetch --no-history chromium
+# Shallow clone of the exact version TermSurf uses
+git clone --depth 1 --branch 146.0.7650.0 \
+  https://chromium.googlesource.com/chromium/src.git src
+
+# Sync all dependencies for this version
+caffeinate gclient sync --no-history
 ```
 
-`caffeinate` prevents macOS from sleeping during the long download. This creates
-a `src/` directory with the Chromium source tree and runs `gclient sync` to
-fetch all dependencies.
+The `git clone --depth 1` fetches only the exact version tag with no history (~9
+GB smaller than a full clone). `gclient sync` then fetches the correct versions
+of all third-party dependencies, build tools, and SDKs to match. `caffeinate`
+prevents macOS from sleeping during the long download.
 
-Check out the TermSurf version and apply patches:
-
-```bash
-cd src
-git checkout 146.0.7650.0
-git checkout -b 146.0.7650.0-termsurf
-git am ../../chromium/patches/termsurf/*.patch
-```
-
-Configure the build (one time):
+Configure and prepare the build:
 
 ```bash
 gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true'
+```
+
+Apply TermSurf patches and build:
+
+```bash
+git checkout -b 146.0.7650.0-termsurf
+git am ../../chromium/patches/termsurf/*.patch
+autoninja -C out/Default chromium_profile_server
 ```
 
 **Always use `autoninja`, never `ninja` directly.** Using `ninja` even once
