@@ -129,60 +129,76 @@ logging into Google in one profile doesn't affect the others.
 
 ## Getting Started
 
-macOS only for now. Three toolchains required: Zig (terminal), Rust (TUI), and
-Chromium (browser engine).
+macOS only for now. You need Xcode installed and three toolchains: Zig
+(terminal), Rust (TUI), and Chromium (browser engine). Plan for ~100 GB of disk
+space (almost all of it is Chromium).
 
-### Prerequisites
+### 1. Install prerequisites
 
-- **Zig 0.15.2+** — [ziglang.org](https://ziglang.org/)
-- **Rust** — [rustup.rs](https://rustup.rs/)
-- **Chromium depot_tools** —
-  [instructions](https://commondatastorage.googleapis.com/chrome-infra-docs/flat/depot_tools/docs/html/depot_tools_tutorial.html#_setting_up)
+```bash
+# Zig 0.15.2+ (terminal emulator)
+brew install zig
 
-### 1. Build the terminal (Zig)
+# Rust (web TUI)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Chromium depot_tools (build system for Chromium)
+git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git chromium/depot_tools
+```
+
+### 2. Build the terminal (Zig)
 
 ```bash
 cd gui && zig build
 ```
 
-### 2. Build the `web` TUI (Rust)
+### 3. Build the `web` TUI (Rust)
 
 ```bash
 cd tui && cargo build
 ```
 
-### 3. Build Chromium
+### 4. Build Chromium
 
-This is the big one. Full build takes ~1.5 hours and ~100 GB of disk space.
-Incremental builds take 15–20 seconds.
+This is the big one. The initial fetch downloads ~50 GB of source code. The
+first build takes ~1.5 hours. After that, incremental builds take 15–20 seconds.
+
+#### Fetch Chromium source
 
 ```bash
-# Fetch Chromium source (one time, takes a while)
 cd chromium
-fetch chromium
+export PATH="$(pwd)/depot_tools:$PATH"
 
-# Check out the TermSurf base version
+# Shallow clone (no git history — faster, saves ~9 GB)
+caffeinate fetch --no-history chromium
+```
+
+`caffeinate` prevents macOS from sleeping during the long download. This creates
+a `src/` directory with the Chromium source tree and runs `gclient sync` to
+fetch all dependencies.
+
+#### Check out the TermSurf version and apply patches
+
+```bash
 cd src
 git checkout 146.0.7650.0
-
-# Apply TermSurf patches
 git checkout -b 146.0.7650.0-termsurf
 git am ../../chromium/patches/termsurf/*.patch
 ```
 
-Then build:
+#### Configure and build
 
 ```bash
-export PATH="$(cd ../depot_tools && pwd):$PATH"
 gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true'
 autoninja -C out/Default chromium_profile_server
 ```
 
-Always use `autoninja`, never `ninja` directly. See
-[chromium/README.md](chromium/README.md) for details on branch management, patch
-workflow, and recovery from build issues.
+**Always use `autoninja`, never `ninja` directly.** Using `ninja` even once
+permanently downgrades the build directory and the only recovery is a full
+rebuild. See [chromium/README.md](chromium/README.md) for details on branch
+management, patch workflow, and recovery from build issues.
 
-### Launch
+### 5. Launch
 
 ```bash
 open gui/zig-out/TermSurf.app
