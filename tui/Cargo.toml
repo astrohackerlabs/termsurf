@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 crossterm = "0.29"
 ratatui = "0.30"
-edtui = { path = "../vendor/edtui", default-features = false, features = ["arboard"] }
+edtui = { version = "0.11.1", default-features = false, features = ["arboard"] }
 arboard = "3"
 libc = "0.2"
 block2 = "0.6"
