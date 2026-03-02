@@ -1,8 +1,8 @@
 ---
-name: build-chromium
+name: chromium
 description:
-  "Build the Chromium fork for TermSurf. Use when building, rebuilding, or
-  troubleshooting the Chromium build."
+  "TermSurf's Chromium fork. Use when viewing, modifying, or building the
+  Chromium source code."
 ---
 
 # Build Chromium
