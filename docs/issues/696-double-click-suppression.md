@@ -110,3 +110,9 @@ The `if (focused)` block is removed entirely. `pane_activation` (set in
 4. Verify: control→browse activation still works (click overlay in control mode,
    first click activates, second interacts)
 5. Verify: terminal pane click-to-focus still works (Issue 670)
+
+### Result: Success
+
+Refocusing a browser pane in browse mode now requires two clicks (focus +
+interact) instead of three. Control→browse activation and terminal
+click-to-focus still work correctly.
