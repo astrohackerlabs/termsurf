@@ -8,22 +8,24 @@ Ghostty defaults or user-configured Ghostty keybindings.
 These are handled by the `web` TUI process (`tui/src/main.rs`) via crossterm key
 events received through the terminal PTY.
 
-| Key    | Mode    | Action            | Notes                                        |
-| ------ | ------- | ----------------- | -------------------------------------------- |
-| Esc    | Browse  | Switch to Control | Sends `mode_changed(browsing: false)` to GUI |
-| Enter  | Control | Switch to Browse  | Sends `mode_changed(browsing: true)` to GUI  |
-| i      | Control | Switch to UrlEdit | Opens editor in insert mode (Issue 646)      |
-| q      | Control | Quit              |                                              |
-| Ctrl+C | Any     | Force quit        |                                              |
+| Key    | Mode    | Action             | Notes                                        |
+| ------ | ------- | ------------------ | -------------------------------------------- |
+| Esc    | Browse  | Switch to Control  | Sends `mode_changed(browsing: false)` to GUI |
+| Enter  | Control | Switch to Browse   | Sends `mode_changed(browsing: true)` to GUI  |
+| i      | Control | Edit URL (insert)  | Opens editor in insert mode (Issue 646)      |
+| e      | Control | Edit URL (normal)  | Opens editor in normal mode (Issue 658)      |
+| :      | Control | Enter Command mode | Yellow command bar (Issue 659)               |
+| q      | Control | Quit               |                                              |
+| Ctrl+C | Any     | Force quit         |                                              |
 
 ## GUI keybindings
 
 These are handled in TermSurf's Zig core (`gui/src/Surface.zig`), intercepted in
 `keyCallback` before keybinding processing.
 
-| Key      | Mode   | Action            | Notes                                                                                                                                                                    |
-| -------- | ------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Ctrl+Esc | Browse | Switch to Control | Calls `notifyNonOverlayClicked` which sends `mode_changed(browsing: false)` to `web` and `focus_changed(false)` to Chromium. Gated on `isOverlayForwarding` (Issue 607). |
+| Key | Mode   | Action            | Notes                                                                                                                                                            |
+| --- | ------ | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Esc | Browse | Switch to Control | Calls `notifyEsc` which sends `mode_changed(browsing: false)` to `web` and `focus_changed(false)` to Chromium. Gated on `isOverlayForwarding` (Issues 607, 665). |
 
 ## Browser navigation keybindings
 
@@ -36,19 +38,31 @@ Chromium handles them internally via its default keybinding logic.
 | Cmd+] | Browse | Forward | Forwarded as key event, handled by Chromium |
 | Cmd+R | Browse | Reload  | Forwarded as key event, handled by Chromium |
 
+## Commands
+
+Entered via `:` in Control mode. Vim-style subsequence matching — `:cs dark`
+works for `:colorscheme dark` (Issue 681).
+
+| Command                            | Action                      |
+| ---------------------------------- | --------------------------- |
+| `:q` / `:quit`                     | Quit                        |
+| `:qa` / `:quitall`                 | Quit all panes              |
+| `:devtools [direction]`            | Open DevTools in split pane |
+| `:colorscheme dark\|light\|system` | Set color scheme            |
+
 ## Modes
 
-The `web` TUI has three modes. The GUI only tracks a boolean (`browsing` or
-not).
+The `web` TUI has four modes. The GUI only tracks a boolean (`browsing` or not).
 
-| Mode        | GUI sees | Behavior                                                |
-| ----------- | -------- | ------------------------------------------------------- |
-| **Browse**  | `true`   | Keyboard/mouse goes to the browser (default on startup) |
-| **Control** | `false`  | Terminal keybindings active, browser input paused       |
-| **UrlEdit** | `false`  | URL bar editable with Vim keybindings (edtui)           |
+| Mode        | GUI sees | Behavior                                                  |
+| ----------- | -------- | --------------------------------------------------------- |
+| **Control** | `false`  | Terminal keybindings active (default on startup)          |
+| **Browse**  | `true`   | Keyboard/mouse goes to the browser                        |
+| **Edit**    | `false`  | Vim-style URL editing with Normal/Insert submodes (edtui) |
+| **Command** | `false`  | `:` prefix command entry                                  |
 
-The GUI does not distinguish between non-browse modes. Control and UrlEdit both
-map to `browsing: false` from the GUI's perspective.
+The GUI does not distinguish between non-browse modes. Control, Edit, and
+Command all map to `browsing: false` from the GUI's perspective.
 
 ## Mode synchronization
 
@@ -56,7 +70,7 @@ Mode state is shared between the GUI and `web` via `mode_changed` XPC messages
 on the existing direct connection (Issue 513). Both sides send and receive:
 
 - **`web` changes mode** (Esc, Enter) → sends `mode_changed` to GUI
-- **GUI changes mode** (Ctrl+Esc) → sends `mode_changed` to `web`
+- **GUI changes mode** (Esc in browse mode) → sends `mode_changed` to `web`
 - **Initial mode** is set via the `browsing` field in the `set_overlay` message
 
 ## Ghostty fallbacks

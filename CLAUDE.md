@@ -119,11 +119,23 @@ and app icon (Issues 611–612), directory rename from ghost/web to gui/tui (Iss
 613), XDG directory compliance (Issue 615), loading progress indicator and
 browser navigation keybindings (Issue 616), CALayerHost migration replacing
 FrameSinkVideoCapturer with zero-copy Window Server compositing (Issues
-624–632), reproducible rename script for upstream merges (Issue 656), purple Edit
-mode border (Issue 657), vim-like editor modes and keybindings (Issue 658),
+624–632), reproducible rename script for upstream merges (Issue 656), purple
+Edit mode border (Issue 657), vim-like editor modes and keybindings (Issue 658),
 vim-style command mode (Issue 659), per-mode submode colors (Issue 660), tight
 title spacing (Issue 661), clap CLI parser with subcommands (Issue 664),
-context-sensitive Esc key navigation (Issue 665).
+context-sensitive Esc key navigation (Issue 665), Esc latency fix via unified
+mpsc channel (Issue 666), active pane indicator with borders and desaturation
+(Issues 667–669), click-to-focus without pass-through (Issue 670), app icon
+update (Issue 671), inner border padding (Issue 672), script consolidation
+(Issue 673), configurable homepage (Issue 674), XPC hello message for live
+config (Issue 675), URL normalization (Issue 676), website deps and linting
+(Issues 677–678), MIT license and trademark (Issue 679), dark mode with
+`:colorscheme` command (Issue 680), `:quitall` and subsequence matching (Issue
+681), Chrome DevTools in split panes (Issues 684, 687, 690–691), multi-profile
+tracking fix (Issue 685), tab lifecycle — close tabs when panes close (Issue
+689), `web file` subcommand (Issue 692), smart input resolution (Issue 693),
+replace pane_id with tab_id in Chromium (Issue 694), activation drag suppression
+(Issue 695), double click suppression fix (Issue 696).
 
 ### Source Layout
 
@@ -205,6 +217,29 @@ git subtree pull --prefix=gui upstream main -m "Merge upstream Ghostty into gui"
 - `docs/issues/632-nav-flicker-calayerhost.md` — Navigation flicker diagnosis
 - `docs/issues/633-persistent-compositor.md` — Persistent compositor for stable
   CAContext
+- `docs/issues/634-calayerhost-audit.md` — CALayerHost feature audit (20/20)
+- `docs/issues/635-multi-pane-calayerhost.md` — Multi-pane persistent compositor
+  regression fix
+- `docs/issues/636-calayerhost-audit.md` — CALayerHost audit continued
+- `docs/issues/637-editable-url-bar.md` — Editable URL bar design
+- `docs/issues/638-page-title.md` — Page title sync via TitleWasSet
+- `docs/issues/639-open-in-same-tab.md` — Open target=\_blank in same tab
+- `docs/issues/640-project-cleanup.md` — Archive ts1–ts5, consolidate docs
+- `docs/issues/641-chromium-patches.md` — Chromium patch archive setup
+- `docs/issues/642-zig-profile-server.md` — Zig profile server (failed)
+- `docs/issues/643-zig-profile-server-2.md` — Zig profile server take 2 (failed)
+- `docs/issues/644-simplified-cpp.md` — Simplified C++ profile server (deferred)
+- `docs/issues/645-audit-xdg.md` — XDG audit (ghostty→termsurf paths)
+- `docs/issues/646-normal-insert.md` — Normal and Insert modes
+- `docs/issues/647-tui-restructure.md` — TUI layout restructure
+- `docs/issues/648-devtools-research.md` — DevTools research
+- `docs/issues/649-control-mode.md` — Start in Control mode
+- `docs/issues/650-installation.md` — Installation and bundling
+- `docs/issues/651-bundle-identifier.md` — Bundle identifier confusion fix
+- `docs/issues/652-termsurf-cli.md` — Rename CLI binary
+- `docs/issues/653-xpc-gateway.md` — XPC gateway isolation (deferred)
+- `docs/issues/654-cmd-h.md` — Fix Cmd+H keybinding override
+- `docs/issues/655-substack-blank.md` — Stub BadgeService binder
 - `docs/issues/656-rename-script.md` — Reproducible ghostty→termsurf rename
   script
 - `docs/issues/657-url-edit-color.md` — Purple URL bar border in Edit mode
@@ -218,6 +253,42 @@ git subtree pull --prefix=gui upstream main -m "Merge upstream Ghostty into gui"
 - `docs/issues/663-js-context-menu.md` — JS context menu injection (deferred)
 - `docs/issues/664-clap.md` — Clap CLI parser with subcommands
 - `docs/issues/665-esc.md` — Context-sensitive Esc key navigation
+- `docs/issues/666-devils-esc.md` — Esc latency fix (unified mpsc channel)
+- `docs/issues/667-active-pane.md` — Active pane indicator (blocked by resize)
+- `docs/issues/668-fix-resize.md` — Fix missing Event::Resize forwarding
+- `docs/issues/669-active-pane.md` — Active pane indicator (borders +
+  desaturation)
+- `docs/issues/670-click-to-focus.md` — Click-to-focus without pass-through
+- `docs/issues/671-app-icon.md` — App icon update and clean-zig.sh
+- `docs/issues/672-border-padding.md` — Inner padding for borders
+- `docs/issues/673-consolidate-scripts.md` — Consolidate scripts to scripts/
+- `docs/issues/674-homepage.md` — Configurable homepage
+- `docs/issues/675-hello-message.md` — XPC hello message for live config
+- `docs/issues/676-url-normalization.md` — URL normalization (auto https://)
+- `docs/issues/677-website-deps.md` — Website dependency updates
+- `docs/issues/678-website-lint-format.md` — Website linting and formatting
+- `docs/issues/679-license.md` — MIT license and trademark
+- `docs/issues/680-dark-mode.md` — Dark mode and :colorscheme command
+- `docs/issues/681-quitall.md` — Quit all and subsequence matching
+- `docs/issues/682-direct-xpc.md` — Direct TUI→Chromium XPC (not implemented)
+- `docs/issues/683-visited-links.md` — Visited links (deferred)
+- `docs/issues/684-devtools.md` — Chrome DevTools in split panes
+- `docs/issues/685-multi-profile-tracking.md` — Multi-profile tracking fix
+- `docs/issues/686-chromium-crash.md` — Chromium crash diagnosis (duplicate
+  DevTools)
+- `docs/issues/687-one-devtools.md` — One DevTools per tab enforcement
+- `docs/issues/688-devtools-split.md` — DevTools split (blocked by tab
+  lifecycle)
+- `docs/issues/689-tab-lifecycle.md` — Tab lifecycle — close tabs when panes
+  close
+- `docs/issues/690-devtools-split.md` — DevTools split command
+- `docs/issues/691-devtools-direct-command.md` — DevTools direct command
+- `docs/issues/692-file-subcommand.md` — `web file` subcommand
+- `docs/issues/693-smart-resolve.md` — Smart input resolution
+- `docs/issues/694-tab-id-chromium.md` — Replace pane_id with tab_id in Chromium
+- `docs/issues/695-suppress-activation-drag.md` — Suppress activation drag
+- `docs/issues/696-double-click-suppression.md` — Double click suppression fix
+- `docs/issues/697-update-docs.md` — Documentation update
 - `docs/xdg.md` — XDG directory pattern and conventions
 
 ### Early Prototypes (ts1–ts5)
