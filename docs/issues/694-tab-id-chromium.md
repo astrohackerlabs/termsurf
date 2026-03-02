@@ -150,24 +150,17 @@ to `xpc_dictionary_get_int64(event, "tab_id")`. Affects: `resize`,
 `navigate`, `set_color_scheme`, `close_tab`.
 
 **`create_tab`:** Special case — the GUI doesn't know the tab_id yet (Chromium
-assigns it). Two options:
+assigns it). `create_tab` is fire-and-forget (`xpc_connection_send_message`, not
+`send_message_with_reply_sync`), so we can't return `tab_id` in a reply. Keep
+`pane_id` in `create_tab` as an opaque correlation ID. Chromium stores it and
+echoes it back in `tab_ready { pane_id, tab_id }`. After that, Chromium never
+uses `pane_id` again — all subsequent messages use `tab_id`.
 
-- **Option A:** Return `tab_id` in the synchronous reply to `create_tab`. The
-  GUI sends `create_tab { url, pixel_width, pixel_height, dark }`, Chromium
-  assigns `tab_id`, returns it in the reply alongside the per-tab endpoint. No
-  pane_id needed at all.
-- **Option B:** Keep an opaque correlation ID (`request_id`) that Chromium
-  echoes back in `tab_ready`.
+**`create_devtools_tab`:** Same — keep `pane_id` for correlation, echo in
+`tab_ready`. `inspected_tab_id` is already a tab_id, no change.
 
-Option A is simpler. The GUI already waits for the reply (to get the per-tab
-endpoint). Adding `tab_id` to the reply is trivial.
-
-**`create_devtools_tab`:** Same as `create_tab` — return `tab_id` in the reply.
-`inspected_tab_id` is already a tab_id, so no change needed there.
-
-**`tab_ready`:** Remove `pane_id` from the message. Keep `tab_id`. (Or remove
-`tab_ready` entirely if `tab_id` is in the create_tab reply — but keep it for
-now as a signal that rendering is ready.)
+**`tab_ready`:** Keep both `pane_id` (for GUI correlation) and `tab_id`. This is
+the ONLY message that includes `pane_id` after this change.
 
 **Outbound messages:** Remove `pane_id` from `ca_context`, `cursor_changed`,
 `url_changed`, `loading_state`, `title_changed`. These go on the per-tab
@@ -200,37 +193,27 @@ Functions affected: `sendCreateTab` (no pane_id, read tab_id from reply),
 `sendCreateDevToolsTab` (same), all forwarding functions (resize, mouse, key,
 navigate, etc.).
 
-**`sendCreateTab` flow change:**
+**`sendCreateTab` flow:** Unchanged — still sends `pane_id` for correlation.
+`sendCreateDevToolsTab`: same.
 
-```zig
-// Before:
-// 1. Send create_tab { pane_id, url, ... }
-// 2. Receive tab_ready { pane_id, tab_id } on per-tab connection
-// 3. Store tab_id in Pane
-
-// After:
-// 1. Send create_tab { url, ... } — no pane_id
-// 2. Reply includes { tab_id, endpoint }
-// 3. Store tab_id in Pane immediately
-// 4. Receive tab_ready { tab_id } on per-tab connection (rendering ready)
-```
+**All other outbound functions** (resize, mouse, key, navigate, etc.): send
+`tab_id` (int64) instead of `pane_id` (string). The Pane struct already has
+`tab_id`.
 
 #### Inbound (Chromium → GUI)
 
 Messages from Chromium now include `tab_id` instead of `pane_id`. The GUI needs
-a reverse lookup: tab_id → Pane. Add a new map:
+a reverse lookup: tab_id → pane_id. Add a new map:
 
 ```zig
 var tab_to_pane: AutoHashMap(i64, []const u8) = .init(alloc);  // tab_id → pane_id
 ```
 
-Populated when `tab_id` is assigned (from create_tab reply). Used to route
-`cursor_changed`, `url_changed`, `loading_state`, `title_changed` back to the
-correct pane/TUI.
+Populated in `handleTabReady` (which still receives `pane_id` for correlation).
+Used to route `ca_context`, `cursor_changed`, `url_changed`, `loading_state`,
+`title_changed` back to the correct pane/TUI.
 
-Alternatively, since per-tab connections already identify the tab, the GUI can
-maintain a `tab_conn_to_pane` map (XPC connection → pane_id). This is already
-partially done via `peer_to_pane`.
+Cleaned up in `handleDisconnect` when a pane is removed.
 
 #### `handleDisconnect` change
 
@@ -243,6 +226,262 @@ The TUI only communicates with the GUI using `pane_id`. The TUI never talks to
 Chromium directly. No TUI changes needed.
 
 ## Test
+
+1. `web google.com` → page loads, URL bar updates
+2. Navigate in Edit mode → URL changes, loading indicator works
+3. Mouse clicks, scroll, text selection → all work
+4. Keyboard input → typing in search bars works
+5. `:devtools right` → DevTools opens, inspects correct tab
+6. Close DevTools pane → pane closes, no crash
+7. Reopen DevTools → works multiple times
+8. Open two browser panes (Cmd+D split) → both work independently
+9. Different profiles → each profile's Chromium process handles its tabs
+10. Close a pane → tab cleaned up, other panes unaffected
+11. `web status` → shows tab inventory with tab_ids
+
+## Experiment 1: Replace pane_id with tab_id everywhere except create/tab_ready
+
+### Hypothesis
+
+If we change all Chromium inbound messages (except `create_tab` and
+`create_devtools_tab`) to use `tab_id` instead of `pane_id`, change all outbound
+messages to send `tab_id` instead of `pane_id`, and update the GUI to translate
+between the two, then Chromium no longer depends on `pane_id` for tab routing —
+only for initial correlation during tab creation.
+
+### Changes
+
+Four Chromium files, one GUI file.
+
+#### 1. Chromium: `shell_browser_main_parts.h`
+
+Add `FindTabById` helper. Rename `CloseTabByPaneId` → `CloseTabById`. Keep
+`pane_id` in TabState (still needed for `tab_ready` echo).
+
+```cpp
+// Add:
+TabState* FindTabById(int tab_id);
+void CloseTabById(int tab_id);
+
+// Remove:
+void CloseTabByPaneId(const std::string& pane_id);
+```
+
+#### 2. Chromium: `shell_browser_main_parts.cc`
+
+**Add `FindTabById` helper:**
+
+```cpp
+ShellBrowserMainParts::TabState* ShellBrowserMainParts::FindTabById(int tab_id) {
+    for (auto& t : tabs_) {
+        if (t->tab_id == tab_id) return t.get();
+    }
+    return nullptr;
+}
+```
+
+**Inbound message handlers — change pane_id → tab_id:**
+
+For `resize`, `mouse_event`, `scroll_event`, `mouse_move`, `focus_changed`,
+`key_event`, `navigate`, `set_color_scheme`:
+
+```cpp
+// Before:
+const char* pane = xpc_dictionary_get_string(event, "pane_id");
+// ... lookup by pane string ...
+
+// After:
+int tab_id = (int)xpc_dictionary_get_int64(event, "tab_id");
+// ... pass tab_id to handler ...
+```
+
+Each handler function signature changes from `const std::string& pane_id` to
+`int tab_id`, and uses `FindTabById(tab_id)` instead of the linear string scan.
+
+**`close_tab` handler:**
+
+```cpp
+// Before:
+const char* pane_id_str = xpc_dictionary_get_string(event, "pane_id");
+// ... CloseTabByPaneId(pane_id) ...
+
+// After:
+int tab_id = (int)xpc_dictionary_get_int64(event, "tab_id");
+// ... CloseTabById(tab_id) ...
+```
+
+**`CloseTabById` (replacing `CloseTabByPaneId`):**
+
+```cpp
+void ShellBrowserMainParts::CloseTabById(int tab_id) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    for (auto it = tabs_.begin(); it != tabs_.end(); ++it) {
+        if ((*it)->tab_id == tab_id) {
+            // Same teardown as before (Issue 689 Exp 6).
+            (*it)->tab_observer.reset();
+            delete (*it)->shell.get();
+            (*it)->shell = nullptr;
+            if ((*it)->tab_connection) {
+                xpc_connection_cancel((*it)->tab_connection);
+                xpc_release((*it)->tab_connection);
+                (*it)->tab_connection = nullptr;
+            }
+            tabs_.erase(it);
+            if (tabs_.empty()) {
+                Shell::Shutdown();
+            }
+            return;
+        }
+    }
+}
+```
+
+**`create_tab` and `create_devtools_tab`:** Unchanged — still receive `pane_id`
+for correlation.
+
+**`tab_ready` messages:** Keep both `pane_id` and `tab_id` (unchanged).
+
+**Log messages:** Update from "pane X" to "tab Y" where appropriate.
+
+#### 3. Chromium: `shell_tab_observer.h`
+
+Replace `pane_id_` with `tab_id_`:
+
+```cpp
+// Remove:
+std::string pane_id_;
+void SetPaneId(const std::string& pane_id);
+
+// Add:
+int tab_id_ = 0;
+void SetTabId(int tab_id);
+```
+
+#### 4. Chromium: `shell_tab_observer.cc`
+
+Replace all outbound `pane_id` with `tab_id`:
+
+```cpp
+// Before (in OnCursorChanged, DidFinishNavigation, SendLoadingState, TitleWasSet):
+xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
+
+// After:
+xpc_dictionary_set_int64(msg, "tab_id", tab_id_);
+```
+
+Update `SetPaneId` → `SetTabId`:
+
+```cpp
+void ShellTabObserver::SetTabId(int tab_id) {
+    tab_id_ = tab_id;
+}
+```
+
+Update callers in `shell_browser_main_parts.cc`:
+
+```cpp
+// Before (in CreateTab, CreateDevToolsTab):
+tab_observer->SetPaneId(pane_id);
+
+// After:
+tab_observer->SetTabId(tab->tab_id);
+```
+
+#### 5. GUI: `xpc.zig`
+
+**Add `tab_to_pane` map (near other global maps):**
+
+```zig
+var tab_to_pane: std.AutoHashMap(i64, []const u8) = .init(alloc);
+```
+
+**`handleTabReady`:** Populate the new map:
+
+```zig
+fn handleTabReady(msg: xpc_object_t) void {
+    const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+    const tab_id = xpc_dictionary_get_int64(msg, "tab_id");
+
+    if (panes.get(pane_id)) |p| {
+        p.tab_id = tab_id;
+        if (tab_id > 0) {
+            last_browser_pane = p.pane_id_key;
+        }
+        // Register reverse lookup.
+        tab_to_pane.put(tab_id, p.pane_id_key) catch {};
+    }
+}
+```
+
+**Inbound Chromium handlers — look up by tab_id:**
+
+For `handleCAContext`, `handleCursorChanged`, `handleUrlChanged`,
+`handleTitleChanged`, `handleLoadingState`:
+
+```zig
+// Before:
+const pane_id = str(xpc_dictionary_get_string(msg, "pane_id"));
+const p = panes.get(pane_id) orelse return;
+
+// After:
+const tab_id = xpc_dictionary_get_int64(msg, "tab_id");
+const pane_id = tab_to_pane.get(tab_id) orelse return;
+const p = panes.get(pane_id) orelse return;
+```
+
+**Outbound to Chromium — send tab_id instead of pane_id:**
+
+For `sendResize`, `sendMouseEvent`, `sendScrollEvent`, `sendMouseMove`,
+`sendKeyEvent`, `sendFocusChanged/sendFocusMessage`, `handleNavigate`,
+`handleSetColorScheme`:
+
+```zig
+// Before:
+xpc_dictionary_set_string(msg, "pane_id", pane_id_z);
+
+// After:
+xpc_dictionary_set_int64(msg, "tab_id", p.tab_id);
+```
+
+This eliminates the null-terminated pane_id buffer copies in each function —
+simpler and faster.
+
+**`handleDisconnect` — send tab_id:**
+
+```zig
+// Before:
+xpc_dictionary_set_string(close_msg, "pane_id", pane_id_z);
+
+// After:
+xpc_dictionary_set_int64(close_msg, "tab_id", p.tab_id);
+
+// Also clean up reverse map:
+_ = tab_to_pane.remove(p.tab_id);
+```
+
+**`sendCreateTab` and `sendCreateDevToolsTab`:** Keep sending `pane_id` (for
+tab_ready correlation). No change.
+
+### What stays the same
+
+- TUI ↔ GUI communication: all `pane_id`, completely unchanged
+- `create_tab` / `create_devtools_tab` messages: still include `pane_id`
+- `tab_ready` response: still includes both `pane_id` and `tab_id`
+- `query_tabs`: doesn't use pane_id or tab_id for routing
+
+### What changes
+
+| Layer    | Before              | After                  |
+| -------- | ------------------- | ---------------------- |
+| Chromium | Lookup by pane_id   | Lookup by tab_id       |
+| Chromium | Send pane_id back   | Send tab_id back       |
+| Chromium | String comparisons  | Integer comparisons    |
+| GUI out  | Send pane_id string | Send tab_id int64      |
+| GUI in   | Look up by pane_id  | Look up by tab_id→pane |
+
+### Test
+
+Same as issue-level test plan:
 
 1. `web google.com` → page loads, URL bar updates
 2. Navigate in Edit mode → URL changes, loading indicator works
