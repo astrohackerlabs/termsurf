@@ -2736,6 +2736,9 @@ pub fn keyCallback(
 ) !InputEffect {
     // log.warn("text keyCallback event={}", .{event_orig});
 
+    // Any keypress proves intentional engagement — cancel click suppression (Issue 696).
+    self.mouse.pane_activation = false;
+
     // Apply key remappings to transform modifiers before any processing.
     // This allows users to remap modifier keys at the app level.
     var event = event_orig;

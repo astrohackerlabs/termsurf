@@ -178,3 +178,23 @@ self.mouse.pane_activation = false;
 4. Focus a terminal pane via mouse click → first click consumed (correct)
 5. Control→browse activation via overlay click still works (click overlay in
    control mode, first click activates, second interacts)
+
+### Result: Success
+
+All tests pass. Keyboard-driven focus followed by Enter to browse mode no longer
+eats the first mouse click.
+
+## Conclusion
+
+Two experiments, two one-line fixes:
+
+1. **Experiment 1:** Removed redundant `overlay_activation` set in
+   `paneFocusChanged` — it stacked on top of `pane_activation`, consuming two
+   clicks instead of one when refocusing via mouse.
+2. **Experiment 2:** Clear `pane_activation` in `keyCallback` — any keypress
+   proves intentional engagement, so click suppression is no longer needed when
+   focus was gained via keyboard.
+
+Both fixes are in `Surface.zig`. No new flags, no new structs. The
+`pane_activation` flag (Issue 670) now correctly handles all focus paths: mouse
+clicks consume the activation click, keyboard interaction cancels suppression.
