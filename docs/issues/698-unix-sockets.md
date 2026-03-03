@@ -1136,3 +1136,48 @@ can link. Options for a future attempt:
 4. **Add protobuf-c to the Xcode project** — link it directly in Xcode's build
    settings alongside the Zig static library, sidestepping the xcframework
    issue.
+
+## Conclusion
+
+This issue validated the full Unix socket + protobuf stack across four
+experiments:
+
+1. **Protobuf works in all three languages** (Experiment 1). Rust (prost), Zig
+   (protobuf-c via `@cImport`), and C++ (libprotobuf) all serialize and
+   deserialize correctly. Wire-compatible output (35 bytes).
+
+2. **The full 30-message schema works** (Experiment 2). All TUI↔GUI and
+   GUI↔Chromium messages defined in a single `termsurf.proto` with a `oneof`
+   wrapper. Type-safe dispatch replaces string-based action matching. Compiles
+   and round-trips in all three languages (40 bytes).
+
+3. **Unix sockets work across Zig and Rust** (Experiment 3). A Zig server and
+   Rust client exchange length-prefixed protobuf messages over `AF_UNIX` /
+   `SOCK_STREAM`. The exact production pattern (TUI → GUI) is proven.
+
+4. **Production integration blocked by build system** (Experiment 4). The TUI
+   side compiled cleanly — `ipc.rs` replaces `xpc.rs` with pure Rust sockets and
+   prost. The GUI side compiled the Zig code and protobuf-c objects correctly,
+   but the xcframework pipeline (`LibtoolStep.zig` → `XCFrameworkStep.zig`)
+   dropped the protobuf-c objects during the archive step. Xcode failed to link
+   with undefined symbols.
+
+The blocker is not Unix sockets — it's getting protobuf-c through Ghostty's
+multi-architecture Zig → libtool → xcframework → Xcode build pipeline. This is a
+standalone build system problem.
+
+### Next steps
+
+1. **Issue 699: Build protobuf-c into the GUI.** Solve the xcframework linking
+   problem in isolation. Once `protobuf_c_empty_string` and friends resolve at
+   link time, the build system is unblocked.
+
+2. **Issue 700: Replace TUI↔GUI XPC with Unix sockets + protobuf.** With the
+   build system solved, apply the Experiment 4 code (TUI `ipc.rs`, GUI socket
+   listener, protobuf dispatcher). This is the actual IPC replacement.
+
+The uncommitted code from Experiment 4 (`tui/src/ipc.rs`, `tui/build.rs`,
+`gui/src/apprt/xpc.zig` socket additions, `gui/src/build/SharedDeps.zig`
+protobuf-c integration) should be discarded and rewritten fresh once Issue 699
+is resolved, since the build system changes will likely affect how protobuf-c is
+integrated.
