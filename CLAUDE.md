@@ -289,6 +289,7 @@ git subtree pull --prefix=gui upstream main -m "Merge upstream Ghostty into gui"
 - `docs/issues/695-suppress-activation-drag.md` — Suppress activation drag
 - `docs/issues/696-double-click-suppression.md` — Double click suppression fix
 - `docs/issues/697-update-docs.md` — Documentation update
+- `docs/issues/698-unix-sockets.md` — Replace XPC with Unix domain sockets
 - `docs/xdg.md` — XDG directory pattern and conventions
 
 ### Early Prototypes (ts1–ts5)
