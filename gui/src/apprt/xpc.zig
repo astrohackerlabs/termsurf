@@ -18,6 +18,11 @@ const internal_os = @import("../os/main.zig");
 const log = std.log.scoped(.xpc);
 const alloc = std.heap.page_allocator;
 
+// Protobuf-c (Issue 699). Import generated types to force linking.
+const pb = @cImport({
+    @cInclude("termsurf.pb-c.h");
+});
+
 // -- XPC C API --
 
 const xpc_object_t = ?*anyopaque;
@@ -1907,4 +1912,10 @@ fn freeKey(key: []const u8) void {
 /// Convert a nullable C string to a Zig slice, defaulting to "(null)".
 fn str(ptr: ?[*:0]const u8) []const u8 {
     return if (ptr) |p| std.mem.span(p) else "(null)";
+}
+
+/// Issue 699: Force the linker to include protobuf-c objects.
+pub fn testProtobuf() void {
+    var msg: pb.Termsurf__TermSurfMessage = undefined;
+    pb.termsurf__term_surf_message__init(&msg);
 }

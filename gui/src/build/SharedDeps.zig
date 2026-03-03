@@ -368,6 +368,14 @@ pub fn add(
     step.linkLibC();
     step.addIncludePath(b.path("src/stb"));
     step.addCSourceFiles(.{ .files = &.{"src/stb/stb.c"} });
+
+    // Protobuf-c (Issue 699).
+    step.addIncludePath(b.path("src/protobuf"));
+    step.addCSourceFiles(.{ .files = &.{
+        "src/protobuf/protobuf-c.c",
+        "src/protobuf/termsurf.pb-c.c",
+    } });
+
     if (step.rootModuleTarget().os.tag == .linux) {
         step.addIncludePath(b.path("src/apprt/gtk"));
     }

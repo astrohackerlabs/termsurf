@@ -164,3 +164,47 @@ nm gui/macos/TermSurfKit.xcframework/macos-arm64_x86_64/libtermsurf.a \
 **Pass criterion:** `zig build` succeeds with no undefined symbol errors, and
 `nm` shows `protobuf_c_empty_string` as defined (T or S, not U) in the final
 archive.
+
+#### Result: PASS
+
+`zig build` succeeded with zero errors. `nm` confirms all protobuf-c symbols are
+defined in the final archive:
+
+```
+0000000000027478 S _protobuf_c_empty_string
+000000000000b768 S _termsurf__term_surf_message__descriptor
+0000000000000430 T _termsurf__term_surf_message__free_unpacked
+0000000000000030 T _termsurf__term_surf_message__get_packed_size
+```
+
+The `S` (data) and `T` (text/code) entries confirm the symbols survived the full
+pipeline: `addCSourceFiles` → `libtermsurf.a` → `libtool -static` →
+`libtermsurf-fat.a` → `xcodebuild -create-xcframework` → final archive.
+
+The stb.c pattern works for protobuf-c: files inside `gui/`, relative paths,
+`addCSourceFiles` (plural).
+
+## Conclusion
+
+Protobuf-c compiles and links into the GUI's final macOS binary. The fix was
+simple: copy the protobuf-c runtime source and generated files into
+`gui/src/protobuf/`, mirroring the stb.c pattern. Files inside the build root
+survive the multi-step archive pipeline. Files outside it don't.
+
+### What was added
+
+- `gui/src/protobuf/protobuf-c.c` — runtime source (protobuf-c v1.5.2)
+- `gui/src/protobuf/protobuf-c.h` — runtime header
+- `gui/src/protobuf/protobuf-c/protobuf-c.h` — subdirectory copy (for
+  `#include <protobuf-c/protobuf-c.h>`)
+- `gui/src/protobuf/termsurf.pb-c.c` — generated from `proto/termsurf.proto`
+- `gui/src/protobuf/termsurf.pb-c.h` — generated header
+- `proto/generate.sh` — regenerates and copies generated files
+- `SharedDeps.zig` — two lines added after the stb.c block
+- `xpc.zig` — `@cImport` of `termsurf.pb-c.h` and `testProtobuf()` to force
+  linking
+
+### Next steps
+
+Issue 700: Replace TUI↔GUI XPC with Unix domain sockets + protobuf, using these
+now-proven protobuf-c bindings.
