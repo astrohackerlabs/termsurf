@@ -164,46 +164,6 @@ pub fn init(
         break :open open;
     };
 
-    // Bundle xpc-gateway binary and LaunchAgent plist (Issue 653).
-    // The gateway binary must be pre-built via `swift build` in
-    // gui/xpc-gateway/ before running `zig build`.
-    const copy_gateway = copy_gw: {
-        const step = RunStep.create(b, "copy xpc-gateway into bundle");
-        step.addArgs(&.{"cp"});
-        step.addFileArg(b.path("xpc-gateway/.build/debug/xpc-gateway"));
-        step.addArg(b.fmt("{s}/Contents/MacOS/xpc-gateway", .{app_path}));
-        step.step.dependOn(&build.step);
-        break :copy_gw step;
-    };
-
-    const mkdir_la = mkdir_la: {
-        const step = RunStep.create(b, "mkdir LaunchAgents in bundle");
-        step.addArgs(&.{
-            "mkdir",
-            "-p",
-            b.fmt("{s}/Contents/Library/LaunchAgents", .{app_path}),
-        });
-        step.step.dependOn(&build.step);
-        break :mkdir_la step;
-    };
-
-    const plist_name = if (config.optimize == .Debug)
-        "com.termsurf.debug.xpc-gateway"
-    else
-        "com.termsurf.xpc-gateway";
-
-    const copy_plist = copy_pl: {
-        const step = RunStep.create(b, "copy xpc-gateway plist into bundle");
-        step.addArgs(&.{"cp"});
-        step.addFileArg(b.path(b.fmt("macos/{s}.bundle.plist", .{plist_name})));
-        step.addArg(b.fmt(
-            "{s}/Contents/Library/LaunchAgents/{s}.plist",
-            .{ app_path, plist_name },
-        ));
-        step.step.dependOn(&mkdir_la.step);
-        break :copy_pl step;
-    };
-
     // Our step to copy the app bundle to the install path.
     // We have to use `cp -R` because there are symlinks in the
     // bundle.
@@ -213,10 +173,6 @@ pub fn init(
         step.addFileArg(b.path(app_path));
         step.addArg(b.fmt("{s}", .{b.install_path}));
         step.step.dependOn(&build.step);
-
-        // Copy must wait for gateway files to be in the bundle.
-        step.step.dependOn(&copy_gateway.step);
-        step.step.dependOn(&copy_plist.step);
 
         break :copy step;
     };

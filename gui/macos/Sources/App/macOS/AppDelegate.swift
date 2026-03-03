@@ -157,25 +157,6 @@ class AppDelegate: NSObject,
     @Published private(set) var appIcon: NSImage? = nil
 
     override init() {
-        // Register the xpc-gateway LaunchAgent before TermSurf.App() connects
-        // to it. SMAppService tells launchd about the bundled agent plist so
-        // the gateway auto-starts on demand (Issue 653).
-#if DEBUG
-        let gatewayService = SMAppService.agent(
-            plistName: "com.termsurf.debug.xpc-gateway.plist")
-#else
-        let gatewayService = SMAppService.agent(
-            plistName: "com.termsurf.xpc-gateway.plist")
-#endif
-        let logger = Logger(subsystem: "com.termsurf", category: "xpc-gateway")
-        logger.info("Registering xpc-gateway (current status: \(String(describing: gatewayService.status)))")
-        do {
-            try gatewayService.register()
-            logger.info("Registered xpc-gateway (status: \(String(describing: gatewayService.status)))")
-        } catch {
-            logger.error("xpc-gateway register failed (status: \(String(describing: gatewayService.status))): \(error)")
-        }
-
 #if DEBUG
         termsurf = TermSurf.App(configPath: ProcessInfo.processInfo.environment["TERMSURF_CONFIG_PATH"])
 #else

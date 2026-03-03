@@ -153,6 +153,8 @@ Removed all dead XPC code from `gui/src/apprt/xpc.zig`. Net change: -1054 lines,
 
 ### Experiment 2: Remove dead XPC code from Chromium
 
+**Result: Success.**
+
 Remove all dead XPC code from the Chromium profile server. Same pattern as
 Experiment 1 — the socket path is the only live path, XPC fallbacks are dead.
 
@@ -268,3 +270,38 @@ Plus delete the XPC gateway daemon: `gui/xpc-gateway/` (entire directory).
 
 1. Build Chromium — must compile clean.
 2. Launch GUI, `web google.com`, browse, navigate, exit TUI — all working.
+
+#### Results
+
+Removed all dead XPC code from Chromium and the GUI build system.
+
+**Chromium (`chromium/src/content/chromium_profile_server/`):**
+
+- `shell_switches.h` — removed `kXpcService` constant.
+- `shell_tab_observer.h` — removed `#include <xpc/xpc.h>`, `SetConnection()`
+  decl, `xpc_connection_` field, updated class comment.
+- `shell_tab_observer.cc` — removed `SetConnection()` body, XPC fallback
+  branches in `OnCursorChanged`, `DidFinishNavigation`, `SendLoadingState`,
+  `TitleWasSet`. Simplified `RenderViewHostChanged` guard.
+- `shell_browser_main_parts.h` — removed `#include <xpc/xpc.h>`,
+  `tab_connection` field, `control_connection_`/`app_endpoint_` members,
+  `StartDynamicMode`/`CloseTab`/`HandleQueryTabs` declarations.
+- `shell_browser_main_parts.cc` — removed `#include <xpc/xpc.h>`,
+  `#include <string_view>`, entire `StartDynamicMode()` (~195 lines),
+  `kXpcService` dispatch branch, XPC branches in `CreateTab()`/
+  `CreateDevToolsTab()` (connection setup + CALayerParams callbacks), entire
+  `CloseTab(xpc_connection_t)`, entire `HandleQueryTabs(xpc_object_t)`, XPC
+  cleanup in `CloseTabById()` and `PostMainMessageLoopRun()`.
+
+**GUI build system:**
+
+- Deleted `gui/xpc-gateway/` — entire gateway daemon directory.
+- `src/build/TermSurfXcodebuild.zig` — removed gateway binary copy, LaunchAgent
+  mkdir, and plist copy steps from the app bundle build.
+- `macos/Sources/App/macOS/AppDelegate.swift` — removed `SMAppService` gateway
+  registration from `init()`.
+- Deleted 4 LaunchAgent plist files (`com.termsurf.*.xpc-gateway*.plist`).
+- Deleted `scripts/deregister.sh` (only deregistered xpc-gateway).
+
+**Verified:** Chromium `autoninja` build clean. GUI `zig build` clean.
+`build-debug.sh` clean. Manual test passed.
