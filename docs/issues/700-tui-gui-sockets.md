@@ -575,6 +575,11 @@ cd tui && cargo build
 **Pass criterion:** Compiles with zero errors. No references to xpc remain in
 the TUI source (aside from the comment in `ipc.rs` noting it replaced xpc.rs).
 
+#### Result: PASS
+
+`cargo build` succeeds. `tui/src/xpc.rs` deleted — 710 lines of unsafe ObjC FFI
+removed.
+
 ## Conclusion
 
 Issue 700 replaces TUI↔GUI XPC with Unix domain sockets + protobuf across four
