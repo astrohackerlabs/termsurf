@@ -1,0 +1,10 @@
+syntax = "proto3";
+package termsurf;
+
+message Hello {
+  string name = 1;
+  int64 id = 2;
+  uint64 size = 3;
+  double x = 4;
+  bool active = 5;
+}

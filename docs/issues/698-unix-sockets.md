@@ -381,3 +381,360 @@ Run all three tests:
 and deserialize it back with all fields intact. This proves the protobuf
 toolchain works for Rust (prost), Zig (protobuf-c), and C++ (libprotobuf) before
 we commit to defining the full 30-message schema.
+
+**Result:** Pass
+
+All three tests produce identical output:
+
+```
+Rust: pass (35 bytes)
+Zig:  pass (35 bytes)
+C++:  pass (35 bytes)
+```
+
+Libraries used:
+
+- **Rust:** prost 0.14.3 with prost-build 0.14.3. Code generation via
+  `build.rs`, zero issues.
+- **Zig:** protobuf-c 1.5.2 via C interop (`@cImport`). Generated C code
+  compiles and links cleanly with Zig 0.15.2. The C struct fields are
+  accessible from Zig after dereferencing the `[*c]` pointer.
+- **C++:** libprotobuf 33.4 (installed via Homebrew). Standard
+  `SerializeToString` / `ParseFromString` API.
+
+All five data types (string, int64, uint64, double, bool) round-trip correctly
+across all three languages. The serialized output is identical (35 bytes),
+confirming wire-format compatibility.
+
+#### Conclusion
+
+Protobuf works in all three languages with mature, well-maintained libraries.
+The Zig integration via protobuf-c is slightly more verbose (C struct
+initialization, manual pack/unpack calls) but fully functional. Ready to define
+the full message schema in Experiment 2.
+
+### Experiment 2: Full message schema
+
+Define all 30 IPC messages in `proto/termsurf.proto` and verify that the
+generated code compiles in all three languages. Use a `oneof` wrapper so every
+message over the wire is a single `TermSurfMessage` type.
+
+#### Changes
+
+**1. Replace `proto/hello.proto` with `proto/termsurf.proto`**
+
+```protobuf
+syntax = "proto3";
+package termsurf;
+
+// Wrapper — every message on the wire is one of these.
+message TermSurfMessage {
+  oneof msg {
+    // Tab lifecycle (GUI → Chromium)
+    CreateTab create_tab = 1;
+    CreateDevtoolsTab create_devtools_tab = 2;
+    Resize resize = 3;
+    CloseTab close_tab = 4;
+
+    // Navigation (GUI → Chromium, TUI → GUI)
+    Navigate navigate = 5;
+
+    // Input (GUI → Chromium)
+    MouseEvent mouse_event = 6;
+    MouseMove mouse_move = 7;
+    ScrollEvent scroll_event = 8;
+    KeyEvent key_event = 9;
+
+    // State (GUI → Chromium)
+    FocusChanged focus_changed = 10;
+    SetColorScheme set_color_scheme = 11;
+
+    // Chromium → GUI
+    ServerRegister server_register = 12;
+    TabReady tab_ready = 13;
+    CaContext ca_context = 14;
+    UrlChanged url_changed = 15;
+    LoadingState loading_state = 16;
+    TitleChanged title_changed = 17;
+    CursorChanged cursor_changed = 18;
+
+    // TUI → GUI
+    SetOverlay set_overlay = 19;
+    SetDevtoolsOverlay set_devtools_overlay = 20;
+    OpenSplit open_split = 21;
+
+    // GUI → TUI
+    ModeChanged mode_changed = 22;
+
+    // Request/reply pairs (TUI ↔ GUI)
+    HelloRequest hello_request = 23;
+    HelloReply hello_reply = 24;
+    QueryLastRequest query_last_request = 25;
+    QueryLastReply query_last_reply = 26;
+    QueryDevtoolsRequest query_devtools_request = 27;
+    QueryDevtoolsReply query_devtools_reply = 28;
+    QueryTabsRequest query_tabs_request = 29;
+    QueryTabsReply query_tabs_reply = 30;
+  }
+}
+
+// --- Tab lifecycle ---
+
+message CreateTab {
+  string url = 1;
+  string pane_id = 2;
+  uint64 pixel_width = 3;
+  uint64 pixel_height = 4;
+  bool dark = 5;
+}
+
+message CreateDevtoolsTab {
+  string pane_id = 1;
+  int64 inspected_tab_id = 2;
+  uint64 pixel_width = 3;
+  uint64 pixel_height = 4;
+  bool dark = 5;
+}
+
+message Resize {
+  int64 tab_id = 1;
+  uint64 pixel_width = 2;
+  uint64 pixel_height = 3;
+}
+
+message CloseTab {
+  int64 tab_id = 1;
+}
+
+// --- Navigation ---
+
+message Navigate {
+  int64 tab_id = 1;      // nonzero when GUI → Chromium
+  string pane_id = 2;    // nonempty when TUI → GUI
+  string url = 3;
+}
+
+// --- Input ---
+
+message MouseEvent {
+  int64 tab_id = 1;
+  string type = 2;       // "down" or "up"
+  string button = 3;     // "left", "right", "middle"
+  double x = 4;
+  double y = 5;
+  int64 click_count = 6;
+  uint64 modifiers = 7;
+}
+
+message MouseMove {
+  int64 tab_id = 1;
+  double x = 2;
+  double y = 3;
+  uint64 modifiers = 4;
+}
+
+message ScrollEvent {
+  int64 tab_id = 1;
+  double x = 2;
+  double y = 3;
+  double delta_x = 4;
+  double delta_y = 5;
+  uint64 phase = 6;
+  uint64 momentum_phase = 7;
+  bool precise = 8;
+  uint64 modifiers = 9;
+}
+
+message KeyEvent {
+  int64 tab_id = 1;
+  string type = 2;       // "down", "up", "repeat"
+  int64 windows_key_code = 3;
+  string utf8 = 4;
+  uint64 modifiers = 5;
+}
+
+// --- State ---
+
+message FocusChanged {
+  int64 tab_id = 1;
+  bool focused = 2;
+}
+
+message SetColorScheme {
+  int64 tab_id = 1;      // nonzero when GUI → Chromium
+  string pane_id = 2;    // nonempty when TUI → GUI
+  bool dark = 3;
+}
+
+// --- Chromium → GUI ---
+
+message ServerRegister {
+  string profile = 1;
+}
+
+message TabReady {
+  string pane_id = 1;
+  int64 tab_id = 2;
+}
+
+message CaContext {
+  int64 tab_id = 1;
+  uint64 ca_context_id = 2;
+  uint64 pixel_width = 3;
+  uint64 pixel_height = 4;
+}
+
+message UrlChanged {
+  int64 tab_id = 1;
+  string url = 2;
+}
+
+message LoadingState {
+  int64 tab_id = 1;
+  string state = 2;      // "loading", "progress", "done", "error"
+  uint64 progress = 3;   // 0-100
+}
+
+message TitleChanged {
+  int64 tab_id = 1;
+  string title = 2;
+}
+
+message CursorChanged {
+  int64 tab_id = 1;
+  int64 cursor_type = 2;
+}
+
+// --- TUI → GUI ---
+
+message SetOverlay {
+  string pane_id = 1;
+  uint64 col = 2;
+  uint64 row = 3;
+  uint64 width = 4;
+  uint64 height = 5;
+  string url = 6;
+  string profile = 7;
+  bool browsing = 8;
+}
+
+message SetDevtoolsOverlay {
+  string pane_id = 1;
+  uint64 col = 2;
+  uint64 row = 3;
+  uint64 width = 4;
+  uint64 height = 5;
+  string profile = 6;
+  bool browsing = 7;
+  int64 inspected_tab_id = 8;
+}
+
+message OpenSplit {
+  string pane_id = 1;
+  string direction = 2;  // "horizontal" or "vertical"
+  string command = 3;
+}
+
+// --- GUI → TUI ---
+
+message ModeChanged {
+  bool browsing = 1;
+}
+
+// --- Request/reply pairs ---
+
+message HelloRequest {
+  string pane_id = 1;
+}
+
+message HelloReply {
+  string homepage = 1;
+}
+
+message QueryLastRequest {
+  string pane_id = 1;
+  string profile = 2;
+}
+
+message QueryLastReply {
+  string pane_id = 1;
+  int64 tab_id = 2;
+  string profile = 3;
+  string error = 4;
+}
+
+message QueryDevtoolsRequest {
+  string pane_id = 1;
+  int64 inspected_tab_id = 2;
+  string profile = 3;
+}
+
+message QueryDevtoolsReply {
+  int64 tab_id = 1;
+  string error = 2;
+}
+
+message QueryTabsRequest {
+  string pane_id = 1;
+  string profile = 2;
+}
+
+message TabInfo {
+  int64 id = 1;
+  int64 inspected_tab_id = 2;
+  string pane_id = 3;
+  string url = 4;
+}
+
+message QueryTabsReply {
+  int64 gui_panes = 1;
+  int64 chromium_tabs = 2;
+  int64 chromium_browser = 3;
+  int64 chromium_devtools = 4;
+  repeated TabInfo tabs = 5;
+  string error = 6;
+}
+```
+
+Key design decisions:
+
+- **`Navigate` and `SetColorScheme` are shared.** These messages are sent both
+  TUI→GUI (with `pane_id`) and GUI→Chromium (with `tab_id`). Using one message
+  type with both fields avoids duplication. The receiver checks which field is
+  populated.
+- **`QueryTabsReply` uses `repeated TabInfo`.** The current XPC implementation
+  uses dynamic keys (`tab_0`, `tab_1`, ...) which is an anti-pattern. A
+  repeated message field is the idiomatic protobuf way.
+- **No `action` field.** The `oneof` discriminator replaces the string-based
+  action dispatch. Type safety instead of string matching.
+- **`oneof` field numbers 1-30.** One per message type, leaving room for future
+  additions above 30.
+
+**2. Update `proto/test-rust/` to use `termsurf.proto`**
+
+Change `build.rs` to compile `termsurf.proto`. Update `main.rs` to create a
+`TermSurfMessage` wrapping a `CreateTab`, serialize, deserialize, verify the
+`oneof` discriminator round-trips correctly.
+
+**3. Update `proto/test-zig/` to use `termsurf.proto`**
+
+Regenerate C code from `termsurf.proto`. Update `main.zig` to create a
+`Termsurf__TermSurfMessage` with a `CreateTab` variant, serialize, deserialize,
+verify.
+
+**4. Update `proto/test-cpp/` to use `termsurf.proto`**
+
+Regenerate C++ code from `termsurf.proto`. Update `main.cc` to create a
+`TermSurfMessage` with a `create_tab` case, serialize, deserialize, verify.
+
+#### Verification
+
+1. `cd proto/test-rust && cargo run` — prints "Rust: pass"
+2. `cd proto/test-zig && zig build run` — prints "Zig: pass"
+3. `cd proto/test-cpp && make clean && make && ./test` — prints "C++: pass"
+4. Cross-reference every field in the `.proto` against `xpc.zig`, `xpc.rs`, and
+   `shell_browser_main_parts.cc` to confirm nothing was missed.
+
+**Pass criterion:** The full 30-message schema compiles in all three languages,
+and a `TermSurfMessage` containing a `CreateTab` round-trips correctly through
+serialize/deserialize in each language.
