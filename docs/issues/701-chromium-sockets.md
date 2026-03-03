@@ -291,3 +291,109 @@ original design:
 
 Generated `termsurf.pb.h` is 580KB with C++ accessors for all 30 messages. The
 smoke test in `ShellBrowserMainParts` constructor compiles and links clean.
+
+### Experiment 2: Multi-client socket accept
+
+**Goal:** Refactor the GUI's socket listener from a single-client `tui_fd` model
+to a connection pool that supports multiple concurrent clients. Each connection
+gets its own fd, dispatch_source, and read buffer. The first message on a
+connection determines its type (TUI or Chromium). This unblocks Experiment 3
+where Chromium connects alongside the TUI.
+
+**Context:**
+
+The current socket code in `xpc.zig` (Issue 700) uses global state for one TUI
+connection:
+
+```zig
+var tui_fd: std.posix.fd_t = -1;
+var tui_source: ?*anyopaque = null;
+var tui_buf: [65536]u8 = undefined;
+var tui_buf_len: usize = 0;
+```
+
+When a new connection arrives, `socketAcceptHandler` forcibly disconnects the
+previous one. This means only one client can be connected at a time. For Issue
+701, the GUI needs to accept N Chromium server connections (one per browser
+profile) alongside the TUI.
+
+The dispatch source API already supports per-connection context:
+`dispatch_set_context(source, ptr)` stores a pointer that the handler receives
+as its first argument. The current handlers ignore this parameter
+(`_: ?*anyopaque`). Experiment 2 uses it to pass a `*ClientConn` pointer.
+
+**Data structure:**
+
+```zig
+const MAX_CLIENTS = 16;
+
+const ConnType = enum { unknown, tui, chromium };
+
+const ClientConn = struct {
+    fd: std.posix.fd_t = -1,
+    source: ?*anyopaque = null,
+    buf: [65536]u8 = undefined,
+    buf_len: usize = 0,
+    conn_type: ConnType = .unknown,
+    server: ?*Server = null, // set when conn_type == .chromium
+};
+
+var clients: [MAX_CLIENTS]ClientConn = [_]ClientConn{.{}} ** MAX_CLIENTS;
+```
+
+No dynamic allocation. Fixed pool indexed by slot. An empty slot has `fd == -1`.
+
+**Changes to `xpc.zig`:**
+
+1. **Replace globals.** Delete `tui_fd`, `tui_source`, `tui_buf`, `tui_buf_len`.
+   Add `ClientConn` struct and `clients` array.
+
+2. **Increase listen backlog.** Change `listen(sock_fd, 1)` to
+   `listen(sock_fd, 8)`.
+
+3. **Refactor `socketAcceptHandler`.** On accept: find an empty slot in
+   `clients`, fill in the fd, create a dispatch_source, call
+   `dispatch_set_context(source, &clients[i])` so the read handler knows which
+   connection it's reading, and resume.
+
+4. **Refactor `socketReadHandler`.** The first parameter is now `*ClientConn`
+   (via dispatch context). Read into `conn.buf[conn.buf_len..]`. Extract
+   messages and dispatch to `handleSocketMessage(conn, pb_msg)`.
+
+5. **Connection type tagging.** In `handleSocketMessage`, if
+   `conn.conn_type == .unknown`, the first message determines the type:
+   - `ServerRegister` (case 12) → `.chromium`. Look up the Server by profile,
+     store `conn` as the server's socket connection. This replaces the XPC peer
+     registration in `handleServerRegister`.
+   - Anything else → `.tui`. Proceed as before.
+
+6. **Refactor disconnect.** `handleClientDisconnect(conn: *ClientConn)` replaces
+   `handleTuiDisconnect()`. For `.tui` connections, clean up panes where
+   `p.web_fd == conn.fd`. For `.chromium` connections, clear `conn.server.fd` so
+   the GUI knows the server disconnected. Reset the slot (`fd = -1`).
+
+7. **Update `web_fd` references.** The existing code stores `tui_fd` in
+   `p.web_fd` for reply routing. This continues to work — each pane stores the
+   fd of the connection that created it. `sendProtobuf(p.web_fd, &wrapper)` is
+   unchanged.
+
+8. **Add `Server.fd`.** Add `fd: std.posix.fd_t = -1` to the `Server` struct
+   alongside the existing `peer: xpc_object_t`. Both coexist during the
+   transition. Experiment 5 (GUI → Chromium socket sends) will switch from
+   `server.peer` to `server.fd`.
+
+**What does NOT change:**
+
+- `handleSocketMessage` dispatch logic (all case numbers stay the same)
+- `sendProtobuf` function (still takes an fd and a wrapper)
+- All the individual socket message handlers (`handleSocketSetOverlay`, etc.)
+- XPC message handling (still works in parallel for Chromium until Experiment 5)
+- The TERMSURF_SOCKET env var export
+
+**Pass criteria:** Build clean on all three targets. Runtime test: launch the
+GUI, open a web page via `web`, verify the TUI connection works exactly as
+before (overlay renders, URL syncs, mode changes). The refactor is transparent
+to TUI clients.
+
+**Fail criteria:** Build errors, runtime regressions (TUI can't connect, overlay
+doesn't render, disconnects cause crashes).
