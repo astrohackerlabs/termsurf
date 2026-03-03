@@ -547,3 +547,48 @@ Code changes:
   child processes discover the correct socket path.
 - **TUI (`ipc.rs`):** Check `TERMSURF_SOCKET` first, fall back to default
   `$TMPDIR/termsurf/gui.sock`.
+
+### Experiment 4: Dead code cleanup
+
+Delete `tui/src/xpc.rs` — the 710-line ObjC FFI module replaced by `ipc.rs` in
+Experiment 1. It's completely dead: `main.rs` uses `mod ipc`, `Cargo.toml` has
+no `block2` dependency, and nothing imports it.
+
+#### Changes
+
+**1. Delete `tui/src/xpc.rs`**
+
+Remove the file. 710 lines of unsafe ObjC FFI gone.
+
+**2. Verify build**
+
+```bash
+cd tui && cargo build
+```
+
+#### Verification
+
+```bash
+cd tui && cargo build
+```
+
+**Pass criterion:** Compiles with zero errors. No references to xpc remain in
+the TUI source (aside from the comment in `ipc.rs` noting it replaced xpc.rs).
+
+## Conclusion
+
+Issue 700 replaces TUI↔GUI XPC with Unix domain sockets + protobuf across four
+experiments:
+
+1. **TUI socket client** — `ipc.rs` (265 lines, pure Rust) replaces `xpc.rs`
+   (710 lines, unsafe ObjC FFI). Same public API, no `block2`, no `extern "C"`.
+2. **GUI socket listener** — `xpc.zig` gains a Unix socket listener alongside
+   XPC. Fire-and-forget messages use the XPC-dict adapter (zero handler
+   duplication). Sync queries reply directly with protobuf.
+3. **End-to-end integration** — `TERMSURF_SOCKET` env var bridges the debug path
+   mismatch. Full round-trip verified at runtime.
+4. **Dead code cleanup** — Delete the old `xpc.rs`.
+
+The TUI is now 100% pure Rust with zero platform-specific FFI. The GUI accepts
+both socket (TUI) and XPC (Chromium) connections on the same serial queue. The
+xpc-gateway daemon is no longer needed for TUI connections.
