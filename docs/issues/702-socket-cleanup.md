@@ -86,4 +86,67 @@ disconnect.
 
 ## Experiments
 
-_None yet._
+### Experiment 1: Remove dead XPC code from GUI
+
+**Result: Success.** Commit `6fba7c7`.
+
+Removed all dead XPC code from `gui/src/apprt/xpc.zig`. Net change: -1054 lines,
++255 lines (rewritten comments and simplified control flow).
+
+#### Removed
+
+- **Extern declarations (15):** `xpc_connection_create_mach_service`,
+  `xpc_connection_set_event_handler`, `xpc_connection_resume`,
+  `xpc_connection_cancel`, `xpc_connection_send_message`,
+  `xpc_connection_send_message_with_reply_sync`, `xpc_connection_create`,
+  `xpc_endpoint_create`, `xpc_dictionary_set_value`,
+  `xpc_dictionary_get_remote_connection`, `xpc_dictionary_create_reply`,
+  `xpc_get_type`, `xpc_retain`, `xpc_release`,
+  `xpc_connection_set_target_queue`.
+- **Extern consts (3):** `_xpc_type_connection`, `_xpc_type_error`,
+  `_xpc_error_connection_invalid`.
+- **Types (3):** `EventBlock`, `PeerContext`, `PeerBlock`.
+- **Helper:** `xpcPtr` function.
+- **Import:** `objc` (only used for block types).
+- **Struct fields:** `Server.peer`, `Pane.web_peer`.
+- **Variables:** `gateway`, `listener`, `peer_to_pane`, `peer_to_profile`.
+- **Functions (10):** `gatewayHandler`, `listenerHandler`, `peerHandler`,
+  `handleServerRegister`, `handleHello`, `handleQueryLast`,
+  `handleQueryDevtools`, `handleQueryTabs`, `handleDisconnect`.
+- **Dispatch entries (5):** `"server_register"`, `"hello"`, `"query_last"`,
+  `"query_devtools"`, `"query_tabs"` in `handleMessage()`.
+- **XPC fallback branches** in all 10 GUI→Chromium send functions and 4 handler
+  functions (`handleLoadingState`, `handleUrlChanged`, `handleTitleChanged`,
+  `sendModeToWeb`).
+- **XPC close-tab fallback** in `handleClientDisconnect`.
+- **XPC forward** in `handleSocketQueryTabs`.
+- **Init/deinit:** Gateway/listener setup, dead map inits,
+  `TERMSURF_XPC_SERVICE` env var, web_peer/peer cleanup, gateway/listener
+  cancel.
+
+#### Kept
+
+- `xpc_dictionary_*` extern declarations — still used by socket adapter
+  functions that build XPC dicts for `handleMessage()` dispatch.
+- `xpc_object_t` type alias — still used throughout.
+- `_xpc_type_dictionary` — still used for type checking.
+- All socket infrastructure (`ClientConn`, `clients`, `socketAcceptHandler`,
+  etc.).
+
+#### Renames
+
+- `xpc_queue` → `ipc_queue` (all occurrences + queue label string).
+- `log = std.log.scoped(.xpc)` → `log = std.log.scoped(.ipc)`.
+- Updated file header comment to reference IPC and Issues 698–701.
+
+#### Simplified guards
+
+- `(server.peer != null or server.fd >= 0)` → `(server.fd >= 0)`.
+- `if (server.peer == null and server.fd < 0) return` →
+  `if (server.fd < 0) return`.
+
+#### Verified
+
+- `zig build` compiles clean.
+- Manual test: launch GUI, `web google.com`, browse, navigate, exit TUI — all
+  working.
