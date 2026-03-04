@@ -96,3 +96,108 @@ All in `gui/src/Surface.zig` unless noted:
 | Line ~4120                       | `overlay_activation = false` clear in `mouseButtonCallback()` | Delete                               |
 | Line ~4867                       | `pane_activation` guard in `cursorPosCallback()`              | Delete                               |
 | `gui/src/apprt/xpc.zig` ~801-809 | `notifyOverlayClicked()`                                      | Modify to also forward the click     |
+
+## Experiments
+
+### Experiment 1: Remove all click/scroll suppression
+
+Remove both suppression flags, make overlay clicks in control mode forward to
+Chromium, and forward scrolls regardless of mode.
+
+#### Changes
+
+**`gui/src/Surface.zig`:**
+
+1. **Delete `overlay_activation` field** (line ~283) and `pane_activation` field
+   (line ~287) from the mouse struct.
+
+2. **Delete `pane_activation` clear in `keyCallback()`** (line ~2740):
+
+   ```zig
+   // Any keypress proves intentional engagement — cancel click suppression (Issue 696).
+   self.mouse.pane_activation = false;
+   ```
+
+3. **Delete `pane_activation` set in `focusCallback()`** (lines ~3417-3420):
+
+   ```zig
+   // Set activation flag so the next click is consumed (Issue 670).
+   if (focused) {
+       self.mouse.pane_activation = true;
+   }
+   ```
+
+4. **Change `scrollCallback()`** (line ~3554): Replace `isOverlayForwarding`
+   with `hasOverlayPane` so scrolls forward to Chromium whenever the cursor is
+   over the overlay, regardless of mode:
+
+   ```zig
+   // before:
+   if (xpc.isOverlayForwarding(self)) {
+   // after:
+   if (xpc.hasOverlayPane(self)) {
+   ```
+
+5. **Delete `pane_activation` guard in `mouseButtonCallback()`** (lines
+   ~4055-4061):
+
+   ```zig
+   // Suppress activation click — click-to-focus without pass-through (Issue 670).
+   if (self.mouse.pane_activation) {
+       if (action == .release) {
+           self.mouse.pane_activation = false;
+       }
+       return true;
+   }
+   ```
+
+6. **Restructure overlay click handling in `mouseButtonCallback()`** (lines
+   ~4068-4111). Currently the logic is:
+
+   ```
+   if isOverlayForwarding → forward click (with overlay_activation guard)
+   else if left press → notifyOverlayClicked (consume click, switch mode)
+   ```
+
+   Replace with:
+
+   ```
+   if hasOverlayPane:
+       if not browsing → notifyOverlayClicked (switch to browse mode)
+       forward click to Chromium (always)
+   ```
+
+   This means: if the overlay exists, always forward the click. If we were in
+   control mode, also switch to browse mode first. Delete the entire
+   `overlay_activation` guard block.
+
+7. **Delete `overlay_activation` clear** (line ~4120):
+
+   ```zig
+   // Clear activation flag — click landed outside overlay (Exp 10).
+   self.mouse.overlay_activation = false;
+   ```
+
+8. **Delete `pane_activation` guard in `cursorPosCallback()`** (line ~4867):
+
+   ```zig
+   // Suppress drag during activation — same as click suppression (Issue 670).
+   if (self.mouse.pane_activation) return;
+   ```
+
+**`gui/src/apprt/xpc.zig`:**
+
+9. **No change to `notifyOverlayClicked()`** — it still switches to browse mode
+   and sends focus. The click forwarding happens in `mouseButtonCallback()`
+   after calling it.
+
+#### Verification
+
+1. `cd gui && zig build` — must compile clean.
+2. Open GUI with two split panes, one terminal and one browser.
+3. Click the terminal pane, then click the browser pane — click should both
+   focus and interact (no double-click needed).
+4. While in control mode, scroll over the browser pane — page should scroll.
+5. While in control mode, click the browser pane — should switch to browse mode
+   AND the click should land on the page.
+6. Drag on the browser pane from control mode — should select text.
