@@ -705,3 +705,67 @@ The key change: `//content/shell:content_shell_lib` replaces
    nothing.
 3. `autoninja -C out/Default content/libtermsurf_content:libtermsurf_content_test`
    — test binary links.
+
+#### Results
+
+**All three verification criteria pass.**
+
+1. Library compiles clean — all 9 source files (5 `.cc` + 2 `.mm` + 2 `.h`)
+   build without errors.
+2. `grep -r chromium_profile_server content/libtermsurf_content/` returns
+   nothing — zero profile server references.
+3. Test binary links successfully.
+
+**Changes made:**
+
+- Swapped 3 base class includes from `chromium_profile_server/` to
+  `content/shell/` (`ts_main_delegate.h`, `ts_browser_client.h`,
+  `ts_browser_main_parts.h`).
+- Created 4 new macOS files: `ts_compositor_bridge_mac.h/mm` (persistent
+  compositor bridge) and `ts_ca_layer_bridge_mac.h/mm` (CALayer helpers). Copied
+  from profile server equivalents with updated include paths.
+- Added `StubBadgeService` to `TsBrowserClient` (Issue 655 — prevents renderer
+  crashes on `navigator.setAppBadge()`).
+- Updated `BUILD.gn` deps: `content/shell:content_shell_app` +
+  `content/shell:content_shell_lib` replace the profile server targets.
+- Cleaned up unused includes in `libtermsurf_content.cc`.
+
+**Build issues encountered and fixed:**
+
+- `blink::mojom::BadgeService` not visible from header — moved
+  `BindBadgeService` to a lambda in the `.cc` file.
+- `mojo::BinderMapWithContext` incomplete type — added
+  `mojo/public/cpp/bindings/binder_map.h` include.
+- `~PersistentCompositorBridge() override` — base class destructor isn't
+  virtual. Changed to `virtual ~PersistentCompositorBridge()`.
+- `ShellDevToolsFrontend` private constructor — vanilla Content Shell's
+  constructor is private (profile server made it public). Used the static
+  `Show()` method instead, which creates the Shell internally and returns the
+  frontend. Get the shell via `frontend->frontend_shell()`.
+- Unused `browser_ctx` variable after switching to `Show()` — removed.
+
+**File structure:**
+
+```
+chromium/src/content/libtermsurf_content/
+├── BUILD.gn
+├── libtermsurf_content.cc
+├── libtermsurf_content.h
+├── test_main.cc
+├── ts_browser_client.cc          # +StubBadgeService
+├── ts_browser_client.h
+├── ts_browser_main_parts.cc
+├── ts_browser_main_parts.h
+├── ts_ca_layer_bridge_mac.h      # NEW (macOS)
+├── ts_ca_layer_bridge_mac.mm     # NEW (macOS)
+├── ts_compositor_bridge_mac.h    # NEW (macOS)
+├── ts_compositor_bridge_mac.mm   # NEW (macOS)
+├── ts_main_delegate.cc
+├── ts_main_delegate.h
+├── ts_tab_observer.cc
+└── ts_tab_observer.h
+```
+
+**Status: SUCCESS.** The C library is now fully independent of the Chromium
+Profile Server. It subclasses vanilla Content Shell directly with zero patches
+to Content Shell files.
