@@ -162,3 +162,48 @@ already present.
 2. Run `web google.com --browser plusium` — no Content Shell window appears on
    screen, page loads in the terminal.
 3. Verify default browser (no `--browser` flag) still works.
+
+#### Result: Failure
+
+The `--hidden` patch works — no Content Shell window appears on screen. But
+Plusium's child processes (renderer, GPU) crash with:
+
+```
+FATAL:content/app/content_main_runner_impl.cc:1002]
+Check failed: sandbox::Seatbelt::IsSandboxed().
+```
+
+Chromium's multi-process architecture on macOS requires child processes to be
+sandboxed via `Seatbelt`. The sandbox profile is read from the app bundle's code
+signature. Plusium is a bare executable with no bundle, so child processes can't
+initialize the sandbox and crash.
+
+The existing Profile Server avoids this because it's packaged as
+`Chromium Profile Server.app` — a signed `.app` bundle with entitlements.
+
+**Solution:** Pass `--no-sandbox` when spawning Plusium. Electron apps ship with
+`--no-sandbox` by default — it's proven safe for embedders that don't need
+Chromium's full browser-grade sandbox. TermSurf's use case (developers browsing
+localhost and docs in a terminal) has a narrower attack surface than a
+general-purpose browser.
+
+### Experiment 2: Pass `--no-sandbox` to Plusium
+
+Add `--no-sandbox` to the spawn args for non-bundled browser binaries. The GUI
+already constructs the argument list in `spawnServerProcess()`. The simplest
+approach: always pass `--no-sandbox` for all browser binaries (the Profile
+Server's bundle entitlements override it, so it's harmless there).
+
+#### What to change
+
+**`gui/src/apprt/xpc.zig`** — In `spawnServerProcess()`, add `--no-sandbox` to
+the argv array passed to the child process. It goes alongside `--hidden`,
+`--enable-logging`, and `--log-file`.
+
+#### Verification
+
+1. `cd gui && zig build` — compiles.
+2. Run `web google.com --browser plusium` — page loads in the terminal, no
+   Content Shell window, no sandbox crash.
+3. Verify default browser (no `--browser` flag) still works.
+4. Check `~/.local/state/termsurf/chromium-server.log` — no sandbox errors.
