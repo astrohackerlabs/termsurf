@@ -207,3 +207,32 @@ the argv array passed to the child process. It goes alongside `--hidden`,
    Content Shell window, no sandbox crash.
 3. Verify default browser (no `--browser` flag) still works.
 4. Check `~/.local/state/termsurf/chromium-server.log` — no sandbox errors.
+
+#### Result: Failure (partial progress)
+
+The `--no-sandbox` fix works — Plusium starts successfully. The GUI log
+confirms:
+
+```
+[libtermsurf_content] Initialized, firing callback
+DevTools listening on ws://127.0.0.1:56508/devtools/browser/...
+```
+
+No sandbox crash, no Content Shell window. Both the Experiment 1 (`--hidden`)
+and Experiment 2 (`--no-sandbox`) fixes are working.
+
+But the page still doesn't render. Plusium initializes but the TUI times out
+waiting for a response. The IPC handshake (socket connect → ServerRegister →
+CreateTab → TabReady → CaContext) is breaking somewhere downstream.
+
+The GUI's Zig logs (`std.log.scoped(.ipc)`) don't appear in stdout/stderr — they
+use Ghostty's internal logging system. Without these logs, we can't see whether:
+
+- Plusium connected to the socket
+- The GUI received the `ServerRegister` message
+- The GUI matched it to a server entry
+- The GUI sent `CreateTab`
+- Plusium sent back `TabReady` / `CaContext`
+
+The next experiment needs to add debug tracing to identify where the handshake
+breaks.

@@ -1003,6 +1003,9 @@ fn spawnServerProcess(server: *Server, browser_path: []const u8) void {
     var hidden_buf: [16]u8 = undefined;
     const hidden_arg = std.fmt.bufPrintZ(&hidden_buf, "--hidden", .{}) catch return;
 
+    var nosandbox_buf: [16]u8 = undefined;
+    const nosandbox_arg = std.fmt.bufPrintZ(&nosandbox_buf, "--no-sandbox", .{}) catch return;
+
     var logging_buf: [64]u8 = undefined;
     const logging_arg = std.fmt.bufPrintZ(
         &logging_buf,
@@ -1042,7 +1045,7 @@ fn spawnServerProcess(server: *Server, browser_path: []const u8) void {
     log.info("spawning server profile={s} browser={s}", .{ serverProfile(server), server.browser });
 
     var child = std.process.Child.init(
-        &.{ server_path, ipc_arg, data_arg, hidden_arg, logging_arg, logfile_arg },
+        &.{ server_path, ipc_arg, data_arg, hidden_arg, nosandbox_arg, logging_arg, logfile_arg },
         alloc,
     );
     child.spawn() catch |err| {
