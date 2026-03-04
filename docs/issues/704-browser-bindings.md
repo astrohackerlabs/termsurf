@@ -569,7 +569,8 @@ handling IPC internally.
   class member pointers. `void* handle_` in `TsTabObserver` was changed to
   `uintptr_t handle_` with `reinterpret_cast` when passing to C callbacks.
 - Vexing parse: `LoadURLParams params(GURL(url))` was parsed as a function
-  declaration. Fixed with extra parentheses: `LoadURLParams params((GURL(url)))`.
+  declaration. Fixed with extra parentheses:
+  `LoadURLParams params((GURL(url)))`.
 
 **Files created:**
 
@@ -600,5 +601,107 @@ chromium/src/content/libtermsurf_content/
   `chromium_profile_server_lib` (for the inherited classes) rather than raw
   `content/public/*` deps.
 
-**Status: SUCCESS.** The C library extracts cleanly. Ready for Experiment 2
-(Roamium — Rust bindings).
+**Status: PARTIAL.** The C library compiles and links, but it depends on the
+Chromium Profile Server (`chromium_profile_server_app` and
+`chromium_profile_server_lib`). This defeats the purpose — the whole point is to
+replace the profile server. Experiment 2 removes this dependency.
+
+### Experiment 2: Remove profile server dependency
+
+Experiment 1's `libtermsurf_content` subclasses the profile server's copies of
+Content Shell classes (`ShellMainDelegate`, `ShellContentBrowserClient`,
+`ShellBrowserMainParts`). But Content Shell itself already has all the virtual
+hooks we need — `InitializeMessageLoopContext()`,
+`CreateContentBrowserClient()`, `CreateBrowserMainParts()` are all virtual. We
+can subclass Content Shell directly and eliminate the profile server dependency
+entirely.
+
+This means `libtermsurf_content` becomes a thin C layer on top of vanilla
+Content Shell. The profile server (our fork of Content Shell) is no longer
+needed. In the future, if Content Shell ever becomes a problem, we can rewrite
+the internals while keeping the C API stable.
+
+#### Changes
+
+**Repoint 3 base classes** (mechanical header swaps):
+
+| File                      | Old base (profile server)                                        | New base (Content Shell)                               |
+| ------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------ |
+| `ts_main_delegate.h`      | `chromium_profile_server/app/shell_main_delegate.h`              | `content/shell/app/shell_main_delegate.h`              |
+| `ts_browser_client.h`     | `chromium_profile_server/browser/shell_content_browser_client.h` | `content/shell/browser/shell_content_browser_client.h` |
+| `ts_browser_main_parts.h` | `chromium_profile_server/browser/shell_browser_main_parts.h`     | `content/shell/browser/shell_browser_main_parts.h`     |
+
+**Copy 4 files into `libtermsurf_content/`** — these are profile server
+additions not present in vanilla Content Shell:
+
+- `ts_compositor_bridge_mac.h/mm` — `PersistentCompositorBridge`
+  (`AcceleratedWidgetMacNSView` impl for stable CAContext IDs across
+  navigations). Copied from `shell_compositor_bridge_mac.h/mm`.
+- `ts_ca_layer_bridge_mac.h/mm` — `SetParentUiLayerOnView()` and
+  `SetCALayerParamsCallbackOnView()` helpers. Copied from
+  `shell_ca_layer_bridge_mac.h/mm`.
+
+**Add `StubBadgeService`** — either copy the class into `libtermsurf_content/`
+or register the Mojo binder in `TsBrowserClient`. This prevents renderer crashes
+when websites call `navigator.setAppBadge()` (Issue 655).
+
+**Update `ts_browser_main_parts.cc`** — change all `#include` paths from
+`chromium_profile_server/` to either `content/shell/` or local
+`libtermsurf_content/` files.
+
+**Update `BUILD.gn`**:
+
+```gn
+static_library("libtermsurf_content") {
+  sources = [
+    "libtermsurf_content.cc",
+    "libtermsurf_content.h",
+    "ts_browser_client.cc",
+    "ts_browser_client.h",
+    "ts_browser_main_parts.cc",
+    "ts_browser_main_parts.h",
+    "ts_main_delegate.cc",
+    "ts_main_delegate.h",
+    "ts_tab_observer.cc",
+    "ts_tab_observer.h",
+  ]
+
+  if (is_mac) {
+    sources += [
+      "ts_ca_layer_bridge_mac.h",
+      "ts_ca_layer_bridge_mac.mm",
+      "ts_compositor_bridge_mac.h",
+      "ts_compositor_bridge_mac.mm",
+    ]
+  }
+
+  deps = [
+    "//content/shell:content_shell_lib",
+    "//content/public/app",
+    "//content/public/browser",
+    "//content/public/common",
+  ]
+
+  if (is_mac) {
+    deps += [
+      "//ui/accelerated_widget_mac",
+      "//ui/compositor",
+    ]
+  }
+}
+```
+
+The key change: `//content/shell:content_shell_lib` replaces
+`//content/chromium_profile_server:chromium_profile_server_app` and
+`//content/chromium_profile_server:chromium_profile_server_lib`.
+
+**Zero patches to Content Shell.** Pure subclassing.
+
+#### Verification
+
+1. `autoninja -C out/Default content/libtermsurf_content:libtermsurf_content` —
+   compiles clean with no `chromium_profile_server` in any `#include` or dep.
+2. `grep -r chromium_profile_server content/libtermsurf_content/` — returns
+   nothing.
+3. `autoninja -C out/Default content/libtermsurf_content:libtermsurf_content_test`
+   — test binary links.
