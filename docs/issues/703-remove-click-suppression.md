@@ -2,12 +2,13 @@
 
 ## Goal
 
-Mouse clicks and drags should always propagate to content immediately, without
-requiring a separate "activation" click first. Clicking a browser pane in
-control mode should switch to browse mode AND forward the click. Clicking an
-unfocused pane should focus it AND forward the click. The current behavior —
-requiring one click to activate, then another to interact — is annoying in
-practice.
+Mouse clicks, drags, and scrolls should always propagate to content immediately,
+without requiring a separate "activation" click first. Clicking a browser pane
+in control mode should switch to browse mode AND forward the click. Clicking an
+unfocused pane should focus it AND forward the click. Scrolling over a browser
+pane in control mode should forward the scroll to the webview — being able to
+scroll without switching modes is very useful. The current behavior — requiring
+one click to activate, then another to interact — is annoying in practice.
 
 Keyboard focus still follows the click (the clicked pane becomes the active pane
 for keyboard input), but mouse events should never be swallowed.
@@ -68,18 +69,30 @@ the click to Chromium. The click is consumed by the mode switch.
 After removing suppression, this click should both switch to browse mode AND
 forward to Chromium, so the user's click lands where they intended.
 
+### 4. Scroll forwarding in control mode
+
+Currently, `scrollCallback()` (line ~3549) checks `isOverlayForwarding()` before
+forwarding scrolls to Chromium. `isOverlayForwarding()` requires `p.browsing`
+(browse mode) AND focused pane. So scrolls over a browser pane in control mode
+fall through to the terminal instead of scrolling the webpage.
+
+Scrolls should forward to Chromium whenever the cursor is over a browser
+overlay, regardless of mode. This lets users scroll webpages without switching
+to browse mode.
+
 ## Code locations
 
 All in `gui/src/Surface.zig` unless noted:
 
-| Location                         | What                                                          | Action                           |
-| -------------------------------- | ------------------------------------------------------------- | -------------------------------- |
-| Line ~283                        | `overlay_activation: bool = false` declaration                | Delete                           |
-| Line ~287                        | `pane_activation: bool = false` declaration                   | Delete                           |
-| Line ~2740                       | `self.mouse.pane_activation = false` in `keyCallback()`       | Delete                           |
-| Line ~3417-3420                  | Set `pane_activation = true` in `focusCallback()`             | Delete                           |
-| Line ~4055-4061                  | `pane_activation` guard in `mouseButtonCallback()`            | Delete                           |
-| Line ~4069-4074                  | `overlay_activation` guard in `mouseButtonCallback()`         | Delete                           |
-| Line ~4120                       | `overlay_activation = false` clear in `mouseButtonCallback()` | Delete                           |
-| Line ~4867                       | `pane_activation` guard in `cursorPosCallback()`              | Delete                           |
-| `gui/src/apprt/xpc.zig` ~801-809 | `notifyOverlayClicked()`                                      | Modify to also forward the click |
+| Location                         | What                                                          | Action                               |
+| -------------------------------- | ------------------------------------------------------------- | ------------------------------------ |
+| Line ~283                        | `overlay_activation: bool = false` declaration                | Delete                               |
+| Line ~287                        | `pane_activation: bool = false` declaration                   | Delete                               |
+| Line ~2740                       | `self.mouse.pane_activation = false` in `keyCallback()`       | Delete                               |
+| Line ~3417-3420                  | Set `pane_activation = true` in `focusCallback()`             | Delete                               |
+| Line ~3554                       | `isOverlayForwarding` check in `scrollCallback()`             | Change to forward regardless of mode |
+| Line ~4055-4061                  | `pane_activation` guard in `mouseButtonCallback()`            | Delete                               |
+| Line ~4069-4074                  | `overlay_activation` guard in `mouseButtonCallback()`         | Delete                               |
+| Line ~4120                       | `overlay_activation = false` clear in `mouseButtonCallback()` | Delete                               |
+| Line ~4867                       | `pane_activation` guard in `cursorPosCallback()`              | Delete                               |
+| `gui/src/apprt/xpc.zig` ~801-809 | `notifyOverlayClicked()`                                      | Modify to also forward the click     |
