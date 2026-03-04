@@ -533,3 +533,72 @@ static_library("libtermsurf_content") {
    `ts_set_on_initialized()` with a callback that creates a profile and tab,
    then calls `ts_content_main()`. The callback should print "initialized" and
    call `ts_quit()`. Verify it starts, prints, and exits cleanly.
+
+#### Results
+
+**Static library compiles clean.** All 5 source files compile without errors:
+
+- `libtermsurf_content.cc` — C API implementation with global state and
+  `TsNotify*` functions
+- `ts_main_delegate.cc` — Extends `ShellMainDelegate`, overrides
+  `CreateContentBrowserClient()` to return `TsBrowserClient`
+- `ts_browser_client.cc` — Extends `ShellContentBrowserClient`, overrides
+  `CreateBrowserMainParts()` to return `TsBrowserMainParts`
+- `ts_browser_main_parts.cc` — Core implementation (~600 lines), manages
+  profiles, tabs, compositor, input forwarding, and fires C callbacks
+- `ts_tab_observer.cc` — Fires `TsNotify*` C callbacks instead of sending
+  protobuf
+
+**Test binary compiles and links.** `test_main.cc` links against
+`libtermsurf_content.a` and calls `ts_content_main()`. The binary crashes at
+startup with a DCHECK in `paths_apple.mm` because it expects to run inside a
+`.app` bundle — this is expected behavior inherited from `ShellMainDelegate`
+(the existing profile server has the same requirement).
+
+**Approach:** Instead of subclassing `ContentMainDelegate` directly (as the
+experiment design suggested), the implementation extends `ShellMainDelegate` and
+its associated classes (`ShellContentBrowserClient`, `ShellBrowserMainParts`).
+This reuses the profile server's existing setup (Mojo binder stubs, macOS menu,
+persistent compositor bridge, etc.) while overriding only the
+initialization/tab-management entry points to fire C callbacks instead of
+handling IPC internally.
+
+**Build issues encountered and fixed:**
+
+- `raw_ptr<T>` clang plugin: Chromium's clang plugin requires `raw_ptr<T>` for
+  class member pointers. `void* handle_` in `TsTabObserver` was changed to
+  `uintptr_t handle_` with `reinterpret_cast` when passing to C callbacks.
+- Vexing parse: `LoadURLParams params(GURL(url))` was parsed as a function
+  declaration. Fixed with extra parentheses: `LoadURLParams params((GURL(url)))`.
+
+**Files created:**
+
+```
+chromium/src/content/libtermsurf_content/
+├── BUILD.gn                    # Static library + test executable
+├── libtermsurf_content.h       # Public C header
+├── libtermsurf_content.cc      # C API implementation
+├── ts_main_delegate.h/cc      # ShellMainDelegate subclass
+├── ts_browser_client.h/cc     # ShellContentBrowserClient subclass
+├── ts_browser_main_parts.h/cc # ShellBrowserMainParts subclass (~600 lines)
+├── ts_tab_observer.h/cc       # WebContentsObserver with C callbacks
+└── test_main.cc               # Minimal test binary
+```
+
+**Deviations from design:**
+
+- No `ts_main_delegate_mac.mm`, `ts_browser_main_parts_mac.mm`,
+  `ts_web_contents_delegate.h/cc`, `ts_compositor_bridge_mac.h/mm`, or
+  `ts_ca_layer_bridge_mac.mm` — these are reused from the existing profile
+  server via `ShellMainDelegate` inheritance rather than being copied.
+- The `on_cursor_changed` callback passes `int cursor_type` (Chromium enum
+  value) instead of `const char* cursor_type` (string). The binding layer
+  handles the enum-to-string mapping.
+- The `on_tab_ready` callback was added (not in original design) — fired after
+  compositor setup on macOS, signals when a tab is ready for input.
+- `BUILD.gn` deps include `chromium_profile_server_app` and
+  `chromium_profile_server_lib` (for the inherited classes) rather than raw
+  `content/public/*` deps.
+
+**Status: SUCCESS.** The C library extracts cleanly. Ready for Experiment 2
+(Roamium — Rust bindings).
