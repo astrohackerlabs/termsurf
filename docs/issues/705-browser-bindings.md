@@ -889,3 +889,27 @@ initialization, or the Shell/WebContents lifecycle differs from content_shell.
 The Experiment 10 IPC changes are correct and should be kept. The next
 experiment should investigate and fix the Plusium-side
 `ShellDevToolsFrontend::Show()` crash.
+
+### Experiment 11: FAILURE — wrong approach entirely
+
+**This experiment was never implemented. It was wrong from the start.**
+
+The proposal was to replace `ShellDevToolsFrontend::Show()` with a plain
+`Shell::CreateNewWindow()` loading the DevTools HTTP URL
+(`http://127.0.0.1:{port}/devtools/devtools_app.html`). This is the
+**out-of-process** DevTools approach — it connects via HTTP/WebSocket remote
+debugging protocol. It gives a completely different experience:
+
+- **Out-of-process (HTTP URL):** Renders a _mock_ of the inspected page inside
+  DevTools. Hovering over elements shows highlights on the mock, not on the real
+  page. This is intended for third-party tools and remote debugging.
+- **In-process (`ShellDevToolsFrontend::Show`):** Attaches a DevTools agent
+  directly via C++ bindings. Hovering over elements in DevTools highlights them
+  on the _real_ inspected page. This is how real Chrome DevTools works.
+
+**We are using the in-process approach. This is non-negotiable.** The fix must
+make `ShellDevToolsFrontend::Show()` work in Plusium, not replace it with an
+inferior alternative.
+
+The next experiment should debug the actual SEGV inside
+`ShellDevToolsFrontend::Show()` and fix the root cause.
