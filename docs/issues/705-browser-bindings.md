@@ -398,3 +398,19 @@ sentinel), so an in-flight creation doesn't match a stale lookup.
    (`FindByHandle succeeded`), and `OnCaContextId` should report a non-zero
    `tab_id`.
 4. The page should render in the terminal.
+
+#### Result: Success
+
+The page renders in the terminal. The fix:
+
+1. Push `TabEntry` (with `handle = nullptr`) to `g_tabs` **before** calling
+   `ts_create_web_contents()`, so the entry exists when `OnTabReady` fires
+   synchronously.
+2. `OnTabReady` tries `FindByHandle(wc)` first (async case), then falls back to
+   finding the entry with `handle == nullptr` (sync case) and assigns the handle
+   immediately.
+3. `FindByHandle()` skips `nullptr` entries so stale lookups don't match.
+4. Same push-first pattern applied to `kCreateDevtoolsTab`.
+
+Plusium now completes the full IPC handshake: ServerRegister → CreateTab →
+tab_ready → ca_context → page renders.
