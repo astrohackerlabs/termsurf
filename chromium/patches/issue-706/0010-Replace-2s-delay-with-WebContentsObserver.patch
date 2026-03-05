@@ -1,7 +1,7 @@
 From f52415d2c8ed65085459341c226dfe9d626870c2 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 15 Feb 2026 07:36:17 -0600
-Subject: [PATCH 10/66] Replace 2s delay with WebContentsObserver
+Subject: [PATCH 10/67] Replace 2s delay with WebContentsObserver
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

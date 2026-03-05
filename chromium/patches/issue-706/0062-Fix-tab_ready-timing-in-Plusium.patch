@@ -1,7 +1,7 @@
 From c5e2bda216e4aab58e1e4475de87fd80bbbfb617 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 18:17:17 -0600
-Subject: [PATCH 62/66] Fix tab_ready timing in Plusium
+Subject: [PATCH 62/67] Fix tab_ready timing in Plusium
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

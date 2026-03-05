@@ -1,7 +1,7 @@
 From 2bcc11a75a0cf15f65f80718538eabdce9fa0e45 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 22 Feb 2026 17:55:54 -0600
-Subject: [PATCH 33/66] Restore resize XPC handler for CALayerHost
+Subject: [PATCH 33/67] Restore resize XPC handler for CALayerHost
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

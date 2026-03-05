@@ -1,7 +1,7 @@
 From 6fde46ac3c73185a799cc06c113273ef0df8d99c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 18:36:30 -0600
-Subject: [PATCH 63/66] Fix dark mode in Plusium
+Subject: [PATCH 63/67] Fix dark mode in Plusium
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 9a391e8e8cc108b99bb4b6d965f7ebedf03291bc Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 05:57:37 -0600
-Subject: [PATCH 55/66] Extract libtermsurf_content C library
+Subject: [PATCH 55/67] Extract libtermsurf_content C library
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

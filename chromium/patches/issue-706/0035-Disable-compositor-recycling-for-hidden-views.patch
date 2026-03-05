@@ -1,7 +1,7 @@
 From 05a993af53556e14b62d125227a2917983f47a94 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Mon, 23 Feb 2026 19:31:40 -0600
-Subject: [PATCH 35/66] Disable compositor recycling for hidden views
+Subject: [PATCH 35/67] Disable compositor recycling for hidden views
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 339d1e23f00e55ed55db021252c9f4a115c686cf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 17 Feb 2026 17:40:19 -0600
-Subject: [PATCH 18/66] Add mouse move event forwarding
+Subject: [PATCH 18/67] Add mouse move event forwarding
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

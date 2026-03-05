@@ -1,7 +1,7 @@
 From 02d82732596b471211586220b82595d4dae9645e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 14 Feb 2026 06:03:33 -0600
-Subject: [PATCH 03/66] Add XPC frame delivery to receiver
+Subject: [PATCH 03/67] Add XPC frame delivery to receiver
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

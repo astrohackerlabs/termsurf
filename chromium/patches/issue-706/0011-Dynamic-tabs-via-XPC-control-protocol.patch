@@ -1,7 +1,7 @@
 From ef28beb26245c1634cf97b09c796b76f34033977 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 15 Feb 2026 09:29:40 -0600
-Subject: [PATCH 11/66] Dynamic tabs via XPC control protocol
+Subject: [PATCH 11/67] Dynamic tabs via XPC control protocol
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

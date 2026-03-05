@@ -1,7 +1,7 @@
 From ac445eb8da23fa3332f107dc4949b84c56b833d4 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Mon, 23 Feb 2026 19:38:18 -0600
-Subject: [PATCH 36/66] Revert compositor recycling experiment
+Subject: [PATCH 36/67] Revert compositor recycling experiment
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

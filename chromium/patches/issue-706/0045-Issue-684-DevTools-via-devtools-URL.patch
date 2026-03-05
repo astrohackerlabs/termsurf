@@ -1,7 +1,7 @@
 From aac4c8865e016b05a0927f6c8e5a2cd590b77cb7 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 07:33:18 -0600
-Subject: [PATCH 45/66] Issue 684: DevTools via devtools:// URL
+Subject: [PATCH 45/67] Issue 684: DevTools via devtools:// URL
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

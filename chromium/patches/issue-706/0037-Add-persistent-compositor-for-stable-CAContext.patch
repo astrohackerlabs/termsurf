@@ -1,7 +1,7 @@
 From e4dacab4dd5bc3649ffcc992fb2e04b91314b368 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 24 Feb 2026 05:42:33 -0600
-Subject: [PATCH 37/66] Add persistent compositor for stable CAContext
+Subject: [PATCH 37/67] Add persistent compositor for stable CAContext
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

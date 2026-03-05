@@ -1,7 +1,7 @@
 From f2a8114f5f74ecc070f025aabdfc4d0385aff5e1 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 13 Feb 2026 07:51:29 -0600
-Subject: [PATCH 02/66] Add FrameSinkVideoCapturer to One Profile
+Subject: [PATCH 02/67] Add FrameSinkVideoCapturer to One Profile
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

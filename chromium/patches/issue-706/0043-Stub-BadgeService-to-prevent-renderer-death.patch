@@ -1,7 +1,7 @@
 From a004e0888e390507a5f948f112d7c92e0ad711d3 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 27 Feb 2026 04:50:20 -0600
-Subject: [PATCH 43/66] Stub BadgeService to prevent renderer death
+Subject: [PATCH 43/67] Stub BadgeService to prevent renderer death
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

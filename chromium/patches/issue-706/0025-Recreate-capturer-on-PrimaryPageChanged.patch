@@ -1,7 +1,7 @@
 From 5b1f4f3802173699d2df34fb1ae23e55c1c6f424 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 21 Feb 2026 07:46:58 -0600
-Subject: [PATCH 25/66] Recreate capturer on PrimaryPageChanged
+Subject: [PATCH 25/67] Recreate capturer on PrimaryPageChanged
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

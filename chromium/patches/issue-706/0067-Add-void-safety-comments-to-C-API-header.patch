@@ -1,0 +1,119 @@
+From 5c5133ecbad9332c2e305436d1d3039c723934b7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 20:23:08 -0600
+Subject: [PATCH 67/67] Add void* safety comments to C API header
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+"Synchronous — safe," each function now reads,
+A warning atop where the typedef feeds.
+For those who come after and reach for void*,
+These comments will save them from bugs in the dark.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../libtermsurf_content/libtermsurf_content.h | 31 +++++++++++++------
+ 1 file changed, 21 insertions(+), 10 deletions(-)
+
+diff --git a/content/libtermsurf_content/libtermsurf_content.h b/content/libtermsurf_content/libtermsurf_content.h
+index b36298ae2b1d5..101d5b8e19337 100644
+--- a/content/libtermsurf_content/libtermsurf_content.h
++++ b/content/libtermsurf_content/libtermsurf_content.h
+@@ -12,7 +12,14 @@
+ extern "C" {
+ #endif
+ 
+-/* Opaque handles */
++/* Opaque handles.
++   WARNING: These are C++ pointers (WebContents*, ShellBrowserContext*) cast to
++   void*. They are safe to use synchronously — pass them in and they are used
++   immediately. NEVER store them for asynchronous use (e.g., to be dereferenced
++   later by a callback or observer). Passing a WebContents* through this
++   boundary for async use caused a SEGV in DevTools (Issue 706). For async
++   cases, pass an integer ID (like inspected_tab_id) and look up the pointer
++   internally inside TsBrowserMainParts. */
+ typedef void* ts_browser_context_t;
+ typedef void* ts_web_contents_t;
+ 
+@@ -38,10 +45,10 @@ void ts_quit(void);
+ /* --- Profiles --- */
+ 
+ /* Create a BrowserContext with persistent storage at the given path.
+-   Returns an opaque handle. */
++   Returns an opaque handle. Synchronous — safe. */
+ ts_browser_context_t ts_create_browser_context(const char* path);
+ 
+-/* Destroy a BrowserContext and release its resources. */
++/* Destroy a BrowserContext and release its resources. Synchronous — safe. */
+ void ts_destroy_browser_context(ts_browser_context_t ctx);
+ 
+ /* --- Tabs --- */
+@@ -49,8 +56,8 @@ void ts_destroy_browser_context(ts_browser_context_t ctx);
+ /* Create a WebContents (tab) in the given BrowserContext.
+    Navigates to url. Sets initial viewport to width x height pixels.
+    dark=true sets prefers-color-scheme:dark.
+-   Returns an opaque handle. The on_ca_context_id callback fires when
+-   the tab's CAContext is ready. */
++   Returns an opaque handle. Synchronous — safe.
++   The on_ca_context_id callback fires when the tab's CAContext is ready. */
+ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
+                                          const char* url,
+                                          int width,
+@@ -67,16 +74,17 @@ ts_web_contents_t ts_create_devtools_web_contents(
+     int height,
+     bool dark);
+ 
+-/* Close and destroy a WebContents. */
++/* Close and destroy a WebContents. Synchronous — safe. */
+ void ts_destroy_web_contents(ts_web_contents_t wc);
+ 
+ /* --- Navigation --- */
+ 
++/* Synchronous — safe. */
+ void ts_load_url(ts_web_contents_t wc, const char* url);
+ 
+ /* --- Input --- */
+ 
+-/* type: 0=down, 1=up. button: 0=left, 1=right, 2=middle. */
++/* type: 0=down, 1=up. button: 0=left, 1=right, 2=middle. Synchronous — safe. */
+ void ts_forward_mouse_event(ts_web_contents_t wc,
+                             int type,
+                             int button,
+@@ -85,12 +93,14 @@ void ts_forward_mouse_event(ts_web_contents_t wc,
+                             int click_count,
+                             int modifiers);
+ 
++/* Synchronous — safe. */
+ void ts_forward_mouse_move(ts_web_contents_t wc,
+                            int x,
+                            int y,
+                            int modifiers);
+ 
+-/* phase/momentum_phase: 0=none, 1=began, 2=changed, 3=ended. */
++/* phase/momentum_phase: 0=none, 1=began, 2=changed, 3=ended.
++   Synchronous — safe. */
+ void ts_forward_scroll_event(ts_web_contents_t wc,
+                              int x,
+                              int y,
+@@ -101,14 +111,15 @@ void ts_forward_scroll_event(ts_web_contents_t wc,
+                              bool precise,
+                              int modifiers);
+ 
+-/* type: 0=down, 1=up, 2=repeat. keycode is Windows VK code. */
++/* type: 0=down, 1=up, 2=repeat. keycode is Windows VK code.
++   Synchronous — safe. */
+ void ts_forward_key_event(ts_web_contents_t wc,
+                           int type,
+                           int keycode,
+                           const char* utf8,
+                           int modifiers);
+ 
+-/* --- State --- */
++/* --- State (all synchronous — safe) --- */
+ 
+ void ts_set_focus(ts_web_contents_t wc, bool focused);
+ void ts_set_color_scheme(ts_web_contents_t wc, bool dark);
+-- 
+2.50.1 (Apple Git-155)
+

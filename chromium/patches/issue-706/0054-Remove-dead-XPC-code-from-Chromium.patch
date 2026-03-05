@@ -1,7 +1,7 @@
 From 4d91714dd33234988866b2e238effb632a2b8b87 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 3 Mar 2026 17:34:58 -0600
-Subject: [PATCH 54/66] Remove dead XPC code from Chromium
+Subject: [PATCH 54/67] Remove dead XPC code from Chromium
 
 The XPC gateway whispered goodbye,
 As sockets took over the sky.

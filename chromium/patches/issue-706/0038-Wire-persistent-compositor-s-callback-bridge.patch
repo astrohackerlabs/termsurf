@@ -1,7 +1,7 @@
 From 6de8b097bb38d20ac71623082901dbf214eb529a Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 24 Feb 2026 06:00:06 -0600
-Subject: [PATCH 38/66] Wire persistent compositor's callback bridge
+Subject: [PATCH 38/67] Wire persistent compositor's callback bridge
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

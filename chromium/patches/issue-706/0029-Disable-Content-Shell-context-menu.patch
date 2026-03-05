@@ -1,7 +1,7 @@
 From e704f4d7af5d1bbdd94e9fbcfd8dc746191dd562 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 21 Feb 2026 16:05:35 -0600
-Subject: [PATCH 29/66] Disable Content Shell context menu
+Subject: [PATCH 29/67] Disable Content Shell context menu
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From a6738b865d937b57ce038477397c00965730ee07 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 21 Feb 2026 16:20:12 -0600
-Subject: [PATCH 30/66] Add Cmd+[/]/R navigation keybindings
+Subject: [PATCH 30/67] Add Cmd+[/]/R navigation keybindings
 
 Brackets go back, brackets go fore,
 And R refreshes what you saw before.

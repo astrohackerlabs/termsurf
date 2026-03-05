@@ -1,7 +1,7 @@
 From efc62973609139ab7075f939062af4d72ddf75f1 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 18 Feb 2026 06:18:47 -0600
-Subject: [PATCH 21/66] Focus and activate view on tab creation
+Subject: [PATCH 21/67] Focus and activate view on tab creation
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

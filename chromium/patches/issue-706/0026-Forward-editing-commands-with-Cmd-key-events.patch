@@ -1,7 +1,7 @@
 From cd363999d1fc6954acae141773215c709b1df406 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 21 Feb 2026 09:00:13 -0600
-Subject: [PATCH 26/66] Forward editing commands with Cmd+key events
+Subject: [PATCH 26/67] Forward editing commands with Cmd+key events
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

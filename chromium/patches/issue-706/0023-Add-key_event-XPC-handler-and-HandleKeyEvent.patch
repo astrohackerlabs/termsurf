@@ -1,7 +1,7 @@
 From b7597c85ee0a77cb2edcb98bc2995e86d1d71c60 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 21 Feb 2026 06:36:22 -0600
-Subject: [PATCH 23/66] Add key_event XPC handler and HandleKeyEvent
+Subject: [PATCH 23/67] Add key_event XPC handler and HandleKeyEvent
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

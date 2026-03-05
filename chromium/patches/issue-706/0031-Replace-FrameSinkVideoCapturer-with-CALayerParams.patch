@@ -1,7 +1,7 @@
 From 9376570dcd80c09fb2bef2331db8c9efd13b3e84 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 22 Feb 2026 15:16:27 -0600
-Subject: [PATCH 31/66] Replace FrameSinkVideoCapturer with CALayerParams
+Subject: [PATCH 31/67] Replace FrameSinkVideoCapturer with CALayerParams
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

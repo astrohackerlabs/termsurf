@@ -1,7 +1,7 @@
 From 659fa82c3b507f830fdadacd92fd5ab4df77de23 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 18 Feb 2026 07:40:52 -0600
-Subject: [PATCH 22/66] Add focus_changed XPC handler
+Subject: [PATCH 22/67] Add focus_changed XPC handler
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

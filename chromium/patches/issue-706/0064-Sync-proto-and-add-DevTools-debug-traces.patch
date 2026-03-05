@@ -1,7 +1,7 @@
 From 157941a8359cfbe07172a2c4bdfc6b597f647be2 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 19:14:10 -0600
-Subject: [PATCH 64/66] Sync proto and add DevTools debug traces
+Subject: [PATCH 64/67] Sync proto and add DevTools debug traces
 
 The proto was stale, the browser field lost,
 DevTools sent blind at a terrible cost.

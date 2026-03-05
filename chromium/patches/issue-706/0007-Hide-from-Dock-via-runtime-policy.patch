@@ -1,7 +1,7 @@
 From a357fafab667e3ae536737c131856c3d7c632877 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 15 Feb 2026 05:43:54 -0600
-Subject: [PATCH 07/66] Hide from Dock via runtime policy
+Subject: [PATCH 07/67] Hide from Dock via runtime policy
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

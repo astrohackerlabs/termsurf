@@ -1,7 +1,7 @@
 From d583c5f0617cb7d5b34ae03e0c3db9d3792a419c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 17 Feb 2026 18:13:51 -0600
-Subject: [PATCH 19/66] Add cursor change callback via XPC
+Subject: [PATCH 19/67] Add cursor change callback via XPC
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 19a9cf44073686553435946d203416fb9fd3ba27 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 14 Feb 2026 08:03:43 -0600
-Subject: [PATCH 04/66] Add --hidden flag to hide the window
+Subject: [PATCH 04/67] Add --hidden flag to hide the window
 
 A window once stood proud and tall,
 But now it needn't show at all.

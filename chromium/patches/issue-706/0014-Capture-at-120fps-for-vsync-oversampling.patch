@@ -1,7 +1,7 @@
 From 7ace97f3b69f710c1944ea62a3eb4fbe8537de2c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Mon, 16 Feb 2026 19:04:28 -0600
-Subject: [PATCH 14/66] Capture at 120fps for vsync oversampling
+Subject: [PATCH 14/67] Capture at 120fps for vsync oversampling
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

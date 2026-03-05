@@ -1,7 +1,7 @@
 From 91020685c49b0d0aa89d57d9af59f38885cb4dd2 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 24 Feb 2026 08:32:11 -0600
-Subject: [PATCH 40/66] Add navigate XPC action
+Subject: [PATCH 40/67] Add navigate XPC action
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

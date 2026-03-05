@@ -1,7 +1,7 @@
 From f6739c164f4b39f2fc523c4ce51c30c446646d56 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 24 Feb 2026 18:54:32 -0600
-Subject: [PATCH 41/66] Add TitleWasSet to ShellTabObserver
+Subject: [PATCH 41/67] Add TitleWasSet to ShellTabObserver
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From a4f6a846ffce0233f16b3498bd51734827d7ed63 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 19:08:52 -0600
-Subject: [PATCH 51/66] Issue 694: Replace pane_id with tab_id
+Subject: [PATCH 51/67] Issue 694: Replace pane_id with tab_id
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

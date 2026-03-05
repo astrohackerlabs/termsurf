@@ -1,7 +1,7 @@
 From 126f7a830b2f94cb73109842dd053bfb0532016f Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 07:40:57 -0600
-Subject: [PATCH 46/66] Issue 684: Fix devtools:// URL parsing
+Subject: [PATCH 46/67] Issue 684: Fix devtools:// URL parsing
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

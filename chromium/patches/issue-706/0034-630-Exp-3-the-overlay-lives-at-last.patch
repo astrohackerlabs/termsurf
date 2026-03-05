@@ -1,7 +1,7 @@
 From 7f7cd93278a174c201cb78d6ab0dee038c188ba9 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Mon, 23 Feb 2026 08:40:01 -0600
-Subject: [PATCH 34/66] 630 Exp 3: the overlay lives at last
+Subject: [PATCH 34/67] 630 Exp 3: the overlay lives at last
 
 The window hid, the compositor slept,
 The callbacks staled, no context kept.

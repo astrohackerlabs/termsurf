@@ -1,7 +1,7 @@
 From ce5a990ef7339f9a67062756e228a533018afc2d Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 10:26:04 -0600
-Subject: [PATCH 48/66] Issue 684: Assign tab_id before tab_ready
+Subject: [PATCH 48/67] Issue 684: Assign tab_id before tab_ready
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 1317a117a5a9ab9404e61c45c4946210034e29a0 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 28 Feb 2026 19:35:37 -0600
-Subject: [PATCH 44/66] Add per-tab color scheme via XPC
+Subject: [PATCH 44/67] Add per-tab color scheme via XPC
 
 The dark mode came knocking at the door,
 "prefers-color-scheme" it was looking for.

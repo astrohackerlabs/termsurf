@@ -1,7 +1,7 @@
 From 15cc0cf858b35d208d24b9647a9472ddd5428325 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 16:17:40 -0600
-Subject: [PATCH 50/66] Issue 689: Correct tab teardown order
+Subject: [PATCH 50/67] Issue 689: Correct tab teardown order
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

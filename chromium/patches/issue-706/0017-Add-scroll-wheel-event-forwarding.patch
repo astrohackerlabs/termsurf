@@ -1,7 +1,7 @@
 From 1876e0003a8db4fc181f3d6d1a17a0a0704e687b Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 17 Feb 2026 17:20:27 -0600
-Subject: [PATCH 17/66] Add scroll wheel event forwarding
+Subject: [PATCH 17/67] Add scroll wheel event forwarding
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

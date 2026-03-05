@@ -1,7 +1,7 @@
 From cdda5e035e00162ec0790a956c8381475b7d73d6 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 21 Feb 2026 14:41:02 -0600
-Subject: [PATCH 27/66] Add loading state observer (Issue 616 Experiment 2)
+Subject: [PATCH 27/67] Add loading state observer (Issue 616 Experiment 2)
 
 ---
  .../browser/shell_video_consumer.cc           | 47 +++++++++++++++++++

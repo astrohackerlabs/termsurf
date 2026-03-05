@@ -1,7 +1,7 @@
 From b88ceab6d76a6786d615db714f125726fef307a5 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 18:00:22 -0600
-Subject: [PATCH 60/66] Add debug traces to Plusium IPC
+Subject: [PATCH 60/67] Add debug traces to Plusium IPC
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

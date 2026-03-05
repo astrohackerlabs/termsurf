@@ -1,7 +1,7 @@
 From 782744c397ff84e7957fbd3a7df249531d8e4657 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 24 Feb 2026 06:55:11 -0600
-Subject: [PATCH 39/66] Move persistent compositor into per-tab state
+Subject: [PATCH 39/67] Move persistent compositor into per-tab state
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

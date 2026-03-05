@@ -1,7 +1,7 @@
 From 3d37649cd9a5e5ac8ae6df940d8af643559953b7 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 15:12:00 -0600
-Subject: [PATCH 49/66] Issue 689: Add query_tabs XPC handler
+Subject: [PATCH 49/67] Issue 689: Add query_tabs XPC handler
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 8d1d5c2801cd3c910dda4cc6bbf7dac79efd53f2 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 18:13:05 -0600
-Subject: [PATCH 61/66] Add callback traces to diagnose tab_ready
+Subject: [PATCH 61/67] Add callback traces to diagnose tab_ready
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 8d920d6a62e5440f5bd187cfa66d79083f73f377 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 06:36:12 -0600
-Subject: [PATCH 56/66] Remove profile server dependency
+Subject: [PATCH 56/67] Remove profile server dependency
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

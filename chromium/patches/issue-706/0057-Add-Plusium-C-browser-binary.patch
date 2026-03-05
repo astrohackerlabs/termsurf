@@ -1,7 +1,7 @@
 From ff5bc4df6bccdabcf9ffaac03064054ce9cb0ca4 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 07:08:41 -0600
-Subject: [PATCH 57/66] Add Plusium C++ browser binary
+Subject: [PATCH 57/67] Add Plusium C++ browser binary
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

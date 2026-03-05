@@ -1,7 +1,7 @@
 From 5d0fa0840174900eb7aed2b57616f82f1fbcf522 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 17 Feb 2026 16:56:36 -0600
-Subject: [PATCH 16/66] Re-apply view size after navigation
+Subject: [PATCH 16/67] Re-apply view size after navigation
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

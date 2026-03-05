@@ -1,7 +1,7 @@
 From 9ff71ddc1824d74b2970780ec6ce94c35b2a7959 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 22 Feb 2026 16:28:48 -0600
-Subject: [PATCH 32/66] Strip shell window chrome (625 Exp 6)
+Subject: [PATCH 32/67] Strip shell window chrome (625 Exp 6)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

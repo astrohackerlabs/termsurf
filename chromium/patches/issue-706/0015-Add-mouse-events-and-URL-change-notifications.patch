@@ -1,7 +1,7 @@
 From 69dac5da944f53682698f10e71979dada4fc0828 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 17 Feb 2026 08:39:19 -0600
-Subject: [PATCH 15/66] Add mouse events and URL change notifications
+Subject: [PATCH 15/67] Add mouse events and URL change notifications
 
 A click set sail from Swift's domain,
 Through XPC seas to Chromium's brain.

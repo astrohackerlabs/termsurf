@@ -1,7 +1,7 @@
 From 0c141270f45cac17d7d73c73e5c049e1b72e09c4 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 14 Feb 2026 08:30:16 -0600
-Subject: [PATCH 05/66] Capture at Retina physical resolution
+Subject: [PATCH 05/67] Capture at Retina physical resolution
 
 The capturer once saw through one-x eyes,
 Blind to the Retina's doubled prize.

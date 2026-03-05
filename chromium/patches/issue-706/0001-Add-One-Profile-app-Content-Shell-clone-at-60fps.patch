@@ -1,7 +1,7 @@
 From 15de44e8226194377a344655b8f6fcf8d01afd32 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 11 Feb 2026 08:27:19 -0600
-Subject: [PATCH 01/66] Add One Profile app: Content Shell clone at 60fps
+Subject: [PATCH 01/67] Add One Profile app: Content Shell clone at 60fps
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

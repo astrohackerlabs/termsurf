@@ -1,7 +1,7 @@
 From 084a805f666c5b69c7c54f618a3a27d33621c001 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 18 Feb 2026 05:36:05 -0600
-Subject: [PATCH 20/66] Derive drag button from modifier bits
+Subject: [PATCH 20/67] Derive drag button from modifier bits
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

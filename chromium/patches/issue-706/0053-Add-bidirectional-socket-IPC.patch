@@ -1,7 +1,7 @@
 From 0896cac1b7085a9467df44217a676d982fe08280 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 3 Mar 2026 07:44:58 -0600
-Subject: [PATCH 53/66] Add bidirectional socket IPC
+Subject: [PATCH 53/67] Add bidirectional socket IPC
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

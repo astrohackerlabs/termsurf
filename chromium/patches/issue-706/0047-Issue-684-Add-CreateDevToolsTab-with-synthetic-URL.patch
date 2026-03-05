@@ -1,7 +1,7 @@
 From d99ba1a495c6bfc87bf806e099993dedeabc64fd Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 1 Mar 2026 08:09:06 -0600
-Subject: [PATCH 47/66] Issue 684: Add CreateDevToolsTab with synthetic URL
+Subject: [PATCH 47/67] Issue 684: Add CreateDevToolsTab with synthetic URL
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

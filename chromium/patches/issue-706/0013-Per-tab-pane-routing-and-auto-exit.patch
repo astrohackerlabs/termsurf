@@ -1,7 +1,7 @@
 From e0dfb696cea4d6467f99f4d78f9d19f451f8efdf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Mon, 16 Feb 2026 16:49:29 -0600
-Subject: [PATCH 13/66] Per-tab pane routing and auto-exit
+Subject: [PATCH 13/67] Per-tab pane routing and auto-exit
 
 The pane_id fled its process cage,
 Now each tab stamps its own front page.

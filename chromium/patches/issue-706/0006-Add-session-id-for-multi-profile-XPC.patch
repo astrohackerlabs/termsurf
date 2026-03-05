@@ -1,7 +1,7 @@
 From b2907d660628a3a3fcf1018a87c00b2091f8645b Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 14 Feb 2026 08:49:37 -0600
-Subject: [PATCH 06/66] Add --session-id for multi-profile XPC
+Subject: [PATCH 06/67] Add --session-id for multi-profile XPC
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

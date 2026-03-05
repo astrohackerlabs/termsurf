@@ -1,7 +1,7 @@
 From 5f04c98ee3be40305205f7f6d9daf788f5e72f03 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sun, 15 Feb 2026 05:53:49 -0600
-Subject: [PATCH 08/66] LSUIElement approach to hide Dock icon
+Subject: [PATCH 08/67] LSUIElement approach to hide Dock icon
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

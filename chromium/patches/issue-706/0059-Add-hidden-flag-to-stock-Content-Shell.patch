@@ -1,7 +1,7 @@
 From d9442c0b73acf7a893816382304080f0b2cf503b Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 08:22:40 -0600
-Subject: [PATCH 59/66] Add --hidden flag to stock Content Shell
+Subject: [PATCH 59/67] Add --hidden flag to stock Content Shell
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

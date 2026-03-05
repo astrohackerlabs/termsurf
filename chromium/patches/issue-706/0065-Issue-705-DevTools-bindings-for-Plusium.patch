@@ -1,7 +1,7 @@
 From 200061d7cd147064e2893987f48f6a84e153842c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 4 Mar 2026 19:59:42 -0600
-Subject: [PATCH 65/66] Issue 705: DevTools bindings for Plusium
+Subject: [PATCH 65/67] Issue 705: DevTools bindings for Plusium
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
