@@ -1,0 +1,39 @@
+From a357fafab667e3ae536737c131856c3d7c632877 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 15 Feb 2026 05:43:54 -0600
+Subject: [PATCH 07/65] Hide from Dock via runtime policy
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The Dock displayed our name in lights,
+A background server? Quite the sight!
+One line at runtime does the trick—
+No plist change, no DCHECK kick.
+"Accessory" whispered to NSApp,
+And vanished from the Dock like that. *snap*
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/one_profile/app/shell_main_delegate_mac.mm | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/content/one_profile/app/shell_main_delegate_mac.mm b/content/one_profile/app/shell_main_delegate_mac.mm
+index 7144c211a329e..6566f2113aabe 100644
+--- a/content/one_profile/app/shell_main_delegate_mac.mm
++++ b/content/one_profile/app/shell_main_delegate_mac.mm
+@@ -61,6 +61,11 @@ void RegisterShellCrApp() {
+   // Force the NSApplication subclass to be used.
+   [ShellCrApplication sharedApplication];
+ 
++  // Hide from Dock and menu bar. Set at runtime (not via LSUIElement in
++  // Info.plist) to avoid IsBackgroundOnlyProcess() misidentifying us as a
++  // helper process, which breaks path resolution in paths_apple.mm.
++  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
++
+   // If there was an invocation to NSApp prior to this method, then the NSApp
+   // will not be a ShellCrApplication, but will instead be an NSApplication.
+   // This is undesirable and we must enforce that this doesn't happen.
+-- 
+2.50.1 (Apple Git-155)
+

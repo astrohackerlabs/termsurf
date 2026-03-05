@@ -1,0 +1,795 @@
+From ff5bc4df6bccdabcf9ffaac03064054ce9cb0ca4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 07:08:41 -0600
+Subject: [PATCH 57/65] Add Plusium C++ browser binary
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Four hundred lines of C++ code,
+Linking libtermsurf_content's load.
+No profile server in sight—
+Just sockets, protobuf, done right.
+The old guard's crumbling abode.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ BUILD.gn                        |   1 +
+ content/plusium/BUILD.gn        |  22 ++
+ content/plusium/plusium_main.cc | 444 ++++++++++++++++++++++++++++++++
+ content/plusium/termsurf.proto  | 271 +++++++++++++++++++
+ 4 files changed, 738 insertions(+)
+ create mode 100644 content/plusium/BUILD.gn
+ create mode 100644 content/plusium/plusium_main.cc
+ create mode 100644 content/plusium/termsurf.proto
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 5b1541d23b605..72ce57c2b8de4 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -196,6 +196,7 @@ group("gn_all") {
+         "//content/browser/interest_group/tools:adjustable_auction",
+         "//content/chromium_profile_server:chromium_profile_server",
+         "//content/libtermsurf_content:libtermsurf_content",
++        "//content/plusium:plusium",
+         "//content/shell:content_shell",
+         "//content/test:content_browsertests",
+         "//content/test:content_unittests",
+diff --git a/content/plusium/BUILD.gn b/content/plusium/BUILD.gn
+new file mode 100644
+index 0000000000000..357f95a2326ce
+--- /dev/null
++++ b/content/plusium/BUILD.gn
+@@ -0,0 +1,22 @@
++# Copyright 2025 TermSurf
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//third_party/protobuf/proto_library.gni")
++
++proto_library("termsurf_proto") {
++  sources = [ "termsurf.proto" ]
++  component_build_force_source_set = true
++  cc_generator_options = "lite"
++}
++
++executable("plusium") {
++  testonly = true
++  sources = [ "plusium_main.cc" ]
++  deps = [
++    ":termsurf_proto",
++    "//content/libtermsurf_content",
++    "//content/shell:content_shell_app",
++    "//content/shell:content_shell_lib",
++  ]
++}
+diff --git a/content/plusium/plusium_main.cc b/content/plusium/plusium_main.cc
+new file mode 100644
+index 0000000000000..0c23016ffc13f
+--- /dev/null
++++ b/content/plusium/plusium_main.cc
+@@ -0,0 +1,444 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++// Plusium — a C++ browser binary that links libtermsurf_content.
++// Functionally equivalent to the Chromium Profile Server, but uses only
++// the public C API from libtermsurf_content.h.
++
++#include "content/libtermsurf_content/libtermsurf_content.h"
++#include "content/plusium/termsurf.pb.h"
++
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++// NOLINTBEGIN(runtime/arrays)
++// Plusium is a standalone binary — suppress Chromium's unsafe buffer warnings.
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
++
++#include <cstring>
++#include <string>
++#include <thread>
++#include <vector>
++
++// --- Tab registry ---
++
++struct TabEntry {
++  ts_web_contents_t handle = nullptr;
++  int tab_id = 0;
++  std::string pane_id;
++  int inspected_tab_id = 0;
++  std::string last_url;
++};
++
++// Globals use raw pointers to avoid exit-time destructors (Chromium -Werror).
++static std::vector<TabEntry>* g_tabs = nullptr;
++static int g_socket_fd = -1;
++static const char* g_profile_name = nullptr;
++static const char* g_socket_path = nullptr;
++static ts_browser_context_t g_browser_context = nullptr;
++
++// Owned strings for g_profile_name/g_socket_path (leaked intentionally).
++static char* g_profile_name_buf = nullptr;
++static char* g_socket_path_buf = nullptr;
++
++// --- Tab registry helpers ---
++
++static TabEntry* FindByHandle(ts_web_contents_t h) {
++  for (auto& t : *g_tabs) {
++    if (t.handle == h) return &t;
++  }
++  return nullptr;
++}
++
++static TabEntry* FindByTabId(int tab_id) {
++  for (auto& t : *g_tabs) {
++    if (t.tab_id == tab_id) return &t;
++  }
++  return nullptr;
++}
++
++// --- Socket I/O ---
++
++static void SendProtobuf(const termsurf::TermSurfMessage& msg) {
++  if (g_socket_fd < 0) return;
++  size_t size = msg.ByteSizeLong();
++  std::vector<uint8_t> buf(4 + size);
++  uint32_t len = static_cast<uint32_t>(size);
++  buf[0] = len & 0xFF;
++  buf[1] = (len >> 8) & 0xFF;
++  buf[2] = (len >> 16) & 0xFF;
++  buf[3] = (len >> 24) & 0xFF;
++  msg.SerializeToArray(&buf[4], size);
++  write(g_socket_fd, buf.data(), buf.size());
++}
++
++// Forward declaration for dispatch.
++void HandleMessage(termsurf::TermSurfMessage* msg);
++
++static void SocketReaderLoop() {
++  uint8_t buf[65536];
++  size_t buf_len = 0;
++
++  while (true) {
++    ssize_t n = read(g_socket_fd, buf + buf_len, sizeof(buf) - buf_len);
++    if (n <= 0) break;
++    buf_len += n;
++
++    while (buf_len >= 4) {
++      uint32_t msg_len = buf[0] | (buf[1] << 8) |
++                          (buf[2] << 16) | (buf[3] << 24);
++      if (buf_len < 4 + msg_len) break;
++
++      auto* msg = new termsurf::TermSurfMessage();
++      if (!msg->ParseFromArray(buf + 4, msg_len)) {
++        delete msg;
++        break;
++      }
++
++      ts_post_task([](void* data) {
++        auto* m = static_cast<termsurf::TermSurfMessage*>(data);
++        HandleMessage(m);
++        delete m;
++      }, msg);
++
++      size_t consumed = 4 + msg_len;
++      if (consumed < buf_len)
++        memmove(buf, buf + consumed, buf_len - consumed);
++      buf_len -= consumed;
++    }
++  }
++}
++
++// --- String-to-int mappings ---
++
++static int MouseTypeFromString(const std::string& s) {
++  if (s == "down") return 0;
++  if (s == "up") return 1;
++  return 0;
++}
++
++static int MouseButtonFromString(const std::string& s) {
++  if (s == "left") return 0;
++  if (s == "right") return 1;
++  if (s == "middle") return 2;
++  return 0;
++}
++
++static int KeyTypeFromString(const std::string& s) {
++  if (s == "down") return 0;
++  if (s == "up") return 1;
++  if (s == "repeat") return 2;
++  return 0;
++}
++
++// --- Message dispatch (called on UI thread via ts_post_task) ---
++
++void HandleMessage(termsurf::TermSurfMessage* msg) {
++  switch (msg->msg_case()) {
++    case termsurf::TermSurfMessage::kCreateTab: {
++      auto& m = msg->create_tab();
++      TabEntry entry;
++      entry.pane_id = m.pane_id();
++      entry.handle = ts_create_web_contents(
++          g_browser_context,
++          m.url().c_str(),
++          static_cast<int>(m.pixel_width()),
++          static_cast<int>(m.pixel_height()),
++          m.dark());
++      g_tabs->push_back(std::move(entry));
++      break;
++    }
++    case termsurf::TermSurfMessage::kCreateDevtoolsTab: {
++      auto& m = msg->create_devtools_tab();
++      TabEntry* inspected = FindByTabId(m.inspected_tab_id());
++      if (!inspected) break;
++      TabEntry entry;
++      entry.pane_id = m.pane_id();
++      entry.inspected_tab_id = m.inspected_tab_id();
++      entry.handle = ts_create_devtools_web_contents(
++          g_browser_context, inspected->handle,
++          static_cast<int>(m.pixel_width()),
++          static_cast<int>(m.pixel_height()),
++          m.dark());
++      g_tabs->push_back(std::move(entry));
++      break;
++    }
++    case termsurf::TermSurfMessage::kResize: {
++      auto& m = msg->resize();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) {
++        ts_set_view_size(t->handle,
++                         static_cast<int>(m.pixel_width()),
++                         static_cast<int>(m.pixel_height()));
++      }
++      break;
++    }
++    case termsurf::TermSurfMessage::kCloseTab: {
++      int tab_id = msg->close_tab().tab_id();
++      TabEntry* t = FindByTabId(tab_id);
++      if (t) {
++        ts_destroy_web_contents(t->handle);
++        for (auto it = g_tabs->begin(); it != g_tabs->end(); ++it) {
++          if (it->tab_id == tab_id) {
++            g_tabs->erase(it);
++            break;
++          }
++        }
++        if (g_tabs->empty()) {
++          ts_quit();
++        }
++      }
++      break;
++    }
++    case termsurf::TermSurfMessage::kNavigate: {
++      auto& m = msg->navigate();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) ts_load_url(t->handle, m.url().c_str());
++      break;
++    }
++    case termsurf::TermSurfMessage::kMouseEvent: {
++      auto& m = msg->mouse_event();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) {
++        ts_forward_mouse_event(
++            t->handle,
++            MouseTypeFromString(m.type()),
++            MouseButtonFromString(m.button()),
++            static_cast<int>(m.x()),
++            static_cast<int>(m.y()),
++            static_cast<int>(m.click_count()),
++            static_cast<int>(m.modifiers()));
++      }
++      break;
++    }
++    case termsurf::TermSurfMessage::kMouseMove: {
++      auto& m = msg->mouse_move();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) {
++        ts_forward_mouse_move(
++            t->handle,
++            static_cast<int>(m.x()),
++            static_cast<int>(m.y()),
++            static_cast<int>(m.modifiers()));
++      }
++      break;
++    }
++    case termsurf::TermSurfMessage::kScrollEvent: {
++      auto& m = msg->scroll_event();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) {
++        ts_forward_scroll_event(
++            t->handle,
++            static_cast<int>(m.x()),
++            static_cast<int>(m.y()),
++            static_cast<float>(m.delta_x()),
++            static_cast<float>(m.delta_y()),
++            static_cast<int>(m.phase()),
++            static_cast<int>(m.momentum_phase()),
++            m.precise(),
++            static_cast<int>(m.modifiers()));
++      }
++      break;
++    }
++    case termsurf::TermSurfMessage::kKeyEvent: {
++      auto& m = msg->key_event();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) {
++        ts_forward_key_event(
++            t->handle,
++            KeyTypeFromString(m.type()),
++            static_cast<int>(m.windows_key_code()),
++            m.utf8().c_str(),
++            static_cast<int>(m.modifiers()));
++      }
++      break;
++    }
++    case termsurf::TermSurfMessage::kFocusChanged: {
++      auto& m = msg->focus_changed();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) ts_set_focus(t->handle, m.focused());
++      break;
++    }
++    case termsurf::TermSurfMessage::kSetColorScheme: {
++      auto& m = msg->set_color_scheme();
++      TabEntry* t = FindByTabId(m.tab_id());
++      if (t) ts_set_color_scheme(t->handle, m.dark());
++      break;
++    }
++    case termsurf::TermSurfMessage::kQueryTabsRequest: {
++      int64_t browser_count = 0;
++      int64_t devtools_count = 0;
++      for (auto& t : *g_tabs) {
++        if (t.inspected_tab_id > 0)
++          devtools_count++;
++        else
++          browser_count++;
++      }
++      termsurf::TermSurfMessage reply_msg;
++      auto* reply = reply_msg.mutable_query_tabs_reply();
++      reply->set_chromium_tabs(static_cast<int64_t>(g_tabs->size()));
++      reply->set_chromium_browser(browser_count);
++      reply->set_chromium_devtools(devtools_count);
++      for (auto& t : *g_tabs) {
++        auto* ti = reply->add_tabs();
++        ti->set_id(t.tab_id);
++        ti->set_inspected_tab_id(t.inspected_tab_id);
++        ti->set_pane_id(t.pane_id);
++        ti->set_url(t.last_url);
++      }
++      SendProtobuf(reply_msg);
++      break;
++    }
++    default:
++      break;
++  }
++}
++
++// --- C API callbacks ---
++
++static void OnInitialized(void*) {
++  // Create the browser context (uses --user-data-dir internally).
++  g_browser_context = ts_create_browser_context(nullptr);
++
++  // Connect to GUI's Unix socket.
++  if (!g_socket_path) return;
++  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
++  if (fd < 0) return;
++
++  struct sockaddr_un addr = {};
++  addr.sun_family = AF_UNIX;
++  strncpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path) - 1);
++
++  if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
++              sizeof(addr)) < 0) {
++    close(fd);
++    return;
++  }
++  g_socket_fd = fd;
++
++  // Send ServerRegister.
++  termsurf::TermSurfMessage reg_msg;
++  reg_msg.mutable_server_register()->set_profile(
++      g_profile_name ? g_profile_name : "");
++  SendProtobuf(reg_msg);
++
++  // Start reader on a detached thread.
++  std::thread reader(SocketReaderLoop);
++  reader.detach();
++}
++
++static void OnTabReady(ts_web_contents_t wc, int tab_id, void*) {
++  TabEntry* t = FindByHandle(wc);
++  if (!t) return;
++  t->tab_id = tab_id;
++
++  termsurf::TermSurfMessage msg;
++  auto* m = msg.mutable_tab_ready();
++  m->set_pane_id(t->pane_id);
++  m->set_tab_id(tab_id);
++  SendProtobuf(msg);
++}
++
++static void OnCaContextId(ts_web_contents_t wc, uint32_t ca_context_id,
++                           int width, int height, void*) {
++  TabEntry* t = FindByHandle(wc);
++  if (!t) return;
++
++  termsurf::TermSurfMessage msg;
++  auto* m = msg.mutable_ca_context();
++  m->set_tab_id(t->tab_id);
++  m->set_ca_context_id(ca_context_id);
++  m->set_pixel_width(width);
++  m->set_pixel_height(height);
++  SendProtobuf(msg);
++}
++
++static void OnUrlChanged(ts_web_contents_t wc, const char* url, void*) {
++  TabEntry* t = FindByHandle(wc);
++  if (!t) return;
++  t->last_url = url;
++
++  termsurf::TermSurfMessage msg;
++  auto* m = msg.mutable_url_changed();
++  m->set_tab_id(t->tab_id);
++  m->set_url(url);
++  SendProtobuf(msg);
++}
++
++static void OnLoadingState(ts_web_contents_t wc, const char* state,
++                            int progress, void*) {
++  TabEntry* t = FindByHandle(wc);
++  if (!t) return;
++
++  termsurf::TermSurfMessage msg;
++  auto* m = msg.mutable_loading_state();
++  m->set_tab_id(t->tab_id);
++  m->set_state(state);
++  m->set_progress(progress);
++  SendProtobuf(msg);
++}
++
++static void OnTitleChanged(ts_web_contents_t wc, const char* title, void*) {
++  TabEntry* t = FindByHandle(wc);
++  if (!t) return;
++
++  termsurf::TermSurfMessage msg;
++  auto* m = msg.mutable_title_changed();
++  m->set_tab_id(t->tab_id);
++  m->set_title(title);
++  SendProtobuf(msg);
++}
++
++static void OnCursorChanged(ts_web_contents_t wc, int cursor_type, void*) {
++  TabEntry* t = FindByHandle(wc);
++  if (!t) return;
++
++  termsurf::TermSurfMessage msg;
++  auto* m = msg.mutable_cursor_changed();
++  m->set_tab_id(t->tab_id);
++  m->set_cursor_type(cursor_type);
++  SendProtobuf(msg);
++}
++
++// --- main ---
++
++int main(int argc, const char** argv) {
++  // Allocate tab registry (leaked — avoids exit-time destructor).
++  g_tabs = new std::vector<TabEntry>();
++
++  // Parse --ipc-socket and --user-data-dir from argv.
++  for (int i = 1; i < argc; i++) {
++    std::string arg(argv[i]);
++    if (arg.rfind("--ipc-socket=", 0) == 0) {
++      std::string val = arg.substr(13);
++      g_socket_path_buf = new char[val.size() + 1];
++      memcpy(g_socket_path_buf, val.c_str(), val.size() + 1);
++      g_socket_path = g_socket_path_buf;
++    } else if (arg.rfind("--user-data-dir=", 0) == 0) {
++      std::string path = arg.substr(16);
++      // Extract basename as profile name.
++      size_t pos = path.rfind('/');
++      std::string name = (pos != std::string::npos)
++                              ? path.substr(pos + 1)
++                              : path;
++      g_profile_name_buf = new char[name.size() + 1];
++      memcpy(g_profile_name_buf, name.c_str(), name.size() + 1);
++      g_profile_name = g_profile_name_buf;
++    }
++  }
++
++  // Register all callbacks.
++  ts_set_on_initialized(OnInitialized, nullptr);
++  ts_set_on_tab_ready(OnTabReady, nullptr);
++  ts_set_on_ca_context_id(OnCaContextId, nullptr);
++  ts_set_on_url_changed(OnUrlChanged, nullptr);
++  ts_set_on_loading_state(OnLoadingState, nullptr);
++  ts_set_on_title_changed(OnTitleChanged, nullptr);
++  ts_set_on_cursor_changed(OnCursorChanged, nullptr);
++
++  // Enter Chromium's message loop (blocks until shutdown).
++  return ts_content_main(argc, argv);
++}
+diff --git a/content/plusium/termsurf.proto b/content/plusium/termsurf.proto
+new file mode 100644
+index 0000000000000..9c676fc73542f
+--- /dev/null
++++ b/content/plusium/termsurf.proto
+@@ -0,0 +1,271 @@
++syntax = "proto3";
++package termsurf;
++
++// Wrapper — every message on the wire is one of these.
++message TermSurfMessage {
++  oneof msg {
++    // Tab lifecycle (GUI → Chromium)
++    CreateTab create_tab = 1;
++    CreateDevtoolsTab create_devtools_tab = 2;
++    Resize resize = 3;
++    CloseTab close_tab = 4;
++
++    // Navigation (GUI → Chromium, TUI → GUI)
++    Navigate navigate = 5;
++
++    // Input (GUI → Chromium)
++    MouseEvent mouse_event = 6;
++    MouseMove mouse_move = 7;
++    ScrollEvent scroll_event = 8;
++    KeyEvent key_event = 9;
++
++    // State (GUI → Chromium)
++    FocusChanged focus_changed = 10;
++    SetColorScheme set_color_scheme = 11;
++
++    // Chromium → GUI
++    ServerRegister server_register = 12;
++    TabReady tab_ready = 13;
++    CaContext ca_context = 14;
++    UrlChanged url_changed = 15;
++    LoadingState loading_state = 16;
++    TitleChanged title_changed = 17;
++    CursorChanged cursor_changed = 18;
++
++    // TUI → GUI
++    SetOverlay set_overlay = 19;
++    SetDevtoolsOverlay set_devtools_overlay = 20;
++    OpenSplit open_split = 21;
++
++    // GUI → TUI
++    ModeChanged mode_changed = 22;
++
++    // Request/reply pairs (TUI ↔ GUI)
++    HelloRequest hello_request = 23;
++    HelloReply hello_reply = 24;
++    QueryLastRequest query_last_request = 25;
++    QueryLastReply query_last_reply = 26;
++    QueryDevtoolsRequest query_devtools_request = 27;
++    QueryDevtoolsReply query_devtools_reply = 28;
++    QueryTabsRequest query_tabs_request = 29;
++    QueryTabsReply query_tabs_reply = 30;
++  }
++}
++
++// --- Tab lifecycle ---
++
++message CreateTab {
++  string url = 1;
++  string pane_id = 2;
++  uint64 pixel_width = 3;
++  uint64 pixel_height = 4;
++  bool dark = 5;
++}
++
++message CreateDevtoolsTab {
++  string pane_id = 1;
++  int64 inspected_tab_id = 2;
++  uint64 pixel_width = 3;
++  uint64 pixel_height = 4;
++  bool dark = 5;
++}
++
++message Resize {
++  int64 tab_id = 1;
++  uint64 pixel_width = 2;
++  uint64 pixel_height = 3;
++}
++
++message CloseTab {
++  int64 tab_id = 1;
++}
++
++// --- Navigation ---
++
++message Navigate {
++  int64 tab_id = 1;      // nonzero when GUI → Chromium
++  string pane_id = 2;    // nonempty when TUI → GUI
++  string url = 3;
++}
++
++// --- Input ---
++
++message MouseEvent {
++  int64 tab_id = 1;
++  string type = 2;       // "down" or "up"
++  string button = 3;     // "left", "right", "middle"
++  double x = 4;
++  double y = 5;
++  int64 click_count = 6;
++  uint64 modifiers = 7;
++}
++
++message MouseMove {
++  int64 tab_id = 1;
++  double x = 2;
++  double y = 3;
++  uint64 modifiers = 4;
++}
++
++message ScrollEvent {
++  int64 tab_id = 1;
++  double x = 2;
++  double y = 3;
++  double delta_x = 4;
++  double delta_y = 5;
++  uint64 phase = 6;
++  uint64 momentum_phase = 7;
++  bool precise = 8;
++  uint64 modifiers = 9;
++}
++
++message KeyEvent {
++  int64 tab_id = 1;
++  string type = 2;       // "down", "up", "repeat"
++  int64 windows_key_code = 3;
++  string utf8 = 4;
++  uint64 modifiers = 5;
++}
++
++// --- State ---
++
++message FocusChanged {
++  int64 tab_id = 1;
++  bool focused = 2;
++}
++
++message SetColorScheme {
++  int64 tab_id = 1;      // nonzero when GUI → Chromium
++  string pane_id = 2;    // nonempty when TUI → GUI
++  bool dark = 3;
++}
++
++// --- Chromium → GUI ---
++
++message ServerRegister {
++  string profile = 1;
++}
++
++message TabReady {
++  string pane_id = 1;
++  int64 tab_id = 2;
++}
++
++message CaContext {
++  int64 tab_id = 1;
++  uint64 ca_context_id = 2;
++  uint64 pixel_width = 3;
++  uint64 pixel_height = 4;
++}
++
++message UrlChanged {
++  int64 tab_id = 1;
++  string url = 2;
++}
++
++message LoadingState {
++  int64 tab_id = 1;
++  string state = 2;      // "loading", "progress", "done", "error"
++  uint64 progress = 3;   // 0-100
++}
++
++message TitleChanged {
++  int64 tab_id = 1;
++  string title = 2;
++}
++
++message CursorChanged {
++  int64 tab_id = 1;
++  int64 cursor_type = 2;
++}
++
++// --- TUI → GUI ---
++
++message SetOverlay {
++  string pane_id = 1;
++  uint64 col = 2;
++  uint64 row = 3;
++  uint64 width = 4;
++  uint64 height = 5;
++  string url = 6;
++  string profile = 7;
++  bool browsing = 8;
++}
++
++message SetDevtoolsOverlay {
++  string pane_id = 1;
++  uint64 col = 2;
++  uint64 row = 3;
++  uint64 width = 4;
++  uint64 height = 5;
++  string profile = 6;
++  bool browsing = 7;
++  int64 inspected_tab_id = 8;
++}
++
++message OpenSplit {
++  string pane_id = 1;
++  string direction = 2;  // "horizontal" or "vertical"
++  string command = 3;
++}
++
++// --- GUI → TUI ---
++
++message ModeChanged {
++  bool browsing = 1;
++  string pane_id = 2;    // nonempty when TUI → GUI
++}
++
++// --- Request/reply pairs ---
++
++message HelloRequest {
++  string pane_id = 1;
++}
++
++message HelloReply {
++  string homepage = 1;
++}
++
++message QueryLastRequest {
++  string pane_id = 1;
++  string profile = 2;
++}
++
++message QueryLastReply {
++  string pane_id = 1;
++  int64 tab_id = 2;
++  string profile = 3;
++  string error = 4;
++}
++
++message QueryDevtoolsRequest {
++  string pane_id = 1;
++  int64 inspected_tab_id = 2;
++  string profile = 3;
++}
++
++message QueryDevtoolsReply {
++  int64 tab_id = 1;
++  string error = 2;
++}
++
++message QueryTabsRequest {
++  string pane_id = 1;
++  string profile = 2;
++}
++
++message TabInfo {
++  int64 id = 1;
++  int64 inspected_tab_id = 2;
++  string pane_id = 3;
++  string url = 4;
++}
++
++message QueryTabsReply {
++  int64 gui_panes = 1;
++  int64 chromium_tabs = 2;
++  int64 chromium_browser = 3;
++  int64 chromium_devtools = 4;
++  repeated TabInfo tabs = 5;
++  string error = 6;
++}
+-- 
+2.50.1 (Apple Git-155)
+

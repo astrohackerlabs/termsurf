@@ -1,0 +1,439 @@
+From d99ba1a495c6bfc87bf806e099993dedeabc64fd Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 1 Mar 2026 08:09:06 -0600
+Subject: [PATCH 47/65] Issue 684: Add CreateDevToolsTab with synthetic URL
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A new XPC command arrives in town,
+"create_devtools_tab" — please sit down.
+No GURL parsing tricks,
+Just integers that fix,
+The bug that once brought DevTools crashing down.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 296 ++++++++++++++----
+ .../browser/shell_browser_main_parts.h        |   4 +
+ .../browser/shell_tab_observer.cc             |  14 +-
+ .../browser/shell_tab_observer.h              |   2 +
+ 4 files changed, 260 insertions(+), 56 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index d698140f1307f..9c1f76ce1ef6c 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -311,6 +311,18 @@ void ShellBrowserMainParts::StartDynamicMode(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::NavigateTab,
+                            base::Unretained(self), s_pane, GURL(s_url)));
++      } else if (action && std::string_view(action) == "create_devtools_tab") {
++        const char* pane_id_str = xpc_dictionary_get_string(event, "pane_id");
++        std::string pane_id(pane_id_str ? pane_id_str : "");
++        int inspected_tab_id = (int)xpc_dictionary_get_int64(event, "inspected_tab_id");
++        int pw = (int)xpc_dictionary_get_uint64(event, "pixel_width");
++        int ph = (int)xpc_dictionary_get_uint64(event, "pixel_height");
++        bool dark = xpc_dictionary_get_bool(event, "dark");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::CreateDevToolsTab,
++                           base::Unretained(self), pane_id,
++                           inspected_tab_id, pw, ph, dark));
+       } else if (action && std::string_view(action) == "set_color_scheme") {
+         const char* pane = xpc_dictionary_get_string(event, "pane_id");
+         bool dark = xpc_dictionary_get_bool(event, "dark");
+@@ -359,49 +371,11 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+                                       bool dark) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+-  // Check for devtools:// URL (Issue 684).
+-  // GURL doesn't recognize "devtools" as a standard scheme, so SchemeIs()
+-  // and host() won't work. Parse from the raw spec string instead.
+-  bool is_devtools = false;
+-  int inspected_tab_id = 0;
+-  WebContents* inspected_contents = nullptr;
+-  {
+-    std::string spec = url.spec();
+-    const std::string prefix = "devtools://";
+-    if (spec.substr(0, prefix.size()) == prefix) {
+-      is_devtools = true;
+-      base::StringToInt(spec.substr(prefix.size()), &inspected_tab_id);
+-    }
+-  }
+-
+-  if (is_devtools) {
+-    for (auto& t : tabs_) {
+-      if (t->tab_id == inspected_tab_id && t->tab_id != 0) {
+-        inspected_contents = t->shell->web_contents();
+-        break;
+-      }
+-    }
+-    if (!inspected_contents) {
+-      LOG(ERROR) << "[ProfileServer] DevTools: tab " << inspected_tab_id
+-                 << " not found";
+-      return;
+-    }
+-    LOG(INFO) << "[ProfileServer] DevTools: inspecting tab "
+-              << inspected_tab_id << " for pane " << pane_id;
+-  }
+-
+-  // DevTools loads the frontend URL instead of the user's URL.
+-  GURL load_url = is_devtools
+-      ? GURL(base::StringPrintf(
+-            "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
+-            ShellDevToolsManagerDelegate::GetHttpHandlerPort()))
+-      : url;
+-
+   // Create a new Shell + WebContents.
+-  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), load_url,
++  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), url,
+                                         nullptr, gfx::Size());
+   LOG(INFO) << "[ProfileServer] Created tab for pane " << pane_id
+-            << ", URL: " << load_url.spec();
++            << ", URL: " << url.spec();
+ 
+   // Resize via Shell::ResizeWebContentForTests which sets the hidden
+   // NSWindow's contentView.frame (Issue 630, fix C4). This ensures
+@@ -593,30 +567,242 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   // Store parent ui layer on observer for re-registration (Issue 635).
+   tab_observer->SetParentUiLayer(tab->root_layer.get());
+ 
+-  // Wire up DevTools bindings if this is a devtools:// tab (Issue 684).
+-  // ShellDevToolsFrontend observes the DevTools WebContents and calls
+-  // Attach() when the DOM loads, connecting the Mojo protocol pipes.
+-  if (is_devtools && inspected_contents) {
+-    new ShellDevToolsFrontend(shell, inspected_contents);
+-    LOG(INFO) << "[ProfileServer] DevTools bindings created for tab "
+-              << inspected_tab_id;
++  // Assign auto-incrementing tab ID (Issue 684).
++  tab->tab_id = next_tab_id_++;
++  LOG(INFO) << "[ProfileServer] Assigned tab_id=" << tab->tab_id
++            << " to pane " << pane_id;
++
++  // Store remaining tab state.
++  tab->tab_observer = std::move(tab_observer);
++  tab->tab_connection = tab_conn;
++  tabs_.push_back(std::move(tab));
++
++  LOG(INFO) << "[ProfileServer] Tab for pane " << pane_id << " ready, "
++            << tabs_.size() << " tab(s) active";
++}
++
++void ShellBrowserMainParts::CreateDevToolsTab(
++    const std::string& pane_id,
++    int inspected_tab_id,
++    int pixel_width,
++    int pixel_height,
++    bool dark) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  // Find the inspected tab by tab_id.
++  WebContents* inspected_contents = nullptr;
++  for (auto& t : tabs_) {
++    if (t->tab_id == inspected_tab_id && t->tab_id != 0) {
++      inspected_contents = t->shell->web_contents();
++      break;
++    }
++  }
++  if (!inspected_contents) {
++    LOG(ERROR) << "[ProfileServer] DevTools: tab " << inspected_tab_id
++               << " not found";
++    return;
++  }
++
++  LOG(INFO) << "[ProfileServer] Creating DevTools for tab "
++            << inspected_tab_id << " in pane " << pane_id;
++
++  // Construct the DevTools frontend URL internally.
++  GURL devtools_url(base::StringPrintf(
++      "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
++      ShellDevToolsManagerDelegate::GetHttpHandlerPort()));
++
++  // Create a new Shell + WebContents with the DevTools frontend URL.
++  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), devtools_url,
++                                        nullptr, gfx::Size());
++  LOG(INFO) << "[ProfileServer] Created DevTools shell for pane " << pane_id
++            << ", URL: " << devtools_url.spec();
++
++  // Resize.
++  if (pixel_width > 0 && pixel_height > 0) {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size logical(
++          static_cast<int>(std::ceil(pixel_width / scale)),
++          static_cast<int>(std::ceil(pixel_height / scale)));
++      shell->ResizeWebContentForTests(logical);
++    }
++  }
++
++  // Create per-tab persistent compositor (same as CreateTab).
++  auto tab = std::make_unique<TabState>();
++  tab->shell = shell;
++  tab->pane_id = pane_id;
++  tab->inspected_tab_id = inspected_tab_id;
++  tab->preferred_color_scheme = dark
++      ? blink::mojom::PreferredColorScheme::kDark
++      : blink::mojom::PreferredColorScheme::kLight;
++
++  tab->widget_mac = std::make_unique<ui::AcceleratedWidgetMac>();
++  ui::ContextFactory* context_factory = content::GetContextFactory();
++  tab->compositor = std::make_unique<ui::Compositor>(
++      context_factory->AllocateFrameSinkId(),
++      context_factory,
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      false /* enable_pixel_canvas */);
++  tab->compositor->SetAcceleratedWidget(
++      tab->widget_mac->accelerated_widget());
++
++  tab->root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
++  tab->root_layer->SetColor(SK_ColorTRANSPARENT);
++
++  // Set initial size.
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size size_pixels(pixel_width, pixel_height);
++      gfx::Size size_dip(
++          static_cast<int>(std::ceil(pixel_width / scale)),
++          static_cast<int>(std::ceil(pixel_height / scale)));
++      tab->root_layer->SetBounds(gfx::Rect(size_dip));
++      viz::LocalSurfaceId local_surface_id =
++          viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++      tab->compositor->SetScaleAndSize(
++          scale, size_pixels, local_surface_id);
++    }
++  }
++
++  tab->compositor->SetRootLayer(tab->root_layer.get());
++  tab->compositor->SetVisible(true);
++
++  // Register bridge.
++  tab->bridge = std::make_unique<PersistentCompositorBridge>(
++      tab->widget_mac.get());
++
++  // Set parent_ui_layer_ on the view.
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      SetParentUiLayerOnView(view, tab->root_layer.get());
++    }
+   }
+ 
+-  // Assign auto-incrementing tab ID for browser tabs only (Issue 684).
+-  // DevTools tabs get tab_id=0 (no ID).
+-  if (!is_devtools) {
+-    tab->tab_id = next_tab_id_++;
+-    LOG(INFO) << "[ProfileServer] Assigned tab_id=" << tab->tab_id
+-              << " to pane " << pane_id;
++  // Create ShellTabObserver.
++  auto tab_observer = std::make_unique<ShellTabObserver>();
++  tab_observer->SetPaneId(pane_id);
++  tab_observer->SetInspectedTabId(inspected_tab_id);
++
++  // Open a new connection to the app for this tab.
++  xpc_connection_t tab_conn = xpc_connection_create_from_endpoint(app_endpoint_);
++
++  ShellBrowserMainParts* self = this;
++
++  xpc_connection_set_event_handler(tab_conn, ^(xpc_object_t event) {
++    if (xpc_get_type(event) == XPC_TYPE_ERROR) {
++      if (event == XPC_ERROR_CONNECTION_INVALID ||
++          event == XPC_ERROR_CONNECTION_INTERRUPTED) {
++        xpc_connection_t conn = tab_conn;
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::CloseTab,
++                           base::Unretained(self), conn));
++      }
++    }
++  });
++
++  xpc_connection_resume(tab_conn);
++
++  // Send tab_ready message.
++  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(msg, "action", "tab_ready");
++  xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++  xpc_connection_send_message(tab_conn, msg);
++  xpc_release(msg);
++
++  // Hand the connection to the observer and start observing.
++  tab_observer->SetConnection(tab_conn);
++  tab_observer->ObserveContents(shell->web_contents());
++
++  // Register cursor change and CALayerParams callbacks.
++  if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
++    auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++        view->GetRenderWidgetHost());
++    rwhi->SetCursorChangedCallback(base::BindRepeating(
++        &ShellTabObserver::OnCursorChanged,
++        base::Unretained(tab_observer.get())));
++
++    std::string cb_pane_id = pane_id;
++    xpc_connection_t cb_conn = tab_conn;
++    auto* last_id = new uint32_t(0);
++    auto ca_layer_callback = base::BindRepeating(
++        [](const std::string& pane_id, xpc_connection_t conn,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++          xpc_dictionary_set_string(msg, "action", "ca_context");
++          xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                    params.ca_context_id);
++          xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++          xpc_dictionary_set_uint64(msg, "pixel_width",
++                                    params.pixel_size.width());
++          xpc_dictionary_set_uint64(msg, "pixel_height",
++                                    params.pixel_size.height());
++          xpc_connection_send_message(conn, msg);
++          xpc_release(msg);
++          LOG(INFO) << "[ProfileServer] DevTools ca_context_id="
++                    << params.ca_context_id << " for pane " << pane_id;
++        },
++        cb_pane_id, cb_conn,
++        base::Owned(last_id));
++    SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++
++    tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++    tab_observer->SetLastCAContextIdPtr(last_id);
++
++    tab->bridge->SetCallback(base::BindRepeating(
++        [](const std::string& pane_id, xpc_connection_t conn,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++          xpc_dictionary_set_string(msg, "action", "ca_context");
++          xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                    params.ca_context_id);
++          xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++          xpc_dictionary_set_uint64(msg, "pixel_width",
++                                    params.pixel_size.width());
++          xpc_dictionary_set_uint64(msg, "pixel_height",
++                                    params.pixel_size.height());
++          xpc_connection_send_message(conn, msg);
++          xpc_release(msg);
++          LOG(INFO) << "[ProfileServer] DevTools tab compositor ca_context_id="
++                    << params.ca_context_id << " for pane " << pane_id;
++        },
++        cb_pane_id, cb_conn,
++        base::Unretained(last_id)));
+   }
+ 
++  // Store parent ui layer on observer.
++  tab_observer->SetParentUiLayer(tab->root_layer.get());
++
++  // Wire up DevTools bindings (Issue 684).
++  // ShellDevToolsFrontend observes the DevTools WebContents and calls
++  // Attach() when the DOM loads, connecting the Mojo protocol pipes.
++  new ShellDevToolsFrontend(shell, inspected_contents);
++  LOG(INFO) << "[ProfileServer] DevTools bindings created for tab "
++            << inspected_tab_id;
++
++  // DevTools tabs don't get an auto-incrementing tab ID (stays 0).
++
+   // Store remaining tab state.
+   tab->tab_observer = std::move(tab_observer);
+   tab->tab_connection = tab_conn;
+   tabs_.push_back(std::move(tab));
+ 
+-  LOG(INFO) << "[ProfileServer] Tab for pane " << pane_id << " ready, "
+-            << tabs_.size() << " tab(s) active";
++  LOG(INFO) << "[ProfileServer] DevTools tab for pane " << pane_id
++            << " ready, " << tabs_.size() << " tab(s) active";
+ }
+ 
+ void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index d60f75431c4e1..e8d828b4eded0 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -107,6 +107,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+     TabState();
+     ~TabState();
+     int tab_id = 0;  // Auto-incrementing, 1-based. 0 = DevTools tab.
++    int inspected_tab_id = 0;  // Nonzero = DevTools tab inspecting this ID.
+     raw_ptr<Shell> shell;
+     std::unique_ptr<ShellTabObserver> tab_observer;
+     blink::mojom::PreferredColorScheme preferred_color_scheme =
+@@ -148,6 +149,9 @@ class ShellBrowserMainParts : public BrowserMainParts {
+                       int windows_key_code, const std::string& utf8_text,
+                       uint64_t modifiers);
+   void NavigateTab(const std::string& pane_id, const GURL& url);
++  void CreateDevToolsTab(const std::string& pane_id,
++                         int inspected_tab_id,
++                         int pixel_width, int pixel_height, bool dark);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.cc b/content/chromium_profile_server/browser/shell_tab_observer.cc
+index de2eb2681e546..115bb8b44e8e7 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.cc
++++ b/content/chromium_profile_server/browser/shell_tab_observer.cc
+@@ -7,6 +7,7 @@
+ #include <cmath>
+ 
+ #include "base/logging.h"
++#include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/render_frame_host.h"
+@@ -36,6 +37,10 @@ void ShellTabObserver::SetPaneId(const std::string& pane_id) {
+   pane_id_ = pane_id;
+ }
+ 
++void ShellTabObserver::SetInspectedTabId(int id) {
++  inspected_tab_id_ = id;
++}
++
+ void ShellTabObserver::OnCursorChanged(const ui::Cursor& cursor) {
+   if (!xpc_connection_)
+     return;
+@@ -112,7 +117,14 @@ void ShellTabObserver::DidFinishNavigation(
+   if (!xpc_connection_)
+     return;
+ 
+-  const std::string& url = navigation_handle->GetURL().spec();
++  // For DevTools tabs, send the synthetic devtools://N URL instead of the
++  // internal HTTP URL (Issue 684).
++  std::string url;
++  if (inspected_tab_id_ > 0) {
++    url = base::StringPrintf("devtools://%d", inspected_tab_id_);
++  } else {
++    url = navigation_handle->GetURL().spec();
++  }
+ 
+   LOG(INFO) << "[ShellTabObserver] Navigation committed:"
+             << " url=" << url
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.h b/content/chromium_profile_server/browser/shell_tab_observer.h
+index 9908de4527d46..76b339fde58c9 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.h
++++ b/content/chromium_profile_server/browser/shell_tab_observer.h
+@@ -55,6 +55,7 @@ class ShellTabObserver : public WebContentsObserver {
+ 
+   void SetConnection(xpc_connection_t conn);
+   void SetPaneId(const std::string& pane_id);
++  void SetInspectedTabId(int id);
+   void OnCursorChanged(const ui::Cursor& cursor);
+ 
+   // Store the CALayerParams callback for re-registration (Issue 630, C2).
+@@ -75,6 +76,7 @@ class ShellTabObserver : public WebContentsObserver {
+ 
+   xpc_connection_t xpc_connection_ = nullptr;
+   std::string pane_id_;
++  int inspected_tab_id_ = 0;  // Nonzero = DevTools tab; send synthetic URL.
+   CALayerParamsCallback ca_layer_params_callback_;
+   raw_ptr<uint32_t> last_ca_context_id_ = nullptr;  // non-owning, owned by callback
+   raw_ptr<ui::Layer> parent_ui_layer_ = nullptr;  // persistent compositor root layer (Issue 633)
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,139 @@
+From 6fde46ac3c73185a799cc06c113273ef0df8d99c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 18:36:30 -0600
+Subject: [PATCH 63/65] Fix dark mode in Plusium
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The preferences were set but never read,
+Light mode ruled, ignoring what we said.
+Override the base class call,
+Now dark mode works for all—
+Each tab's color scheme is properly fed.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../libtermsurf_content/ts_browser_client.cc  | 21 +++++++++++++++++++
+ .../libtermsurf_content/ts_browser_client.h   |  4 ++++
+ .../ts_browser_main_parts.cc                  | 12 +++++++++++
+ .../ts_browser_main_parts.h                   |  7 +++++++
+ 4 files changed, 44 insertions(+)
+
+diff --git a/content/libtermsurf_content/ts_browser_client.cc b/content/libtermsurf_content/ts_browser_client.cc
+index f80d20fa3ec67..ee6f3dc148a5e 100644
+--- a/content/libtermsurf_content/ts_browser_client.cc
++++ b/content/libtermsurf_content/ts_browser_client.cc
+@@ -6,6 +6,10 @@
+ 
+ #include "content/libtermsurf_content/ts_browser_main_parts.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/site_instance.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/web_preferences/web_preferences.h"
++#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
+@@ -60,4 +64,21 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+       base::Unretained(this)));
+ }
+ 
++void TsBrowserClient::OverrideWebPreferences(
++    WebContents* web_contents,
++    SiteInstance& main_frame_site,
++    blink::web_pref::WebPreferences* prefs) {
++  auto* main_parts = static_cast<TsBrowserMainParts*>(
++      shell_browser_main_parts());
++  if (main_parts) {
++    auto scheme = main_parts->GetColorSchemeForWebContents(web_contents);
++    if (scheme.has_value()) {
++      prefs->preferred_color_scheme = scheme.value();
++    } else {
++      prefs->preferred_color_scheme =
++          blink::mojom::PreferredColorScheme::kDark;
++    }
++  }
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_content/ts_browser_client.h b/content/libtermsurf_content/ts_browser_client.h
+index 7ea7dd40ee609..58e034b3a7f9e 100644
+--- a/content/libtermsurf_content/ts_browser_client.h
++++ b/content/libtermsurf_content/ts_browser_client.h
+@@ -28,6 +28,10 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   void RegisterBrowserInterfaceBindersForFrame(
+       RenderFrameHost* render_frame_host,
+       mojo::BinderMapWithContext<RenderFrameHost*>* map) override;
++  void OverrideWebPreferences(
++      WebContents* web_contents,
++      SiteInstance& main_frame_site,
++      blink::web_pref::WebPreferences* prefs) override;
+ 
+  private:
+   class StubBadgeService;
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.cc b/content/libtermsurf_content/ts_browser_main_parts.cc
+index 05eb3265f38a8..b054d3a8182d4 100644
+--- a/content/libtermsurf_content/ts_browser_main_parts.cc
++++ b/content/libtermsurf_content/ts_browser_main_parts.cc
+@@ -5,6 +5,7 @@
+ #include "content/libtermsurf_content/ts_browser_main_parts.h"
+ 
+ #include <cmath>
++#include <optional>
+ 
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+@@ -678,6 +679,17 @@ void TsBrowserMainParts::SetColorScheme(void* wc_handle, bool dark) {
+   tab->shell->web_contents()->OnWebPreferencesChanged();
+ }
+ 
++std::optional<blink::mojom::PreferredColorScheme>
++TsBrowserMainParts::GetColorSchemeForWebContents(
++    WebContents* web_contents) const {
++  for (const auto& tab : tabs_) {
++    if (tab->shell && tab->shell->web_contents() == web_contents) {
++      return tab->preferred_color_scheme;
++    }
++  }
++  return std::nullopt;
++}
++
+ TsBrowserMainParts::TabState* TsBrowserMainParts::FindTab(void* wc_handle) {
+   for (auto& t : tabs_) {
+     if (t->shell &&
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.h b/content/libtermsurf_content/ts_browser_main_parts.h
+index 33606a7efc330..dd82b31d09d19 100644
+--- a/content/libtermsurf_content/ts_browser_main_parts.h
++++ b/content/libtermsurf_content/ts_browser_main_parts.h
+@@ -6,6 +6,7 @@
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_MAIN_PARTS_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+@@ -25,6 +26,7 @@ namespace content {
+ class PersistentCompositorBridge;
+ class Shell;
+ class TsTabObserver;
++class WebContents;
+ 
+ // Notification functions called by TsBrowserMainParts and TsTabObserver
+ // to fire the C callbacks registered via the public API.
+@@ -66,6 +68,11 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+   void SetFocus(void* wc_handle, bool focused);
+   void SetColorScheme(void* wc_handle, bool dark);
+ 
++  // Returns the stored color scheme for the tab owning |web_contents|,
++  // or std::nullopt if not found.
++  std::optional<blink::mojom::PreferredColorScheme>
++  GetColorSchemeForWebContents(WebContents* web_contents) const;
++
+  protected:
+   // ShellBrowserMainParts override: fire C callback instead of starting socket.
+   void InitializeMessageLoopContext() override;
+-- 
+2.50.1 (Apple Git-155)
+

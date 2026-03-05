@@ -1,0 +1,106 @@
+From 15cc0cf858b35d208d24b9647a9472ddd5428325 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 1 Mar 2026 16:17:40 -0600
+Subject: [PATCH 50/65] Issue 689: Correct tab teardown order
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The tabs all fell like dominoes—
+one close, and all would go.
+Delete the Shell before the state,
+and now just one lets go.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 38 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  1 +
+ .../browser/shell_platform_delegate.cc        |  4 +-
+ 3 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index da92d82a12a68..450195d9baaf1 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -339,6 +339,13 @@ void ShellBrowserMainParts::StartDynamicMode(
+               base::BindOnce(&ShellBrowserMainParts::HandleQueryTabs,
+                              base::Unretained(self), qt_reply));
+         }
++      } else if (action && std::string_view(action) == "close_tab") {
++        const char* pane_id_str = xpc_dictionary_get_string(event, "pane_id");
++        std::string pane_id(pane_id_str ? pane_id_str : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::CloseTabByPaneId,
++                           base::Unretained(self), pane_id));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -1243,6 +1250,37 @@ void ShellBrowserMainParts::HandleQueryTabs(xpc_object_t reply) {
+   LOG(INFO) << "[ProfileServer] query_tabs: " << total << " tabs ("
+             << browser_count << " browser, " << devtools_count << " devtools)";
+ }
++void ShellBrowserMainParts::CloseTabByPaneId(const std::string& pane_id) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  for (auto it = tabs_.begin(); it != tabs_.end(); ++it) {
++    if ((*it)->pane_id == pane_id) {
++      LOG(INFO) << "[ProfileServer] CloseTabByPaneId pane=" << pane_id
++                << ", " << (tabs_.size() - 1) << " tab(s) remaining";
++      // Teardown order matters (Issue 689 Exp 4 proved this):
++      // 1. Reset observer (stops navigation callbacks).
++      (*it)->tab_observer.reset();
++      // 2. Delete Shell first — destroys WebContents → RWHV, disconnecting
++      //    the rendering pipeline from the compositor.
++      delete (*it)->shell.get();
++      (*it)->shell = nullptr;
++      // 3. Cancel XPC connection.
++      if ((*it)->tab_connection) {
++        xpc_connection_cancel((*it)->tab_connection);
++        xpc_release((*it)->tab_connection);
++        (*it)->tab_connection = nullptr;
++      }
++      // 4. Erase TabState last — now safe to destroy compositor resources.
++      tabs_.erase(it);
++      if (tabs_.empty()) {
++        LOG(INFO) << "[ProfileServer] No tabs remaining, exiting";
++        Shell::Shutdown();
++      }
++      return;
++    }
++  }
++  LOG(WARNING) << "[ProfileServer] CloseTabByPaneId: no tab for pane="
++               << pane_id;
++}
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ void ShellBrowserMainParts::ToolkitInitialized() {
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 83684fbe7237d..061de89ccde47 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -153,6 +153,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+                          int inspected_tab_id,
+                          int pixel_width, int pixel_height, bool dark);
+   void HandleQueryTabs(xpc_object_t reply);
++  void CloseTabByPaneId(const std::string& pane_id);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+diff --git a/content/chromium_profile_server/browser/shell_platform_delegate.cc b/content/chromium_profile_server/browser/shell_platform_delegate.cc
+index 6ee8734dece1c..bd46c1c1021c1 100644
+--- a/content/chromium_profile_server/browser/shell_platform_delegate.cc
++++ b/content/chromium_profile_server/browser/shell_platform_delegate.cc
+@@ -20,7 +20,9 @@ void ShellPlatformDelegate::DidCreateOrAttachWebContents(
+     WebContents* web_contents) {}
+ 
+ void ShellPlatformDelegate::DidCloseLastWindow() {
+-  Shell::Shutdown();
++  // No-op: we manage tab lifecycle explicitly via CloseTabByPaneId.
++  // The default Shell::Shutdown() would kill all tabs when any single
++  // Shell is destroyed (Issue 689 Exp 6).
+ }
+ 
+ std::unique_ptr<JavaScriptDialogManager>
+-- 
+2.50.1 (Apple Git-155)
+

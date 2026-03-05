@@ -1,0 +1,103 @@
+From b2907d660628a3a3fcf1018a87c00b2091f8645b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 14 Feb 2026 08:49:37 -0600
+Subject: [PATCH 06/65] Add --session-id for multi-profile XPC
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Each frame now whispers its name in the night,
+"profile-a" left, "profile-b" right.
+The session ID flies
+Through XPC's clear skies—
+Two streams, one window, both pixel-tight.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/one_profile/browser/shell_browser_main_parts.cc | 4 ++++
+ content/one_profile/browser/shell_video_consumer.cc     | 8 ++++++++
+ content/one_profile/browser/shell_video_consumer.h      | 4 ++++
+ content/one_profile/common/shell_switches.h             | 4 ++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/content/one_profile/browser/shell_browser_main_parts.cc b/content/one_profile/browser/shell_browser_main_parts.cc
+index 375dbcf82ee1e..22d89c4061ac7 100644
+--- a/content/one_profile/browser/shell_browser_main_parts.cc
++++ b/content/one_profile/browser/shell_browser_main_parts.cc
+@@ -165,6 +165,10 @@ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+     video_consumer_->ConnectToService(
+         cmd->GetSwitchValueASCII(switches::kXpcService));
+   }
++  if (cmd->HasSwitch(switches::kSessionId)) {
++    video_consumer_->SetSessionId(
++        cmd->GetSwitchValueASCII(switches::kSessionId));
++  }
+ #endif
+ 
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+diff --git a/content/one_profile/browser/shell_video_consumer.cc b/content/one_profile/browser/shell_video_consumer.cc
+index a7a454a6c2356..a059f4fa15889 100644
+--- a/content/one_profile/browser/shell_video_consumer.cc
++++ b/content/one_profile/browser/shell_video_consumer.cc
+@@ -53,6 +53,10 @@ void ShellVideoConsumer::ConnectToService(const std::string& name) {
+   xpc_connection_resume(xpc_connection_);
+   LOG(INFO) << "[ShellVideoConsumer] Connected to XPC service: " << name;
+ }
++
++void ShellVideoConsumer::SetSessionId(const std::string& session_id) {
++  session_id_ = session_id;
++}
+ #endif
+ 
+ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+@@ -133,6 +137,10 @@ void ShellVideoConsumer::OnFrameCaptured(
+           xpc_dictionary_set_mach_send(msg, "iosurface_port", port);
+           xpc_dictionary_set_int64(msg, "width", (int64_t)width);
+           xpc_dictionary_set_int64(msg, "height", (int64_t)height);
++          if (!session_id_.empty()) {
++            xpc_dictionary_set_string(msg, "session_id",
++                                      session_id_.c_str());
++          }
+           xpc_connection_send_message(xpc_connection_, msg);
+           xpc_release(msg);
+           mach_port_deallocate(mach_task_self(), port);
+diff --git a/content/one_profile/browser/shell_video_consumer.h b/content/one_profile/browser/shell_video_consumer.h
+index 13246c82f02c4..a27cbe854ed83 100644
+--- a/content/one_profile/browser/shell_video_consumer.h
++++ b/content/one_profile/browser/shell_video_consumer.h
+@@ -40,6 +40,9 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
+   // Connects to an XPC Mach service by name. Once connected, OnFrameCaptured()
+   // will send IOSurface Mach ports to the service every frame.
+   void ConnectToService(const std::string& name);
++
++  // Sets the session identifier included in every XPC frame message.
++  void SetSessionId(const std::string& session_id);
+ #endif
+ 
+   // viz::mojom::FrameSinkVideoConsumer:
+@@ -62,6 +65,7 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
+ 
+ #if BUILDFLAG(IS_MAC)
+   xpc_connection_t xpc_connection_ = nullptr;
++  std::string session_id_;
+ #endif
+ };
+ 
+diff --git a/content/one_profile/common/shell_switches.h b/content/one_profile/common/shell_switches.h
+index 58af1c99f1f69..d44b640050fe8 100644
+--- a/content/one_profile/common/shell_switches.h
++++ b/content/one_profile/common/shell_switches.h
+@@ -64,6 +64,10 @@ inline constexpr char kXpcService[] = "xpc-service";
+ // Hide the window (run as a headless sender for XPC frame delivery).
+ inline constexpr char kHidden[] = "hidden";
+ 
++// Session identifier sent with every XPC frame message. The receiver uses
++// this to map frames to the correct pane.
++inline constexpr char kSessionId[] = "session-id";
++
+ // Helper that returns true if kRunWebTests is present in the command line,
+ // meaning One Profile is running in web test mode.
+ bool IsRunWebTestsSwitchPresent();
+-- 
+2.50.1 (Apple Git-155)
+

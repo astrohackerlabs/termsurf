@@ -1,0 +1,86 @@
+From 5f04c98ee3be40305205f7f6d9daf788f5e72f03 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 15 Feb 2026 05:53:49 -0600
+Subject: [PATCH 08/65] LSUIElement approach to hide Dock icon
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three tried to hide, and each one learned:
+IsBackgroundOnly? Paths got burned.
+CommandLine? Too soon, not parsed yet.
+But /Helpers/ in the path? A sure bet!
+Plist says LSUIElement true,
+No flash, no Dock—a ghostly debut.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/one_profile/app/app-Info.plist        |  2 ++
+ content/one_profile/app/paths_apple.mm        | 21 ++++++++++++-------
+ .../app/shell_main_delegate_mac.mm            |  5 -----
+ 3 files changed, 16 insertions(+), 12 deletions(-)
+
+diff --git a/content/one_profile/app/app-Info.plist b/content/one_profile/app/app-Info.plist
+index 4b30c27e25464..598ad352aabb2 100644
+--- a/content/one_profile/app/app-Info.plist
++++ b/content/one_profile/app/app-Info.plist
+@@ -26,6 +26,8 @@
+ 	<true/>
+ 	<key>NSSupportsAutomaticGraphicsSwitching</key>
+ 	<true/>
++	<key>LSUIElement</key>
++	<true/>
+ 	<key>NSBluetoothAlwaysUsageDescription</key>
+ 	<string>One Profile may use Bluetooth to implement Web Platform features.</string>
+ </dict>
+diff --git a/content/one_profile/app/paths_apple.mm b/content/one_profile/app/paths_apple.mm
+index 3ed7dd9da0fc3..b3d13ed7963d1 100644
+--- a/content/one_profile/app/paths_apple.mm
++++ b/content/one_profile/app/paths_apple.mm
+@@ -18,13 +18,20 @@
+   base::FilePath path;
+   base::PathService::Get(base::FILE_EXE, &path);
+ 
+-  // Up to Contents.
+-  if (base::apple::IsBackgroundOnlyProcess()) {
+-    // The running executable is the helper, located at:
+-    // One Profile.app/Contents/Frameworks/
+-    // One Profile Framework.framework/Versions/C/Helpers/One Profile
+-    // Helper.app/ Contents/MacOS/One Profile Helper. Go up nine steps to get
+-    // to the main bundle's Contents directory.
++  // Helper processes (renderer, GPU, utility) live inside the framework bundle
++  // at a path like:
++  //   One Profile.app/Contents/Frameworks/
++  //     One Profile Framework.framework/Versions/C/Helpers/
++  //     One Profile Helper.app/Contents/MacOS/One Profile Helper
++  //
++  // The main browser process lives at:
++  //   One Profile.app/Contents/MacOS/One Profile
++  //
++  // We detect helpers by checking for "/Helpers/" in the executable path.
++  // We cannot use IsBackgroundOnlyProcess() because the main app sets
++  // LSUIElement=true (no Dock icon), which makes it return true.
++  // We cannot use CommandLine because this runs before command line init.
++  if (path.value().find("/Helpers/") != std::string::npos) {
+     path = path.DirName()
+                .DirName()
+                .DirName()
+diff --git a/content/one_profile/app/shell_main_delegate_mac.mm b/content/one_profile/app/shell_main_delegate_mac.mm
+index 6566f2113aabe..7144c211a329e 100644
+--- a/content/one_profile/app/shell_main_delegate_mac.mm
++++ b/content/one_profile/app/shell_main_delegate_mac.mm
+@@ -61,11 +61,6 @@ void RegisterShellCrApp() {
+   // Force the NSApplication subclass to be used.
+   [ShellCrApplication sharedApplication];
+ 
+-  // Hide from Dock and menu bar. Set at runtime (not via LSUIElement in
+-  // Info.plist) to avoid IsBackgroundOnlyProcess() misidentifying us as a
+-  // helper process, which breaks path resolution in paths_apple.mm.
+-  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+-
+   // If there was an invocation to NSApp prior to this method, then the NSApp
+   // will not be a ShellCrApplication, but will instead be an NSApplication.
+   // This is undesirable and we must enforce that this doesn't happen.
+-- 
+2.50.1 (Apple Git-155)
+

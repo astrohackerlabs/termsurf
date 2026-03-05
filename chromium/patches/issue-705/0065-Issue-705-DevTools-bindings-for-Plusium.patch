@@ -1,0 +1,115 @@
+From 200061d7cd147064e2893987f48f6a84e153842c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 19:59:42 -0600
+Subject: [PATCH 65/65] Issue 705: DevTools bindings for Plusium
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The constructor was private, locked away,
+So Show() was the only card we could play.
+We moved it to public, rewrote the call—
+Create Shell first, bind last, setup and all.
+It still crashes, but hey, progress is tall.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/termsurf.proto                       |  2 ++
+ .../libtermsurf_content/ts_browser_main_parts.cc | 16 ++++++++++++----
+ content/plusium/termsurf.proto                   |  2 ++
+ content/shell/browser/shell_devtools_frontend.h  |  7 +++++--
+ 4 files changed, 21 insertions(+), 6 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/termsurf.proto b/content/chromium_profile_server/browser/termsurf.proto
+index f3aacd749f99e..b1df1a6d468d9 100644
+--- a/content/chromium_profile_server/browser/termsurf.proto
++++ b/content/chromium_profile_server/browser/termsurf.proto
+@@ -249,6 +249,8 @@ message QueryDevtoolsRequest {
+ message QueryDevtoolsReply {
+   int64 tab_id = 1;
+   string error = 2;
++  string browser = 3;
++  string profile = 4;
+ }
+ 
+ message QueryTabsRequest {
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.cc b/content/libtermsurf_content/ts_browser_main_parts.cc
+index b054d3a8182d4..8900fa3df56e4 100644
+--- a/content/libtermsurf_content/ts_browser_main_parts.cc
++++ b/content/libtermsurf_content/ts_browser_main_parts.cc
+@@ -230,6 +230,7 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+   auto* inspected_wc = static_cast<WebContents*>(inspected);
++  auto* browser_ctx = static_cast<ShellBrowserContext*>(ctx);
+ 
+   // Find inspected tab's ID.
+   int inspected_tab_id = 0;
+@@ -240,10 +241,14 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
+     }
+   }
+ 
+-  // Use Show() to create the DevTools frontend — it creates a Shell,
+-  // attaches DevTools bindings, and loads the frontend URL.
+-  auto* frontend = ShellDevToolsFrontend::Show(inspected_wc);
+-  Shell* shell = frontend->frontend_shell();
++  // Create Shell with the DevTools URL directly (Issue 705 Exp 12).
++  // Matches Profile Server's pattern: create Shell first, do all setup,
++  // then create ShellDevToolsFrontend last.
++  GURL devtools_url(base::StringPrintf(
++      "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
++      ShellDevToolsManagerDelegate::GetHttpHandlerPort()));
++  Shell* shell = Shell::CreateNewWindow(browser_ctx, devtools_url,
++                                        nullptr, gfx::Size());
+ 
+   if (width > 0 && height > 0) {
+     RenderWidgetHostView* view =
+@@ -377,6 +382,9 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
+   tab_observer->SetParentUiLayer(tab->root_layer.get());
+ #endif
+ 
++  // Create DevTools bindings LAST, after all setup (Issue 705 Exp 12).
++  new ShellDevToolsFrontend(shell, inspected_wc);
++
+   tab->tab_observer = std::move(tab_observer);
+   tabs_.push_back(std::move(tab));
+ 
+diff --git a/content/plusium/termsurf.proto b/content/plusium/termsurf.proto
+index d854c53df97c6..e33435e85f49e 100644
+--- a/content/plusium/termsurf.proto
++++ b/content/plusium/termsurf.proto
+@@ -249,6 +249,8 @@ message QueryDevtoolsRequest {
+ message QueryDevtoolsReply {
+   int64 tab_id = 1;
+   string error = 2;
++  string browser = 3;
++  string profile = 4;
+ }
+ 
+ message QueryTabsRequest {
+diff --git a/content/shell/browser/shell_devtools_frontend.h b/content/shell/browser/shell_devtools_frontend.h
+index 820aa06e4a382..14d878c0f3e55 100644
+--- a/content/shell/browser/shell_devtools_frontend.h
++++ b/content/shell/browser/shell_devtools_frontend.h
+@@ -33,13 +33,16 @@ class ShellDevToolsFrontend : public ShellDevToolsDelegate,
+ 
+   base::WeakPtr<ShellDevToolsFrontend> GetWeakPtr();
+ 
++  // Construct with an existing Shell. The frontend observes the Shell's
++  // WebContents and attaches DevTools bindings when the DOM loads.
++  ShellDevToolsFrontend(Shell* frontend_shell, WebContents* inspected_contents);
++  ~ShellDevToolsFrontend() override;
++
+  private:
+   // WebContentsObserver overrides
+   void PrimaryMainDocumentElementAvailable() override;
+   void WebContentsDestroyed() override;
+ 
+-  ShellDevToolsFrontend(Shell* frontend_shell, WebContents* inspected_contents);
+-  ~ShellDevToolsFrontend() override;
+   raw_ptr<Shell> frontend_shell_;
+   std::unique_ptr<ShellDevToolsBindings> devtools_bindings_;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,39 @@
+From efc62973609139ab7075f939062af4d72ddf75f1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 18 Feb 2026 06:18:47 -0600
+Subject: [PATCH 21/65] Focus and activate view on tab creation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The page sat in darkness, still and cold,
+No caret blinked, no ring of blue was shown.
+Two calls awoke it: Focus, then SetActive—
+Now Blink believes someone is truly home.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc                    | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 8846a18ed17c7..4957a075726b9 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -366,6 +366,13 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+         base::Unretained(video_consumer.get())));
+   }
+ 
++  // Tell the renderer this page is focused and active so Blink renders
++  // selection highlights, blinking carets, and focus rings.
++  if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
++    view->Focus();
++    view->SetActive(true);
++  }
++
+   // Store tab state.
+   auto tab = std::make_unique<TabState>();
+   tab->shell = shell;
+-- 
+2.50.1 (Apple Git-155)
+

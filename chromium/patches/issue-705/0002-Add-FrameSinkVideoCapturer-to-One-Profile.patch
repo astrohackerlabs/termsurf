@@ -1,0 +1,325 @@
+From f2a8114f5f74ecc070f025aabdfc4d0385aff5e1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 13 Feb 2026 07:51:29 -0600
+Subject: [PATCH 02/65] Add FrameSinkVideoCapturer to One Profile
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A capturer now listens at the gate,
+Where composited frames await their fate.
+Each IOSurface logged and freed,
+Sixty per second—all we need.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/one_profile/BUILD.gn                  |   3 +
+ .../browser/shell_browser_main_parts.cc       |  19 ++-
+ .../browser/shell_browser_main_parts.h        |   2 +
+ .../browser/shell_video_consumer.cc           | 140 ++++++++++++++++++
+ .../browser/shell_video_consumer.h            |  54 +++++++
+ 5 files changed, 216 insertions(+), 2 deletions(-)
+ create mode 100644 content/one_profile/browser/shell_video_consumer.cc
+ create mode 100644 content/one_profile/browser/shell_video_consumer.h
+
+diff --git a/content/one_profile/BUILD.gn b/content/one_profile/BUILD.gn
+index c95ea97a69d3f..9d03380904fc6 100644
+--- a/content/one_profile/BUILD.gn
++++ b/content/one_profile/BUILD.gn
+@@ -198,6 +198,8 @@ static_library("one_profile_lib") {
+     "browser/shell_platform_delegate.h",
+     "browser/shell_speech_recognition_manager_delegate.cc",
+     "browser/shell_speech_recognition_manager_delegate.h",
++    "browser/shell_video_consumer.cc",
++    "browser/shell_video_consumer.h",
+     "browser/shell_web_contents_view_delegate.h",
+     "browser/shell_web_contents_view_delegate_creator.h",
+     "common/main_frame_counter_test_impl.cc",
+@@ -401,6 +403,7 @@ static_library("one_profile_lib") {
+   }
+ 
+   if (is_mac) {
++    frameworks = [ "IOSurface.framework" ]
+     deps += [ "//ui/display:test_support" ]
+   }
+ 
+diff --git a/content/one_profile/browser/shell_browser_main_parts.cc b/content/one_profile/browser/shell_browser_main_parts.cc
+index 235f188875a9e..3679e2457da73 100644
+--- a/content/one_profile/browser/shell_browser_main_parts.cc
++++ b/content/one_profile/browser/shell_browser_main_parts.cc
+@@ -16,6 +16,7 @@
+ #include "base/run_loop.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/current_thread.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/threading/thread.h"
+ #include "base/threading/thread_restrictions.h"
+ #include "build/build_config.h"
+@@ -34,6 +35,7 @@
+ #include "content/one_profile/browser/shell_browser_context.h"
+ #include "content/one_profile/browser/shell_devtools_manager_delegate.h"
+ #include "content/one_profile/browser/shell_platform_delegate.h"
++#include "content/one_profile/browser/shell_video_consumer.h"
+ #include "content/one_profile/common/shell_switches.h"
+ #include "device/bluetooth/bluetooth_adapter_factory.h"
+ #include "net/base/filename_util.h"
+@@ -148,8 +150,20 @@ void ShellBrowserMainParts::InitializeBrowserContexts() {
+ }
+ 
+ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+-  Shell::CreateNewWindow(browser_context_.get(), GetStartupURL(), nullptr,
+-                         gfx::Size());
++  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), GetStartupURL(),
++                                        nullptr, gfx::Size());
++
++  // Attach a video consumer after a short delay to allow the
++  // RenderWidgetHostView to be created by the navigation.
++  video_consumer_ = std::make_unique<ShellVideoConsumer>();
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](ShellVideoConsumer* consumer, WebContents* web_contents) {
++            consumer->Attach(web_contents);
++          },
++          video_consumer_.get(), shell->web_contents()),
++      base::Seconds(2));
+ }
+ 
+ void ShellBrowserMainParts::ToolkitInitialized() {
+@@ -201,6 +215,7 @@ void ShellBrowserMainParts::WillRunMainMessageLoop(
+ void ShellBrowserMainParts::PostMainMessageLoopRun() {
+   DCHECK_EQ(Shell::windows().size(), 0u);
+   ShellDevToolsManagerDelegate::StopHttpHandler();
++  video_consumer_.reset();
+   browser_context_.reset();
+   off_the_record_browser_context_.reset();
+ #if BUILDFLAG(IS_LINUX)
+diff --git a/content/one_profile/browser/shell_browser_main_parts.h b/content/one_profile/browser/shell_browser_main_parts.h
+index a94dac9e4196c..0832b334ca38a 100644
+--- a/content/one_profile/browser/shell_browser_main_parts.h
++++ b/content/one_profile/browser/shell_browser_main_parts.h
+@@ -28,6 +28,7 @@ class ChildExitObserver;
+ 
+ namespace content {
+ class ShellPlatformDelegate;
++class ShellVideoConsumer;
+ 
+ #if BUILDFLAG(IS_FUCHSIA)
+ class FuchsiaViewPresenter;
+@@ -83,6 +84,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+  private:
+   std::unique_ptr<ShellBrowserContext> browser_context_;
+   std::unique_ptr<ShellBrowserContext> off_the_record_browser_context_;
++  std::unique_ptr<ShellVideoConsumer> video_consumer_;
+ 
+   std::unique_ptr<performance_manager::PerformanceManagerLifetime>
+       performance_manager_lifetime_;
+diff --git a/content/one_profile/browser/shell_video_consumer.cc b/content/one_profile/browser/shell_video_consumer.cc
+new file mode 100644
+index 0000000000000..af77cd5fc039b
+--- /dev/null
++++ b/content/one_profile/browser/shell_video_consumer.cc
+@@ -0,0 +1,140 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/one_profile/browser/shell_video_consumer.h"
++
++#include "base/logging.h"
++#include "components/viz/common/surfaces/video_capture_target.h"
++#include "components/viz/host/host_frame_sink_manager.h"
++#include "content/browser/compositor/surface_utils.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "media/base/video_types.h"
++#include "media/capture/mojom/video_capture_buffer.mojom.h"
++#include "mojo/public/cpp/bindings/remote.h"
++
++#if BUILDFLAG(IS_MAC)
++#include <IOSurface/IOSurface.h>
++#endif
++
++namespace content {
++
++ShellVideoConsumer::ShellVideoConsumer() = default;
++ShellVideoConsumer::~ShellVideoConsumer() = default;
++
++void ShellVideoConsumer::Attach(WebContents* web_contents) {
++  RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
++  if (!view) {
++    LOG(ERROR) << "[ShellVideoConsumer] No RenderWidgetHostView available";
++    return;
++  }
++
++  RenderWidgetHost* host = view->GetRenderWidgetHost();
++  if (!host) {
++    LOG(ERROR) << "[ShellVideoConsumer] No RenderWidgetHost available";
++    return;
++  }
++
++  viz::HostFrameSinkManager* manager = GetHostFrameSinkManager();
++  if (!manager) {
++    LOG(ERROR) << "[ShellVideoConsumer] No HostFrameSinkManager available";
++    return;
++  }
++
++  capturer_ = manager->CreateVideoCapturer();
++
++  // Configure for 60fps ARGB capture.
++  capturer_->SetFormat(media::PIXEL_FORMAT_ARGB);
++  capturer_->SetMinCapturePeriod(base::Milliseconds(16));
++  capturer_->SetAutoThrottlingEnabled(false);
++
++  // Target the WebContents' frame sink.
++  const viz::FrameSinkId& frame_sink_id = host->GetFrameSinkId();
++  capturer_->ChangeTarget(viz::VideoCaptureTarget(frame_sink_id),
++                          /*sub_capture_target_version=*/0);
++
++  LOG(INFO) << "[ShellVideoConsumer] Attached to FrameSinkId "
++            << frame_sink_id.ToString() << ", starting capture";
++
++  last_log_time_ = base::TimeTicks::Now();
++  frame_count_ = 0;
++
++  // Request GPU memory buffers (IOSurfaces on macOS).
++  capturer_->Start(
++      this, viz::mojom::BufferFormatPreference::kPreferMappableSharedImage);
++}
++
++void ShellVideoConsumer::OnFrameCaptured(
++    media::mojom::VideoBufferHandlePtr data,
++    media::mojom::VideoFrameInfoPtr info,
++    const gfx::Rect& content_rect,
++    mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
++        callbacks) {
++  frame_count_++;
++
++  if (data->is_gpu_memory_buffer_handle()) {
++    auto& gmb_handle = data->get_gpu_memory_buffer_handle();
++
++#if BUILDFLAG(IS_MAC)
++    IOSurfaceRef io_surface = gmb_handle.io_surface().get();
++    if (io_surface) {
++      size_t width = IOSurfaceGetWidth(io_surface);
++      size_t height = IOSurfaceGetHeight(io_surface);
++
++      // Log fps once per second.
++      base::TimeTicks now = base::TimeTicks::Now();
++      base::TimeDelta elapsed = now - last_log_time_;
++      if (elapsed >= base::Seconds(1)) {
++        double fps = frame_count_ / elapsed.InSecondsF();
++        LOG(INFO) << "[ShellVideoConsumer] " << frame_count_
++                  << " frames in " << elapsed.InSecondsF()
++                  << "s (" << fps << " fps)"
++                  << " | IOSurface " << width << "x" << height;
++        frame_count_ = 0;
++        last_log_time_ = now;
++      }
++    } else {
++      LOG(WARNING) << "[ShellVideoConsumer] gpu_memory_buffer_handle but "
++                   << "IOSurface is null";
++    }
++#else
++    // Log fps once per second (non-macOS).
++    base::TimeTicks now = base::TimeTicks::Now();
++    base::TimeDelta elapsed = now - last_log_time_;
++    if (elapsed >= base::Seconds(1)) {
++      double fps = frame_count_ / elapsed.InSecondsF();
++      LOG(INFO) << "[ShellVideoConsumer] " << frame_count_
++                << " frames in " << elapsed.InSecondsF()
++                << "s (" << fps << " fps)"
++                << " | coded_size " << info->coded_size.ToString();
++      frame_count_ = 0;
++      last_log_time_ = now;
++    }
++#endif
++  } else {
++    LOG(WARNING) << "[ShellVideoConsumer] Frame is NOT a "
++                 << "gpu_memory_buffer_handle (got shared memory instead)";
++  }
++
++  // Signal done immediately to return the buffer to the pool.
++  mojo::Remote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks> cb_remote(
++      std::move(callbacks));
++  cb_remote->Done();
++}
++
++void ShellVideoConsumer::OnNewCaptureVersion(
++    const media::CaptureVersion& capture_version) {}
++
++void ShellVideoConsumer::OnFrameWithEmptyRegionCapture() {}
++
++void ShellVideoConsumer::OnStopped() {
++  LOG(INFO) << "[ShellVideoConsumer] Capture stopped";
++}
++
++void ShellVideoConsumer::OnLog(const std::string& message) {
++  LOG(INFO) << "[ShellVideoConsumer] " << message;
++}
++
++}  // namespace content
+diff --git a/content/one_profile/browser/shell_video_consumer.h b/content/one_profile/browser/shell_video_consumer.h
+new file mode 100644
+index 0000000000000..9809bff343c4f
+--- /dev/null
++++ b/content/one_profile/browser/shell_video_consumer.h
+@@ -0,0 +1,54 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_ONE_PROFILE_BROWSER_SHELL_VIDEO_CONSUMER_H_
++#define CONTENT_ONE_PROFILE_BROWSER_SHELL_VIDEO_CONSUMER_H_
++
++#include <memory>
++
++#include "base/time/time.h"
++#include "components/viz/host/client_frame_sink_video_capturer.h"
++#include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
++
++namespace content {
++
++class WebContents;
++
++// Attaches a FrameSinkVideoCapturer to a WebContents and logs every captured
++// frame. Used to verify that Chromium's video capture API delivers IOSurfaces
++// at 60fps on macOS.
++class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
++ public:
++  ShellVideoConsumer();
++  ~ShellVideoConsumer() override;
++
++  ShellVideoConsumer(const ShellVideoConsumer&) = delete;
++  ShellVideoConsumer& operator=(const ShellVideoConsumer&) = delete;
++
++  // Attaches the capturer to the given WebContents. The WebContents must have
++  // a valid RenderWidgetHostView (i.e., navigation must have started).
++  void Attach(WebContents* web_contents);
++
++  // viz::mojom::FrameSinkVideoConsumer:
++  void OnFrameCaptured(
++      media::mojom::VideoBufferHandlePtr data,
++      media::mojom::VideoFrameInfoPtr info,
++      const gfx::Rect& content_rect,
++      mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
++          callbacks) override;
++  void OnNewCaptureVersion(
++      const media::CaptureVersion& capture_version) override;
++  void OnFrameWithEmptyRegionCapture() override;
++  void OnStopped() override;
++  void OnLog(const std::string& message) override;
++
++ private:
++  std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
++  int frame_count_ = 0;
++  base::TimeTicks last_log_time_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_ONE_PROFILE_BROWSER_SHELL_VIDEO_CONSUMER_H_
+-- 
+2.50.1 (Apple Git-155)
+

@@ -375,8 +375,6 @@ fn handleSetDevtoolsOverlay(msg: xpc_object_t) void {
     const browsing = xpc_dictionary_get_bool(msg, "browsing");
     const inspected_tab_id = xpc_dictionary_get_int64(msg, "inspected_tab_id");
 
-    std.debug.print("[DEBUG] handleSetDevtoolsOverlay: pane={s} profile={s} browser={s} inspected_tab_id={d}\n", .{ pane_id, profile, browser, inspected_tab_id });
-
     log.info("set_devtools_overlay pane={s} inspected_tab_id={d} profile={s} browser={s}", .{
         pane_id, inspected_tab_id, profile, browser,
     });
@@ -441,65 +439,36 @@ fn handleSetDevtoolsOverlay(msg: xpc_object_t) void {
 
         surface_to_pane.put(@intFromPtr(surface.core()), pane_id_key) catch {};
 
-        // Auto-target: resolve inspected_tab_id from last focused browser pane (Issue 684 Exp 3).
-        if (p.inspected_tab_id == 0) {
-            const target_pane_id = last_browser_pane orelse {
-                log.err("devtools auto-target: no browser pane has been focused", .{});
-                cleanupPane(pane_id_key);
-                return;
-            };
-            const target = panes.get(target_pane_id) orelse {
-                log.err("devtools auto-target: pane {s} not found", .{target_pane_id});
-                cleanupPane(pane_id_key);
-                return;
-            };
-            if (target.tab_id == 0) {
-                log.err("devtools auto-target: target pane {s} has no tab_id yet", .{target_pane_id});
-                cleanupPane(pane_id_key);
-                return;
-            }
-            p.inspected_tab_id = target.tab_id;
-            log.info("devtools auto-target: resolved pane={s} tab_id={d}", .{
-                target_pane_id, target.tab_id,
-            });
-        }
-
         log.info("new devtools pane={s} pixel={d}x{d} inspected_tab_id={d}", .{
             pane_id, new_pixel_w, new_pixel_h, p.inspected_tab_id,
         });
 
-        // Use the target's server (profile) when auto-targeting, not the --profile argument.
-        const auto_targeted = p.inspected_tab_id != inspected_tab_id;
-        std.debug.print("[DEBUG] devtools server selection: auto_targeted={} inspected_tab_id={} resolved={} browser={s}\n", .{ auto_targeted, inspected_tab_id, p.inspected_tab_id, browser });
-        if (auto_targeted) {
-            // Auto-targeted — use the target pane's server.
-            const target_pane_id = last_browser_pane.?;
-            const target = panes.get(target_pane_id).?;
-            if (target.server) |target_server| {
-                std.debug.print("[DEBUG] devtools auto-target: using target server fd={} browser={s}\n", .{ target_server.fd, target_server.browser });
-                p.server = target_server;
-                target_server.pane_count += 1;
+        // DevTools must run in the same Chromium process as the inspected tab.
+        // Look up the inspected tab's pane and use its server (Issue 705 Exp 10).
+        const inspected_pane_id = tab_to_pane.get(p.inspected_tab_id) orelse {
+            log.err("devtools: inspected tab_id={d} not found in tab_to_pane", .{p.inspected_tab_id});
+            cleanupPane(pane_id_key);
+            return;
+        };
+        const inspected_pane = panes.get(inspected_pane_id) orelse {
+            log.err("devtools: inspected pane {s} not found", .{inspected_pane_id});
+            cleanupPane(pane_id_key);
+            return;
+        };
+        if (inspected_pane.server) |target_server| {
+            p.server = target_server;
+            target_server.pane_count += 1;
 
-                if (target_server.fd >= 0) {
-                    sendCreateDevToolsTab(p, target_server);
-                    if (p.browsing) {
-                        sendFocusChanged(p.pane_id_key, true);
-                    }
-                }
-            } else {
-                std.debug.print("[DEBUG] devtools auto-target: target has no server\n", .{});
-            }
-        } else if (getOrCreateServer(profile, browser)) |server| {
-            std.debug.print("[DEBUG] devtools explicit: using server fd={} browser={s}\n", .{ server.fd, server.browser });
-            p.server = server;
-            server.pane_count += 1;
-
-            if (server.fd >= 0) {
-                sendCreateDevToolsTab(p, server);
+            if (target_server.fd >= 0) {
+                sendCreateDevToolsTab(p, target_server);
                 if (p.browsing) {
                     sendFocusChanged(p.pane_id_key, true);
                 }
             }
+        } else {
+            log.err("devtools: inspected pane {s} has no server", .{inspected_pane_id});
+            cleanupPane(pane_id_key);
+            return;
         }
     }
 }
@@ -2215,8 +2184,30 @@ fn handleSocketQueryDevtools(client_fd: std.posix.fd_t, pb_msg: *pb.Termsurf__Te
         }
     }
 
-    // Success.
+    // Success — populate browser and profile from the inspected tab's server.
     reply.tab_id = resolved_tab_id;
+    var browser_z: [128]u8 = undefined;
+    var profile_z: [128]u8 = undefined;
+    if (tab_to_pane.get(resolved_tab_id)) |resolved_pane_id| {
+        if (panes.get(resolved_pane_id)) |resolved_pane| {
+            if (resolved_pane.server) |s| {
+                if (s.browser.len < browser_z.len) {
+                    @memcpy(browser_z[0..s.browser.len], s.browser);
+                    browser_z[s.browser.len] = 0;
+                    reply.browser = @ptrCast(&browser_z);
+                }
+                // Extract profile from profile_key ("{profile}\x00{browser}").
+                const key = s.profile_key;
+                const sep = std.mem.indexOfScalar(u8, key, 0) orelse key.len;
+                const prof = key[0..sep];
+                if (prof.len < profile_z.len) {
+                    @memcpy(profile_z[0..prof.len], prof);
+                    profile_z[prof.len] = 0;
+                    reply.profile = @ptrCast(&profile_z);
+                }
+            }
+        }
+    }
     var wrapper: pb.Termsurf__TermSurfMessage = undefined;
     pb.termsurf__term_surf_message__init(&wrapper);
     wrapper.msg_case = @intCast(28); // QUERY_DEVTOOLS_REPLY

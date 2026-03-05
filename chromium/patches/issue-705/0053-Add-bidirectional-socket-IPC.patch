@@ -1,0 +1,1049 @@
+From 0896cac1b7085a9467df44217a676d982fe08280 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 3 Mar 2026 07:44:58 -0600
+Subject: [PATCH 53/65] Add bidirectional socket IPC
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The XPC wires grew tangled and old,
+Each tab a new connection to hold.
+One socket now streams
+Both directions — it seems
+Much simpler than endpoints of gold.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 692 +++++++++++++-----
+ .../browser/shell_browser_main_parts.h        |   9 +
+ .../browser/shell_tab_observer.cc             |  85 ++-
+ .../browser/shell_tab_observer.h              |   5 +
+ .../common/shell_switches.h                   |   3 +
+ 5 files changed, 605 insertions(+), 189 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 7f5eadc426ae2..d0c9bd45c779a 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "base/base_switches.h"
+ #include "base/command_line.h"
++#include "base/compiler_specific.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+@@ -91,6 +92,9 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
+ #include <xpc/xpc.h>
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
+@@ -121,12 +125,7 @@ scoped_refptr<base::RefCountedMemory> PlatformResourceProvider(int key) {
+ 
+ }  // namespace
+ 
+-ShellBrowserMainParts::ShellBrowserMainParts() {
+-  // Smoke test: verify protobuf compiles and links.
+-  termsurf::TermSurfMessage msg;
+-  msg.mutable_server_register()->set_profile("test");
+-  (void)msg;
+-}
++ShellBrowserMainParts::ShellBrowserMainParts() = default;
+ 
+ ShellBrowserMainParts::~ShellBrowserMainParts() = default;
+ 
+@@ -170,13 +169,17 @@ void ShellBrowserMainParts::InitializeBrowserContexts() {
+ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+ #if BUILDFLAG(IS_MAC)
+   base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
++  if (cmd->HasSwitch(switches::kIpcSocket)) {
++    StartSocketMode(cmd->GetSwitchValueASCII(switches::kIpcSocket));
++    return;
++  }
+   if (cmd->HasSwitch(switches::kXpcService)) {
+     StartDynamicMode(cmd->GetSwitchValueASCII(switches::kXpcService));
+     return;
+   }
+ #endif
+-  // Fallback: no XPC service specified. Should not happen in normal operation.
+-  LOG(WARNING) << "[ProfileServer] No --xpc-service specified, idling.";
++  // Fallback: no IPC mechanism specified. Should not happen in normal operation.
++  LOG(WARNING) << "[ProfileServer] No --ipc-socket or --xpc-service specified, idling.";
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
+@@ -376,6 +379,213 @@ void ShellBrowserMainParts::StartDynamicMode(
+             << profile;
+ }
+ 
++void ShellBrowserMainParts::StartSocketMode(
++    const std::string& socket_path) {
++  // Connect to GUI's Unix socket.
++  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
++  if (fd < 0) {
++    LOG(ERROR) << "[ProfileServer] socket() failed: " << strerror(errno);
++    return;
++  }
++  struct sockaddr_un addr = {};
++  addr.sun_family = AF_UNIX;
++  UNSAFE_BUFFERS(
++      strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1));
++
++  if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
++              sizeof(addr)) < 0) {
++    LOG(ERROR) << "[ProfileServer] Socket connect failed: " << strerror(errno);
++    close(fd);
++    return;
++  }
++  socket_fd_ = fd;
++
++  // Derive profile from --user-data-dir basename.
++  std::string profile;
++  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
++  if (cmd->HasSwitch(switches::kChromiumProfileServerUserDataDir)) {
++    base::FilePath data_dir =
++        cmd->GetSwitchValuePath(switches::kChromiumProfileServerUserDataDir);
++    profile = data_dir.BaseName().value();
++  }
++
++  // Send ServerRegister.
++  termsurf::TermSurfMessage reg_msg;
++  reg_msg.mutable_server_register()->set_profile(profile);
++  SendProtobuf(reg_msg);
++
++  LOG(INFO) << "[ProfileServer] Socket connected to " << socket_path
++            << ", profile=" << profile;
++
++  // Start reader on a detached thread.
++  std::thread reader([this]() { SocketReaderLoop(); });
++  reader.detach();
++}
++
++void ShellBrowserMainParts::SendProtobuf(
++    const termsurf::TermSurfMessage& msg) {
++  if (socket_fd_ < 0) return;
++  size_t size = msg.ByteSizeLong();
++  std::vector<uint8_t> buf(4 + size);
++  uint32_t len = static_cast<uint32_t>(size);
++  buf[0] = len & 0xFF;
++  buf[1] = (len >> 8) & 0xFF;
++  buf[2] = (len >> 16) & 0xFF;
++  buf[3] = (len >> 24) & 0xFF;
++  msg.SerializeToArray(&buf[4], size);
++  write(socket_fd_, buf.data(), buf.size());
++}
++
++void ShellBrowserMainParts::SocketReaderLoop() {
++  // SAFETY: Manual buffer management for socket framing protocol.
++  // buf is a fixed 64K array, buf_len tracks used portion.
++  UNSAFE_BUFFERS({
++    uint8_t buf[65536];
++    size_t buf_len = 0;
++
++    while (true) {
++      ssize_t n = read(socket_fd_, buf + buf_len, sizeof(buf) - buf_len);
++      if (n <= 0) break;
++      buf_len += n;
++
++      while (buf_len >= 4) {
++        uint32_t msg_len = buf[0] | (buf[1] << 8) |
++                            (buf[2] << 16) | (buf[3] << 24);
++        if (buf_len < 4 + msg_len) break;
++
++        auto msg = std::make_unique<termsurf::TermSurfMessage>();
++        if (!msg->ParseFromArray(buf + 4, msg_len)) {
++          LOG(ERROR) << "[ProfileServer] Failed to parse socket protobuf";
++          break;
++        }
++
++        ShellBrowserMainParts* self = this;
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::HandleSocketMsg,
++                           base::Unretained(self), std::move(msg)));
++
++        size_t consumed = 4 + msg_len;
++        if (consumed < buf_len)
++          memmove(buf, buf + consumed, buf_len - consumed);
++        buf_len -= consumed;
++      }
++    }
++    LOG(INFO) << "[ProfileServer] Socket reader exiting";
++  });
++}
++
++void ShellBrowserMainParts::HandleSocketMsg(
++    std::unique_ptr<termsurf::TermSurfMessage> msg) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  switch (msg->msg_case()) {
++    case termsurf::TermSurfMessage::kCreateTab: {
++      auto& m = msg->create_tab();
++      CreateTab(GURL(m.url()), m.pane_id(),
++                m.pixel_width(), m.pixel_height(), m.dark());
++      break;
++    }
++    case termsurf::TermSurfMessage::kCreateDevtoolsTab: {
++      auto& m = msg->create_devtools_tab();
++      CreateDevToolsTab(m.pane_id(), m.inspected_tab_id(),
++                        m.pixel_width(), m.pixel_height(), m.dark());
++      break;
++    }
++    case termsurf::TermSurfMessage::kResize: {
++      auto& m = msg->resize();
++      ResizeTab(m.tab_id(), m.pixel_width(), m.pixel_height());
++      break;
++    }
++    case termsurf::TermSurfMessage::kCloseTab: {
++      CloseTabById(msg->close_tab().tab_id());
++      break;
++    }
++    case termsurf::TermSurfMessage::kNavigate: {
++      auto& m = msg->navigate();
++      NavigateTab(m.tab_id(), GURL(m.url()));
++      break;
++    }
++    case termsurf::TermSurfMessage::kMouseEvent: {
++      auto& m = msg->mouse_event();
++      HandleMouseEvent(m.tab_id(), m.type(), m.x(), m.y(),
++                       m.button(), m.click_count(), m.modifiers());
++      break;
++    }
++    case termsurf::TermSurfMessage::kMouseMove: {
++      auto& m = msg->mouse_move();
++      HandleMouseMove(m.tab_id(), m.x(), m.y(), m.modifiers());
++      break;
++    }
++    case termsurf::TermSurfMessage::kScrollEvent: {
++      auto& m = msg->scroll_event();
++      HandleScrollEvent(m.tab_id(), m.x(), m.y(),
++                        m.delta_x(), m.delta_y(),
++                        m.phase(), m.momentum_phase(),
++                        m.precise(), m.modifiers());
++      break;
++    }
++    case termsurf::TermSurfMessage::kKeyEvent: {
++      auto& m = msg->key_event();
++      HandleKeyEvent(m.tab_id(), m.type(),
++                     m.windows_key_code(), m.utf8(), m.modifiers());
++      break;
++    }
++    case termsurf::TermSurfMessage::kFocusChanged: {
++      auto& m = msg->focus_changed();
++      HandleFocusChanged(m.tab_id(), m.focused());
++      break;
++    }
++    case termsurf::TermSurfMessage::kSetColorScheme: {
++      auto& m = msg->set_color_scheme();
++      SetColorScheme(m.tab_id(), m.dark());
++      break;
++    }
++    case termsurf::TermSurfMessage::kQueryTabsRequest: {
++      HandleQueryTabsSocket();
++      break;
++    }
++    default:
++      LOG(WARNING) << "[ProfileServer] Unknown socket msg_case="
++                   << msg->msg_case();
++      break;
++  }
++}
++
++void ShellBrowserMainParts::HandleQueryTabsSocket() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  int64_t total = static_cast<int64_t>(tabs_.size());
++  int64_t browser_count = 0;
++  int64_t devtools_count = 0;
++
++  for (auto& tab : tabs_) {
++    if (tab->inspected_tab_id > 0)
++      devtools_count++;
++    else
++      browser_count++;
++  }
++
++  termsurf::TermSurfMessage reply_msg;
++  auto* reply = reply_msg.mutable_query_tabs_reply();
++  reply->set_chromium_tabs(total);
++  reply->set_chromium_browser(browser_count);
++  reply->set_chromium_devtools(devtools_count);
++
++  for (auto& tab : tabs_) {
++    auto* ti = reply->add_tabs();
++    ti->set_id(tab->tab_id);
++    ti->set_inspected_tab_id(tab->inspected_tab_id);
++    ti->set_pane_id(tab->pane_id);
++    ti->set_url(tab->shell->web_contents()->GetURL().spec());
++  }
++
++  SendProtobuf(reply_msg);
++  LOG(INFO) << "[ProfileServer] query_tabs (socket): " << total
++            << " tabs (" << browser_count << " browser, "
++            << devtools_count << " devtools)";
++}
++
+ void ShellBrowserMainParts::CreateTab(const GURL& url,
+                                       const std::string& pane_id,
+                                       int pixel_width,
+@@ -473,38 +683,51 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   auto tab_observer = std::make_unique<ShellTabObserver>();
+   tab_observer->SetTabId(tab->tab_id);
+ 
+-  // Open a new connection to the app for this tab.
+-  xpc_connection_t tab_conn = xpc_connection_create_from_endpoint(app_endpoint_);
++  xpc_connection_t tab_conn = nullptr;
+ 
+-  ShellBrowserMainParts* self = this;
++  if (socket_fd_ >= 0) {
++    // Socket mode: send tab_ready via protobuf (Issue 701).
++    termsurf::TermSurfMessage tr_msg;
++    tr_msg.mutable_tab_ready()->set_pane_id(pane_id);
++    tr_msg.mutable_tab_ready()->set_tab_id(tab->tab_id);
++    SendProtobuf(tr_msg);
+ 
+-  xpc_connection_set_event_handler(tab_conn, ^(xpc_object_t event) {
+-    if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+-      if (event == XPC_ERROR_CONNECTION_INVALID ||
+-          event == XPC_ERROR_CONNECTION_INTERRUPTED) {
+-        xpc_connection_t conn = tab_conn;
+-        content::GetUIThreadTaskRunner({})->PostTask(
+-            FROM_HERE,
+-            base::BindOnce(&ShellBrowserMainParts::CloseTab,
+-                           base::Unretained(self), conn));
++    tab_observer->SetSocketFd(socket_fd_);
++  } else {
++    // XPC mode: open a new connection to the app for this tab.
++    tab_conn = xpc_connection_create_from_endpoint(app_endpoint_);
++
++    ShellBrowserMainParts* self = this;
++
++    xpc_connection_set_event_handler(tab_conn, ^(xpc_object_t event) {
++      if (xpc_get_type(event) == XPC_TYPE_ERROR) {
++        if (event == XPC_ERROR_CONNECTION_INVALID ||
++            event == XPC_ERROR_CONNECTION_INTERRUPTED) {
++          xpc_connection_t conn = tab_conn;
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce(&ShellBrowserMainParts::CloseTab,
++                             base::Unretained(self), conn));
++        }
+       }
+-    }
+-  });
++    });
++
++    xpc_connection_resume(tab_conn);
++
++    // Send tab_ready via XPC.
++    xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_string(msg, "action", "tab_ready");
++    xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++    xpc_dictionary_set_int64(msg, "tab_id", tab->tab_id);
++    xpc_connection_send_message(tab_conn, msg);
++    xpc_release(msg);
++
++    tab_observer->SetConnection(tab_conn);
++  }
+ 
+-  xpc_connection_resume(tab_conn);
+   LOG(INFO) << "[ProfileServer] Assigned tab_id=" << tab->tab_id
+             << " to pane " << pane_id;
+ 
+-  // Send tab_ready message so the compositor can map this connection to a pane.
+-  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-  xpc_dictionary_set_string(msg, "action", "tab_ready");
+-  xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
+-  xpc_dictionary_set_int64(msg, "tab_id", tab->tab_id);
+-  xpc_connection_send_message(tab_conn, msg);
+-  xpc_release(msg);
+-
+-  // Hand the connection to the observer and start observing.
+-  tab_observer->SetConnection(tab_conn);
+   tab_observer->ObserveContents(shell->web_contents());
+ 
+   // Register cursor change callback so the app can update NSCursor.
+@@ -515,71 +738,122 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+         &ShellTabObserver::OnCursorChanged,
+         base::Unretained(tab_observer.get())));
+ 
+-    // Register CALayerParams callback to send ca_context_id to the app.
+-    // When the GPU process produces a new CAContext, we send its ID once
+-    // (and re-send if it changes). The app creates a CALayerHost with this
+-    // ID — Window Server composites directly from GPU VRAM.
+     int cb_tab_id = tab->tab_id;
+-    xpc_connection_t cb_conn = tab_conn;
+-    // Shared dedup gate — the callback owns it via base::Owned, observer
+-    // holds a non-owning pointer for reset on navigation (Issue 630, C3).
+     auto* last_id = new uint32_t(0);
+-    auto ca_layer_callback = base::BindRepeating(
+-        [](int tab_id, xpc_connection_t conn,
+-           uint32_t* last_id, const gfx::CALayerParams& params) {
+-          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
+-            return;
+-          *last_id = params.ca_context_id;
+-          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-          xpc_dictionary_set_string(msg, "action", "ca_context");
+-          xpc_dictionary_set_uint64(msg, "ca_context_id",
+-                                    params.ca_context_id);
+-          xpc_dictionary_set_int64(msg, "tab_id", tab_id);
+-          xpc_dictionary_set_uint64(msg, "pixel_width",
+-                                    params.pixel_size.width());
+-          xpc_dictionary_set_uint64(msg, "pixel_height",
+-                                    params.pixel_size.height());
+-          xpc_connection_send_message(conn, msg);
+-          xpc_release(msg);
+-          LOG(INFO) << "[ProfileServer] Sent ca_context_id="
+-                    << params.ca_context_id << " for tab " << tab_id
+-                    << " (" << params.pixel_size.width() << "x"
+-                    << params.pixel_size.height() << ")";
+-        },
+-        cb_tab_id, cb_conn,
+-        base::Owned(last_id));
+-    SetCALayerParamsCallbackOnView(view, ca_layer_callback);
+-
+-    // Store callback and dedup pointer on observer for re-registration
+-    // after view swap (Issue 630, C2/C3).
+-    tab_observer->SetCALayerParamsCallback(ca_layer_callback);
+-    tab_observer->SetLastCAContextIdPtr(last_id);
+-
+-    // Set callback on per-tab bridge (Issue 635).
+-    // In UseParentLayerCompositor mode, the per-view callback won't fire.
+-    // The per-tab bridge receives the stable ca_context_id instead.
+-    tab->bridge->SetCallback(base::BindRepeating(
+-        [](int tab_id, xpc_connection_t conn,
+-           uint32_t* last_id, const gfx::CALayerParams& params) {
+-          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
+-            return;
+-          *last_id = params.ca_context_id;
+-          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-          xpc_dictionary_set_string(msg, "action", "ca_context");
+-          xpc_dictionary_set_uint64(msg, "ca_context_id",
+-                                    params.ca_context_id);
+-          xpc_dictionary_set_int64(msg, "tab_id", tab_id);
+-          xpc_dictionary_set_uint64(msg, "pixel_width",
+-                                    params.pixel_size.width());
+-          xpc_dictionary_set_uint64(msg, "pixel_height",
+-                                    params.pixel_size.height());
+-          xpc_connection_send_message(conn, msg);
+-          xpc_release(msg);
+-          LOG(INFO) << "[ProfileServer] Tab compositor ca_context_id="
+-                    << params.ca_context_id << " for tab " << tab_id;
+-        },
+-        cb_tab_id, cb_conn,
+-        base::Unretained(last_id)));
++
++    if (socket_fd_ >= 0) {
++      // Socket mode: CALayerParams callback posts to UI thread (Issue 701).
++      ShellBrowserMainParts* self = this;
++      auto ca_layer_callback = base::BindRepeating(
++          [](ShellBrowserMainParts* self, int tab_id,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            uint32_t ctx_id = params.ca_context_id;
++            int pw = params.pixel_size.width();
++            int ph = params.pixel_size.height();
++            content::GetUIThreadTaskRunner({})->PostTask(
++                FROM_HERE,
++                base::BindOnce([](ShellBrowserMainParts* s, int tid,
++                                  uint32_t cid, int pw, int ph) {
++                  termsurf::TermSurfMessage msg;
++                  auto* ca = msg.mutable_ca_context();
++                  ca->set_tab_id(tid);
++                  ca->set_ca_context_id(cid);
++                  ca->set_pixel_width(pw);
++                  ca->set_pixel_height(ph);
++                  s->SendProtobuf(msg);
++                  LOG(INFO) << "[ProfileServer] Sent ca_context_id=" << cid
++                            << " for tab " << tid << " (socket)";
++                }, base::Unretained(self), tab_id, ctx_id, pw, ph));
++          },
++          base::Unretained(self), cb_tab_id,
++          base::Owned(last_id));
++      SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++      tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++      tab_observer->SetLastCAContextIdPtr(last_id);
++
++      tab->bridge->SetCallback(base::BindRepeating(
++          [](ShellBrowserMainParts* self, int tab_id,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            uint32_t ctx_id = params.ca_context_id;
++            int pw = params.pixel_size.width();
++            int ph = params.pixel_size.height();
++            content::GetUIThreadTaskRunner({})->PostTask(
++                FROM_HERE,
++                base::BindOnce([](ShellBrowserMainParts* s, int tid,
++                                  uint32_t cid, int pw, int ph) {
++                  termsurf::TermSurfMessage msg;
++                  auto* ca = msg.mutable_ca_context();
++                  ca->set_tab_id(tid);
++                  ca->set_ca_context_id(cid);
++                  ca->set_pixel_width(pw);
++                  ca->set_pixel_height(ph);
++                  s->SendProtobuf(msg);
++                  LOG(INFO) << "[ProfileServer] Tab compositor ca_context_id="
++                            << cid << " for tab " << tid << " (socket)";
++                }, base::Unretained(self), tab_id, ctx_id, pw, ph));
++          },
++          base::Unretained(self), cb_tab_id,
++          base::Unretained(last_id)));
++    } else {
++      // XPC mode: CALayerParams callback sends via XPC.
++      xpc_connection_t cb_conn = tab_conn;
++      auto ca_layer_callback = base::BindRepeating(
++          [](int tab_id, xpc_connection_t conn,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++            xpc_dictionary_set_string(msg, "action", "ca_context");
++            xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                      params.ca_context_id);
++            xpc_dictionary_set_int64(msg, "tab_id", tab_id);
++            xpc_dictionary_set_uint64(msg, "pixel_width",
++                                      params.pixel_size.width());
++            xpc_dictionary_set_uint64(msg, "pixel_height",
++                                      params.pixel_size.height());
++            xpc_connection_send_message(conn, msg);
++            xpc_release(msg);
++            LOG(INFO) << "[ProfileServer] Sent ca_context_id="
++                      << params.ca_context_id << " for tab " << tab_id
++                      << " (" << params.pixel_size.width() << "x"
++                      << params.pixel_size.height() << ")";
++          },
++          cb_tab_id, cb_conn,
++          base::Owned(last_id));
++      SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++      tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++      tab_observer->SetLastCAContextIdPtr(last_id);
++
++      tab->bridge->SetCallback(base::BindRepeating(
++          [](int tab_id, xpc_connection_t conn,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++            xpc_dictionary_set_string(msg, "action", "ca_context");
++            xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                      params.ca_context_id);
++            xpc_dictionary_set_int64(msg, "tab_id", tab_id);
++            xpc_dictionary_set_uint64(msg, "pixel_width",
++                                      params.pixel_size.width());
++            xpc_dictionary_set_uint64(msg, "pixel_height",
++                                      params.pixel_size.height());
++            xpc_connection_send_message(conn, msg);
++            xpc_release(msg);
++            LOG(INFO) << "[ProfileServer] Tab compositor ca_context_id="
++                      << params.ca_context_id << " for tab " << tab_id;
++          },
++          cb_tab_id, cb_conn,
++          base::Unretained(last_id)));
++    }
+   }
+ 
+   // Store parent ui layer on observer for re-registration (Issue 635).
+@@ -707,36 +981,48 @@ void ShellBrowserMainParts::CreateDevToolsTab(
+   tab_observer->SetTabId(tab->tab_id);
+   tab_observer->SetInspectedTabId(inspected_tab_id);
+ 
+-  // Open a new connection to the app for this tab.
+-  xpc_connection_t tab_conn = xpc_connection_create_from_endpoint(app_endpoint_);
++  xpc_connection_t tab_conn = nullptr;
+ 
+-  ShellBrowserMainParts* self = this;
++  if (socket_fd_ >= 0) {
++    // Socket mode: send tab_ready via protobuf (Issue 701).
++    termsurf::TermSurfMessage tr_msg;
++    tr_msg.mutable_tab_ready()->set_pane_id(pane_id);
++    tr_msg.mutable_tab_ready()->set_tab_id(tab->tab_id);
++    SendProtobuf(tr_msg);
+ 
+-  xpc_connection_set_event_handler(tab_conn, ^(xpc_object_t event) {
+-    if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+-      if (event == XPC_ERROR_CONNECTION_INVALID ||
+-          event == XPC_ERROR_CONNECTION_INTERRUPTED) {
+-        xpc_connection_t conn = tab_conn;
+-        content::GetUIThreadTaskRunner({})->PostTask(
+-            FROM_HERE,
+-            base::BindOnce(&ShellBrowserMainParts::CloseTab,
+-                           base::Unretained(self), conn));
++    tab_observer->SetSocketFd(socket_fd_);
++  } else {
++    // XPC mode: open a new connection to the app for this tab.
++    tab_conn = xpc_connection_create_from_endpoint(app_endpoint_);
++
++    ShellBrowserMainParts* self = this;
++
++    xpc_connection_set_event_handler(tab_conn, ^(xpc_object_t event) {
++      if (xpc_get_type(event) == XPC_TYPE_ERROR) {
++        if (event == XPC_ERROR_CONNECTION_INVALID ||
++            event == XPC_ERROR_CONNECTION_INTERRUPTED) {
++          xpc_connection_t conn = tab_conn;
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce(&ShellBrowserMainParts::CloseTab,
++                             base::Unretained(self), conn));
++        }
+       }
+-    }
+-  });
++    });
++
++    xpc_connection_resume(tab_conn);
+ 
+-  xpc_connection_resume(tab_conn);
++    // Send tab_ready via XPC.
++    xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_string(msg, "action", "tab_ready");
++    xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++    xpc_dictionary_set_int64(msg, "tab_id", tab->tab_id);
++    xpc_connection_send_message(tab_conn, msg);
++    xpc_release(msg);
+ 
+-  // Send tab_ready message.
+-  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-  xpc_dictionary_set_string(msg, "action", "tab_ready");
+-  xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
+-  xpc_dictionary_set_int64(msg, "tab_id", tab->tab_id);
+-  xpc_connection_send_message(tab_conn, msg);
+-  xpc_release(msg);
++    tab_observer->SetConnection(tab_conn);
++  }
+ 
+-  // Hand the connection to the observer and start observing.
+-  tab_observer->SetConnection(tab_conn);
+   tab_observer->ObserveContents(shell->web_contents());
+ 
+   // Register cursor change and CALayerParams callbacks.
+@@ -748,57 +1034,119 @@ void ShellBrowserMainParts::CreateDevToolsTab(
+         base::Unretained(tab_observer.get())));
+ 
+     int cb_tab_id = tab->tab_id;
+-    xpc_connection_t cb_conn = tab_conn;
+     auto* last_id = new uint32_t(0);
+-    auto ca_layer_callback = base::BindRepeating(
+-        [](int tab_id, xpc_connection_t conn,
+-           uint32_t* last_id, const gfx::CALayerParams& params) {
+-          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
+-            return;
+-          *last_id = params.ca_context_id;
+-          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-          xpc_dictionary_set_string(msg, "action", "ca_context");
+-          xpc_dictionary_set_uint64(msg, "ca_context_id",
+-                                    params.ca_context_id);
+-          xpc_dictionary_set_int64(msg, "tab_id", tab_id);
+-          xpc_dictionary_set_uint64(msg, "pixel_width",
+-                                    params.pixel_size.width());
+-          xpc_dictionary_set_uint64(msg, "pixel_height",
+-                                    params.pixel_size.height());
+-          xpc_connection_send_message(conn, msg);
+-          xpc_release(msg);
+-          LOG(INFO) << "[ProfileServer] DevTools ca_context_id="
+-                    << params.ca_context_id << " for tab " << tab_id;
+-        },
+-        cb_tab_id, cb_conn,
+-        base::Owned(last_id));
+-    SetCALayerParamsCallbackOnView(view, ca_layer_callback);
+-
+-    tab_observer->SetCALayerParamsCallback(ca_layer_callback);
+-    tab_observer->SetLastCAContextIdPtr(last_id);
+-
+-    tab->bridge->SetCallback(base::BindRepeating(
+-        [](int tab_id, xpc_connection_t conn,
+-           uint32_t* last_id, const gfx::CALayerParams& params) {
+-          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
+-            return;
+-          *last_id = params.ca_context_id;
+-          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-          xpc_dictionary_set_string(msg, "action", "ca_context");
+-          xpc_dictionary_set_uint64(msg, "ca_context_id",
+-                                    params.ca_context_id);
+-          xpc_dictionary_set_int64(msg, "tab_id", tab_id);
+-          xpc_dictionary_set_uint64(msg, "pixel_width",
+-                                    params.pixel_size.width());
+-          xpc_dictionary_set_uint64(msg, "pixel_height",
+-                                    params.pixel_size.height());
+-          xpc_connection_send_message(conn, msg);
+-          xpc_release(msg);
+-          LOG(INFO) << "[ProfileServer] DevTools tab compositor ca_context_id="
+-                    << params.ca_context_id << " for tab " << tab_id;
+-        },
+-        cb_tab_id, cb_conn,
+-        base::Unretained(last_id)));
++
++    if (socket_fd_ >= 0) {
++      // Socket mode: CALayerParams callback posts to UI thread (Issue 701).
++      ShellBrowserMainParts* self = this;
++      auto ca_layer_callback = base::BindRepeating(
++          [](ShellBrowserMainParts* self, int tab_id,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            uint32_t ctx_id = params.ca_context_id;
++            int pw = params.pixel_size.width();
++            int ph = params.pixel_size.height();
++            content::GetUIThreadTaskRunner({})->PostTask(
++                FROM_HERE,
++                base::BindOnce([](ShellBrowserMainParts* s, int tid,
++                                  uint32_t cid, int pw, int ph) {
++                  termsurf::TermSurfMessage msg;
++                  auto* ca = msg.mutable_ca_context();
++                  ca->set_tab_id(tid);
++                  ca->set_ca_context_id(cid);
++                  ca->set_pixel_width(pw);
++                  ca->set_pixel_height(ph);
++                  s->SendProtobuf(msg);
++                  LOG(INFO) << "[ProfileServer] DevTools ca_context_id=" << cid
++                            << " for tab " << tid << " (socket)";
++                }, base::Unretained(self), tab_id, ctx_id, pw, ph));
++          },
++          base::Unretained(self), cb_tab_id,
++          base::Owned(last_id));
++      SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++      tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++      tab_observer->SetLastCAContextIdPtr(last_id);
++
++      tab->bridge->SetCallback(base::BindRepeating(
++          [](ShellBrowserMainParts* self, int tab_id,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            uint32_t ctx_id = params.ca_context_id;
++            int pw = params.pixel_size.width();
++            int ph = params.pixel_size.height();
++            content::GetUIThreadTaskRunner({})->PostTask(
++                FROM_HERE,
++                base::BindOnce([](ShellBrowserMainParts* s, int tid,
++                                  uint32_t cid, int pw, int ph) {
++                  termsurf::TermSurfMessage msg;
++                  auto* ca = msg.mutable_ca_context();
++                  ca->set_tab_id(tid);
++                  ca->set_ca_context_id(cid);
++                  ca->set_pixel_width(pw);
++                  ca->set_pixel_height(ph);
++                  s->SendProtobuf(msg);
++                  LOG(INFO) << "[ProfileServer] DevTools tab compositor ca_context_id="
++                            << cid << " for tab " << tid << " (socket)";
++                }, base::Unretained(self), tab_id, ctx_id, pw, ph));
++          },
++          base::Unretained(self), cb_tab_id,
++          base::Unretained(last_id)));
++    } else {
++      // XPC mode: CALayerParams callback sends via XPC.
++      xpc_connection_t cb_conn = tab_conn;
++      auto ca_layer_callback = base::BindRepeating(
++          [](int tab_id, xpc_connection_t conn,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++            xpc_dictionary_set_string(msg, "action", "ca_context");
++            xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                      params.ca_context_id);
++            xpc_dictionary_set_int64(msg, "tab_id", tab_id);
++            xpc_dictionary_set_uint64(msg, "pixel_width",
++                                      params.pixel_size.width());
++            xpc_dictionary_set_uint64(msg, "pixel_height",
++                                      params.pixel_size.height());
++            xpc_connection_send_message(conn, msg);
++            xpc_release(msg);
++            LOG(INFO) << "[ProfileServer] DevTools ca_context_id="
++                      << params.ca_context_id << " for tab " << tab_id;
++          },
++          cb_tab_id, cb_conn,
++          base::Owned(last_id));
++      SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++      tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++      tab_observer->SetLastCAContextIdPtr(last_id);
++
++      tab->bridge->SetCallback(base::BindRepeating(
++          [](int tab_id, xpc_connection_t conn,
++             uint32_t* last_id, const gfx::CALayerParams& params) {
++            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++              return;
++            *last_id = params.ca_context_id;
++            xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++            xpc_dictionary_set_string(msg, "action", "ca_context");
++            xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                      params.ca_context_id);
++            xpc_dictionary_set_int64(msg, "tab_id", tab_id);
++            xpc_dictionary_set_uint64(msg, "pixel_width",
++                                      params.pixel_size.width());
++            xpc_dictionary_set_uint64(msg, "pixel_height",
++                                      params.pixel_size.height());
++            xpc_connection_send_message(conn, msg);
++            xpc_release(msg);
++            LOG(INFO) << "[ProfileServer] DevTools tab compositor ca_context_id="
++                      << params.ca_context_id << " for tab " << tab_id;
++          },
++          cb_tab_id, cb_conn,
++          base::Unretained(last_id)));
++    }
+   }
+ 
+   // Store parent ui layer on observer.
+@@ -1242,8 +1590,8 @@ void ShellBrowserMainParts::CloseTabById(int tab_id) {
+       //    the rendering pipeline from the compositor.
+       delete (*it)->shell.get();
+       (*it)->shell = nullptr;
+-      // 3. Cancel XPC connection.
+-      if ((*it)->tab_connection) {
++      // 3. Cancel XPC connection (skip in socket mode — Issue 701).
++      if (socket_fd_ < 0 && (*it)->tab_connection) {
+         xpc_connection_cancel((*it)->tab_connection);
+         xpc_release((*it)->tab_connection);
+         (*it)->tab_connection = nullptr;
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 0da6bb51cc0d6..2c4f9b1be2bf4 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -8,6 +8,7 @@
+ #include <memory>
+ #include <optional>
+ #include <string>
++#include <thread>
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+@@ -28,6 +29,8 @@
+ #include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
+ #endif
+ 
++namespace termsurf { class TermSurfMessage; }
++
+ namespace performance_manager {
+ class PerformanceManagerLifetime;
+ }  // namespace performance_manager
+@@ -125,6 +128,11 @@ class ShellBrowserMainParts : public BrowserMainParts {
+ 
+ #if BUILDFLAG(IS_MAC)
+   void StartDynamicMode(const std::string& gateway_name);
++  void StartSocketMode(const std::string& socket_path);
++  void SendProtobuf(const termsurf::TermSurfMessage& msg);
++  void SocketReaderLoop();
++  void HandleSocketMsg(std::unique_ptr<termsurf::TermSurfMessage> msg);
++  void HandleQueryTabsSocket();
+   void CreateTab(const GURL& url, const std::string& pane_id,
+                  int pixel_width, int pixel_height, bool dark);
+   void SetColorScheme(int tab_id, bool dark);
+@@ -158,6 +166,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
++  int socket_fd_ = -1;
+ 
+ #endif
+   int next_tab_id_ = 1;  // Auto-incrementing tab ID counter (Issue 684).
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.cc b/content/chromium_profile_server/browser/shell_tab_observer.cc
+index 3de58d0e6db73..9776adba45a10 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.cc
++++ b/content/chromium_profile_server/browser/shell_tab_observer.cc
+@@ -15,6 +15,9 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/chromium_profile_server/browser/termsurf.pb.h"
++
++#include <unistd.h>
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+@@ -33,6 +36,24 @@ void ShellTabObserver::SetConnection(xpc_connection_t conn) {
+   xpc_connection_ = conn;
+ }
+ 
++void ShellTabObserver::SetSocketFd(int fd) {
++  socket_fd_ = fd;
++}
++
++void ShellTabObserver::SendSocketMessage(
++    const termsurf::TermSurfMessage& msg) {
++  if (socket_fd_ < 0) return;
++  size_t size = msg.ByteSizeLong();
++  std::vector<uint8_t> buf(4 + size);
++  uint32_t len = static_cast<uint32_t>(size);
++  buf[0] = len & 0xFF;
++  buf[1] = (len >> 8) & 0xFF;
++  buf[2] = (len >> 16) & 0xFF;
++  buf[3] = (len >> 24) & 0xFF;
++  msg.SerializeToArray(&buf[4], size);
++  write(socket_fd_, buf.data(), buf.size());
++}
++
+ void ShellTabObserver::SetTabId(int tab_id) {
+   tab_id_ = tab_id;
+ }
+@@ -42,6 +63,14 @@ void ShellTabObserver::SetInspectedTabId(int id) {
+ }
+ 
+ void ShellTabObserver::OnCursorChanged(const ui::Cursor& cursor) {
++  if (socket_fd_ >= 0) {
++    termsurf::TermSurfMessage msg;
++    auto* cc = msg.mutable_cursor_changed();
++    cc->set_tab_id(tab_id_);
++    cc->set_cursor_type(static_cast<int64_t>(cursor.type()));
++    SendSocketMessage(msg);
++    return;
++  }
+   if (!xpc_connection_)
+     return;
+   xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+@@ -69,7 +98,7 @@ void ShellTabObserver::SetParentUiLayer(ui::Layer* layer) {
+ // cross-process navigation swaps the RenderViewHost (Issue 630, fix C2).
+ void ShellTabObserver::RenderViewHostChanged(
+     RenderViewHost* old_host, RenderViewHost* new_host) {
+-  if (!new_host || !xpc_connection_)
++  if (!new_host || (!xpc_connection_ && socket_fd_ < 0))
+     return;
+   auto* view = web_contents()->GetRenderWidgetHostView();
+   if (!view)
+@@ -114,9 +143,6 @@ void ShellTabObserver::DidFinishNavigation(
+   if (last_ca_context_id_)
+     *last_ca_context_id_ = 0;
+ 
+-  if (!xpc_connection_)
+-    return;
+-
+   // For DevTools tabs, send the synthetic devtools://N URL instead of the
+   // internal HTTP URL (Issue 684).
+   std::string url;
+@@ -130,17 +156,34 @@ void ShellTabObserver::DidFinishNavigation(
+             << " url=" << url
+             << " tab=" << tab_id_;
+ 
+-  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-  xpc_dictionary_set_string(msg, "action", "url_changed");
+-  xpc_dictionary_set_int64(msg, "tab_id", tab_id_);
+-  xpc_dictionary_set_string(msg, "url", url.c_str());
+-  xpc_connection_send_message(xpc_connection_, msg);
+-  xpc_release(msg);
++  if (socket_fd_ >= 0) {
++    termsurf::TermSurfMessage msg;
++    auto* uc = msg.mutable_url_changed();
++    uc->set_tab_id(tab_id_);
++    uc->set_url(url);
++    SendSocketMessage(msg);
++  } else if (xpc_connection_) {
++    xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_string(msg, "action", "url_changed");
++    xpc_dictionary_set_int64(msg, "tab_id", tab_id_);
++    xpc_dictionary_set_string(msg, "url", url.c_str());
++    xpc_connection_send_message(xpc_connection_, msg);
++    xpc_release(msg);
++  }
+ #endif
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
+ void ShellTabObserver::SendLoadingState(const char* state, int progress) {
++  if (socket_fd_ >= 0) {
++    termsurf::TermSurfMessage msg;
++    auto* ls = msg.mutable_loading_state();
++    ls->set_tab_id(tab_id_);
++    ls->set_state(state);
++    ls->set_progress(progress);
++    SendSocketMessage(msg);
++    return;
++  }
+   if (!xpc_connection_)
+     return;
+   xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+@@ -189,7 +232,7 @@ void ShellTabObserver::DidFailLoad(RenderFrameHost* render_frame_host,
+ 
+ void ShellTabObserver::TitleWasSet(NavigationEntry* entry) {
+ #if BUILDFLAG(IS_MAC)
+-  if (!xpc_connection_ || !entry)
++  if (!entry)
+     return;
+ 
+   std::string title = base::UTF16ToUTF8(entry->GetTitleForDisplay());
+@@ -197,12 +240,20 @@ void ShellTabObserver::TitleWasSet(NavigationEntry* entry) {
+   LOG(INFO) << "[ShellTabObserver] TitleWasSet tab=" << tab_id_
+             << " title=" << title;
+ 
+-  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-  xpc_dictionary_set_string(msg, "action", "title_changed");
+-  xpc_dictionary_set_int64(msg, "tab_id", tab_id_);
+-  xpc_dictionary_set_string(msg, "title", title.c_str());
+-  xpc_connection_send_message(xpc_connection_, msg);
+-  xpc_release(msg);
++  if (socket_fd_ >= 0) {
++    termsurf::TermSurfMessage msg;
++    auto* tc = msg.mutable_title_changed();
++    tc->set_tab_id(tab_id_);
++    tc->set_title(title);
++    SendSocketMessage(msg);
++  } else if (xpc_connection_) {
++    xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_string(msg, "action", "title_changed");
++    xpc_dictionary_set_int64(msg, "tab_id", tab_id_);
++    xpc_dictionary_set_string(msg, "title", title.c_str());
++    xpc_connection_send_message(xpc_connection_, msg);
++    xpc_release(msg);
++  }
+ #endif
+ }
+ 
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.h b/content/chromium_profile_server/browser/shell_tab_observer.h
+index a42fc8c773ccc..7245aedee5d44 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.h
++++ b/content/chromium_profile_server/browser/shell_tab_observer.h
+@@ -19,6 +19,7 @@
+ #include <xpc/xpc.h>
+ #endif
+ 
++namespace termsurf { class TermSurfMessage; }
+ namespace ui { class Layer; }
+ 
+ namespace content {
+@@ -54,6 +55,7 @@ class ShellTabObserver : public WebContentsObserver {
+                              RenderViewHost* new_host) override;
+ 
+   void SetConnection(xpc_connection_t conn);
++  void SetSocketFd(int fd);
+   void SetTabId(int tab_id);
+   void SetInspectedTabId(int id);
+   void OnCursorChanged(const ui::Cursor& cursor);
+@@ -74,7 +76,10 @@ class ShellTabObserver : public WebContentsObserver {
+ #if BUILDFLAG(IS_MAC)
+   void SendLoadingState(const char* state, int progress);
+ 
++  void SendSocketMessage(const termsurf::TermSurfMessage& msg);
++
+   xpc_connection_t xpc_connection_ = nullptr;
++  int socket_fd_ = -1;
+   int tab_id_ = 0;
+   int inspected_tab_id_ = 0;  // Nonzero = DevTools tab; send synthetic URL.
+   CALayerParamsCallback ca_layer_params_callback_;
+diff --git a/content/chromium_profile_server/common/shell_switches.h b/content/chromium_profile_server/common/shell_switches.h
+index 5eb67c5c532ae..63ce3e3d43cb9 100644
+--- a/content/chromium_profile_server/common/shell_switches.h
++++ b/content/chromium_profile_server/common/shell_switches.h
+@@ -61,6 +61,9 @@ inline constexpr char kTestRegisterStandardScheme[] =
+ // XPC Mach service name of the compositor to connect to.
+ inline constexpr char kXpcService[] = "xpc-service";
+ 
++// Unix socket path for IPC (replaces XPC).
++inline constexpr char kIpcSocket[] = "ipc-socket";
++
+ // Hide the window (run as a headless sender for XPC frame delivery).
+ inline constexpr char kHidden[] = "hidden";
+ 
+-- 
+2.50.1 (Apple Git-155)
+

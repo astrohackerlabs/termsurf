@@ -1,0 +1,96 @@
+From 2bcc11a75a0cf15f65f80718538eabdce9fa0e45 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 22 Feb 2026 17:55:54 -0600
+Subject: [PATCH 33/65] Restore resize XPC handler for CALayerHost
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The capturer is gone, but the view must still know
+When the pane grows wide or the window shrinks low.
+ResizeTab sets the size, the CAContext complies—
+Window Server redraws without batting its eyes.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 43 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  2 +
+ 2 files changed, 45 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index cdfc929a34b3b..3eb4349e65d8c 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -217,6 +217,15 @@ void ShellBrowserMainParts::StartDynamicMode(
+             base::BindOnce(&ShellBrowserMainParts::CreateTab,
+                            base::Unretained(self), GURL(url), pane_id,
+                            pw, ph));
++      } else if (action && std::string_view(action) == "resize") {
++        const char* rpane = xpc_dictionary_get_string(event, "pane_id");
++        std::string resize_pane(rpane ? rpane : "");
++        int pw = (int)xpc_dictionary_get_uint64(event, "pixel_width");
++        int ph = (int)xpc_dictionary_get_uint64(event, "pixel_height");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::ResizeTab,
++                           base::Unretained(self), resize_pane, pw, ph));
+       } else if (action && std::string_view(action) == "mouse_event") {
+         const char* pane = xpc_dictionary_get_string(event, "pane_id");
+         const char* type_str = xpc_dictionary_get_string(event, "type");
+@@ -430,6 +439,40 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+             << tabs_.size() << " tab(s) active";
+ }
+ 
++void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
++                                      int pixel_width,
++                                      int pixel_height) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  if (pane_id.empty() || pixel_width <= 0 || pixel_height <= 0)
++    return;
++
++  // Find the tab for this pane.
++  TabState* tab = nullptr;
++  for (auto& t : tabs_) {
++    if (t->pane_id == pane_id) {
++      tab = t.get();
++      break;
++    }
++  }
++  if (!tab)
++    return;
++
++  // Resize the WebContents view (logical pixels).
++  RenderWidgetHostView* view =
++      tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view) {
++    float scale = view->GetDeviceScaleFactor();
++    gfx::Size logical(
++        static_cast<int>(std::ceil(pixel_width / scale)),
++        static_cast<int>(std::ceil(pixel_height / scale)));
++    view->SetSize(logical);
++    LOG(INFO) << "[ProfileServer] Resized pane " << pane_id << " to "
++              << logical.ToString()
++              << " (physical " << pixel_width << "x" << pixel_height << ")";
++  }
++}
++
+ void ShellBrowserMainParts::HandleMouseEvent(
+     const std::string& pane_id, const std::string& type,
+     double x, double y, const std::string& button,
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 6cb4babdd871a..826b9aa070e1e 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -107,6 +107,8 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   void CreateTab(const GURL& url, const std::string& pane_id,
+                  int pixel_width, int pixel_height);
+   void CloseTab(xpc_connection_t conn);
++  void ResizeTab(const std::string& pane_id,
++                 int pixel_width, int pixel_height);
+   void HandleMouseEvent(const std::string& pane_id,
+                         const std::string& type,
+                         double x, double y,
+-- 
+2.50.1 (Apple Git-155)
+

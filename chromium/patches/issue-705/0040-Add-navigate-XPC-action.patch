@@ -1,0 +1,89 @@
+From 91020685c49b0d0aa89d57d9af59f38885cb4dd2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 24 Feb 2026 08:32:11 -0600
+Subject: [PATCH 40/65] Add navigate XPC action
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The URL bar could edit but not steer,
+A ship with a helm but no gear.
+Now "navigate" flows
+Through XPC's prose—
+Type a URL, press Enter, you're here!
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 27 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  1 +
+ 2 files changed, 28 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 93ae40af8009f..400275eb8d015 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -32,8 +32,10 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/storage_partition.h"
++#include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/reload_type.h"
+ #include "content/public/browser/web_contents.h"
++#include "ui/base/page_transition_types.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/result_codes.h"
+ #include "content/public/common/url_constants.h"
+@@ -296,6 +298,15 @@ void ShellBrowserMainParts::StartDynamicMode(
+             base::BindOnce(&ShellBrowserMainParts::HandleKeyEvent,
+                            base::Unretained(self), s_pane, s_type, vk,
+                            s_utf8, mods));
++      } else if (action && std::string_view(action) == "navigate") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        const char* url_str = xpc_dictionary_get_string(event, "url");
++        std::string s_pane(pane ? pane : "");
++        std::string s_url(url_str ? url_str : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::NavigateTab,
++                           base::Unretained(self), s_pane, GURL(s_url)));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -864,6 +875,22 @@ void ShellBrowserMainParts::HandleKeyEvent(
+             << " pane=" << pane_id;
+ }
+ 
++void ShellBrowserMainParts::NavigateTab(const std::string& pane_id,
++                                        const GURL& url) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  for (auto& tab : tabs_) {
++    if (tab->pane_id == pane_id) {
++      content::NavigationController::LoadURLParams params(url);
++      params.transition_type = ui::PAGE_TRANSITION_TYPED;
++      tab->shell->web_contents()->GetController().LoadURLWithParams(params);
++      LOG(INFO) << "[ProfileServer] Navigate pane " << pane_id
++                << " to " << url.spec();
++      return;
++    }
++  }
++  LOG(WARNING) << "[ProfileServer] Navigate: no tab for pane " << pane_id;
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 2c0824eb1c039..b6e6b8746dc3a 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -135,6 +135,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   void HandleKeyEvent(const std::string& pane_id, const std::string& type,
+                       int windows_key_code, const std::string& utf8_text,
+                       uint64_t modifiers);
++  void NavigateTab(const std::string& pane_id, const GURL& url);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+-- 
+2.50.1 (Apple Git-155)
+

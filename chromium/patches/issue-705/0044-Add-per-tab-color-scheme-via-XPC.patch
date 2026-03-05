@@ -1,0 +1,197 @@
+From 1317a117a5a9ab9404e61c45c4946210034e29a0 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 28 Feb 2026 19:35:37 -0600
+Subject: [PATCH 44/65] Add per-tab color scheme via XPC
+
+The dark mode came knocking at the door,
+"prefers-color-scheme" it was looking for.
+XPC now carries dark or light,
+Each tab remembers day or night.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 45 ++++++++++++++++++-
+ .../browser/shell_browser_main_parts.h        | 13 +++++-
+ .../browser/shell_content_browser_client.cc   | 19 +++++---
+ 3 files changed, 69 insertions(+), 8 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 400275eb8d015..b37e2ea40accd 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -220,11 +220,12 @@ void ShellBrowserMainParts::StartDynamicMode(
+         std::string pane_id(pane_id_str ? pane_id_str : "");
+         int pw = (int)xpc_dictionary_get_uint64(event, "pixel_width");
+         int ph = (int)xpc_dictionary_get_uint64(event, "pixel_height");
++        bool dark = xpc_dictionary_get_bool(event, "dark");
+         content::GetUIThreadTaskRunner({})->PostTask(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::CreateTab,
+                            base::Unretained(self), GURL(url), pane_id,
+-                           pw, ph));
++                           pw, ph, dark));
+       } else if (action && std::string_view(action) == "resize") {
+         const char* rpane = xpc_dictionary_get_string(event, "pane_id");
+         std::string resize_pane(rpane ? rpane : "");
+@@ -307,6 +308,14 @@ void ShellBrowserMainParts::StartDynamicMode(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::NavigateTab,
+                            base::Unretained(self), s_pane, GURL(s_url)));
++      } else if (action && std::string_view(action) == "set_color_scheme") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        bool dark = xpc_dictionary_get_bool(event, "dark");
++        std::string s_pane(pane ? pane : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::SetColorScheme,
++                           base::Unretained(self), s_pane, dark));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -343,7 +352,8 @@ void ShellBrowserMainParts::StartDynamicMode(
+ void ShellBrowserMainParts::CreateTab(const GURL& url,
+                                       const std::string& pane_id,
+                                       int pixel_width,
+-                                      int pixel_height) {
++                                      int pixel_height,
++                                      bool dark) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+   // Create a new Shell + WebContents.
+@@ -374,6 +384,9 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   auto tab = std::make_unique<TabState>();
+   tab->shell = shell;
+   tab->pane_id = pane_id;
++  tab->preferred_color_scheme = dark
++      ? blink::mojom::PreferredColorScheme::kDark
++      : blink::mojom::PreferredColorScheme::kLight;
+ 
+   tab->widget_mac = std::make_unique<ui::AcceleratedWidgetMac>();
+   ui::ContextFactory* context_factory = content::GetContextFactory();
+@@ -891,6 +904,34 @@ void ShellBrowserMainParts::NavigateTab(const std::string& pane_id,
+   LOG(WARNING) << "[ProfileServer] Navigate: no tab for pane " << pane_id;
+ }
+ 
++void ShellBrowserMainParts::SetColorScheme(const std::string& pane_id,
++                                            bool dark) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  for (auto& tab : tabs_) {
++    if (tab->pane_id == pane_id) {
++      tab->preferred_color_scheme = dark
++          ? blink::mojom::PreferredColorScheme::kDark
++          : blink::mojom::PreferredColorScheme::kLight;
++      tab->shell->web_contents()->OnWebPreferencesChanged();
++      LOG(INFO) << "[ProfileServer] Set color scheme pane " << pane_id
++                << " dark=" << dark;
++      return;
++    }
++  }
++  LOG(WARNING) << "[ProfileServer] SetColorScheme: no tab for pane " << pane_id;
++}
++
++std::optional<blink::mojom::PreferredColorScheme>
++ShellBrowserMainParts::GetColorSchemeForWebContents(
++    WebContents* web_contents) const {
++  for (const auto& tab : tabs_) {
++    if (tab->shell && tab->shell->web_contents() == web_contents) {
++      return tab->preferred_color_scheme;
++    }
++  }
++  return std::nullopt;
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index b6e6b8746dc3a..622999aaef3a9 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -6,6 +6,7 @@
+ #define CONTENT_CHROMIUM_PROFILE_SERVER_BROWSER_SHELL_BROWSER_MAIN_PARTS_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+@@ -14,6 +15,7 @@
+ #include "build/build_config.h"
+ #include "content/public/browser/browser_main_parts.h"
+ #include "content/chromium_profile_server/browser/shell_browser_context.h"
++#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <xpc/xpc.h>
+@@ -41,6 +43,7 @@ class PersistentCompositorBridge;
+ class Shell;
+ class ShellPlatformDelegate;
+ class ShellTabObserver;
++class WebContents;
+ 
+ #if BUILDFLAG(IS_FUCHSIA)
+ class FuchsiaViewPresenter;
+@@ -75,6 +78,11 @@ class ShellBrowserMainParts : public BrowserMainParts {
+ #endif
+ 
+   ShellBrowserContext* browser_context() { return browser_context_.get(); }
++
++  // Returns the preferred color scheme for the given WebContents, or nullopt
++  // if no tab state exists for it.
++  std::optional<blink::mojom::PreferredColorScheme>
++  GetColorSchemeForWebContents(WebContents* web_contents) const;
+   ShellBrowserContext* off_the_record_browser_context() {
+     return off_the_record_browser_context_.get();
+   }
+@@ -100,6 +108,8 @@ class ShellBrowserMainParts : public BrowserMainParts {
+     ~TabState();
+     raw_ptr<Shell> shell;
+     std::unique_ptr<ShellTabObserver> tab_observer;
++    blink::mojom::PreferredColorScheme preferred_color_scheme =
++        blink::mojom::PreferredColorScheme::kDark;
+ #if BUILDFLAG(IS_MAC)
+     xpc_connection_t tab_connection = nullptr;
+     std::string pane_id;
+@@ -114,7 +124,8 @@ class ShellBrowserMainParts : public BrowserMainParts {
+ #if BUILDFLAG(IS_MAC)
+   void StartDynamicMode(const std::string& gateway_name);
+   void CreateTab(const GURL& url, const std::string& pane_id,
+-                 int pixel_width, int pixel_height);
++                 int pixel_width, int pixel_height, bool dark);
++  void SetColorScheme(const std::string& pane_id, bool dark);
+   void CloseTab(xpc_connection_t conn);
+   void ResizeTab(const std::string& pane_id,
+                  int pixel_width, int pixel_height);
+diff --git a/content/chromium_profile_server/browser/shell_content_browser_client.cc b/content/chromium_profile_server/browser/shell_content_browser_client.cc
+index 320fef1a276ed..f35c1baccd1ba 100644
+--- a/content/chromium_profile_server/browser/shell_content_browser_client.cc
++++ b/content/chromium_profile_server/browser/shell_content_browser_client.cc
+@@ -578,11 +578,20 @@ void ShellContentBrowserClient::OverrideWebPreferences(
+     WebContents* web_contents,
+     SiteInstance& main_frame_site,
+     blink::web_pref::WebPreferences* prefs) {
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+-          switches::kForceDarkMode)) {
+-    prefs->preferred_color_scheme = blink::mojom::PreferredColorScheme::kDark;
+-  } else {
+-    prefs->preferred_color_scheme = blink::mojom::PreferredColorScheme::kLight;
++  // Per-tab color scheme from XPC (Issue 680).
++  auto* main_parts = shell_browser_main_parts();
++  if (main_parts) {
++    auto scheme = main_parts->GetColorSchemeForWebContents(web_contents);
++    if (scheme.has_value()) {
++      prefs->preferred_color_scheme = scheme.value();
++    } else if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++                   switches::kForceDarkMode)) {
++      prefs->preferred_color_scheme =
++          blink::mojom::PreferredColorScheme::kDark;
++    } else {
++      prefs->preferred_color_scheme =
++          blink::mojom::PreferredColorScheme::kDark;
++    }
+   }
+ 
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+-- 
+2.50.1 (Apple Git-155)
+

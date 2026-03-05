@@ -1,0 +1,234 @@
+From 7f7cd93278a174c201cb78d6ab0dee038c188ba9 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 23 Feb 2026 08:40:01 -0600
+Subject: [PATCH 34/65] 630 Exp 3: the overlay lives at last
+
+The window hid, the compositor slept,
+The callbacks staled, no context kept.
+Seven fixes, both Zig and C,
+Now navigation sets the overlay free.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 26 ++++++++---
+ .../browser/shell_platform_delegate_mac.mm    |  9 +++-
+ .../browser/shell_tab_observer.cc             | 43 +++++++++++++++++++
+ .../browser/shell_tab_observer.h              | 17 ++++++++
+ 4 files changed, 87 insertions(+), 8 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 3eb4349e65d8c..b20fe2ebea321 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -335,8 +335,9 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   LOG(INFO) << "[ProfileServer] Created tab for pane " << pane_id
+             << ", URL: " << url.spec();
+ 
+-  // Resize WebContents view to match the terminal viewport.
+-  // SetSize takes logical pixels; Chromium applies device_scale_factor internally.
++  // Resize via Shell::ResizeWebContentForTests which sets the hidden
++  // NSWindow's contentView.frame (Issue 630, fix C4). This ensures
++  // BrowserCompositorMac::DidNavigate() reads the correct dfh_size_dip_.
+   if (pixel_width > 0 && pixel_height > 0) {
+     RenderWidgetHostView* view =
+         shell->web_contents()->GetRenderWidgetHostView();
+@@ -345,7 +346,7 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+       gfx::Size logical(
+           static_cast<int>(std::ceil(pixel_width / scale)),
+           static_cast<int>(std::ceil(pixel_height / scale)));
+-      view->SetSize(logical);
++      shell->ResizeWebContentForTests(logical);
+       LOG(INFO) << "[ProfileServer] Set view size to " << logical.ToString()
+                 << " (physical " << pixel_width << "x" << pixel_height
+                 << ", scale " << scale << ")";
+@@ -401,7 +402,10 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+     // ID — Window Server composites directly from GPU VRAM.
+     std::string cb_pane_id = pane_id;
+     xpc_connection_t cb_conn = tab_conn;
+-    SetCALayerParamsCallbackOnView(view, base::BindRepeating(
++    // Shared dedup gate — the callback owns it via base::Owned, observer
++    // holds a non-owning pointer for reset on navigation (Issue 630, C3).
++    auto* last_id = new uint32_t(0);
++    auto ca_layer_callback = base::BindRepeating(
+         [](const std::string& pane_id, xpc_connection_t conn,
+            uint32_t* last_id, const gfx::CALayerParams& params) {
+           if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
+@@ -424,7 +428,13 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+                     << params.pixel_size.height() << ")";
+         },
+         cb_pane_id, cb_conn,
+-        base::Owned(new uint32_t(0))));
++        base::Owned(last_id));
++    SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++
++    // Store callback and dedup pointer on observer for re-registration
++    // after view swap (Issue 630, C2/C3).
++    tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++    tab_observer->SetLastCAContextIdPtr(last_id);
+   }
+ 
+   // Store tab state.
+@@ -458,7 +468,9 @@ void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
+   if (!tab)
+     return;
+ 
+-  // Resize the WebContents view (logical pixels).
++  // Resize via Shell::ResizeWebContentForTests which sets the hidden
++  // NSWindow's contentView.frame (Issue 630, fix C4). This ensures
++  // BrowserCompositorMac::DidNavigate() reads the correct dfh_size_dip_.
+   RenderWidgetHostView* view =
+       tab->shell->web_contents()->GetRenderWidgetHostView();
+   if (view) {
+@@ -466,7 +478,7 @@ void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
+     gfx::Size logical(
+         static_cast<int>(std::ceil(pixel_width / scale)),
+         static_cast<int>(std::ceil(pixel_height / scale)));
+-    view->SetSize(logical);
++    tab->shell->ResizeWebContentForTests(logical);
+     LOG(INFO) << "[ProfileServer] Resized pane " << pane_id << " to "
+               << logical.ToString()
+               << " (physical " << pixel_width << "x" << pixel_height << ")";
+diff --git a/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm b/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm
+index b2abd8ae68535..d00e9bf4de0d7 100644
+--- a/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm
++++ b/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm
+@@ -206,7 +206,14 @@ void MakeShellButton(NSRect* rect,
+ 
+   // Show the new window (unless --hidden).
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHidden)) {
+-    [window orderOut:nil];
++    // Make the window fully transparent instead of ordering it out
++    // (Issue 630, fix C1). orderOut: triggers
++    // NSWindowDidChangeOcclusionStateNotification which sets
++    // render_widget_host_is_hidden_ = true, detaching the compositor.
++    // setAlphaValue:0 keeps the window in the window list so the
++    // compositor stays active and CAContext survives navigation.
++    [window setAlphaValue:0.0];
++    [window orderWindow:NSWindowBelow relativeTo:0];
+   } else {
+     [window makeKeyAndOrderFront:nil];
+   }
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.cc b/content/chromium_profile_server/browser/shell_tab_observer.cc
+index 7258a72d47c3b..4c053cdf116ce 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.cc
++++ b/content/chromium_profile_server/browser/shell_tab_observer.cc
+@@ -8,10 +8,16 @@
+ 
+ #include "base/logging.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_view_host.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+ 
++#if BUILDFLAG(IS_MAC)
++#include "content/browser/renderer_host/render_widget_host_impl.h"
++#include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
++#endif
++
+ namespace content {
+ 
+ ShellTabObserver::ShellTabObserver() = default;
+@@ -38,6 +44,38 @@ void ShellTabObserver::OnCursorChanged(const ui::Cursor& cursor) {
+   xpc_connection_send_message(xpc_connection_, msg);
+   xpc_release(msg);
+ }
++
++void ShellTabObserver::SetCALayerParamsCallback(CALayerParamsCallback callback) {
++  ca_layer_params_callback_ = std::move(callback);
++}
++
++void ShellTabObserver::SetLastCAContextIdPtr(uint32_t* ptr) {
++  last_ca_context_id_ = ptr;
++}
++
++// Re-register CALayerParams and cursor callbacks on the new view after a
++// cross-process navigation swaps the RenderViewHost (Issue 630, fix C2).
++void ShellTabObserver::RenderViewHostChanged(
++    RenderViewHost* old_host, RenderViewHost* new_host) {
++  if (!new_host || !xpc_connection_)
++    return;
++  auto* view = web_contents()->GetRenderWidgetHostView();
++  if (!view)
++    return;
++
++  LOG(INFO) << "[ShellTabObserver] RenderViewHostChanged pane=" << pane_id_
++            << " — re-registering callbacks on new view";
++
++  // Re-register CALayerParams callback.
++  if (ca_layer_params_callback_)
++    SetCALayerParamsCallbackOnView(view, ca_layer_params_callback_);
++
++  // Re-register cursor callback.
++  auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++      view->GetRenderWidgetHost());
++  rwhi->SetCursorChangedCallback(base::BindRepeating(
++      &ShellTabObserver::OnCursorChanged, base::Unretained(this)));
++}
+ #endif
+ 
+ void ShellTabObserver::ObserveContents(WebContents* web_contents) {
+@@ -52,6 +90,11 @@ void ShellTabObserver::DidFinishNavigation(
+     return;
+ 
+ #if BUILDFLAG(IS_MAC)
++  // Reset the ca_context_id dedup gate so the callback fires even if the
++  // new CAContext reuses the same ID (Issue 630, fix C3).
++  if (last_ca_context_id_)
++    *last_ca_context_id_ = 0;
++
+   if (!xpc_connection_)
+     return;
+ 
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.h b/content/chromium_profile_server/browser/shell_tab_observer.h
+index 540423174d71a..1c249614b76ad 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.h
++++ b/content/chromium_profile_server/browser/shell_tab_observer.h
+@@ -7,10 +7,13 @@
+ 
+ #include <string>
+ 
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
+ #include "build/build_config.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "ui/base/cursor/cursor.h"
++#include "ui/gfx/ca_layer_params.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <xpc/xpc.h>
+@@ -43,9 +46,21 @@ class ShellTabObserver : public WebContentsObserver {
+                    int error_code) override;
+ 
+ #if BUILDFLAG(IS_MAC)
++  // WebContentsObserver: re-register callbacks on view swap (Issue 630, C2).
++  void RenderViewHostChanged(RenderViewHost* old_host,
++                             RenderViewHost* new_host) override;
++
+   void SetConnection(xpc_connection_t conn);
+   void SetPaneId(const std::string& pane_id);
+   void OnCursorChanged(const ui::Cursor& cursor);
++
++  // Store the CALayerParams callback for re-registration (Issue 630, C2).
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++  void SetCALayerParamsCallback(CALayerParamsCallback callback);
++
++  // Store the dedup gate pointer for reset on navigation (Issue 630, C3).
++  void SetLastCAContextIdPtr(uint32_t* ptr);
+ #endif
+ 
+  private:
+@@ -54,6 +69,8 @@ class ShellTabObserver : public WebContentsObserver {
+ 
+   xpc_connection_t xpc_connection_ = nullptr;
+   std::string pane_id_;
++  CALayerParamsCallback ca_layer_params_callback_;
++  raw_ptr<uint32_t> last_ca_context_id_ = nullptr;  // non-owning, owned by callback
+ #endif
+ };
+ 
+-- 
+2.50.1 (Apple Git-155)
+

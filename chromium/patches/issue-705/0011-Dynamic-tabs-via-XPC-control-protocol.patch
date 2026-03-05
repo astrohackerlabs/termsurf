@@ -1,0 +1,430 @@
+From ef28beb26245c1634cf97b09c796b76f34033977 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 15 Feb 2026 09:29:40 -0600
+Subject: [PATCH 11/65] Dynamic tabs via XPC control protocol
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+One connection sat waiting, lonely and still,
+Now tabs spring to life at the compositor's will.
+"Register," it whispers, "create_tab," it calls—
+Three panes dance at sixty through protocol halls.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 188 ++++++++++++++----
+ .../browser/shell_browser_main_parts.h        |  30 ++-
+ .../browser/shell_video_consumer.cc           |  34 +---
+ .../browser/shell_video_consumer.h            |  10 +-
+ .../common/shell_switches.h                   |   6 +-
+ 5 files changed, 182 insertions(+), 86 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 69678938f509e..583fdc27e180c 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/chromium_profile_server/browser/shell_browser_main_parts.h"
+ 
++#include <string_view>
+ #include <utility>
+ 
+ #include "base/base_switches.h"
+@@ -73,34 +74,13 @@
+ #include "content/chromium_profile_server/browser/fuchsia_view_presenter.h"
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++#include <xpc/xpc.h>
++#endif
++
+ namespace content {
+ 
+ namespace {
+-GURL GetStartupURL() {
+-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-  if (command_line->HasSwitch(switches::kBrowserTest))
+-    return GURL();
+-
+-#if BUILDFLAG(IS_ANDROID)
+-  // Delay renderer creation on Android until surface is ready.
+-  return GURL();
+-#else
+-  const base::CommandLine::StringVector& args = command_line->GetArgs();
+-  if (args.empty())
+-    return GURL("https://www.google.com/");
+-
+-#if BUILDFLAG(IS_WIN)
+-  GURL url(base::WideToUTF16(args[0]));
+-#else
+-  GURL url(args[0]);
+-#endif
+-  if (url.is_valid() && url.has_scheme())
+-    return url;
+-
+-  return net::FilePathToFileURL(
+-      base::MakeAbsoluteFilePath(base::FilePath(args[0])));
+-#endif
+-}
+ 
+ scoped_refptr<base::RefCountedMemory> PlatformResourceProvider(int key) {
+   if (key == IDR_DIR_HEADER_HTML) {
+@@ -116,6 +96,10 @@ ShellBrowserMainParts::ShellBrowserMainParts() = default;
+ 
+ ShellBrowserMainParts::~ShellBrowserMainParts() = default;
+ 
++ShellBrowserMainParts::TabState::TabState() = default;
++
++ShellBrowserMainParts::TabState::~TabState() = default;
++
+ void ShellBrowserMainParts::PostCreateMainMessageLoop() {
+ #if BUILDFLAG(IS_CHROMEOS)
+   ash::DBusThreadManager::Initialize();
+@@ -150,30 +134,143 @@ void ShellBrowserMainParts::InitializeBrowserContexts() {
+ }
+ 
+ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+-  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), GetStartupURL(),
+-                                        nullptr, gfx::Size());
+-
+-  video_consumer_ = std::make_unique<ShellVideoConsumer>();
+-
+ #if BUILDFLAG(IS_MAC)
+-  // If --xpc-service is specified, connect to the XPC Mach service to send
+-  // captured IOSurface frames to a receiver process.
+   base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
+   if (cmd->HasSwitch(switches::kXpcService)) {
+-    video_consumer_->ConnectToService(
+-        cmd->GetSwitchValueASCII(switches::kXpcService));
+-  }
+-  if (cmd->HasSwitch(switches::kSessionId)) {
+-    video_consumer_->SetSessionId(
+-        cmd->GetSwitchValueASCII(switches::kSessionId));
++    StartDynamicMode(cmd->GetSwitchValueASCII(switches::kXpcService));
++    return;
+   }
+ #endif
++  // Fallback: no XPC service specified. Should not happen in normal operation.
++  LOG(WARNING) << "[ProfileServer] No --xpc-service specified, idling.";
++}
++
++#if BUILDFLAG(IS_MAC)
++void ShellBrowserMainParts::StartDynamicMode(const std::string& service_name) {
++  xpc_service_name_ = service_name;
++
++  // Open control connection to the compositor's Mach service.
++  control_connection_ = xpc_connection_create_mach_service(
++      service_name.c_str(), nullptr, 0);
++
++  ShellBrowserMainParts* self = this;
++
++  xpc_connection_set_event_handler(control_connection_, ^(xpc_object_t event) {
++    if (xpc_get_type(event) == XPC_TYPE_DICTIONARY) {
++      const char* action = xpc_dictionary_get_string(event, "action");
++      if (action && std::string_view(action) == "create_tab") {
++        const char* url_str = xpc_dictionary_get_string(event, "url");
++        const char* tab_id_str = xpc_dictionary_get_string(event, "tab_id");
++        std::string url(url_str ? url_str : "about:blank");
++        std::string tab_id(tab_id_str ? tab_id_str : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::CreateTab,
++                           base::Unretained(self), GURL(url), tab_id));
++      }
++    } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
++      if (event == XPC_ERROR_CONNECTION_INVALID) {
++        LOG(ERROR) << "[ProfileServer] Control connection invalid";
++      } else if (event == XPC_ERROR_CONNECTION_INTERRUPTED) {
++        LOG(ERROR) << "[ProfileServer] Control connection interrupted";
++      }
++    }
++  });
++
++  xpc_connection_resume(control_connection_);
++  LOG(INFO) << "[ProfileServer] Connected to compositor: " << service_name;
++
++  // Send register message with profile name derived from user-data-dir.
++  std::string profile_name = "unknown";
++  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
++  if (cmd->HasSwitch(switches::kChromiumProfileServerUserDataDir)) {
++    base::FilePath data_dir(
++        cmd->GetSwitchValueASCII(switches::kChromiumProfileServerUserDataDir));
++    profile_name = data_dir.BaseName().value();
++  }
+ 
+-  // Observe the WebContents and attach the capturer when the
+-  // RenderWidgetHostView is ready (via RenderViewReady callback).
+-  video_consumer_->ObserveContents(shell->web_contents());
++  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(msg, "action", "register");
++  xpc_dictionary_set_string(msg, "profile", profile_name.c_str());
++  xpc_connection_send_message(control_connection_, msg);
++  xpc_release(msg);
++  LOG(INFO) << "[ProfileServer] Registered as profile: " << profile_name;
+ }
+ 
++void ShellBrowserMainParts::CreateTab(const GURL& url,
++                                      const std::string& tab_id) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  // Create a new Shell + WebContents.
++  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), url,
++                                        nullptr, gfx::Size());
++  LOG(INFO) << "[ProfileServer] Created tab '" << tab_id
++            << "' for URL: " << url.spec();
++
++  // Create a ShellVideoConsumer for this tab.
++  auto video_consumer = std::make_unique<ShellVideoConsumer>();
++
++  // Open a new connection to the compositor for this tab's frames.
++  xpc_connection_t tab_conn = xpc_connection_create_mach_service(
++      xpc_service_name_.c_str(), nullptr, 0);
++
++  ShellBrowserMainParts* self = this;
++
++  xpc_connection_set_event_handler(tab_conn, ^(xpc_object_t event) {
++    if (xpc_get_type(event) == XPC_TYPE_ERROR) {
++      if (event == XPC_ERROR_CONNECTION_INVALID ||
++          event == XPC_ERROR_CONNECTION_INTERRUPTED) {
++        xpc_connection_t conn = tab_conn;
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::CloseTab,
++                           base::Unretained(self), conn));
++      }
++    }
++  });
++
++  xpc_connection_resume(tab_conn);
++
++  // Send tab_ready message so the compositor can map this connection to a pane.
++  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(msg, "action", "tab_ready");
++  xpc_dictionary_set_string(msg, "tab_id", tab_id.c_str());
++  xpc_connection_send_message(tab_conn, msg);
++  xpc_release(msg);
++
++  // Hand the connection to the video consumer and start observing.
++  video_consumer->SetConnection(tab_conn);
++  video_consumer->ObserveContents(shell->web_contents());
++
++  // Store tab state.
++  auto tab = std::make_unique<TabState>();
++  tab->shell = shell;
++  tab->video_consumer = std::move(video_consumer);
++  tab->tab_connection = tab_conn;
++  tabs_.push_back(std::move(tab));
++
++  LOG(INFO) << "[ProfileServer] Tab '" << tab_id << "' ready, "
++            << tabs_.size() << " tab(s) active";
++}
++
++void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  for (auto it = tabs_.begin(); it != tabs_.end(); ++it) {
++    if ((*it)->tab_connection == conn) {
++      LOG(INFO) << "[ProfileServer] Closing tab, "
++                << (tabs_.size() - 1) << " tab(s) remaining";
++      (*it)->video_consumer.reset();
++      (*it)->shell->Close();
++      xpc_connection_cancel(conn);
++      xpc_release(conn);
++      tabs_.erase(it);
++      return;
++    }
++  }
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ void ShellBrowserMainParts::ToolkitInitialized() {
+   if (switches::IsRunWebTestsSwitchPresent())
+     return;
+@@ -223,7 +320,14 @@ void ShellBrowserMainParts::WillRunMainMessageLoop(
+ void ShellBrowserMainParts::PostMainMessageLoopRun() {
+   DCHECK_EQ(Shell::windows().size(), 0u);
+   ShellDevToolsManagerDelegate::StopHttpHandler();
+-  video_consumer_.reset();
++  tabs_.clear();
++#if BUILDFLAG(IS_MAC)
++  if (control_connection_) {
++    xpc_connection_cancel(control_connection_);
++    xpc_release(control_connection_);
++    control_connection_ = nullptr;
++  }
++#endif
+   browser_context_.reset();
+   off_the_record_browser_context_.reset();
+ #if BUILDFLAG(IS_LINUX)
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index bb658cecc5b0d..b90234135bfc7 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -6,12 +6,19 @@
+ #define CONTENT_CHROMIUM_PROFILE_SERVER_BROWSER_SHELL_BROWSER_MAIN_PARTS_H_
+ 
+ #include <memory>
++#include <string>
++#include <vector>
+ 
++#include "base/memory/raw_ptr.h"
+ #include "base/metrics/field_trial.h"
+ #include "build/build_config.h"
+ #include "content/public/browser/browser_main_parts.h"
+ #include "content/chromium_profile_server/browser/shell_browser_context.h"
+ 
++#if BUILDFLAG(IS_MAC)
++#include <xpc/xpc.h>
++#endif
++
+ #if BUILDFLAG(IS_IOS)
+ #include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
+ #endif
+@@ -27,6 +34,7 @@ class ChildExitObserver;
+ #endif
+ 
+ namespace content {
++class Shell;
+ class ShellPlatformDelegate;
+ class ShellVideoConsumer;
+ 
+@@ -82,9 +90,29 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   }
+ 
+  private:
++  // Per-tab state: one Shell + one ShellVideoConsumer per tab connection.
++  struct TabState {
++    TabState();
++    ~TabState();
++    raw_ptr<Shell> shell;
++    std::unique_ptr<ShellVideoConsumer> video_consumer;
++#if BUILDFLAG(IS_MAC)
++    xpc_connection_t tab_connection = nullptr;
++#endif
++  };
++
++#if BUILDFLAG(IS_MAC)
++  void StartDynamicMode(const std::string& service_name);
++  void CreateTab(const GURL& url, const std::string& tab_id);
++  void CloseTab(xpc_connection_t conn);
++
++  xpc_connection_t control_connection_ = nullptr;
++  std::string xpc_service_name_;
++#endif
++  std::vector<std::unique_ptr<TabState>> tabs_;
++
+   std::unique_ptr<ShellBrowserContext> browser_context_;
+   std::unique_ptr<ShellBrowserContext> off_the_record_browser_context_;
+-  std::unique_ptr<ShellVideoConsumer> video_consumer_;
+ 
+   std::unique_ptr<performance_manager::PerformanceManagerLifetime>
+       performance_manager_lifetime_;
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index c2b12aa018771..55694749366c9 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -27,35 +27,11 @@ namespace content {
+ 
+ ShellVideoConsumer::ShellVideoConsumer() = default;
+ 
+-ShellVideoConsumer::~ShellVideoConsumer() {
+-#if BUILDFLAG(IS_MAC)
+-  if (xpc_connection_) {
+-    xpc_connection_cancel(xpc_connection_);
+-    xpc_release(xpc_connection_);
+-    xpc_connection_ = nullptr;
+-  }
+-#endif
+-}
++ShellVideoConsumer::~ShellVideoConsumer() = default;
+ 
+ #if BUILDFLAG(IS_MAC)
+-void ShellVideoConsumer::ConnectToService(const std::string& name) {
+-  xpc_connection_ = xpc_connection_create_mach_service(
+-      name.c_str(), nullptr, 0);  // Client mode (no listener flag)
+-  xpc_connection_set_event_handler(xpc_connection_, ^(xpc_object_t event) {
+-    if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+-      if (event == XPC_ERROR_CONNECTION_INVALID) {
+-        LOG(ERROR) << "[ShellVideoConsumer] XPC connection invalid";
+-      } else if (event == XPC_ERROR_CONNECTION_INTERRUPTED) {
+-        LOG(ERROR) << "[ShellVideoConsumer] XPC connection interrupted";
+-      }
+-    }
+-  });
+-  xpc_connection_resume(xpc_connection_);
+-  LOG(INFO) << "[ShellVideoConsumer] Connected to XPC service: " << name;
+-}
+-
+-void ShellVideoConsumer::SetSessionId(const std::string& session_id) {
+-  session_id_ = session_id;
++void ShellVideoConsumer::SetConnection(xpc_connection_t conn) {
++  xpc_connection_ = conn;
+ }
+ #endif
+ 
+@@ -145,10 +121,6 @@ void ShellVideoConsumer::OnFrameCaptured(
+           xpc_dictionary_set_mach_send(msg, "iosurface_port", port);
+           xpc_dictionary_set_int64(msg, "width", (int64_t)width);
+           xpc_dictionary_set_int64(msg, "height", (int64_t)height);
+-          if (!session_id_.empty()) {
+-            xpc_dictionary_set_string(msg, "session_id",
+-                                      session_id_.c_str());
+-          }
+           xpc_connection_send_message(xpc_connection_, msg);
+           xpc_release(msg);
+           mach_port_deallocate(mach_task_self(), port);
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.h b/content/chromium_profile_server/browser/shell_video_consumer.h
+index 80602e3e1c7e0..b12ce9c3e37fc 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.h
++++ b/content/chromium_profile_server/browser/shell_video_consumer.h
+@@ -46,12 +46,9 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+   void RenderViewReady() override;
+ 
+ #if BUILDFLAG(IS_MAC)
+-  // Connects to an XPC Mach service by name. Once connected, OnFrameCaptured()
+-  // will send IOSurface Mach ports to the service every frame.
+-  void ConnectToService(const std::string& name);
+-
+-  // Sets the session identifier included in every XPC frame message.
+-  void SetSessionId(const std::string& session_id);
++  // Sets the XPC connection to use for sending IOSurface frames.
++  // The caller retains ownership of the connection.
++  void SetConnection(xpc_connection_t conn);
+ #endif
+ 
+   // viz::mojom::FrameSinkVideoConsumer:
+@@ -74,7 +71,6 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+ 
+ #if BUILDFLAG(IS_MAC)
+   xpc_connection_t xpc_connection_ = nullptr;
+-  std::string session_id_;
+ #endif
+ };
+ 
+diff --git a/content/chromium_profile_server/common/shell_switches.h b/content/chromium_profile_server/common/shell_switches.h
+index 821bdc0c7a6d4..5eb67c5c532ae 100644
+--- a/content/chromium_profile_server/common/shell_switches.h
++++ b/content/chromium_profile_server/common/shell_switches.h
+@@ -58,16 +58,12 @@ inline constexpr char kRunWebTests[] = "run-web-tests";
+ inline constexpr char kTestRegisterStandardScheme[] =
+     "test-register-standard-scheme";
+ 
+-// XPC Mach service name to send captured IOSurface frames to.
++// XPC Mach service name of the compositor to connect to.
+ inline constexpr char kXpcService[] = "xpc-service";
+ 
+ // Hide the window (run as a headless sender for XPC frame delivery).
+ inline constexpr char kHidden[] = "hidden";
+ 
+-// Session identifier sent with every XPC frame message. The receiver uses
+-// this to map frames to the correct pane.
+-inline constexpr char kSessionId[] = "session-id";
+-
+ // Helper that returns true if kRunWebTests is present in the command line,
+ // meaning Chromium Profile Server is running in web test mode.
+ bool IsRunWebTestsSwitchPresent();
+-- 
+2.50.1 (Apple Git-155)
+

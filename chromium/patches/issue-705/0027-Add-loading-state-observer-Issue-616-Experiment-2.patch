@@ -1,0 +1,99 @@
+From cdda5e035e00162ec0790a956c8381475b7d73d6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 14:41:02 -0600
+Subject: [PATCH 27/65] Add loading state observer (Issue 616 Experiment 2)
+
+---
+ .../browser/shell_video_consumer.cc           | 47 +++++++++++++++++++
+ .../browser/shell_video_consumer.h            | 10 ++++
+ 2 files changed, 57 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index 72e25b145ca1e..3ee00fc7a2d05 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -144,6 +144,53 @@ void ShellVideoConsumer::DidFinishNavigation(
+ #endif
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++void ShellVideoConsumer::SendLoadingState(const char* state, int progress) {
++  if (!xpc_connection_)
++    return;
++  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(msg, "action", "loading_state");
++  xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
++  xpc_dictionary_set_string(msg, "state", state);
++  xpc_dictionary_set_uint64(msg, "progress", progress);
++  xpc_connection_send_message(xpc_connection_, msg);
++  xpc_release(msg);
++}
++#endif
++
++void ShellVideoConsumer::DidStartLoading() {
++#if BUILDFLAG(IS_MAC)
++  LOG(INFO) << "[ShellVideoConsumer] DidStartLoading pane=" << pane_id_;
++  SendLoadingState("loading", 0);
++#endif
++}
++
++void ShellVideoConsumer::DidStopLoading() {
++#if BUILDFLAG(IS_MAC)
++  LOG(INFO) << "[ShellVideoConsumer] DidStopLoading pane=" << pane_id_;
++  SendLoadingState("done", 100);
++#endif
++}
++
++void ShellVideoConsumer::LoadProgressChanged(double progress) {
++#if BUILDFLAG(IS_MAC)
++  int pct = static_cast<int>(progress * 100);
++  SendLoadingState("progress", pct);
++#endif
++}
++
++void ShellVideoConsumer::DidFailLoad(RenderFrameHost* render_frame_host,
++                                     const GURL& validated_url,
++                                     int error_code) {
++#if BUILDFLAG(IS_MAC)
++  if (!render_frame_host->IsInPrimaryMainFrame())
++    return;
++  LOG(INFO) << "[ShellVideoConsumer] DidFailLoad url=" << validated_url.spec()
++            << " error=" << error_code << " pane=" << pane_id_;
++  SendLoadingState("error", 0);
++#endif
++}
++
+ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+   RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.h b/content/chromium_profile_server/browser/shell_video_consumer.h
+index 6db4500ba8a46..412eb6eceec86 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.h
++++ b/content/chromium_profile_server/browser/shell_video_consumer.h
+@@ -51,6 +51,12 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+   void RenderViewReady() override;
+   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
+   void PrimaryPageChanged(Page& page) override;
++  void DidStartLoading() override;
++  void DidStopLoading() override;
++  void LoadProgressChanged(double progress) override;
++  void DidFailLoad(RenderFrameHost* render_frame_host,
++                   const GURL& validated_url,
++                   int error_code) override;
+ 
+ #if BUILDFLAG(IS_MAC)
+   // Sets the XPC connection to use for sending IOSurface frames.
+@@ -85,6 +91,10 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+   void OnLog(const std::string& message) override;
+ 
+  private:
++#if BUILDFLAG(IS_MAC)
++  void SendLoadingState(const char* state, int progress);
++#endif
++
+   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
+   raw_ptr<RenderWidgetHost> current_host_ = nullptr;
+   int frame_count_ = 0;
+-- 
+2.50.1 (Apple Git-155)
+

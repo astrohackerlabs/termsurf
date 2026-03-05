@@ -1,0 +1,244 @@
+From 782744c397ff84e7957fbd3a7df249531d8e4657 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 24 Feb 2026 06:55:11 -0600
+Subject: [PATCH 39/65] Move persistent compositor into per-tab state
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+One compositor tried to serve them all—
+Both tabs answered the same curtain call.
+Now each tab has its own stage and light,
+Two contexts dancing, independent, bright.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 133 +++++++++---------
+ .../browser/shell_browser_main_parts.h        |  10 +-
+ 2 files changed, 70 insertions(+), 73 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index c46f3133fcfca..93ae40af8009f 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -359,23 +359,26 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+     }
+   }
+ 
+-  // Create persistent compositor on first tab (Issue 633).
+-  if (!persistent_compositor_) {
+-    persistent_widget_mac_ = std::make_unique<ui::AcceleratedWidgetMac>();
+-    ui::ContextFactory* context_factory = content::GetContextFactory();
+-    persistent_compositor_ = std::make_unique<ui::Compositor>(
+-        context_factory->AllocateFrameSinkId(),
+-        context_factory,
+-        base::SingleThreadTaskRunner::GetCurrentDefault(),
+-        false /* enable_pixel_canvas */);
+-    persistent_compositor_->SetAcceleratedWidget(
+-        persistent_widget_mac_->accelerated_widget());
+-
+-    persistent_root_layer_ =
+-        std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+-    persistent_root_layer_->SetColor(SK_ColorTRANSPARENT);
+-
+-    // Set initial size from the first tab's dimensions.
++  // Create per-tab persistent compositor (Issue 635).
++  auto tab = std::make_unique<TabState>();
++  tab->shell = shell;
++  tab->pane_id = pane_id;
++
++  tab->widget_mac = std::make_unique<ui::AcceleratedWidgetMac>();
++  ui::ContextFactory* context_factory = content::GetContextFactory();
++  tab->compositor = std::make_unique<ui::Compositor>(
++      context_factory->AllocateFrameSinkId(),
++      context_factory,
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      false /* enable_pixel_canvas */);
++  tab->compositor->SetAcceleratedWidget(
++      tab->widget_mac->accelerated_widget());
++
++  tab->root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
++  tab->root_layer->SetColor(SK_ColorTRANSPARENT);
++
++  // Set initial size.
++  {
+     RenderWidgetHostView* view =
+         shell->web_contents()->GetRenderWidgetHostView();
+     if (view) {
+@@ -384,29 +387,30 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+       gfx::Size size_dip(
+           static_cast<int>(std::ceil(pixel_width / scale)),
+           static_cast<int>(std::ceil(pixel_height / scale)));
+-      persistent_root_layer_->SetBounds(gfx::Rect(size_dip));
++      tab->root_layer->SetBounds(gfx::Rect(size_dip));
+       viz::LocalSurfaceId local_surface_id =
+           viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
+-      persistent_compositor_->SetScaleAndSize(
++      tab->compositor->SetScaleAndSize(
+           scale, size_pixels, local_surface_id);
+     }
++  }
+ 
+-    persistent_compositor_->SetRootLayer(persistent_root_layer_.get());
+-    persistent_compositor_->SetVisible(true);
++  tab->compositor->SetRootLayer(tab->root_layer.get());
++  tab->compositor->SetVisible(true);
+ 
+-    // Register bridge to receive CALayerParams callback (Issue 633 Exp 2).
+-    persistent_bridge_ = std::make_unique<PersistentCompositorBridge>(
+-        persistent_widget_mac_.get());
++  // Register bridge (Issue 635).
++  tab->bridge = std::make_unique<PersistentCompositorBridge>(
++      tab->widget_mac.get());
+ 
+-    LOG(INFO) << "[ProfileServer] Created persistent compositor (Issue 633)";
+-  }
++  LOG(INFO) << "[ProfileServer] Created per-tab compositor for pane "
++            << pane_id;
+ 
+-  // Set parent_ui_layer_ on the view (Issue 633).
++  // Set parent_ui_layer_ on the view (Issue 635).
+   {
+     RenderWidgetHostView* view =
+         shell->web_contents()->GetRenderWidgetHostView();
+     if (view) {
+-      SetParentUiLayerOnView(view, persistent_root_layer_.get());
++      SetParentUiLayerOnView(view, tab->root_layer.get());
+       LOG(INFO) << "[ProfileServer] Set parent_ui_layer_ on initial view";
+     }
+   }
+@@ -494,46 +498,39 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+     tab_observer->SetCALayerParamsCallback(ca_layer_callback);
+     tab_observer->SetLastCAContextIdPtr(last_id);
+ 
+-    // Set callback on persistent bridge (Issue 633 Exp 2).
++    // Set callback on per-tab bridge (Issue 635).
+     // In UseParentLayerCompositor mode, the per-view callback won't fire.
+-    // The persistent bridge receives the stable ca_context_id instead.
+-    if (persistent_bridge_) {
+-      persistent_bridge_->SetCallback(base::BindRepeating(
+-          [](const std::string& pane_id, xpc_connection_t conn,
+-             uint32_t* last_id, const gfx::CALayerParams& params) {
+-            if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
+-              return;
+-            *last_id = params.ca_context_id;
+-            xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-            xpc_dictionary_set_string(msg, "action", "ca_context");
+-            xpc_dictionary_set_uint64(msg, "ca_context_id",
+-                                      params.ca_context_id);
+-            xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
+-            xpc_dictionary_set_uint64(msg, "pixel_width",
+-                                      params.pixel_size.width());
+-            xpc_dictionary_set_uint64(msg, "pixel_height",
+-                                      params.pixel_size.height());
+-            xpc_connection_send_message(conn, msg);
+-            xpc_release(msg);
+-            LOG(INFO) << "[ProfileServer] Persistent compositor ca_context_id="
+-                      << params.ca_context_id << " for pane " << pane_id;
+-          },
+-          cb_pane_id, cb_conn,
+-          base::Unretained(last_id)));
+-    }
++    // The per-tab bridge receives the stable ca_context_id instead.
++    tab->bridge->SetCallback(base::BindRepeating(
++        [](const std::string& pane_id, xpc_connection_t conn,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++          xpc_dictionary_set_string(msg, "action", "ca_context");
++          xpc_dictionary_set_uint64(msg, "ca_context_id",
++                                    params.ca_context_id);
++          xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++          xpc_dictionary_set_uint64(msg, "pixel_width",
++                                    params.pixel_size.width());
++          xpc_dictionary_set_uint64(msg, "pixel_height",
++                                    params.pixel_size.height());
++          xpc_connection_send_message(conn, msg);
++          xpc_release(msg);
++          LOG(INFO) << "[ProfileServer] Tab compositor ca_context_id="
++                    << params.ca_context_id << " for pane " << pane_id;
++        },
++        cb_pane_id, cb_conn,
++        base::Unretained(last_id)));
+   }
+ 
+-  // Store parent ui layer on observer for re-registration (Issue 633).
+-  if (persistent_root_layer_) {
+-    tab_observer->SetParentUiLayer(persistent_root_layer_.get());
+-  }
++  // Store parent ui layer on observer for re-registration (Issue 635).
++  tab_observer->SetParentUiLayer(tab->root_layer.get());
+ 
+-  // Store tab state.
+-  auto tab = std::make_unique<TabState>();
+-  tab->shell = shell;
++  // Store remaining tab state.
+   tab->tab_observer = std::move(tab_observer);
+   tab->tab_connection = tab_conn;
+-  tab->pane_id = pane_id;
+   tabs_.push_back(std::move(tab));
+ 
+   LOG(INFO) << "[ProfileServer] Tab for pane " << pane_id << " ready, "
+@@ -575,8 +572,8 @@ void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
+               << " (physical " << pixel_width << "x" << pixel_height << ")";
+   }
+ 
+-  // Update persistent compositor size (Issue 633).
+-  if (persistent_compositor_ && persistent_root_layer_) {
++  // Update per-tab compositor size (Issue 635).
++  if (tab->compositor && tab->root_layer) {
+     RenderWidgetHostView* compositor_view =
+         tab->shell->web_contents()->GetRenderWidgetHostView();
+     if (compositor_view) {
+@@ -584,14 +581,14 @@ void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
+       gfx::Size size_dip(
+           static_cast<int>(std::ceil(pixel_width / scale)),
+           static_cast<int>(std::ceil(pixel_height / scale)));
+-      persistent_root_layer_->SetBounds(gfx::Rect(size_dip));
++      tab->root_layer->SetBounds(gfx::Rect(size_dip));
+       gfx::Size size_pixels(pixel_width, pixel_height);
+       viz::LocalSurfaceId local_surface_id =
+           viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
+-      persistent_compositor_->SetScaleAndSize(
++      tab->compositor->SetScaleAndSize(
+           scale, size_pixels, local_surface_id);
+-      LOG(INFO) << "[ProfileServer] Updated persistent compositor size to "
+-                << size_dip.ToString();
++      LOG(INFO) << "[ProfileServer] Updated tab compositor size to "
++                << size_dip.ToString() << " for pane " << pane_id;
+     }
+   }
+ }
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index dfb0669fad53b..2c0824eb1c039 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -103,6 +103,11 @@ class ShellBrowserMainParts : public BrowserMainParts {
+ #if BUILDFLAG(IS_MAC)
+     xpc_connection_t tab_connection = nullptr;
+     std::string pane_id;
++    // Per-tab persistent compositor (Issue 635).
++    std::unique_ptr<ui::AcceleratedWidgetMac> widget_mac;
++    std::unique_ptr<ui::Compositor> compositor;
++    std::unique_ptr<ui::Layer> root_layer;
++    std::unique_ptr<PersistentCompositorBridge> bridge;
+ #endif
+   };
+ 
+@@ -134,11 +139,6 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+ 
+-  // Persistent compositor for UseParentLayerCompositor mode (Issue 633).
+-  std::unique_ptr<ui::AcceleratedWidgetMac> persistent_widget_mac_;
+-  std::unique_ptr<ui::Compositor> persistent_compositor_;
+-  std::unique_ptr<ui::Layer> persistent_root_layer_;
+-  std::unique_ptr<PersistentCompositorBridge> persistent_bridge_;
+ #endif
+   std::vector<std::unique_ptr<TabState>> tabs_;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

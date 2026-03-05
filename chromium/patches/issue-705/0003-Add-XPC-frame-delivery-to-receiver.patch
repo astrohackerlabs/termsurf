@@ -1,0 +1,177 @@
+From 02d82732596b471211586220b82595d4dae9645e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 14 Feb 2026 06:03:33 -0600
+Subject: [PATCH 03/65] Add XPC frame delivery to receiver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+IOSurfaces now fly on Mach port wings,
+From capturer to receiver, the pipeline sings.
+Sixty frames a second cross the divide—
+No GPU readback, just a kernel-side ride.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 11 +++++
+ .../browser/shell_video_consumer.cc           | 48 ++++++++++++++++++-
+ .../browser/shell_video_consumer.h            | 16 +++++++
+ content/one_profile/common/shell_switches.h   |  3 ++
+ 4 files changed, 77 insertions(+), 1 deletion(-)
+
+diff --git a/content/one_profile/browser/shell_browser_main_parts.cc b/content/one_profile/browser/shell_browser_main_parts.cc
+index 3679e2457da73..375dbcf82ee1e 100644
+--- a/content/one_profile/browser/shell_browser_main_parts.cc
++++ b/content/one_profile/browser/shell_browser_main_parts.cc
+@@ -156,6 +156,17 @@ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+   // Attach a video consumer after a short delay to allow the
+   // RenderWidgetHostView to be created by the navigation.
+   video_consumer_ = std::make_unique<ShellVideoConsumer>();
++
++#if BUILDFLAG(IS_MAC)
++  // If --xpc-service is specified, connect to the XPC Mach service to send
++  // captured IOSurface frames to a receiver process.
++  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
++  if (cmd->HasSwitch(switches::kXpcService)) {
++    video_consumer_->ConnectToService(
++        cmd->GetSwitchValueASCII(switches::kXpcService));
++  }
++#endif
++
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+       FROM_HERE,
+       base::BindOnce(
+diff --git a/content/one_profile/browser/shell_video_consumer.cc b/content/one_profile/browser/shell_video_consumer.cc
+index af77cd5fc039b..cf8715ab9a8aa 100644
+--- a/content/one_profile/browser/shell_video_consumer.cc
++++ b/content/one_profile/browser/shell_video_consumer.cc
+@@ -17,12 +17,41 @@
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <IOSurface/IOSurface.h>
++#include <mach/mach.h>
++#include <xpc/xpc.h>
+ #endif
+ 
+ namespace content {
+ 
+ ShellVideoConsumer::ShellVideoConsumer() = default;
+-ShellVideoConsumer::~ShellVideoConsumer() = default;
++
++ShellVideoConsumer::~ShellVideoConsumer() {
++#if BUILDFLAG(IS_MAC)
++  if (xpc_connection_) {
++    xpc_connection_cancel(xpc_connection_);
++    xpc_release(xpc_connection_);
++    xpc_connection_ = nullptr;
++  }
++#endif
++}
++
++#if BUILDFLAG(IS_MAC)
++void ShellVideoConsumer::ConnectToService(const std::string& name) {
++  xpc_connection_ = xpc_connection_create_mach_service(
++      name.c_str(), nullptr, 0);  // Client mode (no listener flag)
++  xpc_connection_set_event_handler(xpc_connection_, ^(xpc_object_t event) {
++    if (xpc_get_type(event) == XPC_TYPE_ERROR) {
++      if (event == XPC_ERROR_CONNECTION_INVALID) {
++        LOG(ERROR) << "[ShellVideoConsumer] XPC connection invalid";
++      } else if (event == XPC_ERROR_CONNECTION_INTERRUPTED) {
++        LOG(ERROR) << "[ShellVideoConsumer] XPC connection interrupted";
++      }
++    }
++  });
++  xpc_connection_resume(xpc_connection_);
++  LOG(INFO) << "[ShellVideoConsumer] Connected to XPC service: " << name;
++}
++#endif
+ 
+ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+   RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+@@ -83,6 +112,23 @@ void ShellVideoConsumer::OnFrameCaptured(
+       size_t width = IOSurfaceGetWidth(io_surface);
+       size_t height = IOSurfaceGetHeight(io_surface);
+ 
++      // Send IOSurface Mach port via XPC if connected.
++      if (xpc_connection_) {
++        mach_port_t port = IOSurfaceCreateMachPort(io_surface);
++        if (port != MACH_PORT_NULL) {
++          xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++          xpc_dictionary_set_string(msg, "action", "display_surface");
++          xpc_dictionary_set_mach_send(msg, "iosurface_port", port);
++          xpc_dictionary_set_int64(msg, "width", (int64_t)width);
++          xpc_dictionary_set_int64(msg, "height", (int64_t)height);
++          xpc_connection_send_message(xpc_connection_, msg);
++          xpc_release(msg);
++          mach_port_deallocate(mach_task_self(), port);
++        } else {
++          LOG(WARNING) << "[ShellVideoConsumer] IOSurfaceCreateMachPort failed";
++        }
++      }
++
+       // Log fps once per second.
+       base::TimeTicks now = base::TimeTicks::Now();
+       base::TimeDelta elapsed = now - last_log_time_;
+diff --git a/content/one_profile/browser/shell_video_consumer.h b/content/one_profile/browser/shell_video_consumer.h
+index 9809bff343c4f..13246c82f02c4 100644
+--- a/content/one_profile/browser/shell_video_consumer.h
++++ b/content/one_profile/browser/shell_video_consumer.h
+@@ -6,11 +6,17 @@
+ #define CONTENT_ONE_PROFILE_BROWSER_SHELL_VIDEO_CONSUMER_H_
+ 
+ #include <memory>
++#include <string>
+ 
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "components/viz/host/client_frame_sink_video_capturer.h"
+ #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+ 
++#if BUILDFLAG(IS_MAC)
++#include <xpc/xpc.h>
++#endif
++
+ namespace content {
+ 
+ class WebContents;
+@@ -30,6 +36,12 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
+   // a valid RenderWidgetHostView (i.e., navigation must have started).
+   void Attach(WebContents* web_contents);
+ 
++#if BUILDFLAG(IS_MAC)
++  // Connects to an XPC Mach service by name. Once connected, OnFrameCaptured()
++  // will send IOSurface Mach ports to the service every frame.
++  void ConnectToService(const std::string& name);
++#endif
++
+   // viz::mojom::FrameSinkVideoConsumer:
+   void OnFrameCaptured(
+       media::mojom::VideoBufferHandlePtr data,
+@@ -47,6 +59,10 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
+   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
+   int frame_count_ = 0;
+   base::TimeTicks last_log_time_;
++
++#if BUILDFLAG(IS_MAC)
++  xpc_connection_t xpc_connection_ = nullptr;
++#endif
+ };
+ 
+ }  // namespace content
+diff --git a/content/one_profile/common/shell_switches.h b/content/one_profile/common/shell_switches.h
+index a6d22bf2e7f39..e85d4d7a2daa4 100644
+--- a/content/one_profile/common/shell_switches.h
++++ b/content/one_profile/common/shell_switches.h
+@@ -58,6 +58,9 @@ inline constexpr char kRunWebTests[] = "run-web-tests";
+ inline constexpr char kTestRegisterStandardScheme[] =
+     "test-register-standard-scheme";
+ 
++// XPC Mach service name to send captured IOSurface frames to.
++inline constexpr char kXpcService[] = "xpc-service";
++
+ // Helper that returns true if kRunWebTests is present in the command line,
+ // meaning One Profile is running in web test mode.
+ bool IsRunWebTestsSwitchPresent();
+-- 
+2.50.1 (Apple Git-155)
+

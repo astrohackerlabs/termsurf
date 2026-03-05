@@ -205,8 +205,8 @@ fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
     let profile_arg = cli.profile; // Option<String> — None if no --profile given
-    let profile = profile_arg.clone().unwrap_or_else(|| "default".to_string());
-    let browser = cli.browser.unwrap_or_default();
+    let mut profile = profile_arg.clone().unwrap_or_else(|| "default".to_string());
+    let mut browser = cli.browser.unwrap_or_default();
 
     // Validate profile name: lowercase alphanumeric, starts with a letter.
     if profile.is_empty()
@@ -300,11 +300,18 @@ fn main() -> io::Result<()> {
     };
 
     // Validate DevTools request before entering the UI (Issue 687).
+    // The reply includes the inspected tab's browser and profile (Issue 705 Exp 10).
     if is_devtools {
         if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
             match conn.send_query_devtools(pid, inspected_tab_id, &profile) {
-                Ok(resolved_tab_id) => {
+                Ok((resolved_tab_id, resolved_browser, resolved_profile)) => {
                     inspected_tab_id = resolved_tab_id;
+                    if !resolved_browser.is_empty() {
+                        browser = resolved_browser;
+                    }
+                    if !resolved_profile.is_empty() {
+                        profile = resolved_profile;
+                    }
                 }
                 Err(err) => {
                     eprintln!("Error: {}", err);
@@ -605,14 +612,7 @@ fn main() -> io::Result<()> {
                                                 command_error = Some(msg);
                                             }
                                             Ok(_) => {
-                                                let cmd = if browser.is_empty() {
-                                                    format!("{} devtools", current_exe)
-                                                } else {
-                                                    format!(
-                                                        "{} devtools --browser {}",
-                                                        current_exe, browser
-                                                    )
-                                                };
+                                                let cmd = format!("{} devtools", current_exe);
                                                 conn.send_open_split(pid, &direction, &cmd);
                                             }
                                         }

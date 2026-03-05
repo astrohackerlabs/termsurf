@@ -1,0 +1,50 @@
+From 126f7a830b2f94cb73109842dd053bfb0532016f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 1 Mar 2026 07:40:57 -0600
+Subject: [PATCH 46/65] Issue 684: Fix devtools:// URL parsing
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+GURL said "devtools" — I don't know her,
+The scheme was strange, the host a blur.
+Now we parse the spec string raw,
+And find the tab without a flaw.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc            | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 963531240d705..d698140f1307f 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -360,13 +360,21 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+   // Check for devtools:// URL (Issue 684).
+-  bool is_devtools = url.SchemeIs("devtools");
++  // GURL doesn't recognize "devtools" as a standard scheme, so SchemeIs()
++  // and host() won't work. Parse from the raw spec string instead.
++  bool is_devtools = false;
+   int inspected_tab_id = 0;
+   WebContents* inspected_contents = nullptr;
++  {
++    std::string spec = url.spec();
++    const std::string prefix = "devtools://";
++    if (spec.substr(0, prefix.size()) == prefix) {
++      is_devtools = true;
++      base::StringToInt(spec.substr(prefix.size()), &inspected_tab_id);
++    }
++  }
+ 
+   if (is_devtools) {
+-    // Parse tab ID from host (devtools://3 → host is "3").
+-    base::StringToInt(url.host(), &inspected_tab_id);
+     for (auto& t : tabs_) {
+       if (t->tab_id == inspected_tab_id && t->tab_id != 0) {
+         inspected_contents = t->shell->web_contents();
+-- 
+2.50.1 (Apple Git-155)
+

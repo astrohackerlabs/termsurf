@@ -1,0 +1,393 @@
+From 404b287b1eb7dbb203788db5539f72e3093d5f3d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 16 Feb 2026 14:28:47 -0600
+Subject: [PATCH 12/65] Accept pixel dims and resize on the fly
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The server sat content at default size,
+A hidden window, small and unwise.
+Now XPC sends the pixels true,
+And resize makes the viewport new—
+Each frame arrives at perfect guise.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 149 ++++++++++++++----
+ .../browser/shell_browser_main_parts.h        |  10 +-
+ .../browser/shell_video_consumer.cc           |  41 ++++-
+ .../browser/shell_video_consumer.h            |  12 ++
+ .../common/shell_switches.h                   |   4 +
+ 5 files changed, 177 insertions(+), 39 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 583fdc27e180c..0e325b9d4b893 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/chromium_profile_server/browser/shell_browser_main_parts.h"
+ 
++#include <cmath>
+ #include <string_view>
+ #include <utility>
+ 
+@@ -27,7 +28,9 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/first_party_sets_handler.h"
++#include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/storage_partition.h"
++#include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/result_codes.h"
+ #include "content/public/common/url_constants.h"
+@@ -137,7 +140,10 @@ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+ #if BUILDFLAG(IS_MAC)
+   base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
+   if (cmd->HasSwitch(switches::kXpcService)) {
+-    StartDynamicMode(cmd->GetSwitchValueASCII(switches::kXpcService));
++    std::string pane_id;
++    if (cmd->HasSwitch(switches::kPaneId))
++      pane_id = cmd->GetSwitchValueASCII(switches::kPaneId);
++    StartDynamicMode(cmd->GetSwitchValueASCII(switches::kXpcService), pane_id);
+     return;
+   }
+ #endif
+@@ -146,15 +152,48 @@ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
+-void ShellBrowserMainParts::StartDynamicMode(const std::string& service_name) {
+-  xpc_service_name_ = service_name;
++void ShellBrowserMainParts::StartDynamicMode(
++    const std::string& gateway_name,
++    const std::string& pane_id) {
++  pane_id_ = pane_id;
++
++  // Step 1: Connect to xpc-gateway.
++  xpc_connection_t gateway = xpc_connection_create_mach_service(
++      gateway_name.c_str(), nullptr, 0);
++  xpc_connection_set_event_handler(gateway, ^(xpc_object_t event) {
++    if (xpc_get_type(event) == XPC_TYPE_ERROR)
++      LOG(ERROR) << "[ProfileServer] Gateway error";
++  });
++  xpc_connection_resume(gateway);
+ 
+-  // Open control connection to the compositor's Mach service.
+-  control_connection_ = xpc_connection_create_mach_service(
+-      service_name.c_str(), nullptr, 0);
++  // Step 2: Request app endpoint (synchronous).
++  xpc_object_t req = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(req, "action", "connect");
++  xpc_object_t reply = xpc_connection_send_message_with_reply_sync(gateway, req);
++  xpc_release(req);
+ 
+-  ShellBrowserMainParts* self = this;
++  if (!reply || xpc_get_type(reply) == XPC_TYPE_ERROR) {
++    LOG(ERROR) << "[ProfileServer] Gateway returned error";
++    xpc_connection_cancel(gateway);
++    return;
++  }
++  xpc_object_t endpoint = xpc_dictionary_get_value(reply, "endpoint");
++  if (!endpoint || xpc_get_type(endpoint) != XPC_TYPE_ENDPOINT) {
++    LOG(ERROR) << "[ProfileServer] No endpoint from gateway";
++    xpc_release(reply);
++    xpc_connection_cancel(gateway);
++    return;
++  }
++
++  // Store endpoint for per-tab connections (CreateTab reuses it).
++  app_endpoint_ = reinterpret_cast<xpc_endpoint_t>(endpoint);
++  xpc_retain(reinterpret_cast<xpc_object_t>(app_endpoint_));
++  xpc_release(reply);
++
++  // Step 3: Create control connection from endpoint.
++  control_connection_ = xpc_connection_create_from_endpoint(app_endpoint_);
+ 
++  ShellBrowserMainParts* self = this;
+   xpc_connection_set_event_handler(control_connection_, ^(xpc_object_t event) {
+     if (xpc_get_type(event) == XPC_TYPE_DICTIONARY) {
+       const char* action = xpc_dictionary_get_string(event, "action");
+@@ -163,10 +202,20 @@ void ShellBrowserMainParts::StartDynamicMode(const std::string& service_name) {
+         const char* tab_id_str = xpc_dictionary_get_string(event, "tab_id");
+         std::string url(url_str ? url_str : "about:blank");
+         std::string tab_id(tab_id_str ? tab_id_str : "");
++        int pw = (int)xpc_dictionary_get_uint64(event, "pixel_width");
++        int ph = (int)xpc_dictionary_get_uint64(event, "pixel_height");
+         content::GetUIThreadTaskRunner({})->PostTask(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::CreateTab,
+-                           base::Unretained(self), GURL(url), tab_id));
++                           base::Unretained(self), GURL(url), tab_id,
++                           pw, ph));
++      } else if (action && std::string_view(action) == "resize") {
++        int pw = (int)xpc_dictionary_get_uint64(event, "pixel_width");
++        int ph = (int)xpc_dictionary_get_uint64(event, "pixel_height");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::ResizeCapture,
++                           base::Unretained(self), pw, ph));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -176,29 +225,26 @@ void ShellBrowserMainParts::StartDynamicMode(const std::string& service_name) {
+       }
+     }
+   });
+-
+   xpc_connection_resume(control_connection_);
+-  LOG(INFO) << "[ProfileServer] Connected to compositor: " << service_name;
+ 
+-  // Send register message with profile name derived from user-data-dir.
+-  std::string profile_name = "unknown";
+-  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
+-  if (cmd->HasSwitch(switches::kChromiumProfileServerUserDataDir)) {
+-    base::FilePath data_dir(
+-        cmd->GetSwitchValueASCII(switches::kChromiumProfileServerUserDataDir));
+-    profile_name = data_dir.BaseName().value();
+-  }
++  // Step 4: Register with the app.
++  xpc_object_t reg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(reg, "action", "server_register");
++  xpc_dictionary_set_string(reg, "pane_id", pane_id_.c_str());
++  xpc_connection_send_message(control_connection_, reg);
++  xpc_release(reg);
+ 
+-  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+-  xpc_dictionary_set_string(msg, "action", "register");
+-  xpc_dictionary_set_string(msg, "profile", profile_name.c_str());
+-  xpc_connection_send_message(control_connection_, msg);
+-  xpc_release(msg);
+-  LOG(INFO) << "[ProfileServer] Registered as profile: " << profile_name;
++  // Done with gateway.
++  xpc_connection_cancel(gateway);
++
++  LOG(INFO) << "[ProfileServer] Connected to app via gateway, pane="
++            << pane_id_;
+ }
+ 
+ void ShellBrowserMainParts::CreateTab(const GURL& url,
+-                                      const std::string& tab_id) {
++                                      const std::string& tab_id,
++                                      int pixel_width,
++                                      int pixel_height) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+   // Create a new Shell + WebContents.
+@@ -207,12 +253,30 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   LOG(INFO) << "[ProfileServer] Created tab '" << tab_id
+             << "' for URL: " << url.spec();
+ 
++  // Resize WebContents view to match the terminal viewport.
++  // SetSize takes logical pixels; Chromium applies device_scale_factor internally.
++  if (pixel_width > 0 && pixel_height > 0) {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size logical(
++          static_cast<int>(std::ceil(pixel_width / scale)),
++          static_cast<int>(std::ceil(pixel_height / scale)));
++      view->SetSize(logical);
++      LOG(INFO) << "[ProfileServer] Set view size to " << logical.ToString()
++                << " (physical " << pixel_width << "x" << pixel_height
++                << ", scale " << scale << ")";
++    }
++  }
++
+   // Create a ShellVideoConsumer for this tab.
+   auto video_consumer = std::make_unique<ShellVideoConsumer>();
++  video_consumer->SetPaneId(pane_id_);
++  video_consumer->SetInitialSize(pixel_width, pixel_height);
+ 
+-  // Open a new connection to the compositor for this tab's frames.
+-  xpc_connection_t tab_conn = xpc_connection_create_mach_service(
+-      xpc_service_name_.c_str(), nullptr, 0);
++  // Open a new connection to the app for this tab's frames.
++  xpc_connection_t tab_conn = xpc_connection_create_from_endpoint(app_endpoint_);
+ 
+   ShellBrowserMainParts* self = this;
+ 
+@@ -253,6 +317,31 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+             << tabs_.size() << " tab(s) active";
+ }
+ 
++void ShellBrowserMainParts::ResizeCapture(int pixel_width, int pixel_height) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  if (tabs_.empty() || pixel_width <= 0 || pixel_height <= 0)
++    return;
++
++  auto& tab = tabs_[0];
++
++  // Resize the WebContents view (logical pixels).
++  RenderWidgetHostView* view =
++      tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view) {
++    float scale = view->GetDeviceScaleFactor();
++    gfx::Size logical(
++        static_cast<int>(std::ceil(pixel_width / scale)),
++        static_cast<int>(std::ceil(pixel_height / scale)));
++    view->SetSize(logical);
++    LOG(INFO) << "[ProfileServer] Resized view to " << logical.ToString()
++              << " (physical " << pixel_width << "x" << pixel_height << ")";
++  }
++
++  // Resize the capturer (physical pixels).
++  tab->video_consumer->SetResolution(pixel_width, pixel_height);
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+@@ -327,6 +416,10 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
+     xpc_release(control_connection_);
+     control_connection_ = nullptr;
+   }
++  if (app_endpoint_) {
++    xpc_release(reinterpret_cast<xpc_object_t>(app_endpoint_));
++    app_endpoint_ = nullptr;
++  }
+ #endif
+   browser_context_.reset();
+   off_the_record_browser_context_.reset();
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index b90234135bfc7..478d61db9abb1 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -102,12 +102,16 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   };
+ 
+ #if BUILDFLAG(IS_MAC)
+-  void StartDynamicMode(const std::string& service_name);
+-  void CreateTab(const GURL& url, const std::string& tab_id);
++  void StartDynamicMode(const std::string& gateway_name,
++                        const std::string& pane_id);
++  void CreateTab(const GURL& url, const std::string& tab_id,
++                 int pixel_width, int pixel_height);
++  void ResizeCapture(int pixel_width, int pixel_height);
+   void CloseTab(xpc_connection_t conn);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+-  std::string xpc_service_name_;
++  xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
++  std::string pane_id_;
+ #endif
+   std::vector<std::unique_ptr<TabState>> tabs_;
+ 
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index 55694749366c9..f115236733747 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -33,6 +33,24 @@ ShellVideoConsumer::~ShellVideoConsumer() = default;
+ void ShellVideoConsumer::SetConnection(xpc_connection_t conn) {
+   xpc_connection_ = conn;
+ }
++
++void ShellVideoConsumer::SetPaneId(const std::string& pane_id) {
++  pane_id_ = pane_id;
++}
++
++void ShellVideoConsumer::SetInitialSize(int width, int height) {
++  initial_width_ = width;
++  initial_height_ = height;
++}
++
++void ShellVideoConsumer::SetResolution(int width, int height) {
++  if (capturer_ && width > 0 && height > 0) {
++    gfx::Size size(width, height);
++    capturer_->SetResolutionConstraints(size, size,
++                                        /*use_fixed_aspect_ratio=*/false);
++    LOG(INFO) << "[ShellVideoConsumer] Resized to " << width << "x" << height;
++  }
++}
+ #endif
+ 
+ void ShellVideoConsumer::ObserveContents(WebContents* web_contents) {
+@@ -70,12 +88,18 @@ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+   capturer_->SetAutoThrottlingEnabled(false);
+ 
+   // Capture at physical pixel resolution (Retina-correct).
+-  // Without this, the capturer defaults to the frame sink's logical (DIP) size.
+-  gfx::Size view_size = view->GetVisibleViewportSize();
+-  float scale = view->GetDeviceScaleFactor();
+-  gfx::Size physical_size(
+-      static_cast<int>(std::ceil(view_size.width() * scale)),
+-      static_cast<int>(std::ceil(view_size.height() * scale)));
++  gfx::Size physical_size;
++  if (initial_width_ > 0 && initial_height_ > 0) {
++    // Use dimensions from the app (sent via create_tab).
++    physical_size = gfx::Size(initial_width_, initial_height_);
++  } else {
++    // Fallback: derive from the view's logical size × device scale.
++    gfx::Size view_size = view->GetVisibleViewportSize();
++    float scale = view->GetDeviceScaleFactor();
++    physical_size = gfx::Size(
++        static_cast<int>(std::ceil(view_size.width() * scale)),
++        static_cast<int>(std::ceil(view_size.height() * scale)));
++  }
+   capturer_->SetResolutionConstraints(physical_size, physical_size,
+                                       /*use_fixed_aspect_ratio=*/false);
+ 
+@@ -119,8 +143,9 @@ void ShellVideoConsumer::OnFrameCaptured(
+           xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+           xpc_dictionary_set_string(msg, "action", "display_surface");
+           xpc_dictionary_set_mach_send(msg, "iosurface_port", port);
+-          xpc_dictionary_set_int64(msg, "width", (int64_t)width);
+-          xpc_dictionary_set_int64(msg, "height", (int64_t)height);
++          if (!pane_id_.empty()) {
++            xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
++          }
+           xpc_connection_send_message(xpc_connection_, msg);
+           xpc_release(msg);
+           mach_port_deallocate(mach_task_self(), port);
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.h b/content/chromium_profile_server/browser/shell_video_consumer.h
+index b12ce9c3e37fc..c4816f454d5fb 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.h
++++ b/content/chromium_profile_server/browser/shell_video_consumer.h
+@@ -49,6 +49,15 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+   // Sets the XPC connection to use for sending IOSurface frames.
+   // The caller retains ownership of the connection.
+   void SetConnection(xpc_connection_t conn);
++
++  // Sets the pane UUID to include in display_surface messages.
++  void SetPaneId(const std::string& pane_id);
++
++  // Sets the initial capture size (physical pixels) for use in Attach().
++  void SetInitialSize(int width, int height);
++
++  // Updates the capture resolution on a running capturer (physical pixels).
++  void SetResolution(int width, int height);
+ #endif
+ 
+   // viz::mojom::FrameSinkVideoConsumer:
+@@ -71,6 +80,9 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+ 
+ #if BUILDFLAG(IS_MAC)
+   xpc_connection_t xpc_connection_ = nullptr;
++  std::string pane_id_;
++  int initial_width_ = 0;
++  int initial_height_ = 0;
+ #endif
+ };
+ 
+diff --git a/content/chromium_profile_server/common/shell_switches.h b/content/chromium_profile_server/common/shell_switches.h
+index 5eb67c5c532ae..2fcccb941baf2 100644
+--- a/content/chromium_profile_server/common/shell_switches.h
++++ b/content/chromium_profile_server/common/shell_switches.h
+@@ -64,6 +64,10 @@ inline constexpr char kXpcService[] = "xpc-service";
+ // Hide the window (run as a headless sender for XPC frame delivery).
+ inline constexpr char kHidden[] = "hidden";
+ 
++// Pane UUID — identifies which TermSurf pane this server renders into.
++// Included in every display_surface frame so the app knows where to composite.
++inline constexpr char kPaneId[] = "pane-id";
++
+ // Helper that returns true if kRunWebTests is present in the command line,
+ // meaning Chromium Profile Server is running in web test mode.
+ bool IsRunWebTestsSwitchPresent();
+-- 
+2.50.1 (Apple Git-155)
+

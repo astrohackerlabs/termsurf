@@ -1,0 +1,63 @@
+From 19a9cf44073686553435946d203416fb9fd3ba27 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 14 Feb 2026 08:03:43 -0600
+Subject: [PATCH 04/65] Add --hidden flag to hide the window
+
+A window once stood proud and tall,
+But now it needn't show at all.
+orderOut: hides it from the screen,
+While capture hums, serene, unseen.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../one_profile/browser/shell_platform_delegate_mac.mm | 10 ++++++++--
+ content/one_profile/common/shell_switches.h            |  3 +++
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/content/one_profile/browser/shell_platform_delegate_mac.mm b/content/one_profile/browser/shell_platform_delegate_mac.mm
+index 179b9f37662a3..ecd5006353bba 100644
+--- a/content/one_profile/browser/shell_platform_delegate_mac.mm
++++ b/content/one_profile/browser/shell_platform_delegate_mac.mm
+@@ -18,8 +18,10 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "base/command_line.h"
+ #include "content/one_profile/app/resource.h"
+ #include "content/one_profile/browser/shell.h"
++#include "content/one_profile/common/shell_switches.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "url/gurl.h"
+ 
+@@ -201,8 +203,12 @@ void MakeShellButton(NSRect* rect,
+     shell_data.url_edit_view = url_edit_view;
+   }
+ 
+-  // Show the new window.
+-  [window makeKeyAndOrderFront:nil];
++  // Show the new window (unless --hidden).
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHidden)) {
++    [window orderOut:nil];
++  } else {
++    [window makeKeyAndOrderFront:nil];
++  }
+ 
+   shell_data.delegate = delegate;
+ }
+diff --git a/content/one_profile/common/shell_switches.h b/content/one_profile/common/shell_switches.h
+index e85d4d7a2daa4..58af1c99f1f69 100644
+--- a/content/one_profile/common/shell_switches.h
++++ b/content/one_profile/common/shell_switches.h
+@@ -61,6 +61,9 @@ inline constexpr char kTestRegisterStandardScheme[] =
+ // XPC Mach service name to send captured IOSurface frames to.
+ inline constexpr char kXpcService[] = "xpc-service";
+ 
++// Hide the window (run as a headless sender for XPC frame delivery).
++inline constexpr char kHidden[] = "hidden";
++
+ // Helper that returns true if kRunWebTests is present in the command line,
+ // meaning One Profile is running in web test mode.
+ bool IsRunWebTestsSwitchPresent();
+-- 
+2.50.1 (Apple Git-155)
+

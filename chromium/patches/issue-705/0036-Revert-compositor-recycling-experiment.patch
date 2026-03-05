@@ -1,0 +1,39 @@
+From ac445eb8da23fa3332f107dc4949b84c56b833d4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 23 Feb 2026 19:38:18 -0600
+Subject: [PATCH 36/65] Revert compositor recycling experiment
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two attempts were made, both came undone—
+White screens on back nav, we helped no one.
+The IDs change not from occlusion's call,
+But renderer swaps that doom them all.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/renderer_host/render_widget_host_view_mac.mm   | 7 +------
+ 1 file changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 154b422b946c2..eab3f28ba4728 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -564,12 +564,7 @@
+   }
+ 
+   host()->WasHidden();
+-  // Only mark the compositor hidden if the view is truly unattached from a
+-  // window (Issue 631, Experiment 5). When the view has a window (even a
+-  // transparent one), keep the compositor alive to prevent recycling.
+-  // This matches Electron's disable_compositor_recycling.patch.
+-  const bool unattached = ![GetInProcessNSView() window];
+-  browser_compositor_->SetRenderWidgetHostIsHidden(unattached);
++  browser_compositor_->SetRenderWidgetHostIsHidden(true);
+ 
+   // Headless mode forces focus change propagation inside Focus(), since there
+   // is no NSWindow to deliver the normal focus change notifications. As a
+-- 
+2.50.1 (Apple Git-155)
+

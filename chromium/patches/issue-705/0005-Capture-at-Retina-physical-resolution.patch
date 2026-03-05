@@ -1,0 +1,48 @@
+From 0c141270f45cac17d7d73c73e5c049e1b72e09c4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 14 Feb 2026 08:30:16 -0600
+Subject: [PATCH 05/65] Capture at Retina physical resolution
+
+The capturer once saw through one-x eyes,
+Blind to the Retina's doubled prize.
+SetResolutionConstraints now demands
+Full physical pixels from its hands.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/one_profile/browser/shell_video_consumer.cc | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/content/one_profile/browser/shell_video_consumer.cc b/content/one_profile/browser/shell_video_consumer.cc
+index cf8715ab9a8aa..a7a454a6c2356 100644
+--- a/content/one_profile/browser/shell_video_consumer.cc
++++ b/content/one_profile/browser/shell_video_consumer.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "content/one_profile/browser/shell_video_consumer.h"
+ 
++#include <cmath>
++
+ #include "base/logging.h"
+ #include "components/viz/common/surfaces/video_capture_target.h"
+ #include "components/viz/host/host_frame_sink_manager.h"
+@@ -79,6 +81,16 @@ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+   capturer_->SetMinCapturePeriod(base::Milliseconds(16));
+   capturer_->SetAutoThrottlingEnabled(false);
+ 
++  // Capture at physical pixel resolution (Retina-correct).
++  // Without this, the capturer defaults to the frame sink's logical (DIP) size.
++  gfx::Size view_size = view->GetVisibleViewportSize();
++  float scale = view->GetDeviceScaleFactor();
++  gfx::Size physical_size(
++      static_cast<int>(std::ceil(view_size.width() * scale)),
++      static_cast<int>(std::ceil(view_size.height() * scale)));
++  capturer_->SetResolutionConstraints(physical_size, physical_size,
++                                      /*use_fixed_aspect_ratio=*/false);
++
+   // Target the WebContents' frame sink.
+   const viz::FrameSinkId& frame_sink_id = host->GetFrameSinkId();
+   capturer_->ChangeTarget(viz::VideoCaptureTarget(frame_sink_id),
+-- 
+2.50.1 (Apple Git-155)
+

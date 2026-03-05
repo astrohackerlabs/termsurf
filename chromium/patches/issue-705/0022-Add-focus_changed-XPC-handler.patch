@@ -1,0 +1,98 @@
+From 659fa82c3b507f830fdadacd92fd5ab4df77de23 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 18 Feb 2026 07:40:52 -0600
+Subject: [PATCH 22/65] Add focus_changed XPC handler
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+No more focus stuck at birth—
+Now it ebbs and flows with worth.
+Browse mode on? The view comes alive.
+Browse mode off? No more will it strive.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 39 +++++++++++++++----
+ .../browser/shell_browser_main_parts.h        |  1 +
+ 2 files changed, 33 insertions(+), 7 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 4957a075726b9..012242d358681 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -259,6 +259,14 @@ void ShellBrowserMainParts::StartDynamicMode(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::HandleMouseMove,
+                            base::Unretained(self), s_pane, x, y, modifiers));
++      } else if (action && std::string_view(action) == "focus_changed") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        bool focused = xpc_dictionary_get_bool(event, "focused");
++        std::string s_pane(pane ? pane : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::HandleFocusChanged,
++                           base::Unretained(self), s_pane, focused));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -366,13 +374,6 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+         base::Unretained(video_consumer.get())));
+   }
+ 
+-  // Tell the renderer this page is focused and active so Blink renders
+-  // selection highlights, blinking carets, and focus rings.
+-  if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
+-    view->Focus();
+-    view->SetActive(true);
+-  }
+-
+   // Store tab state.
+   auto tab = std::make_unique<TabState>();
+   tab->shell = shell;
+@@ -546,6 +547,30 @@ void ShellBrowserMainParts::HandleMouseMove(
+     view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
+ }
+ 
++void ShellBrowserMainParts::HandleFocusChanged(
++    const std::string& pane_id, bool focused) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  TabState* tab = nullptr;
++  for (auto& t : tabs_) {
++    if (t->pane_id == pane_id) { tab = t.get(); break; }
++  }
++  if (!tab) return;
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (!view) return;
++
++  if (focused) {
++    view->Focus();
++    view->SetActive(true);
++  } else {
++    view->SetActive(false);
++  }
++
++  LOG(INFO) << "[ProfileServer] Focus " << (focused ? "gained" : "lost")
++            << " for pane " << pane_id;
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 8728e4f9d83b2..3c3aaa2ac31d8 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -122,6 +122,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   void HandleMouseMove(const std::string& pane_id,
+                        double x, double y,
+                        uint64_t modifiers);
++  void HandleFocusChanged(const std::string& pane_id, bool focused);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+-- 
+2.50.1 (Apple Git-155)
+

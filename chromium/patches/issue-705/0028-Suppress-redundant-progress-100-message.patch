@@ -1,0 +1,33 @@
+From 27e9cdbd8c2b26640ce292a8f45fe6a36ffe3069 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 15:39:50 -0600
+Subject: [PATCH 28/65] Suppress redundant progress 100 message
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A progress of hundred, eager to say,
+"I'm done!" — but done was already on its way.
+Arriving late, it confused the bar,
+Now silenced at the source, no more bizarre.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/chromium_profile_server/browser/shell_video_consumer.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index 3ee00fc7a2d05..0a6d4d7ffec6c 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -175,6 +175,7 @@ void ShellVideoConsumer::DidStopLoading() {
+ void ShellVideoConsumer::LoadProgressChanged(double progress) {
+ #if BUILDFLAG(IS_MAC)
+   int pct = static_cast<int>(progress * 100);
++  if (pct >= 100) return;  // DidStopLoading sends "done"
+   SendLoadingState("progress", pct);
+ #endif
+ }
+-- 
+2.50.1 (Apple Git-155)
+

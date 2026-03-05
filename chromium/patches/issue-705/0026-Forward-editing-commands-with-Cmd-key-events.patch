@@ -1,0 +1,130 @@
+From cd363999d1fc6954acae141773215c709b1df406 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 09:00:13 -0600
+Subject: [PATCH 26/65] Forward editing commands with Cmd+key events
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ForwardKeyboardEvent just whispered keys,
+But Blink said, "Commands, if you please."
+Now selectAll, copy, paste, cut, undo—
+Each Cmd shortcut finally breaks through.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 59 +++++++++++++++++--
+ 1 file changed, 54 insertions(+), 5 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index ac8c294e15377..e2ed88ce1cfc8 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -48,6 +48,10 @@
+ #include "net/base/net_module.h"
+ #include "net/grit/net_resources.h"
+ #include "ui/base/buildflags.h"
++#include "ui/events/keycodes/dom/dom_code.h"
++#include "ui/events/keycodes/dom/dom_key.h"
++#include "ui/events/keycodes/keyboard_code_conversion.h"
++#include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/base/resource/resource_bundle.h"
+ #include "url/gurl.h"
+ 
+@@ -84,7 +88,9 @@
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "third_party/blink/public/mojom/input/input_handler.mojom.h"
+ #include "ui/events/types/scroll_types.h"
++#include "ui/latency/latency_info.h"
+ #endif
+ 
+ namespace content {
+@@ -605,6 +611,7 @@ void ShellBrowserMainParts::HandleKeyEvent(
+   if (!tab) return;
+ 
+   int web_modifiers = static_cast<int>(modifiers & 0xF);
++  bool has_meta = (web_modifiers & blink::WebInputEvent::kMetaKey) != 0;
+ 
+   auto event_type = blink::WebInputEvent::Type::kRawKeyDown;
+   if (type == "up")
+@@ -614,16 +621,54 @@ void ShellBrowserMainParts::HandleKeyEvent(
+       event_type, web_modifiers, base::TimeTicks::Now());
+   key_event.windows_key_code = windows_key_code;
+ 
++  // Populate dom_code from VK code (assumes US layout).
++  key_event.dom_code = static_cast<int>(
++      ui::UsLayoutKeyboardCodeToDomCode(
++          static_cast<ui::KeyboardCode>(windows_key_code)));
++
++  // Populate dom_key from dom_code.
++  ui::DomKey dom_key;
++  ui::KeyboardCode dummy_vkey;
++  if (ui::DomCodeToUsLayoutDomKey(
++          static_cast<ui::DomCode>(key_event.dom_code),
++          web_modifiers, &dom_key, &dummy_vkey)) {
++    key_event.dom_key = static_cast<int>(static_cast<ui::DomKey::Base>(dom_key));
++  }
++
+   auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+   if (!view) {
+     LOG(WARNING) << "[ProfileServer] Key view is null for pane=" << pane_id;
+     return;
+   }
+ 
+-  view->GetRenderWidgetHost()->ForwardKeyboardEvent(key_event);
++  auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++      view->GetRenderWidgetHost());
++
++  // Build editing commands for Cmd+key shortcuts (key down only).
++  std::vector<blink::mojom::EditCommandPtr> commands;
++  if (has_meta && type != "up") {
++    std::string cmd;
++    switch (windows_key_code) {
++      case ui::VKEY_A: cmd = "selectAll"; break;
++      case ui::VKEY_C: cmd = "copy"; break;
++      case ui::VKEY_V: cmd = "paste"; break;
++      case ui::VKEY_X: cmd = "cut"; break;
++      case ui::VKEY_Z: cmd = "undo"; break;
++      default: break;
++    }
++    if (!cmd.empty()) {
++      commands.push_back(
++          blink::mojom::EditCommand::New(cmd, ""));
++    }
++  }
++
++  ui::LatencyInfo latency;
++  rwhi->ForwardKeyboardEventWithCommands(
++      key_event, latency, std::move(commands));
+ 
+-  // For key down with text, also send a Char event.
+-  if (type != "up" && !utf8_text.empty()) {
++  // For key down with text, send a Char event — but NOT for Cmd+key shortcuts,
++  // which should only produce kRawKeyDown + kKeyUp.
++  if (type != "up" && !utf8_text.empty() && !has_meta) {
+     input::NativeWebKeyboardEvent char_event(
+         blink::WebInputEvent::Type::kChar, web_modifiers,
+         base::TimeTicks::Now());
+@@ -635,11 +680,15 @@ void ShellBrowserMainParts::HandleKeyEvent(
+       char_event.unmodified_text[0] = text16[0];
+     }
+ 
+-    view->GetRenderWidgetHost()->ForwardKeyboardEvent(char_event);
++    std::vector<blink::mojom::EditCommandPtr> no_commands;
++    rwhi->ForwardKeyboardEventWithCommands(
++        char_event, latency, std::move(no_commands));
+   }
+ 
+   LOG(INFO) << "[ProfileServer] Key " << type << " vk=0x" << std::hex
+-            << windows_key_code << std::dec << " pane=" << pane_id;
++            << windows_key_code << std::dec
++            << " mods=" << web_modifiers
++            << " pane=" << pane_id;
+ }
+ 
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+-- 
+2.50.1 (Apple Git-155)
+

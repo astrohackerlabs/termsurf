@@ -250,6 +250,8 @@ message QueryDevtoolsRequest {
 message QueryDevtoolsReply {
   int64 tab_id = 1;
   string error = 2;
+  string browser = 3;
+  string profile = 4;
 }
 
 message QueryTabsRequest {

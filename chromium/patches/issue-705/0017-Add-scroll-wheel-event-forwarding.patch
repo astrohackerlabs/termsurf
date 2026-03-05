@@ -1,0 +1,119 @@
+From 1876e0003a8db4fc181f3d6d1a17a0a0704e687b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 17 Feb 2026 17:20:27 -0600
+Subject: [PATCH 17/65] Add scroll wheel event forwarding
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The wheel spins round, the page goes down,
+Phase and momentum faithfully passed—
+From trackpad flick to Chromium's crown,
+The viewport scrolls smooth at last.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 56 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  5 ++
+ 2 files changed, 61 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index df6c026f3d66d..9e0b846bfdc11 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -81,6 +81,8 @@
+ #if BUILDFLAG(IS_MAC)
+ #include <xpc/xpc.h>
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
++#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "ui/events/types/scroll_types.h"
+ #endif
+ 
+ namespace content {
+@@ -230,6 +232,22 @@ void ShellBrowserMainParts::StartDynamicMode(
+             base::BindOnce(&ShellBrowserMainParts::HandleMouseEvent,
+                            base::Unretained(self), s_pane, s_type, x, y,
+                            s_button, click_count, modifiers));
++      } else if (action && std::string_view(action) == "scroll_event") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        double x = xpc_dictionary_get_double(event, "x");
++        double y = xpc_dictionary_get_double(event, "y");
++        double dx = xpc_dictionary_get_double(event, "delta_x");
++        double dy = xpc_dictionary_get_double(event, "delta_y");
++        uint64_t phase = xpc_dictionary_get_uint64(event, "phase");
++        uint64_t momentum = xpc_dictionary_get_uint64(event, "momentum_phase");
++        bool precise = xpc_dictionary_get_bool(event, "precise");
++        uint64_t modifiers = xpc_dictionary_get_uint64(event, "modifiers");
++        std::string s_pane(pane ? pane : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::HandleScrollEvent,
++                           base::Unretained(self), s_pane, x, y, dx, dy,
++                           phase, momentum, precise, modifiers));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -429,6 +447,44 @@ void ShellBrowserMainParts::HandleMouseEvent(
+             << ") button=" << button << " pane=" << pane_id;
+ }
+ 
++void ShellBrowserMainParts::HandleScrollEvent(
++    const std::string& pane_id, double x, double y,
++    double delta_x, double delta_y,
++    uint64_t phase, uint64_t momentum_phase,
++    bool precise, uint64_t modifiers) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  // Find tab by pane_id.
++  TabState* tab = nullptr;
++  for (auto& t : tabs_) {
++    if (t->pane_id == pane_id) { tab = t.get(); break; }
++  }
++  if (!tab) return;
++
++  int web_modifiers = static_cast<int>(modifiers & 0xF);
++
++  blink::WebMouseWheelEvent wheel_event(
++      blink::WebInputEvent::Type::kMouseWheel,
++      web_modifiers,
++      base::TimeTicks::Now());
++
++  wheel_event.SetPositionInWidget(gfx::PointF(x, y));
++  wheel_event.SetPositionInScreen(gfx::PointF(x, y));
++  wheel_event.delta_x = static_cast<float>(delta_x);
++  wheel_event.delta_y = static_cast<float>(delta_y);
++  wheel_event.phase =
++      static_cast<blink::WebMouseWheelEvent::Phase>(phase);
++  wheel_event.momentum_phase =
++      static_cast<blink::WebMouseWheelEvent::Phase>(momentum_phase);
++  wheel_event.delta_units = precise
++      ? ui::ScrollGranularity::kScrollByPrecisePixel
++      : ui::ScrollGranularity::kScrollByLine;
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view)
++    view->GetRenderWidgetHost()->ForwardWheelEvent(wheel_event);
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 4aa44eb7055c7..d65e221473792 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -114,6 +114,11 @@ class ShellBrowserMainParts : public BrowserMainParts {
+                         double x, double y,
+                         const std::string& button,
+                         int click_count, uint64_t modifiers);
++  void HandleScrollEvent(const std::string& pane_id,
++                         double x, double y,
++                         double delta_x, double delta_y,
++                         uint64_t phase, uint64_t momentum_phase,
++                         bool precise, uint64_t modifiers);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+-- 
+2.50.1 (Apple Git-155)
+

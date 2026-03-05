@@ -1,0 +1,54 @@
+From 5d0fa0840174900eb7aed2b57616f82f1fbcf522 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 17 Feb 2026 16:56:36 -0600
+Subject: [PATCH 16/65] Re-apply view size after navigation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The view forgot its size each time
+A link was clicked—a resize crime.
+Now DidFinishNavigation restores
+The dimensions kept in private stores,
+And black bars vanish, pixel-sublime.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_video_consumer.cc                | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index b831c407181f4..cd1055b66316e 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -45,6 +45,8 @@ void ShellVideoConsumer::SetInitialSize(int width, int height) {
+ 
+ void ShellVideoConsumer::SetResolution(int width, int height) {
+   if (capturer_ && width > 0 && height > 0) {
++    initial_width_ = width;
++    initial_height_ = height;
+     gfx::Size size(width, height);
+     capturer_->SetResolutionConstraints(size, size,
+                                         /*use_fixed_aspect_ratio=*/false);
+@@ -72,6 +74,18 @@ void ShellVideoConsumer::DidFinishNavigation(
+   if (!xpc_connection_)
+     return;
+ 
++  // Re-apply view size — content_shell may reset it after navigation.
++  if (initial_width_ > 0 && initial_height_ > 0) {
++    RenderWidgetHostView* view = web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size logical(
++          static_cast<int>(std::ceil(initial_width_ / scale)),
++          static_cast<int>(std::ceil(initial_height_ / scale)));
++      view->SetSize(logical);
++    }
++  }
++
+   const std::string& url = navigation_handle->GetURL().spec();
+   xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+   xpc_dictionary_set_string(msg, "action", "url_changed");
+-- 
+2.50.1 (Apple Git-155)
+

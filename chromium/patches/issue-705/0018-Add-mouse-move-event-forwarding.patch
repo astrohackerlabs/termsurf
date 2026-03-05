@@ -1,0 +1,91 @@
+From 339d1e23f00e55ed55db021252c9f4a115c686cf Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 17 Feb 2026 17:40:19 -0600
+Subject: [PATCH 18/65] Add mouse move event forwarding
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The cursor glides, Chromium now sees—
+Hover states bloom like spring on the trees.
+But the I-beam stays stuck, that's a tale for next time,
+When cursors learn how to change on a dime.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 37 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  3 ++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 9e0b846bfdc11..09c1bb56c8bb2 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -248,6 +248,16 @@ void ShellBrowserMainParts::StartDynamicMode(
+             base::BindOnce(&ShellBrowserMainParts::HandleScrollEvent,
+                            base::Unretained(self), s_pane, x, y, dx, dy,
+                            phase, momentum, precise, modifiers));
++      } else if (action && std::string_view(action) == "mouse_move") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        double x = xpc_dictionary_get_double(event, "x");
++        double y = xpc_dictionary_get_double(event, "y");
++        uint64_t modifiers = xpc_dictionary_get_uint64(event, "modifiers");
++        std::string s_pane(pane ? pane : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::HandleMouseMove,
++                           base::Unretained(self), s_pane, x, y, modifiers));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -485,6 +495,33 @@ void ShellBrowserMainParts::HandleScrollEvent(
+     view->GetRenderWidgetHost()->ForwardWheelEvent(wheel_event);
+ }
+ 
++void ShellBrowserMainParts::HandleMouseMove(
++    const std::string& pane_id, double x, double y,
++    uint64_t modifiers) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  TabState* tab = nullptr;
++  for (auto& t : tabs_) {
++    if (t->pane_id == pane_id) { tab = t.get(); break; }
++  }
++  if (!tab) return;
++
++  int web_modifiers = static_cast<int>(modifiers);
++
++  blink::WebMouseEvent mouse_event(
++      blink::WebInputEvent::Type::kMouseMove,
++      gfx::PointF(x, y),
++      gfx::PointF(x, y),
++      blink::WebPointerProperties::Button::kNoButton,
++      0,  // click_count
++      web_modifiers,
++      base::TimeTicks::Now());
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view)
++    view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index d65e221473792..8728e4f9d83b2 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -119,6 +119,9 @@ class ShellBrowserMainParts : public BrowserMainParts {
+                          double delta_x, double delta_y,
+                          uint64_t phase, uint64_t momentum_phase,
+                          bool precise, uint64_t modifiers);
++  void HandleMouseMove(const std::string& pane_id,
++                       double x, double y,
++                       uint64_t modifiers);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+-- 
+2.50.1 (Apple Git-155)
+

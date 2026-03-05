@@ -1,0 +1,306 @@
+From e4dacab4dd5bc3649ffcc992fb2e04b91314b368 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 24 Feb 2026 05:42:33 -0600
+Subject: [PATCH 37/65] Add persistent compositor for stable CAContext
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A compositor once wandered alone,
+Born fresh every nav, newly grown.
+Now it persists with pride,
+A root layer inside—
+One CAContext to rule from its throne.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/chromium_profile_server/BUILD.gn      |  8 +-
+ .../browser/shell_browser_main_parts.cc       | 79 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  8 ++
+ .../browser/shell_compositor_bridge_mac.h     | 18 +++++
+ .../browser/shell_compositor_bridge_mac.mm    | 15 ++++
+ .../browser/shell_tab_observer.cc             | 12 +++
+ .../browser/shell_tab_observer.h              |  6 ++
+ 7 files changed, 145 insertions(+), 1 deletion(-)
+ create mode 100644 content/chromium_profile_server/browser/shell_compositor_bridge_mac.h
+ create mode 100644 content/chromium_profile_server/browser/shell_compositor_bridge_mac.mm
+
+diff --git a/content/chromium_profile_server/BUILD.gn b/content/chromium_profile_server/BUILD.gn
+index 42de625203031..7433ec483f49e 100644
+--- a/content/chromium_profile_server/BUILD.gn
++++ b/content/chromium_profile_server/BUILD.gn
+@@ -246,6 +246,8 @@ static_library("chromium_profile_server_lib") {
+       "browser/shell_browser_main_parts_mac.mm",
+       "browser/shell_ca_layer_bridge_mac.h",
+       "browser/shell_ca_layer_bridge_mac.mm",
++      "browser/shell_compositor_bridge_mac.h",
++      "browser/shell_compositor_bridge_mac.mm",
+       "browser/shell_javascript_dialog_mac.mm",
+       "browser/shell_platform_delegate_mac.mm",
+       "browser/shell_web_contents_view_delegate_mac.mm",
+@@ -406,7 +408,11 @@ static_library("chromium_profile_server_lib") {
+ 
+   if (is_mac) {
+     frameworks = [ "IOSurface.framework" ]
+-    deps += [ "//ui/display:test_support" ]
++    deps += [
++      "//ui/accelerated_widget_mac",
++      "//ui/compositor",
++      "//ui/display:test_support",
++    ]
+   }
+ 
+   if (is_ios) {
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index b20fe2ebea321..c6ed699d25a78 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -88,6 +88,12 @@
+ #include <xpc/xpc.h>
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
++#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
++#include "content/public/browser/context_factory.h"
++#include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
++#include "ui/compositor/compositor.h"
++#include "ui/compositor/layer.h"
++#include "components/viz/common/surfaces/local_surface_id.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
+ #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
+@@ -353,6 +359,54 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+     }
+   }
+ 
++  // Create persistent compositor on first tab (Issue 633).
++  if (!persistent_compositor_) {
++    persistent_widget_mac_ = std::make_unique<ui::AcceleratedWidgetMac>();
++    ui::ContextFactory* context_factory = content::GetContextFactory();
++    persistent_compositor_ = std::make_unique<ui::Compositor>(
++        context_factory->AllocateFrameSinkId(),
++        context_factory,
++        base::SingleThreadTaskRunner::GetCurrentDefault(),
++        false /* enable_pixel_canvas */);
++    persistent_compositor_->SetAcceleratedWidget(
++        persistent_widget_mac_->accelerated_widget());
++
++    persistent_root_layer_ =
++        std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
++    persistent_root_layer_->SetColor(SK_ColorTRANSPARENT);
++
++    // Set initial size from the first tab's dimensions.
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size size_pixels(pixel_width, pixel_height);
++      gfx::Size size_dip(
++          static_cast<int>(std::ceil(pixel_width / scale)),
++          static_cast<int>(std::ceil(pixel_height / scale)));
++      persistent_root_layer_->SetBounds(gfx::Rect(size_dip));
++      viz::LocalSurfaceId local_surface_id =
++          viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++      persistent_compositor_->SetScaleAndSize(
++          scale, size_pixels, local_surface_id);
++    }
++
++    persistent_compositor_->SetRootLayer(persistent_root_layer_.get());
++    persistent_compositor_->SetVisible(true);
++
++    LOG(INFO) << "[ProfileServer] Created persistent compositor (Issue 633)";
++  }
++
++  // Set parent_ui_layer_ on the view (Issue 633).
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      SetParentUiLayerOnView(view, persistent_root_layer_.get());
++      LOG(INFO) << "[ProfileServer] Set parent_ui_layer_ on initial view";
++    }
++  }
++
+   // Create a ShellTabObserver for navigation/loading/cursor notifications.
+   auto tab_observer = std::make_unique<ShellTabObserver>();
+   tab_observer->SetPaneId(pane_id);
+@@ -437,6 +491,11 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+     tab_observer->SetLastCAContextIdPtr(last_id);
+   }
+ 
++  // Store parent ui layer on observer for re-registration (Issue 633).
++  if (persistent_root_layer_) {
++    tab_observer->SetParentUiLayer(persistent_root_layer_.get());
++  }
++
+   // Store tab state.
+   auto tab = std::make_unique<TabState>();
+   tab->shell = shell;
+@@ -483,6 +542,26 @@ void ShellBrowserMainParts::ResizeTab(const std::string& pane_id,
+               << logical.ToString()
+               << " (physical " << pixel_width << "x" << pixel_height << ")";
+   }
++
++  // Update persistent compositor size (Issue 633).
++  if (persistent_compositor_ && persistent_root_layer_) {
++    RenderWidgetHostView* compositor_view =
++        tab->shell->web_contents()->GetRenderWidgetHostView();
++    if (compositor_view) {
++      float scale = compositor_view->GetDeviceScaleFactor();
++      gfx::Size size_dip(
++          static_cast<int>(std::ceil(pixel_width / scale)),
++          static_cast<int>(std::ceil(pixel_height / scale)));
++      persistent_root_layer_->SetBounds(gfx::Rect(size_dip));
++      gfx::Size size_pixels(pixel_width, pixel_height);
++      viz::LocalSurfaceId local_surface_id =
++          viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++      persistent_compositor_->SetScaleAndSize(
++          scale, size_pixels, local_surface_id);
++      LOG(INFO) << "[ProfileServer] Updated persistent compositor size to "
++                << size_dip.ToString();
++    }
++  }
+ }
+ 
+ void ShellBrowserMainParts::HandleMouseEvent(
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 826b9aa070e1e..5e6d1480455b6 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -17,6 +17,9 @@
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <xpc/xpc.h>
++#include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
++#include "ui/compositor/compositor.h"
++#include "ui/compositor/layer.h"
+ #endif
+ 
+ #if BUILDFLAG(IS_IOS)
+@@ -129,6 +132,11 @@ class ShellBrowserMainParts : public BrowserMainParts {
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
++
++  // Persistent compositor for UseParentLayerCompositor mode (Issue 633).
++  std::unique_ptr<ui::AcceleratedWidgetMac> persistent_widget_mac_;
++  std::unique_ptr<ui::Compositor> persistent_compositor_;
++  std::unique_ptr<ui::Layer> persistent_root_layer_;
+ #endif
+   std::vector<std::unique_ptr<TabState>> tabs_;
+ 
+diff --git a/content/chromium_profile_server/browser/shell_compositor_bridge_mac.h b/content/chromium_profile_server/browser/shell_compositor_bridge_mac.h
+new file mode 100644
+index 0000000000000..ae2b93eaa81fd
+--- /dev/null
++++ b/content/chromium_profile_server/browser/shell_compositor_bridge_mac.h
+@@ -0,0 +1,18 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_CHROMIUM_PROFILE_SERVER_BROWSER_SHELL_COMPOSITOR_BRIDGE_MAC_H_
++#define CONTENT_CHROMIUM_PROFILE_SERVER_BROWSER_SHELL_COMPOSITOR_BRIDGE_MAC_H_
++
++namespace ui { class Layer; }
++
++namespace content {
++
++class RenderWidgetHostView;
++
++void SetParentUiLayerOnView(RenderWidgetHostView* view, ui::Layer* layer);
++
++}  // namespace content
++
++#endif
+diff --git a/content/chromium_profile_server/browser/shell_compositor_bridge_mac.mm b/content/chromium_profile_server/browser/shell_compositor_bridge_mac.mm
+new file mode 100644
+index 0000000000000..1f2863826e9c7
+--- /dev/null
++++ b/content/chromium_profile_server/browser/shell_compositor_bridge_mac.mm
+@@ -0,0 +1,15 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
++#include "content/browser/renderer_host/render_widget_host_view_mac.h"
++
++namespace content {
++
++void SetParentUiLayerOnView(RenderWidgetHostView* view, ui::Layer* layer) {
++  auto* mac_view = static_cast<RenderWidgetHostViewMac*>(view);
++  mac_view->SetParentUiLayer(layer);
++}
++
++}  // namespace content
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.cc b/content/chromium_profile_server/browser/shell_tab_observer.cc
+index 4c053cdf116ce..2dc3bbe394b84 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.cc
++++ b/content/chromium_profile_server/browser/shell_tab_observer.cc
+@@ -16,6 +16,7 @@
+ #if BUILDFLAG(IS_MAC)
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
++#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
+ #endif
+ 
+ namespace content {
+@@ -53,6 +54,10 @@ void ShellTabObserver::SetLastCAContextIdPtr(uint32_t* ptr) {
+   last_ca_context_id_ = ptr;
+ }
+ 
++void ShellTabObserver::SetParentUiLayer(ui::Layer* layer) {
++  parent_ui_layer_ = layer;
++}
++
+ // Re-register CALayerParams and cursor callbacks on the new view after a
+ // cross-process navigation swaps the RenderViewHost (Issue 630, fix C2).
+ void ShellTabObserver::RenderViewHostChanged(
+@@ -75,6 +80,13 @@ void ShellTabObserver::RenderViewHostChanged(
+       view->GetRenderWidgetHost());
+   rwhi->SetCursorChangedCallback(base::BindRepeating(
+       &ShellTabObserver::OnCursorChanged, base::Unretained(this)));
++
++  // Re-set parent_ui_layer_ on the new view (Issue 633).
++  if (parent_ui_layer_) {
++    SetParentUiLayerOnView(view, parent_ui_layer_);
++    LOG(INFO) << "[ShellTabObserver] Set parent_ui_layer_ on new view"
++              << " pane=" << pane_id_;
++  }
+ }
+ #endif
+ 
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.h b/content/chromium_profile_server/browser/shell_tab_observer.h
+index 1c249614b76ad..244893db35260 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.h
++++ b/content/chromium_profile_server/browser/shell_tab_observer.h
+@@ -19,6 +19,8 @@
+ #include <xpc/xpc.h>
+ #endif
+ 
++namespace ui { class Layer; }
++
+ namespace content {
+ 
+ class WebContents;
+@@ -61,6 +63,9 @@ class ShellTabObserver : public WebContentsObserver {
+ 
+   // Store the dedup gate pointer for reset on navigation (Issue 630, C3).
+   void SetLastCAContextIdPtr(uint32_t* ptr);
++
++  // Store the parent ui layer for re-registration on view swap (Issue 633).
++  void SetParentUiLayer(ui::Layer* layer);
+ #endif
+ 
+  private:
+@@ -71,6 +76,7 @@ class ShellTabObserver : public WebContentsObserver {
+   std::string pane_id_;
+   CALayerParamsCallback ca_layer_params_callback_;
+   raw_ptr<uint32_t> last_ca_context_id_ = nullptr;  // non-owning, owned by callback
++  raw_ptr<ui::Layer> parent_ui_layer_ = nullptr;  // persistent compositor root layer (Issue 633)
+ #endif
+ };
+ 
+-- 
+2.50.1 (Apple Git-155)
+

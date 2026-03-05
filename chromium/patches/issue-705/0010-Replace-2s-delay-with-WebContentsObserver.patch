@@ -1,0 +1,115 @@
+From f52415d2c8ed65085459341c226dfe9d626870c2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 15 Feb 2026 07:36:17 -0600
+Subject: [PATCH 10/65] Replace 2s delay with WebContentsObserver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A timer slept while frames went by,
+Two seconds wasted — but now we ask why?
+RenderViewReady knows the hour,
+ObserveContents grants the power.
+0.68 seconds — not a beat more,
+The capturer attaches at the door.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc             | 13 +++----------
+ .../browser/shell_video_consumer.cc                 |  8 ++++++++
+ .../browser/shell_video_consumer.h                  | 11 ++++++++++-
+ 3 files changed, 21 insertions(+), 11 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index e0766e7ed2f9d..69678938f509e 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -153,8 +153,6 @@ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+   Shell* shell = Shell::CreateNewWindow(browser_context_.get(), GetStartupURL(),
+                                         nullptr, gfx::Size());
+ 
+-  // Attach a video consumer after a short delay to allow the
+-  // RenderWidgetHostView to be created by the navigation.
+   video_consumer_ = std::make_unique<ShellVideoConsumer>();
+ 
+ #if BUILDFLAG(IS_MAC)
+@@ -171,14 +169,9 @@ void ShellBrowserMainParts::InitializeMessageLoopContext() {
+   }
+ #endif
+ 
+-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+-      FROM_HERE,
+-      base::BindOnce(
+-          [](ShellVideoConsumer* consumer, WebContents* web_contents) {
+-            consumer->Attach(web_contents);
+-          },
+-          video_consumer_.get(), shell->web_contents()),
+-      base::Seconds(2));
++  // Observe the WebContents and attach the capturer when the
++  // RenderWidgetHostView is ready (via RenderViewReady callback).
++  video_consumer_->ObserveContents(shell->web_contents());
+ }
+ 
+ void ShellBrowserMainParts::ToolkitInitialized() {
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index f5ebb05b3eaf0..c2b12aa018771 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -59,6 +59,14 @@ void ShellVideoConsumer::SetSessionId(const std::string& session_id) {
+ }
+ #endif
+ 
++void ShellVideoConsumer::ObserveContents(WebContents* web_contents) {
++  Observe(web_contents);
++}
++
++void ShellVideoConsumer::RenderViewReady() {
++  Attach(web_contents());
++}
++
+ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+   RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.h b/content/chromium_profile_server/browser/shell_video_consumer.h
+index e6d3dfb7a9f88..80602e3e1c7e0 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.h
++++ b/content/chromium_profile_server/browser/shell_video_consumer.h
+@@ -11,6 +11,7 @@
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "components/viz/host/client_frame_sink_video_capturer.h"
++#include "content/public/browser/web_contents_observer.h"
+ #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+@@ -24,7 +25,8 @@ class WebContents;
+ // Attaches a FrameSinkVideoCapturer to a WebContents and logs every captured
+ // frame. Used to verify that Chromium's video capture API delivers IOSurfaces
+ // at 60fps on macOS.
+-class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
++class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
++                           public WebContentsObserver {
+  public:
+   ShellVideoConsumer();
+   ~ShellVideoConsumer() override;
+@@ -32,10 +34,17 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer {
+   ShellVideoConsumer(const ShellVideoConsumer&) = delete;
+   ShellVideoConsumer& operator=(const ShellVideoConsumer&) = delete;
+ 
++  // Begin observing a WebContents. When RenderViewReady() fires,
++  // Attach() is called automatically.
++  void ObserveContents(WebContents* web_contents);
++
+   // Attaches the capturer to the given WebContents. The WebContents must have
+   // a valid RenderWidgetHostView (i.e., navigation must have started).
+   void Attach(WebContents* web_contents);
+ 
++  // WebContentsObserver:
++  void RenderViewReady() override;
++
+ #if BUILDFLAG(IS_MAC)
+   // Connects to an XPC Mach service by name. Once connected, OnFrameCaptured()
+   // will send IOSurface Mach ports to the service every frame.
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1036,3 +1036,121 @@ Key differences from the current code:
 3. Hover over elements in DevTools — highlights appear on the inspected page
    (confirming in-process bindings work).
 4. Regular browser tabs still work after DevTools is open.
+
+#### Result: Failure — Shell creation works, bindings crash on attach
+
+The Experiment 12 pattern fixed the Shell creation crash from Experiment 10. The
+DevTools tab was created successfully (tab_id=2), received a `ca_context_id`,
+and the GUI composited it. The URL shown was the raw HTTP DevTools URL instead
+of `devtools://1` — a cosmetic issue but a sign that the frontend loaded as a
+plain page, not through the in-process binding path.
+
+The crash now happens later, inside `ShellDevToolsBindings::AttachInternal()`:
+
+```
+ShellDevToolsBindings::AttachInternal() + 120
+→ DevToolsAgentHost::GetOrCreateForTab(WebContents*)
+→ WebContentsDevToolsAgentHost(WebContents*)
+→ WebContentsDevToolsAgentHost::InnerAttach(WebContents*)
+→ SEGV at address a7fe5f1dbd82658f
+```
+
+The `ShellDevToolsFrontend` constructor stores the inspected `WebContents*` and
+passes it to `ShellDevToolsBindings`. When `PrimaryMainDocumentElementAvailable`
+fires (DevTools DOM loaded), it calls `Attach()` → `AttachInternal()` →
+`GetOrCreateForTab(inspected_contents)`. The corrupted address
+(`a7fe5f1dbd82658f`) shows the inspected `WebContents*` is stale or corrupted by
+the time the attach runs.
+
+This is the same crash signature as Experiment 10 — `SEGV_ACCERR` on a corrupted
+pointer — just happening at a different point. The Shell creation order wasn't
+the root cause. Something about how Plusium manages `WebContents` lifetime or
+how `DevToolsAgentHost` resolves the inspected target is fundamentally different
+from Profile Server.
+
+Hypotheses for why Profile Server works but Plusium crashes:
+
+1. **WebContents ownership differs.** Profile Server's `CreateDevToolsTab`
+   receives `inspected_tab_id` (an integer) and looks up the WebContents from
+   its own `tabs_` vector. Plusium receives `void* inspected` — a raw pointer
+   cast from the C API boundary. If the pointer crosses library boundaries
+   differently (libtermsurf_content is a static library linked into plusium),
+   the vtable or hidden pointers may be corrupted.
+
+2. **BrowserContext mismatch.** Profile Server uses `browser_context_.get()`
+   (its own member). Plusium passes `void* ctx` from the C API. If the
+   BrowserContext used for the DevTools Shell doesn't match the inspected tab's
+   BrowserContext, the DevToolsAgentHost resolution may fail.
+
+3. **Component build issue.** The build uses `is_component_build = true`.
+   `DevToolsAgentHost::GetOrCreateForTab()` lives in `libcontent.dylib`.
+   `ShellDevToolsBindings::AttachInternal()` lives in the `plusium` binary. The
+   `WebContents*` pointer crosses the dylib boundary. If the inspected
+   WebContents was created by a different component than expected, the internal
+   pointers may not resolve correctly.
+
+The next experiment should add debug logging inside
+`ShellDevToolsBindings::AttachInternal()` to print the inspected `WebContents*`
+address just before the crash, and compare it to the address stored at
+construction time, to determine if the pointer is stale or was never valid.
+
+## Conclusion
+
+### What works
+
+Plusium is a standalone Chromium binary that speaks the TermSurf IPC protocol.
+Regular browser tabs work end-to-end: the TUI sends
+`web google.com --browser plusium`, the GUI spawns Plusium, Chromium renders the
+page, CALayerHost composites it into the terminal pane at 60fps. Navigation,
+input forwarding, URL sync, title sync, loading state — all functional.
+
+The IPC routing for DevTools is also correct (Experiment 10). The GUI's
+`QueryDevtoolsReply` now returns the browser and profile of the inspected tab,
+the TUI passes them through, and `handleSetDevtoolsOverlay` routes
+`CreateDevtoolsTab` to the correct Plusium process via `tab_to_pane` lookup.
+This code should be kept.
+
+### What doesn't work
+
+DevTools crashes Plusium. Two experiments (10 and 12) tried different approaches
+to calling `ShellDevToolsFrontend`, and both crash at the same underlying point:
+`DevToolsAgentHost::GetOrCreateForTab(inspected_contents)` inside
+`ShellDevToolsBindings::AttachInternal()`. The inspected `WebContents*` pointer
+is corrupted by the time the DevTools frontend DOM loads and triggers the
+attach.
+
+Profile Server's DevTools works. The difference is architectural: Profile Server
+is a monolithic C++ binary that owns everything directly. Plusium goes through a
+C API boundary (`libtermsurf_content`) where `WebContents*` is cast to `void*`
+and back. Something about this boundary corrupts the pointer that
+`ShellDevToolsBindings` stores for later use.
+
+### Ideas for Issue 706
+
+1. **Debug the pointer.** Add logging in `ShellDevToolsBindings` constructor and
+   `AttachInternal()` to print the inspected `WebContents*` address at both
+   points. If they differ, the pointer is being corrupted in storage. If they
+   match, the object itself was destroyed or relocated.
+
+2. **Look up by tab_id instead of pointer.** Profile Server's
+   `CreateDevToolsTab` receives `inspected_tab_id` (an integer) and looks up
+   `WebContents*` from its own `tabs_` vector. Plusium receives
+   `void* inspected` from the C API. Change Plusium's C API to accept `tab_id`
+   instead of `void*`, and look up the WebContents internally — never passing a
+   WebContents pointer across the C boundary for DevTools.
+
+3. **Defer binding creation.** Instead of creating `ShellDevToolsFrontend` in
+   `CreateDevToolsTab`, store the `inspected_tab_id` on the TabState and create
+   the frontend later — after the DevTools Shell's compositor and observer are
+   fully initialized. This would require a new trigger point (perhaps after the
+   first `ca_context_id` fires).
+
+4. **Compare with Profile Server at the C++ level.** Profile Server's forked
+   `shell_devtools_bindings.cc` may differ from stock. If it has fixes or
+   workarounds for the attach sequence, Plusium needs the same changes.
+
+5. **Component build investigation.** The build uses
+   `is_component_build = true`, so `DevToolsAgentHost` lives in
+   `libcontent.dylib` while `ShellDevToolsBindings` lives in the `plusium`
+   binary. Test whether a non-component build fixes the crash — if so, the issue
+   is dylib boundary related.

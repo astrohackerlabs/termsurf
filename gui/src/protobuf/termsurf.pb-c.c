@@ -3811,7 +3811,7 @@ const ProtobufCMessageDescriptor termsurf__query_devtools_request__descriptor =
   (ProtobufCMessageInit) termsurf__query_devtools_request__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor termsurf__query_devtools_reply__field_descriptors[2] =
+static const ProtobufCFieldDescriptor termsurf__query_devtools_reply__field_descriptors[4] =
 {
   {
     "tab_id",
@@ -3837,15 +3837,41 @@ static const ProtobufCFieldDescriptor termsurf__query_devtools_reply__field_desc
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "browser",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__QueryDevtoolsReply, browser),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "profile",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__QueryDevtoolsReply, profile),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned termsurf__query_devtools_reply__field_indices_by_name[] = {
+  2,   /* field[2] = browser */
   1,   /* field[1] = error */
+  3,   /* field[3] = profile */
   0,   /* field[0] = tab_id */
 };
 static const ProtobufCIntRange termsurf__query_devtools_reply__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 2 }
+  { 0, 4 }
 };
 const ProtobufCMessageDescriptor termsurf__query_devtools_reply__descriptor =
 {
@@ -3855,7 +3881,7 @@ const ProtobufCMessageDescriptor termsurf__query_devtools_reply__descriptor =
   "Termsurf__QueryDevtoolsReply",
   "termsurf",
   sizeof(Termsurf__QueryDevtoolsReply),
-  2,
+  4,
   termsurf__query_devtools_reply__field_descriptors,
   termsurf__query_devtools_reply__field_indices_by_name,
   1,  termsurf__query_devtools_reply__number_ranges,

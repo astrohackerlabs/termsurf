@@ -1,0 +1,61 @@
+From a6738b865d937b57ce038477397c00965730ee07 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 16:20:12 -0600
+Subject: [PATCH 30/65] Add Cmd+[/]/R navigation keybindings
+
+Brackets go back, brackets go fore,
+And R refreshes what you saw before.
+Intercepted in HandleKeyEvent's embrace,
+Before the renderer sees a trace.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 25 +++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index e2ed88ce1cfc8..75bde5bbea297 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -32,6 +32,7 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/storage_partition.h"
++#include "content/public/browser/reload_type.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/result_codes.h"
+@@ -613,6 +614,30 @@ void ShellBrowserMainParts::HandleKeyEvent(
+   int web_modifiers = static_cast<int>(modifiers & 0xF);
+   bool has_meta = (web_modifiers & blink::WebInputEvent::kMetaKey) != 0;
+ 
++  // Navigation commands: Cmd+[ (back), Cmd+] (forward), Cmd+R (reload).
++  // Intercept before forwarding to renderer (Issue 616 Experiment 10).
++  if (has_meta && type != "up") {
++    bool handled = true;
++    switch (windows_key_code) {
++      case ui::VKEY_OEM_4:  // Cmd+[ — back
++        if (tab->shell->web_contents()->GetController().CanGoBack())
++          tab->shell->web_contents()->GetController().GoBack();
++        break;
++      case ui::VKEY_OEM_6:  // Cmd+] — forward
++        if (tab->shell->web_contents()->GetController().CanGoForward())
++          tab->shell->web_contents()->GetController().GoForward();
++        break;
++      case ui::VKEY_R:  // Cmd+R — reload
++        tab->shell->web_contents()->GetController().Reload(
++            content::ReloadType::NORMAL, false);
++        break;
++      default:
++        handled = false;
++        break;
++    }
++    if (handled) return;
++  }
++
+   auto event_type = blink::WebInputEvent::Type::kRawKeyDown;
+   if (type == "up")
+     event_type = blink::WebInputEvent::Type::kKeyUp;
+-- 
+2.50.1 (Apple Git-155)
+

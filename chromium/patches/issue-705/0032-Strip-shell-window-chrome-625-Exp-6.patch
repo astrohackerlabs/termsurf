@@ -1,0 +1,58 @@
+From 9ff71ddc1824d74b2970780ec6ce94c35b2a7959 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 22 Feb 2026 16:28:48 -0600
+Subject: [PATCH 32/65] Strip shell window chrome (625 Exp 6)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The title bar and toolbar conspired,
+fifty-two phantom pixels they acquired.
+Borderless now, toolbar deceased,
+the CAContext offset has ceased—
+a cleaner window, as the layer required.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/chromium_profile_server/browser/shell.cc           | 6 ++++--
+ .../browser/shell_platform_delegate_mac.mm                 | 7 ++++---
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell.cc b/content/chromium_profile_server/browser/shell.cc
+index 6aa9deff56ecf..129dae66cd0b6 100644
+--- a/content/chromium_profile_server/browser/shell.cc
++++ b/content/chromium_profile_server/browser/shell.cc
+@@ -164,8 +164,10 @@ void Shell::SetShellCreatedCallback(
+ 
+ // static
+ bool Shell::ShouldHideToolbar() {
+-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+-      switches::kChromiumProfileServerHideToolbar);
++  // Always hide the toolbar. The Chromium Profile Server window is hidden
++  // (--hidden flag) and the toolbar's 24px height creates an offset in the
++  // CAContext layer tree that shifts CALayerHost content in the GUI (Issue 625).
++  return true;
+ }
+ 
+ // static
+diff --git a/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm b/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm
+index fa3e31cf5f2f5..b2abd8ae68535 100644
+--- a/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm
++++ b/content/chromium_profile_server/browser/shell_platform_delegate_mac.mm
+@@ -145,9 +145,10 @@ void MakeShellButton(NSRect* rect,
+   }
+   NSRect initial_window_bounds = NSMakeRect(0, 0, width, height);
+   NSRect content_rect = initial_window_bounds;
+-  NSUInteger style_mask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+-                          NSWindowStyleMaskMiniaturizable |
+-                          NSWindowStyleMaskResizable;
++  // Borderless window — no title bar offset in the CAContext layer tree.
++  // The window is hidden (--hidden flag); the title bar's ~28px height would
++  // shift CALayerHost content in the GUI (Issue 625).
++  NSUInteger style_mask = NSWindowStyleMaskBorderless;
+   NSWindow* window =
+       [[NSWindow alloc] initWithContentRect:content_rect
+                                   styleMask:style_mask
+-- 
+2.50.1 (Apple Git-155)
+

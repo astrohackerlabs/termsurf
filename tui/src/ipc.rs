@@ -152,12 +152,13 @@ impl CompositorConnection {
     }
 
     /// Validate a DevTools request before launching the TUI (Issue 687).
+    /// Returns (tab_id, browser, profile) on success (Issue 705 Exp 10).
     pub fn send_query_devtools(
         &self,
         pane_id: &str,
         inspected_tab_id: i64,
         profile: &str,
-    ) -> Result<i64, String> {
+    ) -> Result<(i64, String, String), String> {
         self.send(Msg::QueryDevtoolsRequest(proto::QueryDevtoolsRequest {
             pane_id: pane_id.into(),
             inspected_tab_id,
@@ -172,7 +173,7 @@ impl CompositorConnection {
                 if !r.error.is_empty() {
                     Err(r.error)
                 } else {
-                    Ok(r.tab_id)
+                    Ok((r.tab_id, r.browser, r.profile))
                 }
             }
             _ => Err("Unexpected reply type".to_string()),

@@ -1,0 +1,71 @@
+From f6739c164f4b39f2fc523c4ce51c30c446646d56 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 24 Feb 2026 18:54:32 -0600
+Subject: [PATCH 41/65] Add TitleWasSet to ShellTabObserver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The page had a name but nobody knew,
+It whispered its title to no one in view.
+Now TitleWasSet sends word through XPC—
+The viewport shall know what the page claims to be.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_tab_observer.cc             | 21 +++++++++++++++++++
+ .../browser/shell_tab_observer.h              |  1 +
+ 2 files changed, 22 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.cc b/content/chromium_profile_server/browser/shell_tab_observer.cc
+index 2dc3bbe394b84..de2eb2681e546 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.cc
++++ b/content/chromium_profile_server/browser/shell_tab_observer.cc
+@@ -7,6 +7,8 @@
+ #include <cmath>
+ 
+ #include "base/logging.h"
++#include "base/strings/utf_string_conversions.h"
++#include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_view_host.h"
+ #include "content/public/browser/render_widget_host.h"
+@@ -173,4 +175,23 @@ void ShellTabObserver::DidFailLoad(RenderFrameHost* render_frame_host,
+ #endif
+ }
+ 
++void ShellTabObserver::TitleWasSet(NavigationEntry* entry) {
++#if BUILDFLAG(IS_MAC)
++  if (!xpc_connection_ || !entry)
++    return;
++
++  std::string title = base::UTF16ToUTF8(entry->GetTitleForDisplay());
++
++  LOG(INFO) << "[ShellTabObserver] TitleWasSet pane=" << pane_id_
++            << " title=" << title;
++
++  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(msg, "action", "title_changed");
++  xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
++  xpc_dictionary_set_string(msg, "title", title.c_str());
++  xpc_connection_send_message(xpc_connection_, msg);
++  xpc_release(msg);
++#endif
++}
++
+ }  // namespace content
+diff --git a/content/chromium_profile_server/browser/shell_tab_observer.h b/content/chromium_profile_server/browser/shell_tab_observer.h
+index 244893db35260..9908de4527d46 100644
+--- a/content/chromium_profile_server/browser/shell_tab_observer.h
++++ b/content/chromium_profile_server/browser/shell_tab_observer.h
+@@ -46,6 +46,7 @@ class ShellTabObserver : public WebContentsObserver {
+   void DidFailLoad(RenderFrameHost* render_frame_host,
+                    const GURL& validated_url,
+                    int error_code) override;
++  void TitleWasSet(NavigationEntry* entry) override;
+ 
+ #if BUILDFLAG(IS_MAC)
+   // WebContentsObserver: re-register callbacks on view swap (Issue 630, C2).
+-- 
+2.50.1 (Apple Git-155)
+

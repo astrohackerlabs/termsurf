@@ -1,0 +1,156 @@
+From aac4c8865e016b05a0927f6c8e5a2cd590b77cb7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 1 Mar 2026 07:33:18 -0600
+Subject: [PATCH 45/65] Issue 684: DevTools via devtools:// URL
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Type devtools://1 and what do you see?
+The same old CreateTab, but with a twist—
+It finds the inspected, loads the frontend free,
+And wires up bindings none can resist.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 54 ++++++++++++++++++-
+ .../browser/shell_browser_main_parts.h        |  2 +
+ .../browser/shell_devtools_frontend.h         |  9 ++--
+ 3 files changed, 60 insertions(+), 5 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index b37e2ea40accd..963531240d705 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -16,6 +16,8 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/ref_counted_memory.h"
+ #include "base/run_loop.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/current_thread.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -42,6 +44,7 @@
+ #include "content/chromium_profile_server/android/shell_descriptors.h"
+ #include "content/chromium_profile_server/browser/shell.h"
+ #include "content/chromium_profile_server/browser/shell_browser_context.h"
++#include "content/chromium_profile_server/browser/shell_devtools_frontend.h"
+ #include "content/chromium_profile_server/browser/shell_devtools_manager_delegate.h"
+ #include "content/chromium_profile_server/browser/shell_platform_delegate.h"
+ #include "content/chromium_profile_server/browser/shell_tab_observer.h"
+@@ -356,11 +359,41 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+                                       bool dark) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
++  // Check for devtools:// URL (Issue 684).
++  bool is_devtools = url.SchemeIs("devtools");
++  int inspected_tab_id = 0;
++  WebContents* inspected_contents = nullptr;
++
++  if (is_devtools) {
++    // Parse tab ID from host (devtools://3 → host is "3").
++    base::StringToInt(url.host(), &inspected_tab_id);
++    for (auto& t : tabs_) {
++      if (t->tab_id == inspected_tab_id && t->tab_id != 0) {
++        inspected_contents = t->shell->web_contents();
++        break;
++      }
++    }
++    if (!inspected_contents) {
++      LOG(ERROR) << "[ProfileServer] DevTools: tab " << inspected_tab_id
++                 << " not found";
++      return;
++    }
++    LOG(INFO) << "[ProfileServer] DevTools: inspecting tab "
++              << inspected_tab_id << " for pane " << pane_id;
++  }
++
++  // DevTools loads the frontend URL instead of the user's URL.
++  GURL load_url = is_devtools
++      ? GURL(base::StringPrintf(
++            "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
++            ShellDevToolsManagerDelegate::GetHttpHandlerPort()))
++      : url;
++
+   // Create a new Shell + WebContents.
+-  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), url,
++  Shell* shell = Shell::CreateNewWindow(browser_context_.get(), load_url,
+                                         nullptr, gfx::Size());
+   LOG(INFO) << "[ProfileServer] Created tab for pane " << pane_id
+-            << ", URL: " << url.spec();
++            << ", URL: " << load_url.spec();
+ 
+   // Resize via Shell::ResizeWebContentForTests which sets the hidden
+   // NSWindow's contentView.frame (Issue 630, fix C4). This ensures
+@@ -552,6 +585,23 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   // Store parent ui layer on observer for re-registration (Issue 635).
+   tab_observer->SetParentUiLayer(tab->root_layer.get());
+ 
++  // Wire up DevTools bindings if this is a devtools:// tab (Issue 684).
++  // ShellDevToolsFrontend observes the DevTools WebContents and calls
++  // Attach() when the DOM loads, connecting the Mojo protocol pipes.
++  if (is_devtools && inspected_contents) {
++    new ShellDevToolsFrontend(shell, inspected_contents);
++    LOG(INFO) << "[ProfileServer] DevTools bindings created for tab "
++              << inspected_tab_id;
++  }
++
++  // Assign auto-incrementing tab ID for browser tabs only (Issue 684).
++  // DevTools tabs get tab_id=0 (no ID).
++  if (!is_devtools) {
++    tab->tab_id = next_tab_id_++;
++    LOG(INFO) << "[ProfileServer] Assigned tab_id=" << tab->tab_id
++              << " to pane " << pane_id;
++  }
++
+   // Store remaining tab state.
+   tab->tab_observer = std::move(tab_observer);
+   tab->tab_connection = tab_conn;
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 622999aaef3a9..d60f75431c4e1 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -106,6 +106,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   struct TabState {
+     TabState();
+     ~TabState();
++    int tab_id = 0;  // Auto-incrementing, 1-based. 0 = DevTools tab.
+     raw_ptr<Shell> shell;
+     std::unique_ptr<ShellTabObserver> tab_observer;
+     blink::mojom::PreferredColorScheme preferred_color_scheme =
+@@ -152,6 +153,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+ 
+ #endif
++  int next_tab_id_ = 1;  // Auto-incrementing tab ID counter (Issue 684).
+   std::vector<std::unique_ptr<TabState>> tabs_;
+ 
+   std::unique_ptr<ShellBrowserContext> browser_context_;
+diff --git a/content/chromium_profile_server/browser/shell_devtools_frontend.h b/content/chromium_profile_server/browser/shell_devtools_frontend.h
+index 5e8fcc6b74064..8bc3b165dc2f5 100644
+--- a/content/chromium_profile_server/browser/shell_devtools_frontend.h
++++ b/content/chromium_profile_server/browser/shell_devtools_frontend.h
+@@ -33,13 +33,16 @@ class ShellDevToolsFrontend : public ShellDevToolsDelegate,
+ 
+   base::WeakPtr<ShellDevToolsFrontend> GetWeakPtr();
+ 
++  // Construct with an existing Shell (Issue 684: used by CreateTab for
++  // devtools:// URLs). The frontend observes the Shell's WebContents and
++  // attaches DevTools bindings when the DOM loads.
++  ShellDevToolsFrontend(Shell* frontend_shell, WebContents* inspected_contents);
++  ~ShellDevToolsFrontend() override;
++
+  private:
+   // WebContentsObserver overrides
+   void PrimaryMainDocumentElementAvailable() override;
+   void WebContentsDestroyed() override;
+-
+-  ShellDevToolsFrontend(Shell* frontend_shell, WebContents* inspected_contents);
+-  ~ShellDevToolsFrontend() override;
+   raw_ptr<Shell> frontend_shell_;
+   std::unique_ptr<ShellDevToolsBindings> devtools_bindings_;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

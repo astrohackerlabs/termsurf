@@ -1,0 +1,62 @@
+From ce5a990ef7339f9a67062756e228a533018afc2d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 1 Mar 2026 10:26:04 -0600
+Subject: [PATCH 48/65] Issue 684: Assign tab_id before tab_ready
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The tab_id took a leisurely stroll,
+Arriving well after the message did roll.
+tab_ready sent zero each time—
+Now the ID's assigned before the chime.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc              | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 9c1f76ce1ef6c..c3cd738a22d4e 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -478,10 +478,16 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+ 
+   xpc_connection_resume(tab_conn);
+ 
++  // Assign auto-incrementing tab ID BEFORE sending tab_ready (Issue 684).
++  tab->tab_id = next_tab_id_++;
++  LOG(INFO) << "[ProfileServer] Assigned tab_id=" << tab->tab_id
++            << " to pane " << pane_id;
++
+   // Send tab_ready message so the compositor can map this connection to a pane.
+   xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+   xpc_dictionary_set_string(msg, "action", "tab_ready");
+   xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++  xpc_dictionary_set_int64(msg, "tab_id", tab->tab_id);
+   xpc_connection_send_message(tab_conn, msg);
+   xpc_release(msg);
+ 
+@@ -567,11 +573,6 @@ void ShellBrowserMainParts::CreateTab(const GURL& url,
+   // Store parent ui layer on observer for re-registration (Issue 635).
+   tab_observer->SetParentUiLayer(tab->root_layer.get());
+ 
+-  // Assign auto-incrementing tab ID (Issue 684).
+-  tab->tab_id = next_tab_id_++;
+-  LOG(INFO) << "[ProfileServer] Assigned tab_id=" << tab->tab_id
+-            << " to pane " << pane_id;
+-
+   // Store remaining tab state.
+   tab->tab_observer = std::move(tab_observer);
+   tab->tab_connection = tab_conn;
+@@ -715,6 +716,7 @@ void ShellBrowserMainParts::CreateDevToolsTab(
+   xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+   xpc_dictionary_set_string(msg, "action", "tab_ready");
+   xpc_dictionary_set_string(msg, "pane_id", pane_id.c_str());
++  xpc_dictionary_set_int64(msg, "tab_id", tab->tab_id);
+   xpc_connection_send_message(tab_conn, msg);
+   xpc_release(msg);
+ 
+-- 
+2.50.1 (Apple Git-155)
+

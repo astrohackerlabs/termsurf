@@ -1,0 +1,111 @@
+From f619db768264cd0881a6dfae8cb7af2c98ffe0de Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 07:36:44 -0600
+Subject: [PATCH 24/65] Add diagnostic logging for 608 Experiment 1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The logs spoke truth the code had missed:
+A FrameSinkId that no longer exists.
+POST swapped the view, the sink went dark,
+The capturer aimed at yesterday's mark—
+Now we know why the overlay's dismissed.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 19 +++++++++----
+ .../browser/shell_video_consumer.cc           | 27 ++++++++++++++++---
+ 2 files changed, 38 insertions(+), 8 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index bb5b70f5b0fdb..ac8c294e15377 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -483,8 +483,11 @@ void ShellBrowserMainParts::HandleMouseEvent(
+       base::TimeTicks::Now());
+ 
+   auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+-  if (view)
+-    view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++  if (!view) {
++    LOG(WARNING) << "[ProfileServer] Mouse view is null for pane=" << pane_id;
++    return;
++  }
++  view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
+ 
+   LOG(INFO) << "[ProfileServer] Mouse " << type << " at (" << x << "," << y
+             << ") button=" << button << " pane=" << pane_id;
+@@ -558,8 +561,11 @@ void ShellBrowserMainParts::HandleMouseMove(
+       base::TimeTicks::Now());
+ 
+   auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+-  if (view)
+-    view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++  if (!view) {
++    LOG(WARNING) << "[ProfileServer] MouseMove view is null for pane=" << pane_id;
++    return;
++  }
++  view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
+ }
+ 
+ void ShellBrowserMainParts::HandleFocusChanged(
+@@ -609,7 +615,10 @@ void ShellBrowserMainParts::HandleKeyEvent(
+   key_event.windows_key_code = windows_key_code;
+ 
+   auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+-  if (!view) return;
++  if (!view) {
++    LOG(WARNING) << "[ProfileServer] Key view is null for pane=" << pane_id;
++    return;
++  }
+ 
+   view->GetRenderWidgetHost()->ForwardKeyboardEvent(key_event);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index e023f1b3abf36..edf86d4b9007f 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -99,15 +99,36 @@ void ShellVideoConsumer::DidFinishNavigation(
+   }
+ 
+   const std::string& url = navigation_handle->GetURL().spec();
++
++  LOG(INFO) << "[ShellVideoConsumer] Navigation committed:"
++            << " url=" << url
++            << " is_post=" << navigation_handle->IsPost()
++            << " is_same_document=" << navigation_handle->IsSameDocument()
++            << " is_error_page=" << navigation_handle->IsErrorPage()
++            << " is_download=" << navigation_handle->IsDownload()
++            << " is_served_from_bfcache="
++            << navigation_handle->IsServedFromBackForwardCache()
++            << " redirect_chain_size="
++            << navigation_handle->GetRedirectChain().size()
++            << " net_error=" << navigation_handle->GetNetErrorCode()
++            << " pane=" << pane_id_;
++
++  RenderWidgetHostView* post_nav_view =
++      web_contents()->GetRenderWidgetHostView();
++  if (post_nav_view) {
++    auto fsid = post_nav_view->GetRenderWidgetHost()->GetFrameSinkId();
++    LOG(INFO) << "[ShellVideoConsumer] Post-nav view=" << post_nav_view
++              << " FrameSinkId=" << fsid.ToString();
++  } else {
++    LOG(WARNING) << "[ShellVideoConsumer] Post-nav view is NULL";
++  }
++
+   xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
+   xpc_dictionary_set_string(msg, "action", "url_changed");
+   xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
+   xpc_dictionary_set_string(msg, "url", url.c_str());
+   xpc_connection_send_message(xpc_connection_, msg);
+   xpc_release(msg);
+-
+-  LOG(INFO) << "[ShellVideoConsumer] URL changed: " << url
+-            << " (pane " << pane_id_ << ")";
+ #endif
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

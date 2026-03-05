@@ -1,0 +1,106 @@
+From 5b1f4f3802173699d2df34fb1ae23e55c1c6f424 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 07:46:58 -0600
+Subject: [PATCH 25/65] Recreate capturer on PrimaryPageChanged
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A POST came through, the host was new,
+The old frame sink had naught to view.
+Now PrimaryPageChanged takes the stage,
+Destroys the old, rebuilds the cage—
+And frames flow fresh the whole page through.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_video_consumer.cc              | 16 ++++++++++++++++
+ .../browser/shell_video_consumer.h               |  5 +++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index edf86d4b9007f..72e25b145ca1e 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -10,6 +10,7 @@
+ #include "components/viz/common/surfaces/video_capture_target.h"
+ #include "components/viz/host/host_frame_sink_manager.h"
+ #include "content/browser/compositor/surface_utils.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+@@ -75,6 +76,17 @@ void ShellVideoConsumer::RenderViewReady() {
+   Attach(web_contents());
+ }
+ 
++void ShellVideoConsumer::PrimaryPageChanged(Page& page) {
++  RenderWidgetHost* new_host =
++      page.GetMainDocument().GetMainFrame()->GetRenderWidgetHost();
++  if (new_host == current_host_)
++    return;
++
++  LOG(INFO) << "[ShellVideoConsumer] PrimaryPageChanged: host changed, "
++            << "re-attaching capturer (pane " << pane_id_ << ")";
++  Attach(web_contents());
++}
++
+ void ShellVideoConsumer::DidFinishNavigation(
+     NavigationHandle* navigation_handle) {
+   if (!navigation_handle->HasCommitted())
+@@ -145,6 +157,10 @@ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+     return;
+   }
+ 
++  // Destroy old capturer before creating a new one (Issue 608 Experiment 2).
++  capturer_.reset();
++  current_host_ = host;
++
+   viz::HostFrameSinkManager* manager = GetHostFrameSinkManager();
+   if (!manager) {
+     LOG(ERROR) << "[ShellVideoConsumer] No HostFrameSinkManager available";
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.h b/content/chromium_profile_server/browser/shell_video_consumer.h
+index a1140d7e328a4..6db4500ba8a46 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.h
++++ b/content/chromium_profile_server/browser/shell_video_consumer.h
+@@ -8,11 +8,13 @@
+ #include <memory>
+ #include <string>
+ 
++#include "base/memory/raw_ptr.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "ui/base/cursor/cursor.h"
+ #include "components/viz/host/client_frame_sink_video_capturer.h"
+ #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/page.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+ 
+@@ -22,6 +24,7 @@
+ 
+ namespace content {
+ 
++class RenderWidgetHost;
+ class WebContents;
+ 
+ // Attaches a FrameSinkVideoCapturer to a WebContents and logs every captured
+@@ -47,6 +50,7 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+   // WebContentsObserver:
+   void RenderViewReady() override;
+   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
++  void PrimaryPageChanged(Page& page) override;
+ 
+ #if BUILDFLAG(IS_MAC)
+   // Sets the XPC connection to use for sending IOSurface frames.
+@@ -82,6 +86,7 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+ 
+  private:
+   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
++  raw_ptr<RenderWidgetHost> current_host_ = nullptr;
+   int frame_count_ = 0;
+   base::TimeTicks last_log_time_;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

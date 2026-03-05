@@ -1,0 +1,474 @@
+From 8d920d6a62e5440f5bd187cfa66d79083f73f377 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 06:36:12 -0600
+Subject: [PATCH 56/65] Remove profile server dependency
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The umbilical cord is cut at last,
+Content Shell's the base, the fork is past.
+No profile server in our include tree—
+Just vanilla shell, subclassed and free.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/libtermsurf_content/BUILD.gn          | 16 +++++--
+ .../libtermsurf_content.cc                    | 30 +-----------
+ .../libtermsurf_content/ts_browser_client.cc  | 42 +++++++++++++++++
+ .../libtermsurf_content/ts_browser_client.h   | 14 +++++-
+ .../ts_browser_main_parts.cc                  | 35 ++++----------
+ .../ts_browser_main_parts.h                   |  2 +-
+ .../ts_ca_layer_bridge_mac.h                  | 24 ++++++++++
+ .../ts_ca_layer_bridge_mac.mm                 | 18 +++++++
+ .../ts_compositor_bridge_mac.h                | 47 +++++++++++++++++++
+ .../ts_compositor_bridge_mac.mm               | 35 ++++++++++++++
+ .../libtermsurf_content/ts_main_delegate.h    |  2 +-
+ .../libtermsurf_content/ts_tab_observer.cc    |  4 +-
+ 12 files changed, 206 insertions(+), 63 deletions(-)
+ create mode 100644 content/libtermsurf_content/ts_ca_layer_bridge_mac.h
+ create mode 100644 content/libtermsurf_content/ts_ca_layer_bridge_mac.mm
+ create mode 100644 content/libtermsurf_content/ts_compositor_bridge_mac.h
+ create mode 100644 content/libtermsurf_content/ts_compositor_bridge_mac.mm
+
+diff --git a/content/libtermsurf_content/BUILD.gn b/content/libtermsurf_content/BUILD.gn
+index 3636a7496be89..19e78b22c22b6 100644
+--- a/content/libtermsurf_content/BUILD.gn
++++ b/content/libtermsurf_content/BUILD.gn
+@@ -19,9 +19,18 @@ static_library("libtermsurf_content") {
+     "ts_tab_observer.h",
+   ]
+ 
++  if (is_mac) {
++    sources += [
++      "ts_ca_layer_bridge_mac.h",
++      "ts_ca_layer_bridge_mac.mm",
++      "ts_compositor_bridge_mac.h",
++      "ts_compositor_bridge_mac.mm",
++    ]
++  }
++
+   deps = [
+-    "//content/chromium_profile_server:chromium_profile_server_app",
+-    "//content/chromium_profile_server:chromium_profile_server_lib",
++    "//content/shell:content_shell_app",
++    "//content/shell:content_shell_lib",
+     "//content/public/app",
+     "//content/public/browser",
+     "//content/public/common",
+@@ -40,6 +49,7 @@ executable("libtermsurf_content_test") {
+   sources = [ "test_main.cc" ]
+   deps = [
+     ":libtermsurf_content",
+-    "//content/chromium_profile_server:chromium_profile_server_app",
++    "//content/shell:content_shell_app",
++    "//content/shell:content_shell_lib",
+   ]
+ }
+diff --git a/content/libtermsurf_content/libtermsurf_content.cc b/content/libtermsurf_content/libtermsurf_content.cc
+index caedfb15f9a07..58025c95457c7 100644
+--- a/content/libtermsurf_content/libtermsurf_content.cc
++++ b/content/libtermsurf_content/libtermsurf_content.cc
+@@ -4,40 +4,12 @@
+ 
+ #include "content/libtermsurf_content/libtermsurf_content.h"
+ 
+-#include <cmath>
+-#include <memory>
+-#include <string>
+-#include <vector>
+-
+ #include "base/functional/bind.h"
+-#include "base/logging.h"
+-#include "base/strings/stringprintf.h"
+-#include "base/strings/utf_string_conversions.h"
+-#include "base/task/single_thread_task_runner.h"
+ #include "content/public/app/content_main.h"
+ #include "content/public/browser/browser_thread.h"
+-#include "content/public/browser/navigation_controller.h"
+-#include "content/public/browser/reload_type.h"
+-#include "content/public/browser/render_widget_host.h"
+-#include "content/public/browser/render_widget_host_view.h"
+-#include "content/public/browser/web_contents.h"
+-#include "content/browser/renderer_host/render_widget_host_impl.h"
+-#include "content/chromium_profile_server/browser/shell.h"
+-#include "content/chromium_profile_server/browser/shell_browser_context.h"
+-#include "content/chromium_profile_server/browser/shell_devtools_frontend.h"
+-#include "content/chromium_profile_server/browser/shell_devtools_manager_delegate.h"
++#include "content/shell/browser/shell.h"
+ #include "content/libtermsurf_content/ts_main_delegate.h"
+ #include "content/libtermsurf_content/ts_browser_main_parts.h"
+-#include "third_party/blink/public/common/input/web_mouse_event.h"
+-#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
+-#include "third_party/blink/public/mojom/input/input_handler.mojom.h"
+-#include "ui/base/page_transition_types.h"
+-#include "ui/events/keycodes/dom/dom_code.h"
+-#include "ui/events/keycodes/dom/dom_key.h"
+-#include "ui/events/keycodes/keyboard_code_conversion.h"
+-#include "ui/events/keycodes/keyboard_codes.h"
+-#include "ui/events/types/scroll_types.h"
+-#include "ui/latency/latency_info.h"
+ 
+ namespace {
+ 
+diff --git a/content/libtermsurf_content/ts_browser_client.cc b/content/libtermsurf_content/ts_browser_client.cc
+index d396e83882be2..f80d20fa3ec67 100644
+--- a/content/libtermsurf_content/ts_browser_client.cc
++++ b/content/libtermsurf_content/ts_browser_client.cc
+@@ -5,9 +5,34 @@
+ #include "content/libtermsurf_content/ts_browser_client.h"
+ 
+ #include "content/libtermsurf_content/ts_browser_main_parts.h"
++#include "content/public/browser/render_frame_host.h"
++#include "mojo/public/cpp/bindings/binder_map.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "mojo/public/cpp/bindings/receiver_set.h"
++#include "third_party/blink/public/mojom/badging/badging.mojom.h"
+ 
+ namespace content {
+ 
++// Stub BadgeService — accepts and ignores Badging API calls (Issue 655).
++// Prevents renderer kills on navigator.setAppBadge().
++class TsBrowserClient::StubBadgeService
++    : public blink::mojom::BadgeService {
++ public:
++  StubBadgeService() = default;
++  ~StubBadgeService() override = default;
++
++  void Bind(mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
++    receivers_.Add(this, std::move(receiver));
++  }
++
++  // blink::mojom::BadgeService:
++  void SetBadge(blink::mojom::BadgeValuePtr value) override {}
++  void ClearBadge() override {}
++
++ private:
++  mojo::ReceiverSet<blink::mojom::BadgeService> receivers_;
++};
++
+ TsBrowserClient::TsBrowserClient() = default;
+ TsBrowserClient::~TsBrowserClient() = default;
+ 
+@@ -18,4 +43,21 @@ std::unique_ptr<BrowserMainParts> TsBrowserClient::CreateBrowserMainParts(
+   return parts;
+ }
+ 
++void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
++    RenderFrameHost* render_frame_host,
++    mojo::BinderMapWithContext<RenderFrameHost*>* map) {
++  // Call base class first to get NetworkHintsHandler etc.
++  ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
++      render_frame_host, map);
++  // Add BadgeService stub (Issue 655).
++  map->Add<blink::mojom::BadgeService>(base::BindRepeating(
++      [](TsBrowserClient* self, RenderFrameHost*,
++         mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
++        if (!self->stub_badge_service_)
++          self->stub_badge_service_ = std::make_unique<StubBadgeService>();
++        self->stub_badge_service_->Bind(std::move(receiver));
++      },
++      base::Unretained(this)));
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_content/ts_browser_client.h b/content/libtermsurf_content/ts_browser_client.h
+index c027a11093a13..7ea7dd40ee609 100644
+--- a/content/libtermsurf_content/ts_browser_client.h
++++ b/content/libtermsurf_content/ts_browser_client.h
+@@ -5,12 +5,15 @@
+ #ifndef CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
+ 
+-#include "content/chromium_profile_server/browser/shell_content_browser_client.h"
++#include <memory>
++
++#include "content/shell/browser/shell_content_browser_client.h"
+ 
+ namespace content {
+ 
+ // TsBrowserClient overrides ShellContentBrowserClient to return
+-// TsBrowserMainParts from CreateBrowserMainParts().
++// TsBrowserMainParts from CreateBrowserMainParts() and register
++// the StubBadgeService Mojo binder (Issue 655).
+ class TsBrowserClient : public ShellContentBrowserClient {
+  public:
+   TsBrowserClient();
+@@ -22,6 +25,13 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   // ContentBrowserClient:
+   std::unique_ptr<BrowserMainParts> CreateBrowserMainParts(
+       bool is_integration_test) override;
++  void RegisterBrowserInterfaceBindersForFrame(
++      RenderFrameHost* render_frame_host,
++      mojo::BinderMapWithContext<RenderFrameHost*>* map) override;
++
++ private:
++  class StubBadgeService;
++  std::unique_ptr<StubBadgeService> stub_badge_service_;
+ };
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.cc b/content/libtermsurf_content/ts_browser_main_parts.cc
+index de55f56adaffb..05eb3265f38a8 100644
+--- a/content/libtermsurf_content/ts_browser_main_parts.cc
++++ b/content/libtermsurf_content/ts_browser_main_parts.cc
+@@ -18,17 +18,17 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+-#include "content/chromium_profile_server/browser/shell.h"
+-#include "content/chromium_profile_server/browser/shell_browser_context.h"
+-#include "content/chromium_profile_server/browser/shell_devtools_frontend.h"
+-#include "content/chromium_profile_server/browser/shell_devtools_manager_delegate.h"
++#include "content/shell/browser/shell.h"
++#include "content/shell/browser/shell_browser_context.h"
++#include "content/shell/browser/shell_devtools_frontend.h"
++#include "content/shell/browser/shell_devtools_manager_delegate.h"
+ #include "content/libtermsurf_content/ts_tab_observer.h"
+ #include "ui/base/page_transition_types.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+-#include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
+-#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
++#include "content/libtermsurf_content/ts_ca_layer_bridge_mac.h"
++#include "content/libtermsurf_content/ts_compositor_bridge_mac.h"
+ #include "content/public/browser/context_factory.h"
+ #include "components/viz/common/surfaces/local_surface_id.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+@@ -228,7 +228,6 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
+                                              bool dark) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+-  auto* browser_ctx = static_cast<ShellBrowserContext*>(ctx);
+   auto* inspected_wc = static_cast<WebContents*>(inspected);
+ 
+   // Find inspected tab's ID.
+@@ -240,12 +239,10 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
+     }
+   }
+ 
+-  GURL devtools_url(base::StringPrintf(
+-      "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
+-      ShellDevToolsManagerDelegate::GetHttpHandlerPort()));
+-
+-  Shell* shell = Shell::CreateNewWindow(browser_ctx, devtools_url,
+-                                        nullptr, gfx::Size());
++  // Use Show() to create the DevTools frontend — it creates a Shell,
++  // attaches DevTools bindings, and loads the frontend URL.
++  auto* frontend = ShellDevToolsFrontend::Show(inspected_wc);
++  Shell* shell = frontend->frontend_shell();
+ 
+   if (width > 0 && height > 0) {
+     RenderWidgetHostView* view =
+@@ -379,18 +376,6 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
+   tab_observer->SetParentUiLayer(tab->root_layer.get());
+ #endif
+ 
+-  // Wire DevTools bindings.
+-  WebContents* inspected_contents = nullptr;
+-  for (auto& t : tabs_) {
+-    if (t->shell && t->shell->web_contents() == inspected_wc) {
+-      inspected_contents = t->shell->web_contents();
+-      break;
+-    }
+-  }
+-  if (inspected_contents) {
+-    new ShellDevToolsFrontend(shell, inspected_contents);
+-  }
+-
+   tab->tab_observer = std::move(tab_observer);
+   tabs_.push_back(std::move(tab));
+ 
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.h b/content/libtermsurf_content/ts_browser_main_parts.h
+index bae1072d1e922..33606a7efc330 100644
+--- a/content/libtermsurf_content/ts_browser_main_parts.h
++++ b/content/libtermsurf_content/ts_browser_main_parts.h
+@@ -11,7 +11,7 @@
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "build/build_config.h"
+-#include "content/chromium_profile_server/browser/shell_browser_main_parts.h"
++#include "content/shell/browser/shell_browser_main_parts.h"
+ #include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+diff --git a/content/libtermsurf_content/ts_ca_layer_bridge_mac.h b/content/libtermsurf_content/ts_ca_layer_bridge_mac.h
+new file mode 100644
+index 0000000000000..b09531797f850
+--- /dev/null
++++ b/content/libtermsurf_content/ts_ca_layer_bridge_mac.h
+@@ -0,0 +1,24 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_CA_LAYER_BRIDGE_MAC_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_CA_LAYER_BRIDGE_MAC_H_
++
++#include "base/functional/callback.h"
++#include "ui/gfx/ca_layer_params.h"
++
++namespace content {
++
++class RenderWidgetHostView;
++
++// Bridge to set a CALayerParams callback on a RenderWidgetHostViewMac
++// from pure C++ code. The implementation lives in a .mm file because
++// RenderWidgetHostViewMac.h includes Cocoa headers.
++void SetCALayerParamsCallbackOnView(
++    RenderWidgetHostView* view,
++    base::RepeatingCallback<void(const gfx::CALayerParams&)> callback);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_CA_LAYER_BRIDGE_MAC_H_
+diff --git a/content/libtermsurf_content/ts_ca_layer_bridge_mac.mm b/content/libtermsurf_content/ts_ca_layer_bridge_mac.mm
+new file mode 100644
+index 0000000000000..f520317e42395
+--- /dev/null
++++ b/content/libtermsurf_content/ts_ca_layer_bridge_mac.mm
+@@ -0,0 +1,18 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/ts_ca_layer_bridge_mac.h"
++
++#include "content/browser/renderer_host/render_widget_host_view_mac.h"
++
++namespace content {
++
++void SetCALayerParamsCallbackOnView(
++    RenderWidgetHostView* view,
++    base::RepeatingCallback<void(const gfx::CALayerParams&)> callback) {
++  auto* mac_view = static_cast<RenderWidgetHostViewMac*>(view);
++  mac_view->SetCALayerParamsCallback(std::move(callback));
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_content/ts_compositor_bridge_mac.h b/content/libtermsurf_content/ts_compositor_bridge_mac.h
+new file mode 100644
+index 0000000000000..eb503b139f6de
+--- /dev/null
++++ b/content/libtermsurf_content/ts_compositor_bridge_mac.h
+@@ -0,0 +1,47 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_COMPOSITOR_BRIDGE_MAC_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_COMPOSITOR_BRIDGE_MAC_H_
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
++#include "ui/gfx/ca_layer_params.h"
++
++namespace ui { class Layer; }
++
++namespace content {
++
++class RenderWidgetHostView;
++
++void SetParentUiLayerOnView(RenderWidgetHostView* view, ui::Layer* layer);
++
++// Receives CALayerParams from a persistent AcceleratedWidgetMac and forwards
++// them via a callback. Used to extract the stable ca_context_id from the
++// persistent compositor (Issue 633).
++class PersistentCompositorBridge : public ui::AcceleratedWidgetMacNSView {
++ public:
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++
++  explicit PersistentCompositorBridge(ui::AcceleratedWidgetMac* widget);
++  virtual ~PersistentCompositorBridge();
++
++  PersistentCompositorBridge(const PersistentCompositorBridge&) = delete;
++  PersistentCompositorBridge& operator=(const PersistentCompositorBridge&) = delete;
++
++  void SetCallback(CALayerParamsCallback callback);
++
++  // ui::AcceleratedWidgetMacNSView:
++  void AcceleratedWidgetCALayerParamsUpdated() override;
++
++ private:
++  raw_ptr<ui::AcceleratedWidgetMac> widget_;
++  CALayerParamsCallback callback_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_COMPOSITOR_BRIDGE_MAC_H_
+diff --git a/content/libtermsurf_content/ts_compositor_bridge_mac.mm b/content/libtermsurf_content/ts_compositor_bridge_mac.mm
+new file mode 100644
+index 0000000000000..9939d30d4ee39
+--- /dev/null
++++ b/content/libtermsurf_content/ts_compositor_bridge_mac.mm
+@@ -0,0 +1,35 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/ts_compositor_bridge_mac.h"
++#include "content/browser/renderer_host/render_widget_host_view_mac.h"
++
++namespace content {
++
++void SetParentUiLayerOnView(RenderWidgetHostView* view, ui::Layer* layer) {
++  auto* mac_view = static_cast<RenderWidgetHostViewMac*>(view);
++  mac_view->SetParentUiLayer(layer);
++}
++
++PersistentCompositorBridge::PersistentCompositorBridge(
++    ui::AcceleratedWidgetMac* widget)
++    : widget_(widget) {
++  widget_->SetNSView(this);
++}
++
++PersistentCompositorBridge::~PersistentCompositorBridge() {
++  widget_->ResetNSView();
++}
++
++void PersistentCompositorBridge::SetCallback(CALayerParamsCallback callback) {
++  callback_ = std::move(callback);
++}
++
++void PersistentCompositorBridge::AcceleratedWidgetCALayerParamsUpdated() {
++  const auto* params = widget_->GetCALayerParams();
++  if (params && callback_)
++    callback_.Run(*params);
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_content/ts_main_delegate.h b/content/libtermsurf_content/ts_main_delegate.h
+index 6f767a81777f7..0daeecc3bbb98 100644
+--- a/content/libtermsurf_content/ts_main_delegate.h
++++ b/content/libtermsurf_content/ts_main_delegate.h
+@@ -5,7 +5,7 @@
+ #ifndef CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
+ 
+-#include "content/chromium_profile_server/app/shell_main_delegate.h"
++#include "content/shell/app/shell_main_delegate.h"
+ 
+ namespace content {
+ 
+diff --git a/content/libtermsurf_content/ts_tab_observer.cc b/content/libtermsurf_content/ts_tab_observer.cc
+index b200829298fcd..5cbe676bf07ac 100644
+--- a/content/libtermsurf_content/ts_tab_observer.cc
++++ b/content/libtermsurf_content/ts_tab_observer.cc
+@@ -19,8 +19,8 @@
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+-#include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
+-#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
++#include "content/libtermsurf_content/ts_ca_layer_bridge_mac.h"
++#include "content/libtermsurf_content/ts_compositor_bridge_mac.h"
+ #endif
+ 
+ namespace content {
+-- 
+2.50.1 (Apple Git-155)
+

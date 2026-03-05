@@ -1,0 +1,79 @@
+From d9442c0b73acf7a893816382304080f0b2cf503b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 08:22:40 -0600
+Subject: [PATCH 59/65] Add --hidden flag to stock Content Shell
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The window hid behind a veil,
+Alpha zero, beyond the pale.
+No flash, no flicker, gone from sight—
+Compositors still run all right.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../shell/browser/shell_platform_delegate_mac.mm | 16 ++++++++++++++--
+ content/shell/common/shell_switches.h            |  5 +++++
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/content/shell/browser/shell_platform_delegate_mac.mm b/content/shell/browser/shell_platform_delegate_mac.mm
+index 274dffa179ca3..7997fb8925089 100644
+--- a/content/shell/browser/shell_platform_delegate_mac.mm
++++ b/content/shell/browser/shell_platform_delegate_mac.mm
+@@ -9,6 +9,7 @@
+ #include <algorithm>
+ 
+ #import "base/apple/foundation_util.h"
++#include "base/command_line.h"
+ #include "base/check_op.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/notreached.h"
+@@ -20,6 +21,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "content/shell/app/resource.h"
+ #include "content/shell/browser/shell.h"
++#include "content/shell/common/shell_switches.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "url/gurl.h"
+ 
+@@ -201,8 +203,18 @@ void MakeShellButton(NSRect* rect,
+     shell_data.url_edit_view = url_edit_view;
+   }
+ 
+-  // Show the new window.
+-  [window makeKeyAndOrderFront:nil];
++  // Show the new window (unless --hidden).
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHidden)) {
++    // Make the window fully transparent instead of ordering it out.
++    // orderOut: triggers NSWindowDidChangeOcclusionStateNotification which
++    // sets render_widget_host_is_hidden_ = true, detaching the compositor.
++    // setAlphaValue:0 keeps the window in the window list so the compositor
++    // stays active and CAContext survives navigation.
++    [window setAlphaValue:0.0];
++    [window orderWindow:NSWindowBelow relativeTo:0];
++  } else {
++    [window makeKeyAndOrderFront:nil];
++  }
+ 
+   shell_data.delegate = delegate;
+ }
+diff --git a/content/shell/common/shell_switches.h b/content/shell/common/shell_switches.h
+index 8757fa418da94..8f3fd4b3e09fc 100644
+--- a/content/shell/common/shell_switches.h
++++ b/content/shell/common/shell_switches.h
+@@ -50,6 +50,11 @@ inline constexpr char kIsolatedContextOrigins[] = "isolated-context-origins";
+ // risk.
+ inline constexpr char kRemoteDebuggingAddress[] = "remote-debugging-address";
+ 
++// Hide the Content Shell window (make it transparent and order it behind
++// all other windows). Used by TermSurf browser binaries that render via
++// CALayerHost compositing instead of a native window.
++inline constexpr char kHidden[] = "hidden";
++
+ // Runs Content Shell in web test mode, injecting test-only behaviour for
+ // blink web tests.
+ inline constexpr char kRunWebTests[] = "run-web-tests";
+-- 
+2.50.1 (Apple Git-155)
+

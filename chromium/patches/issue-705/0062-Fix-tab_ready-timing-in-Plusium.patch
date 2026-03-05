@@ -1,0 +1,113 @@
+From c5e2bda216e4aab58e1e4475de87fd80bbbfb617 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 18:17:17 -0600
+Subject: [PATCH 62/65] Fix tab_ready timing in Plusium
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The entry came late to the party,
+push_back after the callback — how foolhardy!
+Now it arrives before the call,
+And OnTabReady finds it, standing tall.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ content/plusium/plusium_main.cc | 38 +++++++++++++++++++++++----------
+ 1 file changed, 27 insertions(+), 11 deletions(-)
+
+diff --git a/content/plusium/plusium_main.cc b/content/plusium/plusium_main.cc
+index 6b7b5385cf281..ea0c0048667a7 100644
+--- a/content/plusium/plusium_main.cc
++++ b/content/plusium/plusium_main.cc
+@@ -49,11 +49,12 @@ static char* g_socket_path_buf = nullptr;
+ 
+ static TabEntry* FindByHandle(ts_web_contents_t h) {
+   for (auto& t : *g_tabs) {
+-    if (t.handle == h) return &t;
++    if (t.handle && t.handle == h) return &t;
+   }
+   return nullptr;
+ }
+ 
++
+ static TabEntry* FindByTabId(int tab_id) {
+   for (auto& t : *g_tabs) {
+     if (t.tab_id == tab_id) return &t;
+@@ -151,35 +152,38 @@ void HandleMessage(termsurf::TermSurfMessage* msg) {
+   switch (msg->msg_case()) {
+     case termsurf::TermSurfMessage::kCreateTab: {
+       auto& m = msg->create_tab();
+-      fprintf(stderr, "[DEBUG] Plusium kCreateTab: pane=%s url=%s g_tabs size=%zu BEFORE ts_create_web_contents\n",
+-              m.pane_id().c_str(), m.url().c_str(), g_tabs->size());
++      // Push entry FIRST so OnTabReady can find it (it fires synchronously).
+       TabEntry entry;
+       entry.pane_id = m.pane_id();
+-      entry.handle = ts_create_web_contents(
++      g_tabs->push_back(std::move(entry));
++      TabEntry& ref = g_tabs->back();
++      fprintf(stderr, "[DEBUG] Plusium kCreateTab: pane=%s url=%s g_tabs size=%zu, calling ts_create_web_contents\n",
++              m.pane_id().c_str(), m.url().c_str(), g_tabs->size());
++      ref.handle = ts_create_web_contents(
+           g_browser_context,
+           m.url().c_str(),
+           static_cast<int>(m.pixel_width()),
+           static_cast<int>(m.pixel_height()),
+           m.dark());
+-      fprintf(stderr, "[DEBUG] Plusium kCreateTab: handle=%p g_tabs size=%zu AFTER ts_create_web_contents, BEFORE push_back\n",
+-              (void*)entry.handle, g_tabs->size());
+-      g_tabs->push_back(std::move(entry));
+-      fprintf(stderr, "[DEBUG] Plusium kCreateTab: g_tabs size=%zu AFTER push_back\n", g_tabs->size());
++      fprintf(stderr, "[DEBUG] Plusium kCreateTab: handle=%p tab_id=%d AFTER ts_create_web_contents\n",
++              (void*)ref.handle, ref.tab_id);
+       break;
+     }
+     case termsurf::TermSurfMessage::kCreateDevtoolsTab: {
+       auto& m = msg->create_devtools_tab();
+       TabEntry* inspected = FindByTabId(m.inspected_tab_id());
+       if (!inspected) break;
++      // Push entry FIRST so OnTabReady can find it (it fires synchronously).
+       TabEntry entry;
+       entry.pane_id = m.pane_id();
+       entry.inspected_tab_id = m.inspected_tab_id();
+-      entry.handle = ts_create_devtools_web_contents(
++      g_tabs->push_back(std::move(entry));
++      TabEntry& ref = g_tabs->back();
++      ref.handle = ts_create_devtools_web_contents(
+           g_browser_context, inspected->handle,
+           static_cast<int>(m.pixel_width()),
+           static_cast<int>(m.pixel_height()),
+           m.dark());
+-      g_tabs->push_back(std::move(entry));
+       break;
+     }
+     case termsurf::TermSurfMessage::kResize: {
+@@ -367,12 +371,24 @@ static void OnInitialized(void*) {
+ static void OnTabReady(ts_web_contents_t wc, int tab_id, void*) {
+   fprintf(stderr, "[DEBUG] Plusium OnTabReady: handle=%p tab_id=%d g_tabs size=%zu\n",
+           (void*)wc, tab_id, g_tabs->size());
++  // Try by handle first (async case), then by nullptr handle (sync case —
++  // entry pushed but handle not yet assigned).
+   TabEntry* t = FindByHandle(wc);
++  if (!t) {
++    // Synchronous callback: entry exists but handle is still nullptr.
++    for (auto& entry : *g_tabs) {
++      if (!entry.handle) {
++        t = &entry;
++        t->handle = wc;  // Assign handle now so FindByHandle works later.
++        break;
++      }
++    }
++  }
+   if (!t) {
+     fprintf(stderr, "[DEBUG] Plusium OnTabReady: FindByHandle FAILED — handle not in g_tabs\n");
+     return;
+   }
+-  fprintf(stderr, "[DEBUG] Plusium OnTabReady: FindByHandle succeeded pane=%s\n", t->pane_id.c_str());
++  fprintf(stderr, "[DEBUG] Plusium OnTabReady: matched pane=%s\n", t->pane_id.c_str());
+   t->tab_id = tab_id;
+ 
+   termsurf::TermSurfMessage msg;
+-- 
+2.50.1 (Apple Git-155)
+

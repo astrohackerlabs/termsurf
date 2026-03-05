@@ -1,0 +1,195 @@
+From 69dac5da944f53682698f10e71979dada4fc0828 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 17 Feb 2026 08:39:19 -0600
+Subject: [PATCH 15/65] Add mouse events and URL change notifications
+
+A click set sail from Swift's domain,
+Through XPC seas to Chromium's brain.
+ForwardMouseEvent caught the call,
+While DidFinishNavigation told all:
+"The URL has changed!" it would explain.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 70 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  5 ++
+ .../browser/shell_video_consumer.cc           | 24 +++++++
+ .../browser/shell_video_consumer.h            |  2 +
+ 4 files changed, 101 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 3bea2d5962bb4..df6c026f3d66d 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -28,6 +28,7 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/first_party_sets_handler.h"
++#include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+@@ -79,6 +80,7 @@
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <xpc/xpc.h>
++#include "third_party/blink/public/common/input/web_mouse_event.h"
+ #endif
+ 
+ namespace content {
+@@ -212,6 +214,22 @@ void ShellBrowserMainParts::StartDynamicMode(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::ResizeCapture,
+                            base::Unretained(self), resize_pane, pw, ph));
++      } else if (action && std::string_view(action) == "mouse_event") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        const char* type_str = xpc_dictionary_get_string(event, "type");
++        const char* button_str = xpc_dictionary_get_string(event, "button");
++        double x = xpc_dictionary_get_double(event, "x");
++        double y = xpc_dictionary_get_double(event, "y");
++        int click_count = (int)xpc_dictionary_get_int64(event, "click_count");
++        uint64_t modifiers = xpc_dictionary_get_uint64(event, "modifiers");
++        std::string s_pane(pane ? pane : "");
++        std::string s_type(type_str ? type_str : "");
++        std::string s_button(button_str ? button_str : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::HandleMouseEvent,
++                           base::Unretained(self), s_pane, s_type, x, y,
++                           s_button, click_count, modifiers));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -359,6 +377,58 @@ void ShellBrowserMainParts::ResizeCapture(const std::string& pane_id,
+   tab->video_consumer->SetResolution(pixel_width, pixel_height);
+ }
+ 
++void ShellBrowserMainParts::HandleMouseEvent(
++    const std::string& pane_id, const std::string& type,
++    double x, double y, const std::string& button,
++    int click_count, uint64_t modifiers) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  // Find tab by pane_id (same lookup as ResizeCapture).
++  TabState* tab = nullptr;
++  for (auto& t : tabs_) {
++    if (t->pane_id == pane_id) { tab = t.get(); break; }
++  }
++  if (!tab) return;
++
++  // Map type string to WebInputEvent::Type.
++  blink::WebInputEvent::Type event_type;
++  if (type == "down")
++    event_type = blink::WebInputEvent::Type::kMouseDown;
++  else if (type == "up")
++    event_type = blink::WebInputEvent::Type::kMouseUp;
++  else
++    return;  // Only clicks in this experiment.
++
++  // Map button string.
++  auto btn = blink::WebPointerProperties::Button::kLeft;
++  if (button == "right")
++    btn = blink::WebPointerProperties::Button::kRight;
++
++  // Map modifiers (Swift bitmask matches WebInputEvent::Modifiers).
++  int web_modifiers = static_cast<int>(modifiers & 0xF);
++  // Add button-down modifier for mouseDown.
++  if (type == "down") {
++    if (button == "left")
++      web_modifiers |= blink::WebInputEvent::kLeftButtonDown;
++    else if (button == "right")
++      web_modifiers |= blink::WebInputEvent::kRightButtonDown;
++  }
++
++  blink::WebMouseEvent mouse_event(
++      event_type,
++      gfx::PointF(x, y),
++      gfx::PointF(x, y),  // screen position (approximate)
++      btn, click_count, web_modifiers,
++      base::TimeTicks::Now());
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view)
++    view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++
++  LOG(INFO) << "[ProfileServer] Mouse " << type << " at (" << x << "," << y
++            << ") button=" << button << " pane=" << pane_id;
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 6a31107af0fce..4aa44eb7055c7 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -109,6 +109,11 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   void ResizeCapture(const std::string& pane_id,
+                      int pixel_width, int pixel_height);
+   void CloseTab(xpc_connection_t conn);
++  void HandleMouseEvent(const std::string& pane_id,
++                        const std::string& type,
++                        double x, double y,
++                        const std::string& button,
++                        int click_count, uint64_t modifiers);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index 16761ee3c6f19..b831c407181f4 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -61,6 +61,30 @@ void ShellVideoConsumer::RenderViewReady() {
+   Attach(web_contents());
+ }
+ 
++void ShellVideoConsumer::DidFinishNavigation(
++    NavigationHandle* navigation_handle) {
++  if (!navigation_handle->HasCommitted())
++    return;
++  if (!navigation_handle->IsInPrimaryMainFrame())
++    return;
++
++#if BUILDFLAG(IS_MAC)
++  if (!xpc_connection_)
++    return;
++
++  const std::string& url = navigation_handle->GetURL().spec();
++  xpc_object_t msg = xpc_dictionary_create(NULL, NULL, 0);
++  xpc_dictionary_set_string(msg, "action", "url_changed");
++  xpc_dictionary_set_string(msg, "pane_id", pane_id_.c_str());
++  xpc_dictionary_set_string(msg, "url", url.c_str());
++  xpc_connection_send_message(xpc_connection_, msg);
++  xpc_release(msg);
++
++  LOG(INFO) << "[ShellVideoConsumer] URL changed: " << url
++            << " (pane " << pane_id_ << ")";
++#endif
++}
++
+ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+   RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.h b/content/chromium_profile_server/browser/shell_video_consumer.h
+index c4816f454d5fb..c26a50a049c2a 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.h
++++ b/content/chromium_profile_server/browser/shell_video_consumer.h
+@@ -11,6 +11,7 @@
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "components/viz/host/client_frame_sink_video_capturer.h"
++#include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+ 
+@@ -44,6 +45,7 @@ class ShellVideoConsumer : public viz::mojom::FrameSinkVideoConsumer,
+ 
+   // WebContentsObserver:
+   void RenderViewReady() override;
++  void DidFinishNavigation(NavigationHandle* navigation_handle) override;
+ 
+ #if BUILDFLAG(IS_MAC)
+   // Sets the XPC connection to use for sending IOSurface frames.
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,1760 @@
+From 9a391e8e8cc108b99bb4b6d965f7ebedf03291bc Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 4 Mar 2026 05:57:37 -0600
+Subject: [PATCH 55/65] Extract libtermsurf_content C library
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A library was born from the server's core,
+C functions where C++ lived before.
+Opaque handles in hand,
+Bindings now can expand—
+Roamium, Zoomium, Plusium galore!
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ BUILD.gn                                      |   1 +
+ content/libtermsurf_content/BUILD.gn          |  45 ++
+ .../libtermsurf_content.cc                    | 291 ++++++++
+ .../libtermsurf_content/libtermsurf_content.h | 155 ++++
+ content/libtermsurf_content/test_main.cc      |  17 +
+ .../libtermsurf_content/ts_browser_client.cc  |  21 +
+ .../libtermsurf_content/ts_browser_client.h   |  29 +
+ .../ts_browser_main_parts.cc                  | 705 ++++++++++++++++++
+ .../ts_browser_main_parts.h                   |  99 +++
+ .../libtermsurf_content/ts_main_delegate.cc   |  19 +
+ .../libtermsurf_content/ts_main_delegate.h    |  28 +
+ .../libtermsurf_content/ts_tab_observer.cc    | 143 ++++
+ content/libtermsurf_content/ts_tab_observer.h |  78 ++
+ 13 files changed, 1631 insertions(+)
+ create mode 100644 content/libtermsurf_content/BUILD.gn
+ create mode 100644 content/libtermsurf_content/libtermsurf_content.cc
+ create mode 100644 content/libtermsurf_content/libtermsurf_content.h
+ create mode 100644 content/libtermsurf_content/test_main.cc
+ create mode 100644 content/libtermsurf_content/ts_browser_client.cc
+ create mode 100644 content/libtermsurf_content/ts_browser_client.h
+ create mode 100644 content/libtermsurf_content/ts_browser_main_parts.cc
+ create mode 100644 content/libtermsurf_content/ts_browser_main_parts.h
+ create mode 100644 content/libtermsurf_content/ts_main_delegate.cc
+ create mode 100644 content/libtermsurf_content/ts_main_delegate.h
+ create mode 100644 content/libtermsurf_content/ts_tab_observer.cc
+ create mode 100644 content/libtermsurf_content/ts_tab_observer.h
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 55e5e895e33d0..5b1541d23b605 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -195,6 +195,7 @@ group("gn_all") {
+         "//components/viz:viz_unittests",
+         "//content/browser/interest_group/tools:adjustable_auction",
+         "//content/chromium_profile_server:chromium_profile_server",
++        "//content/libtermsurf_content:libtermsurf_content",
+         "//content/shell:content_shell",
+         "//content/test:content_browsertests",
+         "//content/test:content_unittests",
+diff --git a/content/libtermsurf_content/BUILD.gn b/content/libtermsurf_content/BUILD.gn
+new file mode 100644
+index 0000000000000..3636a7496be89
+--- /dev/null
++++ b/content/libtermsurf_content/BUILD.gn
+@@ -0,0 +1,45 @@
++# Copyright 2025 TermSurf
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//build/config/ui.gni")
++
++static_library("libtermsurf_content") {
++  testonly = true
++  sources = [
++    "libtermsurf_content.cc",
++    "libtermsurf_content.h",
++    "ts_browser_client.cc",
++    "ts_browser_client.h",
++    "ts_browser_main_parts.cc",
++    "ts_browser_main_parts.h",
++    "ts_main_delegate.cc",
++    "ts_main_delegate.h",
++    "ts_tab_observer.cc",
++    "ts_tab_observer.h",
++  ]
++
++  deps = [
++    "//content/chromium_profile_server:chromium_profile_server_app",
++    "//content/chromium_profile_server:chromium_profile_server_lib",
++    "//content/public/app",
++    "//content/public/browser",
++    "//content/public/common",
++  ]
++
++  if (is_mac) {
++    deps += [
++      "//ui/accelerated_widget_mac",
++      "//ui/compositor",
++    ]
++  }
++}
++
++executable("libtermsurf_content_test") {
++  testonly = true
++  sources = [ "test_main.cc" ]
++  deps = [
++    ":libtermsurf_content",
++    "//content/chromium_profile_server:chromium_profile_server_app",
++  ]
++}
+diff --git a/content/libtermsurf_content/libtermsurf_content.cc b/content/libtermsurf_content/libtermsurf_content.cc
+new file mode 100644
+index 0000000000000..caedfb15f9a07
+--- /dev/null
++++ b/content/libtermsurf_content/libtermsurf_content.cc
+@@ -0,0 +1,291 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/libtermsurf_content.h"
++
++#include <cmath>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "content/public/app/content_main.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/reload_type.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "content/browser/renderer_host/render_widget_host_impl.h"
++#include "content/chromium_profile_server/browser/shell.h"
++#include "content/chromium_profile_server/browser/shell_browser_context.h"
++#include "content/chromium_profile_server/browser/shell_devtools_frontend.h"
++#include "content/chromium_profile_server/browser/shell_devtools_manager_delegate.h"
++#include "content/libtermsurf_content/ts_main_delegate.h"
++#include "content/libtermsurf_content/ts_browser_main_parts.h"
++#include "third_party/blink/public/common/input/web_mouse_event.h"
++#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "third_party/blink/public/mojom/input/input_handler.mojom.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/events/keycodes/dom/dom_code.h"
++#include "ui/events/keycodes/dom/dom_key.h"
++#include "ui/events/keycodes/keyboard_code_conversion.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/events/types/scroll_types.h"
++#include "ui/latency/latency_info.h"
++
++namespace {
++
++// Global state for the library.
++content::TsMainDelegate* g_delegate = nullptr;
++content::TsBrowserMainParts* g_main_parts = nullptr;
++
++// Initialized callback.
++void (*g_on_initialized)(void*) = nullptr;
++void* g_on_initialized_data = nullptr;
++
++// Tab ready callback.
++void (*g_on_tab_ready)(ts_web_contents_t, int, void*) = nullptr;
++void* g_on_tab_ready_data = nullptr;
++
++// CAContext callback.
++void (*g_on_ca_context_id)(ts_web_contents_t, uint32_t, int, int, void*) =
++    nullptr;
++void* g_on_ca_context_id_data = nullptr;
++
++// URL changed callback.
++void (*g_on_url_changed)(ts_web_contents_t, const char*, void*) = nullptr;
++void* g_on_url_changed_data = nullptr;
++
++// Loading state callback.
++void (*g_on_loading_state)(ts_web_contents_t, const char*, int, void*) =
++    nullptr;
++void* g_on_loading_state_data = nullptr;
++
++// Title changed callback.
++void (*g_on_title_changed)(ts_web_contents_t, const char*, void*) = nullptr;
++void* g_on_title_changed_data = nullptr;
++
++// Cursor changed callback.
++void (*g_on_cursor_changed)(ts_web_contents_t, int, void*) = nullptr;
++void* g_on_cursor_changed_data = nullptr;
++
++}  // namespace
++
++namespace content {
++
++// Called by TsBrowserMainParts when initialization is complete.
++void TsNotifyInitialized(TsBrowserMainParts* parts) {
++  g_main_parts = parts;
++  if (g_on_initialized)
++    g_on_initialized(g_on_initialized_data);
++}
++
++// Called by TsTabObserver for state change notifications.
++void TsNotifyTabReady(void* wc_handle, int tab_id) {
++  if (g_on_tab_ready)
++    g_on_tab_ready(wc_handle, tab_id, g_on_tab_ready_data);
++}
++
++void TsNotifyCAContextId(void* wc_handle, uint32_t ca_context_id,
++                          int width, int height) {
++  if (g_on_ca_context_id)
++    g_on_ca_context_id(wc_handle, ca_context_id, width, height,
++                       g_on_ca_context_id_data);
++}
++
++void TsNotifyUrlChanged(void* wc_handle, const char* url) {
++  if (g_on_url_changed)
++    g_on_url_changed(wc_handle, url, g_on_url_changed_data);
++}
++
++void TsNotifyLoadingState(void* wc_handle, const char* state, int progress) {
++  if (g_on_loading_state)
++    g_on_loading_state(wc_handle, state, progress, g_on_loading_state_data);
++}
++
++void TsNotifyTitleChanged(void* wc_handle, const char* title) {
++  if (g_on_title_changed)
++    g_on_title_changed(wc_handle, title, g_on_title_changed_data);
++}
++
++void TsNotifyCursorChanged(void* wc_handle, int cursor_type) {
++  if (g_on_cursor_changed)
++    g_on_cursor_changed(wc_handle, cursor_type, g_on_cursor_changed_data);
++}
++
++}  // namespace content
++
++// --- C API Implementation ---
++
++int ts_content_main(int argc, const char** argv) {
++  g_delegate = new content::TsMainDelegate();
++  content::ContentMainParams params(g_delegate);
++  params.argc = argc;
++  params.argv = argv;
++  return content::ContentMain(std::move(params));
++}
++
++void ts_set_on_initialized(void (*callback)(void* user_data),
++                           void* user_data) {
++  g_on_initialized = callback;
++  g_on_initialized_data = user_data;
++}
++
++void ts_post_task(void (*task)(void* user_data), void* user_data) {
++  content::GetUIThreadTaskRunner({})->PostTask(
++      FROM_HERE,
++      base::BindOnce([](void (*fn)(void*), void* data) { fn(data); },
++                     task, user_data));
++}
++
++void ts_quit(void) {
++  content::Shell::Shutdown();
++}
++
++ts_browser_context_t ts_create_browser_context(const char* path) {
++  if (!g_main_parts) return nullptr;
++  return g_main_parts->CreateBrowserContext(path);
++}
++
++void ts_destroy_browser_context(ts_browser_context_t ctx) {
++  if (!g_main_parts) return;
++  g_main_parts->DestroyBrowserContext(ctx);
++}
++
++ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
++                                         const char* url,
++                                         int width,
++                                         int height,
++                                         bool dark) {
++  if (!g_main_parts) return nullptr;
++  return g_main_parts->CreateTab(ctx, url, width, height, dark);
++}
++
++ts_web_contents_t ts_create_devtools_web_contents(
++    ts_browser_context_t ctx,
++    ts_web_contents_t inspected,
++    int width,
++    int height,
++    bool dark) {
++  if (!g_main_parts) return nullptr;
++  return g_main_parts->CreateDevToolsTab(ctx, inspected, width, height, dark);
++}
++
++void ts_destroy_web_contents(ts_web_contents_t wc) {
++  if (!g_main_parts) return;
++  g_main_parts->DestroyTab(wc);
++}
++
++void ts_load_url(ts_web_contents_t wc, const char* url) {
++  if (!g_main_parts) return;
++  g_main_parts->NavigateTab(wc, url);
++}
++
++void ts_forward_mouse_event(ts_web_contents_t wc,
++                            int type,
++                            int button,
++                            int x,
++                            int y,
++                            int click_count,
++                            int modifiers) {
++  if (!g_main_parts) return;
++  g_main_parts->ForwardMouseEvent(wc, type, button, x, y, click_count,
++                                  modifiers);
++}
++
++void ts_forward_mouse_move(ts_web_contents_t wc,
++                           int x,
++                           int y,
++                           int modifiers) {
++  if (!g_main_parts) return;
++  g_main_parts->ForwardMouseMove(wc, x, y, modifiers);
++}
++
++void ts_forward_scroll_event(ts_web_contents_t wc,
++                             int x,
++                             int y,
++                             float delta_x,
++                             float delta_y,
++                             int phase,
++                             int momentum_phase,
++                             bool precise,
++                             int modifiers) {
++  if (!g_main_parts) return;
++  g_main_parts->ForwardScrollEvent(wc, x, y, delta_x, delta_y, phase,
++                                   momentum_phase, precise, modifiers);
++}
++
++void ts_forward_key_event(ts_web_contents_t wc,
++                          int type,
++                          int keycode,
++                          const char* utf8,
++                          int modifiers) {
++  if (!g_main_parts) return;
++  g_main_parts->ForwardKeyEvent(wc, type, keycode, utf8 ? utf8 : "",
++                                modifiers);
++}
++
++void ts_set_focus(ts_web_contents_t wc, bool focused) {
++  if (!g_main_parts) return;
++  g_main_parts->SetFocus(wc, focused);
++}
++
++void ts_set_color_scheme(ts_web_contents_t wc, bool dark) {
++  if (!g_main_parts) return;
++  g_main_parts->SetColorScheme(wc, dark);
++}
++
++void ts_set_view_size(ts_web_contents_t wc, int width, int height) {
++  if (!g_main_parts) return;
++  g_main_parts->ResizeTab(wc, width, height);
++}
++
++void ts_set_on_tab_ready(
++    void (*cb)(ts_web_contents_t wc, int tab_id, void* user_data),
++    void* user_data) {
++  g_on_tab_ready = cb;
++  g_on_tab_ready_data = user_data;
++}
++
++void ts_set_on_ca_context_id(
++    void (*cb)(ts_web_contents_t wc, uint32_t ca_context_id,
++               int width, int height, void* user_data),
++    void* user_data) {
++  g_on_ca_context_id = cb;
++  g_on_ca_context_id_data = user_data;
++}
++
++void ts_set_on_url_changed(
++    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
++    void* user_data) {
++  g_on_url_changed = cb;
++  g_on_url_changed_data = user_data;
++}
++
++void ts_set_on_loading_state(
++    void (*cb)(ts_web_contents_t wc, const char* state, int progress,
++               void* user_data),
++    void* user_data) {
++  g_on_loading_state = cb;
++  g_on_loading_state_data = user_data;
++}
++
++void ts_set_on_title_changed(
++    void (*cb)(ts_web_contents_t wc, const char* title, void* user_data),
++    void* user_data) {
++  g_on_title_changed = cb;
++  g_on_title_changed_data = user_data;
++}
++
++void ts_set_on_cursor_changed(
++    void (*cb)(ts_web_contents_t wc, int cursor_type, void* user_data),
++    void* user_data) {
++  g_on_cursor_changed = cb;
++  g_on_cursor_changed_data = user_data;
++}
+diff --git a/content/libtermsurf_content/libtermsurf_content.h b/content/libtermsurf_content/libtermsurf_content.h
+new file mode 100644
+index 0000000000000..e087616fea286
+--- /dev/null
++++ b/content/libtermsurf_content/libtermsurf_content.h
+@@ -0,0 +1,155 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_LIBTERMSURF_CONTENT_H_
++#define CONTENT_LIBTERMSURF_CONTENT_LIBTERMSURF_CONTENT_H_
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Opaque handles */
++typedef void* ts_browser_context_t;
++typedef void* ts_web_contents_t;
++
++/* --- Lifecycle --- */
++
++/* Initialize Chromium and run the message loop. Blocks until shutdown.
++   Call ts_set_on_initialized() before this to get a callback when ready.
++   argc/argv are forwarded to Chromium's ContentMain(). */
++int ts_content_main(int argc, const char** argv);
++
++/* Called on the UI thread when the browser is initialized and ready
++   for profile/tab creation. */
++void ts_set_on_initialized(void (*callback)(void* user_data),
++                           void* user_data);
++
++/* Post a task to the UI thread. Thread-safe -- call from any thread.
++   This is how bindings marshal socket messages onto the UI thread. */
++void ts_post_task(void (*task)(void* user_data), void* user_data);
++
++/* Shut down Chromium and exit the message loop. */
++void ts_quit(void);
++
++/* --- Profiles --- */
++
++/* Create a BrowserContext with persistent storage at the given path.
++   Returns an opaque handle. */
++ts_browser_context_t ts_create_browser_context(const char* path);
++
++/* Destroy a BrowserContext and release its resources. */
++void ts_destroy_browser_context(ts_browser_context_t ctx);
++
++/* --- Tabs --- */
++
++/* Create a WebContents (tab) in the given BrowserContext.
++   Navigates to url. Sets initial viewport to width x height pixels.
++   dark=true sets prefers-color-scheme:dark.
++   Returns an opaque handle. The on_ca_context_id callback fires when
++   the tab's CAContext is ready. */
++ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
++                                         const char* url,
++                                         int width,
++                                         int height,
++                                         bool dark);
++
++/* Create a DevTools WebContents inspecting another tab. */
++ts_web_contents_t ts_create_devtools_web_contents(
++    ts_browser_context_t ctx,
++    ts_web_contents_t inspected,
++    int width,
++    int height,
++    bool dark);
++
++/* Close and destroy a WebContents. */
++void ts_destroy_web_contents(ts_web_contents_t wc);
++
++/* --- Navigation --- */
++
++void ts_load_url(ts_web_contents_t wc, const char* url);
++
++/* --- Input --- */
++
++/* type: 0=down, 1=up. button: 0=left, 1=right, 2=middle. */
++void ts_forward_mouse_event(ts_web_contents_t wc,
++                            int type,
++                            int button,
++                            int x,
++                            int y,
++                            int click_count,
++                            int modifiers);
++
++void ts_forward_mouse_move(ts_web_contents_t wc,
++                           int x,
++                           int y,
++                           int modifiers);
++
++/* phase/momentum_phase: 0=none, 1=began, 2=changed, 3=ended. */
++void ts_forward_scroll_event(ts_web_contents_t wc,
++                             int x,
++                             int y,
++                             float delta_x,
++                             float delta_y,
++                             int phase,
++                             int momentum_phase,
++                             bool precise,
++                             int modifiers);
++
++/* type: 0=down, 1=up, 2=repeat. keycode is Windows VK code. */
++void ts_forward_key_event(ts_web_contents_t wc,
++                          int type,
++                          int keycode,
++                          const char* utf8,
++                          int modifiers);
++
++/* --- State --- */
++
++void ts_set_focus(ts_web_contents_t wc, bool focused);
++void ts_set_color_scheme(ts_web_contents_t wc, bool dark);
++void ts_set_view_size(ts_web_contents_t wc, int width, int height);
++
++/* --- Callbacks --- */
++
++/* All callbacks fire on the UI thread. The wc parameter identifies which tab
++   changed. Bindings use these to send responses over the socket. */
++
++void ts_set_on_tab_ready(
++    void (*cb)(ts_web_contents_t wc, int tab_id, void* user_data),
++    void* user_data);
++
++void ts_set_on_ca_context_id(
++    void (*cb)(ts_web_contents_t wc,
++               uint32_t ca_context_id,
++               int width,
++               int height,
++               void* user_data),
++    void* user_data);
++
++void ts_set_on_url_changed(
++    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
++    void* user_data);
++
++void ts_set_on_loading_state(
++    void (*cb)(ts_web_contents_t wc,
++               const char* state,
++               int progress,
++               void* user_data),
++    void* user_data);
++
++void ts_set_on_title_changed(
++    void (*cb)(ts_web_contents_t wc, const char* title, void* user_data),
++    void* user_data);
++
++void ts_set_on_cursor_changed(
++    void (*cb)(ts_web_contents_t wc, int cursor_type, void* user_data),
++    void* user_data);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  /* CONTENT_LIBTERMSURF_CONTENT_LIBTERMSURF_CONTENT_H_ */
+diff --git a/content/libtermsurf_content/test_main.cc b/content/libtermsurf_content/test_main.cc
+new file mode 100644
+index 0000000000000..6317ac3ca8eea
+--- /dev/null
++++ b/content/libtermsurf_content/test_main.cc
+@@ -0,0 +1,17 @@
++// Copyright 2025 TermSurf
++// Minimal test: initialize libtermsurf_content and quit.
++
++#include <stdio.h>
++#include "content/libtermsurf_content/libtermsurf_content.h"
++
++static void on_initialized(void* user_data) {
++  printf("[test_main] Chromium initialized, quitting.\n");
++  ts_quit();
++}
++
++int main(int argc, const char** argv) {
++  ts_set_on_initialized(on_initialized, nullptr);
++  int result = ts_content_main(argc, argv);
++  printf("[test_main] Exited with code %d\n", result);
++  return result;
++}
+diff --git a/content/libtermsurf_content/ts_browser_client.cc b/content/libtermsurf_content/ts_browser_client.cc
+new file mode 100644
+index 0000000000000..d396e83882be2
+--- /dev/null
++++ b/content/libtermsurf_content/ts_browser_client.cc
+@@ -0,0 +1,21 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/ts_browser_client.h"
++
++#include "content/libtermsurf_content/ts_browser_main_parts.h"
++
++namespace content {
++
++TsBrowserClient::TsBrowserClient() = default;
++TsBrowserClient::~TsBrowserClient() = default;
++
++std::unique_ptr<BrowserMainParts> TsBrowserClient::CreateBrowserMainParts(
++    bool /* is_integration_test */) {
++  auto parts = std::make_unique<TsBrowserMainParts>();
++  set_browser_main_parts(parts.get());
++  return parts;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_content/ts_browser_client.h b/content/libtermsurf_content/ts_browser_client.h
+new file mode 100644
+index 0000000000000..c027a11093a13
+--- /dev/null
++++ b/content/libtermsurf_content/ts_browser_client.h
+@@ -0,0 +1,29 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
++
++#include "content/chromium_profile_server/browser/shell_content_browser_client.h"
++
++namespace content {
++
++// TsBrowserClient overrides ShellContentBrowserClient to return
++// TsBrowserMainParts from CreateBrowserMainParts().
++class TsBrowserClient : public ShellContentBrowserClient {
++ public:
++  TsBrowserClient();
++  ~TsBrowserClient() override;
++
++  TsBrowserClient(const TsBrowserClient&) = delete;
++  TsBrowserClient& operator=(const TsBrowserClient&) = delete;
++
++  // ContentBrowserClient:
++  std::unique_ptr<BrowserMainParts> CreateBrowserMainParts(
++      bool is_integration_test) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.cc b/content/libtermsurf_content/ts_browser_main_parts.cc
+new file mode 100644
+index 0000000000000..de55f56adaffb
+--- /dev/null
++++ b/content/libtermsurf_content/ts_browser_main_parts.cc
+@@ -0,0 +1,705 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/ts_browser_main_parts.h"
++
++#include <cmath>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/reload_type.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "content/chromium_profile_server/browser/shell.h"
++#include "content/chromium_profile_server/browser/shell_browser_context.h"
++#include "content/chromium_profile_server/browser/shell_devtools_frontend.h"
++#include "content/chromium_profile_server/browser/shell_devtools_manager_delegate.h"
++#include "content/libtermsurf_content/ts_tab_observer.h"
++#include "ui/base/page_transition_types.h"
++
++#if BUILDFLAG(IS_MAC)
++#include "content/browser/renderer_host/render_widget_host_impl.h"
++#include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
++#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
++#include "content/public/browser/context_factory.h"
++#include "components/viz/common/surfaces/local_surface_id.h"
++#include "third_party/blink/public/common/input/web_mouse_event.h"
++#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "third_party/blink/public/mojom/input/input_handler.mojom.h"
++#include "ui/events/keycodes/dom/dom_code.h"
++#include "ui/events/keycodes/dom/dom_key.h"
++#include "ui/events/keycodes/keyboard_code_conversion.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/events/types/scroll_types.h"
++#include "ui/latency/latency_info.h"
++#include "components/input/native_web_keyboard_event.h"
++#endif
++
++namespace content {
++
++TsBrowserMainParts::TsBrowserMainParts() = default;
++TsBrowserMainParts::~TsBrowserMainParts() = default;
++TsBrowserMainParts::TabState::TabState() = default;
++TsBrowserMainParts::TabState::~TabState() = default;
++
++void TsBrowserMainParts::InitializeMessageLoopContext() {
++  LOG(INFO) << "[libtermsurf_content] Initialized, firing callback";
++  TsNotifyInitialized(this);
++}
++
++// --- Profile management ---
++
++void* TsBrowserMainParts::CreateBrowserContext(const char* path) {
++  // For now, use the default browser context from the base class.
++  // Multi-profile support can be added later by creating new
++  // ShellBrowserContext instances with custom paths.
++  return static_cast<void*>(browser_context());
++}
++
++void TsBrowserMainParts::DestroyBrowserContext(void* ctx) {
++  // The default browser context is owned by the base class.
++  // Custom contexts would be deleted here.
++}
++
++// --- Tab management ---
++
++void* TsBrowserMainParts::CreateTab(void* ctx, const char* url,
++                                     int width, int height, bool dark) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  auto* browser_ctx = static_cast<ShellBrowserContext*>(ctx);
++  Shell* shell = Shell::CreateNewWindow(browser_ctx, GURL(url),
++                                        nullptr, gfx::Size());
++
++  // Resize.
++  if (width > 0 && height > 0) {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size logical(
++          static_cast<int>(std::ceil(width / scale)),
++          static_cast<int>(std::ceil(height / scale)));
++      shell->ResizeWebContentForTests(logical);
++    }
++  }
++
++  auto tab = std::make_unique<TabState>();
++  tab->shell = shell;
++  tab->preferred_color_scheme = dark
++      ? blink::mojom::PreferredColorScheme::kDark
++      : blink::mojom::PreferredColorScheme::kLight;
++
++#if BUILDFLAG(IS_MAC)
++  // Per-tab persistent compositor.
++  tab->widget_mac = std::make_unique<ui::AcceleratedWidgetMac>();
++  ui::ContextFactory* context_factory = content::GetContextFactory();
++  tab->compositor = std::make_unique<ui::Compositor>(
++      context_factory->AllocateFrameSinkId(),
++      context_factory,
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      false /* enable_pixel_canvas */);
++  tab->compositor->SetAcceleratedWidget(
++      tab->widget_mac->accelerated_widget());
++
++  tab->root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
++  tab->root_layer->SetColor(SK_ColorTRANSPARENT);
++
++  // Set initial size.
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size size_pixels(width, height);
++      gfx::Size size_dip(
++          static_cast<int>(std::ceil(width / scale)),
++          static_cast<int>(std::ceil(height / scale)));
++      tab->root_layer->SetBounds(gfx::Rect(size_dip));
++      viz::LocalSurfaceId local_surface_id =
++          viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++      tab->compositor->SetScaleAndSize(
++          scale, size_pixels, local_surface_id);
++    }
++  }
++
++  tab->compositor->SetRootLayer(tab->root_layer.get());
++  tab->compositor->SetVisible(true);
++
++  tab->bridge = std::make_unique<PersistentCompositorBridge>(
++      tab->widget_mac.get());
++
++  // Set parent_ui_layer_ on the view.
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      SetParentUiLayerOnView(view, tab->root_layer.get());
++    }
++  }
++#endif
++
++  tab->tab_id = next_tab_id_++;
++
++  // Use the WebContents pointer as the opaque handle.
++  void* handle = static_cast<void*>(shell->web_contents());
++
++  // Create observer.
++  auto tab_observer = std::make_unique<TsTabObserver>();
++  tab_observer->SetTabId(tab->tab_id);
++  tab_observer->SetHandle(handle);
++  tab_observer->ObserveContents(shell->web_contents());
++
++  // Fire tab ready callback.
++  TsNotifyTabReady(handle, tab->tab_id);
++
++#if BUILDFLAG(IS_MAC)
++  // Register cursor and CALayerParams callbacks.
++  if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
++    auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++        view->GetRenderWidgetHost());
++    rwhi->SetCursorChangedCallback(base::BindRepeating(
++        &TsTabObserver::OnCursorChanged,
++        base::Unretained(tab_observer.get())));
++
++    int cb_tab_id = tab->tab_id;
++    auto* last_id = new uint32_t(0);
++    void* cb_handle = handle;
++
++    auto ca_layer_callback = base::BindRepeating(
++        [](void* handle, int tab_id,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          uint32_t ctx_id = params.ca_context_id;
++          int pw = params.pixel_size.width();
++          int ph = params.pixel_size.height();
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce([](void* h, uint32_t cid, int pw, int ph) {
++                TsNotifyCAContextId(h, cid, pw, ph);
++              }, handle, ctx_id, pw, ph));
++        },
++        cb_handle, cb_tab_id,
++        base::Owned(last_id));
++    SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++    tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++    tab_observer->SetLastCAContextIdPtr(last_id);
++
++    tab->bridge->SetCallback(base::BindRepeating(
++        [](void* handle, int tab_id,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          uint32_t ctx_id = params.ca_context_id;
++          int pw = params.pixel_size.width();
++          int ph = params.pixel_size.height();
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce([](void* h, uint32_t cid, int pw, int ph) {
++                TsNotifyCAContextId(h, cid, pw, ph);
++              }, handle, ctx_id, pw, ph));
++        },
++        cb_handle, cb_tab_id,
++        base::Unretained(last_id)));
++  }
++
++  tab_observer->SetParentUiLayer(tab->root_layer.get());
++#endif
++
++  tab->tab_observer = std::move(tab_observer);
++  tabs_.push_back(std::move(tab));
++
++  return handle;
++}
++
++void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, void* inspected,
++                                             int width, int height,
++                                             bool dark) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  auto* browser_ctx = static_cast<ShellBrowserContext*>(ctx);
++  auto* inspected_wc = static_cast<WebContents*>(inspected);
++
++  // Find inspected tab's ID.
++  int inspected_tab_id = 0;
++  for (auto& t : tabs_) {
++    if (t->shell && t->shell->web_contents() == inspected_wc) {
++      inspected_tab_id = t->tab_id;
++      break;
++    }
++  }
++
++  GURL devtools_url(base::StringPrintf(
++      "http://127.0.0.1:%d/devtools/devtools_app.html?targetType=tab",
++      ShellDevToolsManagerDelegate::GetHttpHandlerPort()));
++
++  Shell* shell = Shell::CreateNewWindow(browser_ctx, devtools_url,
++                                        nullptr, gfx::Size());
++
++  if (width > 0 && height > 0) {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size logical(
++          static_cast<int>(std::ceil(width / scale)),
++          static_cast<int>(std::ceil(height / scale)));
++      shell->ResizeWebContentForTests(logical);
++    }
++  }
++
++  auto tab = std::make_unique<TabState>();
++  tab->shell = shell;
++  tab->inspected_tab_id = inspected_tab_id;
++  tab->preferred_color_scheme = dark
++      ? blink::mojom::PreferredColorScheme::kDark
++      : blink::mojom::PreferredColorScheme::kLight;
++
++#if BUILDFLAG(IS_MAC)
++  tab->widget_mac = std::make_unique<ui::AcceleratedWidgetMac>();
++  ui::ContextFactory* context_factory = content::GetContextFactory();
++  tab->compositor = std::make_unique<ui::Compositor>(
++      context_factory->AllocateFrameSinkId(),
++      context_factory,
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      false);
++  tab->compositor->SetAcceleratedWidget(
++      tab->widget_mac->accelerated_widget());
++
++  tab->root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
++  tab->root_layer->SetColor(SK_ColorTRANSPARENT);
++
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      float scale = view->GetDeviceScaleFactor();
++      gfx::Size size_pixels(width, height);
++      gfx::Size size_dip(
++          static_cast<int>(std::ceil(width / scale)),
++          static_cast<int>(std::ceil(height / scale)));
++      tab->root_layer->SetBounds(gfx::Rect(size_dip));
++      viz::LocalSurfaceId local_surface_id =
++          viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++      tab->compositor->SetScaleAndSize(
++          scale, size_pixels, local_surface_id);
++    }
++  }
++
++  tab->compositor->SetRootLayer(tab->root_layer.get());
++  tab->compositor->SetVisible(true);
++
++  tab->bridge = std::make_unique<PersistentCompositorBridge>(
++      tab->widget_mac.get());
++
++  {
++    RenderWidgetHostView* view =
++        shell->web_contents()->GetRenderWidgetHostView();
++    if (view) {
++      SetParentUiLayerOnView(view, tab->root_layer.get());
++    }
++  }
++#endif
++
++  tab->tab_id = next_tab_id_++;
++
++  void* handle = static_cast<void*>(shell->web_contents());
++
++  auto tab_observer = std::make_unique<TsTabObserver>();
++  tab_observer->SetTabId(tab->tab_id);
++  tab_observer->SetInspectedTabId(inspected_tab_id);
++  tab_observer->SetHandle(handle);
++  tab_observer->ObserveContents(shell->web_contents());
++
++  TsNotifyTabReady(handle, tab->tab_id);
++
++#if BUILDFLAG(IS_MAC)
++  if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
++    auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++        view->GetRenderWidgetHost());
++    rwhi->SetCursorChangedCallback(base::BindRepeating(
++        &TsTabObserver::OnCursorChanged,
++        base::Unretained(tab_observer.get())));
++
++    int cb_tab_id = tab->tab_id;
++    auto* last_id = new uint32_t(0);
++    void* cb_handle = handle;
++
++    auto ca_layer_callback = base::BindRepeating(
++        [](void* handle, int tab_id,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          uint32_t ctx_id = params.ca_context_id;
++          int pw = params.pixel_size.width();
++          int ph = params.pixel_size.height();
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce([](void* h, uint32_t cid, int pw, int ph) {
++                TsNotifyCAContextId(h, cid, pw, ph);
++              }, handle, ctx_id, pw, ph));
++        },
++        cb_handle, cb_tab_id,
++        base::Owned(last_id));
++    SetCALayerParamsCallbackOnView(view, ca_layer_callback);
++    tab_observer->SetCALayerParamsCallback(ca_layer_callback);
++    tab_observer->SetLastCAContextIdPtr(last_id);
++
++    tab->bridge->SetCallback(base::BindRepeating(
++        [](void* handle, int tab_id,
++           uint32_t* last_id, const gfx::CALayerParams& params) {
++          if (params.ca_context_id == 0 || params.ca_context_id == *last_id)
++            return;
++          *last_id = params.ca_context_id;
++          uint32_t ctx_id = params.ca_context_id;
++          int pw = params.pixel_size.width();
++          int ph = params.pixel_size.height();
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce([](void* h, uint32_t cid, int pw, int ph) {
++                TsNotifyCAContextId(h, cid, pw, ph);
++              }, handle, ctx_id, pw, ph));
++        },
++        cb_handle, cb_tab_id,
++        base::Unretained(last_id)));
++  }
++
++  tab_observer->SetParentUiLayer(tab->root_layer.get());
++#endif
++
++  // Wire DevTools bindings.
++  WebContents* inspected_contents = nullptr;
++  for (auto& t : tabs_) {
++    if (t->shell && t->shell->web_contents() == inspected_wc) {
++      inspected_contents = t->shell->web_contents();
++      break;
++    }
++  }
++  if (inspected_contents) {
++    new ShellDevToolsFrontend(shell, inspected_contents);
++  }
++
++  tab->tab_observer = std::move(tab_observer);
++  tabs_.push_back(std::move(tab));
++
++  return handle;
++}
++
++void TsBrowserMainParts::DestroyTab(void* wc_handle) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  for (auto it = tabs_.begin(); it != tabs_.end(); ++it) {
++    if ((*it)->shell &&
++        static_cast<void*>((*it)->shell->web_contents()) == wc_handle) {
++      (*it)->tab_observer.reset();
++      delete (*it)->shell.get();
++      (*it)->shell = nullptr;
++      tabs_.erase(it);
++      if (tabs_.empty()) {
++        Shell::Shutdown();
++      }
++      return;
++    }
++  }
++}
++
++void TsBrowserMainParts::NavigateTab(void* wc_handle, const char* url) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++  NavigationController::LoadURLParams params((GURL(url)));
++  params.transition_type = ui::PAGE_TRANSITION_TYPED;
++  tab->shell->web_contents()->GetController().LoadURLWithParams(params);
++}
++
++void TsBrowserMainParts::ResizeTab(void* wc_handle, int width, int height) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (width <= 0 || height <= 0) return;
++
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  RenderWidgetHostView* view =
++      tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view) {
++    float scale = view->GetDeviceScaleFactor();
++    gfx::Size logical(
++        static_cast<int>(std::ceil(width / scale)),
++        static_cast<int>(std::ceil(height / scale)));
++    tab->shell->ResizeWebContentForTests(logical);
++  }
++
++#if BUILDFLAG(IS_MAC)
++  if (tab->compositor && tab->root_layer) {
++    RenderWidgetHostView* cv =
++        tab->shell->web_contents()->GetRenderWidgetHostView();
++    if (cv) {
++      float scale = cv->GetDeviceScaleFactor();
++      gfx::Size size_dip(
++          static_cast<int>(std::ceil(width / scale)),
++          static_cast<int>(std::ceil(height / scale)));
++      tab->root_layer->SetBounds(gfx::Rect(size_dip));
++      gfx::Size size_pixels(width, height);
++      viz::LocalSurfaceId local_surface_id =
++          viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
++      tab->compositor->SetScaleAndSize(
++          scale, size_pixels, local_surface_id);
++    }
++  }
++#endif
++}
++
++void TsBrowserMainParts::ForwardMouseEvent(void* wc_handle, int type,
++                                            int button, int x, int y,
++                                            int click_count, int modifiers) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  blink::WebInputEvent::Type event_type;
++  if (type == 0)
++    event_type = blink::WebInputEvent::Type::kMouseDown;
++  else if (type == 1)
++    event_type = blink::WebInputEvent::Type::kMouseUp;
++  else
++    return;
++
++  auto btn = blink::WebPointerProperties::Button::kLeft;
++  if (button == 1)
++    btn = blink::WebPointerProperties::Button::kRight;
++  else if (button == 2)
++    btn = blink::WebPointerProperties::Button::kMiddle;
++
++  int web_modifiers = modifiers & 0xF;
++  if (type == 0) {
++    if (button == 0)
++      web_modifiers |= blink::WebInputEvent::kLeftButtonDown;
++    else if (button == 1)
++      web_modifiers |= blink::WebInputEvent::kRightButtonDown;
++  }
++
++  blink::WebMouseEvent mouse_event(
++      event_type,
++      gfx::PointF(x, y),
++      gfx::PointF(x, y),
++      btn, click_count, web_modifiers,
++      base::TimeTicks::Now());
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view)
++    view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++#endif
++}
++
++void TsBrowserMainParts::ForwardMouseMove(void* wc_handle, int x, int y,
++                                           int modifiers) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  int web_modifiers = modifiers;
++  auto btn = blink::WebPointerProperties::Button::kNoButton;
++  if (web_modifiers & blink::WebInputEvent::kLeftButtonDown)
++    btn = blink::WebPointerProperties::Button::kLeft;
++  else if (web_modifiers & blink::WebInputEvent::kRightButtonDown)
++    btn = blink::WebPointerProperties::Button::kRight;
++
++  blink::WebMouseEvent mouse_event(
++      blink::WebInputEvent::Type::kMouseMove,
++      gfx::PointF(x, y),
++      gfx::PointF(x, y),
++      btn, 0, web_modifiers,
++      base::TimeTicks::Now());
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view)
++    view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++#endif
++}
++
++void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
++                                             int x, int y,
++                                             float delta_x, float delta_y,
++                                             int phase, int momentum_phase,
++                                             bool precise, int modifiers) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  int web_modifiers = modifiers & 0xF;
++
++  blink::WebMouseWheelEvent wheel_event(
++      blink::WebInputEvent::Type::kMouseWheel,
++      web_modifiers,
++      base::TimeTicks::Now());
++
++  wheel_event.SetPositionInWidget(gfx::PointF(x, y));
++  wheel_event.SetPositionInScreen(gfx::PointF(x, y));
++  wheel_event.delta_x = delta_x;
++  wheel_event.delta_y = delta_y;
++  wheel_event.phase =
++      static_cast<blink::WebMouseWheelEvent::Phase>(phase);
++  wheel_event.momentum_phase =
++      static_cast<blink::WebMouseWheelEvent::Phase>(momentum_phase);
++  wheel_event.delta_units = precise
++      ? ui::ScrollGranularity::kScrollByPrecisePixel
++      : ui::ScrollGranularity::kScrollByLine;
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (view)
++    view->GetRenderWidgetHost()->ForwardWheelEvent(wheel_event);
++#endif
++}
++
++void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle, int type,
++                                          int keycode,
++                                          const std::string& utf8,
++                                          int modifiers) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  int web_modifiers = modifiers & 0xF;
++  bool has_meta = (web_modifiers & blink::WebInputEvent::kMetaKey) != 0;
++
++  // Navigation commands: Cmd+[ (back), Cmd+] (forward), Cmd+R (reload).
++  if (has_meta && type != 1) {
++    bool handled = true;
++    switch (keycode) {
++      case ui::VKEY_OEM_4:
++        if (tab->shell->web_contents()->GetController().CanGoBack())
++          tab->shell->web_contents()->GetController().GoBack();
++        break;
++      case ui::VKEY_OEM_6:
++        if (tab->shell->web_contents()->GetController().CanGoForward())
++          tab->shell->web_contents()->GetController().GoForward();
++        break;
++      case ui::VKEY_R:
++        tab->shell->web_contents()->GetController().Reload(
++            content::ReloadType::NORMAL, false);
++        break;
++      default:
++        handled = false;
++        break;
++    }
++    if (handled) return;
++  }
++
++  auto event_type = blink::WebInputEvent::Type::kRawKeyDown;
++  if (type == 1)
++    event_type = blink::WebInputEvent::Type::kKeyUp;
++
++  input::NativeWebKeyboardEvent key_event(
++      event_type, web_modifiers, base::TimeTicks::Now());
++  key_event.windows_key_code = keycode;
++
++  key_event.dom_code = static_cast<int>(
++      ui::UsLayoutKeyboardCodeToDomCode(
++          static_cast<ui::KeyboardCode>(keycode)));
++
++  ui::DomKey dom_key;
++  ui::KeyboardCode dummy_vkey;
++  if (ui::DomCodeToUsLayoutDomKey(
++          static_cast<ui::DomCode>(key_event.dom_code),
++          web_modifiers, &dom_key, &dummy_vkey)) {
++    key_event.dom_key =
++        static_cast<int>(static_cast<ui::DomKey::Base>(dom_key));
++  }
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (!view) return;
++
++  auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++      view->GetRenderWidgetHost());
++
++  std::vector<blink::mojom::EditCommandPtr> commands;
++  if (has_meta && type != 1) {
++    std::string cmd;
++    switch (keycode) {
++      case ui::VKEY_A: cmd = "selectAll"; break;
++      case ui::VKEY_C: cmd = "copy"; break;
++      case ui::VKEY_V: cmd = "paste"; break;
++      case ui::VKEY_X: cmd = "cut"; break;
++      case ui::VKEY_Z: cmd = "undo"; break;
++      default: break;
++    }
++    if (!cmd.empty()) {
++      commands.push_back(blink::mojom::EditCommand::New(cmd, ""));
++    }
++  }
++
++  ui::LatencyInfo latency;
++  rwhi->ForwardKeyboardEventWithCommands(
++      key_event, latency, std::move(commands));
++
++  if (type != 1 && !utf8.empty() && !has_meta) {
++    input::NativeWebKeyboardEvent char_event(
++        blink::WebInputEvent::Type::kChar, web_modifiers,
++        base::TimeTicks::Now());
++    char_event.windows_key_code = keycode;
++
++    std::u16string text16 = base::UTF8ToUTF16(utf8);
++    if (!text16.empty()) {
++      char_event.text[0] = text16[0];
++      char_event.unmodified_text[0] = text16[0];
++    }
++
++    std::vector<blink::mojom::EditCommandPtr> no_commands;
++    rwhi->ForwardKeyboardEventWithCommands(
++        char_event, latency, std::move(no_commands));
++  }
++#endif
++}
++
++void TsBrowserMainParts::SetFocus(void* wc_handle, bool focused) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (!view) return;
++
++  if (focused) {
++    view->Focus();
++    view->SetActive(true);
++  } else {
++    view->SetActive(false);
++  }
++}
++
++void TsBrowserMainParts::SetColorScheme(void* wc_handle, bool dark) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  tab->preferred_color_scheme = dark
++      ? blink::mojom::PreferredColorScheme::kDark
++      : blink::mojom::PreferredColorScheme::kLight;
++  tab->shell->web_contents()->OnWebPreferencesChanged();
++}
++
++TsBrowserMainParts::TabState* TsBrowserMainParts::FindTab(void* wc_handle) {
++  for (auto& t : tabs_) {
++    if (t->shell &&
++        static_cast<void*>(t->shell->web_contents()) == wc_handle)
++      return t.get();
++  }
++  return nullptr;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_content/ts_browser_main_parts.h b/content/libtermsurf_content/ts_browser_main_parts.h
+new file mode 100644
+index 0000000000000..bae1072d1e922
+--- /dev/null
++++ b/content/libtermsurf_content/ts_browser_main_parts.h
+@@ -0,0 +1,99 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_MAIN_PARTS_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_MAIN_PARTS_H_
++
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "build/build_config.h"
++#include "content/chromium_profile_server/browser/shell_browser_main_parts.h"
++#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
++
++#if BUILDFLAG(IS_MAC)
++#include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
++#include "ui/compositor/compositor.h"
++#include "ui/compositor/layer.h"
++#endif
++
++namespace content {
++
++class PersistentCompositorBridge;
++class Shell;
++class TsTabObserver;
++
++// Notification functions called by TsBrowserMainParts and TsTabObserver
++// to fire the C callbacks registered via the public API.
++void TsNotifyInitialized(class TsBrowserMainParts* parts);
++void TsNotifyTabReady(void* wc_handle, int tab_id);
++void TsNotifyCAContextId(void* wc_handle, uint32_t ca_context_id,
++                          int width, int height);
++void TsNotifyUrlChanged(void* wc_handle, const char* url);
++void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
++void TsNotifyTitleChanged(void* wc_handle, const char* title);
++void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
++
++class TsBrowserMainParts : public ShellBrowserMainParts {
++ public:
++  TsBrowserMainParts();
++  ~TsBrowserMainParts() override;
++
++  TsBrowserMainParts(const TsBrowserMainParts&) = delete;
++  TsBrowserMainParts& operator=(const TsBrowserMainParts&) = delete;
++
++  // --- C API methods (called from libtermsurf_content.cc) ---
++  void* CreateBrowserContext(const char* path);
++  void DestroyBrowserContext(void* ctx);
++  void* CreateTab(void* ctx, const char* url, int width, int height, bool dark);
++  void* CreateDevToolsTab(void* ctx, void* inspected, int width, int height,
++                          bool dark);
++  void DestroyTab(void* wc_handle);
++  void NavigateTab(void* wc_handle, const char* url);
++  void ResizeTab(void* wc_handle, int width, int height);
++  void ForwardMouseEvent(void* wc_handle, int type, int button,
++                         int x, int y, int click_count, int modifiers);
++  void ForwardMouseMove(void* wc_handle, int x, int y, int modifiers);
++  void ForwardScrollEvent(void* wc_handle, int x, int y,
++                          float delta_x, float delta_y,
++                          int phase, int momentum_phase,
++                          bool precise, int modifiers);
++  void ForwardKeyEvent(void* wc_handle, int type, int keycode,
++                       const std::string& utf8, int modifiers);
++  void SetFocus(void* wc_handle, bool focused);
++  void SetColorScheme(void* wc_handle, bool dark);
++
++ protected:
++  // ShellBrowserMainParts override: fire C callback instead of starting socket.
++  void InitializeMessageLoopContext() override;
++
++ private:
++  struct TabState {
++    TabState();
++    ~TabState();
++    int tab_id = 0;
++    int inspected_tab_id = 0;
++    raw_ptr<Shell> shell;
++    std::unique_ptr<TsTabObserver> tab_observer;
++    blink::mojom::PreferredColorScheme preferred_color_scheme =
++        blink::mojom::PreferredColorScheme::kDark;
++#if BUILDFLAG(IS_MAC)
++    std::unique_ptr<ui::AcceleratedWidgetMac> widget_mac;
++    std::unique_ptr<ui::Compositor> compositor;
++    std::unique_ptr<ui::Layer> root_layer;
++    std::unique_ptr<PersistentCompositorBridge> bridge;
++#endif
++  };
++
++  TabState* FindTab(void* wc_handle);
++
++  int next_tab_id_ = 1;
++  std::vector<std::unique_ptr<TabState>> tabs_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_MAIN_PARTS_H_
+diff --git a/content/libtermsurf_content/ts_main_delegate.cc b/content/libtermsurf_content/ts_main_delegate.cc
+new file mode 100644
+index 0000000000000..92406ea531a11
+--- /dev/null
++++ b/content/libtermsurf_content/ts_main_delegate.cc
+@@ -0,0 +1,19 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/ts_main_delegate.h"
++
++#include "content/libtermsurf_content/ts_browser_client.h"
++
++namespace content {
++
++TsMainDelegate::TsMainDelegate() = default;
++TsMainDelegate::~TsMainDelegate() = default;
++
++ContentBrowserClient* TsMainDelegate::CreateContentBrowserClient() {
++  browser_client_ = std::make_unique<TsBrowserClient>();
++  return browser_client_.get();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_content/ts_main_delegate.h b/content/libtermsurf_content/ts_main_delegate.h
+new file mode 100644
+index 0000000000000..6f767a81777f7
+--- /dev/null
++++ b/content/libtermsurf_content/ts_main_delegate.h
+@@ -0,0 +1,28 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
++
++#include "content/chromium_profile_server/app/shell_main_delegate.h"
++
++namespace content {
++
++// TsMainDelegate overrides ShellMainDelegate to swap in TsBrowserClient
++// (which creates TsBrowserMainParts instead of ShellBrowserMainParts).
++class TsMainDelegate : public ShellMainDelegate {
++ public:
++  TsMainDelegate();
++  ~TsMainDelegate() override;
++
++  TsMainDelegate(const TsMainDelegate&) = delete;
++  TsMainDelegate& operator=(const TsMainDelegate&) = delete;
++
++  // ContentMainDelegate:
++  ContentBrowserClient* CreateContentBrowserClient() override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
+diff --git a/content/libtermsurf_content/ts_tab_observer.cc b/content/libtermsurf_content/ts_tab_observer.cc
+new file mode 100644
+index 0000000000000..b200829298fcd
+--- /dev/null
++++ b/content/libtermsurf_content/ts_tab_observer.cc
+@@ -0,0 +1,143 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_content/ts_tab_observer.h"
++
++#include <cmath>
++
++#include "base/logging.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_view_host.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "content/libtermsurf_content/ts_browser_main_parts.h"
++
++#if BUILDFLAG(IS_MAC)
++#include "content/browser/renderer_host/render_widget_host_impl.h"
++#include "content/chromium_profile_server/browser/shell_ca_layer_bridge_mac.h"
++#include "content/chromium_profile_server/browser/shell_compositor_bridge_mac.h"
++#endif
++
++namespace content {
++
++TsTabObserver::TsTabObserver() = default;
++TsTabObserver::~TsTabObserver() = default;
++
++void TsTabObserver::SetTabId(int tab_id) {
++  tab_id_ = tab_id;
++}
++
++void TsTabObserver::SetInspectedTabId(int id) {
++  inspected_tab_id_ = id;
++}
++
++void TsTabObserver::ObserveContents(WebContents* web_contents) {
++  Observe(web_contents);
++}
++
++void TsTabObserver::DidFinishNavigation(
++    NavigationHandle* navigation_handle) {
++  if (!navigation_handle->HasCommitted())
++    return;
++  if (!navigation_handle->IsInPrimaryMainFrame())
++    return;
++
++#if BUILDFLAG(IS_MAC)
++  if (last_ca_context_id_)
++    *last_ca_context_id_ = 0;
++
++  std::string url;
++  if (inspected_tab_id_ > 0) {
++    url = base::StringPrintf("devtools://%d", inspected_tab_id_);
++  } else {
++    url = navigation_handle->GetURL().spec();
++  }
++
++  TsNotifyUrlChanged(reinterpret_cast<void*>(handle_), url.c_str());
++#endif
++}
++
++void TsTabObserver::DidStartLoading() {
++#if BUILDFLAG(IS_MAC)
++  TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "loading", 0);
++#endif
++}
++
++void TsTabObserver::DidStopLoading() {
++#if BUILDFLAG(IS_MAC)
++  TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "done", 100);
++#endif
++}
++
++void TsTabObserver::LoadProgressChanged(double progress) {
++#if BUILDFLAG(IS_MAC)
++  int pct = static_cast<int>(progress * 100);
++  if (pct >= 100) return;
++  TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "progress", pct);
++#endif
++}
++
++void TsTabObserver::DidFailLoad(RenderFrameHost* render_frame_host,
++                                 const GURL& validated_url,
++                                 int error_code) {
++#if BUILDFLAG(IS_MAC)
++  if (!render_frame_host->IsInPrimaryMainFrame())
++    return;
++  TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "error", 0);
++#endif
++}
++
++void TsTabObserver::TitleWasSet(NavigationEntry* entry) {
++#if BUILDFLAG(IS_MAC)
++  if (!entry)
++    return;
++  std::string title = base::UTF16ToUTF8(entry->GetTitleForDisplay());
++  TsNotifyTitleChanged(reinterpret_cast<void*>(handle_), title.c_str());
++#endif
++}
++
++#if BUILDFLAG(IS_MAC)
++void TsTabObserver::OnCursorChanged(const ui::Cursor& cursor) {
++  TsNotifyCursorChanged(reinterpret_cast<void*>(handle_), static_cast<int>(cursor.type()));
++}
++
++void TsTabObserver::SetCALayerParamsCallback(CALayerParamsCallback callback) {
++  ca_layer_params_callback_ = std::move(callback);
++}
++
++void TsTabObserver::SetLastCAContextIdPtr(uint32_t* ptr) {
++  last_ca_context_id_ = ptr;
++}
++
++void TsTabObserver::SetParentUiLayer(ui::Layer* layer) {
++  parent_ui_layer_ = layer;
++}
++
++void TsTabObserver::RenderViewHostChanged(
++    RenderViewHost* old_host, RenderViewHost* new_host) {
++  if (!new_host)
++    return;
++  auto* view = web_contents()->GetRenderWidgetHostView();
++  if (!view)
++    return;
++
++  if (ca_layer_params_callback_)
++    SetCALayerParamsCallbackOnView(view, ca_layer_params_callback_);
++
++  auto* rwhi = static_cast<RenderWidgetHostImpl*>(
++      view->GetRenderWidgetHost());
++  rwhi->SetCursorChangedCallback(base::BindRepeating(
++      &TsTabObserver::OnCursorChanged, base::Unretained(this)));
++
++  if (parent_ui_layer_) {
++    SetParentUiLayerOnView(view, parent_ui_layer_);
++  }
++}
++#endif
++
++}  // namespace content
+diff --git a/content/libtermsurf_content/ts_tab_observer.h b/content/libtermsurf_content/ts_tab_observer.h
+new file mode 100644
+index 0000000000000..5db0db672e0d1
+--- /dev/null
++++ b/content/libtermsurf_content/ts_tab_observer.h
+@@ -0,0 +1,78 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_TAB_OBSERVER_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_TAB_OBSERVER_H_
++
++#include <cstdint>
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "build/build_config.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "ui/base/cursor/cursor.h"
++#include "ui/gfx/ca_layer_params.h"
++
++namespace ui { class Layer; }
++
++namespace content {
++
++class WebContents;
++
++// WebContentsObserver that fires C callbacks (via TsNotify* functions)
++// instead of sending protobuf messages over a socket.
++class TsTabObserver : public WebContentsObserver {
++ public:
++  TsTabObserver();
++  ~TsTabObserver() override;
++
++  TsTabObserver(const TsTabObserver&) = delete;
++  TsTabObserver& operator=(const TsTabObserver&) = delete;
++
++  void ObserveContents(WebContents* web_contents);
++  void SetTabId(int tab_id);
++  void SetInspectedTabId(int id);
++
++  // The opaque handle passed to C callbacks to identify the tab.
++  void SetHandle(void* handle) { handle_ = reinterpret_cast<uintptr_t>(handle); }
++
++  // WebContentsObserver:
++  void DidFinishNavigation(NavigationHandle* navigation_handle) override;
++  void DidStartLoading() override;
++  void DidStopLoading() override;
++  void LoadProgressChanged(double progress) override;
++  void DidFailLoad(RenderFrameHost* render_frame_host,
++                   const GURL& validated_url,
++                   int error_code) override;
++  void TitleWasSet(NavigationEntry* entry) override;
++
++#if BUILDFLAG(IS_MAC)
++  void RenderViewHostChanged(RenderViewHost* old_host,
++                             RenderViewHost* new_host) override;
++
++  void OnCursorChanged(const ui::Cursor& cursor);
++
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++  void SetCALayerParamsCallback(CALayerParamsCallback callback);
++  void SetLastCAContextIdPtr(uint32_t* ptr);
++  void SetParentUiLayer(ui::Layer* layer);
++#endif
++
++ private:
++  int tab_id_ = 0;
++  int inspected_tab_id_ = 0;
++  uintptr_t handle_ = 0;
++
++#if BUILDFLAG(IS_MAC)
++  CALayerParamsCallback ca_layer_params_callback_;
++  raw_ptr<uint32_t> last_ca_context_id_ = nullptr;
++  raw_ptr<ui::Layer> parent_ui_layer_ = nullptr;
++#endif
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_TAB_OBSERVER_H_
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,45 @@
+From 084a805f666c5b69c7c54f618a3a27d33621c001 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 18 Feb 2026 05:36:05 -0600
+Subject: [PATCH 20/65] Derive drag button from modifier bits
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+kNoButton masqueraded as the hand,
+But drags need kLeft to take a stand.
+The bits were there inside the mods—
+Now button matches, evening the odds.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc                  | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index cce4d10e36300..8846a18ed17c7 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -518,11 +518,18 @@ void ShellBrowserMainParts::HandleMouseMove(
+ 
+   int web_modifiers = static_cast<int>(modifiers);
+ 
++  // Derive button from modifier bits (drag events include button-down flags).
++  auto btn = blink::WebPointerProperties::Button::kNoButton;
++  if (web_modifiers & blink::WebInputEvent::kLeftButtonDown)
++    btn = blink::WebPointerProperties::Button::kLeft;
++  else if (web_modifiers & blink::WebInputEvent::kRightButtonDown)
++    btn = blink::WebPointerProperties::Button::kRight;
++
+   blink::WebMouseEvent mouse_event(
+       blink::WebInputEvent::Type::kMouseMove,
+       gfx::PointF(x, y),
+       gfx::PointF(x, y),
+-      blink::WebPointerProperties::Button::kNoButton,
++      btn,
+       0,  // click_count
+       web_modifiers,
+       base::TimeTicks::Now());
+-- 
+2.50.1 (Apple Git-155)
+

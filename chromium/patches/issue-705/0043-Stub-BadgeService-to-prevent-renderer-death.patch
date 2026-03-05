@@ -1,0 +1,123 @@
+From a004e0888e390507a5f948f112d7c92e0ad711d3 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 27 Feb 2026 04:50:20 -0600
+Subject: [PATCH 43/65] Stub BadgeService to prevent renderer death
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A badge request arrived with flair,
+But no one was home — no handler there.
+The renderer fell to its doom,
+Now a stub sits in the room,
+Accepting all badges… into thin air.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_content_browser_client.cc   | 31 +++++++++++++++++++
+ .../browser/shell_content_browser_client.h    | 12 +++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_content_browser_client.cc b/content/chromium_profile_server/browser/shell_content_browser_client.cc
+index 698cf1732a375..320fef1a276ed 100644
+--- a/content/chromium_profile_server/browser/shell_content_browser_client.cc
++++ b/content/chromium_profile_server/browser/shell_content_browser_client.cc
+@@ -15,6 +15,7 @@
+ 
+ #include "base/base_switches.h"
+ #include "base/command_line.h"
++#include "base/functional/bind.h"
+ #include "base/containers/fixed_flat_set.h"
+ #include "base/containers/flat_set.h"
+ #include "base/feature_list.h"
+@@ -71,6 +72,7 @@
+ #include "media/mojo/buildflags.h"
+ #include "media/mojo/mojom/media_service.mojom.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
++#include "mojo/public/cpp/bindings/receiver_set.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include "net/base/features.h"
+@@ -288,6 +290,33 @@ bool AreIsolatedWebAppsEnabled() {
+ 
+ }  // namespace
+ 
++// Stub BadgeService — accepts and ignores Badging API calls (Issue 655).
++class ShellContentBrowserClient::StubBadgeService
++    : public blink::mojom::BadgeService {
++ public:
++  StubBadgeService() = default;
++  ~StubBadgeService() override = default;
++
++  void Bind(mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
++    receivers_.Add(this, std::move(receiver));
++  }
++
++  // blink::mojom::BadgeService:
++  void SetBadge(blink::mojom::BadgeValuePtr value) override {}
++  void ClearBadge() override {}
++
++ private:
++  mojo::ReceiverSet<blink::mojom::BadgeService> receivers_;
++};
++
++void ShellContentBrowserClient::BindBadgeService(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
++  if (!stub_badge_service_)
++    stub_badge_service_ = std::make_unique<StubBadgeService>();
++  stub_badge_service_->Bind(std::move(receiver));
++}
++
+ std::string GetShellLanguage() {
+   return "en-us,en";
+ }
+@@ -608,6 +637,8 @@ void ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+       ->GetBinders()
+       .ExposeInterfacesToRenderFrame(map);
+   map->Add<network_hints::mojom::NetworkHintsHandler>(&BindNetworkHintsHandler);
++  map->Add<blink::mojom::BadgeService>(base::BindRepeating(
++      &ShellContentBrowserClient::BindBadgeService, base::Unretained(this)));
+ #if BUILDFLAG(IS_WIN)
+   map->Add<media::mojom::MediaFoundationPreferences>(
+       &BindMediaFoundationPreferences);
+diff --git a/content/chromium_profile_server/browser/shell_content_browser_client.h b/content/chromium_profile_server/browser/shell_content_browser_client.h
+index 0e67eaf471f4e..a3fad979f37d4 100644
+--- a/content/chromium_profile_server/browser/shell_content_browser_client.h
++++ b/content/chromium_profile_server/browser/shell_content_browser_client.h
+@@ -16,6 +16,7 @@
+ #include "content/chromium_profile_server/browser/shell_speech_recognition_manager_delegate.h"
+ #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
++#include "third_party/blink/public/mojom/badging/badging.mojom.h"
+ #include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
+ 
+ class PrefService;
+@@ -231,6 +232,15 @@ class ShellContentBrowserClient : public ContentBrowserClient {
+           cert_verifier_creation_params);
+ 
+  private:
++  // Stub BadgeService — accepts and ignores Badging API calls.
++  // Without this, the renderer is killed when any page calls
++  // navigator.setAppBadge(). See Issue 655.
++  class StubBadgeService;
++
++  void BindBadgeService(
++      RenderFrameHost* render_frame_host,
++      mojo::PendingReceiver<blink::mojom::BadgeService> receiver);
++
+   // For GetShellContentBrowserClientInstances().
+   friend class ContentBrowserTestContentBrowserClient;
+ 
+@@ -257,6 +267,8 @@ class ShellContentBrowserClient : public ContentBrowserClient {
+   std::unique_ptr<permissions::BluetoothDelegateImpl> bluetooth_delegate_;
+ #endif
+ 
++  std::unique_ptr<StubBadgeService> stub_badge_service_;
++
+   // NOTE: Tests may install a second ShellContentBrowserClient that becomes
+   // the ContentBrowserClient used by content. This has subtle implications
+   // for any state (variables) that are needed by ShellContentBrowserClient.
+-- 
+2.50.1 (Apple Git-155)
+

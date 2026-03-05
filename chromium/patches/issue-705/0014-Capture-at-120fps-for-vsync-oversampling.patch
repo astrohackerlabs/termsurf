@@ -1,0 +1,38 @@
+From 7ace97f3b69f710c1944ea62a3eb4fbe8537de2c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 16 Feb 2026 19:04:28 -0600
+Subject: [PATCH 14/65] Capture at 120fps for vsync oversampling
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Sixteen milliseconds was too slow,
+Two clocks adrift in ebb and flow.
+Now eight ms, the frames arrive—
+At every vsync, one's still alive.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../chromium_profile_server/browser/shell_video_consumer.cc  | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/content/chromium_profile_server/browser/shell_video_consumer.cc b/content/chromium_profile_server/browser/shell_video_consumer.cc
+index f115236733747..16761ee3c6f19 100644
+--- a/content/chromium_profile_server/browser/shell_video_consumer.cc
++++ b/content/chromium_profile_server/browser/shell_video_consumer.cc
+@@ -82,9 +82,10 @@ void ShellVideoConsumer::Attach(WebContents* web_contents) {
+ 
+   capturer_ = manager->CreateVideoCapturer();
+ 
+-  // Configure for 60fps ARGB capture.
++  // Configure for 120fps ARGB capture (Issue 512: oversample at 2x display
++  // rate so there is always a fresh frame at every 60Hz vsync).
+   capturer_->SetFormat(media::PIXEL_FORMAT_ARGB);
+-  capturer_->SetMinCapturePeriod(base::Milliseconds(16));
++  capturer_->SetMinCapturePeriod(base::Milliseconds(8));
+   capturer_->SetAutoThrottlingEnabled(false);
+ 
+   // Capture at physical pixel resolution (Retina-correct).
+-- 
+2.50.1 (Apple Git-155)
+

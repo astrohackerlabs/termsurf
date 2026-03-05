@@ -538,10 +538,12 @@ struct  Termsurf__QueryDevtoolsReply
   ProtobufCMessage base;
   int64_t tab_id;
   char *error;
+  char *browser;
+  char *profile;
 };
 #define TERMSURF__QUERY_DEVTOOLS_REPLY__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&termsurf__query_devtools_reply__descriptor) \
-, 0, (char *)protobuf_c_empty_string }
+, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
 struct  Termsurf__QueryTabsRequest

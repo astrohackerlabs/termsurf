@@ -1,0 +1,95 @@
+From 3d37649cd9a5e5ac8ae6df940d8af643559953b7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 1 Mar 2026 15:12:00 -0600
+Subject: [PATCH 49/65] Issue 689: Add query_tabs XPC handler
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Chromium counted its tabs in silence,
+No one asked, "How many are alive?"
+Now query_tabs breaks the quiet—
+Each orphan exposed, nowhere to hide.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 43 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  1 +
+ 2 files changed, 44 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index c3cd738a22d4e..da92d82a12a68 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -331,6 +331,14 @@ void ShellBrowserMainParts::StartDynamicMode(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::SetColorScheme,
+                            base::Unretained(self), s_pane, dark));
++      } else if (action && std::string_view(action) == "query_tabs") {
++        xpc_object_t qt_reply = xpc_dictionary_create_reply(event);
++        if (qt_reply) {
++          content::GetUIThreadTaskRunner({})->PostTask(
++              FROM_HERE,
++              base::BindOnce(&ShellBrowserMainParts::HandleQueryTabs,
++                             base::Unretained(self), qt_reply));
++        }
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -1200,6 +1208,41 @@ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+     }
+   }
+ }
++
++void ShellBrowserMainParts::HandleQueryTabs(xpc_object_t reply) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  int64_t total = static_cast<int64_t>(tabs_.size());
++  int64_t browser_count = 0;
++  int64_t devtools_count = 0;
++
++  for (size_t i = 0; i < tabs_.size(); i++) {
++    auto& tab = tabs_[i];
++    if (tab->tab_id > 0)
++      browser_count++;
++    else
++      devtools_count++;
++
++    // Per-tab summary string.
++    std::string url = tab->shell->web_contents()->GetURL().spec();
++    std::string val = "id=" + std::to_string(tab->tab_id) +
++                      " inspected=" + std::to_string(tab->inspected_tab_id) +
++                      " pane=" + tab->pane_id +
++                      " url=" + url;
++    std::string key = "tab_" + std::to_string(i);
++    xpc_dictionary_set_string(reply, key.c_str(), val.c_str());
++  }
++
++  xpc_dictionary_set_int64(reply, "chromium_tabs", total);
++  xpc_dictionary_set_int64(reply, "chromium_browser", browser_count);
++  xpc_dictionary_set_int64(reply, "chromium_devtools", devtools_count);
++
++  xpc_connection_send_message(control_connection_, reply);
++  xpc_release(reply);
++
++  LOG(INFO) << "[ProfileServer] query_tabs: " << total << " tabs ("
++            << browser_count << " browser, " << devtools_count << " devtools)";
++}
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ void ShellBrowserMainParts::ToolkitInitialized() {
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index e8d828b4eded0..83684fbe7237d 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -152,6 +152,7 @@ class ShellBrowserMainParts : public BrowserMainParts {
+   void CreateDevToolsTab(const std::string& pane_id,
+                          int inspected_tab_id,
+                          int pixel_width, int pixel_height, bool dark);
++  void HandleQueryTabs(xpc_object_t reply);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+-- 
+2.50.1 (Apple Git-155)
+

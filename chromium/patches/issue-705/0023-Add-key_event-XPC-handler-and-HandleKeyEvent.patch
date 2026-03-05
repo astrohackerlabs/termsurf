@@ -1,0 +1,123 @@
+From b7597c85ee0a77cb2edcb98bc2995e86d1d71c60 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 21 Feb 2026 06:36:22 -0600
+Subject: [PATCH 23/65] Add key_event XPC handler and HandleKeyEvent
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The keys came knocking at Chromium's door,
+"We're from the terminal!" — sixty or more.
+kRawKeyDown, kChar, the protocol's dance,
+But Enter still freezes — needs one more chance.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ .../browser/shell_browser_main_parts.cc       | 62 +++++++++++++++++++
+ .../browser/shell_browser_main_parts.h        |  3 +
+ 2 files changed, 65 insertions(+)
+
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.cc b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+index 012242d358681..bb5b70f5b0fdb 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.cc
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.cc
+@@ -25,6 +25,7 @@
+ #include "cc/base/switches.h"
+ #include "components/performance_manager/embedder/graph_features.h"
+ #include "components/performance_manager/embedder/performance_manager_lifetime.h"
++#include "components/input/native_web_keyboard_event.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/first_party_sets_handler.h"
+@@ -267,6 +268,20 @@ void ShellBrowserMainParts::StartDynamicMode(
+             FROM_HERE,
+             base::BindOnce(&ShellBrowserMainParts::HandleFocusChanged,
+                            base::Unretained(self), s_pane, focused));
++      } else if (action && std::string_view(action) == "key_event") {
++        const char* pane = xpc_dictionary_get_string(event, "pane_id");
++        const char* type_str = xpc_dictionary_get_string(event, "type");
++        int vk = (int)xpc_dictionary_get_int64(event, "windows_key_code");
++        const char* utf8_raw = xpc_dictionary_get_string(event, "utf8");
++        uint64_t mods = xpc_dictionary_get_uint64(event, "modifiers");
++        std::string s_pane(pane ? pane : "");
++        std::string s_type(type_str ? type_str : "");
++        std::string s_utf8(utf8_raw ? utf8_raw : "");
++        content::GetUIThreadTaskRunner({})->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ShellBrowserMainParts::HandleKeyEvent,
++                           base::Unretained(self), s_pane, s_type, vk,
++                           s_utf8, mods));
+       }
+     } else if (xpc_get_type(event) == XPC_TYPE_ERROR) {
+       if (event == XPC_ERROR_CONNECTION_INVALID) {
+@@ -571,6 +586,53 @@ void ShellBrowserMainParts::HandleFocusChanged(
+             << " for pane " << pane_id;
+ }
+ 
++void ShellBrowserMainParts::HandleKeyEvent(
++    const std::string& pane_id, const std::string& type,
++    int windows_key_code, const std::string& utf8_text,
++    uint64_t modifiers) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  TabState* tab = nullptr;
++  for (auto& t : tabs_) {
++    if (t->pane_id == pane_id) { tab = t.get(); break; }
++  }
++  if (!tab) return;
++
++  int web_modifiers = static_cast<int>(modifiers & 0xF);
++
++  auto event_type = blink::WebInputEvent::Type::kRawKeyDown;
++  if (type == "up")
++    event_type = blink::WebInputEvent::Type::kKeyUp;
++
++  input::NativeWebKeyboardEvent key_event(
++      event_type, web_modifiers, base::TimeTicks::Now());
++  key_event.windows_key_code = windows_key_code;
++
++  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (!view) return;
++
++  view->GetRenderWidgetHost()->ForwardKeyboardEvent(key_event);
++
++  // For key down with text, also send a Char event.
++  if (type != "up" && !utf8_text.empty()) {
++    input::NativeWebKeyboardEvent char_event(
++        blink::WebInputEvent::Type::kChar, web_modifiers,
++        base::TimeTicks::Now());
++    char_event.windows_key_code = windows_key_code;
++
++    std::u16string text16 = base::UTF8ToUTF16(utf8_text);
++    if (!text16.empty()) {
++      char_event.text[0] = text16[0];
++      char_event.unmodified_text[0] = text16[0];
++    }
++
++    view->GetRenderWidgetHost()->ForwardKeyboardEvent(char_event);
++  }
++
++  LOG(INFO) << "[ProfileServer] Key " << type << " vk=0x" << std::hex
++            << windows_key_code << std::dec << " pane=" << pane_id;
++}
++
+ void ShellBrowserMainParts::CloseTab(xpc_connection_t conn) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+diff --git a/content/chromium_profile_server/browser/shell_browser_main_parts.h b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+index 3c3aaa2ac31d8..2d1fac22c14d9 100644
+--- a/content/chromium_profile_server/browser/shell_browser_main_parts.h
++++ b/content/chromium_profile_server/browser/shell_browser_main_parts.h
+@@ -123,6 +123,9 @@ class ShellBrowserMainParts : public BrowserMainParts {
+                        double x, double y,
+                        uint64_t modifiers);
+   void HandleFocusChanged(const std::string& pane_id, bool focused);
++  void HandleKeyEvent(const std::string& pane_id, const std::string& type,
++                      int windows_key_code, const std::string& utf8_text,
++                      uint64_t modifiers);
+ 
+   xpc_connection_t control_connection_ = nullptr;
+   xpc_endpoint_t app_endpoint_ = nullptr;  // stored for per-tab connections
+-- 
+2.50.1 (Apple Git-155)
+
