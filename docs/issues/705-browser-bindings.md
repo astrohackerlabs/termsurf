@@ -414,3 +414,89 @@ The page renders in the terminal. The fix:
 
 Plusium now completes the full IPC handshake: ServerRegister → CreateTab →
 tab_ready → ca_context → page renders.
+
+### Experiment 6: Fix dark mode in Plusium
+
+Dark mode is broken in two ways: (1) pages don't respect system dark mode on
+load, and (2) `:colorscheme dark` (`c d`) has no effect. Both have the same root
+cause.
+
+The GUI and Plusium correctly pass the `dark` flag through the full chain. The
+`TsBrowserMainParts` stores it in `tab->preferred_color_scheme`. But when
+Chromium calls `OverrideWebPreferences()` to apply the setting, the base
+`ShellContentBrowserClient` implementation runs — which is hardcoded to check
+`--force-dark-mode` and default to light. It never reads
+`tab->preferred_color_scheme`.
+
+The Profile Server solved this with its own forked
+`ShellContentBrowserClient::OverrideWebPreferences` that calls
+`main_parts->GetColorSchemeForWebContents(web_contents)`. Since
+`libtermsurf_content` uses `TsBrowserClient` (which extends
+`ShellContentBrowserClient`), the fix is to:
+
+1. Add `GetColorSchemeForWebContents()` to `TsBrowserMainParts`
+2. Override `OverrideWebPreferences()` in `TsBrowserClient`
+
+#### What to change
+
+**`content/libtermsurf_content/ts_browser_main_parts.h`** — Add public method:
+
+```cpp
+std::optional<blink::mojom::PreferredColorScheme>
+GetColorSchemeForWebContents(WebContents* web_contents) const;
+```
+
+**`content/libtermsurf_content/ts_browser_main_parts.cc`** — Implement it:
+
+```cpp
+std::optional<blink::mojom::PreferredColorScheme>
+TsBrowserMainParts::GetColorSchemeForWebContents(
+    WebContents* web_contents) const {
+  for (const auto& tab : tabs_) {
+    if (tab->shell && tab->shell->web_contents() == web_contents) {
+      return tab->preferred_color_scheme;
+    }
+  }
+  return std::nullopt;
+}
+```
+
+**`content/libtermsurf_content/ts_browser_client.h`** — Add override:
+
+```cpp
+void OverrideWebPreferences(
+    WebContents* web_contents,
+    SiteInstance& main_frame_site,
+    blink::web_pref::WebPreferences* prefs) override;
+```
+
+**`content/libtermsurf_content/ts_browser_client.cc`** — Implement it (same as
+Profile Server's version):
+
+```cpp
+void TsBrowserClient::OverrideWebPreferences(
+    WebContents* web_contents,
+    SiteInstance& main_frame_site,
+    blink::web_pref::WebPreferences* prefs) {
+  auto* main_parts = static_cast<TsBrowserMainParts*>(
+      shell_browser_main_parts());
+  if (main_parts) {
+    auto scheme = main_parts->GetColorSchemeForWebContents(web_contents);
+    if (scheme.has_value()) {
+      prefs->preferred_color_scheme = scheme.value();
+    } else {
+      prefs->preferred_color_scheme =
+          blink::mojom::PreferredColorScheme::kDark;
+    }
+  }
+}
+```
+
+#### Verification
+
+1. `autoninja -C out/Default plusium` — compiles.
+2. Set system to dark mode. Run `web google.com --browser plusium` — page should
+   load in dark mode.
+3. Run `:colorscheme light` (`c l`) — page should switch to light mode.
+4. Run `:colorscheme dark` (`c d`) — page should switch back to dark mode.
+5. Verify default browser (no `--browser` flag) still works.
