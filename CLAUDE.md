@@ -142,7 +142,9 @@ DevTools in split panes (Issues 684, 687, 690–691), multi-profile tracking fix
 subcommand (Issue 692), smart input resolution (Issue 693), replace pane_id with
 tab_id in Chromium (Issue 694), activation drag suppression (Issue 695), double
 click suppression fix (Issue 696), Unix socket + protobuf IPC replacing XPC
-(Issues 698–702).
+(Issues 698–702), click suppression removal (Issue 703), browser bindings C
+library (Issues 704–706), Roamium Rust browser binary (Issue 707), clean
+Chromium fork with renamed libtermsurf_chromium (Issue 708).
 
 ### Source Layout
 
@@ -305,6 +307,13 @@ git subtree pull --prefix=gui upstream main -m "Merge upstream Ghostty into gui"
   connections
 - `docs/issues/703-remove-click-suppression.md` — Remove click-to-activate
   suppression
+- `docs/issues/704-browser-bindings.md` — Browser bindings (libtermsurf_content)
+- `docs/issues/705-browser-bindings.md` — Browser bindings continued (DevTools
+  fix)
+- `docs/issues/706-plusium-devtools.md` — Plusium DevTools crash fix
+- `docs/issues/707-roamium.md` — Roamium (shared lib + Rust rewrite)
+- `docs/issues/708-roamium-only.md` — Roamium-only (clean fork, renamed lib)
+- `docs/issues/709-wezboard.md` — Wezboard (WezTerm fork research)
 - `docs/xdg.md` — XDG directory pattern and conventions
 
 ### Early Prototypes (ts1–ts5)
