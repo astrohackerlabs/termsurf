@@ -135,3 +135,54 @@ stored pointer appears corrupted.
    significant differences, link Plusium against Profile Server's forked
    DevTools files instead of the stock ones. This is the most direct path to
    matching Profile Server's behavior, though it increases coupling.
+
+## Experiments
+
+### Experiment 1: Diff Profile Server's forked DevTools files against stock
+
+Compared all six forked DevTools files in
+`content/chromium_profile_server/browser/` against their stock equivalents in
+`content/shell/browser/`.
+
+#### Results
+
+**All six files are functionally identical.** The only differences are:
+
+**`shell_devtools_bindings.h`** — Header guard name only.
+
+**`shell_devtools_bindings.cc`** — Include paths only.
+
+**`shell_devtools_frontend.h`** — Header guard, include path, and an Issue 684
+comment on the constructor. No code change.
+
+**`shell_devtools_frontend.cc`** — Include paths only.
+
+**`shell_devtools_manager_delegate.h`** — Header guard and include path only.
+
+**`shell_devtools_manager_delegate.cc`** — Include paths, plus two cosmetic
+constants: Android socket name (`chromium_profile_server_devtools_remote` vs
+`content_shell_devtools_remote`) and discovery page resource ID
+(`IDR_CONTENT_CHROMIUM_PROFILE_SERVER_DEVTOOLS_DISCOVERY_PAGE` vs
+`IDR_CONTENT_SHELL_DEVTOOLS_DISCOVERY_PAGE`).
+
+No logic changes. No workarounds. No crash fixes. The `AttachInternal()` code
+path is byte-for-byte identical between Profile Server's fork and stock.
+
+#### What this eliminates
+
+- **Idea #5 is dead.** Using Profile Server's forked files would change nothing
+  — they're the same code with different include paths.
+- The crash is NOT caused by Plusium using stock DevTools files.
+
+#### What this tells us
+
+The difference must be in how the two binaries call into the DevTools code, not
+in the DevTools code itself. The remaining hypotheses are:
+
+1. **The `void*` pointer boundary** (idea #3) — Profile Server never casts
+   `WebContents*` to `void*` and back. Plusium does, through the C API.
+2. **The component build** (idea #4) — Profile Server links DevTools code
+   statically from its own fork. Plusium links stock DevTools from
+   `content_shell_lib`, which is a shared library in component builds.
+3. **The pointer itself** (idea #1) — we still don't know if the pointer is
+   corrupted in storage or if the object was destroyed.
