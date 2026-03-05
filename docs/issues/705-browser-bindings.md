@@ -297,3 +297,37 @@ the ca_context message has `tab_id=0`.
 The `OnTabReady` callback in `libtermsurf_content` is either not firing, or
 `FindByHandle()` fails because the handle hasn't been stored in `g_tabs` yet
 (race between `ts_create_web_contents` returning and the callback firing).
+
+### Experiment 4: Diagnose missing tab_ready
+
+Add `fprintf(stderr)` traces to the three callback functions in
+`plusium_main.cc` that interact with `FindByHandle()`. The goal is to determine
+whether `OnTabReady` fires at all, and if so, whether `FindByHandle()` returns
+null because the tab entry hasn't been pushed to `g_tabs` yet.
+
+The leading theory: `ts_create_web_contents()` fires `OnTabReady`
+**synchronously** (on the same call stack), before the `push_back` on the next
+line. So `FindByHandle(wc)` searches `g_tabs` before the entry exists and
+silently returns null.
+
+#### What to change
+
+**`chromium/src/content/plusium/plusium_main.cc`** — Add `fprintf(stderr)` at:
+
+1. `kCreateTab` handler — print the handle returned by
+   `ts_create_web_contents()` before and after `push_back`, and the current
+   `g_tabs` size at each point.
+2. `OnTabReady()` — print the handle received, `g_tabs` size, and whether
+   `FindByHandle()` succeeded.
+3. `OnCaContextId()` — same: print handle, `g_tabs` size, and `FindByHandle()`
+   result.
+
+#### Verification
+
+1. `autoninja -C out/Default plusium` — compiles.
+2. Run `web google.com --browser plusium` with GUI logs redirected.
+3. Read `logs/gui.log` — the traces will show whether `OnTabReady` fires and
+   whether `FindByHandle` finds the entry.
+4. If `OnTabReady` fires with `g_tabs` size=0 (before `push_back`), the fix is
+   to push the entry before calling `ts_create_web_contents` and update the
+   handle afterward.
