@@ -14,7 +14,7 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Branch: `146.0.7650.0-issue-707`
+- Branch: `146.0.7650.0-issue-708`
 - Base version: `146.0.7650.0` (tracking Electron's Chromium version)
 
 ## Branch Strategy
@@ -82,6 +82,7 @@ find the most relevant recent branch, create a new branch from it
 | `146.0.7650.0-issue-705`      | [Issue 705](../docs/issues/705-browser-bindings.md)           | Browser bindings continued (DevTools fix)   |
 | `146.0.7650.0-issue-706`      | [Issue 706](../docs/issues/706-plusium-devtools.md)           | Plusium DevTools crash fix                  |
 | `146.0.7650.0-issue-707`      | [Issue 707](../docs/issues/707-roamium.md)                    | Roamium (shared lib + Rust rewrite)         |
+| `146.0.7650.0-issue-708`      | [Issue 708](../docs/issues/708-roamium-only.md)               | Roamium-only (clean fork, renamed lib)      |
 
 ## Patches
 
@@ -159,7 +160,7 @@ gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true
 Build a target:
 
 ```bash
-autoninja -C out/Default chromium_profile_server
+autoninja -C out/Default libtermsurf_chromium
 ```
 
 Build times: ~1.5 hours for a full build, 15–20 seconds incremental.
@@ -187,7 +188,7 @@ If the build directory is contaminated with Ninja state:
 cd chromium/src
 export PATH="$(cd ../depot_tools && pwd):$PATH"
 gn clean out/Default
-autoninja -C out/Default chromium_profile_server
+autoninja -C out/Default libtermsurf_chromium
 ```
 
 This cleans the directory, and `autoninja` will use Siso from that point

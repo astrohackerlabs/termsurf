@@ -845,8 +845,6 @@ fn initBrowserRegistry() void {
 
     // Dev fallback paths for known browsers.
     const browsers = [_]struct { name: []const u8, suffix: []const u8 }{
-        .{ .name = "chromium", .suffix = "/dev/termsurf/chromium/src/out/Default/Chromium Profile Server.app/Contents/MacOS/Chromium Profile Server" },
-        .{ .name = "plusium", .suffix = "/dev/termsurf/chromium/src/out/Default/plusium" },
         .{ .name = "roamium", .suffix = "/dev/termsurf/chromium/src/out/Default/roamium" },
     };
 
@@ -881,9 +879,9 @@ fn buildServerKey(profile: []const u8, browser: []const u8) ?[]u8 {
 }
 
 /// Resolve a browser specifier to an absolute path.
-/// Empty → "chromium" (default). Starts with "/" → absolute path. Otherwise → registry lookup.
+/// Empty → "roamium" (default). Starts with "/" → absolute path. Otherwise → registry lookup.
 fn resolveBrowserPath(browser: []const u8) ?[]const u8 {
-    const name = if (browser.len == 0) "chromium" else browser;
+    const name = if (browser.len == 0) "roamium" else browser;
     if (name.len > 0 and name[0] == '/') return name;
     return browser_paths.get(name);
 }
@@ -891,7 +889,7 @@ fn resolveBrowserPath(browser: []const u8) ?[]const u8 {
 // -- Server lifecycle --
 
 fn getOrCreateServer(profile: []const u8, browser: []const u8) ?*Server {
-    const effective_browser: []const u8 = if (browser.len == 0) "chromium" else browser;
+    const effective_browser: []const u8 = if (browser.len == 0) "roamium" else browser;
 
     std.debug.print("[DEBUG] getOrCreateServer: profile={s} browser={s} effective_browser={s}\n", .{ profile, browser, effective_browser });
 

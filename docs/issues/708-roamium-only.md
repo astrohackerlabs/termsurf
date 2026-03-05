@@ -425,3 +425,11 @@ This should produce exactly 2 patch files (vs. issue-707's 68).
 - `chromium/patches/issue-708/` contains exactly 2 patches
 - `chromium/README.md` lists issue-708 as current branch with
   `libtermsurf_chromium` build target
+
+### Result
+
+**Success.** Removed `chromium` and `plusium` from the browser registry, made
+`roamium` the default in three places (`initBrowserRegistry`,
+`resolveBrowserPath`, `getOrCreateServer`). Generated 2 patches for issue-708
+(down from 68). Updated README with new branch and build target. `web` works
+without `--browser` flag.
