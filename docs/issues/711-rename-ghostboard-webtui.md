@@ -35,5 +35,11 @@ names are ambiguous:
 ### What stays the same
 
 - **Protocol:** `termsurf.proto` — unchanged
-- **Socket paths:** `$TMPDIR/termsurf/gui-{pid}.sock` — unchanged
 - **Config directories:** XDG paths using `termsurf` — unchanged
+
+### Socket path change
+
+The board socket path changes from `$TMPDIR/termsurf/gui-{pid}.sock` to
+`$TMPDIR/termsurf/ghostboard-{pid}.sock`. This aligns the socket name with the
+board name and allows multiple different boards to run simultaneously without
+path collisions (e.g., `ghostboard-{pid}.sock` vs `wezboard-{pid}.sock`).
