@@ -533,3 +533,58 @@ gets a descriptive directory name.
 3. `grep -r 'website/' .prettierignore` — no stale references in root
 4. `grep -r 'website/' ghostboard/.prettierignore ghostboard/.gitattributes` —
    no stale references
+
+**Result:** Pass
+
+All verifications passed. Git detected all 33 files as renames (100% match).
+Directory renamed, package.json name updated, all config file references
+updated. No historical docs were touched.
+
+#### Conclusion
+
+The rename worked cleanly. However, the user changed their mind about the name
+`termsurf.com/` — they want `homepage/` instead. Experiment 5 will rename
+`termsurf.com/` to `homepage/`.
+
+### Experiment 5: Rename `termsurf.com/` to `homepage/`
+
+Rename the website directory from `termsurf.com/` to `homepage/`. The user
+prefers a simple, descriptive name over the domain-based name.
+
+#### Changes
+
+**1. Directory rename:**
+
+- `termsurf.com/` → `homepage/`
+
+**2. `termsurf.com/package.json`** (becomes `homepage/package.json`):
+
+- `"name": "termsurf.com"` → `"name": "termsurf-homepage"`
+
+**3. `.prettierignore`** (root):
+
+- `termsurf.com/.next` → `homepage/.next`
+
+**4. `ghostboard/.prettierignore`:**
+
+- `termsurf.com/.next` → `homepage/.next`
+
+**5. `ghostboard/.gitattributes`:**
+
+- `termsurf.com/** linguist-documentation` →
+  `homepage/** linguist-documentation`
+
+**6. Not changed:**
+
+- `docs/issues/003-website.md` — historical, immutable
+- `ghostboard/src/apprt/gtk/class/window.zig` — GTK action name, not a directory
+  reference
+- `CLAUDE.md` — historical references describe past issues, not directory paths
+
+#### Verification
+
+1. `ls homepage/package.json` — directory exists
+2. `cd homepage && bun install && bun run build` — builds successfully
+3. `grep -r 'termsurf\.com/' .prettierignore` — no stale references in root
+4. `grep -r 'termsurf\.com/' ghostboard/.prettierignore ghostboard/.gitattributes`
+   — no stale references
