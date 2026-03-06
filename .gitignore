@@ -102,6 +102,11 @@ ts4/termsurf-xpc/target/
 ts4/two-profiles-receiver/receiver
 ts4/two-profiles-receiver/shaders.metallib
 
+# Vendor repos (engine research)
+vendor/firefox/
+vendor/webkit/
+vendor/ladybird/
+
 # TUI build outputs
 tui/target/
 

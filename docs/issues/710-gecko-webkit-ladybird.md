@@ -180,3 +180,125 @@ ls vendor/ladybird/Libraries/LibWeb/  # Ladybird's web engine
 - `vendor/ladybird/` exists with Ladybird source (look for `Libraries/LibWeb/`,
   `Libraries/LibJS/`)
 - All three are gitignored from the main repo
+
+### Result
+
+**Success.** All three repos cloned into `vendor/`:
+
+| Engine   | Size on disk | Files   | Clone type |
+| -------- | ------------ | ------- | ---------- |
+| Firefox  | 9.1 GB       | 402,481 | Full       |
+| WebKit   | 7.4 GB       | 457,677 | Shallow    |
+| Ladybird | 495 MB       | 20,808  | Full       |
+
+WebKit required a shallow clone (`--depth=1`) — the full clone (~12 GB pack
+file) failed twice with pack file corruption during transfer. Firefox also
+failed once but succeeded on retry. Ladybird cloned instantly at 418 MB.
+
+Key directories verified:
+
+- `vendor/firefox/layout/` — Gecko layout engine
+- `vendor/webkit/Source/WebKit/` — WebKit framework
+- `vendor/ladybird/Libraries/LibWeb/` — Ladybird web engine
+
+## Experiment 2: WebKit architecture audit
+
+### Goal
+
+Answer the 10 research questions for WebKit. Map each question to specific
+source locations in `vendor/webkit/`. Determine what it would take to build
+`libtermsurf_webkit` — a C shared library wrapping WebKit's embedding API,
+following the same pattern as `libtermsurf_chromium`.
+
+### Research plan
+
+Answer these questions by reading source code in `vendor/webkit/`:
+
+**Q1. Embedding API** — WebKit has two embedding APIs on macOS:
+
+- **WKWebView** (modern, `Source/WebKit/`) — The public macOS/iOS API. Runs the
+  web engine in a separate process (`WebContent` process). Apple's Safari uses
+  this.
+- **WebKitLegacy** (`Source/WebKitLegacy/`) — The old in-process API
+  (`WebView`). Deprecated but still in the tree.
+
+Research: Can we use WKWebView programmatically from C/C++? Or do we need to go
+below the public API and use the internal `WebPage`/`WebPageProxy` layer
+directly? Look at `Source/WebKit/UIProcess/` (the "UI process" side that hosts
+the web view) and `Source/WebKit/WebProcess/` (the renderer).
+
+Also examine `MiniBrowser` (`Tools/MiniBrowser/`) — WebKit's test browser app.
+This is the equivalent of Chromium's Content Shell and will show the minimal
+embedding surface.
+
+**Q2. Headless/hidden rendering** — Look for headless or offscreen rendering
+modes. Check `WebKitTestRunner` (`Tools/WebKitTestRunner/`) and `MiniBrowser`
+for headless flags. Can we create a `WKWebView` without showing a window?
+
+**Q3. CAContext / GPU surface** — This is the critical question. WebKit's
+multi-process architecture means the `WebContent` process does the rendering.
+Look for:
+
+- `CAContext` or `CARemoteLayerServer` in `Source/WebKit/WebProcess/`
+- `CALayerHost` or `CARemoteLayerClient` in `Source/WebKit/UIProcess/`
+- The `RemoteLayerTree` infrastructure — WebKit already uses remote layer trees
+  for cross-process compositing between `UIProcess` and `WebContent` process.
+
+If WebKit already uses `CAContext` / `CALayerHost` internally, we may be able to
+intercept or reuse those layer IDs.
+
+**Q4. Input injection** — How does WKWebView handle input? Look for:
+
+- `simulateMouseDown` / `simulateKeyDown` in test infrastructure
+- `WebPageProxy::handleMouseEvent()` / `handleKeyboardEvent()` in UIProcess
+- `NativeWebMouseEvent` / `NativeWebKeyboardEvent` construction
+
+**Q5. Callback hooks** — WKWebView has delegate protocols:
+
+- `WKNavigationDelegate` — URL changes, loading state
+- `WKUIDelegate` — UI events, alerts, context menus
+- Look for C++ equivalents: `WebPageProxy::Observer`, `PageLoadState`,
+  `WebFrameProxy`
+
+**Q6. DevTools** — WebKit uses Web Inspector (not Chrome DevTools). Look for:
+
+- `WebInspector` / `WebInspectorProxy` in `Source/WebKit/UIProcess/`
+- `Source/WebInspectorUI/` — the inspector frontend
+- Remote inspection protocol (`_WKRemoteWebInspectorViewController`)
+
+**Q7. Build system** — WebKit uses CMake. Look at:
+
+- `Source/CMakeLists.txt` — top-level build
+- `Source/WebKit/CMakeLists.txt` — WebKit framework target
+- `Source/PlatformMac.cmake` — macOS-specific build
+
+Can we add a `libtermsurf_webkit` shared library target alongside the existing
+WebKit framework?
+
+**Q8. Multi-profile** — Look for `WKWebsiteDataStore` (the WebKit equivalent of
+Chromium's `BrowserContext`). Can we create multiple data stores in one process?
+
+**Q9. Fork size** — Based on the other answers, estimate how many files we'd
+need to modify. The ideal is a small library inside the tree with minimal
+patches to stock files.
+
+**Q10. Cross-platform** — WebKit builds on macOS (native), Linux (WebKitGTK,
+WPE), and iOS. Check which compositing path each platform uses.
+
+### Key source directories to examine
+
+- `Source/WebKit/UIProcess/` — UI process (embedding host)
+- `Source/WebKit/WebProcess/` — Web content process (renderer)
+- `Source/WebKit/Shared/` — Shared types between processes
+- `Source/WebKit/UIProcess/RemoteLayerTree/` — Remote layer compositing
+- `Source/WebKit/WebProcess/WebPage/` — WebPage (renderer side)
+- `Source/WebCore/` — Core engine (DOM, layout, rendering)
+- `Source/WebInspectorUI/` — Web Inspector frontend
+- `Tools/MiniBrowser/` — Test browser app
+- `Tools/WebKitTestRunner/` — Test runner (headless patterns)
+
+### Success criteria
+
+All 10 research questions answered with specific file paths and code references.
+A clear assessment of whether `libtermsurf_webkit` is feasible, and if so, what
+the C library surface area would look like.
