@@ -481,3 +481,54 @@ this when `GENERATE_INFOPLIST_FILE = YES`.
 Combined with Experiment 2's directory rename, socket path, XDG paths, and UI
 string changes, the full rename from `gui/` → `ghostboard/` and "TermSurf" →
 "TermSurf Ghostboard" is now complete.
+
+### Experiment 4: Rename `website/` to `termsurf.com/`
+
+Rename the website directory from `website/` to `termsurf.com/`. The directory
+name matches the domain it serves, making the relationship immediately clear.
+This follows the same pattern as `ghostboard/` and `webtui/` — each component
+gets a descriptive directory name.
+
+#### Changes
+
+**1. Directory rename:**
+
+- `website/` → `termsurf.com/`
+
+**2. `website/package.json`** (becomes `termsurf.com/package.json`):
+
+- `"name": "termsurf-website"` → `"name": "termsurf.com"`
+
+**3. `.prettierignore`** (root):
+
+- `website/.next` → `termsurf.com/.next`
+
+**4. `ghostboard/.prettierignore`:**
+
+- `website/.next` → `termsurf.com/.next`
+
+**5. `ghostboard/.gitattributes`:**
+
+- `website/** linguist-documentation` → `termsurf.com/** linguist-documentation`
+
+**6. `docs/issues/003-website.md`:**
+
+- Update directory references from `website/` to `termsurf.com/` in the
+  Directory Structure section and any other path references
+
+**7. Not changed:**
+
+- `ghostboard/src/apprt/gtk/class/window.zig` — the `"website"` string there is
+  a GTK action name for opening the project website URL, not a directory
+  reference
+- `CLAUDE.md` line 227 — historical reference ("website deps and linting")
+  describes what Issue 677–678 did, not a directory path
+- `CLAUDE.md` line 316 — already says "termsurf.com website", not `website/`
+
+#### Verification
+
+1. `ls termsurf.com/package.json` — directory exists
+2. `cd termsurf.com && bun install && bun run build` — builds successfully
+3. `grep -r 'website/' .prettierignore` — no stale references in root
+4. `grep -r 'website/' ghostboard/.prettierignore ghostboard/.gitattributes` —
+   no stale references
