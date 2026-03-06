@@ -108,5 +108,5 @@ vendor/webkit/
 vendor/ladybird/
 
 # TUI build outputs
-tui/target/
+webtui/target/
 

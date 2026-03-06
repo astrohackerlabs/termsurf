@@ -2045,7 +2045,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "web"
+name = "webtui"
 version = "0.1.0"
 dependencies = [
  "arboard",

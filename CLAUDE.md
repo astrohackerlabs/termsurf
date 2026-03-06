@@ -171,7 +171,7 @@ This keeps every issue's Chromium changes isolated and traceable.
 ## Directory Structure
 
 - `gui/` — The GUI (Ghostty fork, Zig-first). **Active development.**
-- `tui/` — The `web` TUI (Rust/ratatui). Browser chrome in the terminal pane.
+- `webtui/` — The `web` TUI (Rust/ratatui). Browser chrome in the terminal pane.
 - `chromium/` — Chromium fork build workspace (gitignored).
 - `docs/issues/` — Documentation across all generations.
 - `docs/early-prototypes.md` — Archived prototype documentation (ts1–ts5,

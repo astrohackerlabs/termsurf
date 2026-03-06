@@ -61,7 +61,7 @@ if [ -x "$CHROMIUM_PROTOC" ]; then
   export PROTOC="$CHROMIUM_PROTOC"
 fi
 
-cd "$REPO_DIR/tui"
+cd "$REPO_DIR/webtui"
 
 if $CLEAN; then
   echo "==> Cleaning TUI build..."
@@ -87,7 +87,7 @@ cp "$REPO_DIR/roamium/target/debug/roamium" "$CHROMIUM_OUT/roamium"
 echo ""
 echo "Done."
 echo "  GUI:     $APP"
-echo "  TUI:     $REPO_DIR/tui/target/debug/web"
+echo "  TUI:     $REPO_DIR/webtui/target/debug/web"
 echo "  Roamium: $CHROMIUM_OUT/roamium"
 
 if $OPEN; then

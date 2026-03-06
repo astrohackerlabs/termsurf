@@ -190,3 +190,16 @@ value.
 3. `grep -r 'tui/' .gitignore` — no stale `tui/` references
 4. `grep 'tui/' CLAUDE.md` — no stale `tui/` references (except historical
    mentions like "directory rename from ghost/web to gui/tui")
+
+**Result:** Pass
+
+All four checks passed. `cargo build` compiled cleanly with the new package name
+`webtui`. The binary is still `web`. No stale `tui/` references remain in
+`.gitignore` or `CLAUDE.md`.
+
+#### Conclusion
+
+Directory renamed, package renamed, build scripts updated. The TUI now lives at
+`webtui/` with package name `webtui` while the user-facing binary stays `web`.
+No code changes were needed in the GUI or TUI source — only paths and the Cargo
+package name.

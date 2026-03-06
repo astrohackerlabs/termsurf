@@ -6,7 +6,7 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 APP="/Applications/TermSurf.app"
 SRC="$REPO_DIR/gui/macos/build/ReleaseLocal/TermSurf.app"
 CHROMIUM="$REPO_DIR/chromium/src/out/Default"
-WEB="$REPO_DIR/tui/target/release/web"
+WEB="$REPO_DIR/webtui/target/release/web"
 
 # Verify release build exists.
 if [ ! -d "$SRC" ]; then
