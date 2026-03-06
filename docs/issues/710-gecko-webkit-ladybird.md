@@ -1559,3 +1559,97 @@ long-term investment. The embedding API is a near-perfect match for TermSurf's
 `libtermsurf_*` pattern. However, for production use today, Chromium (Roamium)
 remains necessary due to web compatibility. WebKit is the best middle ground —
 production-grade compatibility with minimal embedding effort.
+
+## Conclusion
+
+We audited three browser engines — WebKit, Gecko, and Ladybird — to determine
+what it would take to build Roamium equivalents (C shared library + Rust binary)
+for each. The audits examined embedding APIs, GPU compositing, input injection,
+callbacks, DevTools, build systems, multi-profile support, fork size, and
+cross-platform portability. Here's what we learned.
+
+### The libtermsurf\_\* pattern works for all four engines
+
+Every engine can be wrapped in a C shared library exporting `ts_*` functions,
+linked by a Rust binary that speaks the TermSurf protocol over Unix sockets.
+The pattern proven by Roamium (Issue 707) and libtermsurf_chromium (Issue 708)
+generalizes cleanly. The Rust binary (~400 lines) is almost entirely reusable
+across engines — only the C library differs.
+
+### Engine ranking by embedding effort
+
+1. **Ladybird** (~300-500 line C lib, 0-3 stock patches) — Modern C++ API with
+   `ViewImplementation` base class, `Function<>` callbacks, direct
+   `enqueue_input_event()`. IOSurface already exposed via `paintable()`. CMake
+   build with one-line library target. The cleanest integration by far.
+
+2. **WebKit** (~500 line C lib, potentially zero patches) — WKWebView is an
+   NSView. Position it as a subview and macOS handles compositing natively. KVO
+   for callbacks, `_inspector` for DevTools, `WKWebsiteDataStore` for profiles.
+   Can link system WebKit.framework with no fork at all.
+
+3. **Chromium** (~2,000 line C lib, 8 patches across 24 files) — Content API
+   works but requires forking for CAContext extraction, DevTools access, and
+   hidden window support. GN/Ninja build. Already done (Roamium).
+
+4. **Gecko** (~1,000-1,500 line C lib, 5-20 patches) — No official desktop
+   embedding API. Must bootstrap XPCOM, use `nsIWindowlessBrowser`, implement
+   `nsIWebProgressListener`. IOSurface mach ports instead of CAContext. The
+   riskiest option due to Mozilla dropping embedding support years ago.
+
+### GPU compositing varies by engine
+
+Each engine takes a different approach to cross-process compositing on macOS:
+
+- **Chromium:** CAContext + CALayerHost (Window Server routes layer IDs)
+- **WebKit:** RemoteLayerTree serialization (reconstructs CALayers in UI
+  process). WKWebView contains the final layer tree as a native NSView.
+- **Gecko:** IOSurface mach ports (sends GPU buffer handles, parent composites
+  into NativeLayerCA). No CAContext IDs exchanged.
+- **Ladybird:** IOSurface + Metal (Skia renders into IOSurface, Metal blits to
+  CAMetalLayer). IOSurfaceRef exposed via `paintable()`.
+
+For WebKit and Ladybird, the **NSView overlay approach** avoids all compositor
+complexity — just position the engine's view as a subview at the overlay's
+pixel coordinates. For Chromium, we already use CAContext/CALayerHost. For
+Gecko, the NSView overlay approach is also the recommended path.
+
+### Multi-profile is consistent
+
+Chromium, Gecko, and Ladybird all support one profile per process. WebKit is
+the exception — `WKWebsiteDataStore` allows multiple isolated data stores in a
+single process. TermSurf's architecture (one browser process per profile) was
+designed around this constraint and works with all four engines.
+
+### Web compatibility is the real differentiator
+
+The technical embedding effort matters less than whether the engine actually
+renders the web correctly:
+
+- **Chromium** and **Gecko** — Production-grade. Decades of web compatibility
+  work. Pass virtually all Web Platform Tests.
+- **WebKit** — Production-grade. Powers Safari. Excellent standards compliance,
+  though some sites target Chrome specifically.
+- **Ladybird** — Early stage. Active development, but many sites will render
+  incorrectly or not work. Not yet suitable for daily use.
+
+### What this means for TermSurf
+
+**Roamium (Chromium) remains the production browser.** It works today, renders
+everything, and is already shipping.
+
+**WebKit (Rebkit) is the highest-value next engine.** Production-grade web
+compatibility with the smallest embedding effort. Potentially zero fork
+modifications. The WKWebView-as-overlay approach eliminates GPU compositing
+complexity entirely. On macOS, it could link system WebKit.framework — no
+engine build required.
+
+**Ladybird is the long-term bet.** The cleanest API, smallest codebase, and
+most natural fit for TermSurf's architecture. As Ladybird matures toward web
+compatibility, it becomes increasingly attractive. Worth tracking and
+contributing to.
+
+**Gecko (Recko) is the hardest path for the least gain.** No official embedding
+API, XPCOM complexity, and high maintenance risk. Firefox users who want a
+terminal browser can use Roamium (Chromium renders everything Firefox does).
+Not recommended unless there's a specific need for Gecko's rendering.
