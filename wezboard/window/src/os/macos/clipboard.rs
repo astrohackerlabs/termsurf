@@ -1,37 +1,41 @@
-use crate::macos::{nsstring, nsstring_to_str};
-use cocoa::appkit::{NSFilenamesPboardType, NSPasteboard, NSStringPboardType};
-use cocoa::base::*;
-use cocoa::foundation::NSArray;
+#[allow(deprecated)]
+use objc2_app_kit::{NSFilenamesPboardType, NSPasteboardTypeString, NSStringPboardType};
+
+use crate::macos::nsstring_to_str;
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2_app_kit::NSPasteboard;
+use objc2_foundation::NSString;
 
 pub struct Clipboard {
-    pasteboard: id,
+    pasteboard: Retained<NSPasteboard>,
 }
 
 impl Clipboard {
     pub fn new() -> Self {
-        let pasteboard = unsafe { NSPasteboard::generalPasteboard(nil) };
-        if pasteboard.is_null() {
-            panic!("NSPasteboard::generalPasteboard returned null");
-        }
+        let pasteboard = NSPasteboard::generalPasteboard();
         Clipboard { pasteboard }
     }
 
     pub fn read(&self) -> anyhow::Result<String> {
         unsafe {
+            #[allow(deprecated)]
             let plist = self.pasteboard.propertyListForType(NSFilenamesPboardType);
-            if !plist.is_null() {
+            if let Some(plist) = plist {
                 let mut filenames = vec![];
-                for i in 0..plist.count() {
+                let count: isize = objc2::msg_send![&*plist, count];
+                for i in 0..count {
+                    let obj: *mut AnyObject = objc2::msg_send![&*plist, objectAtIndex: i];
                     filenames.push(
-                        shlex::try_quote(nsstring_to_str(plist.objectAtIndex(i)))
-                            .unwrap_or_else(|_| "".into()),
+                        shlex::try_quote(nsstring_to_str(obj.cast())).unwrap_or_else(|_| "".into()),
                     );
                 }
                 return Ok(filenames.join(" "));
             }
+            #[allow(deprecated)]
             let s = self.pasteboard.stringForType(NSStringPboardType);
-            if !s.is_null() {
-                let str = nsstring_to_str(s);
+            if let Some(s) = s {
+                let str = nsstring_to_str((&*s as *const NSString).cast_mut().cast());
                 return Ok(str.to_string());
             }
         }
@@ -41,10 +45,11 @@ impl Clipboard {
     pub fn write(&mut self, data: String) -> anyhow::Result<()> {
         unsafe {
             self.pasteboard.clearContents();
-            let success: BOOL = self
+            let ns_str = NSString::from_str(&data);
+            let success = self
                 .pasteboard
-                .writeObjects(NSArray::arrayWithObject(nil, *nsstring(&data)));
-            anyhow::ensure!(success == YES, "pasteboard write returned false");
+                .setString_forType(&ns_str, NSPasteboardTypeString);
+            anyhow::ensure!(success, "pasteboard write returned false");
             Ok(())
         }
     }

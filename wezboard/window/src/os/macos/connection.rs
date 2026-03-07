@@ -3,11 +3,11 @@
 
 use super::nsstring_to_str;
 use super::window::WindowInner;
+use crate::Appearance;
 use crate::connection::ConnectionOps;
 use crate::os::macos::app::create_app_delegate;
 use crate::screen::{ScreenInfo, Screens};
 use crate::spawn::*;
-use crate::Appearance;
 use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSScreen};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSArray, NSInteger};
@@ -36,7 +36,7 @@ impl Connection {
             ns_app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
 
             let delegate = create_app_delegate();
-            let () = objc2::msg_send![ns_app as *const AnyObject, setDelegate: *delegate as *mut AnyObject];
+            let () = objc2::msg_send![ns_app as *const AnyObject, setDelegate: &*delegate];
 
             let conn = Self {
                 ns_app,
