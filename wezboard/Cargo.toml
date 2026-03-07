@@ -63,7 +63,6 @@ clap = {version="4.0", features=["derive"]}
 clap_complete = "4.4"
 clap_complete_fig = "4.0"
 clipboard-win = "2.2"
-cocoa = "=0.25.0"
 codec = { path = "codec" }
 color-funcs = { path = "lua-api-crates/color-funcs" }
 colorgrad = "0.6"
@@ -151,7 +150,6 @@ nucleo-matcher = "0.3"
 num = "0.4"
 num-derive = "0.4"
 num-traits = {version="0.2", default-features=false }
-objc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
   "NSApplication", "NSEvent", "NSGraphics", "NSMenu", "NSMenuItem",

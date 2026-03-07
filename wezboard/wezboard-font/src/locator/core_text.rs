@@ -2,7 +2,8 @@
 
 use crate::locator::{FontDataSource, FontLocator, FontOrigin};
 use crate::parser::ParsedFont;
-use cocoa::base::id;
+#[allow(non_camel_case_types)]
+type id = *mut objc2::runtime::AnyObject;
 use config::{FontAttributes, FontStretch, FontStyle, FontWeight};
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFRange, TCFType};

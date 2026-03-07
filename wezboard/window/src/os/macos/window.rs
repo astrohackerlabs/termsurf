@@ -13,7 +13,7 @@ use crate::{
     RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
     WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
-use anyhow::{anyhow, bail, ensure};
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 // Function key constants (from NSEvent.h)
 const NS_UP_ARROW_FUNCTION_KEY: u16 = 0xF700;
@@ -38,16 +38,6 @@ use objc2_app_kit::{
     NSApplicationPresentationOptions, NSAutoresizingMaskOptions,
     NSBackingStoreType, NSEventModifierFlags, NSWindowStyleMask,
 };
-use cocoa::base::*;
-use cocoa::foundation::{
-    NSFastEnumeration, NSPoint, NSRect, NSSize,
-    NSString,
-};
-
-fn cg_to_ns_rect(r: CGRect) -> NSRect {
-    NSRect::new(NSPoint::new(r.origin.x, r.origin.y), NSSize::new(r.size.width, r.size.height))
-}
-
 use config::window::WindowLevel;
 use config::{ConfigHandle, RgbaColor, SrgbaTuple};
 use core_foundation::base::{CFTypeID, TCFType};
@@ -55,10 +45,11 @@ use core_foundation::bundle::{CFBundleGetBundleWithIdentifier, CFBundleGetFuncti
 use core_foundation::data::{CFData, CFDataGetBytePtr, CFDataRef};
 use core_foundation::string::{CFString, CFStringRef, UniChar};
 use core_foundation::{declare_TCFType, impl_TCFType};
-use objc::rc::{StrongPtr, WeakPtr};
-use objc::runtime::{Object, BOOL, NO, YES};
-use objc2::rc::Retained;
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
+
+#[allow(non_camel_case_types)]
+type id = *mut AnyObject;
 use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGContext;
 use objc2_foundation::NSRange;
@@ -232,8 +223,8 @@ mod cglbits {
     use super::*;
 
     pub struct GlState {
-        _pixel_format: StrongPtr,
-        gl_context: StrongPtr,
+        _pixel_format: Retained<AnyObject>,
+        gl_context: Retained<AnyObject>,
     }
 
     impl GlState {
@@ -265,13 +256,10 @@ mod cglbits {
                     let __r: *mut AnyObject = objc2::msg_send![pf as *const _ as *const AnyObject, initWithAttributes: attrs.as_ptr()];
                     __r as id
                 };
-                StrongPtr::new(pf)
+                Retained::from_raw(pf)
             };
             log::trace!("NSOpenGLPixelFormat::initWithAttributes returned");
-            ensure!(
-                !pixel_format.is_null(),
-                "failed to create NSOpenGLPixelFormat"
-            );
+            let pixel_format = pixel_format.ok_or_else(|| anyhow!("failed to create NSOpenGLPixelFormat"))?;
 
             // Allow using retina resolutions; without this we're forced into low res
             // and the system will scale us up, resulting in blurry rendering
@@ -280,29 +268,29 @@ mod cglbits {
             }
 
             let gl_context = unsafe {
-                StrongPtr::new(
+                Retained::from_raw(
                     {
                         let ctx: id = {
                             let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSOpenGLContext), alloc];
                             __r as id
                         };
-                        let __r: *mut AnyObject = objc2::msg_send![ctx as *const _ as *const AnyObject, initWithFormat: *pixel_format as *const _ as *mut AnyObject, shareContext: std::ptr::null::<AnyObject>()];
-                        __r as id
+                        let __r: *mut AnyObject = objc2::msg_send![ctx as *const _ as *const AnyObject, initWithFormat: Retained::as_ptr(&pixel_format) as *const _ as *mut AnyObject, shareContext: std::ptr::null::<AnyObject>()];
+                        __r
                     },
                 )
             };
-            ensure!(!gl_context.is_null(), "failed to create NSOpenGLContext");
+            let gl_context = gl_context.ok_or_else(|| anyhow!("failed to create NSOpenGLContext"))?;
 
             unsafe {
                 let opaque: cgl::GLint = 0;
-                let _: () = objc2::msg_send![*gl_context as *const _ as *const AnyObject, setValues: &opaque as *const cgl::GLint, forParameter: 236isize /* NSOpenGLCPSurfaceOpacity */];
+                let _: () = objc2::msg_send![Retained::as_ptr(&gl_context) as *const AnyObject, setValues: &opaque as *const cgl::GLint, forParameter: 236isize /* NSOpenGLCPSurfaceOpacity */];
 
-                let _: () = objc2::msg_send![*gl_context as *const _ as *const AnyObject, setView: view as *const _ as *const AnyObject];
+                let _: () = objc2::msg_send![Retained::as_ptr(&gl_context) as *const AnyObject, setView: view as *const _ as *const AnyObject];
 
                 // Explicitly disable vsync; we'll manage throttling frames at
                 // the application level
                 let swap_interval: cgl::GLint = 0;
-                let _: () = objc2::msg_send![*gl_context as *const _ as *const AnyObject, setValues: &swap_interval as *const cgl::GLint, forParameter: 222isize /* NSOpenGLCPSwapInterval */];
+                let _: () = objc2::msg_send![Retained::as_ptr(&gl_context) as *const AnyObject, setValues: &swap_interval as *const cgl::GLint, forParameter: 222isize /* NSOpenGLCPSwapInterval */];
             }
 
             Ok(Self {
@@ -315,7 +303,7 @@ mod cglbits {
         pub fn update(&self) {
             unsafe {
                 let _: () = objc2::msg_send![
-                    *self.gl_context as *const _ as *const _ as *const AnyObject,
+                    Retained::as_ptr(&self.gl_context) as *const _ as *const _ as *const AnyObject,
                     update
                 ];
             }
@@ -333,7 +321,7 @@ mod cglbits {
                     let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSAutoreleasePool), new];
                     __r as id
                 };
-                let _: () = objc2::msg_send![*self.gl_context as *const _ as *const AnyObject, flushBuffer];
+                let _: () = objc2::msg_send![Retained::as_ptr(&self.gl_context) as *const _ as *const AnyObject, flushBuffer];
                 let _: () = objc2::msg_send![pool as *const _ as *const AnyObject, release];
             }
             Ok(())
@@ -351,13 +339,13 @@ mod cglbits {
         fn get_framebuffer_dimensions(&self) -> (u32, u32) {
             unsafe {
                 let view: id = {
-                    let __r: *mut AnyObject = objc2::msg_send![*self.gl_context as *const _ as *const AnyObject, view];
+                    let __r: *mut AnyObject = objc2::msg_send![Retained::as_ptr(&self.gl_context) as *const _ as *const AnyObject, view];
                     __r as id
                 };
                 let frame: CGRect = objc2::msg_send![view as *const _ as *const AnyObject, frame];
                 let frame_cg = CGRect::new(CGPoint::new(frame.origin.x, frame.origin.y), CGSize::new(frame.size.width, frame.size.height));
                 let backing_cg: CGRect = objc2::msg_send![view as *const _ as *const AnyObject, convertRectToBacking: frame_cg];
-                let backing_frame = NSRect::new(NSPoint::new(backing_cg.origin.x, backing_cg.origin.y), NSSize::new(backing_cg.size.width, backing_cg.size.height));
+                let backing_frame = CGRect::new(CGPoint::new(backing_cg.origin.x, backing_cg.origin.y), CGSize::new(backing_cg.size.width, backing_cg.size.height));
                 (
                     backing_frame.size.width as u32,
                     backing_frame.size.height as u32,
@@ -375,16 +363,9 @@ mod cglbits {
                     let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSOpenGLContext), currentContext];
                     __r as id
                 };
-                let res = if current != nil {
-                    let is_equal: BOOL = {
-                        let __r: bool = objc2::msg_send![current as *const _ as *const AnyObject, isEqual: *self.gl_context as *const _ as *mut AnyObject];
-                        if __r {
-                            YES
-                        } else {
-                            NO
-                        }
-                    };
-                    is_equal != NO
+                let res = if !current.is_null() {
+                    let is_equal: bool = objc2::msg_send![current as *const _ as *const AnyObject, isEqual: Retained::as_ptr(&self.gl_context) as *const _ as *mut AnyObject];
+                    is_equal
                 } else {
                     false
                 };
@@ -395,17 +376,17 @@ mod cglbits {
 
         unsafe fn make_current(&self) {
             let _: () = objc2::msg_send![
-                *self.gl_context as *const _ as *const _ as *const AnyObject,
+                Retained::as_ptr(&self.gl_context) as *const _ as *const _ as *const AnyObject,
                 update
             ];
-            let _: () = objc2::msg_send![*self.gl_context as *const _ as *const AnyObject, makeCurrentContext];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.gl_context) as *const _ as *const AnyObject, makeCurrentContext];
         }
     }
 }
 
 pub(crate) struct WindowInner {
-    view: StrongPtr,
-    window: StrongPtr,
+    view: Retained<AnyObject>,
+    window: Retained<AnyObject>,
     config: ConfigHandle,
 }
 
@@ -440,23 +421,23 @@ fn function_key_to_keycode(function_key: char) -> KeyCode {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Window {
     id: usize,
-    ns_window: *mut Object,
-    ns_view: *mut Object,
+    ns_window: *mut AnyObject,
+    ns_view: *mut AnyObject,
 }
 
 unsafe impl Send for Window {}
 unsafe impl Sync for Window {}
 
-fn set_window_position(window: *mut Object, coords: ScreenPoint) {
+fn set_window_position(window: *mut AnyObject, coords: ScreenPoint) {
     unsafe {
         let cartesian = screen_point_to_cartesian(coords);
         let frame: CGRect = objc2::msg_send![window as *const _ as *const AnyObject, frame];
         let frame_cg = CGRect::new(CGPoint::new(frame.origin.x, frame.origin.y), CGSize::new(frame.size.width, frame.size.height));
         let content_cg: CGRect = objc2::msg_send![window as *const _ as *const AnyObject, contentRectForFrameRect: frame_cg];
-        let content_frame = NSRect::new(NSPoint::new(content_cg.origin.x, content_cg.origin.y), NSSize::new(content_cg.size.width, content_cg.size.height));
+        let content_frame = CGRect::new(CGPoint::new(content_cg.origin.x, content_cg.origin.y), CGSize::new(content_cg.size.width, content_cg.size.height));
         let delta_x = content_frame.origin.x - frame.origin.x;
         let delta_y = content_frame.origin.y - frame.origin.y;
-        let point = NSPoint::new(
+        let point = CGPoint::new(
             cartesian.x as f64 - delta_x,
             cartesian.y as f64 - delta_y - content_frame.size.height,
         );
@@ -506,9 +487,9 @@ impl Window {
                 config.window_decorations,
                 config.integrated_title_button_style,
             );
-            let rect = NSRect::new(
-                NSPoint::new(0., 0.),
-                NSSize::new(width as f64, height as f64),
+            let rect = CGRect::new(
+                CGPoint::new(0., 0.),
+                CGSize::new(width as f64, height as f64),
             );
 
             let conn = Connection::get().expect("Connection::init has not been called");
@@ -553,9 +534,9 @@ impl Window {
                 initWithContentRect: cg_rect,
                 styleMask: style_mask,
                 backing: NSBackingStoreType::Buffered,
-                defer: NO
+                defer: false
             ];
-            let window = StrongPtr::new(window as id);
+            let window = Retained::from_raw(window).unwrap();
 
             apply_decorations_to_window(
                 &window,
@@ -564,15 +545,15 @@ impl Window {
             );
 
             // Prevent Cocoa native tabs from being used
-            let _: () = objc2::msg_send![*window as *const _ as *const _ as *const AnyObject, setTabbingMode: 2_isize /* NSWindowTabbingModeDisallowed */];
-            let _: () = objc2::msg_send![*window as *const _ as *const _ as *const AnyObject, setRestorable: false];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setTabbingMode: 2_isize /* NSWindowTabbingModeDisallowed */];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setRestorable: false];
 
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setReleasedWhenClosed: NO];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setReleasedWhenClosed: false];
             let clear_color: id = {
                 let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSColor), clearColor];
                 __r as id
             };
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setBackgroundColor: clear_color as *const _ as *const AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setBackgroundColor: clear_color as *const _ as *const AnyObject];
 
             // Tell Cocoa that we output in sRGB, so it handles color space
             // conversion for non-sRGB displays.
@@ -580,7 +561,7 @@ impl Window {
                 let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSColorSpace), sRGBColorSpace];
                 __r as id
             };
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setColorSpace: srgb_color_space as *const _ as *const AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setColorSpace: srgb_color_space as *const _ as *const AnyObject];
 
             // We could set this, but it makes the entire window, including
             // its titlebar, opaque to this fixed degree.
@@ -594,17 +575,17 @@ impl Window {
             // better than creating them all centered which is what we used
             // to do here.
             thread_local! {
-                static LAST_POSITION: RefCell<Option<NSPoint>> = RefCell::new(None);
+                static LAST_POSITION: RefCell<Option<CGPoint>> = RefCell::new(None);
             }
 
-            let frame: CGRect = objc2::msg_send![*window as *const _ as *const AnyObject, frame];
+            let frame: CGRect = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, frame];
             let active_screen: id = {
                 let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSScreen), mainScreen];
                 __r as id
             };
             let active_screen_frame: CGRect = objc2::msg_send![active_screen as *const _ as *const AnyObject, frame];
 
-            fn point_in_rect(pt: NSPoint, rect: CGRect) -> bool {
+            fn point_in_rect(pt: CGPoint, rect: CGRect) -> bool {
                 let rect: euclid::Rect<f64, ()> = euclid::rect(
                     rect.origin.x,
                     rect.origin.y,
@@ -618,7 +599,7 @@ impl Window {
                 if let Some(pos) = initial_pos {
                     // Put it where they asked it to be, without influencing
                     // future positioning info
-                    set_window_position(*window, pos);
+                    set_window_position(Retained::as_ptr(&window) as *mut AnyObject, pos);
                     return;
                 }
                 let pos = last_pos.borrow_mut().take();
@@ -627,53 +608,53 @@ impl Window {
                         // Only continue the cascade if the prior point is
                         // still within the currently active screen
                         let pos_cg = CGPoint::new(pos.x, pos.y);
-                        let np: CGPoint = objc2::msg_send![*window as *const _ as *const AnyObject, cascadeTopLeftFromPoint: pos_cg];
-                        NSPoint::new(np.x, np.y)
+                        let np: CGPoint = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, cascadeTopLeftFromPoint: pos_cg];
+                        CGPoint::new(np.x, np.y)
                     }
                     _ => {
                         // Otherwise, position as if it is the first time
                         // we're displaying on this screen
-                        let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, center];
-                        let np: CGPoint = objc2::msg_send![*window as *const _ as *const AnyObject, cascadeTopLeftFromPoint: frame.origin];
-                        NSPoint::new(np.x, np.y)
+                        let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, center];
+                        let np: CGPoint = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, cascadeTopLeftFromPoint: frame.origin];
+                        CGPoint::new(np.x, np.y)
                     }
                 };
                 last_pos.borrow_mut().replace(next_pos);
             });
 
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setTitle: Retained::as_ptr(&nsstring(&name)) as *const _ as *mut AnyObject];
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setAcceptsMouseMovedEvents: YES];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setTitle: Retained::as_ptr(&nsstring(&name)) as *const _ as *mut AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setAcceptsMouseMovedEvents: true];
 
             let view = WindowView::init_with_frame(&inner, rect)?;
             let _: () = objc2::msg_send![
-                *view as *const _ as *const AnyObject,
+                Retained::as_ptr(&view) as *const AnyObject,
                 setAutoresizingMask: NSAutoresizingMaskOptions::ViewHeightSizable
                     | NSAutoresizingMaskOptions::ViewWidthSizable
             ];
 
             let () = objc2::msg_send![
-                *view as *const _ as *const _ as *const AnyObject,
+                Retained::as_ptr(&view) as *const AnyObject,
                 setLayerContentsPlacement: NSViewLayerContentsPlacementTopLeft
             ];
 
-            let wn: isize = objc2::msg_send![*window as *const _ as *const AnyObject, windowNumber];
+            let wn: isize = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, windowNumber];
             CGSSetWindowBackgroundBlurRadius(
                 CGSMainConnectionID(),
                 wn,
                 config.macos_window_background_blur,
             );
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setContentView: *view as *const _ as *mut AnyObject];
-            let _: () = objc2::msg_send![*window as *const _ as *const AnyObject, setDelegate: *view as *const _ as *mut AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setContentView: Retained::as_ptr(&view) as *mut AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, setDelegate: Retained::as_ptr(&view) as *mut AnyObject];
 
-            let _: () = objc2::msg_send![*view as *const _ as *const AnyObject, setWantsLayer: YES];
+            let _: () = objc2::msg_send![Retained::as_ptr(&view) as *const AnyObject, setWantsLayer: true];
             let () = objc2::msg_send![
-                *view as *const _ as *const _ as *const AnyObject,
+                Retained::as_ptr(&view) as *const AnyObject,
                 setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawDuringViewResize
             ];
 
             // register for drag and drop operations.
             let () = objc2::msg_send![
-                *window as *const _ as *const _ as *const AnyObject,
+                Retained::as_ptr(&window) as *const AnyObject,
                 registerForDraggedTypes:
                     {
                         let filenames_type = Retained::as_ptr(&nsstring("NSFilenamesPboardType")) as *const _ as *mut AnyObject;
@@ -682,22 +663,22 @@ impl Window {
                     }
             ];
 
-            let frame: CGRect = objc2::msg_send![*view as *const _ as *const AnyObject, frame];
+            let frame: CGRect = objc2::msg_send![Retained::as_ptr(&view) as *const AnyObject, frame];
             let frame_cg = CGRect::new(CGPoint::new(frame.origin.x, frame.origin.y), CGSize::new(frame.size.width, frame.size.height));
-            let backing_cg: CGRect = objc2::msg_send![*view as *const _ as *const AnyObject, convertRectToBacking: frame_cg];
-            let backing_frame = NSRect::new(NSPoint::new(backing_cg.origin.x, backing_cg.origin.y), NSSize::new(backing_cg.size.width, backing_cg.size.height));
+            let backing_cg: CGRect = objc2::msg_send![Retained::as_ptr(&view) as *const AnyObject, convertRectToBacking: frame_cg];
+            let backing_frame = CGRect::new(CGPoint::new(backing_cg.origin.x, backing_cg.origin.y), CGSize::new(backing_cg.size.width, backing_cg.size.height));
             let width = backing_frame.size.width;
             let height = backing_frame.size.height;
 
-            let dpi = dpi_for_window_screen(*window, &config)
+            let dpi = dpi_for_window_screen(Retained::as_ptr(&window) as *mut AnyObject, &config)
                 .unwrap_or(crate::DEFAULT_DPI * (backing_frame.size.width / frame.size.width))
                 as usize;
 
-            let weak_window = window.weak();
+            let weak_window = Weak::from_retained(&window);
             let window_handle = Window {
                 id: window_id,
-                ns_window: *window,
-                ns_view: *view,
+                ns_window: Retained::as_ptr(&window) as *mut AnyObject,
+                ns_view: Retained::as_ptr(&view) as *mut AnyObject,
             };
             let window_inner = Rc::new(RefCell::new(WindowInner {
                 window,
@@ -792,7 +773,7 @@ impl WindowOps for Window {
         Self: Sized,
     {
         Connection::with_window_inner(self.id, move |inner| {
-            if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
+            if let Some(window_view) = WindowView::get_this(&*inner.view) {
                 window_view
                     .inner
                     .borrow_mut()
@@ -863,7 +844,7 @@ impl WindowOps for Window {
     fn set_inner_size(&self, width: usize, height: usize) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.set_inner_size(width, height);
-            if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
+            if let Some(window_view) = WindowView::get_this(&*inner.view) {
                 window_view
                     .inner
                     .borrow_mut()
@@ -992,7 +973,7 @@ impl WindowOps for Window {
                     let frame: CGRect = objc2::msg_send![main_screen as *const _ as *const AnyObject, frame];
                     let frame_cg = CGRect::new(CGPoint::new(frame.origin.x, frame.origin.y), CGSize::new(frame.size.width, frame.size.height));
                     let backing_cg: CGRect = objc2::msg_send![main_screen as *const _ as *const AnyObject, convertRectToBacking: frame_cg];
-                    let backing_frame = NSRect::new(NSPoint::new(backing_cg.origin.x, backing_cg.origin.y), NSSize::new(backing_cg.size.width, backing_cg.size.height));
+                    let backing_frame = CGRect::new(CGPoint::new(backing_cg.origin.x, backing_cg.origin.y), CGSize::new(backing_cg.size.width, backing_cg.size.height));
                     backing_frame.size.height / frame.size.height
                 };
 
@@ -1025,7 +1006,7 @@ impl WindowOps for Window {
 
 /// Convert from a macOS screen coordinate with the origin in the bottom left
 /// to a pixel coordinate with its origin in the top left
-fn cartesian_to_screen_point(cartesian: NSPoint) -> ScreenPoint {
+fn cartesian_to_screen_point(cartesian: CGPoint) -> ScreenPoint {
     unsafe {
         let screens: id = {
             let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSScreen), screens];
@@ -1044,7 +1025,7 @@ fn cartesian_to_screen_point(cartesian: NSPoint) -> ScreenPoint {
 
 /// Convert from a pixel coordinate in the top left to a macOS screen
 /// coordinate with its origin in the bottom left
-fn screen_point_to_cartesian(point: ScreenPoint) -> NSPoint {
+fn screen_point_to_cartesian(point: ScreenPoint) -> CGPoint {
     unsafe {
         let screens: id = {
             let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSScreen), screens];
@@ -1054,7 +1035,7 @@ fn screen_point_to_cartesian(point: ScreenPoint) -> NSPoint {
         let frame: CGRect = objc2::msg_send![primary as *const _ as *const AnyObject, frame];
         let backing_frame: CGRect = objc2::msg_send![primary as *const _ as *const AnyObject, convertRectToBacking: frame];
         let scale = backing_frame.size.height / frame.size.height;
-        NSPoint::new(
+        CGPoint::new(
             point.x as f64 / scale,
             frame.size.height - (point.y as f64 / scale),
         )
@@ -1063,7 +1044,7 @@ fn screen_point_to_cartesian(point: ScreenPoint) -> NSPoint {
 
 impl WindowInner {
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
-        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+        if let Some(window_view) = WindowView::get_this(&*self.view) {
             window_view.inner.borrow_mut().enable_opengl()
         } else {
             anyhow::bail!("window invalid");
@@ -1073,7 +1054,7 @@ impl WindowInner {
     fn is_fullscreen(&mut self) -> bool {
         if self.is_native_fullscreen() {
             true
-        } else if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+        } else if let Some(window_view) = WindowView::get_this(&*self.view) {
             window_view.inner.borrow().fullscreen.is_some()
         } else {
             false
@@ -1092,13 +1073,13 @@ impl WindowInner {
 
     fn toggle_native_fullscreen(&mut self) {
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, toggleFullScreen: std::ptr::null::<AnyObject>()];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, toggleFullScreen: std::ptr::null::<AnyObject>()];
         }
     }
 
     fn is_native_fullscreen(&self) -> bool {
         let style_mask: NSWindowStyleMask = unsafe {
-            objc2::msg_send![*self.window as *const _ as *const AnyObject, styleMask]
+            objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, styleMask]
         };
         style_mask.contains(NSWindowStyleMask::FullScreen)
     }
@@ -1117,7 +1098,7 @@ impl WindowInner {
     /// If we were in simple full screen mode, exit it and return true.
     /// Otherwise, return false
     fn exit_simple_fullscreen(&mut self) -> bool {
-        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+        if let Some(window_view) = WindowView::get_this(&*self.view) {
             let is_fullscreen = window_view.inner.borrow().fullscreen.is_some();
             if is_fullscreen {
                 self.toggle_simple_fullscreen();
@@ -1134,21 +1115,21 @@ impl WindowInner {
             __r as id
         };
 
-        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+        if let Some(window_view) = WindowView::get_this(&*self.view) {
             let fullscreen = window_view.inner.borrow_mut().fullscreen.take();
             match fullscreen {
                 Some(saved_rect) => unsafe {
                     // Restore prior dimensions
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, orderOut: std::ptr::null::<AnyObject>()];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, orderOut: std::ptr::null::<AnyObject>()];
                     apply_decorations_to_window(
                         &self.window,
                         self.config.window_decorations,
                         self.config.integrated_title_button_style,
                     );
                     let saved_cg = CGRect::new(CGPoint::new(saved_rect.origin.x, saved_rect.origin.y), CGSize::new(saved_rect.size.width, saved_rect.size.height));
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setFrame: saved_cg, display: YES];
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setOpaque: NO];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setFrame: saved_cg, display: true];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setOpaque: false];
                     let _: () = objc2::msg_send![
                         current_app as *const _ as *const AnyObject,
                         setPresentationOptions: NSApplicationPresentationOptions::empty()
@@ -1156,12 +1137,12 @@ impl WindowInner {
                 },
                 None => unsafe {
                     // Go full screen
-                    let saved_rect_cg: CGRect = objc2::msg_send![*self.window as *const _ as *const AnyObject, frame];
+                    let saved_rect_cg: CGRect = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, frame];
                     window_view
                         .inner
                         .borrow_mut()
                         .fullscreen
-                        .replace(cg_to_ns_rect(saved_rect_cg));
+                        .replace(saved_rect_cg);
 
                     let main_screen: id = {
                         let __r: *mut AnyObject = objc2::msg_send![objc2::class!(NSScreen), mainScreen];
@@ -1169,14 +1150,14 @@ impl WindowInner {
                     };
                     let screen_rect: CGRect = objc2::msg_send![main_screen as *const _ as *const AnyObject, frame];
 
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, orderOut: std::ptr::null::<AnyObject>()];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, orderOut: std::ptr::null::<AnyObject>()];
                     let _: () = objc2::msg_send![
-                        *self.window as *const _ as *const AnyObject,
+                        Retained::as_ptr(&self.window) as *const AnyObject,
                         setStyleMask: NSWindowStyleMask::Borderless
                     ];
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setFrame: screen_rect, display: YES];
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
-                    let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setOpaque: YES];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setFrame: screen_rect, display: true];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                    let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setOpaque: true];
                     let _: () = objc2::msg_send![
                         current_app as *const _ as *const AnyObject,
                         setPresentationOptions:
@@ -1189,13 +1170,9 @@ impl WindowInner {
     }
 
     fn update_window_shadow(&mut self) {
-        let is_opaque = if self.config.window_background_opacity >= 1.0 {
-            YES
-        } else {
-            NO
-        };
+        let is_opaque = self.config.window_background_opacity >= 1.0;
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setOpaque: is_opaque];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setOpaque: is_opaque];
             // when transparent, also turn off the window shadow,
             // because having the shadow enabled seems to correlate
             // with ghostly remnants see:
@@ -1207,17 +1184,17 @@ impl WindowInner {
                 .window_decorations
                 .contains(WindowDecorations::MACOS_FORCE_ENABLE_SHADOW)
             {
-                YES
+                true
             } else if self
                 .config
                 .window_decorations
                 .contains(WindowDecorations::MACOS_FORCE_DISABLE_SHADOW)
             {
-                NO
+                false
             } else {
                 is_opaque
             };
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setHasShadow: shadow];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setHasShadow: shadow];
         }
     }
 
@@ -1242,7 +1219,7 @@ impl WindowInner {
             if let Some(titlebar_view_container) = get_titlebar_view_container(&self.window) {
                 let layer: id = {
                     let __r: *mut AnyObject = objc2::msg_send![
-                        *titlebar_view_container.load() as *const _ as *const _ as *const AnyObject,
+                        Retained::as_ptr(&titlebar_view_container) as *const AnyObject,
                         layer
                     ];
                     __r as id
@@ -1269,7 +1246,7 @@ impl WindowInner {
 
     fn update_window_background_blur(&mut self) {
         unsafe {
-            let wn: isize = objc2::msg_send![*self.window as *const _ as *const AnyObject, windowNumber];
+            let wn: isize = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, windowNumber];
             CGSSetWindowBackgroundBlurRadius(
                 CGSMainConnectionID(),
                 wn,
@@ -1296,7 +1273,7 @@ impl WindowInner {
             // Without this, the CAMetalLayer used by webgpu seems to get
             // stuck with a scale factor of 2 despite us having configured 1.
             let _: () = objc2::msg_send![
-                *self.window as *const _ as *const AnyObject,
+                Retained::as_ptr(&self.window) as *const AnyObject,
                 setStyleMask: NSWindowStyleMask::Borderless
             ];
 
@@ -1308,25 +1285,25 @@ impl WindowInner {
 
             self.update_titlebar_background();
 
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
         }
     }
 
     fn close(&mut self) {
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, close];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, close];
         }
     }
 
     fn focus(&mut self) {
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
         }
     }
 
     fn hide(&mut self) {
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, miniaturize: *self.window as *const _ as *mut AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, miniaturize: Retained::as_ptr(&self.window) as *mut AnyObject];
             // We could literally set it invisible like this, but
             // then there is no UI to make it visible again later.
             //let () = msg_send![*self.window, setIsVisible: NO];
@@ -1377,8 +1354,8 @@ impl WindowInner {
 
     fn invalidate(&mut self) {
         unsafe {
-            let () = objc2::msg_send![*self.view as *const _ as *const _ as *const AnyObject, setNeedsDisplay: true];
-            if let Some(window_view) = WindowView::get_this(&**self.view) {
+            let () = objc2::msg_send![Retained::as_ptr(&self.view) as *const AnyObject, setNeedsDisplay: true];
+            if let Some(window_view) = WindowView::get_this(&*self.view) {
                 window_view.inner.borrow_mut().invalidated = true;
             }
         }
@@ -1386,16 +1363,16 @@ impl WindowInner {
     fn set_title(&mut self, title: &str) {
         let title = nsstring(title);
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setTitle: Retained::as_ptr(&title) as *const _ as *mut AnyObject];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setTitle: Retained::as_ptr(&title) as *const _ as *mut AnyObject];
         }
     }
 
     fn set_window_level(&mut self, level: WindowLevel) {
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setLevel: window_level_to_nswindow_level(level)];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setLevel: window_level_to_nswindow_level(level)];
             // Dispatch a resize event with the updated window state
             WindowView::did_resize(
-                *self.view as *mut AnyObject,
+                Retained::as_ptr(&self.view) as *mut AnyObject,
                 objc2::sel!(windowDidResize:),
                 std::ptr::null_mut(),
             );
@@ -1404,11 +1381,11 @@ impl WindowInner {
 
     fn set_inner_size(&mut self, width: usize, height: usize) {
         unsafe {
-            let frame: CGRect = objc2::msg_send![*self.view as *const _ as *const AnyObject, frame];
-            let backing_frame: CGRect = objc2::msg_send![*self.view as *const _ as *const AnyObject, convertRectToBacking: frame];
+            let frame: CGRect = objc2::msg_send![Retained::as_ptr(&self.view) as *const AnyObject, frame];
+            let backing_frame: CGRect = objc2::msg_send![Retained::as_ptr(&self.view) as *const AnyObject, convertRectToBacking: frame];
             let scale = backing_frame.size.width / frame.size.width;
 
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setContentSize: CGSize::new(width as f64 / scale, height as f64 / scale)];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setContentSize: CGSize::new(width as f64 / scale, height as f64 / scale)];
 
             // setContentSize_ doesn't explicitly invalidate,
             // so we need to do it ourselves
@@ -1417,18 +1394,18 @@ impl WindowInner {
     }
 
     fn set_window_position(&self, coords: ScreenPoint) {
-        set_window_position(*self.window, coords);
+        set_window_position(Retained::as_ptr(&self.window) as *mut AnyObject, coords);
     }
 
     fn set_text_cursor_position(&mut self, cursor: Rect) {
-        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+        if let Some(window_view) = WindowView::get_this(&*self.view) {
             window_view.inner.borrow_mut().text_cursor_position = cursor;
         }
         if self.config.use_ime {
             unsafe {
                 let input_context: id = {
                     let __r: *mut AnyObject = objc2::msg_send![
-                        &**self.view as *const _ as *const _ as *const AnyObject,
+                        Retained::as_ptr(&self.view) as *const AnyObject,
                         inputContext
                     ];
                     __r as id
@@ -1444,7 +1421,7 @@ impl WindowInner {
     fn is_zoomed(&self) -> bool {
         unsafe {
             objc2::msg_send![
-                *self.window as *const _ as *const _ as *const AnyObject,
+                Retained::as_ptr(&self.window) as *const AnyObject,
                 isZoomed
             ]
         }
@@ -1453,7 +1430,7 @@ impl WindowInner {
     fn maximize(&mut self) {
         if !self.is_zoomed() {
             unsafe {
-                let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, zoom: std::ptr::null::<AnyObject>()];
+                let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, zoom: std::ptr::null::<AnyObject>()];
             }
         }
     }
@@ -1461,7 +1438,7 @@ impl WindowInner {
     fn restore(&mut self) {
         if self.is_zoomed() {
             unsafe {
-                let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, zoom: std::ptr::null::<AnyObject>()];
+                let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, zoom: std::ptr::null::<AnyObject>()];
             }
         }
     }
@@ -1488,9 +1465,9 @@ impl WindowInner {
         let min_width = incr.base_width + incr.x;
         let min_height = incr.base_height + incr.y;
         unsafe {
-            let _: () = objc2::msg_send![*self.window as *const _ as *const AnyObject, setResizeIncrements: CGSize::new(incr.x.into(), incr.y.into())];
+            let _: () = objc2::msg_send![Retained::as_ptr(&self.window) as *const AnyObject, setResizeIncrements: CGSize::new(incr.x.into(), incr.y.into())];
             let () = objc2::msg_send![
-                *self.window as *const _ as *const _ as *const AnyObject,
+                Retained::as_ptr(&self.window) as *const AnyObject,
                 setContentMinSize: CGSize::new(min_width.into(), min_height.into())
             ];
         }
@@ -1501,7 +1478,7 @@ impl WindowInner {
             self.config.dpi != config.dpi || self.config.dpi_by_screen != config.dpi_by_screen;
 
         self.config = config.clone();
-        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
+        if let Some(window_view) = WindowView::get_this(&*self.view) {
             let mut inner = window_view.inner.borrow_mut();
             inner.config = config.clone();
             if dpi_changed {
@@ -1526,7 +1503,7 @@ fn effective_decorations(
 }
 
 fn apply_decorations_to_window(
-    window: &StrongPtr,
+    window: &Retained<AnyObject>,
     decorations: WindowDecorations,
     integrated_title_button_style: IntegratedTitleButtonStyle,
 ) {
@@ -1534,21 +1511,16 @@ fn apply_decorations_to_window(
     let decorations = effective_decorations(decorations, integrated_title_button_style);
     unsafe {
         let _: () = objc2::msg_send![
-            **window as *const _ as *const AnyObject,
+            Retained::as_ptr(window) as *const AnyObject,
             setStyleMask: mask
         ];
 
-        let hidden = if decorations.contains(WindowDecorations::TITLE)
-            || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
-        {
-            NO
-        } else {
-            YES
-        };
+        let hidden = !(decorations.contains(WindowDecorations::TITLE)
+            || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS));
 
         for titlebar_button in &[1u64 /* NSWindowMiniaturizeButton */, 0u64 /* NSWindowCloseButton */, 2u64 /* NSWindowZoomButton */] {
             let button: id = {
-                let __r: *mut AnyObject = objc2::msg_send![**window as *const _ as *const AnyObject, standardWindowButton: *titlebar_button];
+                let __r: *mut AnyObject = objc2::msg_send![Retained::as_ptr(window) as *const AnyObject, standardWindowButton: *titlebar_button];
                 __r as id
             };
             let _: () = objc2::msg_send![button as *const _ as *const AnyObject, setHidden: hidden];
@@ -1559,14 +1531,14 @@ fn apply_decorations_to_window(
         } else {
             1 // NSWindowTitleHidden
         };
-        let _: () = objc2::msg_send![**window as *const _ as *const AnyObject, setTitleVisibility: title_visibility];
+        let _: () = objc2::msg_send![Retained::as_ptr(window) as *const AnyObject, setTitleVisibility: title_visibility];
 
         if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS)
             || decorations.contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
         {
-            let _: () = objc2::msg_send![**window as *const _ as *const AnyObject, setTitlebarAppearsTransparent: YES];
+            let _: () = objc2::msg_send![Retained::as_ptr(window) as *const AnyObject, setTitlebarAppearsTransparent: true];
         } else {
-            let _: () = objc2::msg_send![**window as *const _ as *const AnyObject, setTitlebarAppearsTransparent: hidden];
+            let _: () = objc2::msg_send![Retained::as_ptr(window) as *const AnyObject, setTitlebarAppearsTransparent: hidden];
         }
     }
 }
@@ -1636,7 +1608,8 @@ unsafe fn get_view_class_name(id: id) -> Option<String> {
         return None;
     }
 
-    let cstr = CStr::from_ptr(class_name.UTF8String()).to_str();
+    let utf8: *const std::ffi::c_char = objc2::msg_send![class_name as *const _ as *const AnyObject, UTF8String];
+    let cstr = CStr::from_ptr(utf8).to_str();
 
     match cstr {
         Ok(s) => Some(s.to_string()),
@@ -1644,18 +1617,18 @@ unsafe fn get_view_class_name(id: id) -> Option<String> {
     }
 }
 
-fn get_titlebar_view_container(window: &StrongPtr) -> Option<WeakPtr> {
+fn get_titlebar_view_container(window: &Retained<AnyObject>) -> Option<Retained<AnyObject>> {
     // The view container for the titlebar on macos is found next to the primary window view
     // so we need to traverse up to the super view to find it
     let super_view = get_view_superview(window)?;
 
-    let sub_views = get_view_subviews(&super_view.load())?;
+    let sub_views = get_view_subviews(&super_view)?;
 
-    let count: usize = unsafe { objc2::msg_send![*sub_views.load() as *const _ as *const AnyObject, count] };
+    let count: usize = unsafe { objc2::msg_send![Retained::as_ptr(&sub_views) as *const AnyObject, count] };
 
     for i in 0..count {
         let sub_view: id = unsafe {
-            let __r: *mut AnyObject = objc2::msg_send![*sub_views.load() as *const _ as *const AnyObject, objectAtIndex: i];
+            let __r: *mut AnyObject = objc2::msg_send![Retained::as_ptr(&sub_views) as *const AnyObject, objectAtIndex: i];
             __r as id
         };
 
@@ -1666,18 +1639,18 @@ fn get_titlebar_view_container(window: &StrongPtr) -> Option<WeakPtr> {
         let class_name = unsafe { get_view_class_name(sub_view)? };
 
         if class_name == TITLEBAR_VIEW_NAME {
-            let titlebar_view = unsafe { WeakPtr::new(sub_view) };
-            return Some(titlebar_view);
+            let titlebar_view = unsafe { Retained::retain(sub_view) };
+            return titlebar_view;
         }
     }
 
     None
 }
 
-fn get_view_superview(view: &StrongPtr) -> Option<WeakPtr> {
+fn get_view_superview(window: &Retained<AnyObject>) -> Option<Retained<AnyObject>> {
     let super_view_id: id = unsafe {
         let content_view: *mut AnyObject = objc2::msg_send![
-            **view as *const _ as *const AnyObject,
+            Retained::as_ptr(window) as *const AnyObject,
             contentView
         ];
         let __r: *mut AnyObject = objc2::msg_send![
@@ -1691,23 +1664,20 @@ fn get_view_superview(view: &StrongPtr) -> Option<WeakPtr> {
         return None;
     }
 
-    let super_view = unsafe { WeakPtr::new(super_view_id) };
-
-    Some(super_view)
+    unsafe { Retained::retain(super_view_id) }
 }
 
-fn get_view_subviews(view: &StrongPtr) -> Option<WeakPtr> {
+fn get_view_subviews(view: &Retained<AnyObject>) -> Option<Retained<AnyObject>> {
     let sub_views_id: id = unsafe {
         let __r: *mut AnyObject =
-            objc2::msg_send![**view as *const _ as *const _ as *const AnyObject, subviews];
+            objc2::msg_send![Retained::as_ptr(view) as *const AnyObject, subviews];
         __r as id
     };
     if sub_views_id.is_null() {
         return None;
     }
 
-    let sub_views = unsafe { WeakPtr::new(sub_views_id) };
-    Some(sub_views)
+    unsafe { Retained::retain(sub_views_id) }
 }
 
 #[derive(Debug)]
@@ -1718,8 +1688,8 @@ struct DeadKeyState {
 
 struct Inner {
     events: WindowEventSender,
-    view_id: Option<WeakPtr>,
-    window: Option<WeakPtr>,
+    view_id: Option<Weak<AnyObject>>,
+    window: Option<Weak<AnyObject>>,
     screen_changed: bool,
     paint_throttled: bool,
     window_id: usize,
@@ -1739,7 +1709,7 @@ struct Inner {
 
     /// When using simple fullscreen mode, this tracks
     /// the window dimensions that need to be restored
-    fullscreen: Option<NSRect>,
+    fullscreen: Option<CGRect>,
 
     config: ConfigHandle,
 
@@ -1909,8 +1879,8 @@ impl Keyboard {
 
 impl Inner {
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
-        let view = self.view_id.as_ref().unwrap().load();
-        let glium_context = GlContextPair::create(*view)?;
+        let view = self.view_id.as_ref().unwrap().load().unwrap();
+        let glium_context = GlContextPair::create(Retained::as_ptr(&view) as id)?;
 
         self.gl_context_pair.replace(glium_context.clone());
 
@@ -2001,7 +1971,6 @@ impl Inner {
     }
 }
 
-const VIEW_CLS_NAME: &str = "WezboardWindowView";
 const VIEW_CLS_CNAME: &CStr = c"WezboardWindowView";
 const WINDOW_CLS_CNAME: &CStr = c"WezboardWindow";
 const TITLEBAR_VIEW_NAME: &str = "NSTitlebarContainerView";
@@ -2010,7 +1979,19 @@ struct WindowView {
     inner: Rc<RefCell<Inner>>,
 }
 
-pub fn superclass(this: &Object) -> &'static AnyClass {
+unsafe fn get_view_ivar(obj: &AnyObject) -> *mut c_void {
+    let ivar = obj.class().instance_variable(VIEW_CLS_CNAME).unwrap();
+    let ptr = (obj as *const AnyObject as *const u8).offset(ivar.offset());
+    *(ptr as *const *mut c_void)
+}
+
+unsafe fn set_view_ivar(obj: &mut AnyObject, value: *mut c_void) {
+    let ivar = obj.class().instance_variable(VIEW_CLS_CNAME).unwrap();
+    let ptr = (obj as *mut AnyObject as *mut u8).offset(ivar.offset());
+    *(ptr as *mut *mut c_void) = value;
+}
+
+pub fn superclass(this: &AnyObject) -> &'static AnyClass {
     unsafe {
         let superclass: *const AnyClass =
             objc2::msg_send![this as *const _ as *const _ as *const AnyObject, superclass];
@@ -2018,7 +1999,7 @@ pub fn superclass(this: &Object) -> &'static AnyClass {
     }
 }
 
-fn dpi_for_window_screen(ns_window: *mut Object, config: &ConfigHandle) -> Option<f64> {
+fn dpi_for_window_screen(ns_window: *mut AnyObject, config: &ConfigHandle) -> Option<f64> {
     if config.dpi_by_screen.is_empty() {
         return config.dpi;
     }
@@ -2109,7 +2090,7 @@ fn get_window_class() -> &'static AnyClass {
 
 impl WindowView {
     extern "C" fn dealloc(this: *mut AnyObject, _sel: Sel) {
-        let this = unsafe { &mut *(this as *mut Object) };
+        let this = unsafe { &mut *(this as *mut AnyObject) };
         Self::drop_inner(this);
         unsafe {
             let superclass = superclass(this);
@@ -2123,10 +2104,10 @@ impl WindowView {
         }
     }
 
-    fn drop_inner(this: &mut Object) {
+    fn drop_inner(this: &mut AnyObject) {
         unsafe {
-            let myself: *mut c_void = *this.get_ivar(VIEW_CLS_NAME);
-            this.set_ivar(VIEW_CLS_NAME, std::ptr::null_mut() as *mut c_void);
+            let myself: *mut c_void = get_view_ivar(this);
+            set_view_ivar(this, std::ptr::null_mut());
 
             if !myself.is_null() {
                 let myself = Box::from_raw(myself as *mut Self);
@@ -2139,7 +2120,7 @@ impl WindowView {
     // We need to translate the selector back into appropriate key
     // sequences
     extern "C" fn do_command_by_selector(this_raw: *mut AnyObject, _sel: Sel, a_selector: Sel) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let selector = format!("{:?}", a_selector);
         log::trace!("do_command_by_selector {:?}", selector);
 
@@ -2151,7 +2132,7 @@ impl WindowView {
     }
 
     extern "C" fn has_marked_text(this_raw: *mut AnyObject, _sel: Sel) -> Bool {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         if let Some(myself) = Self::get_this(this) {
             let inner = myself.inner.borrow();
             if inner.ime_text.is_empty() {
@@ -2165,7 +2146,7 @@ impl WindowView {
     }
 
     extern "C" fn marked_range(this_raw: *mut AnyObject, _sel: Sel) -> NSRange {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         if let Some(myself) = Self::get_this(this) {
             let inner = myself.inner.borrow();
             log::trace!("marked_range {:?}", inner.ime_text);
@@ -2180,7 +2161,7 @@ impl WindowView {
     }
 
     extern "C" fn selected_range(_this_raw: *mut AnyObject, _sel: Sel) -> NSRange {
-        let _this = unsafe { &mut *(_this_raw as *mut Object) };
+        let _this = unsafe { &mut *(_this_raw as *mut AnyObject) };
         NSRange::new(isize::MAX as usize, 0)
     }
 
@@ -2191,7 +2172,7 @@ impl WindowView {
         astring_ao: *mut AnyObject,
         replacement_range: NSRange,
     ) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let astring = astring_ao as id;
         let s = unsafe { nsstring_to_str(astring as *mut AnyObject) };
         log::trace!(
@@ -2232,7 +2213,7 @@ impl WindowView {
         selected_range: NSRange,
         replacement_range: NSRange,
     ) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let astring = astring_ao as id;
         let s = unsafe { nsstring_to_str(astring as *mut AnyObject) };
         log::trace!(
@@ -2267,7 +2248,7 @@ impl WindowView {
     }
 
     extern "C" fn unmark_text(this_raw: *mut AnyObject, _sel: Sel) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         log::trace!("unmarkText");
         if let Some(myself) = Self::get_this(this) {
             let mut inner = myself.inner.borrow_mut();
@@ -2281,7 +2262,7 @@ impl WindowView {
     }
 
     extern "C" fn valid_attributes_for_marked_text(_this_raw: *mut AnyObject, _sel: Sel) -> *mut AnyObject {
-        let _this = unsafe { &mut *(_this_raw as *mut Object) };
+        let _this = unsafe { &mut *(_this_raw as *mut AnyObject) };
         // FIXME: returns NSArray<NSAttributedStringKey> *
         // log::trace!("valid_attributes_for_marked_text");
         // nil
@@ -2319,7 +2300,7 @@ impl WindowView {
         range: NSRange,
         actual: *mut NSRange,
     ) -> CGRect {
-        let this_obj = unsafe { &mut *(this as *mut Object) };
+        let this_obj = unsafe { &mut *(this as *mut AnyObject) };
         // Returns a rect in screen coordinates; this is used to place
         // the input method editor
         log::trace!(
@@ -2375,7 +2356,7 @@ impl WindowView {
     }
 
     extern "C" fn view_did_change_effective_appearance(this_raw: *mut AnyObject, _sel: Sel) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         if let Some(this) = Self::get_this(this) {
             let appearance = Connection::get().unwrap().get_appearance();
             this.inner
@@ -2386,34 +2367,31 @@ impl WindowView {
     }
 
     extern "C" fn update_tracking_areas(this_raw: *mut AnyObject, _sel: Sel) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let frame: CGRect = unsafe { objc2::msg_send![this as *const _ as *const AnyObject, frame] };
 
         if let Some(this) = Self::get_this(this) {
             let mut inner = this.inner.borrow_mut();
-            if let Some(ref view) = inner.view_id {
-                let view = view.load();
-                if view.is_null() {
-                    return;
-                }
-
-                let tag = inner.tracking_rect_tag;
-                if tag != 0 {
-                    unsafe {
-                        let () = objc2::msg_send![*view as *const _ as *const AnyObject, removeTrackingRect: tag];
+            if let Some(ref weak_view) = inner.view_id {
+                if let Some(view) = weak_view.load() {
+                    let tag = inner.tracking_rect_tag;
+                    if tag != 0 {
+                        unsafe {
+                            let () = objc2::msg_send![Retained::as_ptr(&view) as *const AnyObject, removeTrackingRect: tag];
+                        }
                     }
-                }
 
-                inner.tracking_rect_tag = unsafe {
-                    let cg_rect = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(frame.size.width, frame.size.height));
-                    objc2::msg_send![*view as *const _ as *const AnyObject, addTrackingRect: cg_rect, owner: *view as *const _ as *mut AnyObject, userData: std::ptr::null::<std::ffi::c_void>(), assumeInside: false]
-                };
+                    inner.tracking_rect_tag = unsafe {
+                        let cg_rect = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(frame.size.width, frame.size.height));
+                        objc2::msg_send![Retained::as_ptr(&view) as *const AnyObject, addTrackingRect: cg_rect, owner: Retained::as_ptr(&view) as *mut AnyObject, userData: std::ptr::null::<std::ffi::c_void>(), assumeInside: false]
+                    };
+                }
             }
         }
     }
 
     extern "C" fn window_should_close(this_raw: *mut AnyObject, _sel: Sel, _id_ao: *mut AnyObject) -> Bool {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         unsafe {
             let () = objc2::msg_send![this as *const _ as *const _ as *const AnyObject, setNeedsDisplay: true];
         }
@@ -2474,7 +2452,7 @@ impl WindowView {
     }
 
     extern "C" fn did_become_key(this_raw: *mut AnyObject, _sel: Sel, _id_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _id = _id_ao as id;
         if let Some(this) = Self::get_this(this) {
             this.inner
@@ -2486,7 +2464,7 @@ impl WindowView {
     }
 
     extern "C" fn did_resign_key(this_raw: *mut AnyObject, _sel: Sel, _id_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _id = _id_ao as id;
         if let Some(this) = Self::get_this(this) {
             this.inner
@@ -2518,8 +2496,8 @@ impl WindowView {
         _sel: Sel,
         menu_item_ao: *mut AnyObject,
     ) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
-        let menu_item = menu_item_ao as *mut Object;
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
+        let menu_item = menu_item_ao as *mut AnyObject;
         let menu_item = MenuItem::with_menu_item(menu_item as *mut _ as *mut AnyObject);
         // Safe because wezboardPerformKeyAssignment: is only used with KeyAssignment
         let action = menu_item.get_represented_item();
@@ -2538,7 +2516,7 @@ impl WindowView {
     }
 
     extern "C" fn window_will_close(this_raw: *mut AnyObject, _sel: Sel, _id_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _id = _id_ao as id;
         if let Some(this) = Self::get_this(this) {
             // Advise the window of its impending death
@@ -2553,7 +2531,7 @@ impl WindowView {
         }
     }
 
-    fn mouse_common(this: &mut Object, nsevent: id, kind: MouseEventKind) {
+    fn mouse_common(this: &mut AnyObject, nsevent: id, kind: MouseEventKind) {
         let view = this as id;
         let coords;
         let mouse_buttons;
@@ -2566,7 +2544,7 @@ impl WindowView {
             let backing_rect: CGRect = objc2::msg_send![view as *const _ as *const AnyObject, convertRectToBacking: rect];
             // backing_rect computes abs() values, so we need to restore the sign
             // from the original point
-            coords = NSPoint::new(
+            coords = CGPoint::new(
                 f64::copysign(backing_rect.size.width, point.x),
                 f64::copysign(backing_rect.size.height, point.y),
             );
@@ -2577,7 +2555,7 @@ impl WindowView {
             ];
             modifiers = key_modifiers(modifier_flags);
             let mouse_loc: CGPoint = objc2::msg_send![objc2::class!(NSEvent), mouseLocation];
-            screen_coords = NSPoint::new(mouse_loc.x, mouse_loc.y);
+            screen_coords = CGPoint::new(mouse_loc.x, mouse_loc.y);
         }
         let event = MouseEvent {
             kind,
@@ -2594,24 +2572,24 @@ impl WindowView {
     }
 
     extern "C" fn mouse_up(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::mouse_common(this, nsevent, MouseEventKind::Release(MousePress::Left));
     }
 
     extern "C" fn mouse_down(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::mouse_common(this, nsevent, MouseEventKind::Press(MousePress::Left));
     }
     extern "C" fn right_mouse_up(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::mouse_common(this, nsevent, MouseEventKind::Release(MousePress::Right));
     }
 
     extern "C" fn other_mouse_up(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         // Safety: We know this is an button event
         unsafe {
@@ -2625,10 +2603,9 @@ impl WindowView {
     }
 
     extern "C" fn scroll_wheel(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
-        let precise: BOOL = unsafe { objc2::msg_send![nsevent as *const _ as *const AnyObject, hasPreciseScrollingDeltas] };
-        let precise = precise != NO;
+        let precise: bool = unsafe { objc2::msg_send![nsevent as *const _ as *const AnyObject, hasPreciseScrollingDeltas] };
         let scale = if precise {
             // Devices with precise deltas report number of pixels scrolled.
             // At this layer we don't know how many pixels comprise a cell
@@ -2701,13 +2678,13 @@ impl WindowView {
     }
 
     extern "C" fn right_mouse_down(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::mouse_common(this, nsevent, MouseEventKind::Press(MousePress::Right));
     }
 
     extern "C" fn other_mouse_down(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         // Safety: See `other_mouse_up`
         unsafe {
@@ -2720,13 +2697,13 @@ impl WindowView {
     }
 
     extern "C" fn mouse_moved_or_dragged(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::mouse_common(this, nsevent, MouseEventKind::Move);
     }
 
     extern "C" fn mouse_exited(this_raw: *mut AnyObject, _sel: Sel, _nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _nsevent = _nsevent_ao as id;
         if let Some(myself) = Self::get_this(this) {
             myself
@@ -2737,9 +2714,8 @@ impl WindowView {
         }
     }
 
-    fn key_common(this: &mut Object, nsevent: id, key_is_down: bool) {
-        let is_a_repeat: BOOL = unsafe { objc2::msg_send![nsevent as *const _ as *const AnyObject, isARepeat] };
-        let is_a_repeat = is_a_repeat != NO;
+    fn key_common(this: &mut AnyObject, nsevent: id, key_is_down: bool) {
+        let is_a_repeat: bool = unsafe { objc2::msg_send![nsevent as *const _ as *const AnyObject, isARepeat] };
         let chars = unsafe {
             let c: *mut AnyObject = objc2::msg_send![nsevent as *const _ as *const AnyObject, characters];
             nsstring_to_str(c)
@@ -3107,7 +3083,7 @@ impl WindowView {
     }
 
     extern "C" fn perform_key_equivalent(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) -> Bool {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         #[allow(unused_macros)]
         macro_rules! yes_no { (YES) => { Bool::YES }; (NO) => { Bool::NO }; }
@@ -3146,7 +3122,7 @@ impl WindowView {
     }
 
     extern "C" fn flags_changed(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         let modifier_flags: NSEventModifierFlags = unsafe {
             objc2::msg_send![nsevent as *const _ as *const AnyObject, modifierFlags]
@@ -3167,19 +3143,19 @@ impl WindowView {
     }
 
     extern "C" fn key_down(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::key_common(this, nsevent, true);
     }
 
     extern "C" fn key_up(this_raw: *mut AnyObject, _sel: Sel, nsevent_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let nsevent = nsevent_ao as id;
         Self::key_common(this, nsevent, false);
     }
 
     extern "C" fn did_change_screen(this_raw: *mut AnyObject, _sel: Sel, _notification_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _notification = _notification_ao as id;
         log::trace!("did_change_screen");
         if let Some(this) = Self::get_this(this) {
@@ -3192,7 +3168,7 @@ impl WindowView {
     }
 
     extern "C" fn will_start_live_resize(this_raw: *mut AnyObject, _sel: Sel, _notification_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _notification = _notification_ao as id;
         if let Some(this) = Self::get_this(this) {
             let mut inner = this.inner.borrow_mut();
@@ -3201,7 +3177,7 @@ impl WindowView {
     }
 
     extern "C" fn did_end_live_resize(this_raw: *mut AnyObject, _sel: Sel, _notification_ao: *mut AnyObject) {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let _notification = _notification_ao as id;
         if let Some(this) = Self::get_this(this) {
             let mut inner = this.inner.borrow_mut();
@@ -3210,7 +3186,7 @@ impl WindowView {
     }
 
     extern "C" fn did_resize(this: *mut AnyObject, _sel: Sel, _notification: *mut AnyObject) {
-        let this_obj = unsafe { &mut *(this as *mut Object) };
+        let this_obj = unsafe { &mut *(this as *mut AnyObject) };
         if let Some(this) = Self::get_this(this_obj) {
             let inner = this.inner.borrow_mut();
 
@@ -3233,10 +3209,9 @@ impl WindowView {
             // higher up the callstack already has a mutable
             // reference and we'd panic.
             let is_full_screen = inner.fullscreen.is_some()
-                || inner.window.as_ref().map_or(false, |window| {
-                    let window = window.load();
+                || inner.window.as_ref().and_then(|w| w.load()).map_or(false, |window| {
                     let style_mask: NSWindowStyleMask = unsafe {
-                        objc2::msg_send![*window as *const _ as *const AnyObject, styleMask]
+                        objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, styleMask]
                     };
                     style_mask.contains(NSWindowStyleMask::FullScreen)
                 });
@@ -3249,11 +3224,10 @@ impl WindowView {
             // wezboard-gui/src/termwindow/resize.rs.
             // <https://github.com/termsurf/termsurf/issues/3503>
             let is_zoomed = !is_full_screen
-                && inner.window.as_ref().map_or(false, |window| {
-                    let window = window.load();
+                && inner.window.as_ref().and_then(|w| w.load()).map_or(false, |window| {
                     unsafe {
                         objc2::msg_send![
-                            *window as *const _ as *const _ as *const AnyObject,
+                            Retained::as_ptr(&window) as *const AnyObject,
                             isZoomed
                         ]
                     }
@@ -3262,8 +3236,9 @@ impl WindowView {
             let window_level = inner
                 .window
                 .as_ref()
+                .and_then(|w| w.load())
                 .map(|window| {
-                    let level: i64 = unsafe { objc2::msg_send![*window.load() as *const _ as *const AnyObject, level] };
+                    let level: i64 = unsafe { objc2::msg_send![Retained::as_ptr(&window) as *const AnyObject, level] };
                     nswindow_level_to_window_level(level)
                 })
                 .unwrap_or_default();
@@ -3283,9 +3258,9 @@ impl WindowView {
             let dpi = inner
                 .window
                 .as_ref()
+                .and_then(|w| w.load())
                 .and_then(|window| {
-                    let window = window.load();
-                    dpi_for_window_screen(*window, &inner.config)
+                    dpi_for_window_screen(Retained::as_ptr(&window) as *mut AnyObject, &inner.config)
                 })
                 .unwrap_or(crate::DEFAULT_DPI * (backing_frame.size.width / frame.size.width))
                 as usize;
@@ -3303,7 +3278,7 @@ impl WindowView {
     }
 
     extern "C" fn update_layer(_view_raw: *mut AnyObject, _sel: Sel) {
-        let _view = unsafe { &mut *(_view_raw as *mut Object) };
+        let _view = unsafe { &mut *(_view_raw as *mut AnyObject) };
         log::trace!("update_layer called");
     }
 
@@ -3357,7 +3332,7 @@ impl WindowView {
     }
 
     extern "C" fn draw_rect(view: *mut AnyObject, sel: Sel, _dirty_rect: CGRect) {
-        let view_obj = unsafe { &mut *(view as *mut Object) };
+        let view_obj = unsafe { &mut *(view as *mut AnyObject) };
         if let Some(this) = Self::get_this(view_obj) {
             let mut inner = this.inner.borrow_mut();
 
@@ -3386,12 +3361,12 @@ impl WindowView {
                     async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64))
                         .await;
                     Connection::with_window_inner(window_id, move |inner| {
-                        if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
+                        if let Some(window_view) = WindowView::get_this(&*inner.view) {
                             let mut state = window_view.inner.borrow_mut();
                             state.paint_throttled = false;
                             if state.invalidated {
                                 unsafe {
-                                    let () = objc2::msg_send![*inner.view as *const _ as *const _ as *const AnyObject, setNeedsDisplay: true];
+                                    let () = objc2::msg_send![Retained::as_ptr(&inner.view) as *const AnyObject, setNeedsDisplay: true];
                                 }
                             }
                         }
@@ -3404,7 +3379,7 @@ impl WindowView {
     }
 
     extern "C" fn dragging_entered(this_raw: *mut AnyObject, _: Sel, sender_ao: *mut AnyObject) -> usize {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let sender = sender_ao as id;
         // NSDragOperationNone = 0, NSDragOperationCopy = 1
         if let Some(this) = Self::get_this(this) {
@@ -3428,9 +3403,11 @@ impl WindowView {
                 return 0; // NSDragOperationNone
             }
 
-            let paths = unsafe { filenames.iter() }
-                .map(|file| unsafe {
-                    let path = nsstring_to_str(file as *mut AnyObject);
+            let count: usize = unsafe { objc2::msg_send![filenames as *const _ as *const AnyObject, count] };
+            let paths = (0..count)
+                .map(|i| unsafe {
+                    let file: *mut AnyObject = objc2::msg_send![filenames as *const _ as *const AnyObject, objectAtIndex: i];
+                    let path = nsstring_to_str(file);
                     PathBuf::from(path)
                 })
                 .collect::<Vec<_>>();
@@ -3440,7 +3417,7 @@ impl WindowView {
     }
 
     extern "C" fn perform_drag_operation(this_raw: *mut AnyObject, _: Sel, sender_ao: *mut AnyObject) -> Bool {
-        let this = unsafe { &mut *(this_raw as *mut Object) };
+        let this = unsafe { &mut *(this_raw as *mut AnyObject) };
         let sender = sender_ao as id;
         if let Some(this) = Self::get_this(this) {
             let mut inner = this.inner.borrow_mut();
@@ -3463,9 +3440,11 @@ impl WindowView {
                 return Bool::NO;
             }
 
-            let paths = unsafe { filenames.iter() }
-                .map(|file| unsafe {
-                    let path = nsstring_to_str(file as *mut AnyObject);
+            let count: usize = unsafe { objc2::msg_send![filenames as *const _ as *const AnyObject, count] };
+            let paths = (0..count)
+                .map(|i| unsafe {
+                    let file: *mut AnyObject = objc2::msg_send![filenames as *const _ as *const AnyObject, objectAtIndex: i];
+                    let path = nsstring_to_str(file);
                     PathBuf::from(path)
                 })
                 .collect::<Vec<_>>();
@@ -3474,9 +3453,9 @@ impl WindowView {
         Bool::YES
     }
 
-    fn get_this(this: &Object) -> Option<&mut Self> {
+    fn get_this(this: &AnyObject) -> Option<&mut Self> {
         unsafe {
-            let myself: *mut c_void = *this.get_ivar(VIEW_CLS_NAME);
+            let myself: *mut c_void = get_view_ivar(this);
             if myself.is_null() {
                 None
             } else {
@@ -3485,26 +3464,26 @@ impl WindowView {
         }
     }
 
-    fn init_with_frame(inner: &Rc<RefCell<Inner>>, rect: NSRect) -> anyhow::Result<StrongPtr> {
+    fn init_with_frame(inner: &Rc<RefCell<Inner>>, rect: CGRect) -> anyhow::Result<Retained<AnyObject>> {
         let cls = Self::get_class();
 
         let view_id: id = unsafe {
             let __r: *mut AnyObject = objc2::msg_send![cls, alloc];
             __r as id
         };
-        let view_id: StrongPtr = unsafe {
+        let view_id: Retained<AnyObject> = unsafe {
             let cg_rect = CGRect::new(CGPoint::new(rect.origin.x, rect.origin.y), CGSize::new(rect.size.width, rect.size.height));
             let __r: *mut AnyObject = objc2::msg_send![view_id as *const _ as *const AnyObject, initWithFrame: cg_rect];
-            StrongPtr::new(__r as id)
+            Retained::from_raw(__r).unwrap()
         };
-        inner.borrow_mut().view_id.replace(view_id.weak());
+        inner.borrow_mut().view_id.replace(Weak::from_retained(&view_id));
 
         let view = Box::into_raw(Box::new(Self {
             inner: Rc::clone(&inner),
         }));
 
         unsafe {
-            (**view_id).set_ivar(VIEW_CLS_NAME, view as *mut c_void);
+            set_view_ivar(&mut *(Retained::as_ptr(&view_id) as *mut AnyObject), view as *mut c_void);
         }
 
         Ok(view_id)
@@ -3527,7 +3506,7 @@ impl WindowView {
 
         // All callbacks use *mut AnyObject for self and pointer args to satisfy
         // ClassBuilder::add_method's MethodImplementation trait bound.
-        // id (= *mut Object) args become *mut AnyObject; BOOL returns become Bool.
+        // id (= *mut AnyObject) args become *mut AnyObject; BOOL returns become Bool.
         unsafe {
             cls.add_method(objc2::sel!(dealloc),
                 Self::dealloc as extern "C" fn(*mut AnyObject, Sel));
