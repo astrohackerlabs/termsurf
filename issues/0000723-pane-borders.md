@@ -323,3 +323,123 @@ pixel_width: self.pixel_width,
    - Content is visually inset from the border on all interior edges
 3. Single pane — no change in behavior (no borders, no inset)
 4. Zoom a pane — no borders, full content area restored
+
+**Result:** Fail
+
+The `pixel_width` reduction compiled cleanly but did not fix the content inset
+visually. Reducing `pixel_width` passed to `render_screen_line` is not
+sufficient to prevent terminal content from rendering under the border region.
+The approach of constraining `pixel_width` does not achieve the desired
+clipping/inset effect.
+
+#### Conclusion
+
+The `pixel_width` parameter alone does not control where background fills and
+text are drawn relative to the border. A different approach is needed — possibly
+adjusting `dims.cols` to reduce the number of rendered columns, or applying
+actual clipping in the renderer, or modifying how `render_screen_line` uses
+`pixel_width` internally.
+
+### Experiment 3: Constrain visible rows + pixel_width + skip bottom lines
+
+Experiments 1 and 2 each addressed part of the problem but missed the full
+picture. The rendering pipeline has multiple independent content bounds that ALL
+must be constrained simultaneously:
+
+1. **`background_rect`** (layer 0 pane fill) — Exp 1 insets this. Works.
+2. **`left_pixel_x`** — Exp 1 shifts this right on interior left edges. Works.
+3. **`top_pixel_y`** (via `inset_top_pixel_y`) — Exp 1 shifts this down on
+   interior top edges. Works.
+4. **`pixel_width`** (horizontal clipping in `render_screen_line`) — Exp 2
+   reduced this. Clips backgrounds via `bounding_rect.intersection()` and
+   soft-clips glyphs via `pos_x > pixel_width` at `screen_line.rs:523`. Should
+   work horizontally.
+5. **Vertical extent** — **Never addressed.** The number of rendered lines is
+   `dims.viewport_rows`, unchanged. Lines at the bottom still render under the
+   bottom border. There is no `pixel_height` constraint.
+
+The fix combines all three dimensions: horizontal (`pixel_width` reduction from
+Exp 2), vertical top (already working `inset_top_pixel_y` from Exp 1), and
+vertical bottom (skip lines that fall in the bottom border region).
+
+#### Changes
+
+**1. `wezboard/wezboard-gui/src/termwindow/render/pane.rs`** — Three changes:
+
+**(a) Add `pixel_width` and `bottom_pixel_y` fields to `LineRender` struct**
+(after `left_pixel_x`):
+
+```rust
+pixel_width: f32,
+bottom_pixel_y: f32,
+```
+
+**(b) Compute `pixel_width` and `bottom_pixel_y` with border inset** — After
+`inset_top_pixel_y` (around line 382), compute both values:
+
+```rust
+let cell_width = self.render_metrics.cell_size.width as f32;
+let full_pixel_width = cell_width * dims.cols as f32;
+let mut pixel_width = full_pixel_width;
+if border_width > 0.0 && pos.left != 0 {
+    pixel_width -= border_width;
+}
+if border_width > 0.0
+    && pos.left + pos.width < self.terminal_size.cols as usize
+{
+    pixel_width -= border_width;
+}
+
+let bottom_pixel_y = if border_width > 0.0
+    && pos.top + pos.height < self.terminal_size.rows as usize
+{
+    inset_top_pixel_y
+        + (dims.viewport_rows as f32 * cell_height)
+        - border_width
+} else {
+    f32::MAX
+};
+```
+
+Initialize both fields in `LineRender`:
+
+```rust
+pixel_width,
+bottom_pixel_y,
+```
+
+**(c) Use `self.pixel_width` in `render_screen_line` call** — Replace the inline
+computation (line 534-535):
+
+```rust
+// Before:
+pixel_width: self.dims.cols as f32
+    * self.term_window.render_metrics.cell_size.width as f32,
+// After:
+pixel_width: self.pixel_width,
+```
+
+**(d) Skip lines that fall in the bottom border region** — In `render_line`,
+early return when the line's top_pixel_y would place it in the bottom border:
+
+```rust
+let line_top = self.top_pixel_y
+    + (line_idx + self.pos.top) as f32
+        * self.term_window.render_metrics.cell_size.height as f32;
+if line_top >= self.bottom_pixel_y {
+    return Ok(());
+}
+```
+
+Add this at the start of `render_line`, before the stable_row computation.
+
+#### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. Launch with border config, create splits, verify:
+   - Terminal text does not extend under the border on any edge
+   - Background fills stop at the border boundary on left and right
+   - Bottom rows don't render under the bottom border
+   - Content is visually inset from the border on all interior edges
+3. Single pane — no change in behavior (no borders, no inset)
+4. Zoom a pane — no borders, full content area restored
