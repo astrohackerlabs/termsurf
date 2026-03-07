@@ -1,9 +1,9 @@
-use super::proto::term_surf_message::Msg;
 use super::proto::TermSurfMessage;
+use super::proto::term_surf_message::Msg;
 use anyhow::Context;
 use prost::Message;
-use smol::io::AsyncReadExt;
 use smol::Async;
+use smol::io::AsyncReadExt;
 use std::os::unix::net::UnixStream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

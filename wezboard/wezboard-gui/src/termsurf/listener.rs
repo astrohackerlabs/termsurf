@@ -17,8 +17,8 @@ pub fn spawn_termsurf_server(sock_path: PathBuf) -> anyhow::Result<()> {
 
     log::info!("TermSurf socket listening on {}", sock_path.display());
 
-    // Set env var so child processes (TUIs) can discover the socket
-    std::env::set_var("TERMSURF_SOCKET", &sock_path);
+    // SAFETY: called once during single-threaded startup before spawning any threads.
+    unsafe { std::env::set_var("TERMSURF_SOCKET", &sock_path) };
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {

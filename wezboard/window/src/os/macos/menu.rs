@@ -130,11 +130,7 @@ impl Menu {
                 &*self.menu,
                 indexOfItemWithRepresentedObject: object
             ];
-            if n == -1 {
-                None
-            } else {
-                Some(n as usize)
-            }
+            if n == -1 { None } else { Some(n as usize) }
         }
     }
 
@@ -317,6 +313,11 @@ fn get_wrapper_class() -> &'static AnyClass {
                 #[allow(deprecated)]
                 let item = (*this).get_ivar::<*mut c_void>(WRAPPER_FIELD_NAME);
                 let item = (*item) as *mut RepresentedItem;
+                if item.is_null() {
+                    return;
+                }
+                // SAFETY: pointer was created by Box::into_raw in RepresentedItem::new
+                // and the null check above ensures we don't free a null pointer.
                 let item = Box::from_raw(item);
                 drop(item);
                 let superclass = (*this).class().superclass().unwrap();

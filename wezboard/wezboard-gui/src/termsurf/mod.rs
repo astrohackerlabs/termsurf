@@ -1,6 +1,5 @@
 pub mod conn;
 pub mod listener;
-pub mod state;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/termsurf.rs"));

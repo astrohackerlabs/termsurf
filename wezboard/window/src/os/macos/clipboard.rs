@@ -26,9 +26,8 @@ impl Clipboard {
                 let count: isize = objc2::msg_send![&*plist, count];
                 for i in 0..count {
                     let obj: *mut AnyObject = objc2::msg_send![&*plist, objectAtIndex: i];
-                    filenames.push(
-                        shlex::try_quote(nsstring_to_str(obj)).unwrap_or_else(|_| "".into()),
-                    );
+                    filenames
+                        .push(shlex::try_quote(nsstring_to_str(obj)).unwrap_or_else(|_| "".into()));
                 }
                 return Ok(filenames.join(" "));
             }

@@ -316,3 +316,17 @@ above). Don't retrofit comments to inherited upstream unsafe blocks.
 4. No no-op CGRect re-wrapping remains
 5. `state.rs` deleted
 6. All new unsafe blocks have `// SAFETY:` comments
+
+**Result:** Pass
+
+All 7 smells fixed. Build passes with zero errors. App launches, window opens,
+TermSurf socket listens, clean shutdown on quit. Grep confirms no magic numbers
+or no-op CGRect copies remain. `state.rs` deleted. All new unsafe blocks have
+`// SAFETY:` comments.
+
+#### Conclusion
+
+Pure mechanical cleanup — no behavior changes, no regressions. The remaining
+smells (1, 3, 7, 9, 10) require deeper refactoring: error handling for fallible
+ObjC inits (1, 3), boilerplate reduction (7), type alias consolidation (9), and
+ivar approach unification (10). These should be tackled in Experiment 2.
