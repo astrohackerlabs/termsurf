@@ -779,3 +779,194 @@ Key details:
   `nsstring_to_str` (8 call sites), and `Retained::as_ptr() as *const _ as id`
   for `nsstring()` results passed to cocoa's `NSWindow::setTitle_` (2 call
   sites).
+
+### Experiment 5: Migrate `ClassDecl` → `ClassBuilder` and remove `MsgSendRect`/`MsgSendSize`
+
+The geometry types (`NSRect`/`NSSize`/`NSPoint`), `NSRange`, and scalar types
+(`NSInteger`/`NSUInteger`/`NSNotFound`) all appear in ClassDecl callback
+signatures. `ClassDecl::add_method` (from `objc` 0.2) requires `objc::Encode` on
+all parameter types, but the objc2 replacements (`CGRect`, `CGSize`, `CGPoint`,
+`objc2_foundation::NSRange`) only implement `objc2::Encode`. This means geometry
+migration is blocked by the ClassDecl → ClassBuilder migration.
+
+This experiment migrates both class registrations in `window.rs`
+(`get_window_class` and `WindowView::define_class`) from `ClassDecl` to
+`ClassBuilder`, updates all ~52 callback signatures to use objc2 types, and — as
+a direct consequence — eliminates `MsgSendRect`/`MsgSendSize`, the local
+`NSRange` wrapper, all `transmute` calls, and all `objc::Encode` impls.
+
+Callback bodies still use cocoa trait methods (`nsevent.characters()`,
+`NSWindow::frame()`, etc.) — those are migrated in a later experiment. The
+bridge pattern is: use objc2 types in the signature, cast to `id`/`*mut Object`
+at the top of each body.
+
+#### Changes
+
+**Type replacements in callback signatures:**
+
+| Old (objc 0.2 / cocoa)               | New (objc2)                                       |
+| ------------------------------------ | ------------------------------------------------- |
+| `&Object` / `&mut Object`            | `*mut AnyObject`                                  |
+| `id` (`*mut Object`)                 | `*mut AnyObject`                                  |
+| `Sel` (`objc::runtime::Sel`)         | `Sel` (`objc2::runtime::Sel`)                     |
+| `BOOL`                               | `Bool` (`objc2::runtime::Bool`)                   |
+| `NSRect`                             | `CGRect` (`objc2_core_foundation::CGRect`)        |
+| `NSPoint`                            | `CGPoint` (`objc2_core_foundation::CGPoint`)      |
+| `NSSize`                             | `CGSize` (`objc2_core_foundation::CGSize`)        |
+| `NSRange` (local wrapper)            | `NSRange` (`objc2_foundation::NSRange`)           |
+| `NSRangePointer` (local wrapper)     | `*mut NSRange` (`*mut objc2_foundation::NSRange`) |
+| `NSUInteger`                         | `usize`                                           |
+| `CGFloat` (`cocoa::appkit::CGFloat`) | `CGFloat` (`objc2_core_foundation::CGFloat`)      |
+
+**`get_window_class()`** (2 callbacks):
+
+- `ClassDecl::new(WINDOW_CLS_NAME, get_objc_class(c"NSWindow"))` →
+  `ClassBuilder::new(c"WezboardWindow", AnyClass::get(c"NSWindow").unwrap())`
+- `Class::get(WINDOW_CLS_NAME)` → `AnyClass::get(c"WezboardWindow")`
+- Return type `&'static Class` → `&'static AnyClass`
+- `sel2to1(objc2::sel!(...))` → `objc2::sel!(...)` directly
+- `yes` callback: `BOOL` → `Bool`, return `Bool::YES`
+- Signature: `extern "C" fn(&mut Object, Sel) -> BOOL` →
+  `extern "C" fn(*mut AnyObject, Sel) -> Bool`
+
+**`WindowView::define_class()`** (~50 callbacks):
+
+- `ClassDecl::new(VIEW_CLS_NAME, get_objc_class(c"NSView"))` →
+  `ClassBuilder::new(c"WezboardWindowView", AnyClass::get(c"NSView").unwrap())`
+- `Protocol::get("NSTextInputClient")` →
+  `AnyProtocol::get(c"NSTextInputClient")`
+- All `sel2to1()` wrappers removed
+- All callback signatures updated per the type table above
+
+**Callback body pattern** — add casts at the top, leave cocoa calls unchanged:
+
+```rust
+// Before:
+extern "C" fn key_down(this: &mut Object, _sel: Sel, nsevent: id) {
+    Self::key_common(this, nsevent, true);
+}
+
+// After:
+extern "C" fn key_down(this: *mut AnyObject, _sel: Sel, nsevent: *mut AnyObject) {
+    let this = unsafe { &mut *(this as *mut Object) };
+    let nsevent = nsevent as id;
+    Self::key_common(this, nsevent, true);
+}
+```
+
+For callbacks that return `BOOL` → `Bool`:
+
+```rust
+// Before:
+extern "C" fn is_flipped(_this: &Object, _sel: Sel) -> BOOL { YES }
+
+// After:
+extern "C" fn is_flipped(_this: *mut AnyObject, _sel: Sel) -> Bool { Bool::YES }
+```
+
+For callbacks using geometry types (`draw_rect`,
+`first_rect_for_character_range`, `character_index_for_point`):
+
+```rust
+// Before:
+extern "C" fn draw_rect(view: &mut Object, sel: Sel, _dirty_rect: NSRect) {
+
+// After:
+extern "C" fn draw_rect(view: *mut AnyObject, sel: Sel, _dirty_rect: CGRect) {
+    let view = unsafe { &mut *(view as *mut Object) };
+    let sel = sel2to1(sel);  // Still needed for body calls using objc 0.2 Sel
+```
+
+Wait — `sel` is only used in callback bodies when passed to another function
+that expects `objc::runtime::Sel`. Check if any body actually uses `sel`. Most
+bodies ignore it (`_sel`). The few that use it (like `draw_rect` calling another
+method with `sel`) can cast inline.
+
+**Remove types and impls:**
+
+- Delete `struct MsgSendRect` + its `Encode` impl (lines 152–174)
+- Delete `struct MsgSendSize` + its `Encode` impl (lines 176–187)
+- Delete local `struct NSRange(cocoa::foundation::NSRange)` + its `Debug`,
+  `objc::Encode`, `objc2::Encode`, `RefEncode` impls, and `NSRange::new`
+  constructor (lines 99–148, 189–192)
+- Delete `struct NSRangePointer` + its `objc::Encode`, `objc2::Encode` impls
+  (lines 103–104, 126–148)
+- All 6 `transmute` call sites become direct `CGRect`/`CGSize` usage
+
+**`transmute` removal** — before and after for each site:
+
+```rust
+// Line 1478 — setContentMinSize
+// Before:
+setContentMinSize: std::mem::transmute::<NSSize, MsgSendSize>(NSSize::new(...))
+// After:
+setContentMinSize: CGSize::new(min_width.into(), min_height.into())
+
+// Lines 2298-2299 — contentRectForFrameRect
+// Before:
+let __r: MsgSendRect = objc2::msg_send![..., contentRectForFrameRect:
+    std::mem::transmute::<NSRect, MsgSendRect>(frame)];
+std::mem::transmute(__r)
+// After:
+objc2::msg_send![..., contentRectForFrameRect:
+    CGRect::new(frame.origin, frame.size)]
+// (frame is still cocoa NSRect, so construct CGRect from its fields)
+
+// Lines 2302-2303 — convertRectToBacking (same pattern)
+
+// Line 2368 — addTrackingRect
+// Before:
+objc2::msg_send![..., addTrackingRect:
+    std::mem::transmute::<NSRect, MsgSendRect>(rect), ...]
+// After:
+objc2::msg_send![..., addTrackingRect:
+    CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(...)), ...]
+
+// Line 3371 — initWithFrame
+// Before:
+objc2::msg_send![..., initWithFrame:
+    std::mem::transmute::<NSRect, MsgSendRect>(rect)]
+// After:
+objc2::msg_send![..., initWithFrame:
+    CGRect::new(rect.origin, rect.size)]
+```
+
+**Import changes:**
+
+Remove from `cocoa::foundation` import: `NSInteger`, `NSNotFound`, `NSPoint`,
+`NSRect`, `NSSize`, `NSUInteger`. Keep: `NSArray`, `NSAutoreleasePool`,
+`NSFastEnumeration`, `NSString`.
+
+Remove: `objc::declare::ClassDecl`.
+
+Remove from `objc::runtime`: `Class`, `Protocol`. Keep: `Object`, `Sel`, `BOOL`,
+`YES`, `NO` (still used in callback bodies and cocoa trait calls).
+
+Add: `use objc2::runtime::{AnyClass, AnyProtocol, Bool, ClassBuilder};` Add:
+`use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};` Add:
+`use objc2_foundation::NSRange;` (replacing local wrapper)
+
+**`cocoa::foundation` import after this experiment:**
+
+```rust
+use cocoa::foundation::{NSArray, NSAutoreleasePool, NSFastEnumeration, NSString};
+```
+
+**Bridge helpers after this experiment:**
+
+`sel2to1` — still needed in a few callback bodies that pass `sel` to functions
+expecting `objc::runtime::Sel`. Check actual usage and remove if unused.
+
+`cls2to1` / `cls1to2` / `get_class` — `get_class` is used by `get_window_class`
+and `define_class` (replaced by `AnyClass::get`). `cls1to2`/`cls2to1` may still
+be used elsewhere in window.rs. Check and remove if unused.
+
+#### Verification
+
+1. `cd wezboard && cargo build` — zero errors
+2. `cargo run --bin wezboard-gui` — app launches, window opens
+3. No `MsgSendRect` or `MsgSendSize` in codebase
+4. No `transmute` calls related to geometry types
+5. No `objc::Encode` impls in window.rs
+6. No `ClassDecl` in window.rs
+7. Local `NSRange` wrapper removed
