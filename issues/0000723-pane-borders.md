@@ -340,106 +340,93 @@ adjusting `dims.cols` to reduce the number of rendered columns, or applying
 actual clipping in the renderer, or modifying how `render_screen_line` uses
 `pixel_width` internally.
 
-### Experiment 3: Constrain visible rows + pixel_width + skip bottom lines
+### Experiment 3: Reduce cell count upstream via resize
 
-Experiments 1 and 2 each addressed part of the problem but missed the full
-picture. The rendering pipeline has multiple independent content bounds that ALL
-must be constrained simultaneously:
+Experiments 1 and 2 tried to fix the inset downstream in the renderer — shifting
+pixel offsets, reducing `pixel_width`, adjusting `background_rect`. None worked
+because the terminal still thinks it has N columns and M rows and renders all of
+them. The renderer is the wrong place to fix this.
 
-1. **`background_rect`** (layer 0 pane fill) — Exp 1 insets this. Works.
-2. **`left_pixel_x`** — Exp 1 shifts this right on interior left edges. Works.
-3. **`top_pixel_y`** (via `inset_top_pixel_y`) — Exp 1 shifts this down on
-   interior top edges. Works.
-4. **`pixel_width`** (horizontal clipping in `render_screen_line`) — Exp 2
-   reduced this. Clips backgrounds via `bounding_rect.intersection()` and
-   soft-clips glyphs via `pos_x > pixel_width` at `screen_line.rs:523`. Should
-   work horizontally.
-5. **Vertical extent** — **Never addressed.** The number of rendered lines is
-   `dims.viewport_rows`, unchanged. Lines at the bottom still render under the
-   bottom border. There is no `pixel_height` constraint.
+Window padding works by subtracting padding pixels from available space BEFORE
+computing cell count in `resize.rs`. The terminal simply gets fewer cols/rows,
+and content can never overflow because the cells don't exist. Pane borders
+should work the same way.
 
-The fix combines all three dimensions: horizontal (`pixel_width` reduction from
-Exp 2), vertical top (already working `inset_top_pixel_y` from Exp 1), and
-vertical bottom (skip lines that fall in the bottom border region).
+All panes always have a border (even single-pane windows). Subtract
+`border_width * 2` (left + right, top + bottom) from available space before
+computing cell count.
+
+Also remove all downstream inset code from Experiment 1 (`background_rect`
+adjustments, `left_pixel_x` shift, `inset_top_pixel_y` shift) since the upstream
+fix makes them unnecessary and they would double-count.
 
 #### Changes
 
-**1. `wezboard/wezboard-gui/src/termwindow/render/pane.rs`** — Three changes:
+**1. `wezboard/wezboard-gui/src/termwindow/resize.rs`** — Subtract border pixels
+from available space in both branches of `apply_dimensions`.
 
-**(a) Add `pixel_width` and `bottom_pixel_y` fields to `LineRender` struct**
-(after `left_pixel_x`):
-
-```rust
-pixel_width: f32,
-bottom_pixel_y: f32,
-```
-
-**(b) Compute `pixel_width` and `bottom_pixel_y` with border inset** — After
-`inset_top_pixel_y` (around line 382), compute both values:
+In the `else` branch (window resize, ~line 250):
 
 ```rust
-let cell_width = self.render_metrics.cell_size.width as f32;
-let full_pixel_width = cell_width * dims.cols as f32;
-let mut pixel_width = full_pixel_width;
-if border_width > 0.0 && pos.left != 0 {
-    pixel_width -= border_width;
-}
-if border_width > 0.0
-    && pos.left + pos.width < self.terminal_size.cols as usize
-{
-    pixel_width -= border_width;
-}
+let split_border_pixels = config
+    .split_border_width
+    .evaluate_as_pixels(h_context) as usize;
 
-let bottom_pixel_y = if border_width > 0.0
-    && pos.top + pos.height < self.terminal_size.rows as usize
-{
-    inset_top_pixel_y
-        + (dims.viewport_rows as f32 * cell_height)
-        - border_width
-} else {
-    f32::MAX
-};
+let avail_width = dimensions.pixel_width.saturating_sub(
+    (padding_left + padding_right) as usize
+        + (border.left + border.right).get() as usize
+        + split_border_pixels * 2,
+);
+let avail_height = dimensions
+    .pixel_height
+    .saturating_sub(
+        (padding_top + padding_bottom) as usize
+            + (border.top + border.bottom).get() as usize
+            + split_border_pixels * 2,
+    )
+    .saturating_sub(tab_bar_height as usize);
 ```
 
-Initialize both fields in `LineRender`:
+In the `if` branch (explicit size, ~line 204), add `split_border_pixels * 2` to
+the `pixel_height` and `pixel_width` computations so the window requests enough
+pixels to fit both cells and borders.
+
+**2. `wezboard/wezboard-gui/src/termwindow/render/pane.rs`** — Remove Experiment
+1's downstream inset code:
+
+**(a)** Remove the `border_width` computation and `background_rect` inset block
+(lines 155-187). Replace with just `let border_width = 0.0_f32;` or remove
+references entirely.
+
+**(b)** Remove the `border_width` conditional from `left_pixel_x` (line 378) —
+revert to:
 
 ```rust
-pixel_width,
-bottom_pixel_y,
+let left_pixel_x = padding_left
+    + border.left.get() as f32
+    + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
 ```
 
-**(c) Use `self.pixel_width` in `render_screen_line` call** — Replace the inline
-computation (line 534-535):
+**(c)** Remove `inset_top_pixel_y` (line 380-381) — use `top_pixel_y` directly
+in the `LineRender` initializer.
 
-```rust
-// Before:
-pixel_width: self.dims.cols as f32
-    * self.term_window.render_metrics.cell_size.width as f32,
-// After:
-pixel_width: self.pixel_width,
-```
+**(d)** Remove `num_panes` parameter from `paint_pane` signature and update the
+call site in `paint.rs`.
 
-**(d) Skip lines that fall in the bottom border region** — In `render_line`,
-early return when the line's top_pixel_y would place it in the bottom border:
+**3. `wezboard/wezboard-gui/src/termwindow/render/pane.rs`** —
+`paint_pane_border`: Remove the `num_panes <= 1` early return (line 630-632)
+since all panes always get borders.
 
-```rust
-let line_top = self.top_pixel_y
-    + (line_idx + self.pos.top) as f32
-        * self.term_window.render_metrics.cell_size.height as f32;
-if line_top >= self.bottom_pixel_y {
-    return Ok(());
-}
-```
-
-Add this at the start of `render_line`, before the stable_row computation.
+**4. `wezboard/wezboard-gui/src/termwindow/render/paint.rs`** — Remove
+`num_panes` variable and update `paint_pane` call. Keep `paint_pane_border`
+call. Remove the `num_panes` argument from `paint_pane_border` too.
 
 #### Verification
 
 1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
-2. Launch with border config, create splits, verify:
-   - Terminal text does not extend under the border on any edge
-   - Background fills stop at the border boundary on left and right
-   - Bottom rows don't render under the bottom border
-   - Content is visually inset from the border on all interior edges
-3. Single pane — no change in behavior (no borders, no inset)
-4. Zoom a pane — no borders, full content area restored
+2. Launch with border config, single pane — border visible, text does not extend
+   under border
+3. Create splits — borders on all panes, text inset on all edges
+4. Resize window — content reflows correctly, borders stay consistent
+5. Remove `split_border_width` from config — original behavior restored (no
+   borders, no space subtracted)
