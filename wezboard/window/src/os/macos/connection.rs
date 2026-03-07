@@ -138,7 +138,7 @@ impl ConnectionOps for Connection {
         let name = unsafe {
             let appearance: *mut AnyObject = objc2::msg_send![&*self.ns_app, effectiveAppearance];
             let name_obj: *mut AnyObject = objc2::msg_send![appearance, name];
-            nsstring_to_str(name_obj.cast())
+            nsstring_to_str(name_obj)
         };
         log::debug!("NSAppearanceName is {name}");
         match name {
@@ -217,7 +217,7 @@ pub fn nsscreen_to_screen_info(screen: &NSScreen) -> ScreenInfo {
     let name = {
         let name_obj = screen.localizedName();
         let ptr = Retained::as_ptr(&name_obj) as *mut AnyObject;
-        unsafe { nsstring_to_str(ptr.cast()) }.to_string()
+        unsafe { nsstring_to_str(ptr) }.to_string()
     };
 
     let max_fps: NSInteger = unsafe { objc2::msg_send![screen, maximumFramesPerSecond] };

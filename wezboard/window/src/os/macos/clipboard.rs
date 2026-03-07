@@ -27,7 +27,7 @@ impl Clipboard {
                 for i in 0..count {
                     let obj: *mut AnyObject = objc2::msg_send![&*plist, objectAtIndex: i];
                     filenames.push(
-                        shlex::try_quote(nsstring_to_str(obj.cast())).unwrap_or_else(|_| "".into()),
+                        shlex::try_quote(nsstring_to_str(obj)).unwrap_or_else(|_| "".into()),
                     );
                 }
                 return Ok(filenames.join(" "));
@@ -35,7 +35,7 @@ impl Clipboard {
             #[allow(deprecated)]
             let s = self.pasteboard.stringForType(NSStringPboardType);
             if let Some(s) = s {
-                let str = nsstring_to_str((&*s as *const NSString).cast_mut().cast());
+                let str = nsstring_to_str(Retained::as_ptr(&s) as *mut AnyObject);
                 return Ok(str.to_string());
             }
         }

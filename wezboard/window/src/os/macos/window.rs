@@ -37,6 +37,7 @@ use core_foundation::{declare_TCFType, impl_TCFType};
 use objc::declare::ClassDecl;
 use objc::rc::{StrongPtr, WeakPtr};
 use objc::runtime::{Class, Object, Protocol, Sel, BOOL, NO, YES};
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use promise::Future;
 use raw_window_handle::{
@@ -667,7 +668,7 @@ impl Window {
                 last_pos.borrow_mut().replace(next_pos);
             });
 
-            window.setTitle_(*nsstring(&name));
+            window.setTitle_(Retained::as_ptr(&nsstring(&name)) as *const _ as id);
             window.setAcceptsMouseMovedEvents_(YES);
 
             let view = WindowView::init_with_frame(&inner, rect)?;
@@ -1365,7 +1366,7 @@ impl WindowInner {
     fn set_title(&mut self, title: &str) {
         let title = nsstring(title);
         unsafe {
-            NSWindow::setTitle_(*self.window, *title);
+            NSWindow::setTitle_(*self.window, Retained::as_ptr(&title) as *const _ as id);
         }
     }
 
@@ -2161,7 +2162,7 @@ impl WindowView {
         astring: id,
         replacement_range: NSRange,
     ) {
-        let s = unsafe { nsstring_to_str(astring) };
+        let s = unsafe { nsstring_to_str(astring as *mut AnyObject) };
         log::trace!(
             "insert_text_replacement_range {} {:?}",
             s,
@@ -2200,7 +2201,7 @@ impl WindowView {
         selected_range: NSRange,
         replacement_range: NSRange,
     ) {
-        let s = unsafe { nsstring_to_str(astring) };
+        let s = unsafe { nsstring_to_str(astring as *mut AnyObject) };
         log::trace!(
             "set_marked_text_selected_range_replacement_range {} {:?} {:?}",
             s,
@@ -2658,8 +2659,8 @@ impl WindowView {
 
     fn key_common(this: &mut Object, nsevent: id, key_is_down: bool) {
         let is_a_repeat = unsafe { nsevent.isARepeat() == YES };
-        let chars = unsafe { nsstring_to_str(nsevent.characters()) };
-        let unmod = unsafe { nsstring_to_str(nsevent.charactersIgnoringModifiers()) };
+        let chars = unsafe { nsstring_to_str(nsevent.characters() as *mut AnyObject) };
+        let unmod = unsafe { nsstring_to_str(nsevent.charactersIgnoringModifiers() as *mut AnyObject) };
         let modifier_flags = unsafe { nsevent.modifierFlags() };
         let modifiers = key_modifiers(modifier_flags);
         let leds = if modifier_flags.bits() & (1 << 16) != 0 {
@@ -3017,7 +3018,7 @@ impl WindowView {
     }
 
     extern "C" fn perform_key_equivalent(this: &mut Object, _sel: Sel, nsevent: id) -> BOOL {
-        let chars = unsafe { nsstring_to_str(nsevent.characters()) };
+        let chars = unsafe { nsstring_to_str(nsevent.characters() as *mut AnyObject) };
         let modifier_flags = unsafe { nsevent.modifierFlags() };
         let modifiers = key_modifiers(modifier_flags);
 
@@ -3309,7 +3310,7 @@ impl WindowView {
 
             let paths = unsafe { filenames.iter() }
                 .map(|file| unsafe {
-                    let path = nsstring_to_str(file);
+                    let path = nsstring_to_str(file as *mut AnyObject);
                     PathBuf::from(path)
                 })
                 .collect::<Vec<_>>();
@@ -3339,7 +3340,7 @@ impl WindowView {
 
             let paths = unsafe { filenames.iter() }
                 .map(|file| unsafe {
-                    let path = nsstring_to_str(file);
+                    let path = nsstring_to_str(file as *mut AnyObject);
                     PathBuf::from(path)
                 })
                 .collect::<Vec<_>>();

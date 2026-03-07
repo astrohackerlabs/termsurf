@@ -254,7 +254,7 @@ impl MenuItem {
     pub fn get_title(&self) -> String {
         let title = self.item.title();
         let ptr = Retained::as_ptr(&title) as *mut AnyObject;
-        unsafe { nsstring_to_str(ptr.cast()).to_string() }
+        unsafe { nsstring_to_str(ptr).to_string() }
     }
 
     pub fn set_title(&self, title: &str) {

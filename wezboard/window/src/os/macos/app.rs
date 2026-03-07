@@ -27,10 +27,10 @@ extern "C" fn application_should_terminate(
                 let cancel = nsstring("Cancel");
                 let ok = nsstring("Ok");
 
-                let () = objc2::msg_send![alert, setMessageText: *message_text as *mut AnyObject];
-                let () = objc2::msg_send![alert, setInformativeText: *info_text as *mut AnyObject];
-                let () = objc2::msg_send![alert, addButtonWithTitle: *cancel as *mut AnyObject];
-                let () = objc2::msg_send![alert, addButtonWithTitle: *ok as *mut AnyObject];
+                let () = objc2::msg_send![alert, setMessageText: Retained::as_ptr(&message_text)];
+                let () = objc2::msg_send![alert, setInformativeText: Retained::as_ptr(&info_text)];
+                let () = objc2::msg_send![alert, addButtonWithTitle: Retained::as_ptr(&cancel)];
+                let () = objc2::msg_send![alert, addButtonWithTitle: Retained::as_ptr(&ok)];
                 #[allow(non_upper_case_globals)]
                 const NSModalResponseCancel: i64 = 1000;
                 #[allow(non_upper_case_globals, dead_code)]
@@ -122,7 +122,7 @@ extern "C" fn application_open_file(
     #[allow(deprecated)]
     let launched: Bool = unsafe { *(&*this).get_ivar("launched") };
     if launched.as_bool() {
-        let file_name = unsafe { nsstring_to_str(file_name.cast()) }.to_string();
+        let file_name = unsafe { nsstring_to_str(file_name) }.to_string();
         if let Some(conn) = Connection::get() {
             log::debug!("application_open_file {file_name}");
             conn.dispatch_app_event(ApplicationEvent::OpenCommandScript(file_name));
