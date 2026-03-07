@@ -554,3 +554,113 @@ use cocoa::foundation::{
 2. `cargo run --bin wezboard-gui` — app launches, window opens
 3. No `cocoa::appkit` in `window.rs` imports or body
 4. `grep -c 'cocoa::appkit' window/src/os/macos/window.rs` returns 0
+
+#### Results: PASSED
+
+All 4 verification checks pass. Changes made:
+
+**`wezboard/window/src/os/macos/window.rs`**:
+
+- **Deleted `cocoa::appkit` import block** — removed
+  `use cocoa::appkit::{self, NSApplication, NSEvent, NSOpenGLContext, NSOpenGLPixelFormat, NSPasteboard, NSRunningApplication, NSScreen, NSView, NSWindow}`.
+- **Removed `NSArray`, `NSAutoreleasePool`** from `cocoa::foundation` import
+  (all uses migrated to `msg_send!`).
+- **Added 18 function key constants** — `NS_UP_ARROW_FUNCTION_KEY` through
+  `NS_MODE_SWITCH_FUNCTION_KEY`, replacing `appkit::NS*FunctionKey` references
+  in `function_key_to_keycode`.
+- **Added `cg_to_ns_rect` helper** — converts `CGRect` → `NSRect` at msg_send
+  boundaries since `cocoa::foundation::NSRect` does not implement
+  `objc2::Encode`.
+
+**NSOpenGLPixelFormat + NSOpenGLContext (7 sites):**
+
+- `NSOpenGLPixelFormat::alloc(nil).initWithAttributes_(&[...])` → two
+  `msg_send!` calls (alloc + initWithAttributes:) with raw u32 attribute
+  constants (99, 0x3200, 74, 8, 11, 12, 13, 96, 73, 5).
+- `NSOpenGLContext::alloc(nil).initWithFormat_shareContext_(...)` → two
+  `msg_send!` calls with `std::ptr::null::<AnyObject>()` for nil shareContext.
+- `setValues_forParameter_` → `msg_send!` with `isize` parameter type (236 =
+  NSOpenGLCPSurfaceOpacity, 222 = NSOpenGLCPSwapInterval).
+- `setView_`, `flushBuffer`, `makeCurrentContext`, `view()`,
+  `currentContext(nil)` → `msg_send!`.
+- `NSAutoreleasePool::new(nil)` → `msg_send![class!(NSAutoreleasePool), new]`.
+
+**NSWindow (22 sites):**
+
+- `frame`, `contentRectForFrameRect:`, `setFrameOrigin:`, `setBackgroundColor:`,
+  `setColorSpace:`, `cascadeTopLeftFromPoint:`, `setTitle:`,
+  `setAcceptsMouseMovedEvents:`, `windowNumber`, `setContentView:`,
+  `setDelegate:`, `orderOut:`, `setFrame:display:`, `makeKeyAndOrderFront:`,
+  `setOpaque:`, `setHasShadow:`, `miniaturize:`, `setTitle:`, `setLevel:`,
+  `setContentSize:`, `toggleFullScreen:`, `zoom:`, `center`, `close`,
+  `setTitleVisibility:`, `setTitlebarAppearsTransparent:`,
+  `setReleasedWhenClosed:`, `setResizeIncrements:`, `standardWindowButton:` —
+  all replaced with `msg_send!`.
+- `NSColor::clearColor` and `NSColorSpace::sRGBColorSpace` → class-level
+  `msg_send!`.
+- `NSWindowButton` constants → raw u64 values (0=Close, 1=Miniaturize, 2=Zoom).
+- `NSWindowTitleVisibility` → raw isize (0=Visible, 1=Hidden).
+
+**NSView (11 sites):**
+
+- `frame`, `convertRectToBacking:`, `convertPoint:fromView:`, `contentView`,
+  `setWantsLayer:` — all replaced with `msg_send!`.
+
+**NSScreen (9 sites):**
+
+- `mainScreen`, `screens`, `frame`, `convertRectToBacking:` — all replaced with
+  `msg_send!` using `objc2::class!(NSScreen)`.
+
+**NSEvent (11 sites):**
+
+- `pressedMouseButtons`, `mouseLocation`, `buttonNumber`, `locationInWindow`,
+  `isARepeat`, `characters`, `charactersIgnoringModifiers`, `keyCode`,
+  `hasPreciseScrollingDeltas`, `scrollingDeltaY`, `scrollingDeltaX` — all
+  replaced with `msg_send!`.
+
+**NSApplication + NSRunningApplication (3 sites):**
+
+- `sharedApplication`, `currentApplication` → class-level `msg_send!`.
+
+**NSPasteboard (2 sites):**
+
+- `propertyListForType(pb, appkit::NSFilenamesPboardType)` →
+  `msg_send![... propertyListForType: ...]` with
+  `nsstring("NSFilenamesPboardType")`.
+
+**NSArray (2 sites):**
+
+- `arrayWithObject` and `arrayWithObjects` → `msg_send!` with
+  `objc2::class!(NSArray)`.
+
+**NSArray `.count()` / `.objectAtIndex()` (3 sites):**
+
+- Replaced cocoa `NSArray` trait method calls with `msg_send!` returning `usize`
+  and `*mut AnyObject` respectively.
+
+**`window.load().level()` (1 site):**
+
+- Replaced cocoa `NSWindow` trait `level()` call with `msg_send!` returning
+  `i64`.
+
+**CGRect/CGPoint conversion pattern:**
+
+All `msg_send!` calls that return or accept geometry types use
+`CGRect`/`CGPoint` (from `objc2_core_foundation`) since
+`cocoa::foundation::NSRect`/`NSPoint` do not implement `objc2::Encode`.
+Conversions via `cg_to_ns_rect` and manual `NSPoint::new(cg.x, cg.y)` are used
+where downstream code still expects `NSRect`/`NSPoint`.
+
+**`nil` argument pattern:**
+
+All `nil` arguments to `msg_send!` replaced with `std::ptr::null::<AnyObject>()`
+since cocoa's `nil` (`*mut objc::runtime::Object`) does not implement
+`objc2::RefEncode`.
+
+**Runtime crash fix:**
+
+Initial build succeeded but the app crashed at launch with SIGABRT in
+`setValues:forParameter:`. Root cause: `NSOpenGLContextParameter` is `NSInteger`
+(`isize`/i64 on ARM64), but the raw constant was passed as `i32`. objc2's
+debug-mode method signature verification caught the type mismatch. Fixed by
+changing `236i32` → `236isize` and `222i32` → `222isize`.
