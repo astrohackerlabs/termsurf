@@ -1,6 +1,14 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Compile termsurf.proto
+    let proto_path = std::path::Path::new("../../proto/termsurf.proto");
+    if proto_path.exists() {
+        println!("cargo:rerun-if-changed=../../proto/termsurf.proto");
+        prost_build::compile_protos(&[proto_path], &["../../proto"])
+            .expect("compile termsurf.proto");
+    }
+
     #[cfg(windows)]
     {
         use anyhow::Context as _;

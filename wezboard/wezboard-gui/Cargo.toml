@@ -28,6 +28,7 @@ dhat-ad-hoc = ["dhat"]  # if you are doing ad hoc profiling
 
 [build-dependencies]
 anyhow.workspace = true
+prost-build.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
 cc.workspace = true
@@ -68,6 +69,7 @@ mux.workspace = true
 nucleo-matcher.workspace = true
 ordered-float.workspace = true
 parking_lot.workspace = true
+prost.workspace = true
 portable-pty = { workspace=true, features = ["serde_support"]}
 promise.workspace = true
 rangeset.workspace = true

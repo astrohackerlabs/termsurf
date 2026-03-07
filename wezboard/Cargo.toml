@@ -167,6 +167,8 @@ phf = {version="0.11", default-features=false}
 phf_codegen = "0.10"
 pkg-config = "0.3"
 plist = "1.7"
+prost = "0.14"
+prost-build = "0.14"
 plugin = { path = "lua-api-crates/plugin" }
 portable-pty = { path = "pty" }
 predicates = "3.0"

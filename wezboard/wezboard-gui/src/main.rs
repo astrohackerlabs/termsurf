@@ -27,6 +27,8 @@ use termwiz::cell::CellAttributes;
 use termwiz::surface::{Line, SEQ_ZERO};
 use unicode_normalization::UnicodeNormalization;
 use wezboard_bidi::Direction;
+
+mod termsurf;
 use wezboard_client::domain::ClientDomain;
 use wezboard_font::shaper::PresentationWidth;
 use wezboard_font::FontConfiguration;
@@ -418,6 +420,14 @@ async fn async_run_terminal_gui(
     ))?;
     if let Err(err) = spawn_mux_server(unix_socket_path, should_publish) {
         log::warn!("{:#}", err);
+    }
+
+    // TermSurf protocol socket for TUI and browser engine connections
+    let termsurf_sock = std::env::temp_dir()
+        .join("termsurf")
+        .join(format!("wezboard-{}.sock", unsafe { libc::getpid() }));
+    if let Err(err) = termsurf::spawn_termsurf_server(termsurf_sock) {
+        log::warn!("TermSurf socket: {:#}", err);
     }
 
     if !opts.no_auto_connect {
