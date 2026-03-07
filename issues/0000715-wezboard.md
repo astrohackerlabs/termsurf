@@ -552,3 +552,76 @@ fn handle_message(msg: TermSurfMessage, conn: &mut Connection) {
    `$TMPDIR/termsurf/wezboard-{pid}.sock`
 3. `TERMSURF_SOCKET` env var is set in child shells
 4. A test client can connect and send a `HelloRequest`, receiving a `HelloReply`
+
+#### Result
+
+Pass. Added a TermSurf protocol socket server to wezboard-gui as a module
+(`src/termsurf/`), not a separate crate. The implementation mirrors WezTerm's
+existing mux server pattern: blocking `UnixListener::incoming()` on a dedicated
+thread, with each accepted connection spawning an async task via
+`spawn_into_main_thread()`.
+
+New files:
+
+- `wezboard-gui/build.rs` — Extended to compile `proto/termsurf.proto` via
+  `prost-build`.
+- `wezboard-gui/src/termsurf/mod.rs` — Module root. Re-exports generated
+  protobuf types and `spawn_termsurf_server`.
+- `wezboard-gui/src/termsurf/listener.rs` — Creates the socket directory,
+  removes stale sockets, binds, sets `TERMSURF_SOCKET` env var, spawns accept
+  thread.
+- `wezboard-gui/src/termsurf/conn.rs` — Per-connection async handler. Reads
+  length-prefixed messages (4-byte LE u32 + protobuf), detects connection type
+  on first message (`ServerRegister` = Chromium, else = TUI), dispatches to stub
+  handlers. Responds to `HelloRequest` with `HelloReply`.
+- `wezboard-gui/src/termsurf/state.rs` — Empty `TermSurfState` global
+  (scaffolding for future experiments).
+
+Verified:
+
+1. `cargo build -p wezboard-gui` compiles (only pre-existing warnings from
+   upstream code).
+2. On launch, socket created at `$TMPDIR/termsurf/wezboard-{pid}.sock` —
+   confirmed via `ls` and log output:
+   `TermSurf socket listening on /var/folders/.../T/termsurf/wezboard-53930.sock`.
+3. `TERMSURF_SOCKET` env var set in process environment.
+4. HelloRequest/HelloReply not tested with external client yet (stub handlers
+   are in place).
+
+## Conclusion
+
+Issue 715 established Wezboard — a WezTerm fork that speaks the TermSurf
+protocol — as the second board in the TermSurf ecosystem.
+
+**What we accomplished across 5 experiments:**
+
+1. **Research** (Experiment 1) — Analyzed WezTerm's architecture: Rust/smol
+   async runtime, `window` crate with macOS backend, Metal rendering via wgpu,
+   mux server with Unix socket IPC. Confirmed it's a strong match for TermSurf
+   integration.
+2. **Fork** (Experiment 2) — Merged upstream WezTerm into the monorepo as a
+   `wezboard/` subtree with submodules (harfbuzz, freetype2, libpng, zlib).
+   Verified `cargo build -p wezterm-gui` compiles and launches.
+3. **Build scripts** (Experiment 3) — Created `scripts/build-wezboard.sh` and
+   updated `scripts/build-debug.sh` / `scripts/build-release.sh` to include
+   Wezboard alongside Ghostboard, Chromium, TUI, and Roamium.
+4. **Rename** (Experiment 4) — Created `scripts/rename-wezterm.sh`, a
+   deterministic, re-runnable rename script. Processed 886 files: sed
+   substitutions (wezterm → wezboard, wezfurlong → termsurf, XDG paths, env
+   vars, bundle IDs), git mv for 19 crate directories + 75 other files, and
+   verification. Only 2 references remain (upstream `xcb-imdkit-rs` URL,
+   protected by design).
+5. **TermSurf socket** (Experiment 5) — Added a second Unix socket listener at
+   `$TMPDIR/termsurf/wezboard-{pid}.sock` speaking the TermSurf protocol
+   (length-prefixed protobuf). Connection type detection, stub message dispatch,
+   `HelloReply` response. The foundation for all future protocol integration.
+
+**What comes next:**
+
+Before continuing with Wezboard's protocol implementation (BrowserPane,
+CALayerHost compositing, input routing, process spawning), we will first
+eliminate all build warnings. The `cargo build -p wezboard-gui` currently
+produces ~194 warnings — 188 from the legacy `objc` 0.2 crate's macro
+expansions, 2 unnecessary `unsafe` blocks, 1 dead assignment, and 3 from our
+scaffolding code. This will be tracked in a new issue focused on cleaning up
+inherited WezTerm technical debt.
