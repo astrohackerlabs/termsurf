@@ -464,3 +464,89 @@ Smells 1 and 3 are fixed. Null ObjC init returns now produce actionable
 `anyhow::Error` messages instead of bare panics at all sites where the function
 signature supports it. The remaining smells (7, 9, 10) are boilerplate reduction
 and consistency improvements — candidates for Experiment 3.
+
+### Experiment 3: Boilerplate reduction and consistency
+
+#### Goal
+
+Fix smells 7, 9, and 10 — the last three smells. All are mechanical refactors
+with no behavior change: eliminate the verbose `__r` boilerplate, consolidate
+the duplicate `type id` alias, and unify ivar access to use
+`#[allow(deprecated)]` everywhere.
+
+#### Changes
+
+**Smell 7 — Eliminate `__r` boilerplate (40 sites in `window.rs`)**
+
+The two-line pattern:
+
+```rust
+let foo: id = {
+    let __r: *mut AnyObject = objc2::msg_send![...];
+    __r as id
+};
+```
+
+exists because `msg_send!` infers its return type from context, and the `id`
+alias (`*mut AnyObject`) doesn't trigger inference when used directly. The fix
+is to annotate `__r` inline and collapse the block:
+
+```rust
+let foo: id = unsafe { objc2::msg_send![...] };
+```
+
+This works because `msg_send!` can infer `*mut AnyObject` when the `let` binding
+has type `id` (which is `*mut AnyObject`). The `__r` intermediate and the block
+wrapper become unnecessary.
+
+Apply this to all ~40 sites in `window.rs` where the pattern appears. A few
+sites use `__r` in more complex ways (e.g., `Retained::from_raw(__r)` or casting
+to a different type) — leave those as-is since the `__r` serves a purpose there.
+
+**Smell 9 — Consolidate duplicate `type id` alias**
+
+`type id = *mut AnyObject` is defined in both:
+
+- `wezboard/window/src/os/macos/window.rs:64`
+- `wezboard/wezboard-font/src/locator/core_text.rs:6`
+
+These are in separate crates, so they can't share a single definition without
+adding a cross-crate dependency. Leave both definitions in place but add a
+comment to each referencing the other, so future maintainers know about the
+duplication:
+
+```rust
+// NOTE: also defined in wezboard-font/src/locator/core_text.rs
+type id = *mut AnyObject;
+```
+
+This is the minimal fix — no code change, just documentation. A proper fix
+(shared type alias crate or removing `id` entirely) would touch ~100 sites and
+is out of scope.
+
+**Smell 10 — Unify ivar access to `#[allow(deprecated)]`**
+
+`window.rs` uses manual pointer arithmetic (`get_view_ivar`/`set_view_ivar`)
+while `app.rs`, `menu.rs`, and `clipboard.rs` use `#[allow(deprecated)]` with
+`get_ivar`/`get_mut_ivar`. The deprecated API is simpler and less error-prone.
+
+Replace `get_view_ivar` and `set_view_ivar` with `#[allow(deprecated)]`
+`get_ivar`/`get_mut_ivar` calls at all 4 call sites:
+
+| File      | Line | Function        | Change                                        |
+| --------- | ---- | --------------- | --------------------------------------------- |
+| window.rs | 2143 | `get_view_ivar` | `#[allow(deprecated)] (*this).get_ivar(...)`  |
+| window.rs | 2144 | `set_view_ivar` | `#[allow(deprecated)] set_ivar(..., null)`    |
+| window.rs | 3573 | `get_view_ivar` | `#[allow(deprecated)] (*this).get_ivar(...)`  |
+| window.rs | 3609 | `set_view_ivar` | `#[allow(deprecated)] get_mut_ivar(...) = ..` |
+
+Then delete the `get_view_ivar` and `set_view_ivar` functions (lines 2015–2029).
+
+#### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. `cargo run --bin wezboard-gui` — app launches, window opens
+3. Grep confirms no `__r as id` remains in `window.rs` (except sites where `__r`
+   feeds into `Retained::from_raw` or other non-trivial uses)
+4. Grep confirms `get_view_ivar`/`set_view_ivar` functions are deleted
+5. Grep confirms both `type id` definitions have cross-reference comments
