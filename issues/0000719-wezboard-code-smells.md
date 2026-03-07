@@ -441,3 +441,26 @@ let view = self
 3. Grep confirms no `Retained::from_raw(...).unwrap()` remains in our modified
    files
 4. Grep confirms no `load().unwrap()` remains on `view_id`
+
+**Result:** Pass
+
+All 5 sites fixed. Build passes with zero errors. App launches, spawns window
+(window_id: 1, pane_id: 1), TermSurf socket listens, clean shutdown on quit.
+Grep confirms no `Retained::from_raw(...).unwrap()` or `load().unwrap()` remain
+in modified files.
+
+Pragmatic deviation from the plan: Site D (`menu.rs:170`) uses `.expect()`
+instead of `Result` because `wrap()` is called from
+`index_of_item_with_represented_item` (returns `Option<usize>`) and
+`set_represented_item` (returns `()`). Making `wrap` return `Result` would
+cascade through 4+ callers across `menu.rs`, `commands.rs`, and `app.rs` — none
+of which return `Result`. NSObject `alloc`+`init` effectively cannot fail, so
+`.expect("NSObject alloc+init returned nil")` gives an actionable message
+without the signature cascade.
+
+#### Conclusion
+
+Smells 1 and 3 are fixed. Null ObjC init returns now produce actionable
+`anyhow::Error` messages instead of bare panics at all sites where the function
+signature supports it. The remaining smells (7, 9, 10) are boilerplate reduction
+and consistency improvements — candidates for Experiment 3.

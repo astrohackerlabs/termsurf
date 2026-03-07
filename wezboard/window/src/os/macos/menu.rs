@@ -167,7 +167,7 @@ impl RepresentedItem {
         #[allow(deprecated)]
         unsafe {
             *(*wrapper).get_mut_ivar::<*const c_void>(WRAPPER_FIELD_NAME) = item;
-            Retained::from_raw(wrapper).unwrap()
+            Retained::from_raw(wrapper).expect("NSObject alloc+init returned nil")
         }
     }
 

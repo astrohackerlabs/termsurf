@@ -35,7 +35,7 @@ impl Connection {
         let ns_app = NSApplication::sharedApplication(mtm);
         ns_app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-        let delegate = create_app_delegate();
+        let delegate = create_app_delegate()?;
         unsafe {
             let () = objc2::msg_send![&*ns_app, setDelegate: &*delegate];
         }

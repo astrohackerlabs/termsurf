@@ -552,7 +552,8 @@ impl Window {
                 backing: NSBackingStoreType::Buffered,
                 defer: false
             ];
-            let window = Retained::from_raw(window).unwrap();
+            let window = Retained::from_raw(window)
+                .ok_or_else(|| anyhow::anyhow!("NSWindow initWithContentRect returned nil"))?;
 
             apply_decorations_to_window(
                 &window,
@@ -1906,7 +1907,12 @@ impl Keyboard {
 
 impl Inner {
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
-        let view = self.view_id.as_ref().unwrap().load().unwrap();
+        let view = self
+            .view_id
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view_id not set"))?
+            .load()
+            .ok_or_else(|| anyhow::anyhow!("NSView has been deallocated"))?;
         let glium_context = GlContextPair::create(Retained::as_ptr(&view) as id)?;
 
         self.gl_context_pair.replace(glium_context.clone());
@@ -3583,11 +3589,12 @@ impl WindowView {
             let __r: *mut AnyObject = objc2::msg_send![cls, alloc];
             __r as id
         };
-        // SAFETY: view_id was just allocated above; initWithFrame returns a valid object.
+        // SAFETY: view_id was just allocated above; initWithFrame may return nil on failure.
         let view_id: Retained<AnyObject> = unsafe {
             let __r: *mut AnyObject =
                 objc2::msg_send![view_id as *const _ as *const AnyObject, initWithFrame: rect];
-            Retained::from_raw(__r).unwrap()
+            Retained::from_raw(__r)
+                .ok_or_else(|| anyhow::anyhow!("NSView initWithFrame returned nil"))?
         };
         inner
             .borrow_mut()
