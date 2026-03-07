@@ -130,7 +130,11 @@ impl Menu {
                 &*self.menu,
                 indexOfItemWithRepresentedObject: object
             ];
-            if n == -1 { None } else { Some(n as usize) }
+            if n == -1 {
+                None
+            } else {
+                Some(n as usize)
+            }
         }
     }
 

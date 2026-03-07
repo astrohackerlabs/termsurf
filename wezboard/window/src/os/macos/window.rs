@@ -73,14 +73,14 @@ use raw_window_handle::{
 };
 use std::any::Any;
 use std::cell::RefCell;
-use std::ffi::{CStr, c_void};
+use std::ffi::{c_void, CStr};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Instant;
 use wezboard_font::FontConfiguration;
-use wezboard_input_types::{IntegratedTitleButtonStyle, KeyboardLedStatus, is_ascii_control};
+use wezboard_input_types::{is_ascii_control, IntegratedTitleButtonStyle, KeyboardLedStatus};
 
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsPlacementTopLeft: isize = 11;
@@ -247,8 +247,7 @@ mod cglbits {
                     5,  // NSOpenGLPFADoubleBuffer
                     0,
                 ];
-                let pf: id =
-                    objc2::msg_send![objc2::class!(NSOpenGLPixelFormat), alloc];
+                let pf: id = objc2::msg_send![objc2::class!(NSOpenGLPixelFormat), alloc];
                 let pf: id = objc2::msg_send![pf as *const _ as *const AnyObject, initWithAttributes: attrs.as_ptr()];
                 Retained::from_raw(pf)
             };
@@ -264,8 +263,7 @@ mod cglbits {
 
             let gl_context = unsafe {
                 Retained::from_raw({
-                    let ctx: id =
-                        objc2::msg_send![objc2::class!(NSOpenGLContext), alloc];
+                    let ctx: id = objc2::msg_send![objc2::class!(NSOpenGLContext), alloc];
                     let __r: *mut AnyObject = objc2::msg_send![ctx as *const _ as *const AnyObject, initWithFormat: Retained::as_ptr(&pixel_format) as *const _ as *mut AnyObject, shareContext: std::ptr::null::<AnyObject>()];
                     __r
                 })
@@ -309,8 +307,7 @@ mod cglbits {
 
         fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
             unsafe {
-                let pool: id =
-                    objc2::msg_send![objc2::class!(NSAutoreleasePool), new];
+                let pool: id = objc2::msg_send![objc2::class!(NSAutoreleasePool), new];
                 let _: () = objc2::msg_send![
                     Retained::as_ptr(&self.gl_context) as *const _ as *const AnyObject,
                     flushBuffer
@@ -346,10 +343,8 @@ mod cglbits {
 
         fn is_current(&self) -> bool {
             unsafe {
-                let pool: id =
-                    objc2::msg_send![objc2::class!(NSAutoreleasePool), new];
-                let current: id =
-                    objc2::msg_send![objc2::class!(NSOpenGLContext), currentContext];
+                let pool: id = objc2::msg_send![objc2::class!(NSAutoreleasePool), new];
+                let current: id = objc2::msg_send![objc2::class!(NSOpenGLContext), currentContext];
                 let res = if !current.is_null() {
                     let is_equal: bool = objc2::msg_send![current as *const _ as *const AnyObject, isEqual: Retained::as_ptr(&self.gl_context) as *const _ as *mut AnyObject];
                     is_equal
@@ -919,8 +914,7 @@ impl WindowOps for Window {
             && !native_full_screen
             && !config.macos_fullscreen_extend_behind_notch
         {
-            let main_screen: id =
-                unsafe { objc2::msg_send![objc2::class!(NSScreen), mainScreen] };
+            let main_screen: id = unsafe { objc2::msg_send![objc2::class!(NSScreen), mainScreen] };
             let has_safe_area_insets: bool = unsafe {
                 objc2::msg_send![main_screen as *const _ as *const AnyObject, respondsToSelector: objc2::sel!(safeAreaInsets)]
             };
@@ -1122,8 +1116,7 @@ impl WindowInner {
                         .fullscreen
                         .replace(saved_rect_cg);
 
-                    let main_screen: id =
-                        objc2::msg_send![objc2::class!(NSScreen), mainScreen];
+                    let main_screen: id = objc2::msg_send![objc2::class!(NSScreen), mainScreen];
                     let screen_rect: CGRect =
                         objc2::msg_send![main_screen as *const _ as *const AnyObject, frame];
 
@@ -1575,8 +1568,9 @@ fn get_titlebar_view_container(window: &Retained<AnyObject>) -> Option<Retained<
         unsafe { objc2::msg_send![Retained::as_ptr(&sub_views) as *const AnyObject, count] };
 
     for i in 0..count {
-        let sub_view: id =
-            unsafe { objc2::msg_send![Retained::as_ptr(&sub_views) as *const AnyObject, objectAtIndex: i] };
+        let sub_view: id = unsafe {
+            objc2::msg_send![Retained::as_ptr(&sub_views) as *const AnyObject, objectAtIndex: i]
+        };
 
         if sub_view.is_null() {
             continue;
@@ -1921,7 +1915,6 @@ struct WindowView {
     inner: Rc<RefCell<Inner>>,
 }
 
-
 pub fn superclass(this: &AnyObject) -> &'static AnyClass {
     unsafe {
         let superclass: *const AnyClass =
@@ -1935,8 +1928,7 @@ fn dpi_for_window_screen(ns_window: *mut AnyObject, config: &ConfigHandle) -> Op
         return config.dpi;
     }
 
-    let screen: id =
-        unsafe { objc2::msg_send![ns_window as *const _ as *const AnyObject, screen] };
+    let screen: id = unsafe { objc2::msg_send![ns_window as *const _ as *const AnyObject, screen] };
     let info = crate::os::macos::connection::nsscreen_to_screen_info(unsafe {
         &*(screen as *const objc2_app_kit::NSScreen)
     });
@@ -2034,7 +2026,9 @@ impl WindowView {
             #[allow(deprecated)]
             let myself: *mut c_void = *this.get_ivar::<*mut c_void>("WezboardWindowView");
             #[allow(deprecated)]
-            { *this.get_mut_ivar::<*mut c_void>("WezboardWindowView") = std::ptr::null_mut(); }
+            {
+                *this.get_mut_ivar::<*mut c_void>("WezboardWindowView") = std::ptr::null_mut();
+            }
 
             if !myself.is_null() {
                 let myself = Box::from_raw(myself as *mut Self);
@@ -3483,8 +3477,10 @@ impl WindowView {
 
         unsafe {
             #[allow(deprecated)]
-            { *(&mut *(Retained::as_ptr(&view_id) as *mut AnyObject))
-                .get_mut_ivar::<*mut c_void>("WezboardWindowView") = view as *mut c_void; }
+            {
+                *(&mut *(Retained::as_ptr(&view_id) as *mut AnyObject))
+                    .get_mut_ivar::<*mut c_void>("WezboardWindowView") = view as *mut c_void;
+            }
         }
 
         Ok(view_id)

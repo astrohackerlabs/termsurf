@@ -1,15 +1,15 @@
 use crate::inputmap::InputMap;
+use KeyAssignment::*;
 use config::keyassignment::*;
 use config::window::WindowLevel;
 use config::{ConfigHandle, DeferredKeyCode};
-use mux::domain::DomainState;
 use mux::Mux;
+use mux::domain::DomainState;
 use ordered_float::NotNan;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use window::{KeyCode, Modifiers};
-use KeyAssignment::*;
 
 /// Describes an argument/parameter/context that is required
 /// in order for the command to have meaning.

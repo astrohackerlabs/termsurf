@@ -1,6 +1,6 @@
 use crate::termwindow::{RenderFrame, TermWindowNotif};
-use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::WindowOps;
+use ::window::bitmaps::atlas::OutOfTextureSpace;
 use anyhow::Context;
 use smol::Timer;
 use std::time::{Duration, Instant};
@@ -260,13 +260,14 @@ impl crate::TermWindow {
             self.paint_pane_border(&pos, num_panes, &mut layers)?;
         }
 
-        let split_border_width = self.config.split_border_width.evaluate_as_pixels(
-            config::DimensionContext {
-                dpi: self.dimensions.dpi as f32,
-                pixel_max: self.dimensions.pixel_width as f32,
-                pixel_cell: self.render_metrics.cell_size.width as f32,
-            },
-        );
+        let split_border_width =
+            self.config
+                .split_border_width
+                .evaluate_as_pixels(config::DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_width as f32,
+                    pixel_cell: self.render_metrics.cell_size.width as f32,
+                });
         if split_border_width == 0. {
             if let Some(pane) = self.get_active_pane_or_overlay() {
                 let splits = self.get_splits();

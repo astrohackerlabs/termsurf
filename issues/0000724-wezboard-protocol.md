@@ -613,3 +613,43 @@ connection's `tui_tx`. When a Chromium connection drops, clear the server's `tx`
    - `TabReady: pane_id=... tab_id=...`
 5. No crashes. Roamium process visible in Activity Monitor.
 6. Close the `web` pane. Confirm TUI disconnect log and pane cleanup.
+
+**Result:** Pass
+
+All six verification criteria met. Log output from running `web google.com` in a
+Wezboard pane and then closing it:
+
+```
+TermSurf socket listening on /var/folders/.../T/termsurf/wezboard-18991.sock
+TermSurf client connected: Ok((unnamed))
+TermSurf connection type: Tui
+HelloRequest: pane_id=93A578E2-...
+SetOverlay: pane_id=93A578E2-... profile=default browser=roamium url=https://google.com
+spawned roamium (pid=19051) for profile=default
+TermSurf client connected: Ok((unnamed))
+TermSurf connection type: Chromium
+ServerRegister: profile=default
+sent CreateTab: pane_id=93A578E2-... url=https://google.com
+TabReady: pane_id=93A578E2-... tab_id=1
+TermSurf client disconnected (Tui)
+removed pane 93A578E2-... on TUI disconnect
+TermSurf client disconnected (Chromium)
+cleared server tx on Chromium disconnect: profile=default
+```
+
+The full tab lifecycle completed in order: TUI connect → HelloRequest/Reply →
+SetOverlay → spawn Roamium → ServerRegister → CreateTab → TabReady → TUI
+disconnect → pane cleanup → Chromium disconnect → server tx cleared.
+
+Chromium shutdown errors (`Unable to terminate process`, `No rendezvous client`)
+are normal — child processes (GPU, utility) shut down slightly out of order.
+`DisplayLinkMac ID is not available` is expected since no CALayerHost rendering
+exists yet.
+
+#### Conclusion
+
+Shared state, process spawning, and the full tab lifecycle work correctly in
+Wezboard. The `Arc<Mutex<TermSurfState>>` pattern works cleanly with smol async
+tasks on the main thread. The writer task pattern (channel +
+spawn_into_main_thread) allows cross-connection message forwarding. Ready for
+Experiment 2: overlay rendering or message forwarding.

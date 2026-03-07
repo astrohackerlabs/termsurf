@@ -626,7 +626,10 @@ pub struct Config {
     #[dynamic(default)]
     pub unfocused_split_border_color: Option<RgbaColor>,
 
-    #[dynamic(try_from = "crate::units::PixelUnit", default = "crate::color::default_zero_pixel")]
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "crate::color::default_zero_pixel"
+    )]
     pub split_border_width: Dimension,
 
     #[dynamic(default = "default_one_point_oh")]

@@ -203,7 +203,6 @@ pub fn create_app_delegate() -> anyhow::Result<Retained<AnyObject>> {
         let delegate: *mut AnyObject = objc2::msg_send![cls, alloc];
         let delegate: *mut AnyObject = objc2::msg_send![delegate, init];
         // ObjC zeroes ivars on alloc, so `launched` is already false
-        Retained::from_raw(delegate)
-            .ok_or_else(|| anyhow::anyhow!("AppDelegate init returned nil"))
+        Retained::from_raw(delegate).ok_or_else(|| anyhow::anyhow!("AppDelegate init returned nil"))
     }
 }

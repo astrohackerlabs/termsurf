@@ -1,8 +1,9 @@
+use super::state::SharedState;
 use anyhow::Context;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
-pub fn spawn_termsurf_server(sock_path: PathBuf) -> anyhow::Result<()> {
+pub fn spawn_termsurf_server(sock_path: PathBuf, state: SharedState) -> anyhow::Result<()> {
     // Ensure parent directory exists
     if let Some(parent) = sock_path.parent() {
         std::fs::create_dir_all(parent)
@@ -26,8 +27,9 @@ pub fn spawn_termsurf_server(sock_path: PathBuf) -> anyhow::Result<()> {
                 Ok(stream) => {
                     let peer = format!("{:?}", stream.peer_addr());
                     log::info!("TermSurf client connected: {}", peer);
+                    let conn_state = state.clone();
                     promise::spawn::spawn_into_main_thread(async move {
-                        if let Err(err) = super::conn::handle_connection(stream).await {
+                        if let Err(err) = super::conn::handle_connection(stream, conn_state).await {
                             log::error!("TermSurf connection error: {:#}", err);
                         }
                     })

@@ -5,14 +5,14 @@ use crate::customglyph::BlockKey;
 use crate::glyphcache::GlyphCache;
 use crate::utilsprites::RenderMetrics;
 use ::window::*;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use clap::builder::ValueParser;
 use clap::{Parser, ValueHint};
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::{ConfigHandle, SerialDomain, SshDomain, SshMultiplexing};
+use mux::Mux;
 use mux::activity::Activity;
 use mux::domain::{Domain, LocalDomain};
-use mux::Mux;
 use mux_lua::MuxDomain;
 use portable_pty::cmdbuilder::CommandBuilder;
 use promise::spawn::block_on;
@@ -30,8 +30,8 @@ use wezboard_bidi::Direction;
 
 mod termsurf;
 use wezboard_client::domain::ClientDomain;
-use wezboard_font::shaper::PresentationWidth;
 use wezboard_font::FontConfiguration;
+use wezboard_font::shaper::PresentationWidth;
 use wezboard_gui_subcommands::*;
 use wezboard_mux_server_impl::update_mux_domains;
 use wezboard_toast_notification::*;
@@ -65,7 +65,7 @@ mod utilsprites;
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 pub use selection::SelectionMode;
-pub use termwindow::{set_window_class, set_window_position, TermWindow, ICON_DATA};
+pub use termwindow::{ICON_DATA, TermWindow, set_window_class, set_window_position};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -426,7 +426,8 @@ async fn async_run_terminal_gui(
     let termsurf_sock = std::env::temp_dir()
         .join("termsurf")
         .join(format!("wezboard-{}.sock", unsafe { libc::getpid() }));
-    if let Err(err) = termsurf::spawn_termsurf_server(termsurf_sock) {
+    let termsurf_state = Arc::new(std::sync::Mutex::new(termsurf::state::TermSurfState::new()));
+    if let Err(err) = termsurf::spawn_termsurf_server(termsurf_sock, termsurf_state.clone()) {
         log::warn!("TermSurf socket: {:#}", err);
     }
 

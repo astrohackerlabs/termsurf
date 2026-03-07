@@ -2,12 +2,12 @@ use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
-    same_hyperlink, CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
-    RenderScreenLineParams,
+    CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
+    RenderScreenLineParams, same_hyperlink,
 };
 use crate::termwindow::{ScrollHit, UIItem, UIItemType};
-use ::window::bitmaps::TextureRect;
 use ::window::DeadKeyStatus;
+use ::window::bitmaps::TextureRect;
 use anyhow::Context;
 use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
@@ -153,13 +153,13 @@ impl crate::TermWindow {
         };
 
         let bw = if num_panes > 1 && !pos.is_zoomed {
-            self.config.split_border_width.evaluate_as_pixels(
-                config::DimensionContext {
+            self.config
+                .split_border_width
+                .evaluate_as_pixels(config::DimensionContext {
                     dpi: self.dimensions.dpi as f32,
                     pixel_max: self.dimensions.pixel_width as f32,
                     pixel_cell: self.render_metrics.cell_size.width as f32,
-                },
-            ) as f32
+                }) as f32
         } else {
             0.0
         };
@@ -616,13 +616,14 @@ impl crate::TermWindow {
             return Ok(());
         }
 
-        let bw = self.config.split_border_width.evaluate_as_pixels(
-            config::DimensionContext {
+        let bw = self
+            .config
+            .split_border_width
+            .evaluate_as_pixels(config::DimensionContext {
                 dpi: self.dimensions.dpi as f32,
                 pixel_max: self.dimensions.pixel_width as f32,
                 pixel_cell: self.render_metrics.cell_size.width as f32,
-            },
-        ) as f32;
+            }) as f32;
         if bw == 0.0 {
             return Ok(());
         }
