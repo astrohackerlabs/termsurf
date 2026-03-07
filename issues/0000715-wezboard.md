@@ -72,9 +72,9 @@ content natively into WezTerm's tab/split/focus system:
 
 ### Socket server
 
-A `UnixListener` on `$TMPDIR/termsurf/termsurf-wezboard-{pid}.sock`. Uses
-WezTerm's existing async task infrastructure (`smol`/`SimpleExecutor`). One task
-per connection. First message determines connection type: `ServerRegister` =
+A `UnixListener` on `$TMPDIR/termsurf/wezboard-{pid}.sock`. Uses WezTerm's
+existing async task infrastructure (`smol`/`SimpleExecutor`). One task per
+connection. First message determines connection type: `ServerRegister` =
 Chromium, anything else = TUI.
 
 ### CALayerHost compositing (macOS)
@@ -447,7 +447,7 @@ Ghostboard).
 
 #### Socket path
 
-`$TMPDIR/termsurf/termsurf-wezboard-{pid}.sock`
+`$TMPDIR/termsurf/wezboard-{pid}.sock`
 
 Set `TERMSURF_SOCKET={path}` in child process environment so TUIs can discover
 it.
@@ -549,6 +549,6 @@ fn handle_message(msg: TermSurfMessage, conn: &mut Connection) {
 
 1. `cargo build -p wezboard-gui` compiles
 2. Launch wezboard-gui, verify socket exists at
-   `$TMPDIR/termsurf/termsurf-wezboard-{pid}.sock`
+   `$TMPDIR/termsurf/wezboard-{pid}.sock`
 3. `TERMSURF_SOCKET` env var is set in child shells
 4. A test client can connect and send a `HelloRequest`, receiving a `HelloReply`
