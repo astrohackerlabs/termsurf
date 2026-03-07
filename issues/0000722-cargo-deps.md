@@ -101,3 +101,12 @@ Build succeeded with zero errors, app launched and rendered correctly.
 All cross-platform dependencies are up to date. The env_logger 0.10→0.11
 migration was straightforward: add `env_filter = "1.0"` as a direct dependency
 and change one import line. The Windows-only deps remain untouched (can't test).
+
+## Conclusion
+
+All cross-platform cargo dependencies in Wezboard are now up to date. The
+`cargo update` bumped 206 packages to their latest semver-compatible versions,
+and the env-bootstrap `env_logger` 0.10→0.11 migration required only a new
+`env_filter` dependency and one import change. Windows-only deps (`windows`,
+`windows-core`, etc.) were intentionally skipped since they can't be tested on
+macOS.
