@@ -106,6 +106,8 @@ ts4/two-profiles-receiver/shaders.metallib
 vendor/firefox/
 vendor/webkit/
 vendor/ladybird/
+vendor/rust-objc/
+vendor/objc2/
 
 # TUI build outputs
 webtui/target/
