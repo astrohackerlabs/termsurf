@@ -113,3 +113,195 @@ use objc::runtime::{Object, BOOL, NO, YES};
    files.
 
 ## Experiments
+
+### Experiment 1: Replace cocoa constants and bitflags
+
+Replace all `cocoa::appkit` constant and bitflag types with their `objc2-app-kit`
+equivalents. Because these types flow into cocoa trait method calls
+(`setStyleMask_`, `setPresentationOptions_`, `modifierFlags()`, etc.), those
+specific call sites must also be migrated to `msg_send!` or `objc2-app-kit`
+typed methods — otherwise the types don't match.
+
+This experiment does NOT migrate all ~50 cocoa trait calls. It only migrates the
+~17 that take or return bitflag/constant types. The remaining trait calls (frame,
+title, level, etc.) stay as-is for a later experiment.
+
+#### Type replacements
+
+| Old (`cocoa::appkit`)                                          | New (`objc2-app-kit`)                                         |
+| -------------------------------------------------------------- | ------------------------------------------------------------- |
+| `NSWindowStyleMask::NSTitledWindowMask`                        | `NSWindowStyleMask::Titled`                                   |
+| `NSWindowStyleMask::NSClosableWindowMask`                      | `NSWindowStyleMask::Closable`                                 |
+| `NSWindowStyleMask::NSMiniaturizableWindowMask`                | `NSWindowStyleMask::Miniaturizable`                           |
+| `NSWindowStyleMask::NSResizableWindowMask`                     | `NSWindowStyleMask::Resizable`                                |
+| `NSWindowStyleMask::NSFullScreenWindowMask`                    | `NSWindowStyleMask::FullScreen`                               |
+| `NSWindowStyleMask::NSFullSizeContentViewWindowMask`           | `NSWindowStyleMask::FullSizeContentView`                      |
+| `NSWindowStyleMask::NSBorderlessWindowMask`                    | `NSWindowStyleMask::Borderless`                               |
+| `NSBackingStoreBuffered`                                       | `NSBackingStoreType::Buffered`                                |
+| `NSViewHeightSizable \| NSViewWidthSizable`                    | `NSAutoresizingMaskOptions::ViewHeightSizable \| ...ViewWidthSizable` |
+| `NSApplicationActivateIgnoringOtherApps`                       | `NSApplicationActivationOptions::ActivateIgnoringOtherApps`   |
+| `NSApplicationPresentationOptions::NSApplicationPresentationAutoHideMenuBar` | `NSApplicationPresentationOptions::AutoHideMenuBar` |
+| `NSApplicationPresentationOptions::NSApplicationPresentationAutoHideDock`    | `NSApplicationPresentationOptions::AutoHideDock`    |
+| `NSApplicationPresentationOptions::NSApplicationPresentationDefault`         | `NSApplicationPresentationOptions::Default`         |
+| `NSEventModifierFlags::NSShiftKeyMask`                         | `NSEventModifierFlags::Shift`                                 |
+| `NSEventModifierFlags::NSAlternateKeyMask`                     | `NSEventModifierFlags::Option`                                |
+| `NSEventModifierFlags::NSControlKeyMask`                       | `NSEventModifierFlags::Control`                               |
+| `NSEventModifierFlags::NSCommandKeyMask`                       | `NSEventModifierFlags::Command`                               |
+
+#### Cocoa trait calls to migrate (17 sites)
+
+These cocoa trait calls take or return the bitflag types above. Each must be
+replaced with `msg_send!` or an `objc2-app-kit` typed method so the new types
+flow through correctly.
+
+**`NSWindow::styleMask()` → `msg_send!`** (3 sites: lines 870, 1008, 3086):
+
+```rust
+// Before:
+let style_mask = unsafe { NSWindow::styleMask(self.ns_window) };
+// After:
+let style_mask: NSWindowStyleMask = unsafe {
+    objc2::msg_send![self.ns_window as *const _ as *const AnyObject, styleMask]
+};
+```
+
+**`.setStyleMask_()` → `msg_send!`** (3 sites: lines 1072, 1186, 1425):
+
+```rust
+// Before:
+self.window.setStyleMask_(NSWindowStyleMask::NSBorderlessWindowMask);
+// After:
+let _: () = objc2::msg_send![
+    *self.window as *const _ as *const AnyObject,
+    setStyleMask: NSWindowStyleMask::Borderless
+];
+```
+
+**`NSWindow::initWithContentRect_styleMask_backing_defer_()` → `msg_send!`**
+(1 site: line 498):
+
+```rust
+// Before:
+let window = StrongPtr::new(NSWindow::initWithContentRect_styleMask_backing_defer_(
+    window, rect, style_mask, NSBackingStoreBuffered, NO,
+));
+// After:
+let window: id = objc2::msg_send![window, initWithContentRect: rect
+    styleMask: style_mask
+    backing: NSBackingStoreType::Buffered
+    defer: NO];
+let window = StrongPtr::new(window);
+```
+
+**`.setAutoresizingMask_()` → `msg_send!`** (1 site: line 580):
+
+```rust
+// Before:
+view.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
+// After:
+let _: () = objc2::msg_send![
+    view as *const _ as *const AnyObject,
+    setAutoresizingMask: NSAutoresizingMaskOptions::ViewHeightSizable
+        | NSAutoresizingMaskOptions::ViewWidthSizable
+];
+```
+
+**`.activateWithOptions_()` → `msg_send!`** (1 site: line 1179):
+
+```rust
+// Before:
+current_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps);
+// After:
+let _: () = objc2::msg_send![
+    current_app as *const _ as *const AnyObject,
+    activateWithOptions: NSApplicationActivationOptions::ActivateIgnoringOtherApps
+];
+```
+
+**`.setPresentationOptions_()` → `msg_send!`** (3 sites: lines 1054, 1076,
+2343):
+
+```rust
+// Before:
+current_app.setPresentationOptions_(
+    NSApplicationPresentationOptions::NSApplicationPresentationAutoHideMenuBar
+        | NSApplicationPresentationOptions::NSApplicationPresentationAutoHideDock
+);
+// After:
+let _: () = objc2::msg_send![
+    current_app as *const _ as *const AnyObject,
+    setPresentationOptions:
+        NSApplicationPresentationOptions::AutoHideMenuBar
+            | NSApplicationPresentationOptions::AutoHideDock
+];
+```
+
+**`presentationOptions` via `msg_send!`** (1 site: line 2336) — already uses
+`msg_send!`, just change the `from_bits_truncate` to use objc2's type directly:
+
+```rust
+// Before:
+let bits: usize = objc2::msg_send![...AnyObject, presentationOptions];
+NSApplicationPresentationOptions::from_bits_truncate(bits as u64)
+// After:
+let current_options: NSApplicationPresentationOptions =
+    objc2::msg_send![...AnyObject, presentationOptions];
+```
+
+**`.modifierFlags()` → `msg_send!`** (4 sites: lines 2446, 2608, 2970, 3001):
+
+```rust
+// Before:
+let modifier_flags = unsafe { nsevent.modifierFlags() };
+// After:
+let modifier_flags: NSEventModifierFlags = unsafe {
+    objc2::msg_send![nsevent as *const _ as *const AnyObject, modifierFlags]
+};
+```
+
+#### Import changes
+
+**Remove from `cocoa::appkit`:** `NSApplicationActivateIgnoringOtherApps`,
+`NSApplicationPresentationOptions`, `NSBackingStoreBuffered`,
+`NSEventModifierFlags`, `NSViewHeightSizable`, `NSViewWidthSizable`,
+`NSWindowStyleMask`.
+
+**Keep in `cocoa::appkit`:** `self` (for `appkit::` prefixed constants),
+`NSApplication`, `NSEvent`, `NSOpenGLContext`, `NSOpenGLPixelFormat`,
+`NSPasteboard`, `NSRunningApplication`, `NSScreen`, `NSView`, `NSWindow`.
+
+**Add to `objc2_app_kit` import:**
+
+```rust
+use objc2_app_kit::{
+    NSApplicationActivationOptions, NSApplicationPresentationOptions,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSEventModifierFlags,
+    NSWindowStyleMask,
+};
+```
+
+**Add features to `objc2-app-kit` in workspace `Cargo.toml`:** `NSWindow`,
+`NSView`, `NSGraphics`.
+
+#### `.bits()` compatibility
+
+`cocoa`'s bitflags use the `bitflags` crate and expose `.bits()` returning
+`u64`. `objc2-app-kit`'s bitflags use a custom `bitflags!` macro with `.0`
+field access (the inner `NSUInteger`). Update `key_modifiers` line 1945/1948
+which call `flags.bits()`:
+
+```rust
+// Before:
+if flags.contains(NSEventModifierFlags::NSAlternateKeyMask) && (flags.bits() & 0x20) != 0 {
+// After:
+if flags.contains(NSEventModifierFlags::Option) && (flags.0 & 0x20) != 0 {
+```
+
+#### Verification
+
+1. `cd wezboard && cargo build` — zero errors
+2. `cargo run --bin wezboard-gui` — app launches, window opens
+3. No `cocoa::appkit::NS*Mask` or `cocoa::appkit::NS*Options` in window.rs
+4. No `NSBackingStoreBuffered` from cocoa
+5. `key_modifiers` function uses objc2 `NSEventModifierFlags`
+6. `decoration_to_mask` function uses objc2 `NSWindowStyleMask`
