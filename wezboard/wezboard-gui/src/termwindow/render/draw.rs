@@ -115,9 +115,7 @@ impl crate::TermWindow {
                                 store: wgpu::StoreOp::Store,
                             },
                         })],
-                        depth_stencil_attachment: None,
-                        occlusion_query_set: None,
-                        timestamp_writes: None,
+                        ..Default::default()
                     });
                     cleared = true;
 
