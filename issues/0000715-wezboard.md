@@ -220,3 +220,43 @@ WezTerm has four submodules (zlib, libpng, freetype2, harfbuzz) that needed to
 be cloned manually at their pinned commits. The initial build failed because
 `--depth 1` clones pulled the latest upstream (where file paths had changed).
 Cloning at the exact commits from `git ls-tree wezterm/main` fixed it.
+
+### Experiment 3: Register submodules properly
+
+#### Goal
+
+Register WezTerm's four submodules in the root `.gitmodules` with `wezboard/`
+prefixed paths, so `git submodule update --init` works after cloning the repo.
+Also remove dead submodule entries for ts1, ts2, and ts3 — those directories no
+longer exist but their entries remain in `.gitmodules`.
+
+#### Context
+
+The root `.gitmodules` already has entries for `ts2/deps/...` and
+`ts3/deps/...`. We add the same four submodules under `wezboard/deps/...`:
+
+| Submodule                          | URL                             | Pinned commit |
+| ---------------------------------- | ------------------------------- | ------------- |
+| `wezboard/deps/freetype/zlib`      | `github.com/madler/zlib`        | `51b7f2a`     |
+| `wezboard/deps/freetype/libpng`    | `github.com/glennrp/libpng`     | `f5e92d7`     |
+| `wezboard/deps/freetype/freetype2` | `github.com/freetype/freetype2` | `42608f7`     |
+| `wezboard/deps/harfbuzz/harfbuzz`  | `github.com/harfbuzz/harfbuzz`  | `33a3f8d`     |
+
+#### Steps
+
+1. Remove dead submodule entries for ts1 (8 entries), ts2 (4 entries), and ts3
+   (4 entries) from `.gitmodules` via `git rm --cached` and editing
+   `.gitmodules`.
+2. Remove the manually cloned wezboard submodule directories (they're untracked
+   git repos, not proper submodules).
+3. Add all four wezboard submodules via `git submodule add` with the correct
+   paths.
+4. Verify `git submodule status` shows only the four `wezboard/deps/...` entries
+   (no ts1/ts2/ts3 ghosts).
+5. Rebuild to confirm nothing broke.
+
+#### Verification
+
+1. `git submodule status` lists exactly four `wezboard/deps/...` entries
+2. `.gitmodules` contains only `wezboard/deps/...` entries (no ts1/ts2/ts3)
+3. `cargo build -p wezterm-gui` from `wezboard/` still compiles
