@@ -173,3 +173,39 @@ This is the same fork pattern used for Ghostboard (Issue 600) —
 `git subtree add` preserves the full upstream commit history while placing files
 under a subdirectory. Future upstream merges use
 `git subtree pull --prefix=wezboard wezterm main`.
+
+### Experiment 2: Build unmodified WezTerm
+
+#### Goal
+
+Build WezTerm as-is from `wezboard/` to establish a working baseline. If it
+compiles and runs unmodified, we know any future build failures are caused by
+our changes, not by the upstream code or missing dependencies.
+
+#### Steps
+
+1. Build the GUI binary (debug mode):
+
+   ```bash
+   cd wezboard && cargo build -p wezterm-gui
+   ```
+
+2. Run it briefly to confirm it launches:
+
+   ```bash
+   ./target/debug/wezterm-gui
+   ```
+
+   Verify a terminal window appears. Close it manually.
+
+#### Verification
+
+1. `cargo build -p wezterm-gui` exits with status 0
+2. `ls wezboard/target/debug/wezterm-gui` — binary exists
+3. The app launches and displays a terminal window
+
+#### What this does NOT include
+
+- No renaming (Experiment 3)
+- No XDG path changes (Experiment 3)
+- No protocol integration (later experiments)
