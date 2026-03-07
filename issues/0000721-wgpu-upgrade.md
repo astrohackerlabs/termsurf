@@ -287,3 +287,28 @@ type change, field renames (`push_constant_ranges` → `immediate_size`,
 
 1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
 2. `cargo run --bin wezboard-gui` — app launches and renders
+
+#### Results
+
+Success. All 11 changes applied cleanly across 4 files.
+`cargo build -p wezboard-gui` compiled with zero errors — wgpu 28.0.0 resolved
+(with naga 28.0.0, wgpu-hal 28.0.1, wgpu-core 28.0.1, metal 0.33.0). The app
+launched, rendered the terminal, and quit normally. One additional change was
+needed beyond the plan: replacing `use anyhow::anyhow` with `use anyhow::bail`
+since the `ok_or_else` → `match` refactor switched from `anyhow!` to `bail!`.
+All breaking changes matched the ts2 upgrade history.
+
+## Conclusion
+
+wgpu successfully upgraded from 25.0.2 to 28.0.0 in three experiments:
+
+- **Exp 1 (25→26):** 1 breaking change — new `depth_slice` field
+- **Exp 2 (26→27):** 2 breaking changes — `BufferViewMut` lifetime removal,
+  `experimental_features` field
+- **Exp 3 (27→28):** 11 changes across 4 files — async `enumerate_adapters`,
+  `Surface` lifetime, `MipmapFilterMode`, field renames, `RenderPassDescriptor`
+  defaults, `bail!` refactor, `smol::block_on()` wrapper
+
+Total: 14 edits across 5 files. Each step built and ran cleanly. The upgrade
+path was identical to the ts2 history, confirming that the Wezboard fork's wgpu
+usage follows the same patterns.
