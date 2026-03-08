@@ -812,3 +812,35 @@ in Wezboard. The handler mirrors `handle_set_overlay` with two differences:
 `send_create_tab`. The `handle_server_register` pending flush also checks
 `inspected_tab_id` to dispatch the correct create message. Combined with
 Experiment 4's `OpenSplit`, the full `:devtools` flow now works end-to-end.
+
+## Conclusion
+
+Issue 729 fixed overlay repositioning during window resize and implemented the
+remaining TermSurf protocol messages for Wezboard.
+
+**Experiment 1** attempted to reposition overlays from the `SetOverlay` message
+handler. This failed because the TUI doesn't send `SetOverlay` on every resize
+increment — slow resizes left overlays misaligned.
+
+**Experiment 2** moved repositioning to WezTerm's window resize handler, calling
+`reposition_all_overlays()` right after `metrics::set()`. This works on every
+resize increment regardless of TUI message timing.
+
+**Experiment 3** removed the split border content padding added in Issue 723.
+The padding shifted pane content inward, misaligning webview overlays. Drawing
+borders on layer 2 (on top of content) is sufficient — the 2px overlap is
+imperceptible.
+
+**Experiment 4** implemented `OpenSplit`, which creates a split pane running a
+specified command. The TUI's `:devtools` command sends `OpenSplit` with a
+direction and command, and the board uses `mux.split_pane()` with
+`CommandBuilder::from_argv` to spawn the process directly.
+
+**Experiment 5** implemented `SetDevtoolsOverlay` and `CreateDevtoolsTab`,
+completing the DevTools protocol path. The handler mirrors `handle_set_overlay`
+with `inspected_tab_id` instead of `url`, and the server register flush
+dispatches the correct create message based on `inspected_tab_id`.
+
+With these changes, Wezboard handles all TermSurf protocol messages needed for
+multi-pane browsing with DevTools support. The remaining unhandled messages are
+forwarded or logged as debug output.
