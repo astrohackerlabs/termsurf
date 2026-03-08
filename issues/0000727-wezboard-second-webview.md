@@ -814,3 +814,132 @@ Files changed:
 - `conn.rs` — Destructures 6-tuple, adds `border_left`/`border_top` to x/y in
   `update_ca_layer_frame`.
 
+## Experiment 8: Per-window overlay views
+
+### Hypothesis
+
+Opening a webview in a second window renders the overlay in the first window
+because `get_or_create_overlay` stores a single `overlay_view` in
+`TermSurfState` and creates it using `fe.first_ns_view()`, which always returns
+the first window's NSView. All panes' CALayerHost layers are added as sublayers
+of this one overlay, regardless of which window the pane belongs to.
+
+Making the overlay per-window will fix multi-window support.
+
+### Root cause
+
+Three things conspire:
+
+1. **`TermSurfState.overlay_view`** is a single `usize`. One overlay for all
+   windows.
+2. **`fe.first_ns_view()`** returns `known_windows.keys().next()` — always the
+   first window in the BTreeMap, not the window that owns the pane.
+3. **`handle_ca_context`** calls `get_or_create_overlay(&mut st)` without any
+   window context — it doesn't know which window the pane belongs to.
+
+### Design
+
+**1. Per-window overlay map** (state.rs)
+
+Replace the single `overlay_view: usize` with a map from mux window ID to
+overlay view pointer:
+
+```rust
+/// mux_window_id → overlay NSView pointer (macOS only)
+pub overlay_views: HashMap<usize, usize>,
+```
+
+**2. Find the pane's window** (conn.rs)
+
+Given a `pane_id`, find which mux window it belongs to by iterating
+`mux.iter_windows()` and checking each window's tabs' panes. Add a helper:
+
+```rust
+fn get_pane_mux_window(pane_id: &str) -> Option<usize> {
+    let numeric_id: usize = pane_id.parse().ok()?;
+    let mux = mux::Mux::get();
+    for window_id in mux.iter_windows() {
+        if let Some(w) = mux.get_window(window_id) {
+            for tab in w.iter() {
+                for pos in tab.iter_panes() {
+                    if pos.pane.pane_id() == numeric_id {
+                        return Some(window_id);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+```
+
+**3. Get NSView for a specific mux window** (frontend.rs)
+
+Add a method `ns_view_for_mux_window(mux_window_id)` that looks up the correct
+GUI window from `known_windows` and returns its NSView:
+
+```rust
+pub fn ns_view_for_mux_window(&self, mux_window_id: MuxWindowId) -> Option<*mut std::ffi::c_void> {
+    use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let windows = self.known_windows.borrow();
+    for (window, &mux_id) in windows.iter() {
+        if mux_id == mux_window_id {
+            let handle = window.window_handle().ok()?;
+            return match handle.as_raw() {
+                RawWindowHandle::AppKit(h) => Some(h.ns_view.as_ptr()),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+```
+
+**4. Update `get_or_create_overlay`** (conn.rs)
+
+Change signature to accept a mux window ID. Look up the overlay in
+`state.overlay_views` by window ID. If not found, create a new overlay on that
+window's NSView:
+
+```rust
+fn get_or_create_overlay(
+    state: &mut TermSurfState,
+    mux_window_id: usize,
+) -> Option<*mut AnyObject> {
+    if let Some(&view_ptr) = state.overlay_views.get(&mux_window_id) {
+        // Already created for this window
+        let view = view_ptr as *mut AnyObject;
+        unsafe {
+            let layer: *mut AnyObject = msg_send![view, layer];
+            return if layer.is_null() { None } else { Some(layer) };
+        }
+    }
+
+    let fe = crate::frontend::try_front_end()?;
+    let ns_view = fe.ns_view_for_mux_window(mux_window_id)?;
+    // ... same overlay creation code, but using ns_view for the correct window ...
+    state.overlay_views.insert(mux_window_id, overlay as usize);
+    // ...
+}
+```
+
+**5. Update `handle_ca_context`** (conn.rs)
+
+Before calling `get_or_create_overlay`, look up which mux window the pane
+belongs to:
+
+```rust
+let Some(mux_window_id) = get_pane_mux_window(&pane_id) else {
+    log::warn!("handle_ca_context: pane {} not in any mux window", pane_id);
+    return;
+};
+let Some(root_layer) = get_or_create_overlay(&mut st, mux_window_id) else { ... };
+```
+
+### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. Open window 1, run `web google.com` — overlay in window 1
+3. Open window 2, run `web google.com` — overlay in window 2 (not window 1)
+4. Both overlays visible simultaneously in their respective windows
+5. Close window 2 — window 1's overlay unaffected
