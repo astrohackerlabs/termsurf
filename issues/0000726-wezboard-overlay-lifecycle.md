@@ -173,9 +173,16 @@ termsurf::state::init_global(termsurf_state.clone());
 **`wezboard/wezboard-gui/src/termsurf/conn.rs`** — Add
 `sync_overlay_visibility`:
 
+The function takes a `HashSet<String>` of all active pane IDs across all
+windows. A pane is shown if its ID is in the set, hidden otherwise. This
+correctly handles multiple windows — each window contributes its active pane to
+the set.
+
 ```rust
+use std::collections::HashSet;
+
 #[cfg(target_os = "macos")]
-pub fn sync_overlay_visibility(active_pane_id: &str) {
+pub fn sync_overlay_visibility(active_pane_ids: &HashSet<String>) {
     let Some(state) = super::shared_state() else {
         return;
     };
@@ -184,7 +191,7 @@ pub fn sync_overlay_visibility(active_pane_id: &str) {
         if pane.ca_layer_flipped == 0 {
             continue;
         }
-        let is_active = pane_id == active_pane_id;
+        let is_active = active_pane_ids.contains(pane_id);
         unsafe {
             use objc2::msg_send;
             use objc2::runtime::Bool;
@@ -196,39 +203,32 @@ pub fn sync_overlay_visibility(active_pane_id: &str) {
 }
 ```
 
-Also call it at the end of `handle_ca_context()` (after `update_ca_layer_frame`
-on line 761) to hide newly created layers if they belong to an inactive tab:
-
-```rust
-// After update_ca_layer_frame(pane, root_layer);
-// Read the active pane from the caller's pane_id context — but we don't
-// know the mux active pane here. Instead, just let the next
-// WindowInvalidated sync handle it. The layer will flash briefly on
-// creation but will be hidden on the next paint cycle.
-```
-
-Actually, `handle_ca_context` doesn't know the active mux pane. But
-`WindowInvalidated` fires frequently (on every paint), so the flash will be
-imperceptible. No change needed in `handle_ca_context`.
-
 **`wezboard/wezboard-gui/src/termwindow/mod.rs`** — Call sync on
 `WindowInvalidated` (line 1298):
 
-The TermSurf `pane_id` is the mux pane ID as a string (WezTerm sets
-`WEZBOARD_PANE` env var with the mux pane ID → TUI reads it → sends it as
-`HelloRequest.pane_id`). So we get the active mux pane ID and convert to string:
+On every `WindowInvalidated`, iterate all mux windows and collect each window's
+active pane ID into a `HashSet`. The TermSurf `pane_id` is the mux pane ID as a
+string (WezTerm sets `WEZBOARD_PANE` env var → TUI reads it → sends as
+`HelloRequest.pane_id`).
 
 ```rust
 MuxNotification::WindowInvalidated(_) => {
     window.invalidate();
     self.update_title_post_status();
 
-    // Sync TermSurf overlay visibility with active pane
-    if let Some(pane) = self.get_active_pane_or_overlay() {
-        crate::termsurf::conn::sync_overlay_visibility(
-            &pane.pane_id().to_string(),
-        );
+    // Gather active pane IDs across all windows
+    let mux = Mux::get();
+    let mut active_ids = std::collections::HashSet::new();
+    for window_id in mux.iter_windows() {
+        if let Some(w) = mux.get_window(window_id) {
+            if let Some(tab) = w.get_active() {
+                if let Some(pane) = tab.get_active_pane() {
+                    active_ids.insert(pane.pane_id().to_string());
+                }
+            }
+        }
     }
+    crate::termsurf::conn::sync_overlay_visibility(&active_ids);
 }
 ```
 
@@ -243,3 +243,5 @@ MuxNotification::WindowInvalidated(_) => {
 7. Open a third tab with another `web` instance
 8. Switch between all three tabs — each shows only its own overlay (or no
    overlay)
+9. Open a second window with a webview — both windows' overlays visible
+   simultaneously
