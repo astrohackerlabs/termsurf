@@ -68,6 +68,15 @@ impl super::TermWindow {
             modal.reconfigure(self);
         }
         self.emit_window_event("window-resized", None);
+
+        // Push cell metrics to TermSurf overlay code
+        let (pad_left, pad_top) = self.padding_left_top();
+        crate::termsurf::metrics::set(
+            self.render_metrics.cell_size.width as u32,
+            self.render_metrics.cell_size.height as u32,
+            pad_left as u32,
+            pad_top as u32,
+        );
     }
 
     pub fn apply_pending_scale_changes(&mut self) {

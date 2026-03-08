@@ -1,5 +1,6 @@
 pub mod conn;
 pub mod listener;
+pub mod metrics;
 pub mod state;
 
 pub mod proto {

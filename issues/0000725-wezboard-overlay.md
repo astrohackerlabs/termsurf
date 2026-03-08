@@ -368,3 +368,34 @@ let y = pad_top as f64 / scale;
 4. Webview is positioned inside the pane (not at window origin)
 5. Resize the window — webview resizes proportionally
 6. Close pane — clean shutdown, no crash
+
+**Result:** Partial pass
+
+The cell metrics bridge works correctly. Webview size is now accurate — it fills
+the terminal pane area using real cell dimensions instead of placeholder values.
+Resize works: the webview resizes with the window. Build is clean with zero
+errors.
+
+However, the vertical position is wrong. The webview is offset too high by
+exactly the height of the WezTerm tab bar. The metrics bridge captures cell
+padding (`padding_left`, `padding_top` from `config.window_padding`), but the
+tab bar is rendered above the terminal content area and is not part of the
+window padding. The `update_ca_layer_frame()` function positions the overlay at
+`(pad_left / scale, pad_top / scale)`, which is correct relative to the terminal
+content area but does not account for the tab bar pushing that content area down
+within the window.
+
+**What works:**
+
+- Cell metrics atomics update on resize and at startup
+- `handle_set_overlay()` computes correct pixel dimensions from real cell size
+- Webview width and height match the terminal pane
+- Window resize triggers metric updates and the webview follows
+
+**What doesn't work:**
+
+- Vertical position ignores tab bar height — webview is too high by one tab bar
+  height
+
+**Next step:** Add the tab bar height to the metrics bridge so
+`update_ca_layer_frame()` can offset the y-origin correctly.

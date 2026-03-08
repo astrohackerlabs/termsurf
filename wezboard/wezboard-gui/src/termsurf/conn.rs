@@ -232,9 +232,17 @@ fn handle_set_overlay(
         overlay.browser.clone()
     };
 
-    // Placeholder pixel dimensions: grid cells * approximate cell size
-    let pixel_w = overlay.width * 10;
-    let pixel_h = overlay.height * 20;
+    let (cell_w, cell_h, _, _) = super::metrics::get();
+    let pixel_w = if cell_w > 0 {
+        overlay.width * cell_w as u64
+    } else {
+        overlay.width * 10
+    };
+    let pixel_h = if cell_h > 0 {
+        overlay.height * cell_h as u64
+    } else {
+        overlay.height * 20
+    };
 
     let is_new = !st.panes.contains_key(&overlay.pane_id);
 
@@ -766,7 +774,10 @@ unsafe fn update_ca_layer_frame(pane: &Pane, root_layer: *mut objc2::runtime::An
     let scale = if scale > 0.0 { scale } else { 1.0 };
     let w = pane.pixel_width as f64 / scale;
     let h = pane.pixel_height as f64 / scale;
-    let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w, h));
+    let (_, _, pad_left, pad_top) = super::metrics::get();
+    let x = pad_left as f64 / scale;
+    let y = pad_top as f64 / scale;
+    let frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
 
     let positioning = pane.ca_layer_positioning as *mut AnyObject;
     let _: () = msg_send![positioning, setFrame: frame];
