@@ -56,7 +56,11 @@ pub async fn handle_connection(stream: UnixStream, state: SharedState) -> anyhow
             }
         };
         if n == 0 {
-            log::info!("handle_connection: EOF conn_type={:?} msg_count={}", conn_type, msg_count);
+            log::info!(
+                "handle_connection: EOF conn_type={:?} msg_count={}",
+                conn_type,
+                msg_count
+            );
             handle_disconnect(conn_type, &tx, &state);
             tx.close();
             return Ok(());
@@ -75,7 +79,9 @@ pub async fn handle_connection(stream: UnixStream, state: SharedState) -> anyhow
             msg_count += 1;
             log::info!(
                 "handle_connection: msg #{} type={} conn_type={:?}",
-                msg_count, msg_type_name(&msg), conn_type
+                msg_count,
+                msg_type_name(&msg),
+                conn_type
             );
 
             if conn_type == ConnType::Unknown {
@@ -219,7 +225,11 @@ async fn handle_message(
             }
         }
         Some(Msg::QueryLastRequest(q)) => {
-            log::info!("QueryLastRequest: pane_id={} profile={}", q.pane_id, q.profile);
+            log::info!(
+                "QueryLastRequest: pane_id={} profile={}",
+                q.pane_id,
+                q.profile
+            );
             let reply = {
                 let st = state.lock().unwrap();
                 if let Some(ref last_id) = st.last_browser_pane {
@@ -250,7 +260,9 @@ async fn handle_message(
                     }
                 }
             };
-            let msg = TermSurfMessage { msg: Some(Msg::QueryLastReply(reply)) };
+            let msg = TermSurfMessage {
+                msg: Some(Msg::QueryLastReply(reply)),
+            };
             let payload = msg.encode_to_vec();
             let len = (payload.len() as u32).to_le_bytes();
             (&**stream).write_all(&len).await?;
@@ -259,7 +271,9 @@ async fn handle_message(
         Some(Msg::QueryDevtoolsRequest(q)) => {
             log::info!(
                 "QueryDevtoolsRequest: pane_id={} inspected_tab_id={} profile={}",
-                q.pane_id, q.inspected_tab_id, q.profile
+                q.pane_id,
+                q.inspected_tab_id,
+                q.profile
             );
             let reply = {
                 let st = state.lock().unwrap();
@@ -280,7 +294,10 @@ async fn handle_message(
                     }
                 } else {
                     // Check for duplicate DevTools
-                    let already_open = st.panes.values().any(|p| p.inspected_tab_id == resolved_tab_id);
+                    let already_open = st
+                        .panes
+                        .values()
+                        .any(|p| p.inspected_tab_id == resolved_tab_id);
                     if already_open {
                         proto::QueryDevtoolsReply {
                             error: format!("Tab {} already has DevTools open", resolved_tab_id),
@@ -302,17 +319,25 @@ async fn handle_message(
                     }
                 }
             };
-            let msg = TermSurfMessage { msg: Some(Msg::QueryDevtoolsReply(reply)) };
+            let msg = TermSurfMessage {
+                msg: Some(Msg::QueryDevtoolsReply(reply)),
+            };
             let payload = msg.encode_to_vec();
             let len = (payload.len() as u32).to_le_bytes();
             (&**stream).write_all(&len).await?;
             (&**stream).write_all(&payload).await?;
         }
         Some(Msg::QueryTabsRequest(q)) => {
-            log::info!("QueryTabsRequest: pane_id={} profile={}", q.pane_id, q.profile);
+            log::info!(
+                "QueryTabsRequest: pane_id={} profile={}",
+                q.pane_id,
+                q.profile
+            );
             let reply = {
                 let st = state.lock().unwrap();
-                let gui_panes = st.panes.values()
+                let gui_panes = st
+                    .panes
+                    .values()
                     .filter(|p| q.profile.is_empty() || p.profile == q.profile)
                     .count() as i64;
                 proto::QueryTabsReply {
@@ -324,7 +349,9 @@ async fn handle_message(
                     error: String::new(),
                 }
             };
-            let msg = TermSurfMessage { msg: Some(Msg::QueryTabsReply(reply)) };
+            let msg = TermSurfMessage {
+                msg: Some(Msg::QueryTabsReply(reply)),
+            };
             let payload = msg.encode_to_vec();
             let len = (payload.len() as u32).to_le_bytes();
             (&**stream).write_all(&len).await?;
@@ -476,6 +503,8 @@ fn handle_set_overlay(
         ca_layer_host: 0,
         ca_layer_flipped: 0,
         ca_layer_positioning: 0,
+        overlay_origin_x: 0.0,
+        overlay_origin_y: 0.0,
     };
     st.panes.insert(overlay.pane_id.clone(), pane);
 
@@ -499,7 +528,9 @@ fn handle_set_overlay(
         let has_tx = server.tx.is_some();
         log::info!(
             "SetOverlay: reusing server key={} pane_count={} has_tx={}",
-            key, server.pane_count, has_tx
+            key,
+            server.pane_count,
+            has_tx
         );
         let server_tx = server.tx.clone();
         if let Some(ref stx) = server_tx {
@@ -580,12 +611,18 @@ fn handle_disconnect(conn_type: ConnType, tx: &Sender<Vec<u8>>, state: &SharedSt
     let mut st = state.lock().unwrap();
     log::info!(
         "handle_disconnect: conn_type={:?} panes={} servers={} tab_to_pane={}",
-        conn_type, st.panes.len(), st.servers.len(), st.tab_to_pane.len()
+        conn_type,
+        st.panes.len(),
+        st.servers.len(),
+        st.tab_to_pane.len()
     );
     for (key, server) in &st.servers {
         log::info!(
             "  server key={} profile={} has_tx={} pane_count={}",
-            key, server.profile, server.tx.is_some(), server.pane_count
+            key,
+            server.profile,
+            server.tx.is_some(),
+            server.pane_count
         );
     }
     match conn_type {
@@ -628,7 +665,9 @@ fn handle_disconnect(conn_type: ConnType, tx: &Sender<Vec<u8>>, state: &SharedSt
             }
             log::info!(
                 "handle_disconnect: after TUI cleanup panes={} servers={} tab_to_pane={}",
-                st.panes.len(), st.servers.len(), st.tab_to_pane.len()
+                st.panes.len(),
+                st.servers.len(),
+                st.tab_to_pane.len()
             );
         }
         ConnType::Chromium => {
@@ -1019,8 +1058,13 @@ fn get_pane_cell_position(pane_id: &str) -> (usize, usize) {
                 for pos in tab.iter_panes() {
                     log::info!(
                         "get_pane_cell_position: mux pane id={} left={} top={} width={} height={} pixel={}x{}",
-                        pos.pane.pane_id(), pos.left, pos.top,
-                        pos.width, pos.height, pos.pixel_width, pos.pixel_height
+                        pos.pane.pane_id(),
+                        pos.left,
+                        pos.top,
+                        pos.width,
+                        pos.height,
+                        pos.pixel_width,
+                        pos.pixel_height
                     );
                     if pos.pane.pane_id() == numeric_id {
                         return (pos.left, pos.top);
@@ -1033,7 +1077,7 @@ fn get_pane_cell_position(pane_id: &str) -> (usize, usize) {
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn update_ca_layer_frame(pane: &Pane, root_layer: *mut objc2::runtime::AnyObject) {
+unsafe fn update_ca_layer_frame(pane: &mut Pane, root_layer: *mut objc2::runtime::AnyObject) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -1044,14 +1088,32 @@ unsafe fn update_ca_layer_frame(pane: &Pane, root_layer: *mut objc2::runtime::An
     let h = pane.pixel_height as f64 / scale;
     let (cell_w, cell_h, origin_x, origin_y, border_left, border_top) = super::metrics::get();
     let (pane_left, pane_top) = get_pane_cell_position(&pane.pane_id);
-    let x = (origin_x as u64 + border_left as u64
-        + (pane_left as u64 + pane.col) * cell_w as u64) as f64 / scale;
-    let y = (origin_y as u64 + border_top as u64
-        + (pane_top as u64 + pane.row) * cell_h as u64) as f64 / scale;
+    let x_backing = (origin_x as u64
+        + border_left as u64
+        + (pane_left as u64 + pane.col) * cell_w as u64) as f64;
+    let y_backing =
+        (origin_y as u64 + border_top as u64 + (pane_top as u64 + pane.row) * cell_h as u64) as f64;
+    pane.overlay_origin_x = x_backing;
+    pane.overlay_origin_y = y_backing;
+    let x = x_backing / scale;
+    let y = y_backing / scale;
 
     log::info!(
         "update_ca_layer_frame: pane_id={} pane_cell=({},{}) origin=({},{}) border=({},{}) cell=({},{}) scale={} → frame=({:.1},{:.1},{:.1},{:.1})",
-        pane.pane_id, pane_left, pane_top, origin_x, origin_y, border_left, border_top, cell_w, cell_h, scale, x, y, w, h
+        pane.pane_id,
+        pane_left,
+        pane_top,
+        origin_x,
+        origin_y,
+        border_left,
+        border_top,
+        cell_w,
+        cell_h,
+        scale,
+        x,
+        y,
+        w,
+        h
     );
 
     let frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));

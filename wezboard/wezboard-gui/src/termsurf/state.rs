@@ -23,6 +23,8 @@ pub struct Pane {
     pub ca_layer_host: usize,
     pub ca_layer_flipped: usize,
     pub ca_layer_positioning: usize,
+    pub overlay_origin_x: f64,
+    pub overlay_origin_y: f64,
 }
 
 /// Per-server state. One server = one Roamium process = one profile.

@@ -43,22 +43,22 @@ The full browser overlay pipeline is functional:
 
 ### Messages currently handled (14 of 30)
 
-| #  | Message              | Direction        | Handler                |
-| -- | -------------------- | ---------------- | ---------------------- |
-| 1  | ServerRegister       | Chromium → Board | handle_server_register |
-| 2  | SetOverlay           | TUI → Board      | handle_set_overlay     |
-| 3  | TabReady             | Chromium → Board | handle_tab_ready       |
-| 4  | HelloRequest         | TUI → Board      | inline reply           |
-| 5  | UrlChanged           | Chromium → Board | forward_to_tui         |
-| 6  | LoadingState         | Chromium → Board | forward_to_tui         |
-| 7  | TitleChanged         | Chromium → Board | forward_to_tui         |
-| 8  | Navigate             | TUI → Board      | forward_to_chromium    |
-| 9  | SetColorScheme       | TUI → Board      | forward_to_chromium    |
-| 10 | ModeChanged          | TUI → Board      | update pane state      |
-| 11 | CaContext            | Chromium → Board | handle_ca_context      |
-| 12 | QueryLastRequest     | TUI → Board      | inline reply           |
-| 13 | QueryDevtoolsRequest | TUI → Board      | inline reply           |
-| 14 | QueryTabsRequest     | TUI → Board      | inline reply           |
+| #   | Message              | Direction        | Handler                |
+| --- | -------------------- | ---------------- | ---------------------- |
+| 1   | ServerRegister       | Chromium → Board | handle_server_register |
+| 2   | SetOverlay           | TUI → Board      | handle_set_overlay     |
+| 3   | TabReady             | Chromium → Board | handle_tab_ready       |
+| 4   | HelloRequest         | TUI → Board      | inline reply           |
+| 5   | UrlChanged           | Chromium → Board | forward_to_tui         |
+| 6   | LoadingState         | Chromium → Board | forward_to_tui         |
+| 7   | TitleChanged         | Chromium → Board | forward_to_tui         |
+| 8   | Navigate             | TUI → Board      | forward_to_chromium    |
+| 9   | SetColorScheme       | TUI → Board      | forward_to_chromium    |
+| 10  | ModeChanged          | TUI → Board      | update pane state      |
+| 11  | CaContext            | Chromium → Board | handle_ca_context      |
+| 12  | QueryLastRequest     | TUI → Board      | inline reply           |
+| 13  | QueryDevtoolsRequest | TUI → Board      | inline reply           |
+| 14  | QueryTabsRequest     | TUI → Board      | inline reply           |
 
 ### Messages NOT handled (16 of 30)
 
@@ -448,3 +448,46 @@ already used for overlay positioning in Issue 725.
 6. Press Esc — returns to control mode, keys go to terminal
 7. Click on overlay — auto-switches to browse mode
 8. Click outside overlay — returns to control mode
+
+**Result:** Fail
+
+Build succeeded with zero errors and keyboard input partially worked — key
+events reached Chromium and the browser responded to them. However, mouse input
+had two critical bugs:
+
+1. **Mouse coordinates were wrong.** Hovered links highlighted significantly
+   lower than the actual cursor position. The `hit_test_overlay` function stored
+   the overlay origin in backing pixels (pre-Retina-scale values from
+   `update_ca_layer_frame`) and compared them correctly against `event.coords`
+   (also backing pixels), so hit testing worked. But the overlay-relative
+   coordinates sent to Chromium were in backing pixels, while Chromium expects
+   logical/CSS pixels (points). On a 2× Retina display, the y offset sent to
+   Chromium was double the correct value, making hovers land far below the
+   cursor.
+
+2. **Scroll events crashed Chromium.** WezTerm's `WMEK::VertWheel(i16)` is a
+   discrete wheel delta with no scroll phase information. The implementation
+   sent `phase=0` and `momentum_phase=0`, but Chromium's
+   `MouseWheelEventQueue::TryForwardNextEventToRenderer()` has a DCHECK
+   requiring at least one of phase or momentum_phase to be non-zero
+   (`kPhaseNone = 0` is invalid for both). Ghostboard avoids this because it
+   passes through the raw macOS `NSEvent.phase` and `NSEvent.momentumPhase`
+   values directly from the Swift layer — discrete trackpad scrolls always have
+   a real phase. WezTerm's event model strips this information.
+
+#### Conclusion
+
+The architecture is sound — the module structure, interception points, key
+translation, modifier remapping, and mode toggling all worked correctly. The two
+failures are coordinate-space and protocol-detail bugs:
+
+- **Fix 1: Divide by scale.** Store the Retina scale factor in pane state
+  (already available in `update_ca_layer_frame` as the `scale` variable). In
+  `hit_test_overlay`, divide the overlay-relative coordinates by scale before
+  returning them. This converts backing pixels → logical pixels for Chromium.
+
+- **Fix 2: Set scroll phase.** For discrete wheel events, set `phase = 4`
+  (`kPhaseChanged`, which is `1 << 2` in Chromium's bit-flag enum) instead of 0.
+  This satisfies the DCHECK. Ghostboard doesn't need this because it forwards
+  raw macOS phases, but Wezboard must synthesize them since WezTerm doesn't
+  expose scroll phases.

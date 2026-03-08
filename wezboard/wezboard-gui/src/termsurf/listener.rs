@@ -28,7 +28,11 @@ pub fn spawn_termsurf_server(sock_path: PathBuf, state: SharedState) -> anyhow::
                 Ok(stream) => {
                     conn_count += 1;
                     let peer = format!("{:?}", stream.peer_addr());
-                    log::info!("TermSurf client connected: {} (connection #{})", peer, conn_count);
+                    log::info!(
+                        "TermSurf client connected: {} (connection #{})",
+                        peer,
+                        conn_count
+                    );
                     let conn_state = state.clone();
                     promise::spawn::spawn_into_main_thread(async move {
                         if let Err(err) = super::conn::handle_connection(stream, conn_state).await {

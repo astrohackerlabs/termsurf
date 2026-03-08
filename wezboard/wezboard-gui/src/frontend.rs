@@ -331,7 +331,10 @@ impl GuiFrontEnd {
         }
     }
 
-    pub fn ns_view_for_mux_window(&self, mux_window_id: MuxWindowId) -> Option<*mut std::ffi::c_void> {
+    pub fn ns_view_for_mux_window(
+        &self,
+        mux_window_id: MuxWindowId,
+    ) -> Option<*mut std::ffi::c_void> {
         use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let windows = self.known_windows.borrow();
         for (window, &mux_id) in windows.iter() {

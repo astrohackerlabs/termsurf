@@ -248,6 +248,17 @@ impl super::TermWindow {
         is_down: bool,
         key_event: Option<&KeyEvent>,
     ) -> bool {
+        // Forward to browser overlay if in browse mode (TermSurf).
+        if let Some(result) = crate::termsurf::input::try_forward_key(
+            pane.pane_id(),
+            keycode,
+            raw_modifiers,
+            is_down,
+            key_event,
+        ) {
+            return result;
+        }
+
         if is_down && !leader_active {
             // Check to see if this key-press is the leader activating
             if let Some(duration) = self.input_map.is_leader(&keycode, raw_modifiers) {
