@@ -71,11 +71,24 @@ impl super::TermWindow {
 
         // Push cell metrics to TermSurf overlay code
         let (pad_left, pad_top) = self.padding_left_top();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+        let border = self.get_os_border();
+        let origin_x = pad_left + border.left.get() as f32;
+        let origin_y = top_bar_height + pad_top + border.top.get() as f32;
         crate::termsurf::metrics::set(
             self.render_metrics.cell_size.width as u32,
             self.render_metrics.cell_size.height as u32,
-            pad_left as u32,
-            pad_top as u32,
+            origin_x as u32,
+            origin_y as u32,
         );
     }
 

@@ -1,12 +1,12 @@
 use super::proto;
-use super::proto::TermSurfMessage;
 use super::proto::term_surf_message::Msg;
+use super::proto::TermSurfMessage;
 use super::state::{Pane, Server, SharedState, TermSurfState};
 use anyhow::Context;
 use prost::Message;
-use smol::Async;
 use smol::channel::Sender;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
+use smol::Async;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 

@@ -513,3 +513,16 @@ atomics now contain the correct full origin instead of just padding.
 4. Webview left edge aligns with terminal content (inside padding + border)
 5. Resize window — webview stays aligned
 6. Close pane — clean shutdown
+
+**Result:** Fail
+
+The webview is now one row too low. The `border.top` term in the origin formula
+double-counts the OS window frame offset. The overlay NSView is a subview of the
+window's `contentView` — the same coordinate space as the terminal view.
+WezTerm's render code adds `border.top` because it offsets content within the
+contentView for configured window frame styling. But our overlay already shares
+that coordinate space, so adding `border.top` pushes the webview down by an
+extra row.
+
+The correct formula should be `top_bar_height + padding_top` without
+`border.top`. Same for x: `padding_left` without `border.left`.

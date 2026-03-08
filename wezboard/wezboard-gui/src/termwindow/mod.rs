@@ -650,11 +650,16 @@ impl TermWindow {
         let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 
+        let top_bar_height = if config.tab_bar_at_bottom {
+            0
+        } else {
+            tab_bar_height
+        };
         crate::termsurf::metrics::set(
             render_metrics.cell_size.width as u32,
             render_metrics.cell_size.height as u32,
             padding_left as u32,
-            padding_top as u32,
+            (top_bar_height + padding_top) as u32,
         );
 
         let mut dimensions = Dimensions {
