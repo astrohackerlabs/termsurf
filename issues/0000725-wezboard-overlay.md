@@ -153,3 +153,77 @@ The overlay NSView would be:
 - Transparent: no background color, `layer.opaque = false`
 - Non-interactive: `hitTest:` returns nil so all input passes through to the
   terminal view beneath
+
+## Experiments
+
+### Experiment 1: Transparent overlay NSView
+
+Create a transparent, layer-hosting NSView as a sibling subview on top of the
+terminal view. Move the CALayerHost layer tree from the terminal view's backing
+layer into this overlay view's layer tree.
+
+The key insight: WezTerm's terminal view is layer-backed (AppKit owns the layer
+tree), so manually added sublayers are not composited. By creating a separate
+layer-hosting view, we own the layer tree and CALayerHost compositing works.
+
+#### Changes
+
+##### 1. EDIT `wezboard/wezboard-gui/src/termsurf/state.rs`
+
+Add a field to `TermSurfState` to store the overlay view pointer:
+
+```rust
+/// Overlay NSView for CALayerHost rendering (macOS only).
+/// Stored as usize (0 = not created yet).
+pub overlay_view: usize,
+```
+
+Initialize to `0` in `TermSurfState::new()`.
+
+##### 2. EDIT `wezboard/wezboard-gui/src/termsurf/conn.rs`
+
+**Create `TermSurfOverlayView` ObjC subclass** — A custom NSView subclass that
+overrides `hitTest:` to return nil, making it transparent to mouse events. All
+input passes through to the terminal view beneath.
+
+Register the class once (using `std::sync::Once`) with two methods:
+
+- `hitTest:` → returns null (pass-through)
+- `acceptsFirstResponder` → returns NO
+
+**Create `get_or_create_overlay(state)` function** — Lazily creates the overlay
+view on first CaContext arrival:
+
+1. Get the terminal NSView via `first_ns_view()`
+2. Get its superview (the window's contentView)
+3. Create a `TermSurfOverlayView` instance with `initWithFrame:` using the
+   terminal view's frame
+4. Set autoresizing mask to width+height sizable (18) so it follows resizes
+5. Create a root `CALayer`, set `opaque = false`
+6. Assign root layer to overlay view BEFORE setting `wantsLayer = true`
+   (layer-hosting order)
+7. Add overlay view as subview of contentView (goes on top of terminal view)
+8. Store the overlay view pointer in `state.overlay_view`
+9. Return the root layer pointer
+
+**Modify `handle_ca_context()`** — Instead of calling `get_backing_layer()` to
+get the terminal's backing layer, call `get_or_create_overlay()` to get the
+overlay view's root layer. Add the flipped_layer as a sublayer of this root
+layer instead.
+
+**Modify `get_backing_layer()`** — Rename to `get_overlay_root_layer()` or
+remove entirely, since we no longer add sublayers to the terminal view's backing
+layer.
+
+#### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. Launch Wezboard, run `web google.com`
+3. Confirm log: `CaContext: tab_id=1 context_id=...` (nonzero)
+4. Confirm log: `created overlay NSView` (new)
+5. Confirm log: `created CALayerHost contextId=...`
+6. **Browser content visible** as overlay in terminal window
+7. Terminal text still visible beneath (overlay is transparent where no browser
+   content exists)
+8. Mouse clicks pass through overlay to terminal (hitTest: returns nil)
+9. Close pane — layers cleaned up, no crash
