@@ -35,12 +35,7 @@ ready.
       continues as if the page is still loading, then times out. Need to detect
       renderer termination, display an error page, clear the progress bar, and
       show what went wrong. Discovered in Issue 655 Experiment 1.
-- [ ] Wezboard overlay NSView — CALayerHost is invisible because WezTerm uses a
-      layer-backed view (AppKit owns the layer tree). Fix: create a transparent
-      layer-hosting overlay NSView as a subview on top of the terminal view, put
-      the CALayerHost in the overlay's layer tree. Also needs input forwarding
-      and real cell-metric pixel dimensions. Discovered in Issue 724
-      Experiment 3.
+- [x] Wezboard overlay NSView — Promoted to Issue 725.
 - [ ] Mojo interface audit — The Content API build is missing handlers for Mojo
       interfaces that a full Chrome browser registers. Every missing binder is a
       ticking time bomb — the renderer crashes when any page's JavaScript calls
