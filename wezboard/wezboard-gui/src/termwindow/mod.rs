@@ -650,17 +650,6 @@ impl TermWindow {
         let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 
-        crate::termsurf::metrics::set(
-            render_metrics.cell_size.width as u32,
-            render_metrics.cell_size.height as u32,
-            padding_left as u32,
-            if config.tab_bar_at_bottom {
-                0
-            } else {
-                tab_bar_height
-            } as u32,
-        );
-
         let mut dimensions = Dimensions {
             pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
             pixel_height: ((terminal_size.rows * render_metrics.cell_size.height as usize)
@@ -671,6 +660,19 @@ impl TermWindow {
         };
 
         let border = Self::get_os_border_impl(&None, &config, &dimensions, &render_metrics);
+
+        crate::termsurf::metrics::set(
+            render_metrics.cell_size.width as u32,
+            render_metrics.cell_size.height as u32,
+            padding_left as u32,
+            (if config.tab_bar_at_bottom {
+                0
+            } else {
+                tab_bar_height
+            } + padding_top) as u32,
+            border.left.get() as u32,
+            border.top.get() as u32,
+        );
 
         dimensions.pixel_height += (border.top + border.bottom).get() as usize;
         dimensions.pixel_width += (border.left + border.right).get() as usize;

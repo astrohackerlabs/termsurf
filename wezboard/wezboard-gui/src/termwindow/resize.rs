@@ -70,7 +70,8 @@ impl super::TermWindow {
         self.emit_window_event("window-resized", None);
 
         // Push cell metrics to TermSurf overlay code
-        let (pad_left, _) = self.padding_left_top();
+        let (pad_left, pad_top) = self.padding_left_top();
+        let border = self.get_os_border();
         let tab_bar_height = if self.show_tab_bar {
             self.tab_bar_pixel_height().unwrap_or(0.)
         } else {
@@ -85,7 +86,9 @@ impl super::TermWindow {
             self.render_metrics.cell_size.width as u32,
             self.render_metrics.cell_size.height as u32,
             pad_left as u32,
-            top_bar_height as u32,
+            (top_bar_height + pad_top) as u32,
+            border.left.get() as u32,
+            border.top.get() as u32,
         );
     }
 

@@ -794,3 +794,23 @@ window_frame border defaults are 0, so the formula reduces to the baseline.
 4. Split pane, open from LEFT side — overlay over left pane, aligned with
    terminal content
 5. Both overlays shift correctly when borders appear (no misalignment)
+
+### Result: Success
+
+Build compiles with zero errors. The metrics bridge now stores 6 values
+(`cell_width`, `cell_height`, `origin_x`, `origin_y`, `border_left`,
+`border_top`) instead of 4. `origin_y` includes `padding_top` (default 0.5
+cells), fixing the half-cell gap. `border_left` and `border_top` are added to
+the positioning formula, fixing the misalignment when pane borders appear.
+
+Files changed:
+
+- `metrics.rs` — Added `BORDER_LEFT`/`BORDER_TOP` atomics, expanded `set`/`get`
+  to 6 parameters.
+- `resize.rs` — Captures `pad_top` and `border`, passes
+  `(top_bar_height + pad_top)` as `origin_y` plus border values.
+- `mod.rs` — Moved `metrics::set` after `border` computation, added
+  `padding_top` to `origin_y` and passes border values.
+- `conn.rs` — Destructures 6-tuple, adds `border_left`/`border_top` to x/y in
+  `update_ca_layer_frame`.
+

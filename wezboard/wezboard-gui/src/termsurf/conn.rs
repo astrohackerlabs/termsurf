@@ -394,7 +394,7 @@ fn handle_set_overlay(
         overlay.browser.clone()
     };
 
-    let (cell_w, cell_h, _, _) = super::metrics::get();
+    let (cell_w, cell_h, _, _, _, _) = super::metrics::get();
     let pixel_w = if cell_w > 0 {
         overlay.width * cell_w as u64
     } else {
@@ -1018,14 +1018,16 @@ unsafe fn update_ca_layer_frame(pane: &Pane, root_layer: *mut objc2::runtime::An
     let scale = if scale > 0.0 { scale } else { 1.0 };
     let w = pane.pixel_width as f64 / scale;
     let h = pane.pixel_height as f64 / scale;
-    let (cell_w, cell_h, origin_x, origin_y) = super::metrics::get();
+    let (cell_w, cell_h, origin_x, origin_y, border_left, border_top) = super::metrics::get();
     let (pane_left, pane_top) = get_pane_cell_position(&pane.pane_id);
-    let x = (origin_x as u64 + (pane_left as u64 + pane.col) * cell_w as u64) as f64 / scale;
-    let y = (origin_y as u64 + (pane_top as u64 + pane.row) * cell_h as u64) as f64 / scale;
+    let x = (origin_x as u64 + border_left as u64
+        + (pane_left as u64 + pane.col) * cell_w as u64) as f64 / scale;
+    let y = (origin_y as u64 + border_top as u64
+        + (pane_top as u64 + pane.row) * cell_h as u64) as f64 / scale;
 
     log::info!(
-        "update_ca_layer_frame: pane_id={} pane_cell=({},{}) origin=({},{}) cell=({},{}) scale={} → frame=({:.1},{:.1},{:.1},{:.1})",
-        pane.pane_id, pane_left, pane_top, origin_x, origin_y, cell_w, cell_h, scale, x, y, w, h
+        "update_ca_layer_frame: pane_id={} pane_cell=({},{}) origin=({},{}) border=({},{}) cell=({},{}) scale={} → frame=({:.1},{:.1},{:.1},{:.1})",
+        pane.pane_id, pane_left, pane_top, origin_x, origin_y, border_left, border_top, cell_w, cell_h, scale, x, y, w, h
     );
 
     let frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
