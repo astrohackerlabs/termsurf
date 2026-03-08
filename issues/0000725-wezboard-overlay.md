@@ -562,3 +562,15 @@ No other files need changes — `metrics.rs`, `mod.rs` (constructor), and
 4. Webview left edge aligns with first terminal column
 5. Resize window — webview stays aligned
 6. Close pane — clean shutdown
+
+**Result:** Fail
+
+Removing `border.top` and `border.left` made no difference — the webview is
+still offset one row too low. This means `border.top` was already 0 (as expected
+with default macOS window decorations). The extra row of offset comes from
+somewhere else in the formula.
+
+The current origin formula is `top_bar_height + padding_top`. Since removing
+border didn't help, the error must be in either `top_bar_height` or
+`padding_top` — one of them contributes an extra cell height that shouldn't be
+there.

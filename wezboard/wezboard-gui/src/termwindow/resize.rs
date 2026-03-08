@@ -81,9 +81,8 @@ impl super::TermWindow {
         } else {
             tab_bar_height
         };
-        let border = self.get_os_border();
-        let origin_x = pad_left + border.left.get() as f32;
-        let origin_y = top_bar_height + pad_top + border.top.get() as f32;
+        let origin_x = pad_left;
+        let origin_y = top_bar_height + pad_top;
         crate::termsurf::metrics::set(
             self.render_metrics.cell_size.width as u32,
             self.render_metrics.cell_size.height as u32,
