@@ -556,3 +556,56 @@ current formula doesn't use these values. Before the fix, the wrong scale
 accidentally compensated. Now that scale is correct, the TUI's col/row viewport
 offset needs to be explicitly added to the positioning formula. With scale=2.0,
 adding `row * cell_h / scale` would give the correct offset in points.
+
+## Experiment 6: Add TUI viewport offset (col/row)
+
+### Hypothesis
+
+The TUI sends `col`, `row`, `width`, `height` in SetOverlay. We already use
+`width` and `height` for overlay size (`pixel_w = width * cell_w`,
+`pixel_h = height * cell_h`). Adding `col` and `row` to the positioning formula
+will offset the overlay below the URL bar (row=1) and position it at the correct
+viewport origin within the pane. With scale=2.0 from Exp 5, the pixel→point
+conversion will be correct.
+
+### Design
+
+Two files changed: `state.rs` and `conn.rs`.
+
+**1. Add col/row to Pane** (state.rs)
+
+```rust
+pub col: u64,
+pub row: u64,
+```
+
+**2. Store col/row in handle_set_overlay** (conn.rs)
+
+In the new-pane construction and the resize branch, store `overlay.col` and
+`overlay.row` on the pane.
+
+**3. Use col/row in update_ca_layer_frame** (conn.rs)
+
+```rust
+let x = (origin_x as u64 + (pane_left as u64 + pane.col) * cell_w as u64)
+    as f64 / scale;
+let y = (origin_y as u64 + (pane_top as u64 + pane.row) * cell_h as u64)
+    as f64 / scale;
+```
+
+For a single pane (pane_left=0, pane_top=0, col=0, row=1):
+
+- x = (13 + 0 \* 13) / 2 = 6.5 points
+- y = (50 + 1 \* 30) / 2 = 40 points (below tab bar + URL bar row)
+
+For the right pane (pane_left=80, pane_top=0, col=0, row=1):
+
+- x = (13 + 80 \* 13) / 2 = 526.5 points
+- y = (50 + 1 \* 30) / 2 = 40 points
+
+### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. Single pane: overlay positioned below URL bar (no regression from pre-Exp 5)
+3. Split pane, open from RIGHT side — overlay over right pane, below URL bar
+4. Split pane, open from LEFT side — overlay over left pane, below URL bar
