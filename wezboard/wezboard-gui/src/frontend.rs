@@ -331,6 +331,21 @@ impl GuiFrontEnd {
         }
     }
 
+    pub fn ns_view_for_mux_window(&self, mux_window_id: MuxWindowId) -> Option<*mut std::ffi::c_void> {
+        use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let windows = self.known_windows.borrow();
+        for (window, &mux_id) in windows.iter() {
+            if mux_id == mux_window_id {
+                let handle = window.window_handle().ok()?;
+                return match handle.as_raw() {
+                    RawWindowHandle::AppKit(h) => Some(h.ns_view.as_ptr()),
+                    _ => None,
+                };
+            }
+        }
+        None
+    }
+
     pub fn run_forever(&self) -> anyhow::Result<()> {
         self.connection
             .run_message_loop()

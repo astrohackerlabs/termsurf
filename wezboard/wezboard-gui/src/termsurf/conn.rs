@@ -794,14 +794,15 @@ fn register_overlay_class() -> &'static objc2::runtime::AnyClass {
 #[cfg(target_os = "macos")]
 fn get_or_create_overlay(
     state: &mut super::state::TermSurfState,
+    mux_window_id: usize,
 ) -> Option<*mut objc2::runtime::AnyObject> {
     use objc2::msg_send;
     use objc2::runtime::{AnyObject, Bool};
     use objc2_core_foundation::CGRect;
 
-    if state.overlay_view != 0 {
+    if let Some(&ptr) = state.overlay_views.get(&mux_window_id) {
         // Already created — return its layer
-        let view = state.overlay_view as *mut AnyObject;
+        let view = ptr as *mut AnyObject;
         unsafe {
             let layer: *mut AnyObject = msg_send![view, layer];
             return if layer.is_null() { None } else { Some(layer) };
@@ -809,7 +810,7 @@ fn get_or_create_overlay(
     }
 
     let fe = crate::frontend::try_front_end()?;
-    let ns_view = fe.first_ns_view()?;
+    let ns_view = fe.ns_view_for_mux_window(mux_window_id)?;
     let ns_view = ns_view as *mut AnyObject;
 
     unsafe {
@@ -855,7 +856,7 @@ fn get_or_create_overlay(
         // Retain overlay so it stays alive
         let _: *mut AnyObject = msg_send![overlay, retain];
 
-        state.overlay_view = overlay as usize;
+        state.overlay_views.insert(mux_window_id, overlay as usize);
         log::info!("created overlay NSView");
 
         if root_layer.is_null() {
@@ -881,8 +882,14 @@ fn handle_ca_context(ca_context: proto::CaContext, state: &SharedState) {
         return;
     }
 
+    // Look up which mux window this pane belongs to
+    let Some(mux_window_id) = get_pane_mux_window(&pane_id) else {
+        log::warn!("handle_ca_context: pane {} not in any mux window", pane_id);
+        return;
+    };
+
     // Get or create overlay before borrowing pane mutably
-    let Some(root_layer) = get_or_create_overlay(&mut st) else {
+    let Some(root_layer) = get_or_create_overlay(&mut st, mux_window_id) else {
         log::warn!("handle_ca_context: no overlay root layer");
         return;
     };
@@ -979,6 +986,23 @@ fn handle_ca_context(ca_context: proto::CaContext, state: &SharedState) {
 
         let _: () = msg_send![ca_transaction, commit];
     }
+}
+
+fn get_pane_mux_window(pane_id: &str) -> Option<mux::window::WindowId> {
+    let numeric_id: usize = pane_id.parse().ok()?;
+    let mux = mux::Mux::get();
+    for window_id in mux.iter_windows() {
+        if let Some(w) = mux.get_window(window_id) {
+            for tab in w.iter() {
+                for pos in tab.iter_panes() {
+                    if pos.pane.pane_id() == numeric_id {
+                        return Some(window_id);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Look up a pane's cell position within the tab from the mux.

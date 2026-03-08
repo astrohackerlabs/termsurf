@@ -943,3 +943,46 @@ let Some(root_layer) = get_or_create_overlay(&mut st, mux_window_id) else { ... 
 3. Open window 2, run `web google.com` — overlay in window 2 (not window 1)
 4. Both overlays visible simultaneously in their respective windows
 5. Close window 2 — window 1's overlay unaffected
+
+### Result: Success
+
+Build compiles with zero errors. Opening a webview in a second window now
+renders the overlay in the correct window. Both overlays are visible
+simultaneously in their respective windows.
+
+Files changed:
+
+- `state.rs` — Replaced `overlay_view: usize` with
+  `overlay_views: HashMap<usize, usize>` (per-window map).
+- `frontend.rs` — Added `ns_view_for_mux_window(mux_window_id)` that looks up
+  the NSView for a specific mux window from `known_windows`.
+- `conn.rs` — Added `get_pane_mux_window(pane_id)` helper that iterates all
+  windows/tabs/panes to find which mux window owns a pane. Updated
+  `get_or_create_overlay` to accept `mux_window_id`, look up overlays in the
+  per-window map, and create new overlays on the correct window's NSView.
+  Updated `handle_ca_context` to resolve the mux window before creating the
+  overlay.
+
+## Conclusion
+
+Issue 727 is resolved. Two webview overlays render correctly in split panes and
+in separate windows.
+
+The core problem was converting pane-relative grid coordinates to
+window-absolute pixel coordinates. The solution required three pieces:
+
+1. **Mux pane position lookup** (Exp 3) — `get_pane_cell_position` queries
+   WezTerm's `PositionedPane.left`/`.top` to find where each pane sits within
+   the tab layout.
+
+2. **Correct contentsScale + viewport offset** (Exps 5–7) — Setting the overlay
+   root layer's `contentsScale` to the screen's backing scale factor (2.0 on
+   Retina) fixes pixel→point conversion. Adding the TUI's col/row viewport
+   offset positions the overlay below the URL bar. Expanding the metrics bridge
+   to include `padding_top`, `border_left`, and `border_top` aligns the overlay
+   with terminal content when pane borders appear.
+
+3. **Per-window overlay views** (Exp 8) — Replaced the single `overlay_view`
+   with a per-window `HashMap<usize, usize>`. Added `ns_view_for_mux_window` to
+   look up the correct GUI window, and `get_pane_mux_window` to find which
+   window owns a pane. Each window now gets its own transparent overlay NSView.

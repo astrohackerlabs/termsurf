@@ -46,9 +46,8 @@ pub struct TermSurfState {
     pub focused_pane: Option<String>,
     /// Last browser pane (for DevTools auto-targeting)
     pub last_browser_pane: Option<String>,
-    /// Overlay NSView for CALayerHost rendering (macOS only).
-    /// Stored as usize (0 = not created yet).
-    pub overlay_view: usize,
+    /// mux_window_id → overlay NSView pointer (macOS only)
+    pub overlay_views: HashMap<usize, usize>,
 }
 
 impl TermSurfState {
@@ -59,7 +58,7 @@ impl TermSurfState {
             tab_to_pane: HashMap::new(),
             focused_pane: None,
             last_browser_pane: None,
-            overlay_view: 0,
+            overlay_views: HashMap::new(),
         }
     }
 
