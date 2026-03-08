@@ -171,3 +171,280 @@ needs to convert WezTerm KeyCode variants to Windows VK codes.
 The CursorChanged proto sends an integer cursor type. Ghostboard maps these to
 Ghostty cursor shapes in `handleCursorChanged`. Wezboard needs to map them to
 WezTerm's `MouseCursor` enum or directly to macOS NSCursor types.
+
+## Experiment 1: Mode-aware input forwarding
+
+### Goal
+
+Forward keyboard, mouse, and scroll events to Chromium when the active pane is
+in browse mode. This is the highest-impact missing feature — without it, the
+browser overlay is view-only.
+
+### Design
+
+#### How Ghostboard does it
+
+Ghostboard intercepts input at three points in `Surface.zig`:
+
+1. **`keyCallback()` (line 2723)** — Checks `xpc.isOverlayForwarding(self)`
+   (browse mode + focused pane). If true, sends `KeyEvent` to Chromium and
+   returns `.consumed`. Special-cases Esc to exit browse mode.
+2. **`mouseButtonCallback()` (line 4021)** — Calls `hitTestOverlay()` to check
+   if the click is inside the overlay rectangle. If yes, forwards `MouseEvent`.
+   Left-click on overlay auto-switches to browse mode; left-click off overlay
+   switches to control mode.
+3. **`scrollCallback()` (line 3519)** — Calls `hitTestOverlay()`. If the cursor
+   is over the overlay, forwards `ScrollEvent` regardless of mode.
+
+Mouse move is sent from `cursorPosCallback()` when the cursor is over the
+overlay.
+
+Coordinates are overlay-relative: `hitTestOverlay()` computes the overlay's
+pixel rectangle from cell grid position, subtracts the origin, and divides by
+content scale for Retina.
+
+#### Wezboard interception points
+
+WezTerm's event flow in `termwindow/`:
+
+- **Keyboard**: `raw_key_event_impl()` and `key_event_impl()` both call
+  `process_key()` (keyevent.rs:239). This is the single chokepoint for all
+  keyboard input.
+- **Mouse**: `mouse_event_impl()` (mouseevent.rs:61) dispatches to
+  `mouse_event_terminal()` (mouseevent.rs:648) for pane-targeted events.
+- **Scroll**: Handled as `WMEK::VertWheel` / `WMEK::HorzWheel` variants inside
+  `mouse_event_terminal()`.
+
+The active pane is available as `pane.pane_id()` (a `usize`). TermSurf state
+uses string pane IDs. The bridge is `pane_id.to_string()` to look up
+`state.panes`.
+
+#### What to build
+
+**1. Helper module: `termsurf/input.rs`** (new file)
+
+Public functions callable from `termwindow/` that check TermSurf state and
+forward to Chromium:
+
+```rust
+/// Check if a pane is in browse mode and has an active browser tab.
+pub fn is_browsing(pane_id: usize) -> bool
+
+/// Forward a key event to Chromium. Returns true if consumed.
+pub fn forward_key_event(
+    pane_id: usize,
+    key: &KeyCode,
+    modifiers: Modifiers,
+    is_down: bool,
+    utf8: &str,
+) -> bool
+
+/// Forward a mouse event to Chromium. Returns true if consumed.
+pub fn forward_mouse_event(
+    pane_id: usize,
+    event_type: &str,     // "down" or "up"
+    button: &str,         // "left", "right", "middle"
+    x: f64,               // overlay-relative pixel X
+    y: f64,               // overlay-relative pixel Y
+    click_count: i64,
+    modifiers: Modifiers,
+) -> bool
+
+/// Forward a mouse move to Chromium. Returns true if consumed.
+pub fn forward_mouse_move(
+    pane_id: usize,
+    x: f64,
+    y: f64,
+    left_button_down: bool,
+    right_button_down: bool,
+) -> bool
+
+/// Forward a scroll event to Chromium. Returns true if consumed.
+pub fn forward_scroll_event(
+    pane_id: usize,
+    x: f64,
+    y: f64,
+    delta_x: f64,
+    delta_y: f64,
+) -> bool
+```
+
+Each function: lock TermSurf global state → look up pane by
+`pane_id.to_string()` → check `pane.browsing` (for key events) or overlay bounds
+(for mouse/scroll) → build protobuf message → send via server tx channel.
+
+**2. Key code translation: `keycode_to_windows_vk()`**
+
+Map WezTerm `KeyCode` variants to Windows virtual key codes, matching
+Ghostboard's `keyToWindowsVK()` (xpc.zig:1315):
+
+```rust
+fn keycode_to_windows_vk(key: &KeyCode) -> i64 {
+    match key {
+        KeyCode::Char(c) => match c.to_ascii_uppercase() {
+            'A'..='Z' => *c as i64,  // 0x41-0x5A
+            '0'..='9' => *c as i64,  // 0x30-0x39
+            _ => 0,
+        },
+        KeyCode::Function(n) => 0x70 + (*n as i64 - 1),  // F1=0x70
+        KeyCode::Enter => 0x0D,
+        KeyCode::Tab => 0x09,
+        KeyCode::Backspace => 0x08,
+        KeyCode::Escape => 0x1B,
+        KeyCode::Delete => 0x2E,
+        KeyCode::UpArrow => 0x26,
+        KeyCode::DownArrow => 0x28,
+        KeyCode::LeftArrow => 0x25,
+        KeyCode::RightArrow => 0x27,
+        KeyCode::Home => 0x24,
+        KeyCode::End => 0x23,
+        KeyCode::PageUp => 0x21,
+        KeyCode::PageDown => 0x22,
+        KeyCode::Insert => 0x2D,
+        _ => 0,
+    }
+}
+```
+
+**3. Modifier translation: `modifiers_to_termsurf()`**
+
+WezTerm and TermSurf use different bit positions:
+
+```rust
+fn modifiers_to_termsurf(mods: Modifiers) -> u64 {
+    let mut result: u64 = 0;
+    if mods.contains(Modifiers::SHIFT)   { result |= 1; }      // 1 << 0
+    if mods.contains(Modifiers::CTRL)    { result |= 2; }      // 1 << 1
+    if mods.contains(Modifiers::ALT)     { result |= 4; }      // 1 << 2
+    if mods.contains(Modifiers::SUPER)   { result |= 8; }      // 1 << 3
+    result
+}
+```
+
+**4. Overlay hit testing: `hit_test_overlay()`**
+
+Compute whether a pixel coordinate falls inside the overlay rectangle, and
+return overlay-relative coordinates if so. Uses pane state (`col`, `row`,
+`pixel_width`, `pixel_height`) and the cell metrics bridge:
+
+```rust
+fn hit_test_overlay(
+    pane_id: usize,
+    window_x: f64,
+    window_y: f64,
+) -> Option<(f64, f64)>
+```
+
+The overlay's pixel origin is `(col * cell_width, row * cell_height)` plus
+padding and border offsets. This mirrors Ghostboard's `hitTestOverlay()`
+(Surface.zig:2455).
+
+**5. Keyboard interception in `process_key()`**
+
+Add an early check at the top of `process_key()` (keyevent.rs:239), before
+leader key and keybinding processing:
+
+```rust
+// Forward to browser overlay if in browse mode (TermSurf).
+if let Some(result) = crate::termsurf::input::try_forward_key(
+    pane.pane_id(),
+    keycode,
+    raw_modifiers,
+    is_down,
+    key_event,
+) {
+    return result;
+}
+```
+
+The `try_forward_key` function handles:
+
+- Look up TermSurf pane state for `pane.pane_id()`
+- If not browsing, return `None` (let WezTerm handle normally)
+- If Esc press: set `pane.browsing = false`, send `ModeChanged(false)` to TUI,
+  send `FocusChanged(false)` to Chromium, return `Some(true)` (consumed)
+- Otherwise: translate key code and modifiers, send `KeyEvent` to Chromium,
+  return `Some(true)` (consumed)
+
+**6. Mouse interception in `mouse_event_terminal()`**
+
+Add an early check at the top of `mouse_event_terminal()` (mouseevent.rs:648),
+before pane resolution:
+
+```rust
+// Forward to browser overlay if click hits overlay (TermSurf).
+if crate::termsurf::input::try_forward_mouse(
+    pane.pane_id(),
+    &event,
+    &self.render_metrics,
+    // pass padding/border offsets for coordinate translation
+) {
+    return;
+}
+```
+
+The `try_forward_mouse` function handles:
+
+- Hit test: is the mouse position inside the overlay rectangle?
+- If yes and left-click press: auto-switch to browse mode (set
+  `pane.browsing = true`, send `ModeChanged(true)` to TUI)
+- If yes: forward `MouseEvent`, `MouseMove`, or `ScrollEvent` depending on
+  `event.kind`
+- If no and left-click press and was browsing: switch to control mode
+- Mouse move forwarding when cursor is over overlay (regardless of browse mode,
+  for hover effects)
+
+**7. Mode change notifications**
+
+When the board auto-switches mode (click on/off overlay, Esc), it must notify
+both sides:
+
+- **TUI**: Send `ModeChanged { browsing, pane_id }` so the TUI updates its
+  status bar
+- **Chromium**: Send `FocusChanged { tab_id, focused }` so Chromium updates
+  internal focus state (text selection, form focus, etc.)
+
+This requires a new helper in `conn.rs`:
+
+```rust
+pub fn send_mode_changed(pane_id: &str, browsing: bool, state: &SharedState)
+pub fn send_focus_changed(pane_id: &str, focused: bool, state: &SharedState)
+```
+
+### Files to modify
+
+| File                       | Changes                                       |
+| -------------------------- | --------------------------------------------- |
+| `termsurf/input.rs` (new)  | Input forwarding module with all helpers      |
+| `termsurf/mod.rs`          | Add `pub mod input;`                          |
+| `termsurf/conn.rs`         | Add `send_mode_changed`, `send_focus_changed` |
+| `termwindow/keyevent.rs`   | Early return in `process_key()` for browse    |
+| `termwindow/mouseevent.rs` | Early return in `mouse_event_terminal()`      |
+
+### Coordinate system
+
+The trickiest part is translating mouse coordinates from WezTerm's window pixel
+space to overlay-relative pixel space:
+
+1. **Window pixel coords** — `event.coords.x`, `event.coords.y` (from
+   `mouse_event_impl`)
+2. **Subtract padding + border + tab bar** — same offsets already computed in
+   `mouse_event_impl()` for cell coordinate conversion
+3. **Subtract overlay origin** — `col * cell_width`, `row * cell_height` (from
+   TermSurf pane state × cell metrics)
+4. **Divide by content scale** — for Retina displays (matches Ghostboard's
+   approach)
+
+Cell metrics are available via the global atomics bridge (`termsurf::metrics`),
+already used for overlay positioning in Issue 725.
+
+### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. Open `web google.com` — overlay renders (existing behavior)
+3. Type in the Google search box — keystrokes appear in the browser
+4. Click a link — navigates to the target page
+5. Scroll on a page — page scrolls
+6. Press Esc — returns to control mode, keys go to terminal
+7. Click on overlay — auto-switches to browse mode
+8. Click outside overlay — returns to control mode
