@@ -265,3 +265,106 @@ The layer-backed vs layer-hosting hypothesis (Hypothesis 7) was confirmed. The
 overlay NSView approach successfully renders browser content in Wezboard. Next
 steps: fix positioning and sizing to place the webview correctly within the
 terminal pane.
+
+### Experiment 2: Accurate pixel dimensions from cell metrics
+
+Fix the webview's size and position by using WezTerm's actual cell dimensions
+instead of placeholder values. Currently `handle_set_overlay()` computes pixel
+dimensions as `width * 10` and `height * 20` — hardcoded approximations that
+produce wrong sizes. The positioning layer's frame is at (0,0) — no offset for
+where the pane sits within the window.
+
+WezTerm knows the real cell dimensions (`render_metrics.cell_size`), padding
+(`config.window_padding`), and pane grid positions (`PositionedPane.left/top`).
+The challenge is that these live in `TermWindow` (main thread, Rc<RefCell>),
+while `conn.rs` runs in async tasks. We need to bridge this gap.
+
+#### Approach
+
+Store cell metrics in global atomics. TermWindow updates them during resize (and
+at startup). conn.rs reads them when computing pixel dimensions.
+
+This is simpler than passing TermSurfState into TermWindow or using
+`TermWindowNotif::Apply` callbacks — it's a one-way data flow with no locking.
+
+#### Changes
+
+##### 1. CREATE `wezboard/wezboard-gui/src/termsurf/metrics.rs`
+
+A small module with global atomic cell metrics:
+
+```rust
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static CELL_WIDTH: AtomicU32 = AtomicU32::new(0);
+static CELL_HEIGHT: AtomicU32 = AtomicU32::new(0);
+static PADDING_LEFT: AtomicU32 = AtomicU32::new(0);
+static PADDING_TOP: AtomicU32 = AtomicU32::new(0);
+
+pub fn set(cell_width: u32, cell_height: u32, padding_left: u32, padding_top: u32) {
+    CELL_WIDTH.store(cell_width, Ordering::Relaxed);
+    CELL_HEIGHT.store(cell_height, Ordering::Relaxed);
+    PADDING_LEFT.store(padding_left, Ordering::Relaxed);
+    PADDING_TOP.store(padding_top, Ordering::Relaxed);
+}
+
+pub fn get() -> (u32, u32, u32, u32) {
+    (
+        CELL_WIDTH.load(Ordering::Relaxed),
+        CELL_HEIGHT.load(Ordering::Relaxed),
+        PADDING_LEFT.load(Ordering::Relaxed),
+        PADDING_TOP.load(Ordering::Relaxed),
+    )
+}
+```
+
+##### 2. EDIT `wezboard/wezboard-gui/src/termsurf/mod.rs`
+
+Add `pub mod metrics;` to expose the new module.
+
+##### 3. EDIT `wezboard/wezboard-gui/src/termwindow/resize.rs`
+
+At the end of the `resize()` method (after cell dimensions and padding are
+computed), call `crate::termsurf::metrics::set(...)` with the current cell
+width, cell height, padding left, and padding top. These values are available
+from `self.render_metrics.cell_size` and `self.padding_left_top()`.
+
+Also call this in the TermWindow constructor (`spawn_window_impl` or equivalent)
+so metrics are available before the first resize.
+
+##### 4. EDIT `wezboard/wezboard-gui/src/termsurf/conn.rs`
+
+Modify `handle_set_overlay()` to use real cell metrics:
+
+```rust
+let (cell_w, cell_h, pad_left, pad_top) = super::metrics::get();
+let pixel_w = if cell_w > 0 {
+    overlay.width * cell_w as u64
+} else {
+    overlay.width * 10  // fallback
+};
+let pixel_h = if cell_h > 0 {
+    overlay.height * cell_h as u64
+} else {
+    overlay.height * 20  // fallback
+};
+```
+
+Modify `update_ca_layer_frame()` to position the overlay using padding. For now,
+use (padding_left, padding_top) as the origin — correct for a single full-size
+pane. Multi-pane grid offsets can come later:
+
+```rust
+let (_, _, pad_left, pad_top) = super::metrics::get();
+let x = pad_left as f64 / scale;
+let y = pad_top as f64 / scale;
+```
+
+#### Verification
+
+1. `cd wezboard && cargo build -p wezboard-gui` — zero errors
+2. Launch Wezboard, run `web google.com`
+3. Webview fills the terminal pane area (not smaller than expected)
+4. Webview is positioned inside the pane (not at window origin)
+5. Resize the window — webview resizes proportionally
+6. Close pane — clean shutdown, no crash
