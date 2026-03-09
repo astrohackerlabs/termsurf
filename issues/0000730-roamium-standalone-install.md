@@ -728,3 +728,66 @@ icon.
 4. `/Applications/Wezboard.app` shows the new icon with border in Finder/Dock
 5. Launching Wezboard from `/Applications/` works
 6. `web lite.duckduckgo.com` inside Wezboard uses installed Roamium
+
+#### Result
+
+Success. All icons regenerated from `termsurf-10.png`. Wezboard reinstalled with
+the updated icon. The extra border makes the logo look better in the Dock.
+
+#### Conclusion
+
+The `termsurf-10` logo (with border padding) replaces `termsurf-9` across both
+Wezboard and Ghostboard icon assets.
+
+## Summary
+
+Issue 730 made Roamium and Wezboard independently installable as standalone
+packages, separate from the development tree.
+
+**Roamium** installs to `/usr/local/roamium/` as a flat directory containing the
+binary, all Chromium dylibs, helper processes, and resource files. No `.app`
+bundle needed — `AmIBundled()` returns false for plain binaries, so Chromium's
+macOS bundle path transform never fires. Symlinks and wrapper scripts don't work
+due to `NSBundle.mainBundle` resolving to the wrong directory, so boards launch
+the binary directly at `/usr/local/roamium/roamium`.
+
+**Wezboard** installs to `/Applications/Wezboard.app` using a template bundle
+from `wezboard/assets/macos/Wezboard.app/` that contains Info.plist, ANGLE
+dylibs, and the app icon. The install script copies the template, adds the
+release binary, and ad-hoc codesigns.
+
+**Dev path fallbacks removed.** Both Ghostboard and Wezboard no longer hardcode
+`$HOME/dev/termsurf/chromium/src/out/Default/roamium`. Boards resolve Roamium
+from `/usr/local/roamium/roamium` or a user-specified absolute path via
+`--browser`. The old Chromium bundling in `scripts/install.sh` was also removed.
+
+**New TermSurf logo.** Both boards use `termsurf-10.png` (logo with border
+padding for better Dock appearance) for their app icons.
+
+### Install scripts
+
+| Script                        | Installs                                |
+| ----------------------------- | --------------------------------------- |
+| `scripts/install-roamium.sh`  | `/usr/local/roamium/`                   |
+| `scripts/install-wezboard.sh` | `/Applications/Wezboard.app`            |
+| `scripts/install.sh`          | `/Applications/TermSurf Ghostboard.app` |
+
+### Key experiments
+
+| Exp | What                                  | Result                                                        |
+| --- | ------------------------------------- | ------------------------------------------------------------- |
+| 1   | Can Roamium run without .app bundles? | Yes — `AmIBundled()` false, `--browser-subprocess-path` works |
+| 2   | Install script + test                 | Symlink fails (NSBundle resolves wrong dir)                   |
+| 3   | Wrapper script instead of symlink     | Also fails (exec doesn't fix NSBundle)                        |
+| 4   | Flat install to /usr/local/roamium    | Works — direct binary path, no indirection                    |
+| 5   | Remove dev path fallback              | Clean — boards use install path only                          |
+| 6   | Wezboard install + termsurf-9 icon    | Works — template bundle + install script                      |
+| 7   | Update to termsurf-10 logo            | Works — better Dock appearance with border                    |
+
+## Conclusion
+
+Roamium and Wezboard are independently installable. Roamium lives at
+`/usr/local/roamium/` as a flat directory (no `.app` bundle, no symlink).
+Wezboard lives at `/Applications/Wezboard.app` built from a template bundle.
+Both use the `termsurf-10` logo. Dev path hardcodes are gone — boards discover
+Roamium at its install path or via explicit `--browser` flag.
