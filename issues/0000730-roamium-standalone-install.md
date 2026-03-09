@@ -369,11 +369,116 @@ WRAPPER
 sudo chmod +x /usr/local/bin/roamium
 ```
 
+#### Result
+
+Fail. The wrapper script doesn't fix `NSBundle` resolution either. After `exec`
+replaces the shell with the real binary, `NSBundle.mainBundle` still doesn't
+resolve to `/usr/local/lib/roamium/`. Running `/usr/local/bin/roamium` (the
+wrapper) crashes with the same ICU error. Running
+`/usr/local/lib/roamium/roamium` directly works fine.
+
+#### Conclusion
+
+Neither symlinks nor wrapper scripts fix the `NSBundle` issue. `NSBundle` on
+macOS determines the bundle directory in a way that doesn't follow `exec` chains
+for non-bundled executables. The direct binary path works — the problem is only
+the indirection layer. The solution is simpler: don't put anything in
+`/usr/local/bin/`. Roamium is not user-facing — boards launch it directly. Just
+install everything to a single directory and have the board use that path.
+
+### Experiment 4: Install to /usr/local/roamium
+
+#### Goal
+
+Install Roamium and all its dependencies to `/usr/local/roamium/`. No symlink,
+no wrapper, no `/usr/local/bin` entry. The board launches
+`/usr/local/roamium/roamium` directly. `NSBundle.mainBundle` resolves to
+`/usr/local/roamium/` where all resources live.
+
+Roamium is not a user-facing command — it's a browser engine process launched by
+boards (Ghostboard, Wezboard) via the TermSurf protocol. End users never run it
+directly. Only boards need to know the path.
+
+#### Design
+
+**1. Update `scripts/install-roamium.sh`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+CHROMIUM_OUT="$REPO_DIR/chromium/src/out/Default"
+ROAMIUM_SRC="$REPO_DIR/roamium/target/release/roamium"
+INSTALL_DIR="/usr/local/roamium"
+
+# Verify release build exists.
+if [ ! -f "$ROAMIUM_SRC" ]; then
+  echo "Error: Release build not found at $ROAMIUM_SRC"
+  echo "Run: scripts/build-roamium.sh --release"
+  exit 1
+fi
+
+echo "==> Installing Roamium to $INSTALL_DIR..."
+sudo mkdir -p "$INSTALL_DIR"
+
+# Copy roamium binary.
+sudo cp "$ROAMIUM_SRC" "$INSTALL_DIR/roamium"
+
+# Copy dylibs.
+echo "==> Copying dylibs..."
+sudo cp "$CHROMIUM_OUT"/*.dylib "$INSTALL_DIR/"
+
+# Copy resources.
+echo "==> Copying resources..."
+sudo cp "$CHROMIUM_OUT"/*.pak "$INSTALL_DIR/"
+sudo cp "$CHROMIUM_OUT/icudtl.dat" "$INSTALL_DIR/"
+sudo cp "$CHROMIUM_OUT"/v8_context_snapshot*.bin "$INSTALL_DIR/"
+
+# Clean up old install locations.
+sudo rm -f /usr/local/bin/roamium
+sudo rm -rf /usr/local/lib/roamium
+
+echo ""
+echo "Done."
+echo "  Dir: $INSTALL_DIR"
+echo "  Bin: $INSTALL_DIR/roamium"
+```
+
+**2. Update `resolve_browser_path` in Wezboard (`conn.rs`)**
+
+Add `/usr/local/roamium/roamium` as a candidate path for the `"roamium"` name:
+
+```rust
+let candidates = &[
+    ("roamium", format!("/usr/local/roamium/roamium")),
+    ("roamium", format!("{}/dev/termsurf/chromium/src/out/Default/roamium", home)),
+];
+```
+
+The installed path is checked first. If it doesn't exist, fall back to the dev
+build directory.
+
+**3. Update `resolveBrowserPath` in Ghostboard (`xpc.zig`)**
+
+Same change — add `/usr/local/roamium/roamium` as the first candidate:
+
+```zig
+.{ .name = "roamium", .suffix = "" , .path = "/usr/local/roamium/roamium" },
+.{ .name = "roamium", .suffix = "/dev/termsurf/chromium/src/out/Default/roamium" },
+```
+
 #### Verification
 
-1. Run `scripts/install-roamium.sh` — installs with wrapper script
-2. `/usr/local/bin/roamium --help 2>&1` — no ICU crash, initializes normally
-3. `/usr/local/lib/roamium/roamium --help 2>&1` — still works directly
-4. In Ghostboard: `web --browser /usr/local/bin/roamium termsurf.com` — page
-   renders
-5. DevTools: `:devtools right` — helper processes spawn correctly
+1. `scripts/install-roamium.sh` completes without errors
+2. `/usr/local/roamium/roamium --help 2>&1` — initializes normally, no ICU crash
+3. `/usr/local/roamium/` contains roamium, dylibs, .pak files, icudtl.dat, and
+   v8_context_snapshot
+4. In Wezboard: `web lite.duckduckgo.com` — uses installed Roamium from
+   `/usr/local/roamium/roamium`, page renders
+5. In Wezboard: `web --browser /usr/local/roamium/roamium lite.duckduckgo.com` —
+   explicit path also works
+6. Dev build still works: `web --browser roamium lite.duckduckgo.com` when
+   installed path doesn't exist falls back to
+   `$HOME/dev/termsurf/chromium/src/out/Default/roamium`
