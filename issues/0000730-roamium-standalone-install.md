@@ -485,18 +485,93 @@ Same change — add `/usr/local/roamium/roamium` as the first candidate:
 
 #### Result
 
-Success — Wezboard correctly launches Roamium from `/usr/local/roamium/roamium`.
-The install script copies all files, `NSBundle` resolves correctly (no symlink
-or wrapper indirection), and `web lite.duckduckgo.com` renders pages normally.
+Success. Both Wezboard and Ghostboard correctly launch Roamium from
+`/usr/local/roamium/roamium`. The install script copies all files, `NSBundle`
+resolves correctly (no symlink or wrapper indirection), and pages render
+normally in both boards.
 
-Ghostboard does not pick up the installed path — needs debugging in a follow-up
-experiment. The `initBrowserRegistry` change in `xpc.zig` was implemented but
-Ghostboard still uses the dev build path. This may be a build issue (Ghostboard
-wasn't rebuilt) or a logic issue in the registry initialization.
+Initial testing appeared to show Ghostboard not picking up the installed path,
+but this was a false alarm — Ghostboard hadn't been rebuilt with the `xpc.zig`
+changes. After a release build and reinstall, both boards work.
 
 #### Conclusion
 
-The install layout works. `/usr/local/roamium/` with the binary, dylibs, and
-resources colocated — no indirection — is the correct approach. Wezboard
-confirms end-to-end functionality. Ghostboard support needs debugging
-separately.
+The flat install layout works. `/usr/local/roamium/` with the binary, dylibs,
+and resources colocated — no indirection — is the correct approach. Both
+Wezboard and Ghostboard confirm end-to-end functionality.
+
+### Experiment 5: Remove dev path fallback and .app bundling
+
+#### Goal
+
+Remove all hardcoded dev build paths from Ghostboard and Wezboard. Boards should
+only find Roamium at `/usr/local/roamium/roamium` (the installed location) or
+via a user-specified absolute path. Also remove the Chromium bundling from
+`scripts/install.sh` — Roamium is now installed separately via
+`scripts/install-roamium.sh`.
+
+#### Background
+
+Both boards currently have two candidates for Roamium:
+
+1. `/usr/local/roamium/roamium` (installed)
+2. `$HOME/dev/termsurf/chromium/src/out/Default/roamium` (dev build)
+
+The dev path is a hardcoded path to _this_ developer's machine. It shouldn't
+exist in shipped code. Developers who want to test a custom build can use
+`web --browser /path/to/roamium`.
+
+`scripts/install.sh` also bundles old-style Chromium `.app` bundles and
+resources into `Contents/Chromium/` inside the Ghostboard `.app`. This predates
+Roamium and is now dead code — Roamium is installed independently.
+
+#### Design
+
+**1. Simplify `initBrowserRegistry` in Ghostboard (`xpc.zig`)**
+
+Remove the dev fallback entry and simplify the registry to a single absolute
+path. The `Entry` struct, `home` variable, `suffix` field, and `bufPrint` logic
+are no longer needed:
+
+```zig
+const browsers = [_][]const u8{
+    "/usr/local/roamium/roamium",
+};
+
+for (&browsers) |path| {
+    if (std.fs.accessAbsolute(path, .{})) {
+        // register "roamium" → path
+    } else |_| {}
+}
+```
+
+The browser name is derived from the filename (last path component) or can stay
+hardcoded as `"roamium"` for now since there's only one entry.
+
+**2. Remove dev fallback in Wezboard (`conn.rs`)**
+
+Remove the `$HOME/dev/termsurf/...` candidate from `resolve_browser_path`. The
+`home` variable is no longer needed:
+
+```rust
+let candidates = &[
+    ("roamium", "/usr/local/roamium/roamium".to_string()),
+];
+```
+
+**3. Remove Chromium bundling from `scripts/install.sh`**
+
+Remove lines 8 and 23–38 (the `CHROMIUM` variable, the `.app` bundle copying,
+and the resource copying). The `$CHROMIUM` variable is no longer referenced
+after this. The codesign step remains since the `web` TUI binary still gets
+added.
+
+#### Verification
+
+1. Ghostboard builds without errors (`zig build`)
+2. Wezboard builds without errors (`cargo build`)
+3. `web lite.duckduckgo.com` works in both boards (uses installed Roamium)
+4. `web --browser /some/other/path/roamium lite.duckduckgo.com` works (absolute
+   path bypass)
+5. `scripts/install.sh` runs without referencing Chromium build directory
+6. No reference to `chromium/src/out/Default` remains in `xpc.zig` or `conn.rs`
