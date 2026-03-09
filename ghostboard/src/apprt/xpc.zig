@@ -841,31 +841,15 @@ fn serverProfile(server: *const Server) []const u8 {
 // -- Browser registry (Issue 704) --
 
 fn initBrowserRegistry() void {
-    const home = std.posix.getenv("HOME") orelse return;
-
-    // Known browser paths: absolute paths first, then $HOME-relative dev paths.
-    const Entry = struct { name: []const u8, absolute: ?[]const u8 = null, suffix: ?[]const u8 = null };
-    const browsers = [_]Entry{
-        .{ .name = "roamium", .absolute = "/usr/local/roamium/roamium" },
-        .{ .name = "roamium", .suffix = "/dev/termsurf/chromium/src/out/Default/roamium" },
+    // Known browser install paths.
+    const browsers = [_]struct { name: []const u8, path: []const u8 }{
+        .{ .name = "roamium", .path = "/usr/local/roamium/roamium" },
     };
 
     for (&browsers) |b| {
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const path = if (b.absolute) |abs|
-            abs
-        else if (b.suffix) |sfx|
-            std.fmt.bufPrint(&path_buf, "{s}{s}", .{ home, sfx }) catch continue
-        else
-            continue;
-
-        // Skip if this browser name is already registered (first match wins).
-        if (browser_paths.contains(b.name)) continue;
-
-        // Check if binary exists.
-        if (std.fs.accessAbsolute(path, .{})) {
+        if (std.fs.accessAbsolute(b.path, .{})) {
             const name = alloc.dupe(u8, b.name) catch continue;
-            const path_owned = alloc.dupe(u8, path) catch {
+            const path_owned = alloc.dupe(u8, b.path) catch {
                 alloc.free(name);
                 continue;
             };

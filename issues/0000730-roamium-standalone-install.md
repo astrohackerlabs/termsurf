@@ -575,3 +575,16 @@ added.
    path bypass)
 5. `scripts/install.sh` runs without referencing Chromium build directory
 6. No reference to `chromium/src/out/Default` remains in `xpc.zig` or `conn.rs`
+
+#### Result
+
+Success. Both Wezboard and Ghostboard use `/usr/local/roamium/roamium`
+exclusively. The dev build path is gone from both boards. `scripts/install.sh`
+no longer bundles Chromium files.
+
+#### Conclusion
+
+Dev path fallbacks and `.app` bundling removed. Boards now resolve Roamium from
+a single install path (`/usr/local/roamium/roamium`) or a user-specified
+absolute path via `--browser`. Clean separation between board install and
+browser engine install.
