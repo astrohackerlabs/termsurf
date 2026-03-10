@@ -27,3 +27,50 @@ a single `.icns` file.
    with the new `wezboard.icns`.
 3. Update `Info.plist` to reference `wezboard.icns` instead of `terminal.icns`
    (both in `CFBundleIconFile` and `CFBundleDocumentTypes`).
+
+## Experiments
+
+### Experiment 1: Generate icns and update app template
+
+#### Description
+
+Generate `wezboard.icns` from `assets/termsurf-11.png`, replace the stock
+WezTerm icon, and update the plist references. The source image is 900x900 — the
+512x512@2x (1024px) variant will be a slight upscale, which is acceptable for an
+app icon.
+
+#### Changes
+
+**Generate the `.icns` file**
+
+Use `sips` and `iconutil` to create the icon:
+
+```bash
+mkdir -p /tmp/wezboard.iconset
+SRC=assets/termsurf-11.png
+for size in 16 32 128 256 512; do
+  sips -z $size $size "$SRC" --out "/tmp/wezboard.iconset/icon_${size}x${size}.png"
+  double=$((size * 2))
+  sips -z $double $double "$SRC" --out "/tmp/wezboard.iconset/icon_${size}x${size}@2x.png"
+done
+iconutil --convert icns --output wezboard/assets/macos/Wezboard.app/Contents/Resources/wezboard.icns /tmp/wezboard.iconset
+```
+
+**`wezboard/assets/macos/Wezboard.app/Contents/Resources/`**
+
+1. Remove `terminal.icns`.
+2. Add `wezboard.icns` (generated above).
+
+**`wezboard/assets/macos/Wezboard.app/Contents/Info.plist`**
+
+1. Change `CFBundleIconFile` from `terminal.icns` to `wezboard.icns` (line 26).
+2. Change `CFBundleTypeIconFile` from `terminal.icns` to `wezboard.icns` (line
+   73).
+
+#### Verification
+
+1. `./scripts/build.sh wezboard --release && ./scripts/install.sh wezboard`
+2. Open `/Applications/Wezboard.app` — the dock icon should show the TermSurf
+   surfer, not the old WezTerm terminal icon.
+3. Right-click a `.sh` file → Get Info — the document icon should also show the
+   new icon.
