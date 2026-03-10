@@ -196,10 +196,15 @@ regenerates from `proto/termsurf.proto`, so rebuilding Roamium picks up the new
 
 #### Verification
 
-1. `cd roamium && cargo build` — compiles with new Shutdown handler
+1. `scripts/build-roamium.sh` — builds Roamium and copies binary to
+   `chromium/src/out/Default/roamium` (must be colocated with Chromium's dylibs,
+   `.pak` files, `icudtl.dat`, etc. because Chromium re-executes the binary for
+   child processes)
 2. `cd wezboard && cargo build` — compiles with Shutdown send logic
-3. Use `web --browser /path/to/roamium/target/debug/roamium localhost:3000` to
-   test with the debug build (absolute path bypasses the installed version)
+3. Test with
+   `web --browser $REPO/chromium/src/out/Default/roamium localhost:3000` where
+   `$REPO` is the repo root (e.g., `/Users/ryan/dev/termsurf`). The absolute
+   path bypasses the installed version at `/usr/local/roamium/`
 4. Confirm the webview loads
 5. Close the tab — logs show "last pane closed for server key=..., sending
    Shutdown"
