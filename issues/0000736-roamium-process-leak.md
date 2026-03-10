@@ -174,3 +174,25 @@ value, and the `shutdown` union member.
 4. Launch Wezboard with a browser pane, `kill -9` the GUI — Roamium should exit
    (EOF from crash).
 5. Repeat steps 3–4 with Ghostboard.
+
+**Result:** Pass
+
+Removed the `Shutdown` protobuf message from the protocol, all send sites
+(Ghostboard and Wezboard), and the receive site (Roamium). Regenerated
+protobuf-c files. In Ghostboard, reordered the cleanup block so the client fd
+closes before `proc.wait()`, ensuring Roamium sees EOF and exits instead of
+blocking. Also fixed `install.sh` to use `sudo` for Ghostboard's system
+directory writes.
+
+#### Conclusion
+
+The `Shutdown` message is gone. Socket EOF is now the sole shutdown mechanism
+for Roamium — both for graceful pane close and GUI crash. The protocol drops
+from 31 to 30 message types.
+
+## Conclusion
+
+Roamium process leaks are fixed. Experiment 1 made Roamium detect socket EOF and
+quit cleanly via `ts_post_task(ts_quit)`. Experiment 2 removed the now-redundant
+`Shutdown` protobuf message, simplifying the protocol. Socket EOF is the single
+shutdown path — it handles both graceful close and GUI crash uniformly.
