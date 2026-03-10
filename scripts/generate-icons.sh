@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 GUI_DIR="$REPO_ROOT/ghostboard"
 
-PROD_SOURCE="${1:-$REPO_ROOT/assets/termsurf-2-black-3.png}"
+PROD_SOURCE="${1:-$REPO_ROOT/assets/ghostboard-1.png}"
 APPICONSET="$GUI_DIR/macos/Assets.xcassets/AppIcon.appiconset"
 APPICONIMAGE="$GUI_DIR/macos/Assets.xcassets/AppIconImage.imageset"
 

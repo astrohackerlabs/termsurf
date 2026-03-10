@@ -88,3 +88,42 @@ needs no change.
    confirms it is a valid PNG.
 3. The debug icon file at `TermSurfDebugIcon.imageset/termsurf-debug-icon.png`
    matches `assets/ghostboard-1-debug.png` (compare with `cmp`).
+
+**Result:** Partial
+
+The debug icon updated correctly — the orange/green ghost appears in the Dock
+during debug builds. The release icon did not update visually despite the files
+on disk changing. All three verification checks passed (script ran clean, PNGs
+are valid, debug icon matches source), but the built app still shows the old
+surfer-boy release icon.
+
+The release icon appears briefly on launch before `AppDelegate.swift` swaps it
+to the debug icon at runtime. This confirms the release icon (from
+`AppIcon.appiconset`) is still the old image in the compiled app.
+
+The icon files on disk are correct — `icon-1024.png` contains the new blue ghost
+from `ghostboard-1.png`. The problem is that the Zig/Xcode build did not pick up
+the changed asset catalog PNGs. Likely causes:
+
+1. **macOS icon cache.** macOS caches app icons aggressively in
+   `/Library/Caches/com.apple.iconservices.store`. Even after rebuilding, the OS
+   may serve the old icon until the cache is cleared
+   (`sudo rm -rf /Library/Caches/com.apple.iconservices.store && killall Dock`).
+2. **Xcode DerivedData cache.** If the asset catalog was previously compiled,
+   the build system may skip recompiling it because the `Contents.json` didn't
+   change — only the PNGs did. A clean build (`scripts/clean-zig.sh` or deleting
+   DerivedData) would force recompilation.
+3. **Zig build system.** The Zig build may copy the asset catalog at configure
+   time and not track changes to individual PNGs within it.
+
+The debug icon works because it bypasses the asset catalog entirely —
+`AppDelegate.swift` loads the `TermSurfDebugIcon` image from
+`AppIconImage.imageset` at runtime via `NSImage(named:)`, which reads the
+current file on disk rather than a compiled `.car` archive.
+
+#### Conclusion
+
+The file-level changes are correct. The next experiment needs to address the
+build/cache layer so the release icon actually appears in the running app. This
+likely means clearing the macOS icon cache and/or performing a clean build to
+force the asset catalog to recompile.
