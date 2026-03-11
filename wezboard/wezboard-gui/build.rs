@@ -173,14 +173,14 @@ END
         let src_plist = repo_dir
             .join("assets")
             .join("macos")
-            .join("Wezboard.app")
+            .join("TermSurf Wezboard.app")
             .join("Contents")
             .join("Info.plist");
         let build_target_dir = std::env::var("CARGO_TARGET_DIR")
             .and_then(|s| Ok(std::path::PathBuf::from(s)))
             .unwrap_or(repo_dir.join("target").join(profile));
         let dest_plist = build_target_dir.join("Info.plist");
-        println!("cargo:rerun-if-changed=assets/macos/Wezboard.app/Contents/Info.plist");
+        println!("cargo:rerun-if-changed=assets/macos/TermSurf Wezboard.app/Contents/Info.plist");
 
         std::fs::copy(&src_plist, &dest_plist)
             .context(format!(

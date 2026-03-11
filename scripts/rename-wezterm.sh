@@ -136,7 +136,7 @@ safe_mv "$WEZ_DIR/assets/flatpak/org.wezfurlong.wezterm.json" \
 safe_mv "$WEZ_DIR/assets/flatpak/org.wezfurlong.wezterm.template.json" \
         "$WEZ_DIR/assets/flatpak/com.termsurf.wezboard.template.json"
 safe_mv "$WEZ_DIR/assets/macos/WezTerm.app" \
-        "$WEZ_DIR/assets/macos/Wezboard.app"
+        "$WEZ_DIR/assets/macos/TermSurf Wezboard.app"
 safe_mv "$WEZ_DIR/assets/open-wezterm-here" \
         "$WEZ_DIR/assets/open-wezboard-here"
 safe_mv "$WEZ_DIR/assets/shell-integration/wezterm.sh" \

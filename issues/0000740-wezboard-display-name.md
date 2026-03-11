@@ -109,3 +109,44 @@ Info.plist changes alone are insufficient for the dock. To fix the dock name, th
 app bundle directory itself needs to be renamed from `Wezboard.app` to
 `TermSurf Wezboard.app`, and the install script
 (`scripts/install.sh`) needs to install to `/Applications/TermSurf Wezboard.app`.
+
+### Experiment 2: Rename app bundle directory
+
+#### Description
+
+macOS uses the `.app` bundle directory name for the dock icon label. Rename
+`Wezboard.app` to `TermSurf Wezboard.app` in the template directory and update
+every reference.
+
+#### Changes
+
+**Rename the directory**
+
+```
+git mv wezboard/assets/macos/Wezboard.app "wezboard/assets/macos/TermSurf Wezboard.app"
+```
+
+**`scripts/install.sh`**
+
+- Line 92: `Wezboard.app` → `TermSurf Wezboard.app` (TEMPLATE path)
+- Line 93: `/Applications/Wezboard.app` → `/Applications/TermSurf Wezboard.app`
+  (APP path)
+
+**`scripts/uninstall.sh`**
+
+- Line 38: `/Applications/Wezboard.app` → `/Applications/TermSurf Wezboard.app`
+
+**`scripts/rename-wezterm.sh`**
+
+- Line 139: `Wezboard.app` → `TermSurf Wezboard.app` (rename target)
+
+**`wezboard/wezboard-gui/build.rs`**
+
+- Line 176: `.join("Wezboard.app")` → `.join("TermSurf Wezboard.app")`
+- Line 183: `Wezboard.app` → `TermSurf Wezboard.app` (rerun-if-changed path)
+
+#### Verification
+
+1. `./scripts/build.sh wezboard --release` — builds without errors.
+2. `./scripts/install.sh wezboard` — installs to `/Applications/TermSurf Wezboard.app`.
+3. Launch the app. The dock icon says "TermSurf Wezboard".

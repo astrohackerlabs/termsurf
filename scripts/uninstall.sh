@@ -35,7 +35,7 @@ uninstall_roamium() {
 }
 
 uninstall_wezboard() {
-  local APP="/Applications/Wezboard.app"
+  local APP="/Applications/TermSurf Wezboard.app"
 
   echo "==> Uninstalling Wezboard..."
   sudo rm -rf "$APP"

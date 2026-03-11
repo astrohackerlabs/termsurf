@@ -89,8 +89,8 @@ install_roamium() {
 
 install_wezboard() {
   local BINARY="$REPO_DIR/wezboard/target/release/wezboard-gui"
-  local TEMPLATE="$REPO_DIR/wezboard/assets/macos/Wezboard.app"
-  local APP="/Applications/Wezboard.app"
+  local TEMPLATE="$REPO_DIR/wezboard/assets/macos/TermSurf Wezboard.app"
+  local APP="/Applications/TermSurf Wezboard.app"
 
   if [ ! -f "$BINARY" ]; then
     echo "Error: Release build not found at $BINARY"
