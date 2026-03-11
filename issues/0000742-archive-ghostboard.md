@@ -312,3 +312,56 @@ operations without `sudo`.
    root).
 3. `scripts/install.sh` with no args — still prints usage and exits without
    asking for a password (the sudo re-exec happens after arg validation).
+
+### Experiment 4: Fix uninstall script
+
+#### Description
+
+`scripts/uninstall.sh` has two bugs and one consistency issue:
+
+1. **Missing webtui from `all`** — The `all)` case calls `uninstall_roamium` and
+   `uninstall_wezboard` but never `uninstall_webtui`. Running
+   `scripts/uninstall.sh all` leaves `/usr/local/bin/web` behind.
+2. **Missing sudo on webtui** — `uninstall_webtui()` runs `rm -f` without
+   `sudo`, but the file is owned by root (installed by a root-running script).
+   This will fail for non-root users.
+3. **Inconsistent sudo pattern** — The install script now uses a single sudo
+   re-exec at the top (Experiment 3). The uninstall script still sprinkles
+   `sudo` on individual commands. Apply the same pattern for consistency.
+
+#### Changes
+
+**`scripts/uninstall.sh`**
+
+1. Add root re-exec after argument validation (after the empty-component check),
+   same pattern as install.sh:
+
+   ```bash
+   # Re-exec as root so we only prompt for the password once.
+   if [ "$(id -u)" -ne 0 ]; then
+     exec sudo "$0" "$@"
+   fi
+   ```
+
+2. Remove `sudo` prefix from all commands in `uninstall_roamium()` and
+   `uninstall_wezboard()` (3 `sudo` calls total).
+
+3. Add `uninstall_webtui` to the `all)` case, after `uninstall_wezboard`:
+
+   ```bash
+   all)
+     uninstall_roamium
+     uninstall_wezboard
+     uninstall_webtui
+     echo ""
+     echo "Done (all)."
+     ;;
+   ```
+
+#### Verification
+
+1. `scripts/uninstall.sh webtui` — prompts for password once, removes
+   `/usr/local/bin/web`.
+2. `ls /usr/local/bin/web` — file is gone.
+3. `scripts/uninstall.sh` with no args — prints usage, no password prompt.
+4. Read the `all)` case — confirms `uninstall_webtui` is called.
