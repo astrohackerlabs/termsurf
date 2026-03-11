@@ -14,6 +14,11 @@ if [ -z "$COMPONENT" ]; then
   exit 1
 fi
 
+# Re-exec as root so we only prompt for the password once.
+if [ "$(id -u)" -ne 0 ]; then
+  exec sudo "$0" "$@"
+fi
+
 install_roamium() {
   local ROAMIUM_SRC="$REPO_DIR/roamium/target/release/roamium"
   local INSTALL_DIR="/usr/local/roamium"
@@ -25,20 +30,20 @@ install_roamium() {
   fi
 
   echo "==> Installing Roamium to $INSTALL_DIR..."
-  sudo mkdir -p "$INSTALL_DIR"
-  sudo cp "$ROAMIUM_SRC" "$INSTALL_DIR/roamium"
+  mkdir -p "$INSTALL_DIR"
+  cp "$ROAMIUM_SRC" "$INSTALL_DIR/roamium"
 
   echo "==> Copying dylibs..."
-  sudo cp "$CHROMIUM_OUT"/*.dylib "$INSTALL_DIR/"
+  cp "$CHROMIUM_OUT"/*.dylib "$INSTALL_DIR/"
 
   echo "==> Copying resources..."
-  sudo cp "$CHROMIUM_OUT"/*.pak "$INSTALL_DIR/"
-  sudo cp "$CHROMIUM_OUT/icudtl.dat" "$INSTALL_DIR/"
-  sudo cp "$CHROMIUM_OUT"/v8_context_snapshot*.bin "$INSTALL_DIR/"
+  cp "$CHROMIUM_OUT"/*.pak "$INSTALL_DIR/"
+  cp "$CHROMIUM_OUT/icudtl.dat" "$INSTALL_DIR/"
+  cp "$CHROMIUM_OUT"/v8_context_snapshot*.bin "$INSTALL_DIR/"
 
   # Clean up old install locations.
-  sudo rm -f /usr/local/bin/roamium
-  sudo rm -rf /usr/local/lib/roamium
+  rm -f /usr/local/bin/roamium
+  rm -rf /usr/local/lib/roamium
 
   echo "  Dir: $INSTALL_DIR"
   echo "  Bin: $INSTALL_DIR/roamium"
@@ -56,13 +61,13 @@ install_wezboard() {
   fi
 
   echo "==> Installing Wezboard to $APP..."
-  sudo rm -rf "$APP"
-  sudo cp -R "$TEMPLATE" "$APP"
-  sudo mkdir -p "$APP/Contents/MacOS"
-  sudo cp "$BINARY" "$APP/Contents/MacOS/wezboard-gui"
+  rm -rf "$APP"
+  cp -R "$TEMPLATE" "$APP"
+  mkdir -p "$APP/Contents/MacOS"
+  cp "$BINARY" "$APP/Contents/MacOS/wezboard-gui"
 
   echo "==> Codesigning..."
-  sudo codesign --force --deep --sign - "$APP"
+  codesign --force --deep --sign - "$APP"
 
   echo "  App: $APP"
 }
@@ -77,7 +82,7 @@ install_webtui() {
   fi
 
   echo "==> Installing webtui to /usr/local/bin/web..."
-  sudo cp "$WEB" /usr/local/bin/web
+  cp "$WEB" /usr/local/bin/web
 
   echo "  Bin: /usr/local/bin/web"
 }
