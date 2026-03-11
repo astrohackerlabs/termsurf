@@ -62,3 +62,208 @@ Add click state tracking to `input.rs` (or `state.rs`):
   right), matching Ghostboard's convention.
 - On MouseMove outside the overlay while a button is held, clamp coordinates to
   the overlay bounds and continue sending events.
+
+## Experiments
+
+### Experiment 1: Mouse state tracking and button-down flags
+
+#### Description
+
+Fix all three bugs in `input.rs` by adding a `MouseState` struct that tracks
+button presses and click timing. WezTerm's `MouseEvent` already carries
+`mouse_buttons: MouseButtons` (a bitflag with `LEFT`, `RIGHT`, `MIDDLE`), so we
+don't need to manually track press/release — we can read button state directly
+from the event.
+
+#### Changes
+
+**`wezboard/wezboard-gui/src/termsurf/input.rs`**
+
+1. Add a module-level `MouseState` struct with `OnceLock<Mutex<MouseState>>`:
+
+   ```rust
+   use std::sync::{Mutex, OnceLock};
+   use std::time::Instant;
+
+   struct MouseState {
+       left_click_count: i64,
+       last_click_time: Option<Instant>,
+       last_click_x: f64,
+       last_click_y: f64,
+       /// The pane where a drag started (if any button is held).
+       drag_pane: Option<String>,
+   }
+
+   static MOUSE_STATE: OnceLock<Mutex<MouseState>> = OnceLock::new();
+
+   fn mouse_state() -> &'static Mutex<MouseState> {
+       MOUSE_STATE.get_or_init(|| Mutex::new(MouseState {
+           left_click_count: 0,
+           last_click_time: None,
+           last_click_x: 0.0,
+           last_click_y: 0.0,
+           drag_pane: None,
+       }))
+   }
+   ```
+
+2. **Fix 1 — Click count.** In both `Press(Left)` branches (lines 123–135 and
+   137–156), replace the hardcoded `click_count: 1` with a call to a new
+   `compute_click_count` function:
+
+   ```rust
+   fn compute_click_count(x: f64, y: f64) -> i64 {
+       let mut ms = mouse_state().lock().unwrap();
+       let now = Instant::now();
+       // Reset if too far or too long since last click.
+       // 5.0 logical pixels distance threshold, 500ms timing threshold.
+       let dist = ((x - ms.last_click_x).powi(2) + (y - ms.last_click_y).powi(2)).sqrt();
+       let expired = ms.last_click_time
+           .map(|t| now.duration_since(t).as_millis() > 500)
+           .unwrap_or(true);
+       if dist > 5.0 || expired {
+           ms.left_click_count = 0;
+       }
+       ms.left_click_count = (ms.left_click_count % 3) + 1; // cycles 1→2→3→1
+       ms.last_click_time = Some(now);
+       ms.last_click_x = x;
+       ms.last_click_y = y;
+       ms.left_click_count
+   }
+   ```
+
+   Call `compute_click_count(rel_x, rel_y)` for left presses and pass the result
+   as `click_count`. Keep `click_count: 1` for right/middle presses and all
+   releases.
+
+3. **Fix 2 — Button-down flags in MouseMove.** Replace the `WMEK::Move` handler
+   (lines 179–191) to encode button state from `event.mouse_buttons`:
+
+   ```rust
+   WMEK::Move => {
+       let mut mods = modifiers_to_termsurf(event.modifiers);
+       if event.mouse_buttons.contains(MouseButtons::LEFT) {
+           mods |= 64;  // bit 6
+       }
+       if event.mouse_buttons.contains(MouseButtons::RIGHT) {
+           mods |= 256; // bit 8
+       }
+       send_to_chromium(
+           &pane_id_str,
+           Msg::MouseMove(proto::MouseMove {
+               tab_id: 0,
+               x: rel_x,
+               y: rel_y,
+               modifiers: mods,
+           }),
+       );
+       return true;
+   }
+   ```
+
+   Also add `MouseButtons` to the import line at the top of the file.
+
+4. **Fix 3 — Drag outside overlay.** Track drag state and clamp coordinates.
+
+   In the `Press` handlers, after sending the MouseEvent, record the drag pane:
+
+   ```rust
+   mouse_state().lock().unwrap().drag_pane = Some(pane_id_str.clone());
+   ```
+
+   In the `Release` handler, clear it:
+
+   ```rust
+   mouse_state().lock().unwrap().drag_pane = None;
+   ```
+
+   At the top of `try_forward_mouse`, before the `hit_test_overlay` check (line
+   109), add a fallthrough for drag-outside-overlay. After the existing
+   `if let Some((rel_x, rel_y)) = hit_test_overlay(...)` block (which returns on
+   hit), add:
+
+   ```rust
+   // Drag outside overlay — clamp to overlay bounds.
+   if matches!(&event.kind, WMEK::Move | WMEK::Release(_)) {
+       let is_dragging = mouse_state().lock().unwrap().drag_pane.as_deref()
+           == Some(&pane_id_str);
+       if is_dragging {
+           if let Some((rel_x, rel_y)) = clamp_to_overlay(&pane_id_str, event) {
+               match &event.kind {
+                   WMEK::Move => {
+                       let mut mods = modifiers_to_termsurf(event.modifiers);
+                       if event.mouse_buttons.contains(MouseButtons::LEFT) {
+                           mods |= 64;
+                       }
+                       if event.mouse_buttons.contains(MouseButtons::RIGHT) {
+                           mods |= 256;
+                       }
+                       send_to_chromium(
+                           &pane_id_str,
+                           Msg::MouseMove(proto::MouseMove {
+                               tab_id: 0,
+                               x: rel_x,
+                               y: rel_y,
+                               modifiers: mods,
+                           }),
+                       );
+                       return true;
+                   }
+                   WMEK::Release(press) => {
+                       let button_str = match press {
+                           MousePress::Left => "left",
+                           MousePress::Right => "right",
+                           MousePress::Middle => "middle",
+                       };
+                       send_to_chromium(
+                           &pane_id_str,
+                           Msg::MouseEvent(proto::MouseEvent {
+                               tab_id: 0,
+                               r#type: "up".to_string(),
+                               button: button_str.to_string(),
+                               x: rel_x,
+                               y: rel_y,
+                               click_count: 1,
+                               modifiers: modifiers_to_termsurf(event.modifiers),
+                           }),
+                       );
+                       mouse_state().lock().unwrap().drag_pane = None;
+                       return true;
+                   }
+                   _ => {}
+               }
+           }
+       }
+   }
+   ```
+
+   Add the `clamp_to_overlay` helper:
+
+   ```rust
+   fn clamp_to_overlay(pane_id_str: &str, event: &MouseEvent) -> Option<(f64, f64)> {
+       let state = super::shared_state()?;
+       let st = state.lock().unwrap();
+       let pane = st.panes.get(pane_id_str)?;
+       let ox = pane.overlay_origin_x;
+       let oy = pane.overlay_origin_y;
+       let ow = pane.pixel_width as f64;
+       let oh = pane.pixel_height as f64;
+       let scale = pane.overlay_scale;
+       let mx = (event.coords.x as f64).clamp(ox, ox + ow - 1.0);
+       let my = (event.coords.y as f64).clamp(oy, oy + oh - 1.0);
+       Some(((mx - ox) / scale, (my - oy) / scale))
+   }
+   ```
+
+#### Verification
+
+1. `./scripts/build.sh wezboard`
+2. Launch Wezboard, open a browser pane, navigate to a page with text.
+3. **Single click+drag:** Click and drag across text — text should highlight as
+   you drag. Release — selection stays.
+4. **Drag outside overlay:** Start selecting inside the overlay, drag the mouse
+   below/above/beside the overlay boundary — selection should continue
+   (clamped), not freeze.
+5. **Double-click:** Double-click a word — entire word should be selected.
+6. **Triple-click:** Triple-click — entire line/paragraph should be selected.
+7. **Right-click:** Right-click — context menu should appear (no regression).
