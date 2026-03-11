@@ -93,3 +93,19 @@ The about item text (line 450) and quit strings (lines 1272–1273) stay as
 3. The menu bar's first item (app menu) says "TermSurf Wezboard".
 4. The About item still says "Wezboard {version}".
 5. The Quit item still says "Quit Wezboard".
+
+**Result:** Partial
+
+The menu bar app menu changed to "TermSurf Wezboard" as expected. The dock icon
+still says "Wezboard". macOS gets the dock name from the app bundle directory
+name (`Wezboard.app`), not from `CFBundleName` or `CFBundleDisplayName` in
+Info.plist. The bundle is installed to `/Applications/Wezboard.app` by the
+install script, and that's what the dock displays.
+
+#### Conclusion
+
+The commands.rs changes worked — the menu bar shows "TermSurf Wezboard". The
+Info.plist changes alone are insufficient for the dock. To fix the dock name, the
+app bundle directory itself needs to be renamed from `Wezboard.app` to
+`TermSurf Wezboard.app`, and the install script
+(`scripts/install.sh`) needs to install to `/Applications/TermSurf Wezboard.app`.

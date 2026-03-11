@@ -11,7 +11,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Wezboard</string>
+	<string>TermSurf Wezboard</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -33,7 +33,7 @@
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>CFBundleDisplayName</key>
-	<string>Wezboard</string>
+	<string>TermSurf Wezboard</string>
 	<key>NSRequiresAquaSystemAppearance</key>
 	<string>NO</string>
 	<key>NSAppleEventsUsageDescription</key>
