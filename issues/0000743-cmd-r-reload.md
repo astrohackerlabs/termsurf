@@ -90,3 +90,20 @@ ReloadConfiguration => CommandDef {
    (confirming auto-reload still works).
 4. Open the "TermSurf Wezboard" menu — "Reload configuration" is present but has
    no keyboard shortcut displayed.
+
+**Result:** Pass
+
+Cmd+R now reloads the web page in the browser pane. Config auto-reload still
+works.
+
+#### Conclusion
+
+Removing the key binding was sufficient. Cmd+R propagates through
+`try_forward_key()` to Chromium like Cmd+[/] do.
+
+## Conclusion
+
+Removed the Cmd+R keyboard shortcut from the `ReloadConfiguration` command in
+`commands.rs`. The menu item remains accessible without a shortcut. Wezboard's
+config file auto-reload is unaffected. Cmd+R now reaches the browser and reloads
+the page as expected.
