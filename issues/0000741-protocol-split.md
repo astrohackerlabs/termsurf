@@ -26,6 +26,33 @@ uploads, auth challenges, permissions, find-in-page, console capture) would need
 forwarding code in both Ghostboard (Zig) and Wezboard (Rust). That's two
 implementations of the same do-nothing relay, per message, forever.
 
+### Process responsibilities
+
+**Current state** — The GUI does two unrelated jobs: terminal emulation and
+message relay. It proxies content messages it doesn't use, maintains ID maps it
+only needs because it's in the middle, and stores state (like `pane.dark`) only
+to echo it back later. Every new browser feature adds forwarding code to two GUI
+implementations (Ghostboard in Zig, Wezboard in Rust).
+
+**What each process should own:**
+
+- **TUI** — Owns user intent. Browser chrome: URL bar, navigation, modes,
+  commands. Talks to the GUI about layout (overlays, splits, mode changes).
+  Talks to the browser about content (navigation, page state, dialogs,
+  downloads). Direct browser client.
+- **GUI** — Owns the window. Terminal rendering, pane layout, overlay
+  compositing, input capture, process lifecycle. Tells the browser "create a tab
+  at these dimensions" and "here are mouse/key events." Tells the TUI "browser
+  is ready, here's how to connect." Does NOT relay content messages. Does NOT
+  track URLs, titles, loading state, or color schemes.
+- **Browser** — Owns web content. Renders pages, manages tabs, reports state.
+  Accepts connections from anyone — GUI for input/compositing, TUI for content.
+  Doesn't care who's asking, just handles messages.
+
+The key shift: the GUI stops being a router and becomes purely a rendering/input
+layer. The TUI becomes the browser's direct client. The browser becomes a
+multi-client server.
+
 ### The hub-and-spoke assumption
 
 The current architecture routes all communication through the GUI:
