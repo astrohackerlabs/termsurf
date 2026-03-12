@@ -94,3 +94,55 @@ repos on the filesystem. This works, but:
   minimal and hackable.
 - **Forgejo / Gitea** — Self-hosted Git forges. Filesystem-backed, but worth
   understanding their protocol handling.
+
+## Experiments
+
+### Experiment 1: First-pass internet research
+
+#### Description
+
+Survey the landscape of database-backed Git hosting. For each of the research
+questions above, search the internet for existing solutions, blog posts,
+architecture docs, and open-source projects. Summarize findings in a structured
+report below.
+
+#### Research plan
+
+1. **go-git pluggable backends** — Search for go-git's storage interface, what
+   backends exist (PostgreSQL, S3, etc.), and whether anyone has built a
+   database-backed Git server with it.
+
+2. **gitoxide custom backends** — Search for gitoxide's object database
+   abstraction, whether it supports pluggable storage, and its maturity.
+
+3. **GitHub architecture** — Search for blog posts about Spokes, DGit, and
+   GitHub's move away from filesystem-based storage. How do they handle the Git
+   protocol?
+
+4. **GitLab Gitaly** — Search for Gitaly's architecture. It's gRPC over
+   filesystem, but understanding its abstraction layer matters.
+
+5. **Database-backed Git implementations** — Search specifically for projects
+   that store Git objects in PostgreSQL, SQLite, S3, or key-value stores. Look
+   for proof-of-concept projects, academic papers, and production systems.
+
+6. **Git smart protocol** — Search for documentation on the Git smart HTTP and
+   SSH transport protocols. What RPCs does a server need to implement?
+
+7. **Chromium-scale considerations** — Search for how large monorepos are
+   hosted. How does Google host Chromium? What about Microsoft's VFSForGit (now
+   Scalar)?
+
+8. **Jujutsu and alternative VCS** — Search for Jujutsu's storage model and
+   whether its Git interop could serve as a Git hosting layer.
+
+#### Findings
+
+_{to be filled in after research}_
+
+#### Verification
+
+1. Each research question has at least one substantive finding.
+2. At least 3 concrete candidate approaches are identified for further
+   evaluation.
+3. Chromium-scale feasibility is addressed for each candidate.
