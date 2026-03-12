@@ -331,6 +331,20 @@ blob storage but adds latency for small object access.
    evaluation.
 3. Chromium-scale feasibility is addressed for each candidate.
 
+**Result:** Pass
+
+All 8 research questions answered with substantive findings. 4 candidate
+approaches identified (go-git + PostgreSQL, libgit2 + PostgreSQL, hybrid
+native + FUSE, S3 + metadata DB). Chromium-scale feasibility assessed for each.
+
+#### Conclusion
+
+The research reveals a clear pattern: no one runs database-backed Git in
+production at scale. Every major host (GitHub, GitLab, Google) uses
+filesystem-based storage. Database-backed approaches (Gitgres, go-git custom
+Storer) are proof-of-concept only. The Git wire protocol is storage-agnostic, so
+the simplest server shells out to native git — no need to reimplement transport.
+
 ### Experiment 2: Storage architecture and hosting decision
 
 #### Description
@@ -411,6 +425,18 @@ dedicated server once git hosting is added.
 2. Hosting decision documented: OVHcloud dedicated in Dallas, TX.
 3. Trade-offs between OVH and Fly.io analyzed for both website and git hosting.
 
+**Result:** Pass
+
+Architecture and hosting decisions documented with clear rationale. Database
+approach ruled out; filesystem Git + PostgreSQL metadata chosen. Dallas
+dedicated server chosen over Fly.io PaaS.
+
+#### Conclusion
+
+Filesystem-based Git is the proven path. PostgreSQL handles metadata. A
+dedicated server in Dallas provides the NVMe I/O and unmetered bandwidth needed
+for Chromium-scale repos. Further comparison of Dallas providers needed.
+
 ### Experiment 3: Compare Dallas dedicated server providers
 
 #### Description
@@ -461,6 +487,17 @@ dollar. OVHcloud for a bigger company with standardized support.
 1. At least 4 Dallas providers compared on specs, pricing, and bandwidth.
 2. Requirements (NVMe, RAM, unmetered bandwidth) evaluated for each.
 3. Top picks identified with trade-offs noted.
+
+**Result:** Pass
+
+Five Dallas providers compared. SpinServers and OVHcloud identified as top picks
+— SpinServers for hardware value, OVHcloud for standardized support.
+
+#### Conclusion
+
+SpinServers offers the best hardware per dollar with instant deploy and
+unmetered bandwidth. OVHcloud is the safer corporate choice. Both meet all
+requirements.
 
 ### Experiment 4: Compare OS options
 
@@ -515,3 +552,33 @@ valid for minimalism, but the differences are marginal.
 1. OS options documented for both SpinServers and OVHcloud.
 2. Debian vs Ubuntu compared for TermSurf's requirements.
 3. OS decision made: Ubuntu Server 24.04 LTS.
+
+**Result:** Pass
+
+OS options compared for both providers. Ubuntu Server 24.04 LTS chosen for its
+current packages, large community, and 5-year support.
+
+#### Conclusion
+
+Ubuntu Server 24.04 LTS is the OS. Both SpinServers and OVHcloud offer it.
+
+## Conclusion
+
+Self-hosted Git infrastructure decided. Four experiments explored the landscape:
+
+1. **Internet research** — Surveyed database-backed Git (go-git, libgit2,
+   Gitgres), major host architectures (GitHub Spokes, GitLab Gitaly), the Git
+   wire protocol, and Chromium-scale hosting. Finding: no one runs
+   database-backed Git in production. Filesystem-based storage is universal.
+2. **Architecture decision** — Filesystem-based Git (bare repos on NVMe) +
+   PostgreSQL for metadata. Consolidate website, git hosting, and database onto
+   one dedicated server in Dallas, TX.
+3. **Provider comparison** — Five Dallas providers evaluated. SpinServers and
+   OVHcloud emerged as top picks.
+4. **OS comparison** — Ubuntu Server 24.04 LTS chosen over Debian for current
+   packages and community support.
+
+**Final decision: SpinServers dedicated server in Dallas, TX.** Running Ubuntu
+Server 24.04 LTS with bare Git repos on NVMe SSD, PostgreSQL for metadata, and
+nginx for the website. All TermSurf services — git hosting (including the
+Chromium fork), website, and database — on one box with unmetered bandwidth.
