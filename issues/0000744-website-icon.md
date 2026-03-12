@@ -141,3 +141,53 @@ export function Header() {
 3. `bun run dev` — logo displays in header, favicon shows in browser tab.
 4. TypeScript catches typos — changing the `$icon` argument to a bad path causes
    a type error.
+
+### Experiment 3: Replace Identellica LLC with TermSurf
+
+#### Description
+
+Replace all references to "Identellica LLC" with "TermSurf" across the project.
+Also update the copyright year from 2025 to 2026 (the project started January 1,
+2026), and remove the link to identellica.com in the website footer.
+
+The issue doc `issues/0000679-license.md` is immutable (has a `## Conclusion`)
+and must not be modified.
+
+#### Changes
+
+**`LICENSE`** (line 3) — Change:
+
+```
+Copyright (c) 2025 Identellica LLC
+```
+
+To:
+
+```
+Copyright (c) 2026 TermSurf
+```
+
+**`NOTICE`** (line 2) — Same change:
+
+```
+Copyright (c) 2026 TermSurf
+```
+
+**`TRADEMARKS.md`** — Replace all three occurrences of "Identellica LLC" with
+"TermSurf".
+
+**`website/src/components/Footer.tsx`** — Replace the Identellica link and
+copyright with plain text:
+
+```tsx
+© 2026 TermSurf
+```
+
+Remove the `<a href="https://identellica.com">` wrapper.
+
+#### Verification
+
+1. `grep -ri identellica LICENSE NOTICE TRADEMARKS.md website/src/` — returns no
+   matches.
+2. Read `issues/0000679-license.md` — unchanged (immutable).
+3. `bun run dev` — footer shows "© 2026 TermSurf".
