@@ -410,3 +410,54 @@ dedicated server once git hosting is added.
    metadata.
 2. Hosting decision documented: OVHcloud dedicated in Dallas, TX.
 3. Trade-offs between OVH and Fly.io analyzed for both website and git hosting.
+
+### Experiment 3: Compare Dallas dedicated server providers
+
+#### Description
+
+Compare the specific Dallas-based dedicated server providers for hosting the
+TermSurf website + bare Git repos (Chromium, WebKit, Firefox, Ladybird).
+Requirements: fast NVMe (1-2 TB), 64+ GB RAM, unmetered bandwidth.
+
+#### Findings
+
+| Provider        | CPU                       | RAM       | Storage      | Bandwidth              | Price/mo  |
+| --------------- | ------------------------- | --------- | ------------ | ---------------------- | --------- |
+| **OVHcloud**    | AMD EPYC 4245P (6c/12t)   | 32-256 GB | NVMe SSD     | 1-5 Gbps, unmetered    | ~$93-134  |
+| **SpinServers** | Various (up to dual Xeon) | 32-1TB+   | 1TB+ NVMe    | 500Mbps-10Gbps, unmet. | ~$99+     |
+| **UltaHost**    | Intel Xeon E-2276G (6c)   | 64 GB     | 2x 960GB SSD | 10Gbps, unlimited      | ~$130     |
+| **ServerMania** | AMD EPYC 4124P / Xeon W   | 32 GB     | 1TB NVMe     | 1 Gbps                 | ~$139-179 |
+| **Limestone**   | Contact for specs         | —         | —            | —                      | Contact   |
+
+**OVHcloud** — Well-documented specs, large company, standardized configs. $134
+setup fee (one-time). Advance line is purpose-built for this workload.
+
+**SpinServers** — Best hardware per dollar. Dual Xeon configs with 128 GB RAM
+and 10 Gbps unmetered for prices others charge for entry-level. Instant deploy.
+Less hand-holding (no managed option).
+
+**UltaHost** — Best managed option. Fully managed plan includes server admin. 10
+Gbps port. Free install.
+
+**Limestone Networks** — Dallas-based since 2007. Hourly billing capped monthly,
+month-to-month contracts. Must call for pricing (enterprise-oriented).
+
+**ServerMania** — Solid but doesn't stand out on price or specs. NVMe up to 4 TB
+available.
+
+#### Analysis
+
+For TermSurf's use case (website + 4-5 giant Git repos):
+
+- **Fast NVMe** (1-2 TB) for multiple repos at 10-40 GB each
+- **64+ GB RAM** for git operations on large repos
+- **Unmetered bandwidth** for Chromium-scale clones (20 GB each)
+
+**Top two picks: SpinServers or OVHcloud.** SpinServers for more hardware per
+dollar. OVHcloud for a bigger company with standardized support.
+
+#### Verification
+
+1. At least 4 Dallas providers compared on specs, pricing, and bandwidth.
+2. Requirements (NVMe, RAM, unmetered bandwidth) evaluated for each.
+3. Top picks identified with trade-offs noted.
