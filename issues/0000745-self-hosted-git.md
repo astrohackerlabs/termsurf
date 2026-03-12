@@ -246,8 +246,8 @@ A smart HTTP server needs **4 endpoints**:
 | `$REPO/info/refs?service=git-receive-pack` | GET    | Push ref disc. |
 | `$REPO/git-receive-pack`                   | POST   | Push           |
 
-All data uses pkt-line framing. The protocol is ~30% ref management, ~60% object
-transfer (packfile negotiation + streaming), ~10% capabilities/framing.
+All data uses pkt-line framing. The protocol is \~30% ref management, \~60%
+object transfer (packfile negotiation + streaming), \~10% capabilities/framing.
 
 **Key insight:** The wire protocol doesn't care about on-disk format. A server
 needs to: enumerate refs, resolve object graphs, generate packfiles, and unpack
@@ -330,3 +330,83 @@ blob storage but adds latency for small object access.
 2. At least 3 concrete candidate approaches are identified for further
    evaluation.
 3. Chromium-scale feasibility is addressed for each candidate.
+
+### Experiment 2: Storage architecture and hosting decision
+
+#### Description
+
+Based on experiment 1 findings, decide between database-backed Git and
+filesystem-based Git, and choose a hosting provider. The key factors are:
+Chromium + WebKit + Firefox + Ladybird repos (each 10-40 GB), plus TermSurf's
+own repos and a website.
+
+#### Findings
+
+##### Database-backed vs. filesystem-based Git
+
+Every major Git host (GitHub, GitLab, Google) uses **filesystem-based storage**.
+No one runs database-backed Git in production at scale. The reasons:
+
+- Git's scale features (reachability bitmaps, commit graphs, MIDX, cruft packs,
+  partial clone) all assume the filesystem format. A database backend would need
+  to reimplement each one.
+- The Git wire protocol is storage-agnostic — a thin HTTP layer shells out to
+  `git upload-pack --stateless-rpc` / `git receive-pack --stateless-rpc` and
+  pipes stdin/stdout. This is how Gitea, Gogs, and Grack work (~200 lines).
+- Hosting 4-5 giant repos (Chromium, WebKit, Firefox, Ladybird) through a
+  database is uncharted territory with multiplicative risk.
+
+**Decision: Filesystem-based Git (bare repos on NVMe SSD).** PostgreSQL for
+everything else — users, permissions, repo metadata, issues. This is the
+Gitea/Forgejo model.
+
+##### Hosting provider comparison
+
+**OVHcloud dedicated server (Dallas, TX):**
+
+- AMD EPYC 4245P (6c/12t), 32-256 GB RAM, NVMe SSD
+- ~$134/month + $134 setup
+- 1-5 Gbps public bandwidth, unmetered
+- Full root access, bare metal
+- Perfect for git hosting: fast NVMe, unmetered bandwidth, full disk control
+- Chromium clones (20 GB) cost nothing in bandwidth
+
+**Fly.io (Dallas, TX — `dfw` region):**
+
+- Managed micro-VMs (Firecracker), up to 8 cores / 16 GB RAM
+- Volumes: local NVMe, priced per GB, single-region
+- Bandwidth: ~$0.02/GB egress after free tier
+- ~$30-60/month for a small web app
+- Poor fit for git hosting: metered bandwidth, limited disk, no
+  `git maintenance` cron jobs, volumes not designed for 100+ GB repos
+
+**Other Texas options investigated:**
+
+- Hetzner: US datacenter in Ashburn, VA (not Texas). ~$50-80/month.
+- Limestone Networks: Dallas, TX. Downtown Dallas datacenter. Contact for
+  pricing.
+- SpinServers: Dallas, TX. Aggressive pricing on high-spec hardware.
+- Austin colocation: Thin-nology (~$110/month colo fee + hardware cost). More
+  expensive than renting a dedicated server.
+
+| Concern                      | OVHcloud     | Fly.io        |
+| ---------------------------- | ------------ | ------------- |
+| Git hosting (Chromium-scale) | Excellent    | Poor fit      |
+| Website hosting              | Fine         | Excellent     |
+| Bandwidth for large clones   | Unmetered    | Metered ($$$) |
+| Disk I/O control             | Full         | Limited       |
+| Ops burden                   | Self-managed | Managed       |
+| Scaling web traffic          | Manual       | Automatic     |
+
+**Decision: OVHcloud dedicated server in Dallas.** One box handles the website,
+git hosting, and PostgreSQL. Unmetered bandwidth is critical for hosting
+Chromium-scale repos. Fly.io is currently used for the website
+(`"deploy": "fly deploy"` in package.json) but should be consolidated onto the
+dedicated server once git hosting is added.
+
+#### Verification
+
+1. Architecture decision documented: filesystem-based Git + PostgreSQL for
+   metadata.
+2. Hosting decision documented: OVHcloud dedicated in Dallas, TX.
+3. Trade-offs between OVH and Fly.io analyzed for both website and git hosting.
