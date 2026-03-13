@@ -850,6 +850,163 @@ call (line 93).**
 
 Build:
 
+- [x] `cd wezboard && cargo build` — compiles without errors.
+
+Edge case checklist:
+
+- [x] Open a webview — positioned and sized correctly.
+- [ ] Split pane to the left — webview correctly positioned on the right.
+
+Stopped testing at item 2.
+
+**Result:** Fail
+
+Opening a webview in a single unsplit pane positions correctly. Splitting the
+pane (adding a pane to the left) causes the webview to animate to the right —
+the same gross mispositioning as experiment 2.
+
+The animation is because `set_overlay_frame()` calls `setFrame:` without
+wrapping it in a `CATransaction` with `setDisableActions:YES`. Core Animation
+interpolates the frame change, making the overlay visibly slide to the wrong
+position.
+
+The position itself is wrong because the scale factor is 1.0 instead of 2.0. The
+formula `dpi as f64 / ::window::default_dpi()` was supposed to produce
+`backingScaleFactor` (e.g., `144 / 72 = 2.0` on Retina). But on macOS,
+`default_dpi()` does NOT return the base platform constant (72). It returns
+`screens.active.effective_dpi` — the screen's effective DPI, which on a 2x
+Retina display is already 144:
+
+```rust
+// window/src/os/macos/connection.rs:113-118
+fn default_dpi(&self) -> f64 {
+    if let Ok(screens) = self.screens() {
+        screens.active.effective_dpi.unwrap_or(crate::DEFAULT_DPI)
+    } else {
+        crate::DEFAULT_DPI
+    }
+}
+```
+
+So `scale = 144 / 144 = 1.0`. Backing pixels pass through to `setFrame:`
+undivided. On a 2x display, every coordinate is 2x what it should be in logical
+points, pushing the overlay to the right and down.
+
+The correct approach to return
+`(left_pixel_x, top_pixel_y + pos.top * cell_height)` from `paint_pane()` was
+sound — those are the terminal's authoritative pane origin coordinates. The bug
+is purely in the backing-to-points conversion inside `set_overlay_frame()`.
+
+The existing `update_ca_layer_frame()` (used for initial placement) gets the
+correct scale because it reads `contentsScale` from the root overlay layer,
+which was explicitly set to `backingScaleFactor` when the overlay was created
+(conn.rs line 1168-1169):
+
+```rust
+let backing_scale: f64 = msg_send![window, backingScaleFactor];
+let _: () = msg_send![root_layer, setContentsScale: backing_scale];
+```
+
+#### Conclusion
+
+Failed. The `paint_pane()` return value approach is correct — the pane origin
+coordinates match the terminal's own rendering. But the scale calculation in
+`set_overlay_frame()` is wrong: `dpi / default_dpi()` produces 1.0 on macOS
+because both values are the effective DPI (144 on Retina), not base/effective.
+The next experiment should keep the `paint_pane()` return values and fix the
+scale by using `DEFAULT_DPI` (the constant 72.0) instead of `default_dpi()` (the
+function that returns the screen's effective DPI). It must also wrap `setFrame:`
+in a `CATransaction` to suppress animation.
+
+### Experiment 4: Fix scale and suppress animation
+
+#### Description
+
+Experiment 3's approach of returning the pane pixel origin from `paint_pane()`
+is correct — the coordinates match the terminal's own rendering exactly. The
+only problems are:
+
+1. **Wrong scale.** `dpi / default_dpi()` = 1.0 because both are the effective
+   DPI (144 on Retina). The fix: use `dpi as f64 / 72.0` on macOS. The constant
+   72.0 is macOS's base DPI — `backingScaleFactor` is defined as
+   `effectiveDPI / 72`. This matches how `update_ca_layer_frame()` gets the
+   correct scale from `contentsScale` (which is set to `backingScaleFactor`). On
+   other platforms, use `dpi as f64 / 96.0` (the Windows/Linux base DPI). These
+   are the `DEFAULT_DPI` constants already defined in `window/src/lib.rs:22-24`.
+
+2. **Animated frame change.** `setFrame:` without a `CATransaction` causes Core
+   Animation to animate the change. Wrap in `CATransaction` with
+   `setDisableActions:YES`, matching the pattern in `handle_ca_context()`.
+
+#### Changes
+
+**`wezboard-gui/src/termsurf/conn.rs` — fix `set_overlay_frame()`:**
+
+Replace the scale calculation and add a CATransaction:
+
+```rust
+#[cfg(target_os = "macos")]
+pub fn set_overlay_frame(
+    pane_id: usize,
+    x_backing: f64,
+    y_backing: f64,
+    w_backing: f64,
+    h_backing: f64,
+    dpi: usize,
+) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+    let Some(state) = super::state::global() else {
+        return;
+    };
+    let mut st = state.lock().unwrap();
+    let id = pane_id.to_string();
+    let Some(pane) = st.panes.get_mut(&id) else {
+        return;
+    };
+    if pane.ca_layer_positioning == 0 {
+        return;
+    }
+
+    // macOS base DPI is 72. backingScaleFactor = effectiveDPI / 72.
+    // default_dpi() returns effectiveDPI (144 on 2x Retina), NOT 72.
+    let scale = dpi as f64 / 72.0;
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+
+    pane.overlay_origin_x = x_backing;
+    pane.overlay_origin_y = y_backing;
+    pane.overlay_scale = scale;
+
+    let x = x_backing / scale;
+    let y = y_backing / scale;
+    let w = w_backing / scale;
+    let h = h_backing / scale;
+    unsafe {
+        let ca_transaction = cls(b"CATransaction\0");
+        let _: () = msg_send![ca_transaction, begin];
+        let _: () = msg_send![ca_transaction, setDisableActions: Bool::YES];
+
+        let layer = pane.ca_layer_positioning as *mut AnyObject;
+        let frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        let _: () = msg_send![layer, setFrame: frame];
+
+        let _: () = msg_send![ca_transaction, commit];
+    }
+}
+```
+
+No changes to the non-macOS stub (it has no CALayer and no scale to fix).
+
+No changes to any other file. Experiment 3's changes to `pane.rs`, `paint.rs`,
+`resize.rs`, and `mod.rs` are all correct. Only `set_overlay_frame()` in
+`conn.rs` changes.
+
+#### Verification
+
+Build:
+
 - [ ] `cd wezboard && cargo build` — compiles without errors.
 
 Edge case checklist:

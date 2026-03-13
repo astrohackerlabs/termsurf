@@ -1,6 +1,6 @@
 use crate::termwindow::{RenderFrame, TermWindowNotif};
-use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::WindowOps;
+use ::window::bitmaps::atlas::OutOfTextureSpace;
 use anyhow::Context;
 use smol::Timer;
 use std::time::{Duration, Instant};
@@ -255,9 +255,37 @@ impl crate::TermWindow {
                     mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
                 }
             }
-            self.paint_pane(&pos, num_panes, &mut layers)
+            let (pane_pixel_x, pane_pixel_y) = self
+                .paint_pane(&pos, num_panes, &mut layers)
                 .context("paint_pane")?;
             self.paint_pane_border(&pos, num_panes, &mut layers)?;
+
+            // Update webview overlay position using paint_pane's coordinates.
+            {
+                let pane_id = pos.pane.pane_id();
+                let overlay_info = crate::termsurf::state::global().and_then(|state| {
+                    let st = state.lock().unwrap();
+                    let id = pane_id.to_string();
+                    st.panes
+                        .get(&id)
+                        .filter(|p| p.ca_layer_positioning != 0)
+                        .map(|p| (p.col, p.row, p.pixel_width, p.pixel_height))
+                });
+                if let Some((col, row, pw, ph)) = overlay_info {
+                    let cell_w = self.render_metrics.cell_size.width as f64;
+                    let cell_h = self.render_metrics.cell_size.height as f64;
+                    let x = pane_pixel_x as f64 + col as f64 * cell_w;
+                    let y = pane_pixel_y as f64 + row as f64 * cell_h;
+                    crate::termsurf::set_overlay_frame(
+                        pane_id,
+                        x,
+                        y,
+                        pw as f64,
+                        ph as f64,
+                        self.dimensions.dpi,
+                    );
+                }
+            }
         }
 
         let split_border_width =

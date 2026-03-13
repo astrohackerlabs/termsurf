@@ -2,12 +2,12 @@ use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
-    same_hyperlink, CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
-    RenderScreenLineParams,
+    CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
+    RenderScreenLineParams, same_hyperlink,
 };
 use crate::termwindow::{ScrollHit, UIItem, UIItemType};
-use ::window::bitmaps::TextureRect;
 use ::window::DeadKeyStatus;
+use ::window::bitmaps::TextureRect;
 use anyhow::Context;
 use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
@@ -34,9 +34,10 @@ impl crate::TermWindow {
         pos: &PositionedPane,
         _num_panes: usize,
         layers: &mut TripleLayerQuadAllocator,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(f32, f32)> {
         if self.config.use_box_model_render {
-            return self.paint_pane_box_model(pos);
+            self.paint_pane_box_model(pos)?;
+            return Ok((0.0, 0.0));
         }
 
         self.check_for_dirty_lines_and_invalidate_selection(&pos.pane);
@@ -295,6 +296,10 @@ impl crate::TermWindow {
             (sel.range.clone(), sel.rectangular)
         };
 
+        let left_pixel_x = padding_left
+            + border.left.get() as f32
+            + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
+
         let start = Instant::now();
         let selection_fg = palette.selection_fg.to_linear();
         let selection_bg = palette.selection_bg.to_linear();
@@ -337,10 +342,6 @@ impl crate::TermWindow {
                 layers: &'a mut TripleLayerQuadAllocator<'b>,
                 error: Option<anyhow::Error>,
             }
-
-            let left_pixel_x = padding_left
-                + border.left.get() as f32
-                + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
 
             let mut render = LineRender {
                 term_window: self,
@@ -580,7 +581,7 @@ impl crate::TermWindow {
         metrics::histogram!("paint_pane.lines").record(start.elapsed());
         log::trace!("lines elapsed {:?}", start.elapsed());
 
-        Ok(())
+        Ok((left_pixel_x, top_pixel_y + pos.top as f32 * cell_height))
     }
 
     pub fn paint_pane_border(

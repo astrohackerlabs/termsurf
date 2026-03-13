@@ -1,6 +1,6 @@
 use super::proto;
-use super::proto::term_surf_message::Msg;
 use super::proto::TermSurfMessage;
+use super::proto::term_surf_message::Msg;
 use ::window::{
     KeyCode, Modifiers, MouseButtons, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
 };

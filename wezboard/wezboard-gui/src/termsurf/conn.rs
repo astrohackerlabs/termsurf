@@ -1327,38 +1327,6 @@ fn get_pane_mux_window(pane_id: &str) -> Option<mux::window::WindowId> {
     None
 }
 
-/// Look up a pane's cell position within the tab from the mux.
-/// Returns (left, top) in cells, or (0, 0) if not found.
-fn get_pane_cell_position(pane_id: &str) -> (usize, usize) {
-    let numeric_id: usize = match pane_id.parse() {
-        Ok(id) => id,
-        Err(_) => return (0, 0),
-    };
-    let mux = mux::Mux::get();
-    for window_id in mux.iter_windows() {
-        if let Some(w) = mux.get_window(window_id) {
-            if let Some(tab) = w.get_active() {
-                for pos in tab.iter_panes() {
-                    log::info!(
-                        "get_pane_cell_position: mux pane id={} left={} top={} width={} height={} pixel={}x{}",
-                        pos.pane.pane_id(),
-                        pos.left,
-                        pos.top,
-                        pos.width,
-                        pos.height,
-                        pos.pixel_width,
-                        pos.pixel_height
-                    );
-                    if pos.pane.pane_id() == numeric_id {
-                        return (pos.left, pos.top);
-                    }
-                }
-            }
-        }
-    }
-    (0, 0)
-}
-
 #[cfg(target_os = "macos")]
 unsafe fn update_ca_layer_frame(pane: &mut Pane, root_layer: *mut objc2::runtime::AnyObject) {
     use objc2::msg_send;
@@ -1370,12 +1338,8 @@ unsafe fn update_ca_layer_frame(pane: &mut Pane, root_layer: *mut objc2::runtime
     let w = pane.pixel_width as f64 / scale;
     let h = pane.pixel_height as f64 / scale;
     let (cell_w, cell_h, origin_x, origin_y, border_left, border_top) = super::metrics::get();
-    let (pane_left, pane_top) = get_pane_cell_position(&pane.pane_id);
-    let x_backing = (origin_x as u64
-        + border_left as u64
-        + (pane_left as u64 + pane.col) * cell_w as u64) as f64;
-    let y_backing =
-        (origin_y as u64 + border_top as u64 + (pane_top as u64 + pane.row) * cell_h as u64) as f64;
+    let x_backing = (origin_x as u64 + border_left as u64 + pane.col * cell_w as u64) as f64;
+    let y_backing = (origin_y as u64 + border_top as u64 + pane.row * cell_h as u64) as f64;
     pane.overlay_origin_x = x_backing;
     pane.overlay_origin_y = y_backing;
     pane.overlay_scale = scale;
@@ -1383,10 +1347,8 @@ unsafe fn update_ca_layer_frame(pane: &mut Pane, root_layer: *mut objc2::runtime
     let y = y_backing / scale;
 
     log::info!(
-        "update_ca_layer_frame: pane_id={} pane_cell=({},{}) origin=({},{}) border=({},{}) cell=({},{}) scale={} → frame=({:.1},{:.1},{:.1},{:.1})",
+        "update_ca_layer_frame: pane_id={} origin=({},{}) border=({},{}) cell=({},{}) scale={} → frame=({:.1},{:.1},{:.1},{:.1})",
         pane.pane_id,
-        pane_left,
-        pane_top,
         origin_x,
         origin_y,
         border_left,
@@ -1406,41 +1368,51 @@ unsafe fn update_ca_layer_frame(pane: &mut Pane, root_layer: *mut objc2::runtime
     let _: () = msg_send![positioning, setFrame: frame];
 }
 
-/// Reposition all overlay CALayers using current cell metrics and pane positions.
-/// Called from the window resize handler so overlays track pane positions on every frame.
 #[cfg(target_os = "macos")]
-pub fn reposition_all_overlays() {
+pub fn set_overlay_frame(
+    pane_id: usize,
+    x_backing: f64,
+    y_backing: f64,
+    w_backing: f64,
+    h_backing: f64,
+    dpi: usize,
+) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
     let Some(state) = super::state::global() else {
         return;
     };
     let mut st = state.lock().unwrap();
+    let id = pane_id.to_string();
+    let Some(pane) = st.panes.get_mut(&id) else {
+        return;
+    };
+    if pane.ca_layer_positioning == 0 {
+        return;
+    }
 
-    // Collect pane_ids that have layers (ca_layer_positioning != 0)
-    let pane_ids: Vec<String> = st
-        .panes
-        .iter()
-        .filter(|(_, p)| p.ca_layer_positioning != 0)
-        .map(|(id, _)| id.clone())
-        .collect();
+    let scale = dpi as f64 / ::window::default_dpi();
+    let scale = if scale > 0.0 { scale } else { 1.0 };
 
-    for pane_id in &pane_ids {
-        let Some(mux_window_id) = get_pane_mux_window(pane_id) else {
-            continue;
-        };
-        let Some(root_layer) = get_or_create_overlay(&mut st, mux_window_id) else {
-            continue;
-        };
-        let Some(pane) = st.panes.get_mut(pane_id) else {
-            continue;
-        };
-        unsafe {
-            update_ca_layer_frame(pane, root_layer);
-        }
+    pane.overlay_origin_x = x_backing;
+    pane.overlay_origin_y = y_backing;
+    pane.overlay_scale = scale;
+
+    let x = x_backing / scale;
+    let y = y_backing / scale;
+    let w = w_backing / scale;
+    let h = h_backing / scale;
+    unsafe {
+        let layer = pane.ca_layer_positioning as *mut AnyObject;
+        let frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        let _: () = msg_send![layer, setFrame: frame];
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn reposition_all_overlays() {}
+pub fn set_overlay_frame(_pane_id: usize, _x: f64, _y: f64, _w: f64, _h: f64, _dpi: usize) {}
 
 #[cfg(target_os = "macos")]
 fn remove_ca_layers(host: usize, positioning: usize, flipped: usize) {
