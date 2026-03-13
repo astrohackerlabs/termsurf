@@ -127,9 +127,14 @@ All values in the render pass are in **backing pixels** (device pixels):
 CALayer `setFrame:` expects **points**. The conversion is:
 
 ```
-scale = dimensions.dpi / 72.0    (72 = DEFAULT_DPI on macOS)
+scale = dimensions.dpi / default_dpi()
 points = backing_pixels / scale
 ```
+
+`default_dpi()` is platform-specific: 72.0 on macOS, 96.0 on Linux/Windows
+(`wezboard_window::default_dpi()`, backed by the `DEFAULT_DPI` constant in
+`wezboard/window/src/lib.rs`). Wayland already uses this same formula
+(`self.dpi / DEFAULT_DPI`). We must not hardcode 72.
 
 This is consistent with how the rest of Wezboard handles scale. The render pass
 trusts `self.dimensions.dpi` for all scale-dependent calculations (cell sizes,
@@ -174,7 +179,9 @@ frame = CGRect(
 
 **Add `set_overlay_frame()` to `wezboard-gui/src/termsurf/conn.rs`:**
 
-Takes backing-pixel coordinates and scale factor. Converts to points internally.
+Takes backing-pixel coordinates and DPI. Computes scale internally using
+`wezboard_window::default_dpi()`, then converts to points. The caller passes
+`self.dimensions.dpi` — no hardcoded constants.
 
 ```rust
 #[cfg(target_os = "macos")]
@@ -184,7 +191,7 @@ pub fn set_overlay_frame(
     y_backing: f64,
     w_backing: f64,
     h_backing: f64,
-    scale: f64,
+    dpi: usize,
 ) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
@@ -201,6 +208,8 @@ pub fn set_overlay_frame(
     if pane.ca_layer_positioning == 0 {
         return;
     }
+    let scale = dpi as f64 / wezboard_window::default_dpi();
+    let scale = if scale > 0.0 { scale } else { 1.0 };
     let x = x_backing / scale;
     let y = y_backing / scale;
     let w = w_backing / scale;
@@ -219,7 +228,7 @@ pub fn set_overlay_frame(
     _y: f64,
     _w: f64,
     _h: f64,
-    _scale: f64,
+    _dpi: usize,
 ) {}
 ```
 
@@ -261,12 +270,11 @@ for pos in panes {
             + border.left.get() as f64
             + (pos.left as f64 + col as f64) * cell_w;
         let y = top_y + (pos.top as f64 + row as f64) * cell_h;
-        let scale = self.dimensions.dpi as f64 / 72.0;
         crate::termsurf::set_overlay_frame(
             pane_id,
             x, y,
             pw as f64, ph as f64,
-            scale,
+            self.dimensions.dpi,
         );
     }
 }
