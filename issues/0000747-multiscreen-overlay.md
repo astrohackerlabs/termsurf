@@ -297,15 +297,93 @@ Functional (test on both screens):
 
 Same behavior as Experiment 1. Opening a webview positions it at (0,0). The
 `overlay_scale` is 0.0 on first creation (default), so the `else` branch runs —
-which is the same old formula. The branch never helps because `set_overlay_frame`
-hasn't run yet when the first `CaContext` arrives. The overlay starts wrong and
-stays wrong until user interaction triggers a `paint_pass`.
+which is the same old formula. The branch never helps because
+`set_overlay_frame` hasn't run yet when the first `CaContext` arrives. The
+overlay starts wrong and stays wrong until user interaction triggers a
+`paint_pass`.
 
 #### Conclusion
 
 The stored-coordinates approach doesn't help on first creation because
-`overlay_scale` is 0.0, so the fallback (old formula) always runs. The old
-formula is what positions the overlay at first, and it's the only code path that
-fires before any `paint_pass`. The fix must ensure that the initial positioning
-in `handle_ca_context` is correct, or that a `paint_pass` with correct
-coordinates runs immediately after layer creation.
+`overlay_scale` is initialized to `1.0` (not `0.0` as assumed — see state.rs
+lines 524, 648), so the `if pane.overlay_scale > 0.0` branch always runs,
+reading `overlay_origin_x/y` which are still `0.0` (unset). Result:
+`0.0 / 1.0 = (0, 0)`. The fallback never executes. The fix must ensure that the
+initial positioning in `handle_ca_context` is correct, or that a `paint_pass`
+with correct coordinates runs immediately after layer creation.
+
+### Experiment 3: Call update_ca_layer_frame only on first creation
+
+#### Description
+
+`handle_ca_context` has two branches:
+
+1. **First creation** (`ca_layer_host == 0`) — builds the 3-layer hierarchy
+   (flipped → positioning → CALayerHost).
+2. **Swap** (layer exists) — atomically replaces the CALayerHost with a new one
+   when Chromium sends a new context ID (every GPU frame swap).
+
+Currently, `update_ca_layer_frame` is called **after both branches** (line
+1307). This means every Chromium frame swap overwrites the overlay position with
+the split-unaware formula.
+
+The fix: move the `update_ca_layer_frame` call inside the first-creation branch
+only. After creation, `set_overlay_frame` from `paint_pass` becomes the sole
+authority on position. Subsequent frame swaps (the `else` branch) just swap the
+CALayerHost — they don't need to reposition because `set_overlay_frame` has
+already set the correct frame.
+
+This does not modify `update_ca_layer_frame` itself.
+
+#### Changes
+
+**`wezboard-gui/src/termsurf/conn.rs`** — `handle_ca_context`:
+
+Move lines 1306–1307 (`// Position the overlay` +
+`update_ca_layer_frame(pane,
+root_layer);`) from after the `if/else` block into
+the end of the `if
+pane.ca_layer_host == 0` branch (after line 1283, before the
+closing `}`).
+
+Before:
+
+```rust
+        } // end else (swap)
+
+        // Position the overlay
+        update_ca_layer_frame(pane, root_layer);
+
+        let _: () = msg_send![ca_transaction, commit];
+```
+
+After:
+
+```rust
+            // Position the overlay
+            update_ca_layer_frame(pane, root_layer);
+        } else {
+            // Atomic swap: ...
+            ...
+        }
+
+        let _: () = msg_send![ca_transaction, commit];
+```
+
+No other files change.
+
+#### Verification
+
+Build:
+
+- [ ] `cd wezboard && cargo build` — compiles without errors.
+
+Functional (test on both screens):
+
+- [ ] Open a webview — positioned and sized correctly (initial positioning
+      preserved).
+- [ ] Split pane to the left — webview repositions to the right immediately.
+- [ ] Same test on second screen — webview repositions immediately (the bug).
+- [ ] Resize the window — webview tracks pane position.
+- [ ] Close the split pane — webview expands to fill.
+- [ ] Open a new tab, switch back — webview at correct position.
