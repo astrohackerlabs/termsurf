@@ -399,128 +399,176 @@ the overlay is never at 0,0) and focus on fixing the three original bugs
 removing the initial positioning step. The render pass can _update_ the position
 every frame, but it must not be the _only_ place that sets it.
 
-### Experiment 2: Fix the three bugs in existing positioning code
+### Experiment 2: Render-pass positioning with initial placement
 
 #### Description
 
-Keep the existing `update_ca_layer_frame()` / `reposition_all_overlays()`
-architecture. Fix the three bugs directly:
+Same goal as experiment 1 — compute overlay position from the render pass where
+`PositionedPane` and all layout values are already correct — but fix the two
+problems that caused experiment 1 to fail:
 
-1. `get_pane_cell_position()` searches all tabs, not just the active one.
-2. The overlay formula matches `paint_pane()`'s text positioning exactly.
-3. `reposition_all_overlays()` is called on tab switch.
+1. **Keep initial positioning.** `handle_ca_context()` still calls
+   `update_ca_layer_frame()` when the CALayer is first created. The render pass
+   updates the position every frame after that. The overlay is never at (0,0).
 
-No new functions, no new positioning path. The existing code works — it just has
-three specific bugs.
+2. **Use `contentsScale` for scale, not `dpi / default_dpi()`.** The old code
+   reads `contentsScale` from the actual CALayer — this is the authoritative
+   backing scale factor set from `backingScaleFactor` when the overlay is
+   created. The new `set_overlay_frame()` reads `contentsScale` from
+   `ca_layer_positioning` (which inherits the root layer's scale). No indirect
+   DPI calculation.
 
-#### Bug 1 fix: search all tabs in `get_pane_cell_position()`
-
-The current code calls `w.get_active()` and only searches that tab:
-
-```rust
-if let Some(tab) = w.get_active() {
-    for pos in tab.iter_panes() { ... }
-}
-```
-
-Fix: iterate all tabs in the window, not just the active one:
-
-```rust
-for tab in w.iter() {
-    for pos in tab.iter_panes() { ... }
-}
-```
-
-This ensures the pane is found regardless of which tab is active.
-
-#### Bug 2 fix: align overlay formula with `paint_pane()`
-
-The current `update_ca_layer_frame()` formula:
-
-```rust
-let x_backing = origin_x + border_left + (pane_left + col) * cell_w;
-let y_backing = origin_y + border_top + (pane_top + row) * cell_h;
-```
-
-The `paint_pane()` text positioning formula (`left_pixel_x`, line 341):
-
-```rust
-let left_pixel_x = padding_left + border.left + pos.left * cell_width;
-let top_pixel_y = top_bar_height + padding_top + border.top;
-```
-
-These are equivalent: `origin_x` = `padding_left`, `origin_y` =
-`top_bar_height + padding_top`, and `border_left`/`border_top` match. The
-overlay's `(col, row)` offset within the pane is additive. The formulas already
-match for text content positioning.
-
-The background rect in `paint_pane()` has edge-case handling (leftmost panes
-start at x=0, half-cell offsets for split dividers), but those are for
-background fill — not content positioning. The overlay should align with text
-content, not background edges. So the current formula is correct for non-split
-panes.
-
-However, there's a potential issue for split panes where the pane is not at
-position (0,0). The background rect uses `- (cell_width / 2.0)` for non-leftmost
-panes and `- (cell_height / 2.0)` for non-topmost panes to account for split
-dividers eating into the cell grid. If the overlay's `(col, row)` starts at
-(0, 0) within the pane (the TUI's first visible cell), the overlay position
-should match `left_pixel_x` — which does NOT include the half-cell offset. So
-the current formula is already correct.
-
-**No code change needed for Bug 2.** The formula matches `paint_pane()`'s text
-positioning. The three bugs are really two bugs.
-
-#### Bug 3 fix: reposition on tab switch
-
-Add a `reposition_all_overlays()` call to `activate_tab()` in
-`wezboard-gui/src/termwindow/mod.rs`. This is the single function that all tab
-switches flow through (`activate_tab_relative` and `activate_last_tab` both call
-`activate_tab`).
-
-After line 2261 (`self.update_scrollbar();`), add:
-
-```rust
-crate::termsurf::reposition_all_overlays();
-```
-
-With the Bug 1 fix, `reposition_all_overlays()` will now correctly find panes in
-non-active tabs (because `get_pane_cell_position` searches all tabs). And
-calling it on tab switch ensures overlays are repositioned when the user
-switches back to a tab with a webview.
+After the render-pass path is working, remove the old positioning functions that
+are no longer needed (`get_pane_cell_position`, `reposition_all_overlays`,
+`metrics` module usage for positioning). `update_ca_layer_frame` stays for
+initial placement only.
 
 #### Changes
 
-**`wezboard-gui/src/termsurf/conn.rs` — `get_pane_cell_position()`:**
+**`wezboard-gui/src/termsurf/conn.rs` — add `set_overlay_frame()`:**
 
-Change `w.get_active()` to `w.iter()`. Replace:
-
-```rust
-if let Some(tab) = w.get_active() {
-    for pos in tab.iter_panes() {
-```
-
-With:
+New public function. Takes backing-pixel coordinates, reads `contentsScale` from
+the pane's `ca_layer_positioning` layer, converts to points, updates
+`overlay_origin_x/y/scale` for input.rs, and sets the CALayer frame.
 
 ```rust
-for tab in w.iter() {
-    for pos in tab.iter_panes() {
+#[cfg(target_os = "macos")]
+pub fn set_overlay_frame(
+    pane_id: usize,
+    x_backing: f64,
+    y_backing: f64,
+    w_backing: f64,
+    h_backing: f64,
+) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+    let Some(state) = super::state::global() else {
+        return;
+    };
+    let mut st = state.lock().unwrap();
+    let id = pane_id.to_string();
+    let Some(pane) = st.panes.get_mut(&id) else {
+        return;
+    };
+    if pane.ca_layer_positioning == 0 {
+        return;
+    }
+
+    let layer = pane.ca_layer_positioning as *mut AnyObject;
+    let scale: f64 = unsafe { msg_send![layer, contentsScale] };
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+
+    pane.overlay_origin_x = x_backing;
+    pane.overlay_origin_y = y_backing;
+    pane.overlay_scale = scale;
+
+    let x = x_backing / scale;
+    let y = y_backing / scale;
+    let w = w_backing / scale;
+    let h = h_backing / scale;
+    unsafe {
+        let frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        let _: () = msg_send![layer, setFrame: frame];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_overlay_frame(
+    _pane_id: usize,
+    _x: f64,
+    _y: f64,
+    _w: f64,
+    _h: f64,
+) {}
 ```
 
-And remove the corresponding closing brace.
+Key difference from experiment 1: scale comes from `contentsScale` on the actual
+layer, not from `dpi / default_dpi()`.
 
-**`wezboard-gui/src/termwindow/mod.rs` — `activate_tab()`:**
+**`wezboard-gui/src/termwindow/render/paint.rs` — call from `paint_pass()`:**
 
-Add `crate::termsurf::reposition_all_overlays();` after
-`self.update_scrollbar();` (line 2261).
+After `paint_pane()` and `paint_pane_border()` in the pane loop (after line
+260), add the overlay position update. Same formula as experiment 1 — uses
+`padding_left_top()`, `get_os_border()`, `tab_bar_pixel_height()`,
+`render_metrics.cell_size`, and `PositionedPane.left/top`:
+
+```rust
+// Update webview overlay position from the render pass.
+{
+    let pane_id = pos.pane.pane_id();
+    let overlay_info = crate::termsurf::state::global().and_then(|state| {
+        let st = state.lock().unwrap();
+        let id = pane_id.to_string();
+        st.panes
+            .get(&id)
+            .filter(|p| p.ca_layer_positioning != 0)
+            .map(|p| (p.col, p.row, p.pixel_width, p.pixel_height))
+    });
+    if let Some((col, row, pw, ph)) = overlay_info {
+        let cell_w = self.render_metrics.cell_size.width as f64;
+        let cell_h = self.render_metrics.cell_size.height as f64;
+        let (pad_left, pad_top) = self.padding_left_top();
+        let border = self.get_os_border();
+        let tab_bar_h = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap_or(0.) as f64
+        } else {
+            0.0
+        };
+        let top_y = tab_bar_h + pad_top as f64 + border.top.get() as f64;
+        let x = pad_left as f64
+            + border.left.get() as f64
+            + (pos.left as f64 + col as f64) * cell_w;
+        let y = top_y + (pos.top as f64 + row as f64) * cell_h;
+        crate::termsurf::set_overlay_frame(
+            pane_id,
+            x, y,
+            pw as f64, ph as f64,
+        );
+    }
+}
+```
+
+**`wezboard-gui/src/termsurf/conn.rs` — keep `handle_ca_context()` unchanged:**
+
+The `update_ca_layer_frame(pane, root_layer)` call at line 1307 stays. This
+provides the initial position when the CALayer is first created. The render pass
+takes over on the next frame.
+
+**`wezboard-gui/src/termsurf/conn.rs` — delete old positioning helpers:**
+
+After the render-pass path works, delete:
+
+- `get_pane_cell_position()` (lines 1332-1360) — no longer needed; the render
+  pass gets pane position from `PositionedPane`.
+- `reposition_all_overlays()` (lines 1412-1443) — no longer needed; the render
+  pass repositions every frame.
+
+Keep `get_pane_mux_window()` — still used by `handle_ca_context()`. Keep
+`update_ca_layer_frame()` — still used for initial placement.
+
+**`wezboard-gui/src/termwindow/resize.rs` — remove `reposition_all_overlays()`
+call:**
+
+Delete line 93. The render pass handles repositioning every frame.
+
+**`wezboard-gui/src/termsurf/mod.rs` — update re-exports:**
+
+Replace `pub use conn::reposition_all_overlays;` with
+`pub use conn::set_overlay_frame;`.
 
 #### Verification
 
 1. `cd wezboard && cargo build` — compiles without errors.
-2. Open a webview — correct position (unchanged, immediate positioning still
-   works).
-3. Split the pane — webview stays positioned correctly.
+2. Open a webview — correct position immediately (initial placement from
+   `handle_ca_context`).
+3. Split the pane — webview stays positioned correctly (render pass updates
+   every frame).
 4. Switch to a different tab, resize the window, switch back — webview is at the
-   correct position (Bug 1 + Bug 3 fix).
-5. Switch tabs without resizing — webview repositions correctly on switch back
-   (Bug 3 fix).
+   correct position (render pass computes from `PositionedPane`, not active-tab
+   lookup).
+5. Resize while webview tab is active — webview tracks pane position (render
+   pass updates every frame, no need for `reposition_all_overlays`).
+6. Click inside webview — mouse events land correctly (`overlay_origin_x/y` and
+   `overlay_scale` updated every frame by `set_overlay_frame`).
