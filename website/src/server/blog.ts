@@ -3,11 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import toml from "toml";
 
-// In dev, cwd is website/ so docs/blog is ../docs/blog
-// In production Docker, docs/blog is copied into the image at /app/docs/blog
-const BLOG_DIR = fs.existsSync(path.resolve(process.cwd(), "docs/blog"))
-  ? path.resolve(process.cwd(), "docs/blog")
-  : path.resolve(process.cwd(), "../docs/blog");
+const BLOG_DIR = path.resolve(process.cwd(), "blog-posts");
 
 export const getBlogPost = createServerFn({ method: "GET" })
   .inputValidator((slug: string) => slug)

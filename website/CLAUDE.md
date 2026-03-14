@@ -10,7 +10,7 @@ routing via the Vite plugin.
 | --- | --- |
 | `bun run dev` | Start dev server |
 | `bun run build` | TanStack Start production build (client + server) |
-| `bun run build:blog` | Generate blog.json + feeds from docs/blog/ |
+| `bun run build:blog` | Generate blog.json + feeds from blog-posts/ |
 | `bun run build:commits` | Generate commits.json from git history |
 | `bun run build:data` | Run all data generators (commits + blog) |
 
@@ -63,7 +63,7 @@ export const Route = createFileRoute("/example/$id")({
 Static data (commits) comes from JSON files generated at build time
 (`data/commits.json`). Import these directly. Blog post content is loaded at
 runtime via a server function (`src/server/blog.ts`) that reads markdown from
-`docs/blog/`.
+`blog-posts/`.
 
 ### Route params
 
@@ -84,7 +84,7 @@ TanStack Start manages SSR — there is no separate server file.
 
 ### Writing posts
 
-Blog posts are markdown files in `docs/blog/` (top-level, not in `website/`).
+Blog posts are markdown files in `blog-posts/`.
 
 **Filename format:** `YYYY-MM-DD-slug.md`
 
@@ -100,7 +100,7 @@ date = "YYYY-MM-DD"
 
 ### Build pipeline
 
-`website/scripts/build-blog.ts` reads all `.md` files from `docs/blog/`,
+`scripts/build-blog.ts` reads all `.md` files from `blog-posts/`,
 parses TOML front matter, and produces:
 
 - `website/data/blog.json` — typed metadata only (content loaded at runtime)

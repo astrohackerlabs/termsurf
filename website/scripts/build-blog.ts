@@ -1,5 +1,5 @@
 /**
- * Reads markdown blog posts from docs/blog/, parses TOML front matter,
+ * Reads markdown blog posts from blog-posts/, parses TOML front matter,
  * and generates data/blog.json + feed files in public/blog/.
  * Run with: bun run build:blog
  */
@@ -10,7 +10,7 @@ import toml from "toml";
 import { Feed } from "feed";
 import type { BlogPost, BlogData } from "../src/blog";
 
-const DOCS_DIR = join(import.meta.dir, "../../docs/blog");
+const DOCS_DIR = join(import.meta.dir, "../blog-posts");
 const DATA_DIR = join(import.meta.dir, "../data");
 const PUBLIC_DIR = join(import.meta.dir, "../public/blog");
 const SITE_URL = "https://termsurf.com";
