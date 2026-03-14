@@ -39,9 +39,9 @@ function HomePage() {
           Root access to the 'net.
         </h1>
         <p className="text-sm text-muted mt-3">
-          Control the web from your terminal. TermSurf is a protocol that embeds
-          web browsers inside terminal emulators — any engine, any terminal,
-          total control.
+          Hack the web from your terminal. TermSurf is a protocol that overlays
+          web browser engines, like Chromium and WebKit, in your terminal
+          emulator. Unlimited power to control every web page from your keyboard.
         </p>
         <div className="mt-4 text-muted text-xs">
           ──────────────────────────────────────────────────────────
