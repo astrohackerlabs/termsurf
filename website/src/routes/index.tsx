@@ -41,7 +41,14 @@ function HomePage() {
         <p className="text-sm text-muted mt-3">
           Hack the web from your terminal. TermSurf is a protocol that overlays
           web browser engines, like Chromium and WebKit, in your terminal
-          emulator. Unlimited power to control every web page from your keyboard.
+          emulator. Unlimited power to control every web page from your
+          keyboard.{" "}
+          <a
+            href="https://github.com/termsurf/termsurf"
+            className="text-accent hover:text-primary"
+          >
+            [fork the source on GitHub]
+          </a>
         </p>
         <div className="mt-4 text-muted text-xs">
           ──────────────────────────────────────────────────────────
