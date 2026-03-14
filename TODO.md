@@ -6,7 +6,7 @@
 - [x] Browser navigation keybindings (Cmd+[/]/R for back/forward/reload)
 - [x] Context menu removal (Content Shell menu didn't fit architecture)
 - [x] Fix Ctrl+Esc mode switching (dangling pointer in focused_pane)
-- [ ] Clipboard (copy/cut/paste in browser overlays)
+- [x] Clipboard (copy/cut/paste in browser overlays)
 - [ ] target="\_blank" handling (OAuth, "open in new tab" links fail)
 - [ ] Drag-n-drop file uploads
 - [ ] JavaScript dialogs (alert/confirm/prompt)
