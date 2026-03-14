@@ -1,25 +1,44 @@
 @import "tailwindcss";
 
 @theme {
-  /* Tokyo Night color palette */
-  --color-background: #1a1b26;
-  --color-background-dark: #16161e;
-  --color-background-highlight: #292e42;
-  --color-foreground: #c0caf5;
-  --color-foreground-dark: #a9b1d6;
-  --color-primary: #7aa2f7;
-  --color-secondary: #bb9af7;
-  --color-accent: #7dcfff;
-  --color-success: #9ece6a;
-  --color-warning: #e0af68;
-  --color-danger: #f7768e;
-  --color-muted: #565f89;
-  --color-border: #3b4261;
+  /* Tokyo Night Day (light) color palette — default */
+  --color-background: #e1e2e7;
+  --color-background-dark: #d5d6db;
+  --color-background-highlight: #c4c8da;
+  --color-foreground: #3760bf;
+  --color-foreground-dark: #6172b0;
+  --color-primary: #2e7de9;
+  --color-secondary: #9854f1;
+  --color-accent: #007197;
+  --color-success: #587539;
+  --color-warning: #8c6c3e;
+  --color-danger: #f52a65;
+  --color-muted: #848cb5;
+  --color-border: #a8aecb;
 
   /* Font families */
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   --font-mono: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Tokyo Night (dark) color palette */
+    --color-background: #1a1b26;
+    --color-background-dark: #16161e;
+    --color-background-highlight: #292e42;
+    --color-foreground: #c0caf5;
+    --color-foreground-dark: #a9b1d6;
+    --color-primary: #7aa2f7;
+    --color-secondary: #bb9af7;
+    --color-accent: #7dcfff;
+    --color-success: #9ece6a;
+    --color-warning: #e0af68;
+    --color-danger: #f7768e;
+    --color-muted: #565f89;
+    --color-border: #3b4261;
+  }
 }
 
 html {
