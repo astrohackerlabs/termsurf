@@ -49,12 +49,6 @@ html {
 body {
   min-height: 100vh;
   font-family: var(--font-mono);
-  background-image: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--color-border) 40%, transparent) 1px,
-    transparent 1px
-  );
-  background-size: 24px 24px;
 }
 
 body::after {
