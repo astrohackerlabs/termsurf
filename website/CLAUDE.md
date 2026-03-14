@@ -175,7 +175,8 @@ should make the reader want to open a terminal.
   This isn't a corporation talking. It's a mailing list.
 - **Short sentences.** Staccato. Let them hit. Information wants to be free and
   it doesn't want to wait for your subordinate clause.
-- **Lowercase is default.** UPPERCASE IS FOR SHOUTING. Title Case is for suits.
+- **Proper Case for titles and labels.** Nav links, page titles, headings — all
+  Proper Case. UPPERCASE IS FOR SHOUTING.
 - **Bracket links like it's Usenet.** `[fork the source]` `[read the protocol]`
   — not "Get Started" buttons with drop shadows.
 - **No adjectives that sell.** No "powerful." No "innovative." No "seamless." If

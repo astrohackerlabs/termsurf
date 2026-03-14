@@ -2,10 +2,10 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { $icon } from "../util/icons";
 
 const NAV_ITEMS = [
-  { to: "/blog", label: "blog" },
-  { to: "/commits", label: "commits" },
-  { to: "/docs", label: "docs" },
-  { to: "/about", label: "about" },
+  { to: "/blog", label: "Blog" },
+  { to: "/commits", label: "Commits" },
+  { to: "/docs", label: "Docs" },
+  { to: "/about", label: "About" },
 ] as const;
 
 export function Header() {
@@ -20,7 +20,7 @@ export function Header() {
             alt="TermSurf logo"
             className="w-6 h-6"
           />
-          termsurf
+          TermSurf
         </Link>
         <nav className="flex gap-1">
           {NAV_ITEMS.map(({ to, label }) => {

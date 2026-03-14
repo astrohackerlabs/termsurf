@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import blogData from "../../../data/blog.json";
 
 export const Route = createFileRoute("/blog/")({
-  head: () => ({ meta: [{ title: "blog — TermSurf" }] }),
+  head: () => ({ meta: [{ title: "Blog — TermSurf" }] }),
   component: BlogIndex,
 });
 

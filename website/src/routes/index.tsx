@@ -73,8 +73,14 @@ function HomePage() {
         ) : (
           <p className="text-muted text-sm">No posts yet.</p>
         )}
+        <Link to="/blog" className="text-sm text-muted hover:text-accent mt-3 inline-block">
+          [view all posts]
+        </Link>
       </section>
       <CommitLog commits={commitsData.commits.slice(0, 10)} />
+      <Link to="/commits" className="text-sm text-muted hover:text-accent mt-3 inline-block">
+        [view all commits]
+      </Link>
     </>
   );
 }
