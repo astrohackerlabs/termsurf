@@ -47,3 +47,89 @@ that contains the cursor receives the scroll event.
 This is the same behavior terminal panes have — WezTerm already scrolls the pane
 under the cursor regardless of focus. We just need to extend that to browser
 overlays.
+
+## Experiments
+
+### Experiment 1: Hit-test all overlay panes for scroll events
+
+#### Description
+
+Add a new function `try_forward_scroll_any_pane()` that iterates over all panes
+with browser overlays, hit-tests the scroll coordinates against each one, and
+forwards the scroll event to the first match. Call this from `termwindow/mod.rs`
+instead of the current single-pane path.
+
+The existing `try_forward_raw_scroll()` stays unchanged — the new function calls
+it for each candidate pane.
+
+#### Changes
+
+**`wezboard/wezboard-gui/src/termsurf/input.rs`**
+
+1. Add a new public function `try_forward_scroll_any_pane()` with the same
+   signature as `try_forward_raw_scroll` but without the `pane_id` parameter:
+
+   ```rust
+   pub fn try_forward_scroll_any_pane(
+       coords: ::window::Point,
+       delta_x: f64,
+       delta_y: f64,
+       phase: u64,
+       momentum_phase: u64,
+       precise: bool,
+       modifiers: Modifiers,
+   ) -> bool
+   ```
+
+   This function:
+   - Locks the global state
+   - Collects all pane IDs that have a browser overlay (`tab_id != 0` and
+     `ca_layer_host != 0`)
+   - Drops the lock
+   - For each candidate pane, calls `try_forward_raw_scroll()` with that pane's
+     ID
+   - Returns `true` on the first hit, `false` if none match
+
+**`wezboard/wezboard-gui/src/termsurf/mod.rs`**
+
+2. Export the new function: `pub use conn::try_forward_scroll_any_pane;` (or
+   from `input` — wherever it lives).
+
+**`wezboard/wezboard-gui/src/termwindow/mod.rs`**
+
+3. In the `RawScrollEvent` handler (~line 1086), replace the current logic:
+
+   Before:
+
+   ```rust
+   if let Some(pane) = self.get_active_pane_or_overlay() {
+       self.raw_scroll_consumed = crate::termsurf::input::try_forward_raw_scroll(
+           pane.pane_id(), coords, ...
+       );
+   }
+   ```
+
+   After:
+
+   ```rust
+   self.raw_scroll_consumed = crate::termsurf::input::try_forward_scroll_any_pane(
+       coords, delta_x, delta_y, phase, momentum_phase, precise, modifiers,
+   );
+   ```
+
+   If no overlay consumes the scroll, `raw_scroll_consumed` is `false` and the
+   terminal handles it normally.
+
+#### Verification
+
+```bash
+scripts/build.sh wezboard
+```
+
+| # | Test                          | Steps                                                         | Expected                           |
+| - | ----------------------------- | ------------------------------------------------------------- | ---------------------------------- |
+| 1 | Scroll inactive webview       | Split pane, webview on right, focus left, scroll over right   | Right webview scrolls              |
+| 2 | Scroll active webview         | Focus the webview pane, scroll over it                        | Webview scrolls (no regression)    |
+| 3 | Scroll terminal pane          | Scroll over a terminal pane with no webview                   | Terminal scrolls normally          |
+| 4 | Scroll outside overlay bounds | Scroll over the terminal area of a pane that has a webview    | Terminal scrolls, not the webview  |
+| 5 | Two webviews, scroll each     | Two split panes with webviews, scroll over each without focus | Each webview scrolls independently |
