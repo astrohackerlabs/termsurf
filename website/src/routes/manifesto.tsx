@@ -16,8 +16,8 @@ function ManifestoPage() {
         <p>
           The terminal gave us that. Every process, every socket, every file —
           reachable from a single prompt. The terminal does not hide things. It
-          does not decide what we are allowed to see. We are the admins. We are
-          the operators. We are in charge.
+          does not decide what we are allowed to see. We are the programmers. We
+          are the sysadmins. We are the webmasters. We are in charge.
         </p>
         <p>The browser took that away.</p>
         <p>
@@ -40,8 +40,8 @@ function ManifestoPage() {
           everything else already lives. The browser should be a TUI, like
           Neovim or Lazygit. It should sit in the shell, next to the editor,
           next to the repo, next to the logs. It should resize with a keystroke.
-          It should speak protobuf over a Unix socket. It should be a component
-          in the system, not walled garden.
+          It should speak protobuf over a Unix socket. It should be a lever on a
+          control panel, not a TV for websites.
         </p>
         <p>
           So we built TermSurf. Full Chromium. Full GPU rendering. Zero-copy
