@@ -12,12 +12,12 @@ function ManifestoPage() {
         ┌─ Manifesto ─┐
       </h2>
       <div className="text-sm space-y-4 text-foreground-dark">
-        <p>We need total control. It's our job.</p>
+        <p>We need total control.</p>
         <p>
           The terminal gave us that. Every process, every socket, every file —
           reachable from a single prompt. The terminal does not hide things. It
           does not decide what we are allowed to see. We are the admins. We are
-          the operators. We have control because we need it to do our job.
+          the operators. We are in charge.
         </p>
         <p>The browser took it away.</p>
         <p>
@@ -50,9 +50,9 @@ function ManifestoPage() {
           is there — right next to your shell. No alt-tab. No context switch. No
           walled garden.
         </p>
+        <p>We surf by day. We hack by night.</p>
         <p>
-          We surf by day. We hack by night. And we're good at it. We build
-          TermSurf for <em>us</em>.
+          TermSurfers are <em>root</em>.
         </p>
         <p className="pt-2">— Max Commits, San Tokyo, Hawaii</p>
         <p className="pt-2">
