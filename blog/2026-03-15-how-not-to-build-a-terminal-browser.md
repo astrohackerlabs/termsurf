@@ -122,8 +122,11 @@ no signal. The patch falls through.
 Every dead circuit pointed somewhere.
 
 CEF's API limitations pushed us to fork Chromium directly. Chromium's scheduler
-contention forced one-process-per-profile. XPC's complexity drove us to Unix
-sockets and protobuf.
+contention forced one-process-per-profile. We used XPC for IPC early on because
+we thought we needed it for shared GPU textures — but CALayerHost replaced that
+approach. CALayerHost just needs a layer ID, which is an integer. You can send an
+integer over any socket. XPC is macOS-only. Unix domain sockets work everywhere.
+We dropped XPC the same week we shipped CALayerHost.
 Ghostboard ran on Ghostty — Linux and macOS only. We forked WezTerm instead:
 Windows support on day one, and Rust's ecosystem gives us ratatui and edtui off
 the shelf.
