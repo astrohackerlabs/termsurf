@@ -28,20 +28,23 @@ Many of them end with **Result: Fail**.
 
 This is a field report from the wreckage.
 
-## The Signal Flatlines at 31fps
+## CEF: Close, But Not Close Enough
 
 We wired up CEF — the Chromium Embedded Framework. Render pages off-screen, pipe
 the pixels into a terminal pane, ship it. Two generations ran on this circuit.
 ts2 embedded CEF in-process. ts3 split it out over XPC.
 
-Same flatline. CEF's off-screen rendering caps at 31fps on macOS. We hacked the
-frame callback. Profiled the compositor. Overrode the paint scheduler. Ran 26
-experiments across Issues 325–350. Twenty-six. The signal never broke through.
+We pushed it to ~50fps. But the CPU was screaming. 26 experiments across Issues
+325–350. We hacked the frame callback. Profiled the compositor. Overrode the
+paint scheduler. Could we have gotten CEF to 60fps? Maybe. But every experiment
+was a fight against an API that was not designed for this.
 
-31fps is not a bottleneck. It is a wall. Hardcoded in CEF's off-screen pipeline.
-No patch, no flag, no trick gets past it.
+The real question was not "can we make CEF work?" It was "why are we fighting
+CEF's API when we could fork Chromium directly?" A fork gives total control. No
+API limitations. No off-screen rendering pipeline. Direct access to the
+compositor, the GPU layers, the process model. Everything.
 
-We pulled the plug on CEF.
+We dropped CEF and forked Chromium.
 
 ## Two Profiles, Two Frames Per Second
 
@@ -69,21 +72,6 @@ one process will never hit 60fps simultaneously.
 
 The only fix: one process per profile. Fork the process. Isolate the scheduler.
 That is the law now.
-
-## Swift Crashes on Contact
-
-Before Rust, we tried Swift. CEF's C API validates struct layouts on every
-callback — reads `base.size` from the raw pointer. Swift's class memory model
-does not produce C-compatible layouts. The structs do not align.
-
-```
-[FATAL] CefApp_0_CToCpp called with invalid version -1
-```
-
-One line. Connection severed. No workaround.
-
-Rust's `#[repr(C)]` guarantees the layout. We rewired the bindings in Rust the
-same week. Swift never touched CEF again.
 
 ## Four Systems, Four Coordinate Spaces
 
@@ -125,9 +113,11 @@ you will not know until someone clicks a link and the wire is dead.
 
 The failures are not random. They cluster. And the clusters draw a map.
 
-**Performance walls are not bugs.** CEF's 31fps. Chromium's 2fps. These are
-constraints forged into the engines. You cannot tune past them. You have to
-rewire the architecture. We rewired it three times.
+**Sometimes the right move is to go deeper.** CEF could probably hit 60fps with
+enough effort. But every hour fighting CEF's API was an hour not spent building
+with total control. Chromium's 2fps multi-profile contention was a harder wall —
+a constraint forged into the engine. You cannot tune past it. You have to rewire
+the architecture.
 
 **Coordinates fail because four systems refuse to speak the same language.** The
 window, the split tree, the TUI, the compositor — each measures in its own
@@ -146,9 +136,12 @@ no signal. The patch falls through.
 
 Every dead circuit pointed somewhere.
 
-CEF's framerate wall pushed us to Chromium's Content API. Chromium's scheduler
-contention forced one-process-per-profile. Swift's struct misalignment sent us to
-Rust and `#[repr(C)]`. XPC's complexity drove us to Unix sockets and protobuf.
+CEF's API limitations pushed us to fork Chromium directly. Chromium's scheduler
+contention forced one-process-per-profile. We used XPC for IPC early on because
+we thought we needed it for shared GPU textures — but CALayerHost replaced that
+approach. CALayerHost just needs a layer ID, which is an integer. You can send an
+integer over any socket. XPC is macOS-only. Unix domain sockets work everywhere.
+We dropped XPC the same week we shipped CALayerHost.
 Ghostboard ran on Ghostty — Linux and macOS only. We forked WezTerm instead:
 Windows support on day one, and Rust's ecosystem gives us ratatui and edtui off
 the shelf.

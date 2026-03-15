@@ -1,6 +1,111 @@
 {
-  "generatedAt": "2026-03-15T10:27:28.378Z",
+  "generatedAt": "2026-03-15T13:15:01.645Z",
   "commits": [
+    {
+      "hash": "3e111aeec5268db03ed62c18fa53c29e8df624c4",
+      "message": "Revise blog: XPC dropped for sockets",
+      "body": "XPC was macOS-only glue we didn't need—\nCALayerHost sends just an integer seed.\nA layer ID over any socket flies,\nSo Unix domain won, no platform ties.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T07:19:16-05:00"
+    },
+    {
+      "hash": "f363183daac6f953b058aea88c9b1822aa013596",
+      "message": "Revise blog: soften CEF, remove Swift",
+      "body": "CEF could work — but why fight the API\nWhen you can fork the source and fly?\nSwift's section cut, the story tighter—\nFewer ghosts make the signal brighter.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T07:16:26-05:00"
+    },
+    {
+      "hash": "9f2a59a26016b5e5c540b28dbf0c5bf5e44b62fc",
+      "message": "Change blog author to Max Commits",
+      "body": "Wez Longboard has left the building.\nMax Commits takes the byline now—\nMore commits, more dispatches, more pow.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:59:37-05:00"
+    },
+    {
+      "hash": "cdbe7ebb781ca7963a480f8a27a2ae900a535c29",
+      "message": "Close Issue 753: blog posts",
+      "body": "Two dispatches sent from the wire,\nCypherpunk prose, the terminal's fire.\nThe graveyard mapped, the intro rewired—\nWez Longboard, signing off, inspired.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:54:01-05:00"
+    },
+    {
+      "hash": "4505f666978a04555cc4e7f00cfe2ba82d3cd776",
+      "message": "Impl Issue 753 Experiment 2",
+      "body": "Terminal, meet browser.\nBrowser, meet terminal.\nWez Longboard jacked the signal in—\nCypherpunk voice, monospace grin.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:53:23-05:00"
+    },
+    {
+      "hash": "3356db9c3e35880c393e208b37cdb5c26410387e",
+      "message": "Pass Issue 753 Experiment 1",
+      "body": "Dispatched from the wreckage,\nthe signal came through.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:45:10-05:00"
+    },
+    {
+      "hash": "38c2705a4ae0c75c02ab69822059a66e1574ba47",
+      "message": "Rewrite blog post in cypherpunk voice",
+      "body": "The signal flatlines. The wire is dead.\nWez Longboard reports from the wreckage instead.\nCircuits rewired, coordinates reforged—\nEvery dead end a dispatch from the gorge.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:44:05-05:00"
+    },
+    {
+      "hash": "6e5f20f28600a1144d3ff226a3d01536c44125a2",
+      "message": "Fix timeline in blog post",
+      "body": "Six months? We've barely been alive\nFor ten weeks — let's not overdrive.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:35:15-05:00"
+    },
+    {
+      "hash": "bd70c713c5b1c994b9485380428f9aeb481bf634",
+      "message": "Impl Issue 753 Experiment 1",
+      "body": "How not to build a terminal browser:\nTry CEF, try Swift, try Electron's patches—\nHit every wall, light every match,\nThen write it down so others can watch\nThe graveyard glow with arrows attached.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:32:07-05:00"
+    },
+    {
+      "hash": "15673071b188f48c759d3bc1d6cad66d32057c5d",
+      "message": "Rename Issue 753 blog post title",
+      "body": "\"How Not to Build a Terminal Browser\"—\nA title that cuts like a hacksaw through copper.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:27:01-05:00"
+    },
+    {
+      "hash": "128eb450577febc39b76626beb5a1485076b5616",
+      "message": "Design Issue 753 Experiment 1",
+      "body": "Ghostboard's ghost was laid to rest—\nNot for flaws, but Windows is the test.\nRust's crates outnumber Zig's by miles,\nAnd three-act blogs deserve good styles.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:24:41-05:00"
+    },
+    {
+      "hash": "3503c40b66842038f639b966362c44312175f5d1",
+      "message": "Add Issue 753: blog post on failures",
+      "body": "Seven hundred issues, fifty-plus dead ends,\nCEF at 31fps, Chromium that bends.\nEvery wrong turn taught us where to go—\nNow let's write it up so others know.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:20:07-05:00"
+    },
+    {
+      "hash": "5392a7319ad256af2b849ed9d99725ffed5bb0a6",
+      "message": "Close Issue 752: scroll inactive pane",
+      "body": "The wheel once asked, \"Who's focused here?\"\nWe said, \"Forget it — just check who's near.\"\nAll overlays now hear the call,\nThe cursor decides, focus means nothing at all.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T06:20:00-05:00"
+    },
+    {
+      "hash": "277a93fb01c1178376632006b102d0b5527ed7fc",
+      "message": "Design Issue 752 Experiment 1",
+      "body": "The scroll asked, \"Who's active here?\"\nWe said, \"Who cares? Just check who's near.\"\nHit-test every pane in sight,\nThe one beneath the cursor's right.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T05:56:31-05:00"
+    },
+    {
+      "hash": "d73e5d87fe371cf44ec962260d5f601a076cdbe0",
+      "message": "Add Issue 752: scroll inactive pane",
+      "body": "The wheel spins over a sleeping pane,\nBut the scroll event falls like silent rain.\nOnly the active one gets the feed—\nTime to let all overlays heed.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-15T05:53:55-05:00"
+    },
     {
       "hash": "9949d744a5c2c8a96a414ac5fbc392227da0d4e0",
       "message": "Fix scanline overlay on welcome page",
@@ -245,111 +350,6 @@
       "body": "No download yet, no binary to ship,\nBut the source is there for the taking.\nA bracket link whispers, \"fork this,\"\nTo every cypherpunk in the making.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
       "author": "Ryan X. Charles",
       "date": "2026-03-14T08:57:59-05:00"
-    },
-    {
-      "hash": "79fea41b1104810c444b6e3d0eec781166c6e677",
-      "message": "Update hero copy with cypherpunk tone",
-      "body": "Hack the web, not \"control\" it—\nUnlimited power, keyboard-lit.\nChromium, WebKit, overlaid,\nIn your terminal, unafraid.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T08:56:06-05:00"
-    },
-    {
-      "hash": "462a1f6cfff46d67ce3b003061d76bdb615c1e45",
-      "message": "Add hero tagline to home page",
-      "body": "Root access to the 'net—\nA tagline the homepage now wears.\nNo more jumping to posts,\nFirst we make our boasts,\nThen the content beneath it declares.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T08:50:03-05:00"
-    },
-    {
-      "hash": "e869a76c5a6b633e3fa0500873950077ef034bad",
-      "message": "Add server entry for static file serving",
-      "body": "The SSR handler knew how to render,\nBut static assets? \"Not my agenda.\"\nSo server.ts now checks the disk\nFor CSS and JS — no more risk,\nThen falls through to the Start contender.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T08:38:24-05:00"
-    },
-    {
-      "hash": "2c271a70e9b340d49c6b08e1e63cfb5b805544fe",
-      "message": "Fix CSS not loading in production",
-      "body": "The ?url import pointed nowhere,\nProduction assets lost in thin air.\nA plain import instead—\nThe framework's well-read,\nIt injects the styles with great care.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T08:33:33-05:00"
-    },
-    {
-      "hash": "8ff040dd091118c8ad40868d52abf140b8d1ad85",
-      "message": "Move blog posts into website/blog-posts",
-      "body": "The markdown wandered far from home,\nIn docs/blog it used to roam.\nNow nestled where the website lives,\nNo copy hack the deploy forgives.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T08:29:25-05:00"
-    },
-    {
-      "hash": "66ad31a6a3e8b81b0bb3f70be8429836eb75b084",
-      "message": "Migrate website to TanStack Start",
-      "body": "The server was custom-built, bespoke,\nA Bun SSR artisanal yoke.\nTanStack Start took the wheel,\nNow blog posts reveal\nTheir markdown from disk when invoked.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T08:15:03-05:00"
-    },
-    {
-      "hash": "a47fef42209e40d181bcfb4aec9252b036177212",
-      "message": "Add blog pages with markdown rendering",
-      "body": "Remark parses, rehype highlights,\nKaTeX waits for math-filled nights.\nBlog layout, listing, post by slug—\nProse styled dark in the cypherpunk mug.\nFeeds in the head, the reader delights.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:42:44-05:00"
-    },
-    {
-      "hash": "cbb501e514d3740dfce581e55e928e36526ce876",
-      "message": "Add website CLAUDE.md",
-      "body": "A guide for agents yet to come,\nOn routes and themes and how things run.\nMonospace, brackets, scanline haze—\nAll documented for future days.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:40:02-05:00"
-    },
-    {
-      "hash": "b875ad1a990610a076ac979d410a8be4cf135bde",
-      "message": "Add blog with first post and build pipeline",
-      "body": "A post was born in docs/blog today,\nTOML front matter showed it the way.\nA script reads the markdown, feeds the machine,\nThree feeds pour out — JSON, Atom, RSS stream.\nThe blog has a voice. Let it have its say.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:34:32-05:00"
-    },
-    {
-      "hash": "63d12021d68744c150e32cc16662bc50fb69bfee",
-      "message": "Separate home page from blog page",
-      "body": "Home is home and blog is blog,\nEach deserves its own back-log.\nSlash takes you where the landing lives,\nSlash-blog is where the writing gives.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:24:08-05:00"
-    },
-    {
-      "hash": "0d10417b1e5e94e133f160f4a174d9cf7e8b0b76",
-      "message": "Add site navigation and page routes",
-      "body": "Four brackets in a row they stand,\n>[blog] [commits] [docs] [about] — the band.\nThe root now wraps, the welcome stays free,\nEach page a route in the routing tree.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:23:01-05:00"
-    },
-    {
-      "hash": "4f9df00218975e7c32eea953e9401cbfc1fee7a4",
-      "message": "Remove dot grid background",
-      "body": "The dots were keen but out of line,\nThey clashed with text — a bad design.\nThe scanlines stay, the dots depart,\nSometimes less is better art.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:20:23-05:00"
-    },
-    {
-      "hash": "8c0bcf953ea3424e3cf190eb97b3520f58ffe5f6",
-      "message": "Redesign homepage as cypherpunk",
-      "body": "Monospace glyphs and scanline haze,\nBox-drawing borders, a brutalist phase.\nDot grids behind, no corners round,\n[+] to expand what commits have found.\nThe terminal aesthetic, finally crowned.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:19:33-05:00"
-    },
-    {
-      "hash": "78be669d3401d0ff6523329c1e7290d404e44848",
-      "message": "Fix install all skipping webtui",
-      "body": "Codesign warned of unsealed contents,\nset -e took that as repentance.\nThe script died mid-stride,\nwebtui left outside—\nNow || true grants it safe entrance.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:13:26-05:00"
-    },
-    {
-      "hash": "283f5b97d93995059826497637c9a2cf1382590a",
-      "message": "Add light mode with Tokyo Night Day",
-      "body": "The night was dark, the code was too,\nBut users in the sun had no clue.\nNow Day is default, Night is dark—\nprefers-color-scheme lights the spark.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-14T07:12:29-05:00"
     }
   ]
 }
