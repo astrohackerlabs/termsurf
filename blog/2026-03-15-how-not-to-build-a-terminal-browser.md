@@ -1,135 +1,146 @@
 +++
 title = "How Not to Build a Terminal Browser"
-author = "Ryan X. Charles"
+author = "Wez Longboard"
 date = "2026-03-15"
 +++
 
-We have written 250+ issue documents for TermSurf. Many of them end with
-**Result: Fail**. This is a tour of the graveyard.
+You want to jack the web into your terminal. Full Chromium. GPU-rendered. No
+alt-tab, no context switch. Type `web localhost:3000` and the page is _there_,
+right next to your shell. Sounds simple. It is not simple. We have 250+ issue
+documents that prove it.
 
-## The 31fps Wall
+Many of them end with **Result: Fail**.
 
-We started with CEF — the Chromium Embedded Framework. The idea was simple:
-render web pages off-screen, pipe the pixels into a terminal pane, done. We
-built two generations around this. ts2 ran CEF in-process with WezTerm. ts3
-moved CEF out-of-process and connected it over XPC.
+This is a field report from the wreckage.
 
-Both hit the same wall. CEF's off-screen rendering caps at 31fps on macOS. We
-ran 26 experiments across Issues 325–350. We tried every configuration. We
-profiled the compositor. We hacked the frame callback. Nothing broke through.
-31fps. That is the ceiling. It is a hard limit in CEF's off-screen pipeline and
-no amount of tuning gets past it.
+## The Signal Flatlines at 31fps
 
-26 experiments. Same answer every time. CEF cannot do this.
+We wired up CEF — the Chromium Embedded Framework. Render pages off-screen, pipe
+the pixels into a terminal pane, ship it. Two generations ran on this circuit.
+ts2 embedded CEF in-process. ts3 split it out over XPC.
 
-## The 2fps Catastrophe
+Same flatline. CEF's off-screen rendering caps at 31fps on macOS. We hacked the
+frame callback. Profiled the compositor. Overrode the paint scheduler. Ran 26
+experiments across Issues 325–350. Twenty-six. The signal never broke through.
 
-So we dropped CEF and went straight to the Chromium Content API. No wrapper, no
-framework — raw Chromium internals. ts4 was the proof of concept. One browser
-profile, one process, 60fps. It worked.
+31fps is not a bottleneck. It is a wall. Hardcoded in CEF's off-screen pipeline.
+No patch, no flag, no trick gets past it.
 
-Then we added a second profile.
+We pulled the plug on CEF.
 
-2fps. Both panes. We thought it was a bug. Issues 407–421, experiment after
-experiment. We applied Electron's throttling patches — all 147 of them. Could
-not even build: they require the entire Electron dependency tree, Node.js
-included. We applied just the three throttling patches. They compiled. They had
-zero effect. The code paths they target — `Hide()`, `WasOccluded()` — are never
-called in our layout.
+## Two Profiles, Two Frames Per Second
 
-Issue 621 finally isolated it. The bottleneck is JavaScript execution on the
-Blink main thread. Two `BrowserContext` instances sharing one process contend on
-the JS scheduler. CSS animations? 60fps. `requestAnimationFrame`? 2fps. Even a
-trivial 30-line rAF loop triggers it.
+Dropped down to raw Chromium internals. The Content API. No wrapper, no
+framework — bare metal. ts4 proved the concept. One profile, one process, 60fps.
+Clean signal.
 
-This is not a bug. It is an architectural constraint of Chromium. Two profiles in
-one process will never render JavaScript at 60fps simultaneously. The only fix is
-one process per profile.
+Then we spawned a second profile in the same process.
 
-## The Swift Memory Layout Crash
+2fps. Both panes. The whole system seized.
 
-Before Rust, we tried Swift. Swift's class memory model does not produce
-C-compatible struct layouts. CEF validates `base.size` from the raw struct
-pointer on every callback. Swift structs do not match.
+We thought it was a bug. Fourteen issues. We intercepted Electron's throttling
+patches — all 147. Could not build: they depend on the entire Electron tree,
+Node.js and 85 sub-patches included. Applied just the three bypass patches. They
+compiled. Zero effect. The code paths they target — `Hide()`, `WasOccluded()` —
+never fire in our layout. Dead wires.
 
-`[FATAL] CefApp_0_CToCpp called with invalid version -1`
+Issue 621 cracked it open. The contention is on Blink's main thread. Two
+`BrowserContext` instances in one process fight over the JavaScript scheduler.
+CSS animations? 60fps. A single `requestAnimationFrame` loop? 2fps. A trivial
+30-line rAF loop is enough to trigger it.
 
-One line. Fatal. No workaround. Rust's `#[repr(C)]` guarantees C layout. We
-rewrote the bindings in Rust the same week.
+Not a bug. A constraint. Baked into Chromium's architecture. Two JS runtimes in
+one process will never hit 60fps simultaneously.
 
-## The Coordinate Math Gauntlet
+The only fix: one process per profile. Fork the process. Isolate the scheduler.
+That is the law now.
 
-Every time we position a browser overlay in a split pane, we get the math wrong
-on the first try. Issue 727 — placing a second webview — took seven experiments.
+## Swift Crashes on Contact
 
-Experiment 2: doubled the y-offset by mixing window-level and pane-level
-coordinates. Experiment 3: overlay rendered beyond the visible window because
-`contentsScale` defaulted to 1.0 on Retina (should be 2.0). Experiment 5: fixed
-the scale but forgot the URL bar offset. Experiment 6: off by half a cell
-height because pane borders were not accounted for.
+Before Rust, we tried Swift. CEF's C API validates struct layouts on every
+callback — reads `base.size` from the raw pointer. Swift's class memory model
+does not produce C-compatible layouts. The structs do not align.
 
-Seven tries to place a rectangle at the right coordinates. The formula is not
-complicated — it is `origin + border + pane_offset + cell_offset`, divided by
-the scale factor. But every term in that formula comes from a different system
-(the window, the split tree, the TUI protocol, the GPU layer) and they all use
-different coordinate spaces.
+```
+[FATAL] CefApp_0_CToCpp called with invalid version -1
+```
 
-Issue 749 was the same story. Browser overlays flashed on the wrong side of a
-split pane because the CALayerHost was created before the render pass knew where
-to put it. Two experiments. First one made it worse. Second one deferred
-creation to the render pass, where the coordinates are already correct.
+One line. Connection severed. No workaround.
 
-## The Fix You Write Twice
+Rust's `#[repr(C)]` guarantees the layout. We rewired the bindings in Rust the
+same week. Swift never touched CEF again.
 
-Issue 639: `target="_blank"` links silently fail because Chromium creates an
-orphaned window. We overrode `IsWebContentsCreationOverridden`, posted a
-deferred navigation, done. Three methods in `shell.cc`. Worked perfectly.
+## Four Systems, Four Coordinate Spaces
+
+Every browser overlay needs pixel coordinates. The window manager has coordinates.
+The split tree has coordinates. The TUI protocol has coordinates. The GPU
+compositor has coordinates. They all disagree.
+
+Issue 727 — placing a second webview — took seven experiments. Experiment 2
+doubled the y-offset by mixing window-level and pane-level signals. Experiment 3
+rendered the overlay beyond the visible window because `contentsScale` defaulted
+to 1.0 on Retina — should be 2.0, every pixel doubled. Experiment 5 fixed the
+scale but forgot the URL bar offset. Experiment 6: off by half a cell height.
+Border widths.
+
+Seven attempts to place a rectangle. The formula is four terms from four systems
+that do not share a coordinate space. Every positioning feature starts wrong.
+
+Issue 749: overlays flashed on the wrong side of a split pane. The CALayerHost
+was forged before the render pass knew where to place it. First fix made it
+worse — the overlay appeared at 0,0. Second fix deferred creation to the render
+pass, where the coordinates already exist. Born in place. No flash.
+
+## The Patch That Fell Through the Wire
+
+Issue 639: `target="_blank"` links open nothing. Chromium spawns an orphaned
+window that no one can see. We overrode `IsWebContentsCreationOverridden`,
+intercepted the creation, posted a deferred navigation back to the source tab.
+Three methods in `shell.cc`. Signal restored.
 
 Issue 708: refactored the Chromium fork. Renamed directories. The Issue 639
-commits were not carried forward. The fix vanished.
+commits did not carry forward. The override vanished. Links broke again.
+Silently. No crash, no error — just nothing happening when you click.
 
-Issue 750: re-applied the same three methods to the new file paths. Same code,
-same fix, six months later. The lesson is not about `target="_blank"`. The
-lesson is that refactoring can silently erase working code, and if you do not
-have a test that catches it, you will not notice until a user clicks a link and
-nothing happens.
+Issue 750: re-applied the same three methods to the new paths. Same patch, weeks
+later. If the test suite does not cover a behavior, a refactor can erase it and
+you will not know until someone clicks a link and the wire is dead.
 
-## What the Graveyard Taught Us
+## The Map Inside the Graveyard
 
-The failures are not random. They cluster.
+The failures are not random. They cluster. And the clusters draw a map.
 
-**Performance walls are not bugs.** CEF's 31fps. Chromium's 2fps with
-multi-profile JS. These are architectural constraints baked into the engines. You
-cannot tune your way past them. You have to change the architecture. We changed
-it three times.
+**Performance walls are not bugs.** CEF's 31fps. Chromium's 2fps. These are
+constraints forged into the engines. You cannot tune past them. You have to
+rewire the architecture. We rewired it three times.
 
-**Coordinate math fails because the coordinates come from everywhere.** The
-window manager, the split tree, the TUI, the GPU compositor — they all have
-opinions about where things are, and they measure in different units. Every
-overlay positioning feature requires multiple experiments because the formula
-touches four systems that do not share a coordinate space.
+**Coordinates fail because four systems refuse to speak the same language.** The
+window, the split tree, the TUI, the compositor — each measures in its own
+units. Every overlay feature requires multiple experiments because the formula
+crosses four borders.
 
-**Cross-process is hard.** IPC ordering, re-entrancy, type mismatches across
-language boundaries. A `u32` where macOS expects a `u64` crashes the scroll
-handler. A RefCell borrow held during an event dispatch panics when CEF's
-message loop re-enters. These are not deep problems — they are papercuts that
-add up.
+**Cross-process is a minefield.** IPC ordering. Re-entrancy. A `u32` where macOS
+expects a `u64` crashes the scroll handler at runtime. A RefCell borrow held
+during an event dispatch panics when CEF's message loop re-enters. These are not
+deep problems. They are a thousand small wires that must all connect.
 
-**Refactoring erases fixes.** If the test suite does not cover a behavior, a
-rename can delete it. We lost `target="_blank"` handling for weeks.
+**Refactoring severs working circuits.** Rename a directory, lose a fix. No test,
+no signal. The patch falls through.
 
-## What the Failures Built
+## What the Wreckage Built
 
-Every dead end pointed somewhere. CEF's framerate ceiling pushed us to Chromium's
-Content API. Chromium's multi-profile contention forced one-process-per-profile.
-Swift's struct layouts sent us to Rust. XPC's complexity led to Unix sockets and
-protobuf. Ghostboard's macOS-only limitation led to Wezboard, where WezTerm
-already runs on Windows and Rust's ecosystem gives us ratatui and edtui off the
-shelf.
+Every dead circuit pointed somewhere.
 
-TermSurf today is a protocol. 30+ message types over Unix sockets. Any terminal,
-any browser engine, any TUI. One process per profile. CALayerHost for zero-copy
-GPU compositing. The architecture is clean because we tried every wrong
+CEF's framerate wall pushed us to Chromium's Content API. Chromium's scheduler
+contention forced one-process-per-profile. Swift's struct misalignment sent us to
+Rust and `#[repr(C)]`. XPC's complexity drove us to Unix sockets and protobuf.
+Ghostboard ran on Ghostty — Linux and macOS only. We forked WezTerm instead:
+Windows support on day one, and Rust's ecosystem gives us ratatui and edtui off
+the shelf.
+
+TermSurf today is a protocol. 30+ message types over Unix domain sockets. Any
+terminal. Any browser engine. Any TUI. One process per profile. CALayerHost for
+zero-copy GPU compositing. The architecture is clean because we tried every wrong
 architecture first.
 
 250+ issues. The graveyard is large. But every headstone has an arrow on it, and
