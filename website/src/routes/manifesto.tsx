@@ -33,15 +33,16 @@ function ManifestoPage() {
           We are not civilians. We are root. We need to inspect every request.
           Override every header. Pipe responses into scripts. Open DevTools in a
           split pane while tailing logs in another. We need the web the same way
-          we need the filesystem — raw, fast, and under complete control.
+          we need the filesystem — raw, fast, and under <em>our</em> complete
+          control.
         </p>
         <p>
-          The browser we need does not exist as a standalone app. The app is the
-          wrong container. The right container is the terminal — where
-          everything else already lives. The browser should be a pane. It should
-          sit next to the shell, next to the editor, next to the logs. It should
+          The browser we need does not exist as a standalone app. The window is
+          the wrong container. The right container is the terminal — where
+          everything else already lives. The browser should be TUI. It should
+          sit in the shell, next to the editor, next to the logs. It should
           resize with a keystroke. It should speak protobuf over a Unix socket.
-          It should be a component in the system, not a system unto itself.
+          It should be a component in the system, not walled garden.
         </p>
         <p>
           So we built TermSurf. Full Chromium. Full GPU rendering. Zero-copy
