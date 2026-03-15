@@ -1,6 +1,20 @@
 {
-  "generatedAt": "2026-03-14T20:41:15.858Z",
+  "generatedAt": "2026-03-14T20:48:32.738Z",
   "commits": [
+    {
+      "hash": "8d88d3dd0e0b6925f9020037af02e31ae9b9bbca",
+      "message": "Close Issue 751: blog top level + deploy",
+      "body": "Build it, ship it, watch it fly—\nOne script to rule the deploy sky.\nBlog posts roam free at repo root,\nAnd docs will follow the same route.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-14T15:48:16-05:00"
+    },
+    {
+      "hash": "535822edd954f598cc13445740f6f1f8d63fba4c",
+      "message": "Impl Issue 751 Experiment 1",
+      "body": "The blog escaped its nested cage,\nMoved to the root — a wider stage.\nDocker's context grew to see\nBoth website/ and blog/ — now free.\nNext stop: docs on every page.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+      "author": "Ryan X. Charles",
+      "date": "2026-03-14T15:44:15-05:00"
+    },
     {
       "hash": "b669e3ddd8d4ba4d174a351e2bdf9e9027db1ef7",
       "message": "Design Issue 751 Experiment 1",
@@ -336,20 +350,6 @@
       "body": "Two issues, one overlay, zero bugs remain.\n746 gave paint_pass the reins,\n747 stopped the clobber chain.\nNow every screen, every split, every pane—\nThe overlay lands where it should. No strain.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
       "author": "Ryan X. Charles",
       "date": "2026-03-13T07:59:31-05:00"
-    },
-    {
-      "hash": "91f056f90e8334e7c72631859c9d2f8ee4a699c4",
-      "message": "Issue 747: fix overlay split repositioning",
-      "body": "Each frame swap clobbered the overlay's place,\nA split-unaware formula set the wrong space.\nNow it only positions on birth—\nAfter that, paint_pass has worth,\nAnd the second screen shows the right face.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-13T07:53:47-05:00"
-    },
-    {
-      "hash": "95bb9b4cf0f8fbb5020be62c9f3094d16565fc69",
-      "message": "Issue 747: design experiment 3",
-      "body": "Don't touch the function, move the call—\nFirst creation needs it, swaps need none at all.\nOne branch to build, one branch to swap,\nOnly the first should position therop.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
-      "author": "Ryan X. Charles",
-      "date": "2026-03-13T07:49:43-05:00"
     }
   ]
 }

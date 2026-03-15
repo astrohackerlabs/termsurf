@@ -155,7 +155,7 @@ body {
   margin: 1.5rem 0;
 }
 
-body::after {
+.scanline-overlay::after {
   content: "";
   position: fixed;
   inset: 0;

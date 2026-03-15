@@ -33,7 +33,7 @@ function RootComponent() {
         {isWelcome ? (
           <Outlet />
         ) : (
-          <div className="max-w-3xl mx-auto px-4 py-6">
+          <div className="scanline-overlay max-w-3xl mx-auto px-4 py-6">
             <Header />
             <main>
               <Outlet />
