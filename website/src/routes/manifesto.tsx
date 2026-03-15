@@ -54,7 +54,13 @@ function ManifestoPage() {
         <p>
           We are <em>root</em>.
         </p>
-        <p className="pt-2">— Max Commits, San Tokyo, Hawaii</p>
+        <p className="pt-2">
+          — Max Commits
+          <br />
+          CEO of TermSurf
+          <br />
+          San Tokyo, Hawaii
+        </p>
         <p className="pt-2">
           <a
             href="https://github.com/termsurf/termsurf"
