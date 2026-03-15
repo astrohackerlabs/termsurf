@@ -23,14 +23,14 @@ function ManifestoPage() {
           Then there is the browser.
         </p>
         <p>
-          Browsers are designed for the lowest common denominator. They hide the
+          Browsers are designed for civilians. They hide the
           network. They hide the DOM. They wrap everything in a GUI built for
           people who do not know what a process is. Chrome has three billion
           users. It is optimized for all of them. It is optimized for none of
           them.
         </p>
         <p>
-          We are not the lowest common denominator. We need to inspect every
+          We are not civilians. We need to inspect every
           request. Override every header. Pipe responses into scripts. Open
           DevTools in a split pane while tailing logs in another. We need the web
           the same way we need the filesystem — raw, fast, and under complete
