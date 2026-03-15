@@ -116,7 +116,7 @@ message loop re-enters. These are not deep problems — they are papercuts that
 add up.
 
 **Refactoring erases fixes.** If the test suite does not cover a behavior, a
-rename can delete it. We lost `target="_blank"` handling for six months.
+rename can delete it. We lost `target="_blank"` handling for weeks.
 
 ## What the Failures Built
 
