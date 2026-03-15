@@ -116,3 +116,36 @@ scripts/png-to-webp.sh assets/screenshot2.png website/public/images/screenshot2.
 
 Verify the output file exists and is a valid WebP image. Compare file sizes —
 WebP should be smaller than the PNG.
+
+### Experiment 3: Add screenshot to homepage
+
+#### Description
+
+Add the WebP screenshot to the homepage as a hero image, right after the tagline
+and divider, before the "Latest Post" section. Full content width. No caption,
+no border-radius, no effects. Just the image.
+
+#### Changes
+
+**`website/src/routes/index.tsx`**
+
+After the divider `<div>` (~line 50–52), add a new section with the screenshot:
+
+```tsx
+<section className="mb-8">
+  <img
+    src="/images/screenshot2.webp"
+    alt="TermSurf — a browser pane alongside terminal panes"
+    className="w-full"
+  />
+</section>
+```
+
+#### Verification
+
+```bash
+cd website && bun run dev
+```
+
+Visit `http://localhost:3000`. The screenshot should appear below the tagline
+and above the latest post. Full width, no distortion.
