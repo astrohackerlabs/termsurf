@@ -60,3 +60,59 @@ Change the image reference on line 12 from `assets/screenshot.png` to
 #### Verification
 
 View the README on GitHub (or locally) and confirm the new screenshot appears.
+
+### Experiment 2: PNG to WebP conversion script
+
+#### Description
+
+Create `scripts/png-to-webp.sh` that converts any PNG file to lossless WebP. The
+script takes an input path and an output path. It uses a small TypeScript helper
+that calls `sharp` (already a dependency in `website/`).
+
+#### Changes
+
+**`scripts/png-to-webp.sh`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+  echo "Usage: $0 <input.png> <output.webp>"
+  exit 1
+fi
+
+INPUT="$1"
+OUTPUT="$2"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
+bun "$REPO_DIR/website/scripts/png-to-webp.ts" "$INPUT" "$OUTPUT"
+```
+
+**`website/scripts/png-to-webp.ts`**
+
+```typescript
+import sharp from "sharp";
+
+const input = process.argv[2];
+const output = process.argv[3];
+
+if (!input || !output) {
+  console.error("Usage: bun png-to-webp.ts <input.png> <output.webp>");
+  process.exit(1);
+}
+
+await sharp(input).webp({ lossless: true }).toFile(output);
+console.log(`  ${input} → ${output}`);
+```
+
+#### Verification
+
+```bash
+scripts/png-to-webp.sh assets/screenshot2.png website/public/images/screenshot2.webp
+```
+
+Verify the output file exists and is a valid WebP image. Compare file sizes —
+WebP should be smaller than the PNG.
