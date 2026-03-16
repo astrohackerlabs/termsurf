@@ -44,7 +44,6 @@
 | 303 | [TermSurf 3.0 XPC Architecture](0000303-xpc/README.md)                                                       | 2026-01-25 | 2026-03-16 |
 | 302 | [TermSurf 3.0 Webview Rendering](0000302-webview/README.md)                                                  | 2026-01-24 | 2026-03-16 |
 | 301 | [TermSurf 3.0 Architecture](0000301-architecture/README.md)                                                  | 2026-01-24 | 2026-03-16 |
-| 3   | [termsurf.com Website](0000003-website/README.md)                                                            | 2026-01-10 | 2026-03-16 |
 | 210 | [TermSurf 2.0 Architecture](0000210-wezterm-analysis/README.md)                                              | 2026-01-12 | 2026-03-16 |
 | 209 | [Web Command](0000209-web/README.md)                                                                         | 2026-01-22 | 2026-03-16 |
 | 208 | [CEF Browser Profiles](0000208-profile/README.md)                                                            | 2026-01-24 | 2026-03-16 |
@@ -55,7 +54,6 @@
 | 202 | [CEF Integration: Incremental Plan](0000202-cef-mvp/README.md)                                               | 2026-01-17 | 2026-03-16 |
 | 201 | [CEF Integration](0000201-cef/README.md)                                                                     | 2026-01-01 | 2026-03-16 |
 | 200 | [TermSurf Architecture](0000200-architecture/README.md)                                                      | 2026-01-01 | 2026-03-16 |
-| 2   | [Merging Upstream Repositories](0000002-merge-upstream/README.md)                                            | 2026-01-10 | 2026-03-16 |
 | 108 | [WebView Implementation (TermSurf 1.x)](0000108-webview/README.md)                                           | 2026-01-10 | 2026-03-16 |
 | 107 | [Handling target="_blank" Links (TermSurf 1.x)](0000107-target-blank/README.md)                              | 2026-01-06 | 2026-03-16 |
 | 106 | [Release Procedure (TermSurf 1.x)](0000106-release/README.md)                                                | 2026-01-06 | 2026-03-16 |
@@ -65,7 +63,6 @@
 | 102 | [Console Bridging and JavaScript API (TermSurf 1.x)](0000102-console/README.md)                              | 2026-01-03 | 2026-03-16 |
 | 101 | [Build Guide (TermSurf 1.x)](0000101-build/README.md)                                                        | 2026-01-06 | 2026-03-16 |
 | 100 | [Bookmarks Implementation Plan (TermSurf 1.x)](0000100-bookmarks/README.md)                                  | 2026-01-04 | 2026-03-16 |
-| 1   | [Terminal-Browser Hybrids](0000001-competitors/README.md)                                                    | 2026-01-06 | 2026-03-16 |
 | 753 | [Blog post — everything that didn't work](0000753-blog-failures/README.md)                                   | 2026-03-15 | 2026-03-15 |
 | 752 | [Scroll webview in inactive pane](0000752-scroll-inactive-pane/README.md)                                    | 2026-03-15 | 2026-03-15 |
 | 751 | [Move blog posts to top level](0000751-blog-top-level/README.md)                                             | 2026-03-14 | 2026-03-14 |
@@ -276,3 +273,6 @@
 | 309 | [TS3-9: Dynamic Webview Resize (Continued)](0000309-resize/README.md)                                        | 2026-01-29 | 2026-03-06 |
 | 306 | [TermSurf 3.0 Resize Support](0000306-resize/README.md)                                                      | 2026-01-27 | 2026-03-06 |
 | 206 | [CEF MVP5: Copy+Paste](0000206-cef-mvp5/README.md)                                                           | 2026-01-20 | 2026-03-06 |
+| 3   | [termsurf.com Website](0000003-website/README.md)                                                            | 2026-01-10 | 2026-03-16 |
+| 2   | [Merging Upstream Repositories](0000002-merge-upstream/README.md)                                            | 2026-01-10 | 2026-03-16 |
+| 1   | [Terminal-Browser Hybrids](0000001-competitors/README.md)                                                    | 2026-01-06 | 2026-03-16 |
