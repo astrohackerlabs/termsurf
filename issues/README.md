@@ -2,9 +2,10 @@
 
 ## Open
 
-| #   | Issue                                                             | Opened     |
-| --- | ----------------------------------------------------------------- | ---------- |
-| 756 | [Surfari — WebKit engine for TermSurf](0000756-surfari/README.md) | 2026-03-16 |
+| #   | Issue                                                                                          | Opened     |
+| --- | ---------------------------------------------------------------------------------------------- | ---------- |
+| 756 | [Surfari — WebKit engine for TermSurf](0000756-surfari/README.md)                              | 2026-03-16 |
+| 758 | [TUI processes messages for all tabs, not just its own](0000758-tui-message-routing/README.md) | 2026-03-16 |
 
 ## Closed
 
