@@ -37,3 +37,77 @@ duplicate wheel event if the raw scroll was already forwarded to a browser.
 Find why the presence of browser overlays interferes with scroll event delivery
 to terminal panes and fix it. The scroll path must work correctly whether zero,
 one, or many browser overlays are open.
+
+## Experiments
+
+### Experiment 1: Debug logging to diagnose the hit test
+
+#### Description
+
+Add `log::info!` lines to the scroll forwarding path to see exactly what happens
+on each scroll event: which panes are candidates, what their overlay bounds are,
+what cursor coordinates are being tested, and whether the hit test matches. This
+will immediately reveal whether the bug is a false-positive hit test, a
+coordinate mismatch, or something else.
+
+#### Where logs go
+
+Wezboard writes logs to a file, not stdout/stderr. The log file is at:
+
+```
+~/.local/share/termsurf/wezboard/wezboard-gui-log-{pid}.txt
+```
+
+To watch logs in real time while testing:
+
+```bash
+tail -f ~/.local/share/termsurf/wezboard/wezboard-gui-log-*.txt
+```
+
+The log level defaults to `info`. Override with `WEZBOARD_LOG` env var if
+needed.
+
+#### Changes
+
+**`wezboard/wezboard-gui/src/termsurf/input.rs`**
+
+1. In `try_forward_scroll_any_pane()`, after collecting candidates, log the
+   candidate count and each pane's overlay bounds:
+
+   ```rust
+   log::info!(
+       "scroll_any_pane: cursor=({},{}) candidates={}",
+       coords.x, coords.y, candidates.len()
+   );
+   ```
+
+2. In `try_forward_raw_scroll()`, log when the hit test matches AND when it
+   misses, including the overlay bounds:
+
+   ```rust
+   log::info!(
+       "scroll hit_test: pane={} overlay=({},{},{},{}) cursor=({},{}) → {}",
+       pane_id, ox, oy, ow, oh, mx, my, matched
+   );
+   ```
+
+3. In `hit_test_overlay_at()`, add the same overlay bounds to the log.
+
+**`wezboard/wezboard-gui/src/termwindow/mouseevent.rs`**
+
+4. At the `raw_scroll_consumed` suppression check (~line 657), log when a wheel
+   event is suppressed:
+
+   ```rust
+   log::info!("VertWheel/HorzWheel SUPPRESSED by raw_scroll_consumed");
+   ```
+
+#### Verification
+
+1. Build: `scripts/build.sh wezboard`
+2. Open Wezboard, open a browser overlay in one pane, open neovim in another
+3. Watch the log:
+   `tail -f ~/.local/share/termsurf/wezboard/wezboard-gui-log-*.txt`
+4. Scroll over neovim and observe the log output
+5. The logs will show whether the hit test is matching falsely, what coordinates
+   are involved, and whether the wheel event is being suppressed
