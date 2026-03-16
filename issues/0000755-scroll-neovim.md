@@ -105,9 +105,31 @@ needed.
 #### Verification
 
 1. Build: `scripts/build.sh wezboard`
-2. Open Wezboard, open a browser overlay in one pane, open neovim in another
-3. Watch the log:
-   `tail -f ~/.local/share/termsurf/wezboard/wezboard-gui-log-*.txt`
-4. Scroll over neovim and observe the log output
+2. Run Wezboard from the terminal to capture stdout/stderr:
+   `wezboard/target/debug/wezboard-gui 2>&1 | tee /tmp/wezboard-scroll.log`
+3. Open a browser overlay in one tab, open neovim in another tab
+4. Scroll over neovim and observe stdout output
 5. The logs will show whether the hit test is matching falsely, what coordinates
    are involved, and whether the wheel event is being suppressed
+
+**Result:** Fail
+
+The experiment design was wrong about where logs go. Wezboard's `log::info!`
+writes to a log file
+(`~/.local/share/termsurf/wezboard/wezboard-gui-log-*.txt`), not to
+stdout/stderr. The debug logging was added correctly but could not be observed
+at the expected location. The user had to capture stdout/stderr directly to see
+the output.
+
+The logging did reveal the root cause: **pane=2** (a webview on an inactive tab)
+has overlay bounds `(26,95,2054,1980)` that cover nearly the entire window. The
+hit test matches this invisible overlay and consumes scroll events intended for
+neovim. The bug is that `try_forward_scroll_any_pane` does not filter out panes
+on inactive tabs.
+
+#### Conclusion
+
+The hit test iterates all panes with `ca_layer_host != 0`, including panes on
+inactive tabs. An overlay on a hidden tab still has bounds that overlap with the
+visible tab's content area, causing false-positive hits. The fix: filter
+candidates to only include panes on the currently active tab.
