@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-03-16"
+closed = "2026-03-16"
 +++
 
 # Issue 757: Disable overlay fade animation on tab switch
@@ -74,8 +75,24 @@ unsafe {
 scripts/build.sh wezboard
 ```
 
-| # | Test                         | Steps                                  | Expected                      |
-| - | ---------------------------- | -------------------------------------- | ----------------------------- |
-| 1 | Tab switch hides instantly   | Open webview, switch to another tab    | Overlay disappears instantly  |
-| 2 | Tab switch shows instantly   | Switch back to webview tab             | Overlay appears instantly     |
-| 3 | No regression on positioning | Split pane with webview, resize window | Overlay repositions correctly |
+| #   | Test                         | Steps                                  | Expected                      |
+| --- | ---------------------------- | -------------------------------------- | ----------------------------- |
+| 1   | Tab switch hides instantly   | Open webview, switch to another tab    | Overlay disappears instantly  |
+| 2   | Tab switch shows instantly   | Switch back to webview tab             | Overlay appears instantly     |
+| 3   | No regression on positioning | Split pane with webview, resize window | Overlay repositions correctly |
+
+**Result:** Pass
+
+All three tests pass. Overlays appear and disappear instantly.
+
+#### Conclusion
+
+Wrapping `setHidden:` in a `CATransaction` with `setDisableActions: YES`
+disables the implicit fade animation. Same pattern used everywhere else in
+`conn.rs`.
+
+## Conclusion
+
+The overlay fade was caused by CoreAnimation implicitly animating the `hidden`
+property change. Wrapping it in a `CATransaction` with disabled actions fixes it
+— one line of the same pattern already used throughout the file.

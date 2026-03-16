@@ -67,6 +67,8 @@ sorted_closed=$(echo -e "$closed_rows" | sort -r -t$'\t' -k1 | cut -f2-)
   fi
 } > "$OUTPUT"
 
+prettier --write --prose-wrap always --print-width 80 "$OUTPUT" > /dev/null 2>&1
+
 open_count=$(echo -e "$open_rows" | sed '/^$/d' | wc -l | tr -d ' ')
 closed_count=$(echo "$sorted_closed" | sed '/^$/d' | wc -l | tr -d ' ')
 echo "  issues/README.md: ${open_count} open, ${closed_count} closed"

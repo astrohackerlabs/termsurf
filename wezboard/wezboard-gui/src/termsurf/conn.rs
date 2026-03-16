@@ -1516,9 +1516,13 @@ pub fn sync_overlay_visibility(active_pane_ids: &HashSet<String>) {
         unsafe {
             use objc2::msg_send;
             use objc2::runtime::Bool;
+            let ca = cls(b"CATransaction\0");
+            let _: () = msg_send![ca, begin];
+            let _: () = msg_send![ca, setDisableActions: Bool::YES];
             let layer = pane.ca_layer_flipped as *mut objc2::runtime::AnyObject;
             let hidden = if is_active { Bool::NO } else { Bool::YES };
             let _: () = msg_send![layer, setHidden: hidden];
+            let _: () = msg_send![ca, commit];
         }
     }
 }

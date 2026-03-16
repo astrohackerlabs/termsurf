@@ -2,15 +2,15 @@
 
 ## Open
 
-| #   | Issue                                                                          | Opened     |
-| --- | ------------------------------------------------------------------------------ | ---------- |
-| 756 | [Surfari — WebKit engine for TermSurf](0000756-surfari/README.md)              | 2026-03-16 |
-| 757 | [Disable overlay fade animation on tab switch](0000757-overlay-fade/README.md) | 2026-03-16 |
+| #   | Issue                                                             | Opened     |
+| --- | ----------------------------------------------------------------- | ---------- |
+| 756 | [Surfari — WebKit engine for TermSurf](0000756-surfari/README.md) | 2026-03-16 |
 
 ## Closed
 
 | #   | Issue                                                                                                        | Opened     | Closed     |
 | --- | ------------------------------------------------------------------------------------------------------------ | ---------- | ---------- |
+| 757 | [Disable overlay fade animation on tab switch](0000757-overlay-fade/README.md)                               | 2026-03-16 | 2026-03-16 |
 | 755 | [Scroll broken in neovim when webviews are open](0000755-scroll-neovim/README.md)                            | 2026-03-16 | 2026-03-16 |
 | 754 | [Screenshot pipeline and homepage hero](0000754-screenshots/README.md)                                       | 2026-03-15 | 2026-03-15 |
 | 753 | [Blog post — everything that didn't work](0000753-blog-failures/README.md)                                   | 2026-03-15 | 2026-03-15 |
@@ -266,7 +266,7 @@
 | 201 | [CEF Integration](0000201-cef/README.md)                                                                     | 2026-01-01 | 2026-01-01 |
 | 200 | [TermSurf Architecture](0000200-architecture/README.md)                                                      | 2026-01-01 | 2026-01-01 |
 | 108 | [WebView Implementation (TermSurf 1.x)](0000108-webview/README.md)                                           | 2026-01-10 | 2026-01-10 |
-| 107 | [Handling target="_blank" Links (TermSurf 1.x)](0000107-target-blank/README.md)                              | 2026-01-06 | 2026-01-06 |
+| 107 | [Handling target="\_blank" Links (TermSurf 1.x)](0000107-target-blank/README.md)                             | 2026-01-06 | 2026-01-06 |
 | 106 | [Release Procedure (TermSurf 1.x)](0000106-release/README.md)                                                | 2026-01-06 | 2026-01-06 |
 | 105 | [libghostty Changes (TermSurf 1.x)](0000105-libghostty/README.md)                                            | 2026-01-04 | 2026-01-04 |
 | 104 | [Keybindings Architecture (TermSurf 1.x)](0000104-keybindings/README.md)                                     | 2026-01-03 | 2026-01-03 |
