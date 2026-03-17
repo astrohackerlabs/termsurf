@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-03-17"
+closed = "2026-03-17"
 +++
 
 # Issue 759: Show link URL on hover
@@ -317,10 +318,32 @@ cd webtui && cargo build
 scripts/build.sh wezboard
 ```
 
-| # | Test                     | Steps                           | Expected                                          |
-| - | ------------------------ | ------------------------------- | ------------------------------------------------- |
-| 1 | Hover shows URL          | Hover mouse over a link         | URL appears in viewport bottom-left border        |
-| 2 | Leave link clears URL    | Move mouse off the link         | Bottom-left text disappears                       |
-| 3 | Different links update   | Move mouse across several links | URL updates to each link's destination            |
-| 4 | Engine label still works | Check viewport bottom-right     | Engine name still shows at bottom-right           |
-| 5 | No bleed across TUIs     | Two TUIs, hover in one          | Only that TUI shows the hover URL (tab_id filter) |
+| #   | Test                     | Steps                           | Expected                                          |
+| --- | ------------------------ | ------------------------------- | ------------------------------------------------- |
+| 1   | Hover shows URL          | Hover mouse over a link         | URL appears in viewport bottom-left border        |
+| 2   | Leave link clears URL    | Move mouse off the link         | Bottom-left text disappears                       |
+| 3   | Different links update   | Move mouse across several links | URL updates to each link's destination            |
+| 4   | Engine label still works | Check viewport bottom-right     | Engine name still shows at bottom-right           |
+| 5   | No bleed across TUIs     | Two TUIs, hover in one          | Only that TUI shows the hover URL (tab_id filter) |
+
+**Result:** Pass
+
+All five tests pass. Hover URL appears in the viewport bottom-left, clears when
+the mouse leaves the link, updates across different links, coexists with the
+engine label at bottom-right, and doesn't bleed across TUIs.
+
+#### Conclusion
+
+The full pipeline works on the first attempt. `UpdateTargetURL` on Shell fires
+the C callback, Roamium serializes it as `TargetUrlChanged`, and the TUI
+displays it via `title_bottom()` on the viewport border.
+
+## Conclusion
+
+Hovering over a link now shows the destination URL in the bottom-left corner of
+the viewport border. The pipeline spans five layers — Chromium's
+`UpdateTargetURL` delegate method, the `libtermsurf_chromium` C library,
+Roamium's protobuf dispatch, the TermSurf protocol (`TargetUrlChanged` message),
+and the TUI's ratatui viewport block. Messages flow directly from Roamium to the
+TUI via the browser socket, bypassing Wezboard entirely. Blink's built-in
+rate-limiting prevents flooding.
