@@ -2,9 +2,10 @@
 
 ## Open
 
-| #   | Issue                                                             | Opened     |
-| --- | ----------------------------------------------------------------- | ---------- |
-| 756 | [Surfari — WebKit engine for TermSurf](0000756-surfari/README.md) | 2026-03-16 |
+| #   | Issue                                                                      | Opened     |
+| --- | -------------------------------------------------------------------------- | ---------- |
+| 756 | [Surfari — WebKit engine for TermSurf](0000756-surfari/README.md)          | 2026-03-16 |
+| 760 | [Add short flags for TUI CLI arguments](0000760-cli-short-flags/README.md) | 2026-03-17 |
 
 ## Closed
 
