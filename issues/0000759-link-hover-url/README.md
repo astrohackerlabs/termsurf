@@ -99,6 +99,11 @@ display. The TUI shows the hover URL in the bottom-left corner of the viewport
 border, using ratatui's `title_bottom()` — the same mechanism already used for
 the engine label (bottom-right) and command error text.
 
+#### Chromium branch
+
+Create `146.0.7650.0-issue-759` from `146.0.7650.0-issue-750` (the most recent
+branch). Add it to the Branches table in `chromium/README.md`.
+
 #### Changes
 
 **1. Chromium: `content/shell/browser/shell.h`**
