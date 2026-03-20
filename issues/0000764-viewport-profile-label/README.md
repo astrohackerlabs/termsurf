@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-03-20"
+closed = "2026-03-20"
 +++
 
 # Issue 764: Move profile label to bottom-right with engine name
@@ -77,9 +78,24 @@ viewport block builder. The `.title_bottom(engine_label...)` line stays.
 cd webtui && cargo build
 ```
 
-| # | Test                  | Steps                             | Expected                                       |
-| - | --------------------- | --------------------------------- | ---------------------------------------------- |
-| 1 | Combined label shows  | Open `web -p work localhost:9616` | Bottom-right shows `👤 work/roamium`           |
-| 2 | Top-right is empty    | Check viewport top-right          | No profile text there                          |
-| 3 | Default profile       | Open `web localhost:9616`         | Bottom-right shows `👤 default/roamium`        |
-| 4 | Hover URL still works | Hover a link                      | Bottom-left shows URL, bottom-right unaffected |
+| #   | Test                  | Steps                             | Expected                                       |
+| --- | --------------------- | --------------------------------- | ---------------------------------------------- |
+| 1   | Combined label shows  | Open `web -p work localhost:9616` | Bottom-right shows `👤 work/roamium`           |
+| 2   | Top-right is empty    | Check viewport top-right          | No profile text there                          |
+| 3   | Default profile       | Open `web localhost:9616`         | Bottom-right shows `👤 default/roamium`        |
+| 4   | Hover URL still works | Hover a link                      | Bottom-left shows URL, bottom-right unaffected |
+
+**Result:** Pass
+
+Combined label shows correctly in the bottom-right, top-right is empty.
+
+#### Conclusion
+
+Removed `profile_title` and its `.title_top()` call, replaced `engine_label`
+with a combined `👤 profile/engine` label. Three lines removed, four added.
+
+## Conclusion
+
+The viewport bottom-right now shows `👤 profile/engine` (e.g.,
+`👤 default/roamium`), combining the profile name and browser engine into a
+single label. The top-right is freed up for future use.

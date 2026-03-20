@@ -2,15 +2,15 @@
 
 ## Open
 
-| #                                                   | Title                                               | Opened     |
-| --------------------------------------------------- | --------------------------------------------------- | ---------- |
-| [0000756](0000756-surfari/README.md)                | Surfari — WebKit engine for TermSurf                | 2026-03-16 |
-| [0000764](0000764-viewport-profile-label/README.md) | Move profile label to bottom-right with engine name | 2026-03-20 |
+| #                                    | Title                                | Opened     |
+| ------------------------------------ | ------------------------------------ | ---------- |
+| [0000756](0000756-surfari/README.md) | Surfari — WebKit engine for TermSurf | 2026-03-16 |
 
 ## Closed
 
 | #                                                             | Title                                                                         | Opened     | Closed     |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0000764](0000764-viewport-profile-label/README.md)           | Move profile label to bottom-right with engine name                           | 2026-03-20 | 2026-03-20 |
 | [0000763](0000763-scroll-initial/README.md)                   | Scroll doesn't work until keyboard pane switch                                | 2026-03-20 | 2026-03-20 |
 | [0000762](0000762-persistent-cookies/README.md)               | Cookies and network state not persisted across restarts                       | 2026-03-19 | 2026-03-20 |
 | [0000761](0000761-browser-label/README.md)                    | Browser engine label missing when using default                               | 2026-03-19 | 2026-03-19 |
