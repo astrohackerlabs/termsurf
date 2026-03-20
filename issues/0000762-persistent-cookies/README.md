@@ -203,3 +203,154 @@ configuration doesn't satisfy. The next experiment should investigate what
 Chrome does differently — there may be additional fields, initialization order,
 or directory creation steps that are required for `file_paths` to work without
 breaking the network stack.
+
+### Experiment 2: Disable cookie encryption and set required params
+
+#### Description
+
+The root cause of Experiment 1's failure is now identified.
+`enable_encrypted_cookies` defaults to `true` in the protobuf definition
+(`network_context.mojom`, line 356). When `file_paths` is set with a
+`cookie_database_name`, the network service tries to create a persistent
+`SQLitePersistentCookieStore` with encryption. But we never provide a
+`cookie_encryption_provider`, so it hits `NOTREACHED()` on macOS
+(`network_context.cc`, line 3131) — a crash that kills the network service.
+
+Without the network service, no HTTP requests succeed, and every page is a white
+screen.
+
+Electron's working implementation (`network_context_service.cc`, lines 46-125)
+reveals the minimum viable configuration:
+
+1. Set `enable_encrypted_cookies = false` (Electron sets this via a fuse flag)
+2. Set `http_cache_enabled = true`
+3. Set `cookie_manager_params` to a new default instance
+4. Set `restore_old_session_cookies = false`
+5. Set `persist_session_cookies = false`
+
+#### Chromium branch
+
+Continue on `146.0.7650.0-issue-762` (the revert from Experiment 1 is the
+current HEAD). After committing, regenerate patches:
+
+```bash
+cd chromium/src
+rm -rf ../../chromium/patches/issue-762/
+git format-patch 146.0.7650.0..HEAD -o ../../chromium/patches/issue-762/
+```
+
+#### Changes
+
+**1. Chromium: `content/libtermsurf_chromium/ts_browser_client.h`**
+
+Add the override declaration (same location as Experiment 1, after
+`OverrideWebPreferences`):
+
+```cpp
+ protected:
+  void ConfigureNetworkContextParamsForShell(
+      BrowserContext* context,
+      network::mojom::NetworkContextParams* context_params,
+      cert_verifier::mojom::CertVerifierCreationParams*
+          cert_verifier_creation_params) override;
+```
+
+Add forward declaration include:
+
+```cpp
+#include "services/network/public/mojom/network_context.mojom-forward.h"
+```
+
+**2. Chromium: `content/libtermsurf_chromium/ts_browser_client.cc`**
+
+Add includes:
+
+```cpp
+#include "content/shell/browser/shell_browser_context.h"
+#include "services/network/public/mojom/network_context.mojom.h"
+```
+
+Add the implementation:
+
+```cpp
+void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+    BrowserContext* context,
+    network::mojom::NetworkContextParams* context_params,
+    cert_verifier::mojom::CertVerifierCreationParams*
+        cert_verifier_creation_params) {
+  // Call base class for user_agent, accept_language, zstd, etc.
+  ShellContentBrowserClient::ConfigureNetworkContextParamsForShell(
+      context, context_params, cert_verifier_creation_params);
+
+  // Persistent cookie/network storage.
+  auto* shell_context = static_cast<ShellBrowserContext*>(context);
+  base::FilePath path = shell_context->GetPath();
+  if (path.empty() || shell_context->IsOffTheRecord())
+    return;
+
+  // Disable cookie encryption — we don't provide an encryption provider,
+  // and the default (true) hits NOTREACHED() on non-Android.
+  context_params->enable_encrypted_cookies = false;
+
+  // Enable HTTP cache.
+  context_params->http_cache_enabled = true;
+
+  // Cookie manager params (required by some code paths).
+  context_params->cookie_manager_params =
+      network::mojom::CookieManagerParams::New();
+
+  // Session cookie behavior.
+  context_params->restore_old_session_cookies = false;
+  context_params->persist_session_cookies = false;
+
+  // Set file paths for persistent storage.
+  context_params->file_paths =
+      network::mojom::NetworkContextFilePaths::New();
+  context_params->file_paths->data_directory =
+      path.Append(FILE_PATH_LITERAL("Network"));
+  context_params->file_paths->unsandboxed_data_path = path;
+  context_params->file_paths->cookie_database_name =
+      base::FilePath(FILE_PATH_LITERAL("Cookies"));
+  context_params->file_paths->http_cache_directory =
+      path.Append(FILE_PATH_LITERAL("Cache"));
+  context_params->file_paths->http_server_properties_file_name =
+      base::FilePath(FILE_PATH_LITERAL("Network Persistent State"));
+  context_params->file_paths->transport_security_persister_file_name =
+      base::FilePath(FILE_PATH_LITERAL("TransportSecurity"));
+  context_params->file_paths->trust_token_database_name =
+      base::FilePath(FILE_PATH_LITERAL("Trust Tokens"));
+}
+```
+
+Key differences from Experiment 1:
+
+- `enable_encrypted_cookies = false` — prevents the `NOTREACHED()` crash
+- `http_cache_enabled = true` — enables the HTTP cache
+- `cookie_manager_params` initialized — required by some code paths
+- `restore_old_session_cookies` and `persist_session_cookies` set explicitly
+- Guard: skip if path is empty or context is off-the-record
+- Uses `FILE_PATH_LITERAL()` macro for cross-platform path strings
+- Includes `transport_security_persister_file_name` and
+  `trust_token_database_name` (matching Electron)
+
+#### Verification
+
+Build Chromium:
+
+```bash
+scripts/build.sh chromium
+```
+
+Start the test server:
+
+```bash
+cd test-html && bun run server.ts
+```
+
+| #   | Test                  | Steps                                                   | Expected                                           |
+| --- | --------------------- | ------------------------------------------------------- | -------------------------------------------------- |
+| 1   | Pages still load      | `web localhost:9616`                                    | Index page renders normally                        |
+| 2   | Cookie test visit 1   | Navigate to `/test-cookie.html`                         | Shows "Visit count: 1"                             |
+| 3   | Cookie test visit 2   | Quit Roamium, reopen, navigate to `/test-cookie.html`   | Shows "Visit count: 2"                             |
+| 4   | Files created on disk | `ls ~/.local/share/termsurf/chromium-profiles/default/` | `Network/`, `Cache/` dirs and `Cookies` file exist |
+| 5   | No regression         | Browse the web normally, navigate, open DevTools        | Everything works as before                         |
