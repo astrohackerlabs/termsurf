@@ -114,12 +114,12 @@ minimal and keeps the fix contained.
 scripts/build.sh wezboard
 ```
 
-| #   | Test                           | Steps                                            | Expected                 |
-| --- | ------------------------------ | ------------------------------------------------ | ------------------------ |
-| 1   | Scroll works on first open     | Open `web localhost:9616`, scroll on a long page | Page scrolls immediately |
-| 2   | Scroll works after kb switch   | Switch pane with keyboard, switch back, scroll   | Page scrolls             |
-| 3   | Scroll works after mouse click | Click another pane, click back, scroll           | Page scrolls             |
-| 4   | Hidden tabs don't scroll       | Open two tabs, scroll on visible tab             | Only visible tab scrolls |
+| # | Test                           | Steps                                            | Expected                 |
+| - | ------------------------------ | ------------------------------------------------ | ------------------------ |
+| 1 | Scroll works on first open     | Open `web localhost:9616`, scroll on a long page | Page scrolls immediately |
+| 2 | Scroll works after kb switch   | Switch pane with keyboard, switch back, scroll   | Page scrolls             |
+| 3 | Scroll works after mouse click | Click another pane, click back, scroll           | Page scrolls             |
+| 4 | Hidden tabs don't scroll       | Open two tabs, scroll on visible tab             | Only visible tab scrolls |
 
 **Result:** Fail
 
@@ -145,3 +145,50 @@ The next experiment should set `visible = true` when the overlay is first
 created — either in `handle_tab_ready` or when `SetOverlay` adds the pane. The
 `PaneFocused` change from this experiment is still useful for the mouse-click
 pane switching case and should be kept.
+
+### Experiment 2: Initialize visible = true in SetOverlay
+
+#### Description
+
+The simplest correct fix: set `visible: true` when the pane is created in the
+`SetOverlay` handler (`conn.rs:527`). The TUI only sends `SetOverlay` for the
+active pane — the one the user is looking at. It should be visible from the
+start. When the user switches tabs later, `sync_overlay_visibility` (from
+`WindowInvalidated` or `PaneFocused` via Experiment 1) will set the old tab's
+overlay to `visible = false`.
+
+Same for `SetDevtoolsOverlay` at line 652.
+
+Combined with Experiment 1's `PaneFocused` change (already committed), this
+covers both cases: initial open and pane switching.
+
+#### Changes
+
+**1. Wezboard: `wezboard-gui/src/termsurf/conn.rs`**
+
+In the `SetOverlay` handler (~line 527), change:
+
+```rust
+visible: false,
+```
+
+to:
+
+```rust
+visible: true,
+```
+
+Same change in the `SetDevtoolsOverlay` handler (~line 652).
+
+#### Verification
+
+```bash
+scripts/build.sh wezboard
+```
+
+| # | Test                           | Steps                                            | Expected                 |
+| - | ------------------------------ | ------------------------------------------------ | ------------------------ |
+| 1 | Scroll works on first open     | Open `web localhost:9616`, scroll on a long page | Page scrolls immediately |
+| 2 | Scroll works after kb switch   | Switch pane with keyboard, switch back, scroll   | Page scrolls             |
+| 3 | Scroll works after mouse click | Click another pane, click back, scroll           | Page scrolls             |
+| 4 | Hidden tabs don't scroll       | Open two tabs, scroll on visible tab             | Only visible tab scrolls |
