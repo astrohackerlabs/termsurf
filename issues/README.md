@@ -2,10 +2,11 @@
 
 ## Open
 
-| #                                            | Title                                 | Opened     |
-| -------------------------------------------- | ------------------------------------- | ---------- |
-| [0000756](0000756-surfari/README.md)         | Surfari — WebKit engine for TermSurf  | 2026-03-16 |
-| [0000760](0000760-cli-short-flags/README.md) | Add short flags for TUI CLI arguments | 2026-03-17 |
+| #                                            | Title                                          | Opened     |
+| -------------------------------------------- | ---------------------------------------------- | ---------- |
+| [0000756](0000756-surfari/README.md)         | Surfari — WebKit engine for TermSurf           | 2026-03-16 |
+| [0000760](0000760-cli-short-flags/README.md) | Add short flags for TUI CLI arguments          | 2026-03-17 |
+| [0000763](0000763-scroll-initial/README.md)  | Scroll doesn't work until keyboard pane switch | 2026-03-20 |
 
 ## Closed
 
