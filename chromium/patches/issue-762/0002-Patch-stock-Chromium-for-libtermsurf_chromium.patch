@@ -1,7 +1,7 @@
 From 55316cf48ff78c216ddfa0d5417790767c45e78b Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Thu, 5 Mar 2026 06:52:41 -0600
-Subject: [PATCH 2/5] Patch stock Chromium for libtermsurf_chromium
+Subject: [PATCH 2/6] Patch stock Chromium for libtermsurf_chromium
 
 Eight patches, surgical and tight:
 A hidden window, a constructor's right,

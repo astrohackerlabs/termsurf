@@ -180,9 +180,26 @@ cookie database.
 scripts/build.sh chromium
 ```
 
-| # | Test                  | Steps                                                      | Expected                                           |
-| - | --------------------- | ---------------------------------------------------------- | -------------------------------------------------- |
-| 1 | Cookies persist       | Log into a site, quit Roamium, reopen, check login state   | User remains logged in                             |
-| 2 | Files created on disk | Check `~/.local/share/termsurf/chromium-profiles/default/` | `Network/`, `Cache/`, `Cookies` files exist        |
-| 3 | Multiple profiles     | Log into different sites on two profiles, restart both     | Each profile retains its own cookies independently |
-| 4 | No regression         | Browse normally, navigate, open DevTools                   | Everything works as before                         |
+| #   | Test                  | Steps                                                      | Expected                                           |
+| --- | --------------------- | ---------------------------------------------------------- | -------------------------------------------------- |
+| 1   | Cookies persist       | Log into a site, quit Roamium, reopen, check login state   | User remains logged in                             |
+| 2   | Files created on disk | Check `~/.local/share/termsurf/chromium-profiles/default/` | `Network/`, `Cache/`, `Cookies` files exist        |
+| 3   | Multiple profiles     | Log into different sites on two profiles, restart both     | Each profile retains its own cookies independently |
+| 4   | No regression         | Browse normally, navigate, open DevTools                   | Everything works as before                         |
+
+**Result:** Fail
+
+Catastrophic regression. No web pages load at all — only a white screen. After
+many minutes and multiple restarts, no content ever renders. Setting
+`file_paths` on the network context params breaks the network service entirely.
+The override needs to be reverted.
+
+#### Conclusion
+
+Setting `file_paths` in `ConfigureNetworkContextParamsForShell` broke page
+loading completely. The issue is likely that content shell's network service
+setup has additional requirements or constraints that our minimal `file_paths`
+configuration doesn't satisfy. The next experiment should investigate what
+Chrome does differently — there may be additional fields, initialization order,
+or directory creation steps that are required for `file_paths` to work without
+breaking the network stack.
