@@ -114,9 +114,34 @@ minimal and keeps the fix contained.
 scripts/build.sh wezboard
 ```
 
-| # | Test                           | Steps                                            | Expected                 |
-| - | ------------------------------ | ------------------------------------------------ | ------------------------ |
-| 1 | Scroll works on first open     | Open `web localhost:9616`, scroll on a long page | Page scrolls immediately |
-| 2 | Scroll works after kb switch   | Switch pane with keyboard, switch back, scroll   | Page scrolls             |
-| 3 | Scroll works after mouse click | Click another pane, click back, scroll           | Page scrolls             |
-| 4 | Hidden tabs don't scroll       | Open two tabs, scroll on visible tab             | Only visible tab scrolls |
+| #   | Test                           | Steps                                            | Expected                 |
+| --- | ------------------------------ | ------------------------------------------------ | ------------------------ |
+| 1   | Scroll works on first open     | Open `web localhost:9616`, scroll on a long page | Page scrolls immediately |
+| 2   | Scroll works after kb switch   | Switch pane with keyboard, switch back, scroll   | Page scrolls             |
+| 3   | Scroll works after mouse click | Click another pane, click back, scroll           | Page scrolls             |
+| 4   | Hidden tabs don't scroll       | Open two tabs, scroll on visible tab             | Only visible tab scrolls |
+
+**Result:** Fail
+
+Test 1 fails — scrolling still doesn't work on first open. Tests 2-3 were not
+tested because Test 1 is the primary symptom.
+
+#### Conclusion
+
+The fix addresses pane switching but not the initial open. The timing is wrong:
+`PaneFocused` fires when the terminal pane is created, _before_ the TUI sends
+`SetOverlay` and the browser overlay is added to `st.panes`. By the time the
+overlay exists, `sync_overlay_visibility` has already run and missed it.
+
+The sequence on initial open:
+
+1. Pane created → `PaneFocused` fires → `sync_overlay_visibility` runs → overlay
+   doesn't exist yet in `st.panes` → nothing to set visible
+2. TUI sends `SetOverlay` → overlay created in `st.panes` with `visible = false`
+3. `TabReady` comes back → `BrowserReady` sent to TUI
+4. No further `sync_overlay_visibility` call → `visible` stays `false`
+
+The next experiment should set `visible = true` when the overlay is first
+created — either in `handle_tab_ready` or when `SetOverlay` adds the pane. The
+`PaneFocused` change from this experiment is still useful for the mouse-click
+pane switching case and should be kept.
