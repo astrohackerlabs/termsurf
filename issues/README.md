@@ -2,9 +2,10 @@
 
 ## Open
 
-| #                                    | Title                                | Opened     |
-| ------------------------------------ | ------------------------------------ | ---------- |
-| [0000756](0000756-surfari/README.md) | Surfari — WebKit engine for TermSurf | 2026-03-16 |
+| #                                           | Title                                                   | Opened     |
+| ------------------------------------------- | ------------------------------------------------------- | ---------- |
+| [0000756](0000756-surfari/README.md)        | Surfari — WebKit engine for TermSurf                    | 2026-03-16 |
+| [0000765](0000765-terminfo-crash/README.md) | Wezboard pane crashes on XTGETTCAP (corrupted terminfo) | 2026-03-22 |
 
 ## Closed
 
