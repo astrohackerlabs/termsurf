@@ -50,17 +50,19 @@ scripts to produce the correct sizes and formats.
 Use `assets/termsurf-12.png` as the new source. Run the icon generation script
 to produce the `.icns` file:
 
+The `update.sh` script converts an SVG source to multiple PNG sizes and outputs
+the `.icns` directly into the app bundle template at
+`assets/macos/Wezboard.app/Contents/Resources/terminal.icns`. The install script
+copies the entire template into `/Applications/`, so no manual copy is needed.
+
+The current script uses an SVG source with ImageMagick. Since the new source is
+a PNG, we may need to update the script or run the conversion manually:
+
 ```bash
 cd wezboard/assets/icon
-# Update script to point at new source, or copy source in
 cp ../../../assets/termsurf-12.png ./termsurf-12.png
-./update.sh termsurf-12.png
-```
-
-Verify `wezboard.icns` is updated, then copy it into the app bundle:
-
-```bash
-cp wezboard.icns ../macos/TermSurf\ Wezboard.app/Contents/Resources/wezboard.icns
+# Generate sized PNGs and .icns from the PNG source
+# (may need to adapt update.sh or run png2icns directly)
 ```
 
 **2. Website icon**
