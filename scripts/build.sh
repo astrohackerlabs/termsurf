@@ -104,12 +104,14 @@ build_wezboard() {
   fi
   if $RELEASE; then
     echo "==> Building Wezboard (release)..."
-    cargo build --release -p wezboard-gui
+    cargo build --release -p wezboard-gui -p wezboard
     echo "  Wezboard: $REPO_DIR/wezboard/target/release/wezboard-gui"
+    echo "  Wezboard CLI: $REPO_DIR/wezboard/target/release/wezboard"
   else
     echo "==> Building Wezboard (debug)..."
-    cargo build -p wezboard-gui
+    cargo build -p wezboard-gui -p wezboard
     echo "  Wezboard: $REPO_DIR/wezboard/target/debug/wezboard-gui"
+    echo "  Wezboard CLI: $REPO_DIR/wezboard/target/debug/wezboard"
   fi
 }
 

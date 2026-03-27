@@ -69,6 +69,13 @@ install_wezboard() {
   echo "==> Codesigning..."
   codesign --force --deep --sign - "$APP" || true
 
+  local CLI="$REPO_DIR/wezboard/target/release/wezboard"
+  if [ -f "$CLI" ]; then
+    echo "==> Installing wezboard CLI to /usr/local/bin/wezboard..."
+    cp "$CLI" /usr/local/bin/wezboard
+    echo "  Bin: /usr/local/bin/wezboard"
+  fi
+
   echo "  App: $APP"
 }
 
