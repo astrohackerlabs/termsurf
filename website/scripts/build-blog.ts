@@ -91,7 +91,7 @@ async function buildBlog() {
     link: `${SITE_URL}/blog`,
     language: "en",
     favicon: `${SITE_URL}/favicon.ico`,
-    copyright: `Copyright (C) ${new Date().getFullYear()} TermSurf`,
+    copyright: `Copyright (C) ${new Date().getFullYear()} Astrohacker`,
     updated: posts.length > 0 ? new Date(posts[0].date) : new Date(),
     feedLinks: {
       json: `${SITE_URL}/blog/feed.json`,
