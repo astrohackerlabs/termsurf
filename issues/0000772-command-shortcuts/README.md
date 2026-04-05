@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-04-05"
+closed = "2026-04-05"
 +++
 
 # Issue 772: Explicit command shortcuts and rename colorscheme to dark
@@ -218,3 +219,16 @@ dark with toggle, update docs.
 
 7. **Old commands don't work:** `:colorscheme dark` does nothing (command
    removed). `:cs` does nothing (no subsequence matching).
+
+**Result:** Pass
+
+All commands work with explicit shortcuts. Dark mode toggle works. Old
+subsequence-based commands no longer match.
+
+## Conclusion
+
+Replaced vim-style subsequence matching with explicit command aliases. Three
+commands: `quit`/`q`, `dark`/`da`, `devtools`/`de`. The `colorscheme` command
+is replaced by `dark` with toggle support. The `quitall` command is removed
+(identical behavior to `quit`). Also added `codesign` to `install.sh` after
+copying binaries to prevent macOS SIGKILL on unsigned executables.
