@@ -43,7 +43,6 @@ pub async fn handle_connection(stream: UnixStream, state: SharedState) -> anyhow
 
     let mut buf = Vec::with_capacity(4096);
     let mut conn_type = ConnType::Unknown;
-    let mut server_key: Option<String> = None;
     let mut tmp = [0u8; 4096];
     let mut msg_count: u64 = 0;
 
@@ -94,22 +93,7 @@ pub async fn handle_connection(stream: UnixStream, state: SharedState) -> anyhow
                 log::info!("TermSurf connection type: {:?}", conn_type);
             }
 
-            // Handle ServerRegister in the loop so we can capture the
-            // server_key for this connection (used to scope tab_id lookups).
-            if matches!(&msg.msg, Some(Msg::ServerRegister(_))) {
-                if let Some(Msg::ServerRegister(r)) = msg.msg {
-                    match handle_server_register(r, tx.clone(), &state) {
-                        Ok(key) => {
-                            server_key = key;
-                        }
-                        Err(err) => {
-                            log::error!("TermSurf handle error: {:#}", err);
-                        }
-                    }
-                }
-            } else if let Err(err) =
-                handle_message(msg, &stream, &tx, &server_key, &state).await
-            {
+            if let Err(err) = handle_message(msg, &stream, &tx, &state).await {
                 log::error!("TermSurf handle error: {:#}", err);
             }
 
@@ -153,10 +137,12 @@ async fn handle_message(
     msg: TermSurfMessage,
     stream: &Arc<Async<UnixStream>>,
     tx: &Sender<Vec<u8>>,
-    server_key: &Option<String>,
     state: &SharedState,
 ) -> anyhow::Result<()> {
     match msg.msg {
+        Some(Msg::ServerRegister(r)) => {
+            handle_server_register(r, tx.clone(), state)?;
+        }
         Some(Msg::SetOverlay(o)) => {
             handle_set_overlay(o, tx.clone(), state)?;
         }
@@ -239,7 +225,7 @@ async fn handle_message(
             );
             #[cfg(target_os = "macos")]
             if c.ca_context_id != 0 {
-                handle_ca_context(c, server_key, state);
+                handle_ca_context(c, state);
             }
         }
         Some(Msg::CursorChanged(c)) => {
@@ -249,9 +235,7 @@ async fn handle_message(
                 c.cursor_type
             );
             let mut st = state.lock().unwrap();
-            let skey = server_key.as_deref().unwrap_or("");
-            let lookup = (skey.to_string(), c.tab_id);
-            if let Some(pane_id) = st.tab_to_pane.get(&lookup).cloned() {
+            if let Some(pane_id) = st.tab_to_pane.get(&c.tab_id).cloned() {
                 if let Some(pane) = st.panes.get_mut(&pane_id) {
                     pane.cursor_type = c.cursor_type;
                 }
@@ -336,30 +320,7 @@ async fn handle_message(
                             error: format!("Tab {} already has DevTools open", resolved_tab_id),
                             ..Default::default()
                         }
-                    } else if let Some(inspected_pane_id) = {
-                        // Look up by the requesting pane's profile/browser to build
-                        // the composite key (DevTools requests come from TUIs, not
-                        // browsers, so server_key on the connection is None).
-                        let devtools_key = if !q.profile.is_empty() {
-                            // Use the profile from the request + default browser
-                            let browser = st
-                                .panes
-                                .get(&q.pane_id)
-                                .map(|p| p.browser.clone())
-                                .unwrap_or_default();
-                            TermSurfState::server_key(&q.profile, &browser)
-                        } else if let Some(ref last_id) = st.last_browser_pane {
-                            st.panes
-                                .get(last_id)
-                                .map(|p| {
-                                    TermSurfState::server_key(&p.profile, &p.browser)
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
-                        st.tab_to_pane.get(&(devtools_key, resolved_tab_id))
-                    } {
+                    } else if let Some(inspected_pane_id) = st.tab_to_pane.get(&resolved_tab_id) {
                         let inspected_pane = st.panes.get(inspected_pane_id).unwrap();
                         proto::QueryDevtoolsReply {
                             tab_id: resolved_tab_id,
@@ -721,7 +682,7 @@ fn handle_server_register(
     reg: proto::ServerRegister,
     server_tx: Sender<Vec<u8>>,
     state: &SharedState,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<()> {
     let mut st = state.lock().unwrap();
 
     log::info!("ServerRegister: profile={}", reg.profile);
@@ -736,12 +697,12 @@ fn handle_server_register(
         }
     });
 
-    if let Some((ref key, ref browser, ref profile)) = matched {
+    if let Some((_key, browser, profile)) = matched {
         // Flush pending tabs
         let pending: Vec<String> = st
             .panes
             .iter()
-            .filter(|(_, p)| p.profile == *profile && p.browser == *browser && p.tab_id == 0)
+            .filter(|(_, p)| p.profile == profile && p.browser == browser && p.tab_id == 0)
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -753,24 +714,21 @@ fn handle_server_register(
                 send_create_tab(&server_tx, pane)?;
             }
         }
-        Ok(Some(key.clone()))
     } else {
         log::warn!(
             "ServerRegister: no matching server for profile={}",
             reg.profile
         );
-        Ok(None)
     }
+
+    Ok(())
 }
 
 fn handle_tab_ready(ready: proto::TabReady, state: &SharedState) -> anyhow::Result<()> {
     let mut st = state.lock().unwrap();
     if st.panes.contains_key(&ready.pane_id) {
         st.panes.get_mut(&ready.pane_id).unwrap().tab_id = ready.tab_id;
-        let pane = st.panes.get(&ready.pane_id).unwrap();
-        let skey = TermSurfState::server_key(&pane.profile, &pane.browser);
-        st.tab_to_pane
-            .insert((skey, ready.tab_id), ready.pane_id.clone());
+        st.tab_to_pane.insert(ready.tab_id, ready.pane_id.clone());
         let inspected = st.panes.get(&ready.pane_id).unwrap().inspected_tab_id;
         if inspected == 0 {
             st.last_browser_pane = Some(ready.pane_id.clone());
@@ -921,8 +879,7 @@ fn handle_disconnect(conn_type: ConnType, tx: &Sender<Vec<u8>>, state: &SharedSt
             for pane_id in &to_remove {
                 if let Some(pane) = st.panes.remove(pane_id) {
                     if pane.tab_id != 0 {
-                        let skey = TermSurfState::server_key(&pane.profile, &pane.browser);
-                        st.tab_to_pane.remove(&(skey, pane.tab_id));
+                        st.tab_to_pane.remove(&pane.tab_id);
                         // Send CloseTab to server
                         let key = TermSurfState::server_key(&pane.profile, &pane.browser);
                         if let Some(server) = st.servers.get_mut(&key) {
@@ -1234,24 +1191,14 @@ fn get_or_create_overlay(
 }
 
 #[cfg(target_os = "macos")]
-fn handle_ca_context(
-    ca_context: proto::CaContext,
-    server_key: &Option<String>,
-    state: &SharedState,
-) {
+fn handle_ca_context(ca_context: proto::CaContext, state: &SharedState) {
     use objc2::msg_send;
     use objc2::runtime::{AnyObject, Bool};
     use objc2_core_foundation::CGPoint;
 
     let mut st = state.lock().unwrap();
-    let skey = server_key.as_deref().unwrap_or("");
-    let lookup = (skey.to_string(), ca_context.tab_id);
-    let Some(pane_id) = st.tab_to_pane.get(&lookup).cloned() else {
-        log::warn!(
-            "handle_ca_context: unknown server_key={} tab_id={}",
-            skey,
-            ca_context.tab_id
-        );
+    let Some(pane_id) = st.tab_to_pane.get(&ca_context.tab_id).cloned() else {
+        log::warn!("handle_ca_context: unknown tab_id={}", ca_context.tab_id);
         return;
     };
     if !st.panes.contains_key(&pane_id) {

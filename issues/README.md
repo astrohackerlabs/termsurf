@@ -6,12 +6,12 @@
 | ----------------------------------------------- | ---------------------------------------------------- | ---------- |
 | [0000756](0000756-surfari/README.md)            | Surfari — WebKit engine for TermSurf                 | 2026-03-16 |
 | [0000768](0000768-cloudflare-website/README.md) | Migrate termsurf.com from Fly.io to Cloudflare Pages | 2026-03-29 |
-| [0000769](0000769-tab-id-collision/README.md)   | Tab ID collision across browser profiles             | 2026-04-05 |
 
 ## Closed
 
 | #                                                             | Title                                                                         | Opened     | Closed     |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0000769](0000769-tab-id-collision/README.md)                 | Tab ID collision across browser profiles                                      | 2026-04-05 | 2026-04-05 |
 | [0000767](0000767-overlay-titlebar-offset/README.md)          | Webview overlay offset by title bar height                                    | 2026-03-26 | 2026-03-26 |
 | [0000766](0000766-new-logo/README.md)                         | Update icons with termsurf-12 logo                                            | 2026-03-26 | 2026-03-26 |
 | [0000765](0000765-terminfo-crash/README.md)                   | Wezboard pane crashes on XTGETTCAP (corrupted terminfo)                       | 2026-03-22 | 2026-03-22 |

@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-04-05"
+closed = "2026-04-05"
 +++
 
 # Issue 769: Tab ID collision across browser profiles
@@ -360,3 +361,17 @@ This restores both files to commit `3aeb2b2` (the last commit before experiment
 1. Build Wezboard: `scripts/build.sh wezboard`
 2. Launch Wezboard, run `web ryanxcharles.com`.
 3. **Pass:** The browser loads and displays the page.
+
+**Result:** Fail
+
+Browser still does not load after reverting. The failure is not caused by the
+composite key changes — it is a separate, pre-existing issue.
+
+## Conclusion
+
+The tab_id collision bug (the original issue) remains unfixed. The composite key
+approach in experiment 1 was correct in principle but the implementation broke
+the browser entirely. Reverting did not restore a working browser, indicating
+the root cause of the current failure is unrelated to the changes made in this
+issue. A new issue should be opened to diagnose why the browser process fails
+to connect to the GUI.

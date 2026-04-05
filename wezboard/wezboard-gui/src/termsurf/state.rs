@@ -48,8 +48,8 @@ pub struct TermSurfState {
     pub panes: HashMap<String, Pane>,
     /// "{profile}\0{browser}" → Server
     pub servers: HashMap<String, Server>,
-    /// (server_key, tab_id) → pane_id — scoped per browser process
-    pub tab_to_pane: HashMap<(String, i64), String>,
+    /// tab_id → pane_id
+    pub tab_to_pane: HashMap<i64, String>,
     /// Currently focused pane (only one at a time)
     pub focused_pane: Option<String>,
     /// Last browser pane (for DevTools auto-targeting)
