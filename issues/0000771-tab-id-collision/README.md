@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-04-05"
+closed = "2026-04-05"
 +++
 
 # Issue 771: Tab ID collision across browser profiles
@@ -236,3 +237,15 @@ restructure the message loop.
 5. **Close and reopen:**
    - Open two profiles, close one, reopen it.
    - **Pass:** No stale mappings.
+
+**Result:** Pass
+
+Two profiles work independently with no cloning.
+
+## Conclusion
+
+The composite `(server_key, tab_id)` key fixes the tab ID collision. The key
+difference from Issue 769's failed attempt: `ServerRegister` stays inside
+`handle_message`'s match — the server_key flows out via the return value instead
+of restructuring the connection loop. Issue 769 failed due to a combination of
+the loop restructuring and a coincident macOS SDK mismatch (Issue 770).
