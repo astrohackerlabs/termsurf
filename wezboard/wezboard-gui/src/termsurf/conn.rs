@@ -973,6 +973,7 @@ fn resolve_browser_path(browser: &str) -> anyhow::Result<String> {
     let candidates: &[(&str, &str)] = &[
         ("roamium", "/usr/local/roamium/roamium"),
         ("roamium", "/opt/homebrew/opt/termsurf/roamium/roamium"),
+        ("roamium", "/opt/homebrew/opt/termsurf-roamium/roamium"),
     ];
 
     for (n, path) in candidates {

@@ -1617,7 +1617,7 @@ impl Config {
 }
 
 fn default_check_for_updates() -> bool {
-    cfg!(not(feature = "distro-defaults"))
+    false
 }
 
 fn default_pane_select_fg_color() -> RgbaColor {
