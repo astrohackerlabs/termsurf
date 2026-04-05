@@ -1,9 +1,204 @@
 ---
 import DocPage from "../../../components/DocPage.astro";
+const cb =
+  "bg-background-dark p-3 border-l-2 border-border text-foreground-dark text-xs mb-6 overflow-x-auto";
 ---
 
 <DocPage title="Roamium">
   <h1>Roamium</h1>
 
-  <p>Coming soon.</p>
+  <p>
+    Roamium is the Chromium browser engine binary for TermSurf. It wraps
+    <code>libtermsurf_chromium</code> (a C shared library built from the
+    Chromium fork) in a ~400-line Rust binary that handles Unix socket IPC,
+    protobuf message dispatch, and process lifecycle.
+  </p>
+
+  <h2>How It Works</h2>
+
+  <p>
+    The GUI (Wezboard) spawns one Roamium process per browser profile. Each
+    process serves exactly one profile — one set of cookies, storage, and cache.
+    This is a hard constraint imposed by Chromium's
+    <code>BrowserContext</code>.
+  </p>
+
+  <p>Startup sequence:</p>
+
+  <ol>
+    <li>GUI spawns Roamium with <code>--ipc-socket</code>, <code>--user-data-dir</code>, and <code>--listen-socket</code></li>
+    <li>Roamium calls <code>ts_content_main</code> to enter Chromium's message loop</li>
+    <li>Chromium initializes, fires the <code>on_initialized</code> callback</li>
+    <li>Roamium creates a <code>BrowserContext</code> and connects to the GUI socket</li>
+    <li>Roamium sends <code>ServerRegister</code> with its profile name</li>
+    <li>GUI sends <code>CreateTab</code> with a URL and dimensions</li>
+    <li>Chromium creates a <code>WebContents</code>, fires <code>on_tab_ready</code></li>
+    <li>Roamium sends <code>TabReady</code> back to the GUI</li>
+    <li>Chromium renders and sends <code>CaContext</code> (GPU layer ID) to the GUI</li>
+  </ol>
+
+  <h2>Architecture</h2>
+
+  <p>
+    Roamium follows a two-layer pattern designed to be reusable across browser
+    engines:
+  </p>
+
+  <ul>
+    <li>
+      <strong><code>libtermsurf_chromium</code></strong> — a C shared library
+      that wraps Chromium's embedding API. Exports <code>ts_*</code> functions
+      for lifecycle, navigation, input forwarding, and state management. Built
+      from the Chromium fork.
+    </li>
+    <li>
+      <strong>Roamium</strong> — a Rust binary that links the C library and
+      handles IPC. Parses command-line args, connects to the GUI socket,
+      dispatches protobuf messages to <code>ts_*</code> FFI calls, and relays
+      Chromium callbacks back as protobuf messages.
+    </li>
+  </ul>
+
+  <h2>Source Layout</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>main.rs</code></td>
+        <td>Entry point, arg parsing, callback registration, Chromium message loop</td>
+      </tr>
+      <tr>
+        <td><code>dispatch.rs</code></td>
+        <td>Message dispatch — routes protobuf messages to FFI calls, relays callbacks</td>
+      </tr>
+      <tr>
+        <td><code>ipc.rs</code></td>
+        <td>Unix socket connection, length-prefixed protobuf framing, reader loop</td>
+      </tr>
+      <tr>
+        <td><code>ffi.rs</code></td>
+        <td>FFI bindings to <code>libtermsurf_chromium</code> C functions</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>C API</h2>
+
+  <p>
+    The <code>ts_*</code> functions exported by <code>libtermsurf_chromium</code>:
+  </p>
+
+  <h3>Lifecycle</h3>
+
+  <table>
+    <thead>
+      <tr><th>Function</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ts_content_main</code></td><td>Enter Chromium's message loop (blocks)</td></tr>
+      <tr><td><code>ts_set_on_initialized</code></td><td>Register initialization callback</td></tr>
+      <tr><td><code>ts_post_task</code></td><td>Post a task to the UI thread</td></tr>
+      <tr><td><code>ts_quit</code></td><td>Shut down Chromium</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Profiles and Tabs</h3>
+
+  <table>
+    <thead>
+      <tr><th>Function</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ts_create_browser_context</code></td><td>Create a profile (BrowserContext)</td></tr>
+      <tr><td><code>ts_create_web_contents</code></td><td>Create a browser tab</td></tr>
+      <tr><td><code>ts_create_devtools_web_contents</code></td><td>Create a DevTools tab</td></tr>
+      <tr><td><code>ts_destroy_web_contents</code></td><td>Close a tab</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Navigation and Input</h3>
+
+  <table>
+    <thead>
+      <tr><th>Function</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ts_load_url</code></td><td>Navigate to a URL</td></tr>
+      <tr><td><code>ts_forward_mouse_event</code></td><td>Forward mouse click</td></tr>
+      <tr><td><code>ts_forward_mouse_move</code></td><td>Forward mouse movement</td></tr>
+      <tr><td><code>ts_forward_scroll_event</code></td><td>Forward scroll</td></tr>
+      <tr><td><code>ts_forward_key_event</code></td><td>Forward keyboard input</td></tr>
+    </tbody>
+  </table>
+
+  <h3>State</h3>
+
+  <table>
+    <thead>
+      <tr><th>Function</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ts_set_focus</code></td><td>Set focus state (browse/control mode)</td></tr>
+      <tr><td><code>ts_set_color_scheme</code></td><td>Set dark/light mode</td></tr>
+      <tr><td><code>ts_set_view_size</code></td><td>Resize the viewport</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Callbacks</h2>
+
+  <p>
+    Chromium fires callbacks on the UI thread. Roamium converts them to protobuf
+    messages and sends them to the GUI:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Callback</th><th>Protobuf Message</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>on_tab_ready</code></td><td><code>TabReady</code></td><td>Tab created, tab_id assigned</td></tr>
+      <tr><td><code>on_ca_context_id</code></td><td><code>CaContext</code></td><td>GPU layer ready for compositing</td></tr>
+      <tr><td><code>on_url_changed</code></td><td><code>UrlChanged</code></td><td>Page navigated</td></tr>
+      <tr><td><code>on_loading_state</code></td><td><code>LoadingState</code></td><td>Loading started/finished</td></tr>
+      <tr><td><code>on_title_changed</code></td><td><code>TitleChanged</code></td><td>Page title updated</td></tr>
+      <tr><td><code>on_cursor_changed</code></td><td><code>CursorChanged</code></td><td>Cursor type changed (pointer, text, etc.)</td></tr>
+      <tr><td><code>on_target_url_changed</code></td><td><code>TargetUrlChanged</code></td><td>Link hover target</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Multi-Engine Pattern</h2>
+
+  <p>
+    Roamium is the first engine binary, but the architecture is designed for
+    multiple engines. Each engine follows the same pattern:
+  </p>
+
+  <ol>
+    <li>A C shared library wrapping the engine's embedding API (<code>ts_*</code> functions)</li>
+    <li>A Rust binary (~400 lines) handling IPC and protobuf</li>
+  </ol>
+
+  <p>
+    The Rust binary is almost entirely reusable — only the C library changes per
+    engine. Planned engines: Surfari (WebKit), Waterwolf (Gecko), Girlbat
+    (Ladybird).
+  </p>
+
+  <h2>Installation</h2>
+
+  <p>
+    Roamium installs to <code>/usr/local/roamium/</code> alongside Chromium's
+    dylibs, <code>.pak</code> resource files, and ICU data. The GUI knows to
+    look for it there.
+  </p>
+
+  <pre
+    class={cb}><code><span class="text-primary">scripts/build.sh</span> roamium --release
+<span class="text-primary">sudo</span> scripts/install.sh roamium</code></pre>
 </DocPage>
