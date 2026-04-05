@@ -128,3 +128,99 @@ The fix needs to either:
 Approach 1 is correct. The browser reader loop already knows which server it
 belongs to (the connection is established per-server). Adding a `server_key`
 parameter to the reader and `handle_message` is the clean solution.
+
+## Experiments
+
+### Experiment 1: Use composite (server_key, tab_id) key
+
+Thread the server_key through the connection reader loop and use a composite
+`(String, i64)` key for `tab_to_pane` so tab IDs are scoped per browser process.
+
+#### Changes
+
+**`wezboard/wezboard-gui/src/termsurf/state.rs`**
+
+1. Change `tab_to_pane` type from `HashMap<i64, String>` to
+   `HashMap<(String, i64), String>`.
+
+**`wezboard/wezboard-gui/src/termsurf/conn.rs`**
+
+2. Add a `server_key: Option<String>` field to the connection reader's local
+   state (alongside `conn_type`). Initialize to `None`.
+
+3. In `handle_server_register` (line 681): return the matched server_key so the
+   caller can store it. Change the return type to
+   `anyhow::Result<Option<String>>` and return `Some(key)` on match.
+
+4. In the `handle_connection` reader loop (line 96): after `handle_message`
+   returns for a `ServerRegister`, capture the server_key. Restructure so
+   `ServerRegister` is handled in the loop body directly (calling
+   `handle_server_register` and storing the returned key), then all other
+   messages go through `handle_message`.
+
+5. Add `server_key: &Option<String>` parameter to `handle_message` (line 136).
+   Pass it from the connection loop.
+
+6. **Insert (line 731):** In `handle_tab_ready`, the pane already has `profile`
+   and `browser` fields. Build the composite key:
+   ```rust
+   let key = TermSurfState::server_key(&pane.profile, &pane.browser);
+   st.tab_to_pane.insert((key, ready.tab_id), ready.pane_id.clone());
+   ```
+   `handle_tab_ready` doesn't need `server_key` from the connection — the pane
+   struct already has the profile/browser.
+
+7. **CaContext lookup (line 1200):** `handle_ca_context` receives a bare
+   `tab_id`. Pass `server_key` to it. Use it to build the composite key:
+   ```rust
+   fn handle_ca_context(ca_context: proto::CaContext, server_key: &str, state: &SharedState) {
+       let key = (server_key.to_string(), ca_context.tab_id);
+       let Some(pane_id) = st.tab_to_pane.get(&key).cloned() else { ... };
+   ```
+
+8. **CursorChanged lookup (line 238):** Same pattern — use `server_key` from the
+   connection to build the composite key for the lookup.
+
+9. **DevTools lookup (line 323):** The `QueryDevtoolsRequest` comes from a TUI,
+   not a browser, so `server_key` is `None`. Instead, look up the requesting
+   pane's profile/browser to build the key:
+   ```rust
+   let inspected_key = TermSurfState::server_key(&pane.profile, &pane.browser);
+   st.tab_to_pane.get(&(inspected_key, resolved_tab_id))
+   ```
+
+10. **Remove on disconnect (line 882):** The pane being removed has `profile`
+    and `browser`. Build the composite key for removal:
+    ```rust
+    let key = TermSurfState::server_key(&pane.profile, &pane.browser);
+    st.tab_to_pane.remove(&(key, pane.tab_id));
+    ```
+
+11. Update all log lines that print `tab_to_pane` counts (lines 766-769,
+    854-858, 916-919) — no functional change, just ensure they still compile.
+
+#### Verification
+
+1. **Two profiles, no cloning:**
+   - Open two panes with different profiles.
+   - Navigate in pane 1.
+   - **Pass:** Pane 2 continues showing its own page. No cloning.
+
+2. **Two profiles, independent navigation:**
+   - Open two panes with different profiles.
+   - Navigate in both panes independently.
+   - **Pass:** Each pane shows its own page throughout.
+
+3. **Single profile (regression):**
+   - Open one pane with one profile.
+   - Navigate, refresh, open DevTools.
+   - **Pass:** Everything works as before.
+
+4. **DevTools with two profiles:**
+   - Open two panes with different profiles.
+   - Open DevTools on one pane.
+   - **Pass:** DevTools opens for the correct pane, not the other.
+
+5. **Close and reopen:**
+   - Open two profiles, close one, reopen it.
+   - **Pass:** No stale mappings. The new pane works correctly.
