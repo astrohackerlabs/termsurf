@@ -1,8 +1,5 @@
 ---
 import Base from "../layouts/Base.astro";
-import blogData from "../../data/blog.json";
-
-const latestPost = blogData.posts[0];
 ---
 
 <Base title="TermSurf">
@@ -46,33 +43,5 @@ const latestPost = blogData.posts[0];
         [learn more in the docs]
       </a>
     </p>
-    <div class="mt-4 text-muted text-xs">
-      ──────────────────────────────────────────────────────────
-    </div>
-  </section>
-  <section class="mb-8">
-    <h2 class="text-sm font-bold text-foreground mb-4">
-      ┌─ Latest Post ─┐
-    </h2>
-    {latestPost ? (
-      <a
-        href={`/blog/${latestPost.slug}`}
-        class="block hover:bg-background-highlight/30 text-sm"
-      >
-        <span class="text-accent hover:text-primary">
-          {latestPost.title}
-        </span>
-        <span class="text-muted ml-3">{latestPost.date}</span>
-        <span class="text-success ml-3">{latestPost.author}</span>
-      </a>
-    ) : (
-      <p class="text-muted text-sm">No posts yet.</p>
-    )}
-    <a
-      href="/blog"
-      class="text-sm text-muted hover:text-accent mt-3 inline-block"
-    >
-      [view all posts]
-    </a>
   </section>
 </Base>
