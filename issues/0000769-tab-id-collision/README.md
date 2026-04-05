@@ -327,3 +327,36 @@ breaks.
    - `handle_ca_context: looking up key=(...)` — confirms what key is used for
      lookup and whether the tab_to_pane map contains a matching entry.
 4. The mismatch between insert and lookup keys (if any) will reveal the bug.
+
+**Result:** Fail
+
+No debug logs appeared because the browser process never connects to the GUI.
+Roamium is spawned (PID visible in logs) but immediately exits. The composite
+key changes broke something fundamental that prevents the browser from loading
+at all, though the exact mechanism is unclear from code analysis.
+
+#### Conclusion
+
+Experiments 1 and 2 must be fully reverted before any further work on this
+issue. The composite key approach needs to be redesigned from scratch.
+
+### Experiment 3: Revert experiments 1 and 2
+
+Restore `conn.rs` and `state.rs` to their exact state before experiment 1 to
+recover a working browser.
+
+#### Changes
+
+One command:
+```
+git checkout 3aeb2b2 -- wezboard/wezboard-gui/src/termsurf/conn.rs wezboard/wezboard-gui/src/termsurf/state.rs
+```
+
+This restores both files to commit `3aeb2b2` (the last commit before experiment
+1 was implemented).
+
+#### Verification
+
+1. Build Wezboard: `scripts/build.sh wezboard`
+2. Launch Wezboard, run `web ryanxcharles.com`.
+3. **Pass:** The browser loads and displays the page.
