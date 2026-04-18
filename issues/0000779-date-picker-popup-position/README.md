@@ -3,13 +3,14 @@ status = "open"
 opened = "2026-04-15"
 +++
 
-# Issue 779: Date picker popup renders outside webview overlay
+# Issue 779: Native popups (date picker, select dropdown) render outside webview overlay
 
 ## Goal
 
-Native/popup UI elements spawned by the webview (like a DaisyUI date input
-picker) should appear over the webview where the user clicked, not detached
-from it in an unrelated screen region.
+Native/popup UI elements spawned by the webview — date pickers, `<select>`
+dropdowns, and any other OS-level popup Chromium creates — should appear over
+the webview where the user clicked, not detached from it in an unrelated
+screen region.
 
 ## Background
 
@@ -17,6 +18,12 @@ While testing an app with a DaisyUI date input, clicking the date field causes
 the picker to pop up in the wrong location. When the webview overlay is
 positioned on the right side of the terminal window (e.g., a right split), the
 date picker appears on the left — entirely outside the webview's bounds.
+
+The same bug happens with **native `<select>` dropdown boxes**: clicking a
+dropdown opens the menu at a detached screen position that doesn't match the
+`<select>` element the user clicked. This confirms the problem is not specific
+to date pickers — it affects every kind of native popup window Chromium
+creates.
 
 This is surprising because the webview is composited into the terminal via
 CALayerHost (zero-copy GPU texture sharing from Roamium's Chromium process into
@@ -73,8 +80,18 @@ Possible root causes to investigate:
 
 ## Reproduction
 
+### Date picker
+
 1. Build and run Wezboard with a right split hosting a webview.
 2. Load a page with a DaisyUI date input (or any `<input type="date">`).
 3. Click the date field.
 4. Observe: picker appears on the left side of the window, outside the webview
    overlay's bounds.
+
+### Native `<select>` dropdown
+
+1. Build and run Wezboard with a right split hosting a webview.
+2. Load a page with a native `<select>` element.
+3. Click the dropdown.
+4. Observe: the dropdown menu appears at a detached location, not anchored to
+   the `<select>` element the user clicked.
