@@ -258,3 +258,46 @@ clean was performed, and no Chromium branch was created.
 The current `146.0.7650.0` baseline is buildable. Experiment 3 can start the
 first Chromium migration attempt, targeting `148.0.7778.97` on a new Chromium
 branch named `148.0.7778.97-issue-781`.
+
+### Experiment 3: Attempt Chromium 148 Migration
+
+#### Description
+
+Attempt the first real Chromium upgrade by moving TermSurf's Chromium fork from
+`146.0.7650.0` to `148.0.7778.97`, the current Electron-stable target identified
+in Experiment 1. The purpose is to learn whether a direct jump from 146 to 148
+is reasonable, or whether we need an intermediate checkpoint such as
+`147.0.7727.139`.
+
+#### Changes
+
+1. In `chromium/src`, create a new Chromium branch named
+   `148.0.7778.97-issue-781`.
+2. Base the branch on the upstream `148.0.7778.97` tag.
+3. Reapply the current TermSurf Chromium changes from the latest relevant
+   `146.0.7650.0` issue branch.
+4. Record whether the patches apply cleanly, partially, or fail.
+5. If conflicts appear, classify them by area, especially:
+   - Chromium embedding / profile server code
+   - TermSurf protocol glue
+   - build files and GN configuration
+   - app bundle or packaging paths
+6. Update `chromium/README.md` only if the new branch is created successfully
+   and becomes the active migration branch.
+
+Do not delete or clean `chromium/src/out/Default`. Do not use `ninja` directly;
+only use `autoninja` through the project build scripts or Chromium-approved
+commands.
+
+#### Verification
+
+This experiment passes if the new branch is created, the TermSurf patches are
+reapplied, and `scripts/build.sh chromium` succeeds against `148.0.7778.97`.
+
+It is a partial result if the branch is created but the migration exposes
+conflicts or build failures that need separate follow-up experiments. Record the
+exact conflict classes or failing build targets.
+
+It fails if `148.0.7778.97` cannot be checked out, cannot be used as a branch
+base, or the TermSurf changes are too tangled to classify. In that case,
+Experiment 4 should try the intermediate checkpoint `147.0.7727.139`.
