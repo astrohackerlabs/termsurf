@@ -265,39 +265,67 @@ branch named `148.0.7778.97-issue-781`.
 
 Attempt the first real Chromium upgrade by moving TermSurf's Chromium fork from
 `146.0.7650.0` to `148.0.7778.97`, the current Electron-stable target identified
-in Experiment 1. The purpose is to learn whether a direct jump from 146 to 148
-is reasonable, or whether we need an intermediate checkpoint such as
+in Experiment 1. This explicitly answers the open question about target policy
+for the first migration attempt: prefer Electron stable before Chromium stable
+or tip-of-tree. The purpose is to learn whether a direct jump from 146 to 148 is
+reasonable, or whether we need an intermediate checkpoint such as
 `147.0.7727.139`.
+
+This is not a small experiment. Fetching tags, running `gclient sync`, applying
+patches, and rebuilding Chromium may take hours.
 
 #### Changes
 
-1. In `chromium/src`, create a new Chromium branch named
-   `148.0.7778.97-issue-781`.
-2. Base the branch on the upstream `148.0.7778.97` tag.
-3. Reapply the current TermSurf Chromium changes from the latest relevant
-   `146.0.7650.0` issue branch.
-4. Record whether the patches apply cleanly, partially, or fail.
-5. If conflicts appear, classify them by area, especially:
+1. In `chromium/src`, confirm the current documented source branch is
+   `146.0.7650.0-issue-762`.
+2. Fetch the upstream `148.0.7778.97` tag from
+   `chromium.googlesource.com/chromium/src.git`.
+3. Check out the upstream `148.0.7778.97` tag and create a new Chromium branch
+   named `148.0.7778.97-issue-781`.
+4. Run `gclient sync` for the new Chromium version so DEPS, generated project
+   files, and third-party checkouts match the 148 tag.
+5. Reapply the current TermSurf Chromium changes from the archived
+   `146.0.7650.0-issue-762` patch series using `git am`:
+   `../../chromium/patches/issue-762/*.patch`.
+6. Record how many patches apply cleanly, how many conflict, and which patch is
+   the first blocker if `git am` stops.
+7. If conflicts appear, classify them by area, especially:
    - Chromium embedding / profile server code
    - TermSurf protocol glue
    - build files and GN configuration
    - app bundle or packaging paths
-6. Update `chromium/README.md` only if the new branch is created successfully
-   and becomes the active migration branch.
+8. If the migration branch reaches a useful committed state, regenerate the
+   patch archive for Issue 781 with
+   `git format-patch 148.0.7778.97..HEAD -o ../../chromium/patches/issue-781/`.
+9. Update `chromium/README.md` only if the new branch is created successfully
+   and becomes the active migration branch. Update both the Current State block
+   and the Branches table.
 
 Do not delete or clean `chromium/src/out/Default`. Do not use `ninja` directly;
 only use `autoninja` through the project build scripts or Chromium-approved
-commands.
+commands. `gclient sync` and a Chromium version jump may invalidate much of the
+existing 146 build cache; record that cost rather than attempting an unplanned
+rollback.
 
 #### Verification
 
-This experiment passes if the new branch is created, the TermSurf patches are
-reapplied, and `scripts/build.sh chromium` succeeds against `148.0.7778.97`.
+This experiment passes if:
+
+1. The new `148.0.7778.97-issue-781` branch is created.
+2. `gclient sync` completes for `148.0.7778.97`.
+3. The TermSurf Chromium patch series is reapplied and committed on the new
+   branch.
+4. `scripts/build.sh chromium` succeeds against `148.0.7778.97`.
+5. `scripts/build.sh roamium` succeeds against the new Chromium output.
+6. `scripts/build.sh wezboard` succeeds after the Chromium/Roamium migration.
 
 It is a partial result if the branch is created but the migration exposes
-conflicts or build failures that need separate follow-up experiments. Record the
-exact conflict classes or failing build targets.
+limited conflicts or build failures that need separate follow-up experiments.
+Treat the result as partial if at least half of the `issue-762` patches apply
+cleanly, the remaining conflicts are classifiable, and the next fix is clear.
 
-It fails if `148.0.7778.97` cannot be checked out, cannot be used as a branch
-base, or the TermSurf changes are too tangled to classify. In that case,
-Experiment 4 should try the intermediate checkpoint `147.0.7727.139`.
+It fails if `148.0.7778.97` cannot be fetched, checked out, used as a branch
+base, or synced with `gclient sync`. It also fails if more than half of the
+`issue-762` patches fail to apply, or if the conflicts are too tangled to
+classify into a small number of follow-up tasks. In that case, Experiment 4
+should try the intermediate checkpoint `147.0.7727.139`.
