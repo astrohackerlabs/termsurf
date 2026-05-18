@@ -259,6 +259,7 @@ bundle), uploads it to a GitHub Release on `termsurf/termsurf`, updates the
 Homebrew cask SHA and version, and pushes to `termsurf/homebrew-termsurf`.
 
 **Cask installs:**
+
 - `.app` bundle → `/Applications/TermSurf Wezboard.app`
 - `web`, `wezboard` CLIs → `/opt/homebrew/bin/`
 - Roamium + Chromium dylibs → `/opt/homebrew/opt/termsurf-roamium/`
@@ -280,15 +281,15 @@ incremental steps that solve the problem.
 Each issue is a **folder** containing a `README.md` with TOML frontmatter:
 
 ```
-issues/0000756-surfari/
+issues/0756-surfari/
 ├── README.md          ← main issue document with frontmatter
 ├── 01-build-webkit.md ← optional: additional files for long issues
 └── 02-compositing.md
 ```
 
-The folder name is `{number}-{slug}`. The number is globally sequential across
-all generations (ts1–ts5). The slug is lowercase, hyphenated, and describes the
-topic.
+The folder name is `{NNNN}-{slug}`. The number is zero-padded to 4 digits and
+globally sequential across all generations (ts1–ts5). The slug is lowercase,
+hyphenated, and describes the topic.
 
 The full index of all issues is at `issues/README.md`. Regenerate it with:
 
@@ -336,8 +337,8 @@ under ~1000 lines to fit in an AI agent's context window.
 
 ### Multiple Open Issues
 
-Multiple issues can be open at the same time. This allows interleaving work —
-a large issue like Surfari can stay open while smaller issues are opened and
+Multiple issues can be open at the same time. This allows interleaving work — a
+large issue like Surfari can stay open while smaller issues are opened and
 closed alongside it.
 
 ### Experiments
@@ -362,8 +363,8 @@ Each experiment has:
 #### Chromium branches
 
 If an experiment modifies Chromium code, it MUST create a new branch:
-`{version}-issue-{N}`. Fork the most relevant recent branch. Add it to the
-table in `chromium/README.md`.
+`{version}-issue-{N}`. Fork the most relevant recent branch. Add it to the table
+in `chromium/README.md`.
 
 #### One at a time
 
@@ -402,7 +403,7 @@ modified. History stays as it was written.
 
 ### Process Summary
 
-1. **Create the issue** — `issues/{number}-{slug}/README.md` with frontmatter,
+1. **Create the issue** — `issues/{NNNN}-{slug}/README.md` with frontmatter,
    goal, background. No experiments yet.
 2. **Design Experiment 1** — Add `## Experiments` and `### Experiment 1`.
 3. **Implement Experiment 1** — Write the code.

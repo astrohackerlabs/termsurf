@@ -17,10 +17,10 @@ characters. This skill ensures they survive every edit.
 **After every Write or Edit to a file that contains Nerd Font icons.** Currently
 the known files are:
 
-| File                        | Icons                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------- |
-| `tui/src/main.rs`           | nf-md-web (U+F059F), nf-fa-keyboard_o (U+F11C), nf-fa-user (U+F007)                          |
-| `issues/0000504-web-tui.md` | nf-md-web (U+F059F), nf-fa-keyboard_o (U+F11C), nf-fa-user (U+F007), nf-md-refresh (U+F0450) |
+| File                            | Icons                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| `tui/src/main.rs`               | nf-md-web (U+F059F), nf-fa-keyboard_o (U+F11C), nf-fa-user (U+F007)                          |
+| `issues/0504-web-tui/README.md` | nf-md-web (U+F059F), nf-fa-keyboard_o (U+F11C), nf-fa-user (U+F007), nf-md-refresh (U+F0450) |
 
 Update this table when new files or icons are added.
 
