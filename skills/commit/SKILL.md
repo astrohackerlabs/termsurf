@@ -91,6 +91,40 @@ given, look at all uncommitted changes and commit everything.
 5. **Compose the poem**: Pick a style that fits the change, make it fun
 6. **Stage and commit** using the poetic message
 
+## Commit Message Mechanics
+
+Poem lines must be real newline characters in Git history. Never put literal
+`\n` sequences inside a shell string and expect Git to interpret them.
+
+For multi-line commit messages, prefer writing the message to a temporary file
+and committing with `git commit -F <file>`:
+
+```text
+Title under 50 chars
+
+Poem line one,
+Poem line two.
+```
+
+Then run:
+
+```bash
+git commit -F /path/to/message-file
+```
+
+If using `git commit -m`, only use it for separate paragraphs where the shell
+arguments already contain the exact intended text. Do not encode poem line
+breaks as `\n` inside `-m` arguments.
+
+After committing, verify the rendered message:
+
+```bash
+git log -1 --format=%B
+```
+
+If literal `\n` appears in the output, amend or rewrite the commit message
+immediately before continuing.
+
 ## Chromium Fork Workflow
 
 The Chromium fork at `chromium/src/` is a separate git repo (gitignored from the
