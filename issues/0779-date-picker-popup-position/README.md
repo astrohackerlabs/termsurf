@@ -9,8 +9,8 @@ opened = "2026-04-15"
 
 Native/popup UI elements spawned by the webview — date pickers, `<select>`
 dropdowns, and any other OS-level popup Chromium creates — should appear over
-the webview where the user clicked, not detached from it in an unrelated
-screen region.
+the webview where the user clicked, not detached from it in an unrelated screen
+region.
 
 ## Background
 
@@ -22,24 +22,23 @@ date picker appears on the left — entirely outside the webview's bounds.
 The same bug happens with **native `<select>` dropdown boxes**: clicking a
 dropdown opens the menu at a detached screen position that doesn't match the
 `<select>` element the user clicked. This confirms the problem is not specific
-to date pickers — it affects every kind of native popup window Chromium
-creates.
+to date pickers — it affects every kind of native popup window Chromium creates.
 
 This is surprising because the webview is composited into the terminal via
 CALayerHost (zero-copy GPU texture sharing from Roamium's Chromium process into
 Wezboard). Content rendered into that texture is necessarily clipped to the
 overlay's rect. The fact that the picker renders outside the overlay strongly
-implies it is **not** drawn into the webview's GPU texture at all — it must be
-a separate OS-level window (a popup/child window) that Chromium positions using
+implies it is **not** drawn into the webview's GPU texture at all — it must be a
+separate OS-level window (a popup/child window) that Chromium positions using
 screen coordinates it computed against its own internal notion of where the
 webview lives, which does not match where Wezboard actually composites the
 CALayerHost overlay.
 
-In other words: Chromium thinks the webview is at screen coordinates (X, Y),
-but Wezboard is actually displaying the layer at (X', Y'). Any popup window
-Chromium spawns (date pickers, select dropdowns, autofill, color pickers,
-context menus rendered as native windows, etc.) will be placed at the wrong
-absolute screen position.
+In other words: Chromium thinks the webview is at screen coordinates (X, Y), but
+Wezboard is actually displaying the layer at (X', Y'). Any popup window Chromium
+spawns (date pickers, select dropdowns, autofill, color pickers, context menus
+rendered as native windows, etc.) will be placed at the wrong absolute screen
+position.
 
 ## Analysis
 
@@ -54,22 +53,22 @@ Possible root causes to investigate:
    the window origin).
 
 2. **Popup windows are separate OS windows.** Chromium typically renders
-   `<select>` dropdowns, date pickers, and autofill as platform popup widgets
-   on macOS. These are real `NSWindow`s (or `NSPanel`s) positioned in screen
+   `<select>` dropdowns, date pickers, and autofill as platform popup widgets on
+   macOS. These are real `NSWindow`s (or `NSPanel`s) positioned in screen
    coordinates. If Chromium's host view reports the wrong screen origin, the
    popup opens in the wrong place.
 
 3. **Coordinate space mismatch.** Wezboard positions the overlay in its own
    window-local coordinates and converts to screen coordinates for CALayerHost.
-   Roamium/Chromium may be using a different origin (top-left vs bottom-left,
-   or main-screen vs window-local) when computing popup placement.
+   Roamium/Chromium may be using a different origin (top-left vs bottom-left, or
+   main-screen vs window-local) when computing popup placement.
 
 ## Proposed Solutions
 
-- Audit what view/window bounds Roamium reports into Chromium when the GUI
-  sends `OverlayReposition` / `OverlayResize` protocol messages. Ensure the
-  `RenderWidgetHostView`'s screen rect is updated, not just the compositor
-  layer size.
+- Audit what view/window bounds Roamium reports into Chromium when the GUI sends
+  `OverlayReposition` / `OverlayResize` protocol messages. Ensure the
+  `RenderWidgetHostView`'s screen rect is updated, not just the compositor layer
+  size.
 - Add a protocol field (or reuse existing reposition messages) to carry the
   webview's **absolute screen rect**, not just a window-local rect, so Chromium
   can position popups correctly.
