@@ -614,8 +614,10 @@ In this model:
 - Adjacent pane `outer_rect`s abut exactly at split boundaries.
 - The border is drawn inside the pane's `outer_rect`.
 - Terminal content starts at `outer_rect + border_width`.
-- Line rendering uses the full pane cell grid; no rightmost column or bottom row
-  is hidden by reducing render width at paint time.
+- The pane's PTY/renderable cell grid is the content grid inside the border.
+  Border space is reserved before pane and split positions are exposed to
+  rendering, so the rightmost column and bottom row remain visible without
+  paint-time clipping.
 - Split resize hit regions straddle the shared boundary between adjacent
   `outer_rect`s.
 - Single-pane and zoomed-pane rendering keep the old behavior: no split border,
@@ -627,22 +629,45 @@ background rect as the bordered pane's outer rect.
 
 #### Changes
 
-1. **Create a bordered pane geometry helper.**
+1. **Reserve border space before rendering.**
+
+   Add a layout-level bordered pane mapping before `paint_pane` sees pane
+   positions. This should be near the GUI's tab/pane positioning path, not in
+   line rendering and not by resizing panes from paint.
+
+   When `split_border_width > 0`, `num_panes > 1`, and the pane is not zoomed:
+   - Convert `split_border_width` from logical pixels to physical pixels using
+     `physical = logical * dpi / 96.0`.
+   - Treat each pane's terminal cell grid as the content grid.
+   - Build a visual `outer_rect` around that content grid by adding
+     `border_width` on each side.
+   - Recompute adjacent pane visual positions so neighboring `outer_rect`s abut
+     exactly. Do not leave later panes at pre-border positions if earlier panes
+     reserve border space.
+   - Recompute split hit-region positions from those same abutting visual
+     boundaries.
+
+   The important invariant is: `PositionedPane` content origin, visual
+   `outer_rect`, split hit region, browser overlay origin, and mouse-to-cell
+   mapping all derive from the same bordered layout. Do not shrink only
+   `RenderScreenLineParams`, and do not resize PTYs from paint.
+
+2. **Create a bordered pane geometry helper.**
 
    In `wezboard/wezboard-gui/src/termwindow/render/pane.rs`, add a helper used
    only when `split_border_width > 0`, `num_panes > 1`, and the pane is not
    zoomed. The helper should compute:
-   - `outer_rect` from the pane's exact cell allocation, without half-cell
-     expansion.
-   - `border_width` from logical pixels using `physical = logical * dpi / 96.0`.
+   - `outer_rect` from the bordered visual layout, without half-cell expansion.
+   - `border_width` from the layout-level converted physical pixel value.
    - `content_origin` as `outer_rect.origin + border_width`.
-   - `content_rect` as the full pane cell span starting at `content_origin`.
+   - `content_rect` as the pane's full PTY/renderable cell span starting at
+     `content_origin`.
    - `background_rect` as `outer_rect`.
 
    The old half-cell-expanded background rect remains only for the no-border
    path.
 
-2. **Render content from the bordered content origin without shrinking cells.**
+3. **Render content from the bordered content origin.**
 
    In `paint_pane`, when bordered geometry is active:
    - Use the bordered `content_origin` for `left_pixel_x` and `top_pixel_y`.
@@ -650,20 +675,25 @@ background rect as the bordered pane's outer rect.
    - Keep `RenderableDimensions.cols` and `viewport_rows` unchanged.
    - Do not subtract `2 * border_width` from render width or height.
 
-   This intentionally preserves the PTY/mux cell grid. The border creates visual
-   padding by moving the full cell grid inward, not by hiding cells or resizing
-   the terminal.
+   The pane dimensions reaching this point must already be the visible content
+   grid selected by the bordered layout. Rendering must not hide columns or rows
+   to compensate for border pixels.
 
-3. **Draw borders inside non-overlapping pane boxes.**
+4. **Draw borders inside non-overlapping pane boxes.**
 
    Update `paint_pane_border` to use the bordered `outer_rect`. Since adjacent
    `outer_rect`s abut instead of overlapping, interior borders should not create
    a cell-wide gutter or cover neighboring content.
 
+   Mechanical correctness check: for two horizontally adjacent panes,
+   `left_pane.outer_rect.max_x() == right_pane.outer_rect.origin.x`. The two
+   borders touch at that boundary; they do not overlap content and they do not
+   leave an unpainted seam.
+
    Paint unfocused pane borders first and focused pane borders last so focused
    edges win on shared boundaries.
 
-4. **Register split resize hit regions from split boundaries.**
+5. **Register split resize hit regions from split boundaries.**
 
    In `wezboard/wezboard-gui/src/termwindow/render/split.rs` and/or `paint.rs`,
    keep suppressing the old thin divider when split borders are enabled, but
@@ -680,22 +710,29 @@ background rect as the bordered pane's outer rect.
    The hit region is for mouse interaction only; do not draw the old divider
    when borders are active.
 
-5. **Update overlay and mouse geometry from the same helper.**
+6. **Update overlay and mouse geometry from the same helper.**
 
    Browser overlay frames should use the bordered content origin returned by
    `paint_pane`.
 
-   Mouse-to-cell mapping should subtract the same bordered content origin before
-   computing row/column. Captured drags outside the pane must preserve negative
-   `x_pixel_offset` and `y_pixel_offset`; do not clamp away the old
-   out-of-bounds offset behavior.
+   In `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`, update
+   `mouse_position_for_pane` so mouse-to-cell mapping subtracts the same
+   bordered content origin before computing row/column. Split the clamping
+   behavior:
+   - Clamp row/column to valid cell coordinates when needed.
+   - Preserve the raw signed pixel offset for `x_pixel_offset` and
+     `y_pixel_offset`, including negative values when a captured drag leaves the
+     pane past the left or top edge.
 
-6. **Keep old paths unchanged when borders are inactive.**
+   Do not use `rel_x.max(0)` or `rel_y.max(0)` to compute the stored pixel
+   offsets.
+
+7. **Keep old paths unchanged when borders are inactive.**
 
    With one pane, a zoomed pane, or `split_border_width = 0`, the old WezTerm
    gutter/background/divider behavior should remain unchanged.
 
-7. **Keep the diff scoped.**
+8. **Keep the diff scoped.**
 
    Touch only the files required for pane geometry, split hit regions, overlay
    positioning, mouse mapping, and this issue document. Avoid formatter churn.
@@ -732,13 +769,19 @@ background rect as the bordered pane's outer rect.
    - Content in every pane starts exactly `split_border_width` logical pixels
      inside that pane's visible border on all four edges.
    - Normal window padding remains visible.
+   - For an interior split, verify the left pane's `outer_rect.max_x()` equals
+     the right pane's `outer_rect.origin.x` by logging or inspecting the
+     computed geometry while testing.
 
 5. Edge-cell visibility:
    - In each split pane, print text that reaches the rightmost column and bottom
      row.
    - The rightmost glyphs and bottom row remain visible and are not painted
      under the border.
-   - `stty size` or `tput cols` still matches the visible cell grid.
+   - Take a screenshot or inspect pixels to confirm the right edge of the
+     rightmost glyph is separated from the inner border edge by the configured
+     border inset, not hidden underneath it.
+   - `stty size` or `tput cols` matches the pane's visible content grid.
 
 6. Mouse resize:
    - Hovering the shared border area shows the resize cursor.
