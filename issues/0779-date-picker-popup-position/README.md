@@ -965,3 +965,97 @@ this issue.
 Issue 779 is back to documentation-only state. Any future attempt must start
 from the pre-Issue-779 code path and avoid reusing the discarded patch archive
 or the failed Chromium trace approach.
+
+### Experiment 5: Restore Native Popup Proof Page
+
+#### Description
+
+Restore the `test-html` proof-of-bug page only. This experiment must not touch
+Chromium, Roamium, Wezboard, protobufs, overlay geometry, popup positioning, or
+debug logging.
+
+The goal is to bring back a deterministic local page that proves Issue 779
+exists: native Chromium/macOS popup UI opens at the wrong screen coordinates
+when the webview overlay is not located where Chromium thinks it is.
+
+This page should avoid implying that the HTML control's position inside the page
+matters. The controls can be listed plainly. The bug is about the webview
+overlay's position on the screen.
+
+#### Changes
+
+1. **Add `test-html/public/test-native-popups.html`.**
+
+   Include native controls that trigger OS/Chromium popup UI:
+   - `<select>`;
+   - `<input type="date">`;
+   - `<input type="time">`;
+   - `<input type="datetime-local">`;
+   - `<input type="color">`;
+   - `<input list>` with `<datalist>`.
+
+2. **Add a simple on-page event log.**
+
+   It should show:
+   - last focused control;
+   - last clicked control;
+   - timestamp;
+   - expected behavior: popup should anchor to the clicked control and stay
+     associated with the visible webview.
+
+3. **Add a visible page boundary.**
+
+   The boundary is only for screenshots and visual proof that the popup appears
+   outside the webview. Do not describe it as testing right, bottom, edge, or
+   in-page positioning.
+
+4. **Link the page from `test-html/public/index.html`.**
+
+   Add it under `Input` as:
+
+   `Native Popups — select, date, time, color, datalist`
+
+5. **Do not fix the underlying bug in this experiment.**
+
+   This experiment is only for restoring the reproduction. It should not add
+   logs or modify application behavior.
+
+#### Verification
+
+1. Run the test server:
+
+   ```bash
+   bun test-html/server.ts
+   ```
+
+2. Confirm the page serves:
+
+   ```bash
+   curl -I http://localhost:9616/test-native-popups.html
+   ```
+
+3. Open the page in a normal browser or Roamium to confirm it renders.
+
+4. In Wezboard, open:
+
+   ```bash
+   web http://localhost:9616/test-native-popups.html
+   ```
+
+5. Put the browser pane somewhere visibly offset on screen, such as a split
+   pane.
+
+6. Click `<select>` first.
+
+   Pass if the native popup appears detached from the visible webview/control,
+   proving the bug.
+
+7. Click date, time, color, and datalist controls.
+
+   Pass if any native popup appears at the wrong absolute screen position.
+
+8. Pass criteria:
+   - the page exists and is linked from the `test-html` index;
+   - it proves the native-popup bug without changing application code;
+   - it gives enough visual context for screenshots;
+   - it does not add debug logs or attempt a fix.
