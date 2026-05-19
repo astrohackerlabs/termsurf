@@ -443,73 +443,103 @@ must move deeper into Chromium's macOS view/root-window coordinate plumbing,
 likely `RenderWidgetHostViewMac` popup positioning, root-window bounds, or
 screen-info conversion.
 
-### Experiment 3: Trace Native Popup Coordinates
+### Experiment 3: Apply Synthetic Window Bounds
 
 #### Description
 
 Experiment 2 failed because the webview screen rect reached Chromium but native
 popups still opened completely outside the Wezboard window. That means the
-implementation updated a value that rendering or generic bounds code may see,
-but the macOS native popup path does not use it.
+implementation updated the wrong half of Chromium's macOS bounds model.
 
-This experiment is research-first. Do not attempt another fix yet. Instead,
-trace the exact Chromium macOS coordinate path used by native controls, compare
-Roamium against a known-good content shell window, and add enough logs to
-identify the correct injection point for the next fix.
+In Chromium's `RenderWidgetHostViewMac`, `GetViewBounds()` is computed from two
+cached rectangles:
 
-The working hypothesis is that content shell works because its `NSWindow`,
-`NSView`, `WebContentsView`, and `RenderWidgetHostViewMac` live in a real
-visible AppKit hierarchy. Roamium renders via CALayerHost in Wezboard, but
-Chromium's native view hierarchy still lives in Roamium's hidden host window.
-Native popups likely ask that hidden hierarchy for screen coordinates.
+```cpp
+return view_bounds_in_window_dip_ +
+       window_frame_in_screen_dip_.OffsetFromOrigin();
+```
+
+Experiment 2 passed the absolute TermSurf webview screen rect to
+`RenderWidgetHostView::SetBounds()`. On macOS, `SetBounds()` updates the
+view-in-window bounds. It only updates the window-frame-in-screen bounds when
+`IsHeadless()` is true:
+
+```cpp
+ns_view_->SetBounds(rect);
+if (IsHeadless()) {
+  OnWindowFrameInScreenChanged(rect);
+}
+```
+
+Roamium is not Chromium-headless; it is an offscreen/CALayerHost embedding.
+Therefore Experiment 2 likely put the absolute screen origin into
+`view_bounds_in_window_dip_` while `window_frame_in_screen_dip_` stayed tied to
+Roamium's hidden host window. Native popup positioning then still saw the wrong
+screen rect.
+
+This experiment directly tests the likely fix while logging enough state to
+prove or disprove it. Treat the TermSurf webview screen rect as a synthetic
+host-window frame for the embedded tab, and keep the WebContents view local to
+that synthetic window.
 
 #### Changes
 
-1. **Map the native popup call paths.**
+1. **Expose a TermSurf synthetic-window update on macOS.**
 
-   In `chromium/src/`, inspect the macOS code paths for:
-   - `<select>` popup menus;
-   - datalist / autofill suggestions;
-   - date and time pickers;
-   - root-window and screen-coordinate conversion helpers used by those
-     controls.
+   On the Issue 779 Chromium branch, add a small TermSurf-specific helper around
+   `RenderWidgetHostViewMac` state. The helper should take:
+   - local view bounds, expected to be `(0, 0, width_dip, height_dip)`;
+   - synthetic window frame, expected to be
+     `(screen_x, screen_y, screen_width, screen_height)`.
 
-   Start with local source searches around:
-   - `RenderWidgetHostViewMac`;
-   - `ShowPopupMenu`;
-   - `PopupMenuHelper`;
-   - `AutofillPopup`;
-   - `DateTimeChooser`;
-   - `GetBoundsInRootWindow`;
-   - `GetViewBounds`;
-   - `convertRect`;
-   - `convertRectToScreen`.
+   The helper must update the same state that `GetViewBounds()` uses:
+   - call the existing `SetBounds()` path with local view bounds;
+   - call or expose `OnWindowFrameInScreenChanged()` with the synthetic window
+     frame.
 
-   Record the findings in this experiment before implementing a fix. The result
-   should name the functions that compute the final popup anchor rect.
+   Do not pass the absolute screen rect to `SetBounds()` again. That was the
+   Experiment 2 mistake.
 
-2. **Add Chromium-side popup coordinate logs.**
+2. **Apply the synthetic model from `ts_set_view_bounds`.**
 
-   On the Issue 779 Chromium branch, add temporary diagnostic logs with a
-   consistent prefix, for example `[termsurf-popup-trace]`, at the coordinate
-   functions identified in step 1.
+   In `content/libtermsurf_chromium/ts_browser_main_parts.cc`, update the
+   bounded resize path so it computes:
 
-   For each popup event, log:
-   - popup/control type when available (`select`, autofill/datalist, date/time);
-   - incoming anchor rect from Blink or renderer code;
-   - `RenderWidgetHostViewMac` bounds;
-   - `GetBoundsInRootWindow` result;
-   - `GetViewBounds` or equivalent view bounds result;
-   - native `NSView` frame and bounds;
-   - native `NSWindow` frame;
-   - `NSView convertRect:toView:nil` result;
-   - `NSWindow convertRectToScreen:` result;
-   - final popup screen rect passed to AppKit or Chromium popup UI.
+   ```text
+   local_view_bounds = (0, 0, logical_width, logical_height)
+   synthetic_window_frame = (screen_x, screen_y, screen_width, screen_height)
+   ```
 
-   The logs should be detailed but temporary. They are the experiment output,
-   not the final product.
+   Then apply those to the `RenderWidgetHostViewMac` helper from step 1.
 
-3. **Keep the existing TermSurf bounds logs.**
+   The expected invariant after the update is:
+
+   ```text
+   view_bounds_in_window_dip_ = (0, 0, w, h)
+   window_frame_in_screen_dip_ = (screen_x, screen_y, w, h)
+   GetViewBounds() = (screen_x, screen_y, w, h)
+   ```
+
+3. **Add targeted Chromium logs.**
+
+   Add temporary logs with a consistent prefix, for example
+   `[termsurf-popup-trace]`, when `ts_set_view_bounds` applies the synthetic
+   model.
+
+   Log:
+   - incoming TermSurf screen rect;
+   - local view bounds sent to `SetBounds()`;
+   - synthetic window frame sent to `OnWindowFrameInScreenChanged()`;
+   - resulting `GetViewBounds()`;
+   - device scale factor;
+   - content pixel size and logical size.
+
+   If needed, add one popup-path log near `<select>` popup handling to record
+   the anchor or view bounds consumed by the popup path. Do not broaden this
+   into a full Chromium coordinate audit unless the `GetViewBounds()` invariant
+   is correct and popups still fail.
+
+4. **Keep the existing TermSurf bounds logs.**
 
    Preserve the Experiment 2 logs in Wezboard and Chromium that show:
    - Wezboard's computed webview screen rect;
@@ -517,24 +547,7 @@ Native popups likely ask that hidden hierarchy for screen coordinates.
    - Chromium's received `ts_set_view_bounds` values.
 
    The important comparison is between TermSurf's known intended webview rect
-   and the rect used by the native popup path.
-
-4. **Compare Roamium with content shell.**
-
-   Build and run a known-good Chromium/content shell target if available from
-   the local checkout. Open the same reproduction page:
-
-   ```bash
-   http://localhost:9616/test-native-popups.html
-   ```
-
-   In content shell, click the same native controls and collect the same
-   `[termsurf-popup-trace]` logs. Content shell does not need to run TermSurf;
-   it is the baseline for how Chromium behaves when the AppKit view hierarchy
-   matches the visible window.
-
-   If content shell requires a different target or runner, record the exact
-   command used in the result.
+   and Chromium's resulting `GetViewBounds()`.
 
 5. **Run the Roamium reproduction with logs enabled.**
 
@@ -550,17 +563,16 @@ Native popups likely ask that hidden hierarchy for screen coordinates.
    Color input can be clicked and recorded, but it remains a known exception if
    Chromium delegates it to the global `NSColorPanel`.
 
-6. **Analyze the logs before proposing a fix.**
+6. **Analyze the result.**
 
    The result must answer these questions:
    - Does Wezboard compute the correct visible webview screen rect?
    - Does Chromium receive that same rect through `ts_set_view_bounds`?
-   - Which native popup coordinate function ignores or loses that rect?
-   - Which native view/window rect is still wrong?
-   - How does the same function differ in content shell?
-   - What is the next fix location: `RenderWidgetHostViewMac`,
-     `WebContentsViewMac`, root-window bounds, screen-info conversion, host
-     `NSWindow`/`NSView` placement, or popup-specific code?
+   - Does Chromium's `GetViewBounds()` become the same rect after applying the
+     synthetic-window update?
+   - Do select, datalist, and date popups anchor inside the Wezboard webview?
+   - If popups still fail while `GetViewBounds()` is correct, which popup path
+     should be logged next?
 
 #### Verification
 
@@ -572,21 +584,13 @@ Native popups likely ask that hidden hierarchy for screen coordinates.
    scripts/build.sh wezboard
    ```
 
-   Build content shell or the nearest available known-good Chromium shell target
-   if it is not already present.
-
 2. Start the reproduction server:
 
    ```bash
    bun test-html/server.ts
    ```
 
-3. Collect logs from content shell:
-   - open `http://localhost:9616/test-native-popups.html`;
-   - click select, datalist, and date controls;
-   - save the relevant `[termsurf-popup-trace]` log excerpts.
-
-4. Collect logs from Roamium/Wezboard:
+3. Collect logs from Roamium/Wezboard:
    - run local Wezboard;
    - run local `web` with `--browser` pointing at
      `chromium/src/out/Default/roamium`;
@@ -595,17 +599,22 @@ Native popups likely ask that hidden hierarchy for screen coordinates.
    - click select, datalist, and date controls;
    - save the relevant Wezboard, Roamium, and Chromium log excerpts.
 
-5. Pass criteria:
-   - the experiment identifies the exact Chromium function or object that
-     computes the wrong popup screen rect in Roamium;
-   - logs include both the correct TermSurf/Wezboard webview rect and the wrong
-     native popup rect;
-   - content shell logs show the corresponding known-good coordinate path;
-   - the conclusion names one concrete next fix location.
+4. Pass criteria:
+   - Chromium logs show `GetViewBounds()` equals the visible Wezboard webview
+     rect within 1 DIP;
+   - select, datalist, and date popups open anchored to their controls inside
+     the webview;
+   - moving the browser pane to another split position updates `GetViewBounds()`
+     and popup anchoring follows it.
+
+5. Partial criteria:
+   - `GetViewBounds()` is correct, but one or more native popups still open in
+     the wrong place. In that case, keep the logs and design the next experiment
+     around the specific popup path that ignores `GetViewBounds()`.
 
 6. Fail criteria:
-   - logs are too broad to determine which coordinate conversion is wrong;
-   - content shell cannot be used and no equivalent known-good baseline is
-     recorded;
-   - the result proposes another fix without first identifying the coordinate
-     source used by native popups.
+   - `GetViewBounds()` does not equal the visible Wezboard webview rect after
+     applying the synthetic-window update;
+   - popups still open completely outside the Wezboard window and the logs do
+     not explain whether `view_bounds_in_window_dip_` or
+     `window_frame_in_screen_dip_` is wrong.
