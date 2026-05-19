@@ -189,3 +189,31 @@ or appears detached elsewhere on the screen.
    less visible there, but this comparison helps show that the bad offset is
    tied to the webview overlay's screen position, not the control's position
    inside the page.
+
+**Result:** Pass
+
+Added `test-html/public/test-native-popups.html`, a plain HTML reproduction page
+for native popup positioning. The page includes native date, time,
+datetime-local, color, select, and datalist controls; draws a visible webview
+content boundary; and logs the last focused or clicked control so screenshots
+can identify which native popup was triggered.
+
+Added the page to `test-html/public/index.html` under Input.
+
+Static serving verification passed using a temporary local server for
+`test-html/public`:
+
+```bash
+curl -I http://localhost:9617/test-native-popups.html
+curl -s http://localhost:9617/
+curl -s http://localhost:9617/test-native-popups.html
+```
+
+Manual Wezboard reproduction of the native-popup mispositioning remains for the
+next experiment.
+
+#### Conclusion
+
+Issue 779 now has a local, deterministic reproduction page. Future experiments
+can use `http://localhost:9616/test-native-popups.html` to compare native popup
+placement as the webview overlay moves between split positions on screen.

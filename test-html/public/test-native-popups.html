@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Native Popup Position Test</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #1a1b26;
+  color: #c0caf5;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  padding: 32px;
+}
+h1 {
+  color: #7aa2f7;
+  margin: 0 0 8px;
+}
+p {
+  color: #a9b1d6;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+.frame {
+  border: 3px solid #7dcfff;
+  border-radius: 8px;
+  padding: 20px;
+  background: #16161e;
+}
+.frame-header {
+  color: #7dcfff;
+  font-weight: 700;
+  margin-bottom: 18px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+.control {
+  border: 1px solid #3b4261;
+  border-radius: 8px;
+  padding: 14px;
+  background: #24283b;
+}
+label {
+  display: block;
+  color: #e0af68;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+input,
+select {
+  width: 100%;
+  color: #c0caf5;
+  background: #1f2335;
+  border: 1px solid #565f89;
+  border-radius: 6px;
+  font: inherit;
+  padding: 10px;
+}
+input[type="color"] {
+  height: 44px;
+  padding: 4px;
+}
+.expectation {
+  color: #9aa5ce;
+  font-size: 13px;
+  margin-top: 8px;
+}
+#log {
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid #565f89;
+  border-radius: 8px;
+  background: #11121a;
+  color: #9ece6a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-height: 44px;
+}
+</style>
+</head>
+<body>
+  <h1>Native Popup Position Test</h1>
+  <p>
+    Click each native control after moving this browser pane to different
+    Wezboard split positions. The popup should open at the clicked control. If
+    it appears detached from the webview, the host screen coordinates are wrong.
+  </p>
+
+  <div class="frame" aria-label="Visible webview content boundary">
+    <div class="frame-header">Visible webview content boundary</div>
+
+    <div class="grid">
+      <div class="control">
+        <label for="date">Date input</label>
+        <input id="date" type="date" value="2026-05-19">
+        <div class="expectation">The picker should anchor to this field.</div>
+      </div>
+
+      <div class="control">
+        <label for="time">Time input</label>
+        <input id="time" type="time" value="12:30">
+        <div class="expectation">The picker should anchor to this field.</div>
+      </div>
+
+      <div class="control">
+        <label for="datetime">Date and time input</label>
+        <input id="datetime" type="datetime-local" value="2026-05-19T12:30">
+        <div class="expectation">The picker should anchor to this field.</div>
+      </div>
+
+      <div class="control">
+        <label for="color">Color input</label>
+        <input id="color" type="color" value="#7dcfff">
+        <div class="expectation">The picker should anchor to this field.</div>
+      </div>
+
+      <div class="control">
+        <label for="select">Select dropdown</label>
+        <select id="select">
+          <option>TermSurf</option>
+          <option>Roamium</option>
+          <option>Wezboard</option>
+          <option>Surfari</option>
+        </select>
+        <div class="expectation">The menu should anchor to this field.</div>
+      </div>
+
+      <div class="control">
+        <label for="browser">Datalist input</label>
+        <input id="browser" list="browsers" value="Roamium">
+        <datalist id="browsers">
+          <option value="Roamium">
+          <option value="Surfari">
+          <option value="Waterwolf">
+          <option value="Girlbat">
+        </datalist>
+        <div class="expectation">Suggestions should anchor to this field.</div>
+      </div>
+    </div>
+
+    <div id="log">Last clicked control: none</div>
+  </div>
+
+  <script>
+    const log = document.getElementById('log');
+    for (const el of document.querySelectorAll('input, select')) {
+      el.addEventListener('pointerdown', () => {
+        log.textContent = `Last clicked control: #${el.id} (${el.type || el.tagName.toLowerCase()})`;
+      });
+      el.addEventListener('focus', () => {
+        log.textContent = `Last focused control: #${el.id} (${el.type || el.tagName.toLowerCase()})`;
+      });
+    }
+  </script>
+</body>
+</html>
