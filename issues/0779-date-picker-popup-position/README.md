@@ -1090,3 +1090,208 @@ Issue 779 again has a local proof-of-bug page without restoring the failed fix
 or debug patches. Future experiments can use
 `http://localhost:9616/test-native-popups.html` to reproduce native popup
 mispositioning.
+
+### Experiment 6: Trace TUI, Overlay, and Popup Coordinates Safely
+
+#### Description
+
+Add narrow, low-frequency logs that answer two questions without changing
+behavior:
+
+1. What exact coordinate value causes native popups to open away from the
+   visible webview?
+2. If the `web` TUI fails to render or becomes hidden again, where did that
+   happen?
+
+This experiment must avoid the failed Experiment 4 approach. Do not log inside
+Chromium hot geometry getters such as `RenderWidgetHostViewMac::GetViewBounds()`
+and do not log from repeated Chromium layout or bounds callbacks. Logging must
+stay at ownership boundaries where TermSurf already sends, receives, creates, or
+positions something.
+
+Use a single log prefix across all components:
+
+```text
+[issue-779-trace]
+```
+
+Every log line should include the pane id or tab id when available so lines from
+Wezboard, `web`, Roamium, and Chromium can be joined manually.
+
+#### Changes
+
+1. **Add `webtui` baseline draw logs.**
+
+   In `webtui/src/main.rs`, log only when one of these low-frequency events
+   happens:
+   - raw/alternate screen setup completes;
+   - `terminal.draw(...)` completes for the first frame;
+   - `viewport_rect` changes;
+   - `SetOverlay` or `SetDevtoolsOverlay` is sent;
+   - `BrowserReady` is received;
+   - the event loop exits.
+
+   Include:
+   - pane id;
+   - draw count;
+   - terminal frame area;
+   - returned viewport rect in cells;
+   - current mode;
+   - browser URL;
+   - whether the overlay message was sent.
+
+   This tells us whether `web` actually drew and what viewport rect it asked
+   Wezboard to cover.
+
+2. **Add Wezboard overlay receive and placement logs.**
+
+   In `wezboard/wezboard-gui/src/termsurf/conn.rs`, log when Wezboard receives
+   `SetOverlay` or `SetDevtoolsOverlay` and when it creates or positions the
+   CALayerHost.
+
+   Include:
+   - pane id and tab id if known;
+   - received overlay cell rect `(col,row,width,height)`;
+   - computed pixel size from current cell metrics;
+   - CALayerHost frame in view points;
+   - root overlay view bounds;
+   - flipped layer frame;
+   - positioning layer frame;
+   - final host layer frame if available;
+   - absolute screen rect from `update_overlay_screen_rect`.
+
+   Add an explicit baseline check log:
+
+   ```text
+   [issue-779-trace] overlay_chrome_overlap pane_id=... overlaps_chrome=... overlay=... viewport=... reason=...
+   ```
+
+   `overlaps_chrome` should be `true` if the final overlay frame extends outside
+   the viewport rect sent by `web` or covers the URL/status chrome area. This is
+   what makes a repeated "web TUI disappeared" failure visible in logs.
+
+3. **Add one Roamium boundary log.**
+
+   In `roamium/src/dispatch.rs`, log only when a resize/create message is
+   received from Wezboard and passed through to the FFI.
+
+   Include:
+   - tab id;
+   - pixel width and height;
+   - whether this is initial create or resize.
+
+   Do not add new protocol fields and do not change FFI signatures.
+
+4. **Add one Chromium popup-entry log.**
+
+   In Chromium, log only at `PopupMenuHelper::ShowPopupMenu(...)` for native
+   `<select>` popup positioning. Do not log in `GetViewBounds()` or repeated
+   bounds callbacks.
+
+   Include:
+   - input `bounds`;
+   - `web_contents->GetContainerBounds()`;
+   - computed `bounds_in_screen`;
+   - the current `RenderWidgetHostViewMac` pointer;
+   - `rwhvm->GetViewBounds()` result read once inside this popup entry log;
+   - item count and selected item.
+
+   This single log line should identify whether the popup misplacement comes
+   from the element anchor, the WebContents container bounds, or the
+   RenderWidgetHostView screen bounds.
+
+5. **Keep all logs opt-in.**
+
+   Logs should only emit when an environment variable is set, for example:
+
+   ```bash
+   TERMSURF_ISSUE_779_TRACE=1
+   ```
+
+   If the variable is unset, behavior and log volume should be unchanged.
+
+6. **No behavior changes.**
+
+   Do not change overlay geometry, protocol fields, Chromium bounds,
+   `RenderWidgetHostViewMac` state, popup placement, focus, input, or lifecycle.
+
+#### Verification
+
+1. Build affected components:
+
+   ```bash
+   scripts/build.sh chromium
+   scripts/build.sh roamium
+   scripts/build.sh wezboard
+   scripts/build.sh webtui
+   ```
+
+2. Start the test server:
+
+   ```bash
+   bun test-html/server.ts
+   ```
+
+3. Start local Wezboard with trace enabled and logs in the repo log directory:
+
+   ```bash
+   mkdir -p logs/issue-779-exp6-state/termsurf
+   TERMSURF_ISSUE_779_TRACE=1 \
+   XDG_STATE_HOME="$PWD/logs/issue-779-exp6-state" \
+   RUST_LOG=info \
+     ./wezboard/target/debug/wezboard-gui \
+     2>&1 | tee logs/issue-779-exp6-wezboard.log
+   ```
+
+4. In local Wezboard, run local `web` with local Roamium:
+
+   ```bash
+   TERMSURF_ISSUE_779_TRACE=1 \
+   /Users/ryan/dev/termsurf/webtui/target/debug/web \
+     --browser /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium \
+     http://localhost:9616/test-native-popups.html
+   ```
+
+5. Confirm baseline TUI behavior first:
+   - the `web` TUI is visible;
+   - the URL/status chrome is visible;
+   - the browser overlay is confined to the viewport area;
+   - logs contain `webtui` draw, `SetOverlay`, Wezboard receive, and Wezboard
+     placement lines;
+   - `overlay_chrome_overlap` is `false`.
+
+   If the TUI fails to render or is hidden again, stop before clicking native
+   controls. The result must use the logs to classify the failure as one of:
+   - `webtui` never completed its first draw;
+   - `webtui` drew but sent a bad viewport rect;
+   - Wezboard received a good viewport but computed a bad overlay frame;
+   - Wezboard positioned the overlay correctly but the root/layer frame covered
+     more than the viewport;
+   - another named point shown by the trace.
+
+6. If the baseline is good, click the `<select>` control on the proof page.
+
+7. Extract logs:
+
+   ```bash
+   rg "\\[issue-779-trace\\]|PopupMenuHelper::ShowPopupMenu" \
+     logs/issue-779-exp6-wezboard.log \
+     logs/issue-779-exp6-state/termsurf/chromium-server.log
+   ```
+
+8. Pass criteria:
+   - trace is opt-in and quiet when `TERMSURF_ISSUE_779_TRACE` is unset;
+   - `web` remains visible and usable with trace enabled;
+   - if `web` is not visible, the logs identify the exact failing stage;
+   - the `<select>` popup log names the first divergent coordinate among webview
+     overlay screen rect, Chromium view bounds, container bounds, and popup
+     `bounds_in_screen`;
+   - no application behavior changes are made.
+
+9. Fail criteria:
+   - logs emit without `TERMSURF_ISSUE_779_TRACE=1`;
+   - `web` disappears again and the logs do not identify why;
+   - native popup misplacement occurs but the logs cannot identify the
+     coordinate source;
+   - any geometry, protocol, FFI, popup, focus, input, or lifecycle behavior is
+     changed.
