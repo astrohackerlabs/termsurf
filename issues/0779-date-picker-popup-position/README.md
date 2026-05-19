@@ -691,3 +691,259 @@ that synthetic window.
    - popups still open completely outside the Wezboard window and the logs do
      not explain whether `view_bounds_in_window_dip_` or
      `window_frame_in_screen_dip_` is wrong.
+
+**Result:** Fail
+
+Implemented the synthetic-window bounds path in Chromium:
+
+- added `RenderWidgetHostViewMac::SetTermSurfSyntheticWindowBounds()`;
+- added an Objective-C++ bridge helper so `libtermsurf_chromium` can call it
+  from C++;
+- changed bounded resize handling so the WebContents view receives local bounds
+  `(0, 0, logical_width, logical_height)`;
+- changed bounded resize handling so the TermSurf screen rect is applied as the
+  synthetic window frame via `OnWindowFrameInScreenChanged()`;
+- added `[termsurf-popup-trace]` logs showing the incoming rect, local view
+  bounds, synthetic window frame, and resulting `GetViewBounds()`.
+
+Build verification passed:
+
+```bash
+scripts/build.sh chromium
+scripts/build.sh roamium
+scripts/build.sh wezboard
+```
+
+Manual verification failed before popup anchoring could be tested. Running the
+local stack with this Chromium change launches/logs the browser process, but the
+`web` TUI no longer appears. That leaves the browser visible without the TUI
+chrome or a usable close/control path from `web`.
+
+#### Conclusion
+
+This experiment introduced a more severe regression than the original popup
+positioning bug: browser startup can progress far enough to show/log the
+browser, but the `web` TUI is absent. The synthetic-window approach is not
+acceptable in its current form. Before any further popup-coordinate work, the
+next step must either revert this Chromium change or explain exactly why
+changing `RenderWidgetHostViewMac` bounds breaks the TUI/browser lifecycle.
+
+### Experiment 4: Passive Popup Coordinate Trace
+
+#### Description
+
+Experiment 3 proved that mutating global `RenderWidgetHostViewMac` geometry is
+too dangerous: it restored no confidence in popup positioning and broke the
+basic `web` TUI experience. The next experiment must be logging-only.
+
+The goal is to collect enough precise data to identify the native popup
+coordinate source and the correct fix location without changing behavior. This
+experiment must preserve the current baseline:
+
+- `web` TUI appears and works;
+- browser pane opens;
+- native popups still reproduce the off-window bug.
+
+No code in this experiment may change view bounds, window frames, screen info,
+input coordinates, focus behavior, tab lifecycle, renderer lifecycle, or overlay
+placement. Any helper added for this experiment must only read existing state
+and log it.
+
+#### Changes
+
+1. **Keep the Experiment 3 revert as the code baseline.**
+
+   Use the current Issue 779 Chromium branch after the revert of
+   `Apply synthetic popup bounds`. Do not reintroduce
+   `SetTermSurfSyntheticWindowBounds()` or any equivalent behavior.
+
+2. **Add passive Chromium logs for `RenderWidgetHostViewMac` geometry.**
+
+   Add `[termsurf-popup-trace]` logs that only read and print state in
+   `content/browser/renderer_host/render_widget_host_view_mac.mm`.
+
+   Log these methods:
+   - `SetBounds(const gfx::Rect& rect)`;
+   - `GetViewBounds()`;
+   - `OnBoundsInWindowChanged(...)`;
+   - `OnWindowFrameInScreenChanged(...)`;
+   - `SetWindowFrameInScreen(...)` if it is called in this path.
+
+   Each log line must include:
+   - method name;
+   - input rect, if any;
+   - `view_bounds_in_window_dip_`;
+   - `window_frame_in_screen_dip_`;
+   - computed `GetViewBounds()`;
+   - whether `IsHeadless()` is true;
+   - whether the view is attached to a window when that is known;
+   - enough tab/view identity to correlate events for the same WebContents
+     without logging private user data.
+
+3. **Add passive Chromium logs for the native popup path.**
+
+   Add `[termsurf-popup-trace]` logs at the macOS popup entry point for
+   `<select>` controls. Start with:
+   - `content/browser/renderer_host/render_frame_host_impl.cc`
+     `ShowPopupMenu(...)`;
+   - `content/browser/renderer_host/popup_menu_helper_mac.mm`
+     `PopupMenuHelper::ShowPopupMenu(...)`.
+
+   For each popup log, print:
+   - function name;
+   - popup anchor bounds passed into the function;
+   - the owning `RenderWidgetHostView` `GetViewBounds()` result, when available;
+   - the final rect passed to Cocoa/AppKit, when visible in the function;
+   - the selected item count or item list size only if already available and
+     cheap to log.
+
+   Do not alter popup positioning. Do not normalize coordinates. Do not call
+   `SetBounds()`, `OnWindowFrameInScreenChanged()`, or any screen-info update
+   from these popup logs.
+
+4. **Add passive logs for datalist/autofill and date input if identifiable
+   quickly.**
+
+   Search the local Chromium source for the macOS-specific paths for:
+   - datalist/autofill popup display;
+   - date/time chooser display.
+
+   If the entry points are clear within a short source search, add the same
+   passive log shape there. If they are not clear, do not guess and do not
+   broaden the patch. Record in the result that Experiment 4 traced `<select>`
+   first and that datalist/date need a separate target.
+
+5. **Preserve existing TermSurf-side logs.**
+
+   Keep the existing Wezboard logs from Experiment 2:
+   - `overlay screen rect`;
+   - `Resize: pane_id=... screen=(...)`;
+   - Chromium `ResizeTab bounds` / `ts_set_view_bounds` received values.
+
+   These are the ground truth for the visible Wezboard webview rect. The
+   Chromium popup logs must be compared against these values.
+
+6. **Use deterministic log files under `logs/`.**
+
+   Run Wezboard from the repo root with:
+
+   ```bash
+   mkdir -p logs/issue-779-exp4-state/termsurf
+   XDG_STATE_HOME="$PWD/logs/issue-779-exp4-state" \
+   RUST_LOG=termsurf=info,wezboard_gui::termsurf=info \
+     ./wezboard/target/debug/wezboard-gui \
+     2>&1 | tee logs/issue-779-exp4-wezboard.log
+   ```
+
+   Chromium/Roamium logs should appear at:
+
+   ```bash
+   logs/issue-779-exp4-state/termsurf/chromium-server.log
+   ```
+
+   Tail Chromium/Roamium logs while testing:
+
+   ```bash
+   tail -f logs/issue-779-exp4-state/termsurf/chromium-server.log
+   ```
+
+   Extract relevant lines after testing:
+
+   ```bash
+   rg "termsurf-popup-trace|Resize:|overlay screen rect|ResizeTab bounds|GetViewBounds|ShowPopupMenu" \
+     logs/issue-779-exp4-wezboard.log \
+     logs/issue-779-exp4-state/termsurf/chromium-server.log
+   ```
+
+7. **Analyze root cause from the logs.**
+
+   The result must answer these exact questions:
+   - What is Wezboard's visible webview screen rect?
+   - What `screen_x/screen_y/screen_width/screen_height` does Chromium receive
+     through `ts_set_view_bounds`?
+   - What are `view_bounds_in_window_dip_` and `window_frame_in_screen_dip_`
+     immediately before opening the popup?
+   - What does `GetViewBounds()` return immediately before opening the popup?
+   - What anchor rect does `ShowPopupMenu(...)` receive?
+   - Does the popup path add `GetViewBounds()` to the anchor rect, use a native
+     `NSView`/`NSWindow` conversion, or use some other coordinate source?
+   - Which exact value first diverges from the visible Wezboard webview rect?
+   - Based on that divergence, where is the next fix location?
+
+   The conclusion must name one of these fix targets:
+   - popup-specific anchor conversion;
+   - `PopupMenuHelper` / Cocoa popup wrapper;
+   - `RenderWidgetHostViewMac::GetViewBounds()` caller-side use;
+   - native `NSView`/`NSWindow` conversion path;
+   - TermSurf `Resize` / screen rect computation;
+   - another named function discovered in the logs.
+
+#### Verification
+
+1. Build affected components:
+
+   ```bash
+   scripts/build.sh chromium
+   scripts/build.sh roamium
+   scripts/build.sh wezboard
+   scripts/build.sh webtui
+   ```
+
+2. Start the reproduction server:
+
+   ```bash
+   bun test-html/server.ts
+   ```
+
+3. Start local Wezboard with deterministic logs:
+
+   ```bash
+   mkdir -p logs/issue-779-exp4-state/termsurf
+   XDG_STATE_HOME="$PWD/logs/issue-779-exp4-state" \
+   RUST_LOG=termsurf=info,wezboard_gui::termsurf=info \
+     ./wezboard/target/debug/wezboard-gui \
+     2>&1 | tee logs/issue-779-exp4-wezboard.log
+   ```
+
+4. In local Wezboard, run local `web` with local Roamium:
+
+   ```bash
+   /Users/ryan/dev/termsurf/webtui/target/debug/web \
+     --browser /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium \
+     http://localhost:9616/test-native-popups.html
+   ```
+
+5. Confirm the baseline still works:
+   - `web` TUI is visible;
+   - browser pane opens;
+   - browser controls can close or navigate the browser.
+
+   If the TUI is missing again, stop immediately and mark the experiment Fail.
+
+6. Put the browser pane in a visibly offset location, preferably top-right.
+
+7. Click the `<select>` control. If datalist/date logs were added, click those
+   too.
+
+8. Extract logs:
+
+   ```bash
+   rg "termsurf-popup-trace|Resize:|overlay screen rect|ResizeTab bounds|GetViewBounds|ShowPopupMenu" \
+     logs/issue-779-exp4-wezboard.log \
+     logs/issue-779-exp4-state/termsurf/chromium-server.log
+   ```
+
+9. Pass criteria:
+   - `web` TUI remains fully usable;
+   - no behavior changes are introduced;
+   - logs identify the first coordinate value that diverges from the visible
+     Wezboard webview rect;
+   - the result names one concrete next fix location.
+
+10. Fail criteria:
+
+- `web` TUI fails to appear or becomes unusable;
+- the browser pane fails to open;
+- logs are missing for `SetBounds`, `GetViewBounds`, `OnBoundsInWindowChanged`,
+  `OnWindowFrameInScreenChanged`, or `ShowPopupMenu`;
+- the result cannot identify the coordinate source used by the `<select>` popup.

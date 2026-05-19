@@ -1,7 +1,7 @@
 From 445a4d44d9e57662a095326e8ae3dcd4aa530cc7 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 17 Mar 2026 05:11:15 -0500
-Subject: [PATCH 4/9] Add UpdateTargetURL for link hover
+Subject: [PATCH 04/11] Add UpdateTargetURL for link hover
 
 The mouse hovered, the link was shy,
 No URL whispered where it might fly.

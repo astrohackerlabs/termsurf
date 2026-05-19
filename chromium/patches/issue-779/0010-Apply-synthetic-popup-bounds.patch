@@ -1,0 +1,143 @@
+From 5315c8ccd61ef505b89699633be8e345d617a266 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 19 May 2026 07:40:08 -0500
+Subject: [PATCH 10/11] Apply synthetic popup bounds
+
+The hidden window lied by omission,
+So we gave it a TermSurf position.
+The view stays local, the frame goes wide,
+And popups have nowhere left to hide.
+---
+ .../render_widget_host_view_mac.h             |  3 +++
+ .../render_widget_host_view_mac.mm            | 23 +++++++++++++++++++
+ .../ts_browser_main_parts.cc                  | 16 +++++++++----
+ .../ts_ca_layer_bridge_mac.h                  |  6 +++++
+ .../ts_ca_layer_bridge_mac.mm                 |  9 ++++++++
+ 5 files changed, 53 insertions(+), 4 deletions(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index c8d6231fe7db0..e8eb6fa2cd355 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -109,6 +109,9 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   using CALayerParamsCallback =
+       base::RepeatingCallback<void(const gfx::CALayerParams&)>;
+   void SetCALayerParamsCallback(CALayerParamsCallback callback);
++  void SetTermSurfSyntheticWindowBounds(
++      const gfx::Rect& local_view_bounds,
++      const gfx::Rect& synthetic_window_frame_in_screen);
+ 
+   // |delegate| is used to separate out the logic from the NSResponder delegate.
+   // |delegate| is retained by this class.
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 025d2ce065604..709bc76ff1434 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -631,6 +631,29 @@
+   }
+ }
+ 
++void RenderWidgetHostViewMac::SetTermSurfSyntheticWindowBounds(
++    const gfx::Rect& local_view_bounds,
++    const gfx::Rect& synthetic_window_frame_in_screen) {
++  LOG(INFO) << "[termsurf-popup-trace] applying synthetic bounds"
++            << " local_view=" << local_view_bounds.ToString()
++            << " synthetic_window="
++            << synthetic_window_frame_in_screen.ToString()
++            << " old_view_bounds="
++            << view_bounds_in_window_dip_.ToString()
++            << " old_window_frame="
++            << window_frame_in_screen_dip_.ToString()
++            << " old_get_view_bounds=" << GetViewBounds().ToString();
++
++  SetBounds(local_view_bounds);
++  OnBoundsInWindowChanged(local_view_bounds, /*attached_to_window=*/true);
++  OnWindowFrameInScreenChanged(synthetic_window_frame_in_screen);
++
++  LOG(INFO) << "[termsurf-popup-trace] synthetic bounds applied"
++            << " view_bounds=" << view_bounds_in_window_dip_.ToString()
++            << " window_frame=" << window_frame_in_screen_dip_.ToString()
++            << " get_view_bounds=" << GetViewBounds().ToString();
++}
++
+ gfx::NativeView RenderWidgetHostViewMac::GetNativeView() {
+   return gfx::NativeView(GetInProcessNSView());
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index a1e42ecf847e1..c3c0f9f5d309c 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -449,16 +449,24 @@ void TsBrowserMainParts::ResizeTab(void* wc_handle,
+         static_cast<int>(std::ceil(height / scale)));
+     tab->shell->ResizeWebContentForTests(logical);
+     if (screen_width > 0.0 && screen_height > 0.0) {
+-      gfx::Rect screen_bounds(
++      gfx::Rect synthetic_window_frame(
+           static_cast<int>(std::round(screen_x)),
+           static_cast<int>(std::round(screen_y)),
+           static_cast<int>(std::round(screen_width)),
+           static_cast<int>(std::round(screen_height)));
+-      view->SetBounds(screen_bounds);
+-      LOG(INFO) << "[libtermsurf_chromium] ResizeTab bounds pixels="
++      gfx::Rect local_view_bounds(gfx::Point(), logical);
++#if BUILDFLAG(IS_MAC)
++      SetTermSurfSyntheticWindowBoundsOnView(view, local_view_bounds,
++                                             synthetic_window_frame);
++#else
++      view->SetBounds(synthetic_window_frame);
++#endif
++      LOG(INFO) << "[termsurf-popup-trace] ResizeTab bounds pixels="
+                 << width << "x" << height
+                 << " logical=" << logical.ToString()
+-                << " screen=" << screen_bounds.ToString()
++                << " local_view=" << local_view_bounds.ToString()
++                << " synthetic_window=" << synthetic_window_frame.ToString()
++                << " get_view_bounds=" << view->GetViewBounds().ToString()
+                 << " screen_scale=" << screen_scale
+                 << " device_scale=" << scale;
+     }
+diff --git a/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h b/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h
+index b09531797f850..7342af92aaac4 100644
+--- a/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h
++++ b/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h
+@@ -7,6 +7,7 @@
+ 
+ #include "base/functional/callback.h"
+ #include "ui/gfx/ca_layer_params.h"
++#include "ui/gfx/geometry/rect.h"
+ 
+ namespace content {
+ 
+@@ -19,6 +20,11 @@ void SetCALayerParamsCallbackOnView(
+     RenderWidgetHostView* view,
+     base::RepeatingCallback<void(const gfx::CALayerParams&)> callback);
+ 
++void SetTermSurfSyntheticWindowBoundsOnView(
++    RenderWidgetHostView* view,
++    const gfx::Rect& local_view_bounds,
++    const gfx::Rect& synthetic_window_frame_in_screen);
++
+ }  // namespace content
+ 
+ #endif  // CONTENT_LIBTERMSURF_CONTENT_TS_CA_LAYER_BRIDGE_MAC_H_
+diff --git a/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.mm b/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.mm
+index c5af57f60a6f1..e0be81c15bf08 100644
+--- a/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.mm
++++ b/content/libtermsurf_chromium/ts_ca_layer_bridge_mac.mm
+@@ -15,4 +15,13 @@ void SetCALayerParamsCallbackOnView(
+   mac_view->SetCALayerParamsCallback(std::move(callback));
+ }
+ 
++void SetTermSurfSyntheticWindowBoundsOnView(
++    RenderWidgetHostView* view,
++    const gfx::Rect& local_view_bounds,
++    const gfx::Rect& synthetic_window_frame_in_screen) {
++  auto* mac_view = static_cast<RenderWidgetHostViewMac*>(view);
++  mac_view->SetTermSurfSyntheticWindowBounds(
++      local_view_bounds, synthetic_window_frame_in_screen);
++}
++
+ }  // namespace content
+-- 
+2.50.1 (Apple Git-155)
+

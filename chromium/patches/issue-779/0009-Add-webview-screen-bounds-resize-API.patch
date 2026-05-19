@@ -1,7 +1,7 @@
 From 3ad0ff52ee8f3d4e4dfc3870c22f15622ae6091e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 19 May 2026 07:11:42 -0500
-Subject: [PATCH 9/9] Add webview screen bounds resize API
+Subject: [PATCH 09/11] Add webview screen bounds resize API
 
 ---
  .../libtermsurf_chromium.cc                   | 13 ++++++++++
