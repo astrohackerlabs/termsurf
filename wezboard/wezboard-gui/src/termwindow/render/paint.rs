@@ -2,7 +2,6 @@ use crate::termwindow::{RenderFrame, TermWindowNotif};
 use ::window::WindowOps;
 use ::window::bitmaps::atlas::OutOfTextureSpace;
 use anyhow::Context;
-use config::Dimension;
 use smol::Timer;
 use std::time::{Duration, Instant};
 use wezboard_font::ClearShapeCache;
@@ -308,38 +307,21 @@ impl crate::TermWindow {
             }
         }
 
-        let split_border_context = config::DimensionContext {
-            dpi: self.dimensions.dpi as f32,
-            pixel_max: self.dimensions.pixel_width as f32,
-            pixel_cell: self.render_metrics.cell_size.width as f32,
-        };
-        let split_border_width = match self.config.split_border_width {
-            Dimension::Pixels(n) => (n * split_border_context.dpi / 96.0).round(),
-            dimension => dimension.evaluate_as_pixels(split_border_context),
-        }
-        .max(0.0);
-        if let Some(pane) = self.get_active_pane_or_overlay() {
-            let splits = self.get_splits();
-            for split in &splits {
-                let hit_thickness = if split.direction == mux::tab::SplitDirection::Horizontal {
-                    self.render_metrics
-                        .cell_size
-                        .width
-                        .max(split_border_width as isize) as f32
-                } else {
-                    self.render_metrics
-                        .cell_size
-                        .height
-                        .max(split_border_width as isize) as f32
-                };
-                self.paint_split(
-                    &mut layers,
-                    split,
-                    &pane,
-                    split_border_width == 0.,
-                    hit_thickness,
-                )
-                .context("paint_split")?;
+        let split_border_width =
+            self.config
+                .split_border_width
+                .evaluate_as_pixels(config::DimensionContext {
+                    dpi: self.dimensions.dpi as f32,
+                    pixel_max: self.dimensions.pixel_width as f32,
+                    pixel_cell: self.render_metrics.cell_size.width as f32,
+                });
+        if split_border_width == 0. {
+            if let Some(pane) = self.get_active_pane_or_overlay() {
+                let splits = self.get_splits();
+                for split in &splits {
+                    self.paint_split(&mut layers, split, &pane)
+                        .context("paint_split")?;
+                }
             }
         }
 

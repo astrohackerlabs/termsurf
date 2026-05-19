@@ -9,7 +9,7 @@ use crate::termwindow::{ScrollHit, UIItem, UIItemType};
 use ::window::DeadKeyStatus;
 use ::window::bitmaps::TextureRect;
 use anyhow::Context;
-use config::{Dimension, VisualBellTarget};
+use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
@@ -21,105 +21,6 @@ use wezboard_term::{Line, StableRowIndex};
 use window::color::LinearRgba;
 
 impl crate::TermWindow {
-    fn split_border_width_physical(&self, num_panes: usize, is_zoomed: bool) -> f32 {
-        if num_panes <= 1 || is_zoomed {
-            return 0.0;
-        }
-
-        let context = config::DimensionContext {
-            dpi: self.dimensions.dpi as f32,
-            pixel_max: self.dimensions.pixel_width as f32,
-            pixel_cell: self.render_metrics.cell_size.width as f32,
-        };
-
-        let width = match self.config.split_border_width {
-            Dimension::Pixels(n) => (n * context.dpi / 96.0).round(),
-            dimension => dimension.evaluate_as_pixels(context),
-        };
-
-        width.max(0.0)
-    }
-
-    fn pane_render_geometry(
-        &self,
-        pos: &PositionedPane,
-        num_panes: usize,
-    ) -> anyhow::Result<PaneRenderGeometry> {
-        let (padding_left, padding_top) = self.padding_left_top();
-        let tab_bar_height = if self.show_tab_bar {
-            self.tab_bar_pixel_height()
-                .context("tab_bar_pixel_height")?
-        } else {
-            0.
-        };
-        let (top_bar_height, _bottom_bar_height) = if self.config.tab_bar_at_bottom {
-            (0.0, tab_bar_height)
-        } else {
-            (tab_bar_height, 0.0)
-        };
-
-        let border = self.get_os_border();
-        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
-        let cell_width = self.render_metrics.cell_size.width as f32;
-        let cell_height = self.render_metrics.cell_size.height as f32;
-
-        let content_origin_x =
-            padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
-        let content_origin_y = top_pixel_y + (pos.top as f32 * cell_height);
-
-        let (x, width_delta) = if pos.left == 0 {
-            (
-                0.,
-                padding_left + border.left.get() as f32 + (cell_width / 2.0),
-            )
-        } else {
-            (
-                padding_left + border.left.get() as f32 - (cell_width / 2.0)
-                    + (pos.left as f32 * cell_width),
-                cell_width,
-            )
-        };
-
-        let (y, height_delta) = if pos.top == 0 {
-            (top_pixel_y - padding_top, padding_top + (cell_height / 2.0))
-        } else {
-            (
-                top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                cell_height,
-            )
-        };
-
-        let background_rect = euclid::rect(
-            x,
-            y,
-            if pos.left + pos.width >= self.terminal_size.cols as usize {
-                self.dimensions.pixel_width as f32 - x
-            } else {
-                (pos.width as f32 * cell_width) + width_delta
-            },
-            if pos.top + pos.height >= self.terminal_size.rows as usize {
-                self.dimensions.pixel_height as f32 - y
-            } else {
-                (pos.height as f32 * cell_height) + height_delta
-            },
-        );
-
-        let content_width = pos.width as f32 * cell_width;
-        let content_height = pos.height as f32 * cell_height;
-        let border_width = self.split_border_width_physical(num_panes, pos.is_zoomed);
-
-        Ok(PaneRenderGeometry {
-            background_rect,
-            content_rect: euclid::rect(
-                content_origin_x,
-                content_origin_y,
-                content_width,
-                content_height,
-            ),
-            border_width,
-        })
-    }
-
     fn paint_pane_box_model(&mut self, pos: &PositionedPane) -> anyhow::Result<()> {
         let computed = self.build_pane(pos)?;
         let mut ui_items = computed.ui_items();
@@ -161,6 +62,8 @@ impl crate::TermWindow {
         let config = self.config.clone();
         let palette = pos.pane.palette();
 
+        let (padding_left, padding_top) = self.padding_left_top();
+
         let tab_bar_height = if self.show_tab_bar {
             self.tab_bar_pixel_height()
                 .context("tab_bar_pixel_height")?
@@ -174,6 +77,7 @@ impl crate::TermWindow {
         };
 
         let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
 
         let cursor = pos.pane.get_cursor_position();
         if pos.is_active {
@@ -203,9 +107,51 @@ impl crate::TermWindow {
                 config.text_background_opacity
             });
 
+        let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
-        let geometry = self.pane_render_geometry(pos, _num_panes)?;
-        let background_rect = geometry.background_rect;
+        let background_rect = {
+            // We want to fill out to the edges of the splits
+            let (x, width_delta) = if pos.left == 0 {
+                (
+                    0.,
+                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
+                )
+            } else {
+                (
+                    padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                        + (pos.left as f32 * cell_width),
+                    cell_width,
+                )
+            };
+
+            let (y, height_delta) = if pos.top == 0 {
+                (
+                    (top_pixel_y - padding_top),
+                    padding_top + (cell_height / 2.0),
+                )
+            } else {
+                (
+                    top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
+                    cell_height,
+                )
+            };
+            euclid::rect(
+                x,
+                y,
+                // Go all the way to the right edge if we're right-most
+                if pos.left + pos.width >= self.terminal_size.cols as usize {
+                    self.dimensions.pixel_width as f32 - x
+                } else {
+                    (pos.width as f32 * cell_width) + width_delta
+                },
+                // Go all the way to the bottom if we're bottom-most
+                if pos.top + pos.height >= self.terminal_size.rows as usize {
+                    self.dimensions.pixel_height as f32 - y
+                } else {
+                    (pos.height as f32 * cell_height) + height_delta as f32
+                },
+            )
+        };
 
         if self.window_background.is_empty() {
             // Per-pane, palette-specified background
@@ -350,8 +296,9 @@ impl crate::TermWindow {
             (sel.range.clone(), sel.rectangular)
         };
 
-        let left_pixel_x = geometry.content_rect.origin.x;
-        let content_origin_y = geometry.content_rect.origin.y;
+        let left_pixel_x = padding_left
+            + border.left.get() as f32
+            + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
 
         let start = Instant::now();
         let selection_fg = palette.selection_fg.to_linear();
@@ -401,7 +348,7 @@ impl crate::TermWindow {
                 selrange,
                 rectangular,
                 dims,
-                top_pixel_y: content_origin_y - pos.top as f32 * cell_height,
+                top_pixel_y,
                 left_pixel_x,
                 pos,
                 pane_id,
@@ -634,7 +581,7 @@ impl crate::TermWindow {
         metrics::histogram!("paint_pane.lines").record(start.elapsed());
         log::trace!("lines elapsed {:?}", start.elapsed());
 
-        Ok((left_pixel_x, content_origin_y))
+        Ok((left_pixel_x, top_pixel_y + pos.top as f32 * cell_height))
     }
 
     pub fn paint_pane_border(
@@ -643,8 +590,18 @@ impl crate::TermWindow {
         num_panes: usize,
         layers: &mut TripleLayerQuadAllocator,
     ) -> anyhow::Result<()> {
-        let geometry = self.pane_render_geometry(pos, num_panes)?;
-        let bw = geometry.border_width;
+        if num_panes <= 1 || pos.is_zoomed {
+            return Ok(());
+        }
+
+        let bw = self
+            .config
+            .split_border_width
+            .evaluate_as_pixels(config::DimensionContext {
+                dpi: self.dimensions.dpi as f32,
+                pixel_max: self.dimensions.pixel_width as f32,
+                pixel_cell: self.render_metrics.cell_size.width as f32,
+            }) as f32;
         if bw == 0.0 {
             return Ok(());
         }
@@ -662,47 +619,77 @@ impl crate::TermWindow {
                 .unwrap_or_else(|| palette.split.to_linear())
         };
 
-        let background = geometry.background_rect;
-        let content = geometry.content_rect;
+        let (padding_left, padding_top) = self.padding_left_top();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height()
+                .context("tab_bar_pixel_height")?
+        } else {
+            0.
+        };
+        let (top_bar_height, _bottom_bar_height) = if self.config.tab_bar_at_bottom {
+            (0.0, tab_bar_height)
+        } else {
+            (tab_bar_height, 0.0)
+        };
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
 
-        let left_x = if pos.left == 0 {
-            background.min_x()
-        } else {
-            content.min_x() - bw
-        };
-        let right_x = if pos.left + pos.width >= self.terminal_size.cols as usize {
-            background.max_x() - bw
-        } else {
-            content.max_x()
-        };
-        let top_y = if pos.top == 0 {
-            background.min_y()
-        } else {
-            content.min_y() - bw
-        };
-        let bottom_y = if pos.top + pos.height >= self.terminal_size.rows as usize {
-            background.max_y() - bw
-        } else {
-            content.max_y()
+        // Compute background_rect (same logic as paint_pane)
+        let background_rect: ::window::RectF = {
+            let (x, width_delta) = if pos.left == 0 {
+                (
+                    0.,
+                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
+                )
+            } else {
+                (
+                    padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                        + (pos.left as f32 * cell_width),
+                    cell_width,
+                )
+            };
+            let (y, height_delta) = if pos.top == 0 {
+                (
+                    (top_pixel_y - padding_top),
+                    padding_top + (cell_height / 2.0),
+                )
+            } else {
+                (
+                    top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
+                    cell_height,
+                )
+            };
+            euclid::rect(
+                x,
+                y,
+                if pos.left + pos.width >= self.terminal_size.cols as usize {
+                    self.dimensions.pixel_width as f32 - x
+                } else {
+                    (pos.width as f32 * cell_width) + width_delta
+                },
+                if pos.top + pos.height >= self.terminal_size.rows as usize {
+                    self.dimensions.pixel_height as f32 - y
+                } else {
+                    (pos.height as f32 * cell_height) + height_delta as f32
+                },
+            )
         };
 
-        let full_width = (right_x + bw - left_x).max(0.0);
-        let full_height = (bottom_y + bw - top_y).max(0.0);
+        let x = background_rect.origin.x;
+        let y = background_rect.origin.y;
+        let w = background_rect.size.width;
+        let h = background_rect.size.height;
 
-        self.filled_rectangle(layers, 2, euclid::rect(left_x, top_y, full_width, bw), color)?;
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(left_x, bottom_y, full_width, bw),
-            color,
-        )?;
-        self.filled_rectangle(layers, 2, euclid::rect(left_x, top_y, bw, full_height), color)?;
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(right_x, top_y, bw, full_height),
-            color,
-        )?;
+        // Top border
+        self.filled_rectangle(layers, 2, euclid::rect(x, y, w, bw), color)?;
+        // Bottom border
+        self.filled_rectangle(layers, 2, euclid::rect(x, y + h - bw, w, bw), color)?;
+        // Left border
+        self.filled_rectangle(layers, 2, euclid::rect(x, y, bw, h), color)?;
+        // Right border
+        self.filled_rectangle(layers, 2, euclid::rect(x + w - bw, y, bw, h), color)?;
 
         Ok(())
     }
@@ -811,10 +798,4 @@ impl crate::TermWindow {
             content: ComputedElementContent::Children(vec![]),
         })
     }
-}
-
-struct PaneRenderGeometry {
-    background_rect: ::window::RectF,
-    content_rect: ::window::RectF,
-    border_width: f32,
 }

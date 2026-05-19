@@ -843,6 +843,10 @@ still does not change the terminal content position. When the border appears,
 the content does not shift inward, so the core requirement of this issue remains
 unsatisfied.
 
+A later reimplementation attempt also failed visual testing. It was worse than
+the original failed implementation: scrolling flickered, and the padding was
+still wrong.
+
 #### Conclusion
 
 Experiment 4 did not restore Ghostboard-style border-box pane geometry. The
@@ -851,3 +855,151 @@ cell grid instead of making the visible content grid move when borders appear.
 The next attempt must not be accepted unless opening a split pane visibly shifts
 the terminal content by the configured border width while keeping resize handles
 usable.
+
+The reimplementation failure confirms that this issue should not be solved by
+incrementally adjusting the same approach. Any future attempt must first define
+and verify the exact pane box model against the visually correct Ghostboard
+behavior before changing Wezboard code again.
+
+### Experiment 5: Restore the Experiment 1 Presentation Model
+
+#### Description
+
+Return to the approach from Experiment 1 because it matched the visually correct
+behavior better than the later layout-level attempts. Do not change mux split
+layout, PTY sizing, tab sizing, or `PositionedPane` cell coordinates. Treat the
+existing WezTerm split geometry as stable and add the border as presentation
+geometry around it.
+
+The goal is pragmatic correctness: when a split pane is visible, draw the pane
+border and shift terminal rendering, browser overlays, mouse mapping, and split
+hit regions by the same converted border width. Do not try to make `stty size`,
+mux pane dimensions, or the split tree shrink to account for the border.
+Experiment 1 worked because it kept those structural systems alone.
+
+This experiment must explicitly avoid the Experiment 2 and 4 failure modes:
+
+- No calls to pane or PTY resize from paint.
+- No bordered layout state in `mux/src/tab.rs`.
+- No mutation of split proportions or pane cell coordinates.
+- No attempt to fold normal window padding into pane border layout.
+- No layout recomputation on scroll or paint frames.
+
+#### Changes
+
+1. **Start from the clean code baseline.**
+
+   Ensure the failed Experiment 4 code changes are reverted before implementing
+   this experiment. The implementation should touch only the presentation path:
+   - `wezboard/wezboard-gui/src/termwindow/render/pane.rs`
+   - `wezboard/wezboard-gui/src/termwindow/render/paint.rs`
+   - `wezboard/wezboard-gui/src/termwindow/render/split.rs`
+   - `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`, only if mouse mapping
+     needs the same content-origin correction.
+
+   Do not touch `wezboard/mux/src/tab.rs` or
+   `wezboard/wezboard-gui/src/termwindow/resize.rs`.
+
+2. **Recreate the Experiment 1 border-width helper.**
+
+   Add a local helper for split-border presentation geometry:
+   - Return `0.0` for one pane, zoomed panes, or zero border.
+   - Treat `Dimension::Pixels(n)` as logical pixels for this feature.
+   - Convert with `physical = logical * dpi / 96.0`.
+   - Use the same physical value for drawing, content origin, overlay origin,
+     mouse mapping, and split hit regions.
+
+   Do not change global `Dimension::Pixels` behavior.
+
+3. **Use shared presentation geometry in `paint_pane`.**
+
+   Reintroduce a small shared geometry helper that computes:
+   - the existing WezTerm pane background rect as `outer_rect`;
+   - `border_width`;
+   - `content_origin = normal_cell_origin + border_width`;
+   - `content_pixel_width` for line rendering.
+
+   Keep the old half-cell-expanded background/gutter behavior. Do not replace it
+   with non-overlapping pane boxes. That replacement caused the later padding
+   and flicker regressions.
+
+4. **Shift rendered content, not mux layout.**
+
+   When borders are active:
+   - pass `content_origin.x` as `left_pixel_x`;
+   - pass the shifted `content_origin.y` into `LineRender`;
+   - return `content_origin` from `paint_pane` so browser overlays align with
+     the shifted terminal content;
+   - keep `dims.cols`, `dims.viewport_rows`, `PositionedPane.width`, and
+     `PositionedPane.height` unchanged.
+
+   If the implementation needs to avoid edge clipping, do it the way Experiment
+   1 did: as render-time presentation geometry only. Do not resize panes or
+   alter the mux grid.
+
+5. **Draw borders from the same geometry.**
+
+   Update `paint_pane_border` to draw from the shared `outer_rect` and
+   `border_width`. The border drawing must use the same geometry source as the
+   shifted content origin, so the visible border and content shift cannot drift.
+
+6. **Preserve split resize hit regions.**
+
+   In `paint.rs` / `split.rs`, keep the old divider drawing only when
+   `split_border_width == 0`, but always register `UIItemType::Split` when
+   multiple panes are visible.
+
+   When borders are enabled, keep the hit target practical:
+   - vertical split target width: `max(border_width, cell_width)`;
+   - horizontal split target height: `max(border_width, cell_height)`.
+
+7. **Update mouse mapping only to match shifted content.**
+
+   Mouse-to-cell mapping should subtract the same shifted content origin used by
+   rendering. Preserve the old captured-drag behavior: do not clamp away raw
+   negative pixel offsets when a captured drag leaves the pane above or to the
+   left.
+
+8. **Keep normal window padding out of the border model.**
+
+   Window padding remains exactly what it was before. The split border is a
+   presentation inset applied inside the existing pane rendering area. Do not
+   move borders outside window padding or recalculate the terminal area around
+   padding.
+
+#### Verification
+
+1. Build Wezboard:
+
+   ```bash
+   scripts/build.sh wezboard
+   ```
+
+2. Configure:
+
+   ```lua
+   config.focused_split_border_color = "#7dcfff"
+   config.unfocused_split_border_color = "#565f89"
+   config.split_border_width = 4
+   ```
+
+3. Single pane:
+   - No border is drawn.
+   - Content starts exactly where it did before.
+   - Existing window padding is unchanged.
+
+4. Split panes:
+   - Borders appear when a split is opened.
+   - Content visibly shifts inward by the converted border width.
+   - Normal window padding does not disappear or get absorbed into the border.
+   - Focused and unfocused border colors are correct.
+   - Scrolling does not flicker.
+
+5. Mouse and overlay:
+   - The split resize region remains hoverable and draggable.
+   - Browser overlays align with shifted terminal content.
+   - Clicking and selecting text hit the expected cells.
+
+6. Regression:
+   - Removing `split_border_width` restores the old thin divider behavior.
+   - Zooming a pane hides the border and removes the content shift.
