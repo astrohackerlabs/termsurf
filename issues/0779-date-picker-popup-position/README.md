@@ -2575,12 +2575,18 @@ and identifying which coordinate conversion introduced that delta.
 
    These logs define the baseline webview, Shell, and TUI geometry.
 
-2. **Add a per-popup correlation id.**
+2. **Use a non-invasive per-popup join key.**
 
-   In Chromium, generate a monotonically increasing integer `popup_trace_id` for
-   every native popup-open path that this experiment logs. Every log line
-   emitted for a single popup-open event must include the same `popup_trace_id`,
-   plus the relevant `WebContents*` pointer when available.
+   Do not add fields to Mojo structs or other Chromium protocols just to carry a
+   trace id. For this manual experiment, the user clicks exactly one control at
+   a time, so `WebContents*`, relevant NSView/NSWindow pointers, and timestamp
+   are enough to join the log lines.
+
+   Every popup-open log line should include:
+   - the relevant `WebContents*` pointer when available;
+   - the relevant view/window pointer;
+   - a timestamp or monotonic sequence value local to the process;
+   - a path label such as `select`, `views-popup`, `date`, or `datalist`.
 
    The log prefix remains `[issue-779-trace]`.
 
@@ -2594,13 +2600,14 @@ and identifying which coordinate conversion introduced that delta.
    ```
 
    Log:
-   - `popup_trace_id`;
+   - the per-popup join key fields from step 2;
    - `view` pointer;
    - `view.frame`;
    - `view.bounds`;
    - `view.window.frame`;
    - `view.window.contentView.frame`;
    - `view.window.screen.frame`;
+   - `view.window.screen.visibleFrame`;
    - the `bounds` / anchor rect passed into `runMenuInView`;
    - that anchor rect converted with `[view convertRect:toView:nil]`;
    - that window rect converted with `[view.window convertRectToScreen:]`;
@@ -2615,6 +2622,12 @@ and identifying which coordinate conversion introduced that delta.
    appkit-screen-bottom-left
    chromium-screen-top-left
    ```
+
+   Important limitation: for `<select>`, Chromium does not directly observe the
+   final NSMenu/NSPopUpButtonCell window frame after AppKit places the menu.
+   This path can log the expected anchor rect. The final visible menu position
+   must be measured from a screenshot and compared to that anchor. This is not a
+   failure of the trace; it is an AppKit ownership boundary.
 
 4. **Trace the RenderWidgetHost popup-menu entry.**
 
@@ -2632,11 +2645,9 @@ and identifying which coordinate conversion introduced that delta.
    - `RenderWidgetHostViewMac::GetBoundsInRootWindow()` if available at that
      point;
    - any bounds passed across Mojo to the app shim;
-   - the same `popup_trace_id` if the id can be propagated cheaply.
+   - the per-popup join key fields from step 2.
 
-   If the id cannot be threaded through without behavior changes, include the
-   `WebContents*`, view pointer, and timestamp so the event can still be joined
-   to the `WebMenuRunner` log.
+   Do not modify Mojo IDL or serialized message fields for this experiment.
 
 5. **Trace Views-based native widget popups.**
 
@@ -2648,8 +2659,10 @@ and identifying which coordinate conversion introduced that delta.
    ```
 
    Specifically log in `NativeWidgetNSWindowBridge::SetBounds` and the
-   visibility/order-front path:
-   - `popup_trace_id` if available, otherwise bridge/window pointer;
+   visibility/order-front path, especially `SetVisibilityState` if that is the
+   method that orders the popup window onscreen:
+   - the per-popup join key fields from step 2 when available, otherwise
+     bridge/window pointer and timestamp;
    - `this` pointer;
    - `window_` pointer;
    - requested Chromium `new_bounds` / `bounds` rect;
@@ -2657,6 +2670,7 @@ and identifying which coordinate conversion introduced that delta.
    - `window_.contentView.frame`;
    - `window_.parentWindow` pointer and frame;
    - `window_.screen.frame`;
+   - `window_.screen.visibleFrame`;
    - `window_.level`;
    - `window_.isVisible`;
    - `window_.alphaValue`;
@@ -2671,6 +2685,8 @@ and identifying which coordinate conversion introduced that delta.
    - AppKit screen rect, bottom-left origin;
    - Chromium-style screen rect, top-left origin;
    - the `NSScreen.frame` used for conversion.
+   - the `NSScreen.visibleFrame` used to detect AppKit menu-bar/dock
+     constraints.
 
    Use the same conversion formula already used by Wezboard:
 
@@ -2683,13 +2699,13 @@ and identifying which coordinate conversion introduced that delta.
 
    This avoids another ambiguous "same numbers, different origin" trace.
 
-7. **Add one computed delta line per popup.**
+7. **Add one computed delta line per Views popup.**
 
    At the lowest point where both expected anchor and final native rect are
    known, emit one summary line:
 
    ```text
-   popup_y_delta popup_trace_id=...
+   popup_y_delta join_key=...
      expected_anchor_top_left=(x,y w x h)
      final_popup_top_left=(x,y w x h)
      delta_x=...
@@ -2698,31 +2714,69 @@ and identifying which coordinate conversion introduced that delta.
      content_view_frame=...
      web_view_frame=...
      rwhv_computed_view_bounds=...
+     screen_frame=...
+     visible_frame=...
    ```
 
    If no single function has both expected and final rects, emit the partial
-   values with the same `popup_trace_id` and explicitly state in the result that
-   the delta was computed from joined log lines.
+   values with the same join key and explicitly state in the result that the
+   delta was computed from joined log lines.
 
-8. **Keep logging opt-in and low volume.**
+   For `<select>`, `final_popup_top_left` is expected to be unavailable from
+   Chromium. Record the anchor rect in logs and compute the delta against a
+   screenshot-measured final menu position in the result.
+
+8. **Use the numeric decision tree from Experiment 9.**
+
+   Interpret the measured `delta_y` against these candidate causes:
+   - `delta_y ~= 0`: Shell move and popup anchor are correct; remaining visual
+     issue is likely AppKit menu behavior or human measurement error.
+   - `delta_y ~= 24`: Shell content chrome height from Experiment 9
+     (`web_chrome_height=24`) is being added or skipped incorrectly.
+   - `delta_y ~= 32`: AppKit title/frame height is being mixed with content
+     coordinates.
+   - `delta_y ~= 56`: the exact webview-in-window offset from Experiment 9
+     (`view_bounds_in_window.y=56`) is being applied on the wrong side of the
+     conversion.
+   - `delta_y ~= 100`: likely a composition of multiple offsets, such as `56`
+     plus AppKit menu positioning, selected-item alignment, menu bar, or visible
+     frame clamping.
+   - `delta_y ~= screen.frame/visibleFrame delta`: AppKit is constraining the
+     popup to `NSScreen.visibleFrame`.
+
+   The result must name which bucket the measured value falls into, or state
+   that it does not match any known candidate.
+
+9. **Keep logging opt-in and low volume.**
 
    All new logs must be gated by `TERMSURF_ISSUE_779_TRACE=1`.
 
    Do not log from hot getters on every frame. Logging should happen only when a
    popup is requested, positioned, shown, or dismissed.
 
-9. **Do not modify popup behavior.**
+10. **Do not modify popup behavior.**
 
-   This experiment must not:
-   - move the Shell window differently;
-   - change `SetBounds`;
-   - change `setFrame:display:`;
-   - change popup anchor math;
-   - change protocol fields;
-   - change Wezboard overlay placement;
-   - change webtui layout.
+    This experiment must not:
+    - move the Shell window differently;
+    - change `SetBounds`;
+    - change `setFrame:display:`;
+    - change popup anchor math;
+    - change protocol fields;
+    - change Wezboard overlay placement;
+    - change webtui layout.
 
 #### Verification
+
+0. Run a trace-off baseline.
+
+   Before enabling `TERMSURF_ISSUE_779_TRACE`, run the current build once with
+   no trace env var. Confirm:
+   - `web` is fully visible and usable;
+   - the browser overlay appears normally;
+   - no `[issue-779-trace]` lines are emitted to the log paths.
+
+   If trace-off is broken, stop. The logging experiment cannot diagnose popup
+   placement until the baseline works.
 
 1. Build the same components as Experiment 9:
 
@@ -2767,11 +2821,19 @@ and identifying which coordinate conversion introduced that delta.
    http://localhost:9616/test-native-popups.html
    ```
 
-6. Click exactly one `<select>` control. Close it. Then click exactly one
+6. Keep the layout deterministic.
+
+   Use the same single-pane layout shape as the Experiment 9 run unless there is
+   a reason to test splits. Before clicking a control, take or visually inspect
+   a screenshot and note the clicked control's position relative to the top-left
+   of the visible webview. This verifies that the logged expected anchor is
+   itself correct.
+
+7. Click exactly one `<select>` control. Close it. Then click exactly one
    date/time-style control if available. Avoid clicking every control at once;
    this experiment needs clean, joinable popup events.
 
-7. Extract the trace:
+8. Extract the trace:
 
    ```bash
    rg -a "\[issue-779-trace\]|popup_y_delta|WebMenuRunner|NativeWidgetNSWindowBridge" \
@@ -2782,23 +2844,30 @@ and identifying which coordinate conversion introduced that delta.
      > logs/issue-779-exp10-trace.log
    ```
 
-8. Pass criteria:
+9. Pass criteria:
    - `web` remains visible and usable;
    - native widgets still appear inside the webview, preserving Experiment 9's
      improvement;
-   - each clicked popup produces one joinable `popup_trace_id` or equivalent
-     pointer/timestamp chain;
-   - the trace includes expected anchor rect and final native popup rect in the
-     same top-left screen coordinate system;
-   - the trace computes or allows computing `delta_x` and `delta_y`;
+   - each clicked popup produces one joinable pointer/timestamp chain;
+   - for `<select>`, the trace includes the expected anchor rect in top-left
+     screen coordinates, and that anchor is within `4` DIP of the
+     screenshot-measured clicked control position;
+   - for Views-based popups, the trace includes expected anchor rect and final
+     native popup rect in the same top-left screen coordinate system;
+   - the trace computes or allows computing `delta_x` and `delta_y`; for
+     `<select>`, the final menu position may come from screenshot measurement;
    - the trace shows whether the remaining y offset matches the Shell
      content/webview offset, the AppKit frame/titlebar offset, or a separate
      popup-path conversion.
+   - `NSScreen.frame` and `NSScreen.visibleFrame` are present on the relevant
+     popup lines.
 
-9. Fail criteria:
-   - `web` disappears or the browser covers the TUI chrome;
-   - native widgets return to the old outside-the-window placement;
-   - logs do not include the clicked control anchor rect;
-   - logs do not include the final native popup rect;
-   - logs cannot join expected and actual rects for one popup-open event;
-   - the logs add noise without producing a concrete y delta.
+10. Fail criteria:
+    - `web` disappears or the browser covers the TUI chrome;
+    - native widgets return to the old outside-the-window placement;
+    - logs do not include the clicked control anchor rect;
+    - logs do not include the final native popup rect for Views-based popups;
+    - logs cannot join expected and actual rects for one Views popup-open event;
+    - the `<select>` anchor cannot be compared to a screenshot-measured menu
+      position;
+    - the logs add noise without producing a concrete y delta.
