@@ -2942,8 +2942,9 @@ The success condition is one date-popup summary line that answers:
 date_popup_final_y - date_input_anchor_y = ?
 ```
 
-and identifies whether the bad y value was introduced before `OpenPagePopup`,
-inside `WebPagePopupImpl::SetWindowRect`, or while the transient
+and identifies whether the bad y value was introduced before `OpenPagePopup`, at
+the browser `ShowCreatedWidget` IPC boundary, inside
+`RenderWidgetHostViewMac::InitAsPopup`, or while the transient
 `RenderWidgetHostViewMac` view was attached to the Shell window.
 
 #### Changes
@@ -3051,10 +3052,72 @@ inside `WebPagePopupImpl::SetWindowRect`, or while the transient
    - `GetScreenInfo()` rect and device scale factor;
    - the callback point for `DidSetBounds`.
 
-   This is the key trace line. It should show whether Blink requested the wrong
-   top-left y before the popup reaches macOS view/window code.
+   This line shows whether Blink requested the wrong top-left y before the popup
+   reaches browser-process widget creation.
 
-6. **Trace transient popup `RenderWidgetHostViewMac` creation.**
+6. **Trace `WebContentsImpl::ShowCreatedWidget`.**
+
+   Add the primary browser-process IPC boundary log in:
+
+   ```text
+   chromium/src/content/browser/web_contents/web_contents_impl.cc
+   ```
+
+   In `WebContentsImpl::ShowCreatedWidget`, log:
+   - `path=date-page-popup`;
+   - `this` `WebContentsImpl*`;
+   - `process_id`;
+   - `widget_route_id`;
+   - the `initial_rect` received from the renderer;
+   - the `initial_anchor_rect` received from the renderer;
+   - `needs_transform`;
+   - `transformed_rect`;
+   - `transformed_anchor_rect`;
+   - `GetRenderWidgetHostView()` for `this`;
+   - the `outermost_web_contents`;
+   - the parent `view` passed to `InitAsPopup`;
+   - the `widget_host_view` returned by `GetCreatedWidget`;
+   - the popup `RenderWidgetHostImpl*`;
+   - `GetVisibility()`;
+   - `rwh->is_active()`;
+   - whether the popup is destroyed by the unfocused-window guard,
+     background-tab guard, or permission exclusion-area guard.
+
+   This line answers whether the renderer IPC already supplied a bad popup rect,
+   or whether the y error appears later in the macOS popup view code.
+
+7. **Trace `RenderWidgetHostViewMac::InitAsPopup`.**
+
+   Add the highest-priority macOS popup placement log in:
+
+   ```text
+   chromium/src/content/browser/renderer_host/render_widget_host_view_mac.mm
+   ```
+
+   In `RenderWidgetHostViewMac::InitAsPopup`, log:
+   - `path=date-page-popup`;
+   - `this` popup `RenderWidgetHostViewMac*`;
+   - `host()` pointer if available;
+   - `parent_host_view`;
+   - `popup_parent_host_view_`;
+   - incoming `pos`;
+   - incoming `anchor_rect`;
+   - parent `GetViewBounds()`;
+   - parent `GetBoundsInRootWindow()`;
+   - existing `popup_child_host_view_` before replacement;
+   - `ns_view_`;
+   - parent `ns_view_id_`;
+   - `window_frame_in_screen_dip_`;
+   - `view_bounds_in_window_dip_`;
+   - `computed_view_bounds` using the same formula as the existing
+     `chromium_webview_bounds` trace.
+
+   This is the smoking-gun log for date/page-popup placement. `pos` is the
+   popup's intended screen rect, `anchor_rect` is the element anchor, and the
+   parent bounds establish whether the rects are relative to the visible webview
+   or to the hidden Shell window/frame.
+
+8. **Trace transient popup `RenderWidgetHostViewMac` bounds updates.**
 
    Extend the existing `chromium_webview_bounds` log in:
 
@@ -3077,55 +3140,80 @@ inside `WebPagePopupImpl::SetWindowRect`, or while the transient
 
    If a direct `WebPagePopupImpl*` join key is unavailable at this layer, use
    timestamp plus the unique `webcontents=0` view pointer and the incoming rect
-   to join with `WebPagePopupImpl::SetWindowRect`.
+   to join with `WebContentsImpl::ShowCreatedWidget` and
+   `RenderWidgetHostViewMac::InitAsPopup`.
 
-7. **Add one computed `date_popup_y_delta` summary.**
+9. **Trace `<select>` menu close only if needed.**
 
-   At the lowest point where enough values are available, or in the result by
-   joining log lines, produce this summary:
+   Keep the `<select>` regression trace narrow. Add or keep logs around:
+   - `WebMenuRunner` return/cancel/dismissal;
+   - `PopupMenuHelper` close/destruction if present;
+   - the top of `RenderFrameHostImpl::ShowPopupMenu`, including whether a popup
+     helper is already alive.
 
-   ```text
-   date_popup_y_delta join_key=...
-     input_anchor_top_left=(x,y w x h)
-     page_popup_requested_top_left=(x,y w x h)
-     transient_rwhv_top_left=(x,y w x h)
-     delta_input_to_requested_x=...
-     delta_input_to_requested_y=...
-     delta_requested_to_transient_x=...
-     delta_requested_to_transient_y=...
-     webview_top_left=...
-     shell_window_frame=...
-     webview_in_window_offset=...
-     screen_info=...
-   ```
+   This is not the main date y-axis path. Its only job is to explain the
+   Experiment 10 symptom where later widgets stopped opening after a select menu
+   closed.
 
-   If the summary cannot be emitted in code without behavior risk, the result
-   must compute the same fields manually from joined trace lines.
+10. **Add one computed `date_popup_y_delta` summary.**
 
-8. **Keep click lifecycle logs minimal but sufficient.**
+At the lowest point where enough values are available, or in the result by
+joining log lines, produce this summary:
 
-   To diagnose the "native widgets stop opening" failure only if it recurs, add
-   logs for:
-   - date/page-popup close and cleanup;
-   - `<select>` close/cancel return from `WebMenuRunner`;
-   - whether `WebViewImpl` still has `page_popup_` set after close;
-   - whether the next popup request reaches `DateTimeChooserImpl`,
-     `OpenPagePopup`, or `ShowPopupMenu`.
+```text
+date_popup_y_delta join_key=...
+  input_anchor_top_left=(x,y w x h)
+  page_popup_requested_top_left=(x,y w x h)
+  show_created_widget_initial=(x,y w x h)
+  show_created_widget_anchor=(x,y w x h)
+  init_as_popup_pos=(x,y w x h)
+  init_as_popup_anchor=(x,y w x h)
+  transient_rwhv_top_left=(x,y w x h)
+  delta_input_to_requested_x=...
+  delta_input_to_requested_y=...
+  delta_requested_to_show_created_x=...
+  delta_requested_to_show_created_y=...
+  delta_show_created_to_init_as_popup_x=...
+  delta_show_created_to_init_as_popup_y=...
+  delta_init_as_popup_to_transient_x=...
+  delta_init_as_popup_to_transient_y=...
+  webview_top_left=...
+  shell_window_frame=...
+  webview_in_window_offset=...
+  screen_info=...
+```
 
-   Do not add high-volume mouse-move logging. Cursor movement was already
-   visible in Experiment 10 and did not identify the missing popup request.
+If the summary cannot be emitted in code without behavior risk, the result must
+compute the same fields manually from joined trace lines.
 
-9. **Do not change behavior.**
+11. **Keep click lifecycle logs minimal but sufficient.**
 
-   This experiment must not:
-   - change `SetWindowRect`;
-   - change `SetBounds`;
-   - change `OpenPagePopup`;
-   - change popup anchor math;
-   - change event dispatch;
-   - change Mojo structs or protocol fields;
-   - change Shell window placement;
-   - change Wezboard or webtui layout.
+To diagnose the "native widgets stop opening" failure only if it recurs, add
+logs for:
+
+- date/page-popup close and cleanup;
+- `<select>` close/cancel return from `WebMenuRunner`;
+- whether `WebViewImpl` still has `page_popup_` set after close;
+- whether the next popup request reaches `DateTimeChooserImpl`, `OpenPagePopup`,
+  or `ShowPopupMenu`.
+
+Do not add high-volume mouse-move logging. Cursor movement was already visible
+in Experiment 10 and did not identify the missing popup request.
+
+12. **Do not change behavior.**
+
+This experiment must not:
+
+- change `SetWindowRect`;
+- change `ShowCreatedWidget`;
+- change `InitAsPopup`;
+- change `SetBounds`;
+- change `OpenPagePopup`;
+- change popup anchor math;
+- change event dispatch;
+- change Mojo structs or protocol fields;
+- change Shell window placement;
+- change Wezboard or webtui layout.
 
 #### Verification
 
@@ -3190,7 +3278,7 @@ inside `WebPagePopupImpl::SetWindowRect`, or while the transient
 9. Extract the trace:
 
    ```bash
-   rg -a "\[issue-779-trace\]|date_popup_y_delta|DateTimeChooserImpl|OpenPagePopup|WebPagePopupImpl|webcontents=0|WebViewImpl::ClosePagePopup|WebViewImpl::CleanupPagePopup|WebMenuRunner" \
+   rg -a "\[issue-779-trace\]|date_popup_y_delta|DateTimeChooserImpl|OpenPagePopup|WebPagePopupImpl|ShowCreatedWidget|InitAsPopup|webcontents=0|WebViewImpl::ClosePagePopup|WebViewImpl::CleanupPagePopup|WebMenuRunner|PopupMenuHelper" \
      logs/issue-779-exp11-wezboard.log \
      logs/issue-779-exp11-state/termsurf/webtui-trace.log \
      logs/issue-779-exp11-state/termsurf/roamium-trace.log \
@@ -3200,21 +3288,28 @@ inside `WebPagePopupImpl::SetWindowRect`, or while the transient
 
 10. Pass criteria:
     - the first date click produces a joined
-      `DateTimeChooserImpl -> OpenPagePopup -> WebPagePopupImpl::SetWindowRect -> webcontents=0 RWHV`
+      `DateTimeChooserImpl -> OpenPagePopup -> WebPagePopupImpl::SetWindowRect -> WebContentsImpl::ShowCreatedWidget -> RenderWidgetHostViewMac::InitAsPopup -> webcontents=0 RWHV`
       chain;
     - the trace includes the date input anchor or enough renderer coordinates
       plus scroll/viewport values to compute it;
     - the trace includes the page popup requested rect in screen coordinates;
+    - the trace includes the browser `initial_rect` and `initial_anchor_rect`
+      from `ShowCreatedWidget`;
+    - the trace includes the `InitAsPopup` `pos` and `anchor_rect`;
     - the trace includes the transient popup view's first computed screen rect;
     - the result can compute `delta_input_to_requested_y` and
-      `delta_requested_to_transient_y`;
+      `delta_requested_to_show_created_y`,
+      `delta_show_created_to_init_as_popup_y`, and
+      `delta_init_as_popup_to_transient_y`;
     - the measured delta maps to one likely cause: renderer anchor, page-popup
-      rect calculation, `56` DIP webview-in-window offset, top-left/bottom-left
+      rect calculation, `ShowCreatedWidget` transform, `InitAsPopup` macOS
+      conversion, `56` DIP webview-in-window offset, top-left/bottom-left
       conversion, or transient RWHV attachment.
 
 11. Fail criteria:
     - the date click does not produce a `DateTimeChooserImpl` or `OpenPagePopup`
       log;
+    - the date click does not produce `ShowCreatedWidget` or `InitAsPopup` logs;
     - the trace still only shows transient `webcontents=0` bounds without the
       upstream date input anchor;
     - the log cannot join the page-popup request to the transient popup view;
