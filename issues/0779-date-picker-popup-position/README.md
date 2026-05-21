@@ -3315,3 +3315,116 @@ This experiment must not:
     - the log cannot join the page-popup request to the transient popup view;
     - the experiment adds high-volume event noise without a computable y delta;
     - the logging changes alter popup behavior.
+
+**Result:** Partial
+
+Experiment 11 produced the missing joined PagePopup chain and identified where
+the date/time/color-family y value first becomes wrong. The user tested date,
+time, date-time, color, dropdown, and datalist controls. Date, time, date-time,
+and color all appeared with the wrong y value and stayed visible after alt-tab
+when the TermSurf window was no longer active. The dropdown behaved differently:
+its y value appeared correct, but its x value was wrong. After interacting with
+dropdown/datalist controls, native widgets eventually stopped appearing for the
+rest of the session.
+
+The date/PagePopup trace is now complete. A representative date click produced:
+
+```text
+anchor_rect = 1916,680 291x43
+WebPagePopupImpl::SetWindowRect rect_in_screen = 1916,723 218x281
+WebContentsImpl::ShowCreatedWidget initial_rect = 1916,723 218x281
+RenderWidgetHostViewMac::InitAsPopup pos = 1916,723 218x281
+transient RenderWidgetHostViewMac bounds = 1916,723 218x281
+```
+
+The requested popup y is exactly the input anchor y plus the input anchor
+height: `723 = 680 + 43`. This same pattern repeated for the other
+PagePopup-style controls:
+
+- date: `delta_input_to_requested_y = 43`;
+- time: `delta_input_to_requested_y = 45`;
+- date-time/color-family PagePopup controls: `delta_input_to_requested_y` was
+  the control height, typically `43` or `44`.
+
+There was no additional y drift at the browser-process IPC boundary or in the
+macOS popup view code:
+
+```text
+delta_requested_to_show_created_y = 0
+delta_show_created_to_init_as_popup_y = 0
+delta_init_as_popup_to_transient_y = 0
+```
+
+That means the wrong y value is already present in Blink's PagePopup placement
+request. `ShowCreatedWidget`, `RenderWidgetHostViewMac::InitAsPopup`, and the
+transient `webcontents=0` RWHV preserve the requested rect exactly. The y-axis
+bug for date/time/color is therefore not a Wezboard overlay, Shell window,
+`ShowCreatedWidget`, or `InitAsPopup` conversion bug. It is upstream in Blink's
+PagePopup positioning decision.
+
+The dropdown followed the separate `<select>` AppKit menu path:
+
+```text
+RenderFrameHostImpl::ShowPopupMenu
+PopupMenuHelper::ShowPopupMenu
+RenderWidgetHostNSViewBridge::DisplayPopupMenu
+WebMenuRunner::runMenuInView
+NSPopUpButtonCell
+```
+
+For the observed dropdown, Chromium computed the select anchor as:
+
+```text
+bounds_top_left_screen = 2253,821 292x43
+```
+
+This agrees with the user's observation that the dropdown y value looked right.
+The wrong x value is a separate AppKit menu placement problem. Chromium still
+does not observe the final `NSPopUpButtonCell` menu window rect, so the final
+dropdown x delta remains visually observed rather than fully log-computable.
+
+The "all native widgets stop opening" failure also appears separate from stale
+PagePopup or stale `PopupMenuHelper` state. After the PagePopup controls closed,
+the trace showed clean PagePopup cleanup:
+
+```text
+WebViewImpl::CleanupPagePopup page_popup_after=0
+```
+
+After the dropdown closed, the trace showed:
+
+```text
+WebMenuRunner::runMenuInView.return
+PopupMenuHelper::PopupMenuClosed
+PopupMenuHelper::~PopupMenuHelper
+PopupMenuHelper::Hide
+```
+
+Later clicks still produced `CursorChanged` messages, so Chromium continued to
+receive some pointer movement, but the clicks no longer reached
+`DateTimeChooserImpl`, `WebPagePopupImpl::SetWindowRect`, or
+`RenderFrameHostImpl::ShowPopupMenu`. This suggests the stuck state is upstream
+of the popup implementations, likely in activation, focus, event dispatch, or
+AppKit menu tracking state, not in an uncleared popup object.
+
+The alt-tab persistence is another distinct bug. PagePopup widgets are separate
+transient popup RWHV/NSWindow-style views, and the trace did not show any
+hide/close tied to TermSurf window deactivation. Date/time/color popups can
+therefore remain visible after the hosting TermSurf window loses focus.
+
+#### Conclusion
+
+Experiment 11 succeeded at identifying the y-axis fault boundary for the primary
+date input problem: Blink requests the PagePopup at the bottom edge of the input
+control, and every downstream layer preserves that rect. The next experiment
+should focus on Blink's PagePopup placement calculation, specifically why
+`WebPagePopupImpl` requests `anchor.y + anchor.height` when the visual popup
+should be aligned differently in the embedded TermSurf window.
+
+Keep the other findings as separate issues or later experiments:
+
+- dropdown uses a different AppKit `<select>` path and has a wrong x value, not
+  the PagePopup y bug;
+- PagePopup widgets remain visible after alt-tab/window deactivation;
+- after dropdown/datalist interactions, native popup activation can stop
+  reaching the popup-open paths even though cursor events still arrive.
