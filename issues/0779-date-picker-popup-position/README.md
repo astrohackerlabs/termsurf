@@ -3564,28 +3564,12 @@ The following bugs are real but explicitly out of scope for this experiment:
    predicate narrow. Do not apply this correction to arbitrary popup rects that
    are not anchored at `anchor.bottom()`.
 
-3. **Gate the fix as an experiment.**
-
-   Gate the behavior change behind a new environment variable:
-
-   ```text
-   TERMSURF_ISSUE_779_FIX_PAGE_POPUP_Y=1
-   ```
-
-   Keep `TERMSURF_ISSUE_779_TRACE=1` for logs. This makes it possible to run the
-   same binary with:
-   - trace only, no fix;
-   - trace plus fix.
-
-   Do not reuse `TERMSURF_ISSUE_779_TRACE` to change behavior.
-
-4. **Log the correction decision.**
+3. **Log the correction decision.**
 
    Add one trace line in `WebPagePopupImpl::SetWindowRect`:
 
    ```text
    page_popup_y_fix
-     enabled=...
      applied=...
      reason=...
      rect_in_screen=...
@@ -3605,7 +3589,7 @@ The following bugs are real but explicitly out of scope for this experiment:
    delta_corrected_y=0
    ```
 
-5. **Do not change non-PagePopup code.**
+4. **Do not change non-PagePopup code.**
 
    This experiment must not modify:
    - `<select>` / `PopupMenuHelper` / `WebMenuRunner` behavior;
@@ -3631,42 +3615,20 @@ The following bugs are real but explicitly out of scope for this experiment:
    scripts/build.sh wezboard
    ```
 
-1. Run a trace-only baseline with the new binary and no fix variable:
-
-   ```bash
-   cd /Users/ryan/dev/termsurf
-   mkdir -p logs/issue-779-exp12-baseline-state/termsurf
-
-   TERMSURF_ISSUE_779_TRACE=1 \
-   XDG_STATE_HOME="$PWD/logs/issue-779-exp12-baseline-state" \
-   RUST_LOG=info \
-   ./wezboard/target/debug/wezboard-gui \
-   2>&1 | tee logs/issue-779-exp12-baseline-wezboard.log
-   ```
-
-   Click exactly one date control first. Confirm the baseline still reproduces
-   the old trace pattern:
-
-   ```text
-   delta_original_y = anchor.height
-   applied = false
-   ```
-
-2. Run the fixed experiment with both trace and fix variables:
+1. Run the experiment with tracing enabled:
 
    ```bash
    cd /Users/ryan/dev/termsurf
    mkdir -p logs/issue-779-exp12-fixed-state/termsurf
 
    TERMSURF_ISSUE_779_TRACE=1 \
-   TERMSURF_ISSUE_779_FIX_PAGE_POPUP_Y=1 \
    XDG_STATE_HOME="$PWD/logs/issue-779-exp12-fixed-state" \
    RUST_LOG=info \
    ./wezboard/target/debug/wezboard-gui \
    2>&1 | tee logs/issue-779-exp12-fixed-wezboard.log
    ```
 
-3. In Wezboard, launch:
+2. In Wezboard, launch:
 
    ```bash
    /Users/ryan/dev/termsurf/webtui/target/release/web \
@@ -3674,11 +3636,11 @@ The following bugs are real but explicitly out of scope for this experiment:
      http://localhost:9616/test-native-popups.html
    ```
 
-4. Click exactly one date control first. Then, if the date popup closes cleanly,
+3. Click exactly one date control first. Then, if the date popup closes cleanly,
    click one time control and one color control. Do not click dropdown or
    datalist during the primary fixed run.
 
-5. Extract the fixed trace:
+4. Extract the fixed trace:
 
    ```bash
    rg -a "\[issue-779-trace\]|page_popup_y_fix|DateTimeChooserImpl|WebPagePopupImpl|ShowCreatedWidget|InitAsPopup|webcontents=0" \
@@ -3689,7 +3651,7 @@ The following bugs are real but explicitly out of scope for this experiment:
      > logs/issue-779-exp12-fixed-trace.log
    ```
 
-6. Pass criteria:
+5. Pass criteria:
    - date popup appears at the correct y position;
    - time and color PagePopup-family controls do not regress;
    - the fixed trace includes `page_popup_y_fix applied=true`;
@@ -3699,7 +3661,7 @@ The following bugs are real but explicitly out of scope for this experiment:
      the corrected y;
    - dropdown behavior is unchanged, because dropdown is out of scope.
 
-7. Fail criteria:
+6. Fail criteria:
    - date popup remains too low;
    - correction applies to a popup whose incoming rect is not anchored at
      `anchor.bottom()`;
@@ -3708,3 +3670,28 @@ The following bugs are real but explicitly out of scope for this experiment:
    - PagePopup does not open;
    - the fix hides the alt-tab persistence or post-dropdown activation bugs
      instead of leaving them as separate issues.
+
+**Result:** Pass
+
+The PagePopup y-axis correction succeeded. Date now appears at the correct y
+position. Time, date-time, and color also appear with the correct y position.
+This confirms the Experiment 11 diagnosis: the PagePopup-family y bug was caused
+by the requested popup rect using `anchor.y + anchor.height()` instead of
+`anchor.y`.
+
+The experiment did not fix and did not attempt to fix the deferred issues:
+
+- date, time, date-time, and color PagePopups still remain visible after
+  alt-tab/window deactivation;
+- `<select>` still has the correct y position but the wrong x position;
+- after interacting with `<select>` once or twice, native widgets stop opening
+  for the rest of the session;
+- the sixth control could not be tested because the post-select failure prevents
+  further native widgets from opening.
+
+#### Conclusion
+
+Experiment 12 fixes the primary date PagePopup y-axis issue. Keep the correction
+and continue with one remaining bug at a time. The alt-tab PagePopup visibility
+bug, dropdown x bug, post-select native-widget failure, and datalist behavior
+are separate follow-up issues.
