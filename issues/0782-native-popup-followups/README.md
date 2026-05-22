@@ -1094,3 +1094,228 @@ Wezboard's top-level mouse input pipeline. It should log every raw mouse down/up
 received by the GUI, the pane and overlay hit-test result, browsing and focus
 state, whether `try_forward_mouse` is called, and the concrete reason when the
 click is routed to the terminal/TUI instead of the browser overlay.
+
+### Experiment 4: Trace Wezboard Mouse Dispatch Before Forwarding
+
+Experiment 3 showed that the failed post-select date click never reached Roamium
+or Chromium as a mouse down/up event. Mouse moves still forwarded after the
+select menu closed, so the browser process was not fully disconnected. The
+remaining failure boundary is inside Wezboard's top-level mouse handling, before
+or around the call to `termsurf::input::try_forward_mouse`.
+
+This experiment adds logs only. It must not change mouse capture, focus
+handling, terminal mouse reporting, browser forwarding, AppKit menu behavior, or
+any native popup behavior.
+
+Keep all new logs behind the existing `TERMSURF_ISSUE_779_TRACE=1` trace gate.
+Continue using Chromium branch `148.0.7778.97-issue-782`; this experiment is
+expected to modify Wezboard only unless implementation discovers that the raw
+window event source lives elsewhere.
+
+#### Changes
+
+1. Add a raw window mouse-event entry log in
+   `wezboard/wezboard-gui/src/termwindow/mod.rs`.
+
+   In the `WindowEvent::MouseEvent(event)` arm, log only mouse down/up and
+   click-like drag release events before calling `mouse_event_impl`:
+   - event kind, button, modifiers;
+   - window pixel coordinates and screen coordinates;
+   - whether the window is focused if that state is cheaply available;
+   - active pane id from `get_active_pane_or_overlay()` if available;
+   - current `is_click_to_focus_window` state if accessible at this layer.
+
+   Use a summary line:
+
+   ```text
+   [issue-779-trace] wezboard_mouse_dispatch boundary=window_event outcome=entered ...
+   ```
+
+   This answers whether the failed click reaches Wezboard's window event handler
+   at all.
+
+2. Add entry and pre-routing logs in
+   `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`.
+
+   At the top of `TermWindow::mouse_event_impl`, log only mouse down/up and
+   click-like drag release events:
+   - event kind, button, modifiers;
+   - window pixel coordinates and screen coordinates;
+   - active pane id;
+   - `current_mouse_capture`, `current_mouse_buttons`, `dragging`,
+     `window_drag_position`, `is_click_to_focus_window`, and whether
+     `focused.is_some()`;
+   - `last_ui_item` and resolved `ui_item` after `resolve_ui_item` runs;
+   - the computed `ClickPosition` for the active pane.
+
+   Add outcome logs for every early return before `mouse_event_terminal`,
+   including:
+   - no active pane or overlay;
+   - completed window drag;
+   - completed UI drag;
+   - routed to a UI item instead of a terminal pane;
+   - skipped terminal routing because capture state was neither `None` nor
+     `TerminalPane`.
+
+   Use a summary line:
+
+   ```text
+   [issue-779-trace] wezboard_mouse_dispatch boundary=mouse_event_impl outcome=...
+   ```
+
+3. Add terminal-routing decision logs in
+   `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`.
+
+   In `TermWindow::mouse_event_terminal`, log immediately before
+   `try_forward_mouse`:
+   - pane id and computed terminal `ClickPosition`;
+   - global window-cell position;
+   - `current_mouse_capture`, `current_mouse_buttons`,
+     `is_click_to_focus_window`;
+   - `focused.is_some()`, computed `is_focused`, and config flags
+     `swallow_mouse_click_on_window_focus`, `swallow_mouse_click_on_pane_focus`,
+     and `pane_focus_follows_mouse`;
+   - whether the event is a click-to-focus pane candidate.
+
+   Log immediately after `try_forward_mouse`:
+   - `try_forward_mouse_return=true|false`;
+   - if `true`, `outcome=forwarded_to_browser`;
+   - if `false`, continue logging subsequent routing decisions.
+
+   Use:
+
+   ```text
+   [issue-779-trace] wezboard_mouse_dispatch boundary=before_try_forward_mouse outcome=entered ...
+   [issue-779-trace] wezboard_mouse_dispatch boundary=after_try_forward_mouse outcome=...
+   ```
+
+4. Add focus-swallow and terminal-fallback logs in `mouse_event_terminal`.
+
+   Log every branch that can consume or redirect a click after
+   `try_forward_mouse` returns false:
+   - `outcome=swallowed_window_focus` when the click enters
+     click-to-focus-window state;
+   - `outcome=swallowed_window_focus_release` when the matching release exits
+     click-to-focus-window state;
+   - `outcome=allow_action_false` when the event is not allowed to run bindings
+     or terminal forwarding;
+   - `outcome=mouse_binding_action` when a mouse binding handles the event;
+   - `outcome=sent_to_terminal_pane` when `pane.mouse_event(mouse_event)` runs;
+   - `outcome=dropped_terminal_pane_focus` when
+     `swallow_mouse_click_on_pane_focus` suppresses terminal delivery.
+
+   These logs should include the same pane id, event kind, button, focus state,
+   click-to-focus state, and capture state fields so the successful and failed
+   clicks can be compared mechanically.
+
+5. Keep the existing Experiment 3 logs in place for the run.
+
+   The expected trace for a successful date click still includes:
+
+   ```text
+   window_event -> mouse_event_impl -> before_try_forward_mouse -> after_try_forward_mouse(forwarded) -> Roamium -> Chromium -> Blink
+   ```
+
+   The failed post-select date click should now show one of:
+   - no `window_event` log, meaning AppKit/window delivery swallowed the click
+     before Wezboard;
+   - `window_event` but no `mouse_event_impl`, meaning TermWindow dispatch did
+     not run;
+   - `mouse_event_impl` but no `before_try_forward_mouse`, meaning UI/capture
+     routing consumed the click;
+   - `before_try_forward_mouse` followed by `after_try_forward_mouse=false`,
+     meaning overlay hit testing or browser sender state rejected the click;
+   - `after_try_forward_mouse=false` followed by focus, binding, or terminal
+     fallback logs naming the consumer.
+
+6. Interpret the logs mechanically:
+
+   | Trace pattern                                               | Diagnosis                                                        |
+   | ----------------------------------------------------------- | ---------------------------------------------------------------- |
+   | No `window_event` for failed click, but moves still forward | Native/AppKit event delivery is losing button events             |
+   | `window_event` only                                         | Wezboard event dispatch stops before `mouse_event_impl`          |
+   | `mouse_event_impl` routes to UI item                        | Hit testing/capture thinks the click is terminal chrome, not web |
+   | `mouse_event_impl` skips terminal route due capture         | Wezboard mouse capture is stuck after select menu dismissal      |
+   | `try_forward_mouse=false` with overlay miss                 | Overlay hit testing disagrees with rendered browser position     |
+   | `try_forward_mouse=false` with no sender/tab                | Browser overlay state was torn down or no active tab was mapped  |
+   | Focus-swallow outcome                                       | Window/pane focus state changed after AppKit menu dismissal      |
+   | Sent to terminal pane                                       | Wezboard is treating the click as terminal input, not web input  |
+
+#### Verification
+
+1. Build through the project scripts:
+
+   ```bash
+   cd /Users/ryan/dev/termsurf
+   scripts/build.sh wezboard
+   scripts/build.sh roamium
+   scripts/build.sh chromium
+   scripts/build.sh webtui
+   ```
+
+2. Start the native popup test page:
+
+   ```bash
+   cd /Users/ryan/dev/termsurf
+   bun test-html/server.ts
+   ```
+
+3. Start Wezboard with fresh Experiment 4 logs:
+
+   ```bash
+   cd /Users/ryan/dev/termsurf
+   mkdir -p logs/issue-782-exp4-state/termsurf
+
+   TERMSURF_ISSUE_779_TRACE=1 \
+   XDG_STATE_HOME="$PWD/logs/issue-782-exp4-state" \
+   RUST_LOG=info \
+   ./wezboard/target/debug/wezboard-gui \
+   2>&1 | tee logs/issue-782-exp4-wezboard.log
+   ```
+
+4. Launch the TUI:
+
+   ```bash
+   /Users/ryan/dev/termsurf/webtui/target/debug/web \
+     --browser /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium \
+     http://localhost:9616/test-native-popups.html
+   ```
+
+5. Run the minimum sequence:
+   - click the date control and confirm it opens;
+   - close it;
+   - click the `<select>` dropdown and dismiss it by clicking outside;
+   - click the same date control again;
+   - stop immediately after the failed post-select date click.
+
+6. Extract the trace:
+
+   ```bash
+   rg -a "\[issue-779-trace\]|wezboard_mouse_dispatch|mouse_forward_boundary|ts_forward_mouse|ForwardMouseEvent|ForwardMouseMove|HandleMousePressEvent|HandleMouseReleaseEvent|DateTimeChooserImpl|MenuListSelectType|PopupMenuClosed|OnMenuClosed" \
+     logs/issue-782-exp4-wezboard.log \
+     logs/issue-782-exp4-state/termsurf/webtui-trace.log \
+     logs/issue-782-exp4-state/termsurf/roamium-trace.log \
+     logs/issue-782-exp4-state/termsurf/chromium-server.log \
+     > logs/issue-782-exp4-trace.log
+   ```
+
+7. Pass criteria:
+   - the trace includes the successful pre-select date click, select open/close,
+     and failed post-select date click;
+   - the failed click has at least one `wezboard_mouse_dispatch` line;
+   - the first missing or consuming boundary is identified by an explicit
+     `outcome` and `reason`;
+   - the trace distinguishes AppKit/window delivery loss, Wezboard capture/UI
+     routing, focus swallowing, overlay hit-test failure, browser sender state,
+     and terminal fallback.
+
+8. Partial criteria:
+   - the failed click produces no `wezboard_mouse_dispatch` down/up logs, but
+     the run confirms mouse moves still forward after select close;
+   - the trace narrows the failure to a small Wezboard region but needs one more
+     hook to name the exact branch.
+
+9. Fail criteria:
+   - the failure does not reproduce;
+   - the logs are too noisy to pair the successful and failed clicks;
+   - the experiment changes routing behavior instead of only adding logs.
