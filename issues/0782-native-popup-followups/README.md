@@ -1740,5 +1740,162 @@ mouse events consistently, and reassert that state around Shell movement and
 native menu close. A follow-up should also verify whether the visible
 `RenderWidgetPopupWindow` is expected or stale after popup cleanup.
 
-- the logs are too noisy to pair the failed click with the preceding select
-  cleanup.
+### Experiment 6: Keep the hidden Shell window mouse-transparent
+
+Experiment 5 identified the likely cause of the post-select native-widget
+shutdown: the hidden Chromium Shell window overlaps Wezboard's visible overlay,
+is visible to AppKit, has `alpha=0.000`, and has `ignoresMouseEvents=false`.
+That violates the TermSurf embedding invariant. The Shell window may need to sit
+at the overlay's screen coordinates so Chromium can compute native popup
+positions, but it must not win AppKit mouse hit tests while the user is
+interacting with the terminal.
+
+This experiment implements the narrow fix for that invariant. It is not a new
+logging round. It changes behavior intentionally: every hidden TermSurf Shell
+window should ignore mouse events whenever it is positioned over the Wezboard
+overlay, and the ignore state should be reasserted after native AppKit menu
+loops return.
+
+Do not attempt to fix the other remaining bugs in this experiment. Deferred
+issues:
+
+- PagePopup controls still remain visible after alt-tab.
+- `<select>` still has the wrong x position.
+- The `RenderWidgetPopupWindow` seen in Experiment 5 may be stale or may simply
+  survive long enough to affect AppKit targeting.
+- Datalist still needs a clean isolated run after post-select shutdown is fixed.
+
+#### Changes
+
+1. **Reassert Shell mouse transparency in the TermSurf Shell move path.**
+
+   In Chromium's TermSurf Shell window positioning code, set the Shell window to
+   ignore mouse events every time the window is moved or resized to match the
+   overlay:
+
+   ```objective-c
+   [window setIgnoresMouseEvents:YES];
+   ```
+
+   This must be unconditional for TermSurf-managed hidden Shell windows. Do not
+   gate it behind a runtime flag or experiment flag. The Shell window is an
+   invisible coordinate proxy for native popup placement; it should never be the
+   user's mouse target while it overlaps Wezboard.
+
+2. **Set the same invariant when the Shell window is created or configured.**
+
+   If the Shell window is created with `alpha=0`, hidden toolbar/chrome state,
+   or TermSurf-specific window configuration, set `ignoresMouseEvents=YES` there
+   as well. The move path should still reassert it, because AppKit or native
+   menu code may mutate window state later.
+
+3. **Reassert the invariant after the native select menu returns.**
+
+   In the `<select>` AppKit path, after `WebMenuRunner::runMenuInView` returns
+   and before/around popup cleanup, reassert `ignoresMouseEvents=YES` on the
+   owning Shell window if it is available. This is defensive: even if the root
+   cause is the Shell window's initial configuration, native menu teardown is
+   the boundary that exposes the bug.
+
+4. **Keep the Experiment 5 Shell-state logs temporarily.**
+
+   Preserve the `chromium_shell_window_state` logs for this experiment so the
+   verification can prove:
+   - before select menu open: `ignoresMouseEvents=true`;
+   - after `WebMenuRunner::runMenuInView` returns: `ignoresMouseEvents=true`;
+   - after `WebContentsViewMac::OnMenuClosed`: `ignoresMouseEvents=true`.
+
+   Do not add another broad trace layer. The existing logs are enough.
+
+5. **Do not modify popup window behavior yet.**
+
+   Do not change `RenderWidgetPopupWindow` ownership, ordering, close behavior,
+   or mouse-event handling in this experiment. If fixing the Shell window is not
+   sufficient, the popup window becomes the next experiment's target.
+
+#### Verification
+
+1. Build through the project scripts:
+
+   ```bash
+   cd /Users/ryan/dev/termsurf
+   scripts/build.sh chromium
+   scripts/build.sh roamium
+   scripts/build.sh wezboard
+   scripts/build.sh webtui
+   ```
+
+2. Start the native popup test page:
+
+   ```bash
+   cd /Users/ryan/dev/termsurf
+   bun test-html/server.ts
+   ```
+
+3. Start Wezboard with fresh Experiment 6 logs:
+
+   ```bash
+   cd /Users/ryan/dev/termsurf
+   mkdir -p logs/issue-782-exp6-state/termsurf
+
+   TERMSURF_ISSUE_779_TRACE=1 \
+   XDG_STATE_HOME="$PWD/logs/issue-782-exp6-state" \
+   RUST_LOG=info \
+   ./wezboard/target/debug/wezboard-gui \
+   2>&1 | tee logs/issue-782-exp6-wezboard.log
+   ```
+
+4. Launch the TUI:
+
+   ```bash
+   /Users/ryan/dev/termsurf/webtui/target/debug/web \
+     --browser /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium \
+     http://localhost:9616/test-native-popups.html
+   ```
+
+5. Run the controlled sequence:
+   - click the date control and confirm it opens;
+   - close it;
+   - click the `<select>` dropdown;
+   - dismiss it by clicking outside or selecting an item;
+   - click the date control again;
+   - click the time control;
+   - click the color control;
+   - click the `<select>` dropdown again.
+
+6. Extract the focused trace:
+
+   ```bash
+   rg -a "\[issue-779-trace\]|chromium_shell_window_state|wezboard_appkit_dispatch|appkit_view|mouse_forward_boundary|ForwardMouseEvent|DateTimeChooserImpl|MenuListSelectType|PopupMenuClosed|OnMenuClosed|RouteOrProcessMouseEvent" \
+     logs/issue-782-exp6-wezboard.log \
+     logs/issue-782-exp6-state/termsurf/webtui-trace.log \
+     logs/issue-782-exp6-state/termsurf/roamium-trace.log \
+     logs/issue-782-exp6-state/termsurf/chromium-server.log \
+     > logs/issue-782-exp6-trace.log
+   ```
+
+7. Pass criteria:
+   - every Shell window snapshot for the TermSurf Shell window reports
+     `ignoresMouseEvents=true`;
+   - after dismissing `<select>`, the next date click reaches Wezboard
+     `mouseDown:` and opens `DateTimeChooserImpl`;
+   - time and color still open after the select interaction;
+   - the second select attempt opens instead of causing the session-wide native
+     popup shutdown;
+   - the date/time/color y-axis fix from Issue 779 remains correct.
+
+8. Partial criteria:
+   - Shell snapshots show `ignoresMouseEvents=true`, but post-select clicks
+     still do not reach Wezboard. That means the lingering
+     `RenderWidgetPopupWindow` or another AppKit window is the next target.
+   - Shell snapshots still show `ignoresMouseEvents=false` at any point. That
+     means another path resets the property and needs a more specific
+     reassertion point.
+   - Post-select clicks recover, but another deferred bug remains visible, such
+     as select x-position or PagePopup alt-tab visibility.
+
+9. Fail criteria:
+   - the app no longer opens native popups at all;
+   - the Shell window no longer provides correct screen geometry for
+     date/time/color placement;
+   - the fix introduces a behavior flag or changes unrelated popup families.
