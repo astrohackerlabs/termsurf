@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-05-23"
+closed = "2026-05-23"
 +++
 
 # Issue 785: Split border hides bottom pane row
@@ -711,3 +712,48 @@ The experiment fails if:
   presentation-inset behavior active;
 - later unrelated improvements in the affected files are removed without an
   explicit reason.
+
+**Result:** Pass
+
+Experiment 2 manually restored the split border code paths to the pre-Issue-777
+grid-consistent behavior in commit `4e20a50e91022 Restore grid split borders`.
+
+The rollback removed the Issue 777 presentation-inset machinery from:
+
+- `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`
+- `wezboard/wezboard-gui/src/termwindow/render/paint.rs`
+- `wezboard/wezboard-gui/src/termwindow/render/pane.rs`
+- `wezboard/wezboard-gui/src/termwindow/render/split.rs`
+
+No `git revert` was used. The rollback was performed manually, hunk by hunk. The
+audit grep for Issue 777 inset symbols returned no matches:
+
+```bash
+rg "pane_render_geometry|PaneRenderGeometry|split_border_width_physical|content_pixel_width|content_pixel_height|content_origin_x|content_origin_y|draw_divider|hit_thickness" \
+  wezboard/wezboard-gui
+```
+
+`scripts/build.sh wezboard` passed cleanly. Manual testing reported that the old
+grid-consistent version is working AFAICT, and the hidden bottom-row regression
+is no longer observed.
+
+#### Conclusion
+
+The urgent regression is resolved by rollback. Wezboard is back to the older
+split-border behavior where the grid, PTY dimensions, mouse mapping, overlay
+positioning, and visible terminal content agree.
+
+The accepted tradeoff is that split borders can again sit over pane content.
+That visual problem should not be fixed in Issue 785. A future fix needs a
+grid-native border architecture that matches Wezboard's cell-based split model.
+
+## Conclusion
+
+Issue 785 closed the bottom-row clipping regression by manually restoring the
+pre-Issue-777 split border code. The terminal's last visible row is no longer
+hidden by the presentation-inset border model.
+
+The remaining visual issue is that split borders can overlap pane content. That
+work is deferred to a new issue focused on a grid-native border design: existing
+shared split divider cells plus new outer perimeter border cells, so active
+panes can be outlined without pixel-level layout hacks.

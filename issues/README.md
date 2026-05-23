@@ -2,18 +2,19 @@
 
 ## Open
 
-| #                                              | Title                                                  | Opened     |
-| ---------------------------------------------- | ------------------------------------------------------ | ---------- |
-| [0756](0756-surfari/README.md)                 | Surfari — WebKit engine for TermSurf                   | 2026-03-16 |
-| [0776](0776-pdf-not-loading/README.md)         | PDF files show blank white screen instead of rendering | 2026-04-11 |
-| [0778](0778-back-nav-title-stale/README.md)    | Back navigation leaves stale title in webtui           | 2026-04-12 |
-| [0780](0780-link-drag-freeze/README.md)        | Link drag freezes the browser                          | 2026-04-17 |
-| [0785](0785-split-border-bottom-row/README.md) | Split border hides bottom pane row                     | 2026-05-23 |
+| #                                                | Title                                                  | Opened     |
+| ------------------------------------------------ | ------------------------------------------------------ | ---------- |
+| [0756](0756-surfari/README.md)                   | Surfari — WebKit engine for TermSurf                   | 2026-03-16 |
+| [0776](0776-pdf-not-loading/README.md)           | PDF files show blank white screen instead of rendering | 2026-04-11 |
+| [0778](0778-back-nav-title-stale/README.md)      | Back navigation leaves stale title in webtui           | 2026-04-12 |
+| [0780](0780-link-drag-freeze/README.md)          | Link drag freezes the browser                          | 2026-04-17 |
+| [0786](0786-grid-native-split-borders/README.md) | Grid-Native Split Borders                              | 2026-05-23 |
 
 ## Closed
 
 | #                                                       | Title                                                                         | Opened     | Closed     |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0785](0785-split-border-bottom-row/README.md)          | Split border hides bottom pane row                                            | 2026-05-23 | 2026-05-23 |
 | [0784](0784-datalist-popup/README.md)                   | Datalist suggestions do not open                                              | 2026-05-23 | 2026-05-23 |
 | [0783](0783-native-popup-remainders/README.md)          | Remaining native popup bugs after Shell fix                                   | 2026-05-22 | 2026-05-23 |
 | [0782](0782-native-popup-followups/README.md)           | Remaining native popup bugs                                                   | 2026-05-21 | 2026-05-22 |
