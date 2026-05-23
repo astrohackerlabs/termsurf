@@ -7,7 +7,6 @@
 | [0756](0756-surfari/README.md)              | Surfari — WebKit engine for TermSurf                   | 2026-03-16 |
 | [0776](0776-pdf-not-loading/README.md)      | PDF files show blank white screen instead of rendering | 2026-04-11 |
 | [0778](0778-back-nav-title-stale/README.md) | Back navigation leaves stale title in webtui           | 2026-04-12 |
-| [0780](0780-link-drag-freeze/README.md)     | Link drag freezes the browser                          | 2026-04-17 |
 
 ## Closed
 
@@ -19,6 +18,7 @@
 | [0783](0783-native-popup-remainders/README.md)          | Remaining native popup bugs after Shell fix                                   | 2026-05-22 | 2026-05-23 |
 | [0782](0782-native-popup-followups/README.md)           | Remaining native popup bugs                                                   | 2026-05-21 | 2026-05-22 |
 | [0781](0781-chromium-upgrade/README.md)                 | Chromium Upgrade Path                                                         | 2026-05-18 | 2026-05-18 |
+| [0780](0780-link-drag-freeze/README.md)                 | Link drag freezes the browser                                                 | 2026-04-17 | 2026-05-23 |
 | [0779](0779-date-picker-popup-position/README.md)       | Native popups (date picker, select dropdown) render outside webview overlay   | 2026-04-15 | 2026-05-21 |
 | [0777](0777-split-border-overlap/README.md)             | Split border overlaps pane content and blocks mouse resize                    | 2026-04-11 | 2026-05-19 |
 | [0775](0775-devtools-multi-profile/README.md)           | DevTools gets confused with multiple profiles open                            | 2026-04-11 | 2026-05-23 |

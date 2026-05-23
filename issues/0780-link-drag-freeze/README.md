@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-04-17"
+closed = "2026-05-23"
 +++
 
 # Issue 780: Link drag freezes the browser
@@ -459,3 +460,14 @@ The testing workflow must always pass
 validating Chromium/Roamium changes without installing. Otherwise tests can
 accidentally exercise the installed stable Roamium and produce misleading
 results.
+
+## Conclusion
+
+Issue 780 is closed by Experiment 2. Roamium now suppresses Chromium's native
+macOS drag start while running in TermSurf overlay mode, which prevents
+accidental link/image drags from freezing the browser.
+
+This is intentionally a freeze fix, not full drag-and-drop support. Native HTML5
+drag-and-drop and file drag/drop remain unsupported and are tracked separately
+in `TODO.md`. Normal mouse-driven web interactions that do not use Chromium's
+native drag pipeline should continue to work.
