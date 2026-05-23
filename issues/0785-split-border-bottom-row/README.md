@@ -416,3 +416,210 @@ pixel-first content-rect sizing model.
 For this issue, the safer path is rollback of the Issue 777 split-border
 implementation. A future border-box implementation should be designed as a
 larger layout architecture change, not as an urgent regression patch.
+
+### Experiment 2: Manually Restore Pre-Issue-777 Split Borders
+
+#### Description
+
+Fully and precisely remove the code behavior introduced by Issue 777 Experiment
+5, commit `61ff8e625d0f0 Restore presentation split borders`.
+
+This is a rollback of code behavior, not a `git revert` operation. Do not run
+`git revert`. Do not apply a reverse patch blindly. Do not modify the closed
+Issue 777 document. Instead, manually restore the affected code paths to the
+pre-`61ff8e625d0f0` behavior, reviewing every hunk so later unrelated work is
+not accidentally removed.
+
+The goal is to return split rendering to the old grid-consistent model where the
+terminal pane grid, PTY dimensions, `RenderableDimensions`, mouse mapping, and
+browser overlay positioning all agree. This may bring back the visual
+border-overlap behavior that Issue 777 tried to improve, but it must eliminate
+the deal-breaking hidden bottom row.
+
+#### Non-Negotiable Invariants
+
+- Do not run `git revert`.
+- Do not modify closed issue documents, including Issue 777.
+- Remove the Issue 777 presentation-inset behavior completely from code.
+- Do not leave a hybrid state where content origin is shifted but rows/columns
+  are also clipped.
+- The bottom row must be visible in split panes.
+- `stty size` must match the visible terminal grid.
+- Single-pane and zoomed-pane behavior must remain unchanged.
+- Browser overlays must keep their pre-Issue-777 alignment behavior.
+- Mouse clicks, text selection, terminal mouse forwarding, and split dragging
+  must use the same cell coordinate model as the visible grid.
+
+#### Changes
+
+1. **Use the commit diff only as a map.**
+
+   Inspect the code-only portion of commit `61ff8e625d0f0`:
+
+   ```bash
+   git show --stat --oneline 61ff8e625d0f0
+   git show -- wezboard/wezboard-gui/src/termwindow/mouseevent.rs \
+     wezboard/wezboard-gui/src/termwindow/render/paint.rs \
+     wezboard/wezboard-gui/src/termwindow/render/pane.rs \
+     wezboard/wezboard-gui/src/termwindow/render/split.rs \
+     61ff8e625d0f0
+   ```
+
+   Use that diff to identify the exact Issue 777 hunks. Then edit files
+   manually. The implementation should not restore whole files from the parent
+   commit unless a review confirms there have been no later unrelated changes in
+   that file.
+
+2. **Restore `render/pane.rs` to pre-presentation-inset behavior.**
+
+   In `wezboard/wezboard-gui/src/termwindow/render/pane.rs`:
+   - remove `PaneRenderGeometry` and `pane_render_geometry()` if they are only
+     serving the Issue 777 presentation-inset model;
+   - remove `split_border_width_physical()` if it has no remaining legitimate
+     caller after the rollback;
+   - remove any calculation of `content_origin_x`, `content_origin_y`,
+     `content_pixel_width`, or `content_pixel_height` that shifts or shrinks
+     terminal rendering for split borders;
+   - remove the temporary `RenderableDimensions` shrink in `paint_pane()`;
+   - restore line rendering width to the pane's actual dimensions instead of the
+     Issue 777 content width;
+   - restore the `paint_pane()` return value to the pre-Issue-777 pane origin
+     used by browser overlays.
+
+   After this step, `paint_pane()` must not reduce row or column count based on
+   `split_border_width`.
+
+3. **Restore split drawing and hit regions in `render/split.rs`.**
+
+   In `wezboard/wezboard-gui/src/termwindow/render/split.rs`:
+   - restore `paint_split()` to the pre-Issue-777 signature;
+   - remove `draw_divider` and `hit_thickness` parameters;
+   - restore the old divider drawing behavior;
+   - restore split `UIItem` hit regions to the cell-based coordinates used
+     before the presentation-border experiment.
+
+4. **Restore split rendering call sites in `render/paint.rs`.**
+
+   In `wezboard/wezboard-gui/src/termwindow/render/paint.rs`:
+   - remove the Issue 777 logic that computes `split_border_width` and changes
+     split drawing or hit-region thickness;
+   - restore calls to `paint_split()` to the old argument list;
+   - keep browser overlay calls wired to the pane origin returned by
+     `paint_pane()`, but that origin should now be the pre-Issue-777 origin.
+
+5. **Restore mouse coordinate handling in `mouseevent.rs`.**
+
+   In `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`:
+   - remove the Issue 777 helper path that uses `pane_render_geometry()` to
+     remap mouse coordinates to inset content;
+   - restore the original window-cell coordinate calculation for terminal mouse
+     events;
+   - restore split dragging to use the pre-Issue-777 cell coordinate arguments;
+   - preserve any later unrelated mouse handling fixes if review finds them.
+
+6. **Audit for leftovers.**
+
+   After manual edits, search for Issue 777 presentation-inset leftovers:
+
+   ```bash
+   rg "pane_render_geometry|PaneRenderGeometry|split_border_width_physical|content_pixel_width|content_pixel_height|draw_divider|hit_thickness" \
+     wezboard/wezboard-gui/src/termwindow
+   ```
+
+   Any remaining match must be intentionally justified in the result. The
+   expected outcome is that these Issue 777 rollback-target symbols are gone
+   from the split rendering path.
+
+7. **Preserve configuration compatibility.**
+
+   Do not remove the `split_border_width` config option in this experiment. If
+   the option becomes unused after the rollback, leave the config surface in
+   place and record that it no longer affects split rendering. Removing or
+   redefining the option is a separate compatibility decision.
+
+#### Verification
+
+1. Build Wezboard:
+
+   ```bash
+   scripts/build.sh wezboard
+   ```
+
+2. Configure:
+
+   ```lua
+   config.focused_split_border_color = "#7dcfff"
+   config.unfocused_split_border_color = "#565f89"
+   config.split_border_width = 4
+   ```
+
+3. Split pane bottom row:
+   - open a split pane;
+   - run `stty size`;
+   - move the shell prompt to the last visible row;
+   - confirm the prompt/input line is visible;
+   - print text on the last row and confirm it remains visible.
+
+4. TUI status lines:
+   - run Codex or another TUI with a bottom status line;
+   - run Neovim in a split pane;
+   - confirm bottom status/command lines are visible.
+
+5. Edge cells:
+   - print text reaching the rightmost column and bottom row;
+   - confirm no row or column silently disappears.
+
+6. Split behavior:
+   - open horizontal and vertical splits;
+   - drag split dividers;
+   - confirm hit regions work and pane resizing still behaves normally.
+
+7. Mouse behavior:
+   - click cells near split boundaries;
+   - select text across lines;
+   - test terminal mouse forwarding in an app that receives mouse input;
+   - confirm clicks target the visible cells.
+
+8. Browser overlay behavior:
+   - open a browser pane with `web`;
+   - verify the browser overlay aligns with the terminal pane;
+   - resize splits and verify the overlay follows the pane.
+
+9. Single-pane and zoomed-pane behavior:
+   - verify a single pane renders normally;
+   - zoom and unzoom a split pane;
+   - confirm bottom-row visibility and overlay/mouse behavior remain correct.
+
+10. Regression acceptance:
+    - visually inspect split borders;
+    - if the old overlap behavior returns, record it as the accepted rollback
+      tradeoff;
+    - do not treat border overlap as a failure for this experiment unless it
+      hides terminal content.
+
+#### Pass Criteria
+
+The experiment passes if the bottom row is visible in split panes, the terminal
+grid and `stty size` agree with what is visible, and the four affected code
+paths have been manually restored to the pre-Issue-777 split behavior without
+using `git revert`.
+
+#### Partial Criteria
+
+The experiment is Partial if the bottom row is visible but one non-critical
+secondary behavior needs a follow-up, such as a visual border artifact or a
+minor split-hit-region issue. Partial is not acceptable if any terminal row or
+column is still hidden.
+
+#### Failure Criteria
+
+The experiment fails if:
+
+- `git revert` or a blind reverse patch is used;
+- the bottom row is still clipped;
+- a different row or column becomes hidden;
+- mouse mapping, selection, terminal mouse forwarding, split dragging, or
+  browser overlay positioning regress;
+- closed Issue 777 documentation is modified;
+- the code remains in a hybrid state with both pre-Issue-777 and Issue 777
+  presentation-inset behavior active.
