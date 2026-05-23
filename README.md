@@ -191,7 +191,7 @@ git am ../../chromium/patches/issue-784/*.patch
 Configure and build Chromium:
 
 ```bash
-gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true'
+gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 autoninja -C out/Default libtermsurf_chromium
 ```
 

@@ -68,7 +68,7 @@ cd ~/dev/termsurf/chromium/src
 export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
 
 # Generate build files (only needed once, or after changing args.gn)
-gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true'
+gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 
 # Build
 autoninja -C out/Default libtermsurf_chromium
@@ -90,7 +90,7 @@ caffeinate gclient sync --revision src@148.0.7778.97 --no-history
 cd src
 git checkout -b 148.0.7778.97-issue-784 148.0.7778.97
 git am ../../chromium/patches/issue-784/*.patch
-gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true'
+gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 autoninja -C out/Default libtermsurf_chromium
 ```
 

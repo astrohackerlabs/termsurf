@@ -182,7 +182,7 @@ export PATH="$(cd ../depot_tools && pwd):$PATH"
 Configure the build (one time):
 
 ```bash
-gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true'
+gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 ```
 
 Build a target:
