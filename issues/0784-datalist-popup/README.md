@@ -422,6 +422,69 @@ content-side `AutofillClient`, or to implement a smaller datalist-only
 Experiment 3 based on dependency cost and which popup UI surface is safer for
 TermSurf.
 
+**Result:** Pass
+
+The trace confirmed the missing-client hypothesis.
+
+The renderer path is definitely content_shell:
+
+```text
+datalist_autofill event=ShellContentRendererClient::RenderFrameCreated
+```
+
+Blink also definitely attempts to open the datalist chooser. The trace recorded
+multiple calls to:
+
+```text
+datalist_autofill event=ChromeClientImpl::OpenTextDataListChooser
+```
+
+Each call identified the real datalist input on the test page:
+
+```text
+has_datalist=1
+value_length=7
+url="http://localhost:9616/test-native-popups.html"
+```
+
+But every open attempt reported:
+
+```text
+autofill_client_present=0
+```
+
+No downstream Autofill logs fired:
+
+- no `AutofillAgent::AutofillAgent.after_set_client`;
+- no `AutofillAgent::OpenTextDataListChooser`;
+- no `AutofillAgent::ShowSuggestions`;
+- no `AutofillExternalDelegate::OnQuery`.
+
+This proves the datalist request reaches Blink's datalist-open hook, but dies
+immediately because the frame has no `WebAutofillClient`.
+
+#### Conclusion
+
+The datalist bug is not caused by AppKit, PagePopup geometry, select-menu state,
+Shell window mouse transparency, or Cmd-Tab focus handling.
+
+The concrete bug is:
+
+```text
+content_shell/Roamium does not install Chromium's Autofill renderer plumbing.
+ChromeClientImpl::OpenTextDataListChooser(...)
+  -> AutofillClientFromFrame(frame) returns null
+  -> no AutofillAgent::OpenTextDataListChooser(...)
+  -> no browser-side Autofill query
+  -> no datalist suggestions
+```
+
+Experiment 3 should design and implement the smallest viable datalist-capable
+Autofill integration for Roamium/content_shell. The main design choice is
+whether to reuse Chromium's existing `AutofillAgent` plus the browser-side
+Autofill popup machinery, or to add a narrower TermSurf-specific
+`WebAutofillClient` that only supports datalist suggestions.
+
 ## Cleanup Requirement
 
 Do not perform broad log cleanup before the datalist fix. Some remaining
