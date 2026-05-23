@@ -203,6 +203,223 @@ Expected result: the Blink datalist trigger fires, but
 around adding the minimal Autofill/datalist support required by the
 content_shell/Roamium embedding, without importing the full Chrome browser UI.
 
+### Experiment 2: Trace the datalist Autofill boundary
+
+#### Description
+
+Add a small, read-only trace to prove exactly where the datalist open request
+stops.
+
+Experiment 1 found that datalist suggestions should flow through Blink's
+Autofill client:
+
+```text
+ChromeClientImpl::OpenTextDataListChooser
+  -> AutofillClientFromFrame
+  -> AutofillAgent::OpenTextDataListChooser
+  -> AutofillAgent::ShowSuggestions
+  -> browser Autofill query
+  -> AutofillExternalDelegate::ShowSuggestions
+```
+
+The current hypothesis is that Roamium/content_shell does not install
+`AutofillAgent`, so `AutofillClientFromFrame(...)` returns null and the request
+becomes a no-op before any browser-side Autofill code runs.
+
+This experiment must only add logs. Do not install Autofill, do not change popup
+behavior, do not change focus behavior, and do not clean up unrelated logs.
+
+#### Non-Negotiable Invariants
+
+Do not touch the existing native-popup fixes:
+
+- do not modify `WebPagePopupImpl::SetWindowRect` or the PagePopup y-axis
+  correction;
+- do not modify Shell window movement or any `setIgnoresMouseEvents:YES`
+  reassertion;
+- do not modify `SetGuiActive`;
+- do not modify `WebMenuRunner` direct `NSMenu` select placement;
+- do not modify the test page.
+
+If the date/time/color/select invariants regress after this logging patch, the
+experiment fails.
+
+#### Changes
+
+Create a new Chromium branch for Issue 784, branched from the current Issue 783
+Chromium tip, and register it in `chromium/README.md`.
+
+Add trace logs gated by the existing `TERMSURF_ISSUE_779_TRACE=1` gate and the
+existing `[issue-779-trace]` prefix. Use a new event label such as
+`datalist_autofill` so extraction is precise.
+
+1. In `third_party/blink/renderer/core/page/chrome_client_impl.cc`, log at the
+   top of `ChromeClientImpl::OpenTextDataListChooser(...)`:
+   - input element pointer;
+   - document/frame pointers;
+   - whether `AutofillClientFromFrame(...)` is null;
+   - whether the input has a datalist;
+   - current input value length;
+   - owner frame URL if cheaply available.
+
+   This is the primary smoking-gun log. If it fires with
+   `autofill_client_present=false`, the missing-client hypothesis is confirmed.
+
+2. In the same file, log `ChromeClientImpl::TextFieldDataListChanged(...)` with
+   the same `AutofillClientFromFrame(...)` presence check.
+
+   This tells us whether datalist option changes are also being dropped because
+   the frame has no Autofill client.
+
+3. In `content/shell/renderer/shell_content_renderer_client.cc`, log
+   `ShellContentRendererClient::RenderFrameCreated(...)`.
+
+   This confirms that Roamium is using content_shell's renderer client path, not
+   Chrome's renderer client path.
+
+4. In `components/autofill/content/renderer/autofill_agent.cc`, log:
+   - the `AutofillAgent` constructor after it calls `SetAutofillClient(this)`;
+   - `AutofillAgent::OpenTextDataListChooser(...)`;
+   - the beginning of `AutofillAgent::ShowSuggestions(...)`, including the
+     trigger source and any early-return reason that prevents a browser query.
+
+   Log the trigger source symbolically if Chromium already has a helper for
+   `AutofillSuggestionTriggerSource`. If no helper exists, log the raw enum
+   value and include enough context in the log label to make
+   `kOpenTextDataListChooser` recognizable.
+
+   Expected result for the current hypothesis: none of these logs fire in the
+   datalist click run, including the constructor log. That non-appearance is
+   itself confirmation that content_shell never installs `AutofillAgent`. If
+   they do fire, the missing-client hypothesis is wrong and the trace should
+   show the next suppression point.
+
+5. In `components/autofill/core/browser/ui/autofill_external_delegate.cc`, keep
+   the existing `AutofillExternalDelegate::ShowSuggestions` trace and add one
+   lightweight log to `AutofillExternalDelegate::OnQuery(...)`:
+   - trigger source;
+   - `update_datalist`;
+   - datalist option count;
+   - caret bounds;
+   - field bounds.
+
+   Expected result for the current hypothesis: this log does not fire. If it
+   does fire, browser-side Autofill is receiving the query and the bug is later
+   in suggestion UI display.
+
+6. Do not add high-volume per-mouse, input-router, or AppKit window logs. Those
+   were useful for earlier issues but are not part of the datalist hypothesis.
+
+#### Verification
+
+1. Build Chromium with the project script:
+
+   ```bash
+   scripts/build.sh chromium
+   ```
+
+2. Build the other components normally if needed:
+
+   ```bash
+   scripts/build.sh roamium
+   scripts/build.sh wezboard
+   scripts/build.sh webtui
+   ```
+
+3. Run a quick invariant check without focusing datalist first:
+   - open the native popup test page;
+   - open a date picker and confirm the y-position is still correct;
+   - with the date picker still open, Cmd-Tab to another app and confirm the
+     picker dismisses; Cmd-Tab back and confirm the page is still usable;
+   - open a select dropdown and confirm the x-position is still correct;
+   - dismiss the select, then open the date picker again and confirm native
+     widgets still work.
+
+4. Run the datalist trace with:
+
+   ```bash
+   TERMSURF_ISSUE_779_TRACE=1 \
+   XDG_STATE_HOME="$PWD/logs/issue-784-exp2-state" \
+   RUST_LOG=info \
+   ./wezboard/target/debug/wezboard-gui \
+   2>&1 | tee logs/issue-784-exp2-wezboard.log
+   ```
+
+5. In `web`, open the native popup test page.
+
+6. Test the exact datalist control on the page:
+   - the control is `input#browser`;
+   - it has `list="browsers"`;
+   - its initial value is `Roamium`;
+   - valid options include `Roamium`, `Surfari`, `Waterwolf`, and `Girlbat`.
+
+   Click into `input#browser`, select the existing text, type `S`, then perform
+   the normal datalist-open action for the browser UI under test: click the
+   datalist affordance if it is visible, or press ArrowDown while the caret is
+   in the field. `S` should match `Surfari`, so the test is not blocked by an
+   empty suggestion set.
+
+7. Stop immediately after the datalist fails or succeeds. Do not continue with
+   other controls after the datalist attempt.
+
+8. Extract the relevant trace lines:
+
+   ```bash
+   rg "\\[issue-779-trace\\].*(datalist_autofill|OpenTextDataListChooser|TextFieldDataListChanged|AutofillAgent|AutofillExternalDelegate|ShellContentRendererClient)" \
+     logs/issue-784-exp2-wezboard.log \
+     logs/issue-784-exp2-state
+   ```
+
+9. After committing the Chromium trace patch, export it to
+   `chromium/patches/issue-784/0001-Trace-datalist-autofill-boundary.patch` and
+   verify the patch applies cleanly.
+
+#### Pass Criteria
+
+The experiment passes if the trace names the first missing boundary.
+
+Expected pass shape:
+
+- `ShellContentRendererClient::RenderFrameCreated(...)` fires;
+- `ChromeClientImpl::OpenTextDataListChooser(...)` fires;
+- that log says `autofill_client_present=false`;
+- no `AutofillAgent::OpenTextDataListChooser(...)` log fires;
+- no browser-side `AutofillExternalDelegate::OnQuery(...)` log fires.
+
+That result would confirm that content_shell/Roamium lacks the renderer Autofill
+client required to open datalist suggestions.
+
+#### Partial Criteria
+
+If `AutofillAgent::OpenTextDataListChooser(...)` fires, the missing-client
+hypothesis is wrong. The result is still useful if the trace records the next
+early-return reason in `AutofillAgent::ShowSuggestions(...)`.
+
+If `AutofillExternalDelegate::OnQuery(...)` fires, the renderer and browser
+Autofill query path is alive. The next experiment should target the Autofill
+popup UI display path rather than client installation.
+
+#### Failure Criteria
+
+The experiment fails if:
+
+- any non-log behavior changes are made;
+- any known-good native popup invariant regresses;
+- the trace does not show whether `AutofillClientFromFrame(...)` is null;
+- broad mouse/input/AppKit logs are reintroduced and drown out the datalist
+  signal.
+
+#### Expected Interpretation
+
+If the expected pass shape is observed, Experiment 3 should design the minimal
+fix for installing datalist-capable Autofill support in Roamium/content_shell.
+That fix should avoid importing Chrome browser UI wholesale. The first design
+question will be whether to reuse Chromium's `AutofillAgent` plus a small
+content-side `AutofillClient`, or to implement a smaller datalist-only
+`WebAutofillClient` for TermSurf's embedding. Choose the fix direction in
+Experiment 3 based on dependency cost and which popup UI surface is safer for
+TermSurf.
+
 ## Cleanup Requirement
 
 Do not perform broad log cleanup before the datalist fix. Some remaining
