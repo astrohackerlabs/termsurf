@@ -1,6 +1,6 @@
 use crate::termwindow::{RenderFrame, TermWindowNotif};
-use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::WindowOps;
+use ::window::bitmaps::atlas::OutOfTextureSpace;
 use anyhow::Context;
 use smol::Timer;
 use std::time::{Duration, Instant};
@@ -258,7 +258,6 @@ impl crate::TermWindow {
             let (pane_pixel_x, pane_pixel_y) = self
                 .paint_pane(pos, num_panes, &mut layers)
                 .context("paint_pane")?;
-            self.paint_pane_border(pos, num_panes, &mut layers)?;
 
             // Update webview overlay position using paint_pane's coordinates.
             {
@@ -305,6 +304,13 @@ impl crate::TermWindow {
                     }
                 }
             }
+        }
+
+        for pos in panes.iter().filter(|pos| !pos.is_active) {
+            self.paint_pane_border(pos, num_panes, &mut layers)?;
+        }
+        for pos in panes.iter().filter(|pos| pos.is_active) {
+            self.paint_pane_border(pos, num_panes, &mut layers)?;
         }
 
         if let Some(pane) = self.get_active_pane_or_overlay() {

@@ -2,12 +2,12 @@ use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
-    same_hyperlink, CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
-    RenderScreenLineParams,
+    CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
+    RenderScreenLineParams, same_hyperlink,
 };
 use crate::termwindow::{ScrollHit, UIItem, UIItemType};
-use ::window::bitmaps::TextureRect;
 use ::window::DeadKeyStatus;
+use ::window::bitmaps::TextureRect;
 use anyhow::Context;
 use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
@@ -590,7 +590,7 @@ impl crate::TermWindow {
         num_panes: usize,
         layers: &mut TripleLayerQuadAllocator,
     ) -> anyhow::Result<()> {
-        if num_panes <= 1 || pos.is_zoomed || !pos.is_active {
+        if num_panes <= 1 || pos.is_zoomed {
             return Ok(());
         }
 
@@ -599,11 +599,17 @@ impl crate::TermWindow {
         };
 
         let palette = pos.pane.palette();
-        let color = self
-            .config
-            .focused_split_border_color
-            .map(|c| c.to_linear())
-            .unwrap_or_else(|| palette.split.to_linear());
+        let color = if pos.is_active {
+            self.config
+                .focused_split_border_color
+                .map(|c| c.to_linear())
+                .unwrap_or_else(|| palette.split.to_linear())
+        } else {
+            self.config
+                .unfocused_split_border_color
+                .map(|c| c.to_linear())
+                .unwrap_or_else(|| palette.split.to_linear())
+        };
 
         let (padding_left, padding_top) = self.padding_left_top();
         let tab_bar_height = if self.show_tab_bar {
