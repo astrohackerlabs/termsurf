@@ -502,6 +502,19 @@ goal is to make datalist work if the existing Autofill UI can be reused without
 pulling in Chrome's full browser stack. If the implementation reaches a
 dependency wall, stop at the smallest verified boundary and record that result.
 
+This experiment tries the existing `AutofillAgent` path before a custom
+TermSurf-only `WebAutofillClient` because it proves the standard Chromium
+renderer-to-browser datalist data path with the least new UI code. Even if the
+existing popup UI proves too Chrome-specific to reuse, a useful Partial result
+will give the next experiment a known-good suggestion source instead of making
+it rediscover datalist extraction from scratch.
+
+The expected outcome is probably Partial, not necessarily Pass. Chromium's data
+plumbing lives mostly under `components/autofill`, but the desktop popup UI is
+Chrome UI code. If the renderer and browser receive datalist suggestions but the
+visible popup would require `chrome/browser` profile services or Chrome-only
+Views controllers, stop there and record the UI dependency boundary.
+
 #### Non-Negotiable Invariants
 
 Do not regress the native-popup fixes from Issues 779, 782, and 783:
@@ -521,7 +534,23 @@ If any invariant regresses, stop and fix that regression before continuing.
 
 Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
 
-1. Renderer setup: install Autofill for content_shell frames.
+1. Pre-code dependency check.
+
+   Before writing implementation code, inspect the constructors and GN
+   dependencies for:
+   - `components/autofill/content/renderer/autofill_agent.*`;
+   - `components/password_manager/content/renderer/password_autofill_agent.*`;
+   - `components/password_manager/content/renderer/password_generation_agent.*`;
+   - Chrome's `chrome/renderer/chrome_content_renderer_client.cc` Autofill setup
+     block.
+
+   Confirm whether `PasswordAutofillAgent` and `PasswordGenerationAgent` can be
+   constructed in content_shell without enabling password storage or importing
+   broad password-manager/browser infrastructure. If they cannot, do not force
+   the `AutofillAgent` path. Record that as an immediate dependency wall and
+   pivot the next experiment to a narrow datalist-only `WebAutofillClient`.
+
+2. Renderer setup: install Autofill for content_shell frames.
 
    In `content/shell/renderer/shell_content_renderer_client.cc`, update
    `ShellContentRendererClient::RenderFrameCreated(...)` to install the same
@@ -534,14 +563,16 @@ Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
 
    Use Chrome's
    `chrome/renderer/chrome_content_renderer_client.cc::RenderFrameCreated(...)`
-   as the reference shape, but do not copy unrelated Chrome renderer behavior.
+   as the reference shape, specifically the local block that constructs
+   `PasswordAutofillAgent`, `PasswordGenerationAgent`, and `AutofillAgent`. Do
+   not copy unrelated Chrome renderer behavior.
 
    Expected immediate effect: Experiment 2's
    `ChromeClientImpl::OpenTextDataListChooser(...)` log should change from
    `autofill_client_present=0` to `autofill_client_present=1`, and
    `AutofillAgent::OpenTextDataListChooser(...)` should fire.
 
-2. Browser setup: attach the smallest content Autofill client that can receive
+3. Browser setup: attach the smallest content Autofill client that can receive
    datalist queries.
 
    `AutofillAgent` sends its browser query through
@@ -565,7 +596,13 @@ Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
    as a reference for how a `ContentAutofillClient` can be attached and stubbed.
    Do not add test-only dependencies to production code.
 
-3. Popup display: prefer reusing existing Autofill suggestion UI, but do not
+   Expect this class to be substantial even if most methods are stubs. That is
+   acceptable only if the real behavior stays datalist-scoped. The methods that
+   need meaningful behavior for this experiment are the datalist suggestion,
+   datalist update, hide, and manager creation boundaries; unrelated services
+   should remain null or no-op.
+
+4. Popup display: prefer reusing existing Autofill suggestion UI, but do not
    import Chrome wholesale.
 
    If the content Autofill client can reuse Chromium's existing Autofill popup
@@ -578,14 +615,26 @@ Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
    and records the exact missing UI boundary. That result is Partial and should
    feed a narrower custom datalist popup experiment.
 
-4. Build wiring.
+5. Build wiring.
 
    Update only the GN targets required for the renderer agent and the minimal
    browser-side datalist client. Keep dependency additions narrow. If adding one
    Autofill dependency pulls in large Chrome subsystems, stop and record the
    dependency boundary rather than forcing it.
 
-5. Keep the existing `datalist_autofill` trace lines from Experiment 2.
+   Expected narrow dependencies may include:
+   - `//components/autofill/content/renderer`;
+   - `//components/autofill/content/browser`;
+   - `//components/autofill/core/browser`;
+   - `//components/password_manager/content/renderer`, only if the pre-code
+     check proves those renderer objects can be constructed without enabling
+     password storage.
+
+   Treat `chrome/browser`, Chrome profile services, sync, identity, payments,
+   address storage, and Chrome Autofill Views controllers as the dependency wall
+   unless a very small isolated dependency proves otherwise.
+
+6. Keep the existing `datalist_autofill` trace lines from Experiment 2.
 
    Add only low-volume logs needed to interpret this experiment:
    - renderer installed Autofill client for a frame;
@@ -641,10 +690,21 @@ Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
    `S` should match `Surfari`. If a suggestion popup appears, select `Surfari`
    and verify the field value changes to `Surfari`.
 
-7. Stop after the datalist succeeds or reaches the first new failure boundary.
+7. If a datalist suggestion popup appears, test Cmd-Tab dismissal for the new
+   popup family:
+   - open the datalist suggestions again;
+   - Cmd-Tab to another app;
+   - confirm the datalist suggestions dismiss and do not remain visible on
+     screen;
+   - Cmd-Tab back and confirm the page is still usable.
+
+   Autofill suggestions are not PagePopups, so this must be verified separately
+   from the existing date/time/color Cmd-Tab invariant.
+
+8. Stop after the datalist succeeds or reaches the first new failure boundary.
    Do not continue with unrelated controls after the datalist attempt.
 
-8. Extract the relevant trace:
+9. Extract the relevant trace:
 
    ```bash
    rg "\\[issue-779-trace\\].*datalist_autofill" \
@@ -652,8 +712,8 @@ Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
      logs/issue-784-exp3-state
    ```
 
-9. Commit Chromium changes on the Issue 784 branch and regenerate
-   `chromium/patches/issue-784/` after a successful or useful partial result.
+10. Commit Chromium changes on the Issue 784 branch and regenerate
+    `chromium/patches/issue-784/` after a successful or useful partial result.
 
 #### Pass Criteria
 
@@ -665,6 +725,7 @@ The experiment passes if datalist suggestions visibly work:
 - the browser-side datalist client receives suggestions including `Surfari`;
 - a visible popup appears for `input#browser`;
 - selecting `Surfari` fills the field with `Surfari`;
+- the datalist popup dismisses on Cmd-Tab;
 - all known-good native-popup invariants still pass.
 
 #### Partial Criteria
@@ -676,7 +737,8 @@ visible popup work. Useful partial outcomes include:
   because no `ContentAutofillClient` or driver factory is attached;
 - the browser client receives datalist suggestions, but Chromium's existing
   Autofill popup UI requires broad Chrome dependencies;
-- the popup appears but accepting a suggestion does not update the input;
+- the popup appears and can be navigated, but accepting a suggestion does not
+  update the input;
 - dependency additions become too broad and the trace identifies the smallest
   missing production interface.
 
