@@ -1421,3 +1421,237 @@ The experiment fails if:
 - `paint_split()` draws visible border fragments again;
 - active/inactive pane borders regress;
 - terminal content, browser overlays, or terminal mouse forwarding regress.
+
+**Result:** Fail
+
+The implementation added separate `hit_left` and `hit_top` coordinates to
+`PositionedSplit`, moved the split `UIItem` rectangles to those coordinates, and
+used those same coordinates as the drag delta anchor.
+`scripts/build.sh wezboard` passed, but manual testing showed no visible
+behavioral change: the draggable resize area remains one grid cell offset from
+the visible border.
+
+This means the experiment's core assumption was wrong or incomplete. The
+observed slider position is not controlled by the adjusted `PositionedSplit` hit
+coordinates in the way the experiment expected, or the adjustment was applied at
+the wrong layer. The actual hover/drag target may be coming from another
+`UIItem`, a stale/reversed hit-test ordering issue, a coordinate conversion
+mismatch between pixel and cell space, or pane/background geometry that makes
+the visible border appear one cell away from the split hit cell.
+
+#### Conclusion
+
+Experiment 5 should not be considered a fix. It preserved the build and did not
+regress the visual borders, but it failed the only user-visible goal: aligning
+the slider with the visible border.
+
+Before designing another fix, the next step should instrument or otherwise
+inspect the actual runtime hit-testing path. We need to identify the exact
+`UIItem` that wins hover at the off-by-one location, its pixel rectangle, the
+mouse cell coordinates at the visible border, and the pane border rectangle
+being drawn. Without that runtime comparison, more coordinate nudges are just
+guesswork.
+
+### Experiment 6: Derive Split Hitboxes From Pane Borders
+
+#### Description
+
+Fix the split resize slider by deriving its hit region from the same pane border
+rectangles that draw the visible border.
+
+Experiment 5 failed because it adjusted `PositionedSplit` coordinates without
+proving those coordinates matched the actual visible border. The correct next
+step is to make the hit-test geometry observable, then bind the split `UIItem`
+rectangle to the real shared edge between adjacent `PositionedPaneBorder`
+rectangles.
+
+This experiment should remove the guesswork:
+
+- inspect the runtime `UIItem` that wins hover;
+- inspect the visible pane border rectangles;
+- compute the split resize hitbox from the border rectangles, not from a blind
+  `+1` offset;
+- preserve the existing visual border painter.
+
+#### Non-Negotiable Invariants
+
+- Preserve Experiment 1's grid-reserved layout and truthful PTY sizing.
+- Preserve Experiments 3 and 4's one-rectangle active/inactive pane borders.
+- Keep `paint_split()` visually non-visual.
+- Do not paint over terminal content cells.
+- Do not change browser overlay content coordinates.
+- Do not change terminal mouse forwarding for content cells.
+- Do not resize the wrong split.
+- Do not introduce a one-cell jump when dragging begins.
+- Single-pane and zoomed-pane behavior remain unchanged.
+
+#### Changes
+
+1. **Remove or neutralize the failed Experiment 5 coordinate model.**
+
+   The `hit_left` / `hit_top` fields added to `PositionedSplit` did not affect
+   the observed behavior. Do not build Experiment 6 on top of that assumption
+   unless runtime evidence proves the fields are still useful.
+
+   Expected cleanup:
+   - either remove `hit_left` / `hit_top`;
+   - or leave them only if they become true derived values from pane-border
+     geometry, not a hard-coded direction-based `+1` adjustment.
+
+2. **Add temporary targeted hit-test diagnostics.**
+
+   Add a narrow, environment-gated diagnostic path, for example
+   `TERMSURF_SPLIT_HIT_TRACE=1`.
+
+   When enabled, log:
+   - mouse pixel coordinate and derived cell coordinate;
+   - the `UIItemType::Split` item that wins `resolve_ui_item()`;
+   - every split `UIItem` rectangle registered for the frame;
+   - every visible pane's content rect and `PositionedPaneBorder.outer_*`;
+   - the selected split index/direction.
+
+   The logs must be low-volume:
+   - only log when the winning UI item changes;
+   - or only log near split hit regions;
+   - or only log on `MouseEventKind::Move` when a split item is under the
+     cursor.
+
+   These diagnostics are temporary. They should be removed or explicitly
+   converted into a small kept trace before closing the issue.
+
+3. **Identify the actual winning geometry.**
+
+   Run with the diagnostics and reproduce:
+   - right split: slider appears one cell left of visible border;
+   - down split: slider appears one cell above visible border.
+
+   Record in the experiment result:
+   - which `UIItem` wins at the offset location;
+   - whether moving onto the visible border hits no item, a pane item, or a
+     split item;
+   - the pixel/cell coordinates of the visible border;
+   - the split item's pixel/cell rectangle.
+
+   If the winning item is not the split `UIItem`, stop and fix the hit-test
+   ordering or competing item first. Do not continue with split-coordinate
+   changes until the actual winner is understood.
+
+4. **Derive split hitboxes from adjacent pane borders.**
+
+   For each `PositionedSplit`, find the adjacent visible panes that meet at that
+   split:
+   - for `SplitDirection::Horizontal`, find panes whose right/left border
+     rectangles touch the split's vertical shared edge;
+   - for `SplitDirection::Vertical`, find panes whose bottom/top border
+     rectangles touch the split's horizontal shared edge.
+
+   The split hitbox should be the shared reserved border cell that visually
+   separates those panes:
+   - vertical split hitbox: `x` equals the shared visible border cell, `y` spans
+     the overlapping pane-border range;
+   - horizontal split hitbox: `y` equals the shared visible border cell, `x`
+     spans the overlapping pane-border range.
+
+   Prefer cell-space derivation in `mux/src/tab.rs` if the data naturally lives
+   there. Prefer pixel-space derivation in `render/split.rs` only if it needs
+   render metrics or padding. In either case, the source of truth must be the
+   adjacent pane border rectangles, not the old split-tree divider coordinate.
+
+5. **Keep drag semantics stable.**
+
+   The hitbox and drag anchor must use the same coordinate. Dragging from the
+   visible border should produce `delta = 0` until the mouse moves into the next
+   cell.
+
+   If the hitbox coordinate differs from the logical split-tree coordinate,
+   carry both values explicitly:
+   - logical split index/direction for `resize_split_by()`;
+   - visual hit anchor for hover and `delta` calculation.
+
+   Do not mutate `resize_split_by()` unless runtime evidence proves its model is
+   wrong.
+
+6. **Keep split painting non-visual.**
+
+   `paint_split()` may register `UIItemType::Split` rectangles, but it must not
+   call `filled_rectangle()` or draw visible divider fragments.
+
+#### Verification
+
+1. Build Wezboard:
+
+   ```bash
+   scripts/build.sh wezboard
+   ```
+
+2. Diagnostic reproduction:
+   - run with `TERMSURF_SPLIT_HIT_TRACE=1`;
+   - reproduce the right-split and down-split offset cases;
+   - confirm logs identify the winning `UIItem`, its rectangle, and the visible
+     border rectangle.
+
+3. Right split hover alignment:
+   - open a split pane to the right;
+   - move the mouse across the visible vertical border;
+   - confirm the resize cursor appears on the visible border;
+   - confirm it no longer appears one cell left of the border.
+
+4. Down split hover alignment:
+   - open a split pane down;
+   - move the mouse across the visible horizontal border;
+   - confirm the resize cursor appears on the visible border;
+   - confirm it no longer appears one cell above the border.
+
+5. Drag no-jump check:
+   - press on the visible split border without moving;
+   - confirm the panes do not jump;
+   - drag one cell and confirm the split moves exactly one cell.
+
+6. Nested split check:
+   - create at least three panes with mixed horizontal and vertical nesting;
+   - hover every internal visible border;
+   - confirm the cursor appears on the visible border;
+   - drag each border and confirm the intended split resizes.
+
+7. Visual border regression check:
+   - confirm every visible non-zoomed pane still has one connected rectangle
+     border;
+   - confirm active/inactive colors still work;
+   - confirm `paint_split()` still draws nothing visible.
+
+8. Content and overlay check:
+   - run `stty size`;
+   - print on the last visible row and rightmost visible column;
+   - open a browser pane and confirm overlay alignment remains unchanged.
+
+9. Cleanup check:
+   - if temporary diagnostics were added, remove them before final pass unless
+     the result explicitly justifies keeping an environment-gated trace.
+
+#### Pass Criteria
+
+The experiment passes if runtime diagnostics identify the previous mismatch,
+resize hover aligns with the visible border in right/down and nested splits,
+dragging starts without a jump, the intended split resizes, active/inactive pane
+borders remain visually correct, temporary diagnostics are removed or justified,
+and `scripts/build.sh wezboard` passes.
+
+#### Partial Criteria
+
+The experiment is Partial if diagnostics identify the real mismatch and the fix
+works for simple right/down splits, but one nested split geometry remains
+misaligned. Partial is not acceptable if dragging jumps or the wrong split
+resizes.
+
+#### Failure Criteria
+
+The experiment fails if:
+
+- the fix is another unverified coordinate nudge;
+- the resize cursor remains one cell offset from the visible border;
+- hover alignment is fixed but dragging jumps;
+- the wrong split resizes;
+- `paint_split()` draws visible border fragments again;
+- active/inactive pane borders regress;
+- terminal content, browser overlays, or terminal mouse forwarding regress;
+- temporary diagnostics are left behind without explicit justification.

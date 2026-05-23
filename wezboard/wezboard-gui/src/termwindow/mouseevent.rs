@@ -266,8 +266,8 @@ impl super::TermWindow {
             None => return,
         };
         let delta = match split.direction {
-            SplitDirection::Horizontal => (x as isize).saturating_sub(split.left as isize),
-            SplitDirection::Vertical => (y as isize).saturating_sub(split.top as isize),
+            SplitDirection::Horizontal => (x as isize).saturating_sub(split.hit_left as isize),
+            SplitDirection::Vertical => (y as isize).saturating_sub(split.hit_top as isize),
         };
 
         if delta != 0 {

@@ -215,6 +215,10 @@ pub struct PositionedSplit {
     /// The offset from the top left corner of the containing tab to the top
     /// left corner of this split, in cells.
     pub top: usize,
+    /// The cell used for split hover and drag hit testing.
+    pub hit_left: usize,
+    /// The cell used for split hover and drag hit testing.
+    pub hit_top: usize,
     /// For Horizontal splits, how tall the split should be, for Vertical
     /// splits how wide it should be
     pub size: usize,
@@ -1202,12 +1206,24 @@ impl TabInner {
                     }
                     left += inset;
                     top += inset;
+                    let hit_left = if inset > 0 && node.direction == SplitDirection::Horizontal {
+                        left + 1
+                    } else {
+                        left
+                    };
+                    let hit_top = if inset > 0 && node.direction == SplitDirection::Vertical {
+                        top + 1
+                    } else {
+                        top
+                    };
 
                     dividers.push(PositionedSplit {
                         index,
                         direction: node.direction,
                         left,
                         top,
+                        hit_left,
+                        hit_top,
                         size: if node.direction == SplitDirection::Horizontal {
                             node.height() as usize
                         } else {
