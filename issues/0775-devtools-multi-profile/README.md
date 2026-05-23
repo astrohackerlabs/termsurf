@@ -7,16 +7,27 @@ opened = "2026-04-11"
 
 ## Goal
 
-Opening DevTools must always target the correct browser, profile, and tab with
-no ambiguity, even when multiple profiles are active simultaneously.
+Fix DevTools targeting so opening DevTools always identifies the exact browser
+engine, profile, and tab number to inspect. The DevTools protocol must not infer
+the target from "the last tab" or any other global fallback; every DevTools open
+request must be unambiguous even when multiple profiles or browser engines are
+active.
+
+Also update the `web` TUI UI so browser panes and DevTools panes visibly show
+the full target identity: browser engine, profile, and tab number. The tab
+number is currently missing from the displayed context and should be shown
+alongside browser and profile so users can confirm which tab DevTools is
+inspecting.
 
 ## Background
 
 DevTools currently gets confused when multiple browser profiles are open. The
 root cause is that DevTools requests do not explicitly specify which browser
-engine process, profile, and tab they refer to. When only one profile is active
-this works by accident, but with multiple profiles the targeting becomes
-ambiguous.
+engine process, profile, and tab they refer to. Current code tries to be helpful
+by resolving some DevTools requests against "the last tab," but that fallback is
+ambiguous and does not properly account for profile/process boundaries. When
+only one profile is active this works by accident, but with multiple profiles
+the targeting becomes ambiguous.
 
 Since each profile runs in its own browser engine process (one process per
 profile is a hard architectural constraint), DevTools must route to the correct
@@ -46,3 +57,5 @@ This may require changes to:
   specific (engine, profile, tab) tuple before sending the request.
 - The browser engine's DevTools handler — Must validate that the request targets
   a tab it actually owns.
+- The `web` TUI display — Must show browser engine, profile, and tab number for
+  browser and DevTools panes so the active target is visible to the user.
