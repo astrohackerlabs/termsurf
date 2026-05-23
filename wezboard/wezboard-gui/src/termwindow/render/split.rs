@@ -49,7 +49,6 @@ impl crate::TermWindow {
                 item_type: UIItemType::Split(split.clone()),
             }
         };
-        self.split_hit_trace_split_ui(split, &item);
         self.ui_items.push(item);
 
         Ok(())

@@ -82,7 +82,6 @@ pub mod render;
 pub mod resize;
 mod selection;
 pub mod spawn;
-mod split_hit_trace;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;

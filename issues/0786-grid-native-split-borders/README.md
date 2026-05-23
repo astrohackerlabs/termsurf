@@ -2045,3 +2045,18 @@ The split resize hitbox now shares the same reserved grid cell model as the
 painted border. This preserves the grid-native pane-border architecture from
 Experiment 1 and the one-rectangle active/inactive border painting from
 Experiments 3 and 4, while restoring correct mouse resize behavior.
+
+### Post-Experiment Cleanup
+
+After Experiment 7 passed, the temporary split hit-test diagnostics were
+removed:
+
+- deleted `split_hit_trace.rs`;
+- removed the `TERMSURF_SPLIT_HIT_TRACE` runtime path;
+- removed split-hit trace calls from pane border paint, split UI registration,
+  frame paint, and mouse hover handling;
+- restored normal `UIItem` hit resolution in `mouseevent.rs`;
+- deleted the ignored local `logs/split-hitbox.log` file.
+
+The cleanup intentionally preserved the repaired `hit_left` / `hit_top`
+coordinates because they are part of the working split resize behavior.

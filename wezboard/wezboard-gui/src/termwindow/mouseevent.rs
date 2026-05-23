@@ -25,7 +25,11 @@ use wezboard_term::{ClickPosition, LastMouseClick, StableRowIndex};
 
 impl super::TermWindow {
     fn resolve_ui_item(&self, event: &MouseEvent) -> Option<UIItem> {
-        self.split_hit_trace_resolve_ui_item(event)
+        self.ui_items
+            .iter()
+            .rev()
+            .find(|item| item.hit_test(event.coords.x, event.coords.y))
+            .cloned()
     }
 
     fn leave_ui_item(&mut self, item: &UIItem) {
@@ -185,28 +189,20 @@ impl super::TermWindow {
 
         let ui_item = if matches!(self.current_mouse_capture, None | Some(MouseCapture::UI)) {
             let ui_item = self.resolve_ui_item(&event);
-            let prior_for_trace = self.last_ui_item.clone();
 
             match (self.last_ui_item.take(), &ui_item) {
                 (Some(prior), Some(item)) => {
                     if prior != *item || !self.config.use_fancy_tab_bar {
-                        self.split_hit_trace_hover_change(
-                            &event,
-                            prior_for_trace.as_ref(),
-                            Some(item),
-                        );
                         self.leave_ui_item(&prior);
                         self.enter_ui_item(item);
                         context.invalidate();
                     }
                 }
                 (Some(prior), None) => {
-                    self.split_hit_trace_hover_change(&event, prior_for_trace.as_ref(), None);
                     self.leave_ui_item(&prior);
                     context.invalidate();
                 }
                 (None, Some(item)) => {
-                    self.split_hit_trace_hover_change(&event, None, Some(item));
                     self.enter_ui_item(item);
                     context.invalidate();
                 }
