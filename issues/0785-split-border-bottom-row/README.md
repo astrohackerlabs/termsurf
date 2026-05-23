@@ -415,7 +415,8 @@ pixel-first content-rect sizing model.
 
 For this issue, the safer path is rollback of the Issue 777 split-border
 implementation. A future border-box implementation should be designed as a
-larger layout architecture change, not as an urgent regression patch.
+larger layout architecture change in a new issue, not as an urgent regression
+patch inside Issue 785.
 
 ### Experiment 2: Manually Restore Pre-Issue-777 Split Borders
 
@@ -451,6 +452,46 @@ the deal-breaking hidden bottom row.
   must use the same cell coordinate model as the visible grid.
 
 #### Changes
+
+0. **Inventory later dependencies before editing.**
+
+   Before removing code, identify every later change that might depend on the
+   Issue 777 presentation-inset model.
+
+   For each primary rollback file, inspect all later commits:
+
+   ```bash
+   git log -p 61ff8e625d0f0..HEAD -- \
+     wezboard/wezboard-gui/src/termwindow/mouseevent.rs
+   git log -p 61ff8e625d0f0..HEAD -- \
+     wezboard/wezboard-gui/src/termwindow/render/paint.rs
+   git log -p 61ff8e625d0f0..HEAD -- \
+     wezboard/wezboard-gui/src/termwindow/render/pane.rs
+   git log -p 61ff8e625d0f0..HEAD -- \
+     wezboard/wezboard-gui/src/termwindow/render/split.rs
+   ```
+
+   Classify each subsequent hunk as either:
+   - building on Issue 777's inset model, which must be unwound alongside the
+     rollback; or
+   - unrelated later work, which must be preserved.
+
+   Also inventory every current dependency on the Issue 777 model:
+
+   ```bash
+   rg "pane_render_geometry|PaneRenderGeometry|split_border_width_physical|content_origin_x|content_origin_y" \
+     wezboard
+   ```
+
+   Categorize matches as:
+   - inside the four primary files and removable by this experiment;
+   - outside the four files but only present because of Issue 777, in which case
+     update them in lockstep;
+   - legitimate non-Issue-777 callers, in which case stop and record that the
+     rollback is broader than expected before proceeding.
+
+   The intended end state is: pre-Issue-777 split-border behavior plus all
+   unrelated later improvements.
 
 1. **Use the commit diff only as a map.**
 
@@ -507,6 +548,13 @@ the deal-breaking hidden bottom row.
    - keep browser overlay calls wired to the pane origin returned by
      `paint_pane()`, but that origin should now be the pre-Issue-777 origin.
 
+   Verify the browser overlay call path explicitly. In
+   `wezboard/wezboard-gui/src/termsurf/conn.rs`, confirm that
+   `set_overlay_frame()` and `create_pending_ca_layer_host()` receive the
+   pre-Issue-777 pane origin from their callers. If any caller still passes an
+   inset content origin, restore that caller to the pane outer origin as part of
+   this experiment.
+
 5. **Restore mouse coordinate handling in `mouseevent.rs`.**
 
    In `wezboard/wezboard-gui/src/termwindow/mouseevent.rs`:
@@ -522,20 +570,56 @@ the deal-breaking hidden bottom row.
    After manual edits, search for Issue 777 presentation-inset leftovers:
 
    ```bash
-   rg "pane_render_geometry|PaneRenderGeometry|split_border_width_physical|content_pixel_width|content_pixel_height|draw_divider|hit_thickness" \
-     wezboard/wezboard-gui/src/termwindow
+   rg "pane_render_geometry|PaneRenderGeometry|split_border_width_physical|content_pixel_width|content_pixel_height|content_origin_x|content_origin_y|draw_divider|hit_thickness" \
+     wezboard/wezboard-gui
    ```
 
    Any remaining match must be intentionally justified in the result. The
    expected outcome is that these Issue 777 rollback-target symbols are gone
    from the split rendering path.
 
+   Also check tests and test-like files for references to removed internals:
+
+   ```bash
+   rg "pane_render_geometry|PaneRenderGeometry|split_border_width_physical" \
+     wezboard/wezboard-gui/tests wezboard/wezboard-gui/src
+   ```
+
+   Remove or update test references that exist only to cover the Issue 777 inset
+   model.
+
 7. **Preserve configuration compatibility.**
 
    Do not remove the `split_border_width` config option in this experiment. If
    the option becomes unused after the rollback, leave the config surface in
    place and record that it no longer affects split rendering. Removing or
-   redefining the option is a separate compatibility decision.
+   redefining the option is a separate compatibility decision. If the compiler
+   warns about an intentionally-unused retained field, add the narrowest
+   possible `#[allow(dead_code)]` or source comment explaining that it is kept
+   for compatibility.
+
+   Identify when the related config options were introduced:
+   - `split_border_width`
+   - `focused_split_border_color`
+   - `unfocused_split_border_color`
+
+   Preserve options that predate `61ff8e625d0f0`. If an option was introduced
+   solely by the reverted presentation-border implementation, either remove it
+   in the same manual rollback or leave it as an explicitly documented inactive
+   compatibility field. The result must state which path was chosen.
+
+8. **Record the user-facing compatibility note.**
+
+   Add a note to this issue's result, and to release notes if this release has a
+   release-notes file, saying:
+
+   ```text
+   Split borders have been restored to the pre-Issue-777 model because the
+   margin-style implementation could hide the bottom terminal row. If
+   split_border_width is configured but inactive after the rollback, that is an
+   intentional compatibility tradeoff. A future release should reintroduce
+   configurable margin-style split borders through a larger layout change.
+   ```
 
 #### Verification
 
@@ -556,6 +640,8 @@ the deal-breaking hidden bottom row.
 3. Split pane bottom row:
    - open a split pane;
    - run `stty size`;
+   - count or otherwise verify that the reported row count equals the visible
+     row count;
    - move the shell prompt to the last visible row;
    - confirm the prompt/input line is visible;
    - print text on the last row and confirm it remains visible.
@@ -622,4 +708,6 @@ The experiment fails if:
   browser overlay positioning regress;
 - closed Issue 777 documentation is modified;
 - the code remains in a hybrid state with both pre-Issue-777 and Issue 777
-  presentation-inset behavior active.
+  presentation-inset behavior active;
+- later unrelated improvements in the affected files are removed without an
+  explicit reason.
