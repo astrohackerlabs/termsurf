@@ -767,6 +767,293 @@ If the browser receives suggestions but selection cannot be accepted through the
 existing Autofill delegate path, the next experiment should focus only on
 acceptance and value-setting, not on popup discovery.
 
+**Result:** Fail
+
+Manual testing showed no visible improvement. After selecting the existing
+`Roamium` text in `input#browser`, typing `S`, and attempting to open datalist
+suggestions, no datalist popup appeared. From the user's perspective, nothing
+detectable changed: the field still accepted text, but no dropdown or suggestion
+box appeared.
+
+This failed the experiment's visible-behavior goal. The implemented slice may
+still have moved the internal boundary from "Blink has no `WebAutofillClient`"
+to a later Autofill boundary, but the tested behavior did not improve and the
+experiment did not produce a working or visibly partial datalist UI.
+
+#### Conclusion
+
+Installing the stock Chromium `AutofillAgent` path in content_shell is not, by
+itself, a useful fix for TermSurf's datalist bug. The next experiment should not
+continue trying to pull in Chrome's full Autofill UI stack. It should pivot to a
+narrow datalist-only implementation that directly extracts
+`WebInputElement::FilteredDataListOptions()` and presents those options through
+a TermSurf/content_shell-controlled popup path.
+
+### Experiment 4: Implement a narrow content_shell datalist popup
+
+#### Description
+
+Experiment 3 showed that importing Chrome's normal Autofill UI path is the wrong
+direction for TermSurf. The datalist bug needs a small embedding-level
+implementation, not Chrome profile/UI infrastructure.
+
+This experiment should implement a datalist-only popup for content_shell/Roamium
+using Blink's public datalist APIs:
+
+```text
+ChromeClientImpl::OpenTextDataListChooser(...)
+  -> WebAutofillClient::OpenTextDataListChooser(...)
+  -> WebInputElement::FilteredDataListOptions()
+  -> content_shell-owned popup UI
+  -> WebFormControlElement::SetValue(..., send_events=true)
+```
+
+This deliberately bypasses Chrome's `ContentAutofillClient` and Chrome Autofill
+Views UI. The goal is one working feature: native `<input list>` suggestions for
+TermSurf's Chromium engine.
+
+#### Non-Negotiable Invariants
+
+Do not regress the existing native-popup fixes:
+
+- do not modify `WebPagePopupImpl::SetWindowRect` or the PagePopup y-axis
+  correction;
+- do not modify Shell window movement or any `setIgnoresMouseEvents:YES`
+  reassertion;
+- do not modify `SetGuiActive`;
+- do not modify `WebMenuRunner` direct `NSMenu` select placement;
+- do not modify the native popup test page;
+- do not import Chrome browser profile services, Chrome Autofill Views
+  controllers, sync, identity, payments, address storage, card storage, or
+  password storage.
+
+If any invariant regresses, stop and fix the regression before continuing.
+
+#### Changes
+
+Continue on the Issue 784 Chromium branch, `148.0.7778.97-issue-784`.
+
+1. Replace the failed stock `AutofillAgent` attempt with a datalist-only
+   renderer client.
+
+   Add a small class under `content/shell/renderer/`, for example
+   `ShellDatalistAutofillClient`, that:
+   - inherits `content::RenderFrameObserver`;
+   - inherits `blink::WebAutofillClient`;
+   - calls `render_frame->GetWebFrame()->SetAutofillClient(this)` in its
+     constructor;
+   - clears the frame's Autofill client on destruction if still appropriate;
+   - implements only `OpenTextDataListChooser(...)` and
+     `DataListOptionsChanged(...)`;
+   - leaves all other `WebAutofillClient` hooks as default no-ops.
+
+   `ShellContentRendererClient::RenderFrameCreated(...)` should create this
+   class instead of constructing `autofill::AutofillAgent`,
+   `PasswordAutofillAgent`, or `PasswordGenerationAgent`.
+
+2. Extract datalist options directly.
+
+   In `OpenTextDataListChooser(...)`, use:
+
+   ```text
+   blink::WebInputElement::FilteredDataListOptions()
+   blink::WebOptionElement::Value()
+   blink::WebOptionElement::GetText()
+   blink::WebOptionElement::Label()
+   blink::WebOptionElement::IsEnabled()
+   ```
+
+   Keep only enabled options with non-empty values. Preserve both display text
+   and value. The value is what should be inserted into the input.
+
+3. Show a minimal macOS popup.
+
+   On macOS, present the extracted options with a small AppKit `NSMenu` anchored
+   to the input element's bounds.
+
+   The first implementation may live in a `.mm` helper under
+   `content/shell/renderer/` or `content/shell/browser/renderer_host/`, but it
+   must stay content_shell-scoped. Do not use Chrome Autofill popup UI.
+
+   Anchor placement should reuse the coordinate conventions already proven in
+   Issues 779 and 783:
+   - get the input bounds in the renderer frame;
+   - convert to screen coordinates using the same webview/screen origin logic
+     used by the existing popup traces;
+   - place the menu below the input unless AppKit constrains it.
+
+   If it is much simpler and safer to present the `NSMenu` at the current mouse
+   location for this experiment, that is acceptable as a Partial result only. A
+   passing result requires the popup to appear at the datalist input.
+
+4. Accept a suggestion by setting the input value.
+
+   When the user selects a menu item:
+   - set the input's value to the chosen option value;
+   - pass `send_events=true` so normal input/change behavior fires;
+   - keep focus usable after the popup closes.
+
+   Prefer `blink::WebFormControlElement::SetValue(value, true)` if it produces
+   correct DOM behavior. If it does not, record the exact failure and make the
+   result Partial.
+
+5. Dismissal and lifecycle.
+
+   The datalist popup must dismiss when:
+   - the user selects an item;
+   - the user clicks away;
+   - the Wezboard app deactivates through Cmd-Tab.
+
+   If Cmd-Tab dismissal does not come for free from the menu's modal AppKit
+   behavior, wire it to the existing `SetGuiActive(false)` path or record that
+   as a Partial boundary.
+
+6. Build wiring.
+
+   Remove any Experiment 3 dependency additions that are no longer needed, such
+   as `//components/autofill/content/renderer`, if the new datalist-only client
+   does not use them.
+
+   Keep dependencies narrow:
+   - Blink public web APIs are allowed;
+   - content_shell renderer/browser helpers are allowed;
+   - AppKit is allowed on macOS;
+   - Chrome browser/UI/profile dependencies are not allowed.
+
+7. Trace only the new datalist path.
+
+   Keep low-volume `datalist_autofill` logs for:
+   - datalist client installed;
+   - `OpenTextDataListChooser(...)` fired;
+   - number of filtered options;
+   - first few option labels/values;
+   - popup shown with anchor rect;
+   - selected value;
+   - value set success/failure;
+   - popup dismissed reason.
+
+   Do not reintroduce broad mouse/input/AppKit logs.
+
+#### Verification
+
+1. Build Chromium with the project script:
+
+   ```bash
+   scripts/build.sh chromium
+   ```
+
+2. Build the other components normally if needed:
+
+   ```bash
+   scripts/build.sh roamium
+   scripts/build.sh wezboard
+   scripts/build.sh webtui
+   ```
+
+3. Run the invariant checks first:
+   - open the native popup test page;
+   - open a date picker and confirm the y-position is still correct;
+   - with the date picker still open, Cmd-Tab to another app and confirm the
+     picker dismisses; Cmd-Tab back and confirm the page is still usable;
+   - open a select dropdown and confirm the x-position is still correct;
+   - dismiss the select, then open the date picker again and confirm native
+     widgets still work.
+
+4. Run the datalist test with trace enabled:
+
+   ```bash
+   TERMSURF_ISSUE_779_TRACE=1 \
+   XDG_STATE_HOME="$PWD/logs/issue-784-exp4-state" \
+   RUST_LOG=info \
+   ./wezboard/target/debug/wezboard-gui \
+   2>&1 | tee logs/issue-784-exp4-wezboard.log
+   ```
+
+5. In `web`, open the native popup test page.
+
+6. Test `input#browser`:
+   - click into the datalist field;
+   - select the existing `Roamium` text;
+   - type `S`;
+   - click the datalist affordance if visible, or press ArrowDown;
+   - confirm a popup appears with `Surfari`;
+   - select `Surfari`;
+   - confirm the field value becomes `Surfari`.
+
+7. Test full-list behavior:
+   - clear the datalist input;
+   - open the datalist suggestions;
+   - confirm the available browser options appear, including `Roamium`,
+     `Surfari`, `Waterwolf`, and `Girlbat`.
+
+8. Test dismissal:
+   - open the datalist popup and click away;
+   - confirm it dismisses;
+   - open it again and Cmd-Tab away;
+   - confirm it dismisses and does not remain visible on screen;
+   - Cmd-Tab back and confirm the page remains usable.
+
+9. Stop after the datalist succeeds or reaches the first new failure boundary.
+
+10. Extract the relevant trace:
+
+    ```bash
+    rg "\\[issue-779-trace\\].*datalist_autofill" \
+      logs/issue-784-exp4-wezboard.log \
+      logs/issue-784-exp4-state
+    ```
+
+11. Commit Chromium changes on the Issue 784 branch and regenerate
+    `chromium/patches/issue-784/` after a successful or useful partial result.
+
+#### Pass Criteria
+
+The experiment passes if:
+
+- the datalist popup appears for `input#browser`;
+- typing `S` filters the options to include `Surfari`;
+- selecting `Surfari` sets the input value to `Surfari`;
+- clearing the input can show the full datalist option set;
+- click-away dismissal works;
+- Cmd-Tab dismissal works;
+- all known-good native-popup invariants still pass;
+- no Chrome browser/profile/Autofill UI dependencies are imported.
+
+#### Partial Criteria
+
+The experiment is Partial if it proves the narrow path but one edge remains, for
+example:
+
+- options are extracted correctly but the popup anchor is wrong;
+- the popup appears at the mouse location but not yet at the input;
+- the popup appears and selection works, but Cmd-Tab dismissal needs one more
+  hook;
+- selection changes the visible value but does not fire the expected DOM events;
+- the macOS implementation works but non-macOS behavior is still unimplemented.
+
+#### Failure Criteria
+
+The experiment fails if:
+
+- it keeps pursuing Chrome's full Autofill UI stack;
+- it imports unrelated Autofill storage/services;
+- it changes the test page;
+- it regresses any prior native-popup fix;
+- it cannot extract datalist options through Blink's public APIs.
+
+#### Expected Interpretation
+
+If this passes, datalist is fixed and the next experiment should be the
+native-popup log cleanup pass.
+
+If option extraction works but UI placement is wrong, the next experiment should
+be a small positioning fix, using the coordinate lessons from Issues 779
+and 783.
+
+If option extraction and UI placement work but value acceptance is wrong, the
+next experiment should focus only on setting the input value and dispatching the
+right DOM events.
+
 ## Cleanup Requirement
 
 Do not perform broad log cleanup before the datalist fix. Some remaining
