@@ -305,3 +305,62 @@ overlay screen rect from reaching Chromium during normal operation.
 - The fix modifies Chromium popup placement as a workaround without correcting
   Wezboard's reported screen rect.
 - Any prior native popup fix from Issues 779, 782, or 783 regresses.
+
+**Result:** Partial
+
+The Wezboard-side screen-rect conversion fix partially succeeded.
+
+What worked:
+
+- the visible webview remained in the correct pane;
+- the severe split-pane y error was fixed or substantially reduced;
+- when the webview is in the top pane with a terminal pane below it, native
+  popups no longer open far down in the lower terminal pane;
+- the fix stayed in Wezboard's coordinate reporting path and did not require
+  Chromium changes.
+
+What did not work:
+
+- PagePopup-family controls still appear vertically offset by approximately one
+  control height;
+- the popup is now near the right webview and pane, but it is not anchored at
+  the same y used by the clicked input;
+- this looks like the Issue 779 PagePopup height correction is missing,
+  bypassed, or failing to match after the Wezboard screen-rect fix.
+
+The implementation changed `webview_screen_rect_desc()` so the flipped CALayer
+frame is converted into the hosting overlay `NSView` coordinate space before
+calling AppKit's `convertRect:toView:`. It also removed the
+`TERMSURF_ISSUE_779_TRACE` gate around the initial screen-rect send in
+`create_pending_ca_layer_host()`.
+
+#### Conclusion
+
+Experiment 1 fixed the larger coordinate-space error: Chromium's hidden native
+coordinate proxy now tracks the top split webview closely enough that native
+popups appear in the correct pane instead of the lower terminal pane.
+
+The remaining bug is narrower. The screenshots show a popup y offset that looks
+approximately equal to the height of the input/control that opened the popup.
+That matches the original Issue 779 PagePopup failure mode:
+
+```text
+popup_y = anchor.y + anchor.height
+```
+
+instead of:
+
+```text
+popup_y = anchor.y
+```
+
+The next experiment should focus on the Chromium PagePopup correction path. The
+leading hypothesis is that `WebPagePopupImpl::SetWindowRect()` still receives a
+rect anchored at `anchor.bottom()`, but the current exact-match predicate no
+longer fires after the Wezboard screen-rect correction because of rounding,
+scale, or small DIP differences. If the trace shows
+`page_popup_y_fix applied=false` with a y delta near the input height, the fix
+should add a small tolerance to the `anchor.bottom()` predicate. If the trace
+does not appear at all, then the failing popup is bypassing
+`WebPagePopupImpl::SetWindowRect()` and the next experiment should identify the
+alternate popup placement path.

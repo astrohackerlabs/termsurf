@@ -1,27 +1,22 @@
 use super::proto;
-use super::proto::term_surf_message::Msg;
 use super::proto::TermSurfMessage;
+use super::proto::term_surf_message::Msg;
 use super::state::{Pane, Server, SharedState, TermSurfState};
 use anyhow::Context;
 use prost::Message;
 use sha2::{Digest, Sha256};
+use smol::Async;
 use smol::channel::Sender;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
-use smol::Async;
 use std::collections::HashSet;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnType {
     Unknown,
     Tui,
     Chromium,
-}
-
-fn issue_779_trace_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("TERMSURF_ISSUE_779_TRACE").is_some())
 }
 
 pub async fn handle_connection(stream: UnixStream, state: SharedState) -> anyhow::Result<()> {
@@ -1442,8 +1437,18 @@ fn webview_screen_rect_desc(
             return None;
         }
         let screen_frame: CGRect = msg_send![screen, frame];
+        let view_bounds: CGRect = msg_send![view, bounds];
         let nil_view: *mut AnyObject = std::ptr::null_mut();
-        let window_rect: CGRect = msg_send![view, convertRect: local_frame, toView: nil_view];
+        // The overlay layer tree is flipped for top-left TermSurf coordinates,
+        // but NSView conversion expects the hosting view's bottom-left space.
+        let view_frame = CGRect::new(
+            objc2_core_foundation::CGPoint::new(
+                local_frame.origin.x,
+                view_bounds.size.height - local_frame.origin.y - local_frame.size.height,
+            ),
+            local_frame.size,
+        );
+        let window_rect: CGRect = msg_send![view, convertRect: view_frame, toView: nil_view];
         let screen_rect: CGRect = msg_send![window, convertRectToScreen: window_rect];
         let top_left_screen_y = screen_frame.origin.y + screen_frame.size.height
             - screen_rect.origin.y
@@ -1689,21 +1694,19 @@ pub fn create_pending_ca_layer_host(
         );
         let _ = pane;
 
-        if issue_779_trace_enabled() {
-            let expected_frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
-            if let Some(rect) = webview_screen_rect_desc(
-                &st,
-                mux_window_id,
-                expected_frame,
-                x_backing,
-                y_backing,
-                w_backing,
-                h_backing,
-                scale,
-                dpi,
-            ) {
-                send_resize_with_screen_rect(&mut st, &id, &rect);
-            }
+        let expected_frame = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        if let Some(rect) = webview_screen_rect_desc(
+            &st,
+            mux_window_id,
+            expected_frame,
+            x_backing,
+            y_backing,
+            w_backing,
+            h_backing,
+            scale,
+            dpi,
+        ) {
+            send_resize_with_screen_rect(&mut st, &id, &rect);
         }
 
         let _: () = msg_send![ca_transaction, commit];

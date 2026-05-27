@@ -2,12 +2,12 @@ use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
-    CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
-    RenderScreenLineParams, same_hyperlink,
+    same_hyperlink, CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
+    RenderScreenLineParams,
 };
 use crate::termwindow::{ScrollHit, UIItem, UIItemType};
-use ::window::DeadKeyStatus;
 use ::window::bitmaps::TextureRect;
+use ::window::DeadKeyStatus;
 use anyhow::Context;
 use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
