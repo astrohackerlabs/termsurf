@@ -1,0 +1,325 @@
+From a196184b665b5cd5bcb607f55e8934bfc4559908 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 27 May 2026 08:03:43 -0500
+Subject: [PATCH 25/27] Probe PDF viewer plumbing
+
+The plugin knocked, the shell said "file",
+The renderer waited all the while.
+Now logs reveal the missing floor:
+The PDF never reached its door.
+---
+ content/libtermsurf_chromium/BUILD.gn         | 13 +++-
+ .../libtermsurf_chromium/ts_content_client.cc | 54 ++++++++++++++++
+ .../libtermsurf_chromium/ts_content_client.h  | 29 +++++++++
+ .../libtermsurf_chromium/ts_main_delegate.cc  | 12 ++++
+ .../libtermsurf_chromium/ts_main_delegate.h   |  2 +
+ .../ts_renderer_client.cc                     | 64 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_renderer_client.h | 45 +++++++++++++
+ 7 files changed, 217 insertions(+), 2 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_content_client.cc
+ create mode 100644 content/libtermsurf_chromium/ts_content_client.h
+ create mode 100644 content/libtermsurf_chromium/ts_renderer_client.cc
+ create mode 100644 content/libtermsurf_chromium/ts_renderer_client.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index a2438eb4ce200..ee17fdbf72b43 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -13,8 +13,12 @@ shared_library("libtermsurf_chromium") {
+     "ts_browser_client.h",
+     "ts_browser_main_parts.cc",
+     "ts_browser_main_parts.h",
++    "ts_content_client.cc",
++    "ts_content_client.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
++    "ts_renderer_client.cc",
++    "ts_renderer_client.h",
+     "ts_tab_observer.cc",
+     "ts_tab_observer.h",
+   ]
+@@ -31,11 +35,16 @@ shared_library("libtermsurf_chromium") {
+   }
+ 
+   deps = [
+-    "//content/shell:content_shell_app",
+-    "//content/shell:content_shell_lib",
++    "//components/pdf/common:constants",
++    "//components/pdf/common:util",
++    "//components/pdf/renderer",
+     "//content/public/app",
+     "//content/public/browser",
+     "//content/public/common",
++    "//content/shell:content_shell_app",
++    "//content/shell:content_shell_lib",
++    "//pdf",
++    "//pdf:features",
+   ]
+ 
+   if (is_mac) {
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+new file mode 100644
+index 0000000000000..e00a1087ceaf9
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -0,0 +1,54 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_content_client.h"
++
++#include "base/files/file_path.h"
++#include "base/logging.h"
++#include "base/strings/utf_string_conversions.h"
++#include "components/pdf/common/constants.h"
++#include "content/public/common/webplugininfo.h"
++#include "pdf/buildflags.h"
++
++namespace content {
++
++namespace {
++
++constexpr base::FilePath::CharType kPDFInternalPluginPath[] =
++    FILE_PATH_LITERAL("internal-pdf-viewer");
++
++}  // namespace
++
++TsContentClient::TsContentClient() = default;
++TsContentClient::~TsContentClient() = default;
++
++void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
++  ShellContentClient::AddPlugins(plugins);
++
++#if BUILDFLAG(ENABLE_PDF)
++  static constexpr char16_t kPDFPluginName[] = u"Chromium PDF Plugin";
++  static constexpr char16_t kPDFPluginDescription[] = u"Built-in PDF viewer";
++  static constexpr char kPDFPluginExtension[] = "pdf";
++  static constexpr char kPDFPluginExtensionDescription[] =
++      "Portable Document Format";
++
++  content::WebPluginInfo pdf_info;
++  pdf_info.name = kPDFPluginName;
++  pdf_info.path = base::FilePath(kPDFInternalPluginPath);
++  pdf_info.desc = kPDFPluginDescription;
++  content::WebPluginMimeType pdf_mime_type(pdf::kInternalPluginMimeType,
++                                           kPDFPluginExtension,
++                                           kPDFPluginExtensionDescription);
++  pdf_info.mime_types.push_back(pdf_mime_type);
++  pdf_info.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
++  plugins->push_back(pdf_info);
++
++  LOG(INFO) << "[issue-776] registered internal PDF plugin mime="
++            << pdf::kInternalPluginMimeType;
++#else
++  LOG(INFO) << "[issue-776] PDF support disabled at build time";
++#endif
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_content_client.h b/content/libtermsurf_chromium/ts_content_client.h
+new file mode 100644
+index 0000000000000..23a0b19a87e79
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_content_client.h
+@@ -0,0 +1,29 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
++
++#include <vector>
++
++#include "content/shell/common/shell_content_client.h"
++
++namespace content {
++
++struct WebPluginInfo;
++
++class TsContentClient : public ShellContentClient {
++ public:
++  TsContentClient();
++  ~TsContentClient() override;
++
++  TsContentClient(const TsContentClient&) = delete;
++  TsContentClient& operator=(const TsContentClient&) = delete;
++
++  void AddPlugins(std::vector<content::WebPluginInfo>* plugins) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.cc b/content/libtermsurf_chromium/ts_main_delegate.cc
+index fff1576276025..83d17a81b3ca7 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.cc
++++ b/content/libtermsurf_chromium/ts_main_delegate.cc
+@@ -13,6 +13,8 @@
+ #include "base/path_service.h"
+ #include "build/build_config.h"
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
++#include "content/libtermsurf_chromium/ts_content_client.h"
++#include "content/libtermsurf_chromium/ts_renderer_client.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/shell/common/shell_paths.h"
+ #include "content/shell/common/shell_switches.h"
+@@ -114,9 +116,19 @@ std::optional<int> TsMainDelegate::BasicStartupComplete() {
+   return std::nullopt;
+ }
+ 
++ContentClient* TsMainDelegate::CreateContentClient() {
++  content_client_ = std::make_unique<TsContentClient>();
++  return content_client_.get();
++}
++
+ ContentBrowserClient* TsMainDelegate::CreateContentBrowserClient() {
+   browser_client_ = std::make_unique<TsBrowserClient>();
+   return browser_client_.get();
+ }
+ 
++ContentRendererClient* TsMainDelegate::CreateContentRendererClient() {
++  renderer_client_ = std::make_unique<TsRendererClient>();
++  return renderer_client_.get();
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.h b/content/libtermsurf_chromium/ts_main_delegate.h
+index 9a6d57da39a99..8b2f398a921a3 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.h
++++ b/content/libtermsurf_chromium/ts_main_delegate.h
+@@ -21,7 +21,9 @@ class TsMainDelegate : public ShellMainDelegate {
+ 
+   // ContentMainDelegate:
+   std::optional<int> BasicStartupComplete() override;
++  ContentClient* CreateContentClient() override;
+   ContentBrowserClient* CreateContentBrowserClient() override;
++  ContentRendererClient* CreateContentRendererClient() override;
+ };
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.cc b/content/libtermsurf_chromium/ts_renderer_client.cc
+new file mode 100644
+index 0000000000000..8f673bfa9b9b8
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_renderer_client.cc
+@@ -0,0 +1,64 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_renderer_client.h"
++
++#include "base/logging.h"
++#include "base/strings/utf_string_conversions.h"
++#include "components/pdf/common/constants.h"
++#include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
++#include "pdf/buildflags.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/web/web_plugin.h"
++#include "third_party/blink/public/web/web_plugin_params.h"
++
++namespace content {
++
++TsRendererClient::TsRendererClient() = default;
++TsRendererClient::~TsRendererClient() = default;
++
++bool TsRendererClient::IsPluginHandledExternally(
++    RenderFrame* embedder_frame,
++    const blink::WebElement& plugin_element,
++    const GURL& original_url,
++    const std::string& original_mime_type) {
++#if BUILDFLAG(ENABLE_PDF)
++  if (original_mime_type == pdf::kPDFMimeType ||
++      original_mime_type == pdf::kInternalPluginMimeType) {
++    LOG(INFO) << "[issue-776] IsPluginHandledExternally mime="
++              << original_mime_type << " url=" << original_url;
++  }
++#endif
++  return ShellContentRendererClient::IsPluginHandledExternally(
++      embedder_frame, plugin_element, original_url, original_mime_type);
++}
++
++bool TsRendererClient::OverrideCreatePlugin(
++    RenderFrame* render_frame,
++    const blink::WebPluginParams& params,
++    blink::WebPlugin** plugin) {
++  if (ShellContentRendererClient::OverrideCreatePlugin(render_frame, params,
++                                                       plugin)) {
++    return true;
++  }
++
++#if BUILDFLAG(ENABLE_PDF)
++  const std::string mime_type = params.mime_type.Utf8();
++  if (mime_type == pdf::kInternalPluginMimeType) {
++    LOG(INFO) << "[issue-776] OverrideCreatePlugin saw PDF mime=" << mime_type;
++    blink::WebPlugin* pdf_plugin =
++        pdf::CreateInternalPlugin(params, render_frame, {});
++    LOG(INFO) << "[issue-776] CreateInternalPlugin returned "
++              << (pdf_plugin ? "plugin" : "nullptr");
++    if (pdf_plugin) {
++      *plugin = pdf_plugin;
++      return true;
++    }
++  }
++#endif
++
++  return false;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.h b/content/libtermsurf_chromium/ts_renderer_client.h
+new file mode 100644
+index 0000000000000..7f9cce0fb50f9
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_renderer_client.h
+@@ -0,0 +1,45 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_RENDERER_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_RENDERER_CLIENT_H_
++
++#include <string>
++
++#include "content/shell/renderer/shell_content_renderer_client.h"
++
++class GURL;
++
++namespace blink {
++class WebElement;
++class WebPlugin;
++struct WebPluginParams;
++}  // namespace blink
++
++namespace content {
++
++class RenderFrame;
++
++class TsRendererClient : public ShellContentRendererClient {
++ public:
++  TsRendererClient();
++  ~TsRendererClient() override;
++
++  TsRendererClient(const TsRendererClient&) = delete;
++  TsRendererClient& operator=(const TsRendererClient&) = delete;
++
++  bool IsPluginHandledExternally(
++      RenderFrame* embedder_frame,
++      const blink::WebElement& plugin_element,
++      const GURL& original_url,
++      const std::string& original_mime_type) override;
++
++  bool OverrideCreatePlugin(RenderFrame* render_frame,
++                            const blink::WebPluginParams& params,
++                            blink::WebPlugin** plugin) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_RENDERER_CLIENT_H_
+-- 
+2.50.1 (Apple Git-155)
+

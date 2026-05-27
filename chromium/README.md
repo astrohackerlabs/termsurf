@@ -14,7 +14,7 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Branch: `148.0.7778.97-issue-776-exp2`
+- Branch: `148.0.7778.97-issue-776-exp3`
 - Base version: `148.0.7778.97` (tracking Electron's Chromium version)
 
 ## Branch Strategy
@@ -99,6 +99,7 @@ find the most relevant recent branch, create a new branch from it
 | `148.0.7778.97-issue-778`      | [Issue 778](../issues/0778-back-nav-title-stale/README.md)       | Re-emit titles on navigation commit         |
 | `148.0.7778.97-issue-776`      | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Probe PDF viewer plumbing                   |
 | `148.0.7778.97-issue-776-exp2` | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Route PDF navigations to wrapper            |
+| `148.0.7778.97-issue-776-exp3` | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Diagnose PDF renderer process gate          |
 
 ## Patches
 
@@ -112,7 +113,7 @@ patches/
 ├── issue-411/         — Two profiles experiment 3
 ├── issue-412/         — One profile
 ├── ...
-└── issue-776-exp2/    — Current Chromium branch patch archive
+└── issue-776-exp3/    — Current Chromium branch patch archive
 ```
 
 Each patch set is cumulative — it contains all commits from the base tag to the
@@ -132,8 +133,8 @@ git am ../../chromium/patches/issue-{N}/*.patch
 For the current TermSurf Chromium branch, use:
 
 ```bash
-git checkout -b 148.0.7778.97-issue-776-exp2 148.0.7778.97
-git am ../../chromium/patches/issue-776-exp2/*.patch
+git checkout -b 148.0.7778.97-issue-776-exp3 148.0.7778.97
+git am ../../chromium/patches/issue-776-exp3/*.patch
 ```
 
 ### Generating patches

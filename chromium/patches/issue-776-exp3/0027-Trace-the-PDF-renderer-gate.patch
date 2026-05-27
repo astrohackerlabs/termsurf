@@ -1,0 +1,203 @@
+From 9bd25c25cd438214fea3c66b8d0bd626c450e2b6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 27 May 2026 09:28:12 -0500
+Subject: [PATCH 27/27] Trace the PDF renderer gate
+
+A wrapper knocked on PDF's door,
+A parent frame appeared once more.
+But Chromium checked the family tree:
+"PDF renderer first," said it, "not thee."
+---
+ .../ts_pdf_navigation_throttle.cc             | 33 +++++++---
+ .../ts_renderer_client.cc                     | 66 ++++++++++++++++++-
+ 2 files changed, 87 insertions(+), 12 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc b/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc
+index 4488ceca954e6..d07b9fd6b9144 100644
+--- a/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc
++++ b/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc
+@@ -67,22 +67,35 @@ std::string ResponseMimeType(NavigationHandle* handle) {
+ 
+ GURL BuildPdfWrapperUrl(const GURL& pdf_url) {
+   const std::string escaped_pdf_url = base::EscapeForHTML(pdf_url.spec());
+-  const std::string html = base::StrCat({
++  const std::string child_html = base::StrCat({
+       "<!doctype html><meta charset=\"utf-8\">",
+       "<style>",
+       "html,body,embed{margin:0;width:100%;height:100%;overflow:hidden;",
+       "background:#f8d7da;}",
+-      "#termsurf-pdf-wrapper-marker{position:fixed;left:6px;top:6px;",
+-      "z-index:2147483647;background:#7f1d1d;color:white;",
+-      "font:12px sans-serif;padding:3px 5px;}",
+       "</style>",
+-      "<div id=\"termsurf-pdf-wrapper-marker\">TermSurf PDF wrapper</div>",
+       "<embed src=\"",
+       escaped_pdf_url,
+       "\" type=\"",
+       pdf::kInternalPluginMimeType,
+       "\">",
+   });
++  const std::string html = base::StrCat({
++      "<!doctype html><meta charset=\"utf-8\">",
++      "<style>",
++      "html,body,iframe{margin:0;width:100%;height:100%;overflow:hidden;",
++      "background:#f8d7da;}",
++      "iframe{border:0;display:block;}",
++      "#termsurf-pdf-wrapper-marker{position:fixed;left:6px;top:6px;",
++      "z-index:2147483647;background:#7f1d1d;color:white;",
++      "font:12px sans-serif;padding:3px 5px;}",
++      "</style>",
++      "<div id=\"termsurf-pdf-wrapper-marker\">TermSurf PDF wrapper</div>",
++      "<iframe id=\"termsurf-pdf-frame\" srcdoc=\"",
++      base::EscapeForHTML(child_html),
++      "\"></iframe>",
++  });
++  LOG(INFO) << "[issue-776-exp3] nested-wrapper probe pdf_url="
++            << pdf_url.possibly_invalid_spec();
+   return GURL(base::StrCat({
+       "data:text/html;charset=utf-8;",
+       kWrapperSentinel,
+@@ -94,14 +107,14 @@ GURL BuildPdfWrapperUrl(const GURL& pdf_url) {
+ void LoadWrapper(base::WeakPtr<WebContents> web_contents, GURL wrapper_url) {
+   if (!web_contents) {
+     LOG(INFO)
+-        << "[issue-776-exp2] wrapper navigation skipped: WebContents gone";
++        << "[issue-776-exp3] wrapper navigation skipped: WebContents gone";
+     return;
+   }
+ 
+   NavigationController::LoadURLParams params(wrapper_url);
+   params.is_renderer_initiated = false;
+   web_contents->GetController().LoadURLWithParams(std::move(params));
+-  LOG(INFO) << "[issue-776-exp2] wrapper navigation posted url="
++  LOG(INFO) << "[issue-776-exp3] wrapper navigation posted url="
+             << wrapper_url.possibly_invalid_spec();
+ }
+ 
+@@ -124,7 +137,7 @@ TsPdfNavigationThrottle::WillProcessResponse() {
+       url.spec().find(kWrapperSentinel) != std::string::npos;
+   const bool supported_scheme = IsOrdinaryPdfScheme(url);
+ 
+-  LOG(INFO) << "[issue-776-exp2] pdf throttle response url="
++  LOG(INFO) << "[issue-776-exp3] pdf throttle response url="
+             << url.possibly_invalid_spec()
+             << " response_mime=" << response_mime_type
+             << " header_mime=" << header_mime_type
+@@ -139,12 +152,12 @@ TsPdfNavigationThrottle::WillProcessResponse() {
+ 
+   WebContents* web_contents = handle->GetWebContents();
+   if (!web_contents) {
+-    LOG(INFO) << "[issue-776-exp2] proceeding: no WebContents";
++    LOG(INFO) << "[issue-776-exp3] proceeding: no WebContents";
+     return PROCEED;
+   }
+ 
+   const GURL wrapper_url = BuildPdfWrapperUrl(url);
+-  LOG(INFO) << "[issue-776-exp2] canceling PDF navigation before download path"
++  LOG(INFO) << "[issue-776-exp3] canceling PDF navigation before download path"
+             << " pdf_url=" << url.possibly_invalid_spec()
+             << " wrapper_url=" << wrapper_url.possibly_invalid_spec();
+   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.cc b/content/libtermsurf_chromium/ts_renderer_client.cc
+index 33fbf3a9c94bc..c690668886a57 100644
+--- a/content/libtermsurf_chromium/ts_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_renderer_client.cc
+@@ -4,18 +4,50 @@
+ 
+ #include "content/libtermsurf_chromium/ts_renderer_client.h"
+ 
++#include <array>
++
+ #include "base/logging.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "components/pdf/common/constants.h"
++#include "components/pdf/common/pdf_util.h"
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
++#include "content/public/renderer/render_frame.h"
+ #include "pdf/buildflags.h"
++#include "third_party/blink/public/platform/web_security_origin.h"
+ #include "third_party/blink/public/platform/web_string.h"
+ #include "third_party/blink/public/platform/web_url.h"
++#include "third_party/blink/public/web/web_frame.h"
++#include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_plugin.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
++#include "url/origin.h"
+ 
+ namespace content {
+ 
++namespace {
++
++#if BUILDFLAG(ENABLE_PDF)
++std::string OriginForLog(blink::WebFrame* frame) {
++  if (!frame) {
++    return "<none>";
++  }
++  return frame->GetSecurityOrigin().ToString().Utf8();
++}
++
++bool IsAllowedPdfParentOrigin(blink::WebFrame* frame) {
++  if (!frame) {
++    return false;
++  }
++  return IsPdfInternalPluginAllowedOrigin(frame->GetSecurityOrigin(), {});
++}
++
++url::Origin UrlOriginForFrame(blink::WebFrame* frame) {
++  return static_cast<url::Origin>(frame->GetSecurityOrigin());
++}
++#endif
++
++}  // namespace
++
+ TsRendererClient::TsRendererClient() = default;
+ TsRendererClient::~TsRendererClient() = default;
+ 
+@@ -47,12 +79,42 @@ bool TsRendererClient::OverrideCreatePlugin(
+ #if BUILDFLAG(ENABLE_PDF)
+   const std::string mime_type = params.mime_type.Utf8();
+   if (mime_type == pdf::kInternalPluginMimeType) {
++    blink::WebLocalFrame* web_frame =
++        render_frame ? render_frame->GetWebFrame() : nullptr;
++    blink::WebFrame* parent_frame = web_frame ? web_frame->Parent() : nullptr;
++    const bool parent_origin_allowed =
++        IsAllowedPdfParentOrigin(parent_frame);
++
+     LOG(INFO) << "[issue-776] OverrideCreatePlugin saw PDF mime=" << mime_type
+               << " url=" << GURL(params.url).possibly_invalid_spec();
+-    blink::WebPlugin* pdf_plugin =
+-        pdf::CreateInternalPlugin(params, render_frame, {});
++    LOG(INFO) << "[issue-776-exp3] plugin-context url="
++              << GURL(params.url).possibly_invalid_spec()
++              << " mime=" << mime_type
++              << " frame_exists=" << (web_frame ? "true" : "false")
++              << " parent_exists=" << (parent_frame ? "true" : "false")
++              << " parent_is_remote="
++              << (parent_frame && parent_frame->IsWebRemoteFrame() ? "true"
++                                                                   : "false")
++              << " frame_origin=" << OriginForLog(web_frame)
++              << " parent_origin=" << OriginForLog(parent_frame)
++              << " parent_origin_allowed="
++              << (parent_origin_allowed ? "true" : "false");
++
++    blink::WebPlugin* pdf_plugin = nullptr;
++    if (parent_frame && !parent_origin_allowed) {
++      const std::array<url::Origin, 1> additional_allowed_origins = {
++          UrlOriginForFrame(parent_frame)};
++      LOG(INFO) << "[issue-776-exp3] additional_allowed_origins probe"
++                << " parent_origin=" << OriginForLog(parent_frame);
++      pdf_plugin = pdf::CreateInternalPlugin(params, render_frame,
++                                             additional_allowed_origins);
++    } else {
++      pdf_plugin = pdf::CreateInternalPlugin(params, render_frame, {});
++    }
+     LOG(INFO) << "[issue-776] CreateInternalPlugin returned "
+               << (pdf_plugin ? "plugin" : "nullptr");
++    LOG(INFO) << "[issue-776-exp3] CreateInternalPlugin returned "
++              << (pdf_plugin ? "plugin" : "nullptr");
+     if (pdf_plugin) {
+       *plugin = pdf_plugin;
+       return true;
+-- 
+2.50.1 (Apple Git-155)
+

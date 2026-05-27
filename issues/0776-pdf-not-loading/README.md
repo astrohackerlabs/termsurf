@@ -1149,3 +1149,97 @@ that layer rather than continuing to adjust wrapper markup.
 - Normal HTML navigation regresses.
 - Non-PDF binary responses are intercepted by the PDF path.
 - Roamium crashes before producing enough logs to identify the blocker.
+
+**Result:** Partial
+
+Experiment 3 proved the next blocker after Experiment 2.
+
+The first diagnostic run kept Experiment 2's top-level wrapper and added
+renderer-side parent-frame/origin logging. It reproduced the `nullptr` result
+and showed the exact first gate:
+
+```text
+[issue-776-exp3] plugin-context url=http://localhost:9616/bitcoin.pdf
+mime=application/x-google-chrome-pdf frame_exists=true parent_exists=false
+parent_is_remote=false frame_origin=null parent_origin=<none>
+parent_origin_allowed=false
+```
+
+So the original `data:` wrapper was structurally wrong for Chromium's internal
+PDF plugin: the plugin frame had no parent frame, and `CreateInternalPlugin()`
+returned before reaching the PDF-renderer process check.
+
+The second run changed the wrapper into the smallest nested-frame probe: the
+top-level `data:` wrapper contains an `<iframe srcdoc=...>`, and that child
+frame contains the internal PDF `<embed>`. That got past the missing-parent
+branch:
+
+```text
+[issue-776-exp3] plugin-context url=http://localhost:9616/bitcoin.pdf
+mime=application/x-google-chrome-pdf frame_exists=true parent_exists=true
+parent_is_remote=false frame_origin=null parent_origin=null
+parent_origin_allowed=false
+[issue-776-exp3] additional_allowed_origins probe parent_origin=null
+```
+
+Passing the exact copied opaque parent origin as an `additional_allowed_origins`
+diagnostic then advanced to Chromium's next hard gate:
+
+```text
+FATAL:components/pdf/renderer/internal_plugin_renderer_helpers.cc:61]
+Check failed: IsPdfRenderer().
+```
+
+That is the important result. PDF rendering is not blocked by the navigation
+throttle anymore, and not merely blocked by the wrapper's missing parent frame.
+The next missing layer is Chromium's PDF renderer process model: browser-side
+renderer spawning with the `--pdf-renderer` switch plus MimeHandlerView-style
+routing. Continuing to adjust wrapper markup will not make the internal plugin
+render in an ordinary content renderer.
+
+Verification artifacts:
+
+- initial top-level-wrapper diagnostic: `logs/issue-776-exp2-20260527-091929/`;
+- final nested-wrapper PDF probe: `logs/issue-776-exp3-20260527-092312/`;
+- normal HTML smoke: `logs/issue-776-exp3-20260527-092154/`;
+- non-PDF binary smoke: `logs/issue-776-exp3-20260527-092204/`.
+
+Verification table:
+
+| Layer                                                         | Result |
+| ------------------------------------------------------------- | ------ |
+| `OverrideCreatePlugin()` reached                              | yes    |
+| plugin frame exists                                           | yes    |
+| parent frame exists                                           | yes    |
+| parent frame is remote                                        | no     |
+| parent origin logged                                          | yes    |
+| parent origin allowed without extra origins                   | no     |
+| nested-wrapper probe attempted                                | yes    |
+| nested-wrapper probe creates a parent frame                   | yes    |
+| `additional_allowed_origins` probe attempted                  | yes    |
+| `CreateInternalPlugin()` returns plugin after allowance probe | no     |
+| process hits `CHECK(IsPdfRenderer())` after allowance probe   | yes    |
+| screenshot shows recognizable PDF content                     | no     |
+
+Regression checks:
+
+- `autoninja -C out/Default libtermsurf_chromium` passed.
+- `https://example.com` rendered normally.
+- `http://localhost:9616/test.bin` was not intercepted by the PDF throttle and
+  still went through Content Shell's download path.
+- The known teardown crash recurred after artifacts were captured; it did not
+  invalidate the diagnostic result.
+
+#### Conclusion
+
+Experiment 3 moves Issue 776 from "wrapper/plugin creation unknown" to a
+specific Chromium architecture gap. The wrapper can reach the internal PDF
+plugin path, and a nested wrapper can satisfy the parent-frame precondition, but
+Chromium refuses to create the internal PDF plugin outside a PDF renderer
+process.
+
+Experiment 4 should stop changing wrapper HTML and focus on the PDF renderer
+process/MimeHandlerView layer: how Chrome causes a top-level PDF navigation to
+spawn or route into a renderer with `--pdf-renderer`, how the PDF plugin frame's
+parent becomes a remote trusted viewer frame, and which minimal subset of that
+pipeline Roamium can adopt without porting all of Chrome's extension system.

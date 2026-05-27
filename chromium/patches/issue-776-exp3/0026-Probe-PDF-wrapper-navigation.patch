@@ -1,0 +1,374 @@
+From 9d6be957742cbd4ebfe2e5d3331fdcb5b3af1a16 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 27 May 2026 08:30:59 -0500
+Subject: [PATCH 26/27] Probe PDF wrapper navigation
+
+A throttle stood before the fall,
+And wrapped the PDF in a hall.
+The plugin woke, then shook its head:
+"I know the mime, but not the bed."
+---
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../libtermsurf_chromium/ts_browser_client.cc |  35 ++--
+ .../libtermsurf_chromium/ts_browser_client.h  |   9 +-
+ .../ts_pdf_navigation_throttle.cc             | 160 ++++++++++++++++++
+ .../ts_pdf_navigation_throttle.h              |  27 +++
+ .../ts_renderer_client.cc                     |   4 +-
+ 6 files changed, 218 insertions(+), 19 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_navigation_throttle.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index ee17fdbf72b43..6e7a6688c29b0 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -17,6 +17,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_client.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
++    "ts_pdf_navigation_throttle.cc",
++    "ts_pdf_navigation_throttle.h",
+     "ts_renderer_client.cc",
+     "ts_renderer_client.h",
+     "ts_tab_observer.cc",
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 9b8da5ccfcc88..e4bbe19169633 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -5,24 +5,25 @@
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+-#include "content/shell/browser/shell_browser_context.h"
+-#include "services/network/public/mojom/network_context.mojom.h"
++#include "content/libtermsurf_chromium/ts_pdf_navigation_throttle.h"
++#include "content/public/browser/navigation_throttle_registry.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
+-#include "third_party/blink/public/common/web_preferences/web_preferences.h"
+-#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
++#include "content/shell/browser/shell_browser_context.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/badging/badging.mojom.h"
++#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+ 
+ namespace content {
+ 
+ // Stub BadgeService — accepts and ignores Badging API calls (Issue 655).
+ // Prevents renderer kills on navigator.setAppBadge().
+-class TsBrowserClient::StubBadgeService
+-    : public blink::mojom::BadgeService {
++class TsBrowserClient::StubBadgeService : public blink::mojom::BadgeService {
+  public:
+   StubBadgeService() = default;
+   ~StubBadgeService() override = default;
+@@ -59,8 +60,9 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   map->Add<blink::mojom::BadgeService>(base::BindRepeating(
+       [](TsBrowserClient* self, RenderFrameHost*,
+          mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
+-        if (!self->stub_badge_service_)
++        if (!self->stub_badge_service_) {
+           self->stub_badge_service_ = std::make_unique<StubBadgeService>();
++        }
+         self->stub_badge_service_->Bind(std::move(receiver));
+       },
+       base::Unretained(this)));
+@@ -70,19 +72,24 @@ void TsBrowserClient::OverrideWebPreferences(
+     WebContents* web_contents,
+     SiteInstance& main_frame_site,
+     blink::web_pref::WebPreferences* prefs) {
+-  auto* main_parts = static_cast<TsBrowserMainParts*>(
+-      shell_browser_main_parts());
++  auto* main_parts =
++      static_cast<TsBrowserMainParts*>(shell_browser_main_parts());
+   if (main_parts) {
+     auto scheme = main_parts->GetColorSchemeForWebContents(web_contents);
+     if (scheme.has_value()) {
+       prefs->preferred_color_scheme = scheme.value();
+     } else {
+-      prefs->preferred_color_scheme =
+-          blink::mojom::PreferredColorScheme::kDark;
++      prefs->preferred_color_scheme = blink::mojom::PreferredColorScheme::kDark;
+     }
+   }
+ }
+ 
++void TsBrowserClient::CreateThrottlesForNavigation(
++    NavigationThrottleRegistry& registry) {
++  ShellContentBrowserClient::CreateThrottlesForNavigation(registry);
++  registry.AddThrottle(std::make_unique<TsPdfNavigationThrottle>(registry));
++}
++
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+     BrowserContext* context,
+     network::mojom::NetworkContextParams* context_params,
+@@ -95,8 +102,9 @@ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+   // Persistent cookie/network storage.
+   auto* shell_context = static_cast<ShellBrowserContext*>(context);
+   base::FilePath path = shell_context->GetPath();
+-  if (path.empty() || shell_context->IsOffTheRecord())
++  if (path.empty() || shell_context->IsOffTheRecord()) {
+     return;
++  }
+ 
+   // Disable cookie encryption — we don't provide an encryption provider,
+   // and the default (true) hits NOTREACHED() on non-Android.
+@@ -114,8 +122,7 @@ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+   context_params->persist_session_cookies = false;
+ 
+   // Set file paths for persistent storage.
+-  context_params->file_paths =
+-      network::mojom::NetworkContextFilePaths::New();
++  context_params->file_paths = network::mojom::NetworkContextFilePaths::New();
+   context_params->file_paths->data_directory =
+       path.Append(FILE_PATH_LITERAL("Network"));
+   context_params->file_paths->unsandboxed_data_path = path;
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index b671edda23858..c872c08687790 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -29,10 +29,11 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   void RegisterBrowserInterfaceBindersForFrame(
+       RenderFrameHost* render_frame_host,
+       mojo::BinderMapWithContext<RenderFrameHost*>* map) override;
+-  void OverrideWebPreferences(
+-      WebContents* web_contents,
+-      SiteInstance& main_frame_site,
+-      blink::web_pref::WebPreferences* prefs) override;
++  void OverrideWebPreferences(WebContents* web_contents,
++                              SiteInstance& main_frame_site,
++                              blink::web_pref::WebPreferences* prefs) override;
++  void CreateThrottlesForNavigation(
++      NavigationThrottleRegistry& registry) override;
+ 
+  protected:
+   void ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc b/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc
+new file mode 100644
+index 0000000000000..4488ceca954e6
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_navigation_throttle.cc
+@@ -0,0 +1,160 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_navigation_throttle.h"
++
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/logging.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/escape.h"
++#include "base/strings/strcat.h"
++#include "base/task/sequenced_task_runner.h"
++#include "components/pdf/common/constants.h"
++#include "content/browser/renderer_host/navigation_request.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/filename_util.h"
++#include "net/http/http_response_headers.h"
++#include "url/gurl.h"
++
++namespace content {
++
++namespace {
++
++constexpr char kWrapperSentinel[] = "termsurf-pdf-wrapper=1";
++
++bool IsOrdinaryPdfScheme(const GURL& url) {
++  return url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile();
++}
++
++std::string HeaderMimeType(NavigationHandle* handle) {
++  const net::HttpResponseHeaders* headers = handle->GetResponseHeaders();
++  if (!headers) {
++    return std::string();
++  }
++  std::string mime_type;
++  headers->GetMimeType(&mime_type);
++  return mime_type;
++}
++
++bool LooksLikePdfUrl(const GURL& url) {
++  base::FilePath file_path;
++  return net::FileURLToFilePath(url, &file_path)
++             ? file_path.MatchesExtension(FILE_PATH_LITERAL(".pdf"))
++             : url.ExtractFileName().ends_with(".pdf");
++}
++
++std::string ResponseMimeType(NavigationHandle* handle) {
++  const std::string private_mime_type =
++      NavigationRequest::From(handle)->GetMimeType();
++  if (!private_mime_type.empty()) {
++    return private_mime_type;
++  }
++
++  const std::string header_mime_type = HeaderMimeType(handle);
++  if (!header_mime_type.empty()) {
++    return header_mime_type;
++  }
++
++  return LooksLikePdfUrl(handle->GetURL()) ? pdf::kPDFMimeType : std::string();
++}
++
++GURL BuildPdfWrapperUrl(const GURL& pdf_url) {
++  const std::string escaped_pdf_url = base::EscapeForHTML(pdf_url.spec());
++  const std::string html = base::StrCat({
++      "<!doctype html><meta charset=\"utf-8\">",
++      "<style>",
++      "html,body,embed{margin:0;width:100%;height:100%;overflow:hidden;",
++      "background:#f8d7da;}",
++      "#termsurf-pdf-wrapper-marker{position:fixed;left:6px;top:6px;",
++      "z-index:2147483647;background:#7f1d1d;color:white;",
++      "font:12px sans-serif;padding:3px 5px;}",
++      "</style>",
++      "<div id=\"termsurf-pdf-wrapper-marker\">TermSurf PDF wrapper</div>",
++      "<embed src=\"",
++      escaped_pdf_url,
++      "\" type=\"",
++      pdf::kInternalPluginMimeType,
++      "\">",
++  });
++  return GURL(base::StrCat({
++      "data:text/html;charset=utf-8;",
++      kWrapperSentinel,
++      ",",
++      base::EscapeUrlEncodedData(html, /*use_plus=*/false),
++  }));
++}
++
++void LoadWrapper(base::WeakPtr<WebContents> web_contents, GURL wrapper_url) {
++  if (!web_contents) {
++    LOG(INFO)
++        << "[issue-776-exp2] wrapper navigation skipped: WebContents gone";
++    return;
++  }
++
++  NavigationController::LoadURLParams params(wrapper_url);
++  params.is_renderer_initiated = false;
++  web_contents->GetController().LoadURLWithParams(std::move(params));
++  LOG(INFO) << "[issue-776-exp2] wrapper navigation posted url="
++            << wrapper_url.possibly_invalid_spec();
++}
++
++}  // namespace
++
++TsPdfNavigationThrottle::TsPdfNavigationThrottle(
++    NavigationThrottleRegistry& registry)
++    : NavigationThrottle(registry) {}
++
++TsPdfNavigationThrottle::~TsPdfNavigationThrottle() = default;
++
++NavigationThrottle::ThrottleCheckResult
++TsPdfNavigationThrottle::WillProcessResponse() {
++  NavigationHandle* handle = navigation_handle();
++  const GURL& url = handle->GetURL();
++  const std::string response_mime_type = ResponseMimeType(handle);
++  const std::string header_mime_type = HeaderMimeType(handle);
++  const bool is_primary_main_frame = handle->IsInPrimaryMainFrame();
++  const bool is_wrapper =
++      url.spec().find(kWrapperSentinel) != std::string::npos;
++  const bool supported_scheme = IsOrdinaryPdfScheme(url);
++
++  LOG(INFO) << "[issue-776-exp2] pdf throttle response url="
++            << url.possibly_invalid_spec()
++            << " response_mime=" << response_mime_type
++            << " header_mime=" << header_mime_type
++            << " primary_main_frame=" << is_primary_main_frame
++            << " wrapper=" << is_wrapper
++            << " supported_scheme=" << supported_scheme;
++
++  if (response_mime_type != pdf::kPDFMimeType || !is_primary_main_frame ||
++      is_wrapper || !supported_scheme) {
++    return PROCEED;
++  }
++
++  WebContents* web_contents = handle->GetWebContents();
++  if (!web_contents) {
++    LOG(INFO) << "[issue-776-exp2] proceeding: no WebContents";
++    return PROCEED;
++  }
++
++  const GURL wrapper_url = BuildPdfWrapperUrl(url);
++  LOG(INFO) << "[issue-776-exp2] canceling PDF navigation before download path"
++            << " pdf_url=" << url.possibly_invalid_spec()
++            << " wrapper_url=" << wrapper_url.possibly_invalid_spec();
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&LoadWrapper, web_contents->GetWeakPtr(), wrapper_url));
++  return CANCEL_AND_IGNORE;
++}
++
++const char* TsPdfNavigationThrottle::GetNameForLogging() {
++  return "TsPdfNavigationThrottle";
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_navigation_throttle.h b/content/libtermsurf_chromium/ts_pdf_navigation_throttle.h
+new file mode 100644
+index 0000000000000..bd4198f61328a
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_navigation_throttle.h
+@@ -0,0 +1,27 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_NAVIGATION_THROTTLE_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_NAVIGATION_THROTTLE_H_
++
++#include "content/public/browser/navigation_throttle.h"
++
++namespace content {
++
++class TsPdfNavigationThrottle : public NavigationThrottle {
++ public:
++  explicit TsPdfNavigationThrottle(NavigationThrottleRegistry& registry);
++  ~TsPdfNavigationThrottle() override;
++
++  TsPdfNavigationThrottle(const TsPdfNavigationThrottle&) = delete;
++  TsPdfNavigationThrottle& operator=(const TsPdfNavigationThrottle&) = delete;
++
++  // NavigationThrottle:
++  ThrottleCheckResult WillProcessResponse() override;
++  const char* GetNameForLogging() override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_NAVIGATION_THROTTLE_H_
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.cc b/content/libtermsurf_chromium/ts_renderer_client.cc
+index 8f673bfa9b9b8..33fbf3a9c94bc 100644
+--- a/content/libtermsurf_chromium/ts_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_renderer_client.cc
+@@ -10,6 +10,7 @@
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+ #include "pdf/buildflags.h"
+ #include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/platform/web_url.h"
+ #include "third_party/blink/public/web/web_plugin.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
+ 
+@@ -46,7 +47,8 @@ bool TsRendererClient::OverrideCreatePlugin(
+ #if BUILDFLAG(ENABLE_PDF)
+   const std::string mime_type = params.mime_type.Utf8();
+   if (mime_type == pdf::kInternalPluginMimeType) {
+-    LOG(INFO) << "[issue-776] OverrideCreatePlugin saw PDF mime=" << mime_type;
++    LOG(INFO) << "[issue-776] OverrideCreatePlugin saw PDF mime=" << mime_type
++              << " url=" << GURL(params.url).possibly_invalid_spec();
+     blink::WebPlugin* pdf_plugin =
+         pdf::CreateInternalPlugin(params, render_frame, {});
+     LOG(INFO) << "[issue-776] CreateInternalPlugin returned "
+-- 
+2.50.1 (Apple Git-155)
+
