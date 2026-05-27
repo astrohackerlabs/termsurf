@@ -65,11 +65,11 @@ provide a TermSurf renderer client, and `libtermsurf_chromium/BUILD.gn` has no
 PDF deps. Therefore the PDF navigation can succeed while no viewer exists to
 render the document.
 
-This experiment is a scoped PDF-rendering probe with an automated visual
-acceptance test. It should add the smallest TermSurf `ContentClient` /
-renderer-client hooks needed to make Chromium's built-in PDF path available,
-then run TermSurf end-to-end and take a screenshot of a real PDF loaded in the
-browser pane.
+This experiment is a scoped PDF-rendering probe with automated screenshot
+capture and agent visual classification. It should add the smallest TermSurf
+`ContentClient` / renderer-client hooks needed to make Chromium's built-in PDF
+path available, then run TermSurf end-to-end and take a screenshot of a real PDF
+loaded in the browser pane.
 
 The primary question for this experiment is user-visible:
 
@@ -77,10 +77,31 @@ The primary question for this experiment is user-visible:
 Does the PDF visibly render in the TermSurf browser pane?
 ```
 
-The experiment should not require manual app interaction for verification. If
-the automated screenshot shows recognizable PDF content, the experiment passes.
-If the screenshot is still blank or white, the result should record the
-automated artifact and only then use logs to decide the next experiment.
+The experiment should not require manual app interaction for verification. It
+will capture screenshots automatically, then the agent will inspect those
+artifacts. If a screenshot shows recognizable PDF content, the experiment
+passes. If the screenshot is still blank or white, the result should record the
+artifact and only then use logs to decide the next experiment.
+
+Use the vendored Bitcoin whitepaper fixture:
+
+```text
+test-html/public/bitcoin.pdf
+```
+
+The primary automated run should open it through the local test server:
+
+```text
+http://localhost:9616/bitcoin.pdf
+```
+
+That avoids network flakiness while still exercising Chromium's browser PDF
+rendering path. If the HTTP fixture renders, also run a second screenshot check
+against the same file through `file://` to verify the original local-file goal:
+
+```text
+file:///Users/ryan/dev/termsurf/test-html/public/bitcoin.pdf
+```
 
 This experiment commits to the expensive product direction: in-pane PDF viewing
 inside the TermSurf browser overlay. A simpler fallback would be to hand PDFs to
@@ -115,11 +136,17 @@ experiments, that product trade-off can be revisited explicitly.
    - `//pdf:features`;
    - `//components/pdf/common:constants`;
    - `//components/pdf/common:util`;
-   - `//components/pdf/renderer`. Do not add
-     `//chrome/browser/resources/pdf:resources`, `//components/pdf/browser`,
+   - `//components/pdf/renderer`. Do not add `//components/pdf/browser`,
      extension, MimeHandlerView, or stream-manager deps in this experiment
      unless a compile error proves one of them is needed by the plumbing probe
      itself.
+
+   Do not include `//chrome/browser/resources/pdf:resources` in the first build
+   attempt. If the plugin is created but the screenshot remains blank, record
+   "plugin created, viewer resources or MimeHandlerView missing" as an expected
+   Partial outcome. A compile error is not expected to reveal this runtime
+   missing-resource layer.
+
 4. Add a TermSurf content client, for example `ts_content_client.{cc,h}`,
    derived from `ShellContentClient`.
    - Override `AddPlugins()`.
@@ -144,13 +171,12 @@ experiments, that product trade-off can be revisited explicitly.
    - Add temporary `LOG(INFO)` lines that report each PDF MIME type seen by
      `OverrideCreatePlugin()` and whether `pdf::CreateInternalPlugin()` returned
      a plugin or `nullptr`.
-7. Also override `IsPluginHandledExternally()` in the TermSurf renderer client
-   if it is available on the Chromium 148 `ContentRendererClient` interface.
+7. Override `IsPluginHandledExternally()` in the TermSurf renderer client.
    - Log when `mime_type == pdf::kPDFMimeType` or
      `pdf::kInternalPluginMimeType`.
    - Do not try to implement MimeHandlerView in this experiment.
-   - If the method is not available or cannot be implemented without pulling in
-     extensions infrastructure, record that explicitly in the result.
+   - If implementing the override requires broad extensions infrastructure,
+     record that explicitly in the result instead of silently widening scope.
 8. Update `TsMainDelegate` to override `CreateContentRendererClient()` and
    return the new TermSurf renderer client.
 9. Do not wire the PDF component-extension, MimeHandlerView, GuestView, or
@@ -170,10 +196,10 @@ experiments, that product trade-off can be revisited explicitly.
     - Wezboard overlay positioning or input forwarding.
 
 11. Build `libtermsurf_chromium` with `autoninja`, rebuild Roamium against the
-    new library, and run the diagnostic verification. Only regenerate and commit
-    the Issue 776 Chromium patch archive if this experiment produces a coherent
-    branch state worth preserving. On Partial or Fail, record the branch state
-    and the next required layer before deciding whether to archive.
+    new library, and run the diagnostic verification. Regenerate and commit the
+    Issue 776 Chromium patch archive on Pass or Partial. Skip archiving only for
+    a Fail result that leaves the Chromium branch in an incoherent state, and
+    document why the archive was skipped.
 
 12. Add an automated visual PDF smoke-test command or script.
 
@@ -187,10 +213,12 @@ experiments, that product trade-off can be revisited explicitly.
       /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium
       ```
 
+    - ensure the local test server is running and serves
+      `test-html/public/bitcoin.pdf`;
     - open:
 
       ```text
-      https://bitcoin.org/bitcoin.pdf
+      http://localhost:9616/bitcoin.pdf
       ```
 
     - wait for the browser pane to settle;
@@ -202,6 +230,10 @@ experiments, that product trade-off can be revisited explicitly.
     Events, to type the debug `web` command into the newly launched Wezboard
     window. This is acceptable for this experiment because the target is an
     end-to-end visual smoke test of the actual GUI path.
+
+    If AppleScript/System Events are used, Accessibility permission is also a
+    precondition. Screen Recording permission is required for `screencapture`;
+    Accessibility permission is required for typed GUI automation.
 
     The automation must not rely on installed stable TermSurf binaries. It must
     use debug Wezboard, debug `web`, and the repo-built Roamium/Chromium path.
@@ -224,8 +256,9 @@ experiments, that product trade-off can be revisited explicitly.
 
 #### Verification
 
-This experiment's verification is automated. Manual inspection by the user is
-not required to decide whether the experiment passes.
+This experiment's verification uses automated capture plus agent visual
+classification. Manual inspection by the user is not required to decide whether
+the experiment passes.
 
 1. Confirm screenshot capture is available before running the full test:
 
@@ -237,6 +270,11 @@ not required to decide whether the experiment passes.
    If this fails, stop and record the permission problem. The experiment cannot
    be visually verified until macOS Screen Recording permission is granted to
    the process running the test.
+
+   If the automation uses AppleScript/System Events to type into Wezboard,
+   verify Accessibility permission as well. If Accessibility permission is not
+   available, either use a non-typed launch path or stop and record the
+   automation permission problem.
 
 2. Record the precondition results:
    - `enable_pdf`, `enable_extensions`, and `enable_plugins` state;
@@ -263,18 +301,36 @@ not required to decide whether the experiment passes.
 
 5. Run the automated visual PDF smoke test.
 
+   Start the local test server if it is not already running. The fixture is:
+
+   ```text
+   /Users/ryan/dev/termsurf/test-html/public/bitcoin.pdf
+   ```
+
    The test must launch debug Wezboard and debug `web`, explicitly passing the
    repo-built Roamium binary:
 
    ```bash
    /Users/ryan/dev/termsurf/webtui/target/debug/web \
      --browser /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium \
-     https://bitcoin.org/bitcoin.pdf
+     http://localhost:9616/bitcoin.pdf
    ```
 
    The test then waits for load and captures a screenshot.
 
-6. Inspect the screenshot artifact.
+6. If the HTTP fixture renders, run a second screenshot check against the local
+   file URL:
+
+   ```bash
+   /Users/ryan/dev/termsurf/webtui/target/debug/web \
+     --browser /Users/ryan/dev/termsurf/chromium/src/out/Default/roamium \
+     file:///Users/ryan/dev/termsurf/test-html/public/bitcoin.pdf
+   ```
+
+   This verifies the original `web file.pdf` class of bug after the renderer
+   path is proven to work.
+
+7. Inspect the screenshot artifacts.
 
    The automated result should classify the screenshot as one of:
    - **rendered PDF** — visible Bitcoin whitepaper content is present, such as
@@ -289,27 +345,34 @@ not required to decide whether the experiment passes.
 
    A human-readable screenshot path must be recorded in the experiment result.
 
-7. If and only if the screenshot is blank/white or an error page, collect the
+8. If and only if the screenshot is blank/white or an error page, collect the
    logs and record a failure-layer table:
 
-   | Layer                                                 | Result                 |
-   | ----------------------------------------------------- | ---------------------- |
-   | PDF build flags enabled                               | yes/no                 |
-   | Minimal PDF deps compile                              | yes/no                 |
-   | PDF plugin registered in `AddPlugins()`               | yes/no                 |
-   | `OverrideCreatePlugin()` sees internal PDF MIME type  | yes/no                 |
-   | `CreateInternalPlugin()` returns a plugin             | yes/no/null-not-called |
-   | `IsPluginHandledExternally()` sees top-level PDF      | yes/no/not-available   |
-   | Evidence that MimeHandlerView/extension layer is next | yes/no                 |
+   | Layer                                                       | Result                 |
+   | ----------------------------------------------------------- | ---------------------- |
+   | PDF build flags enabled                                     | yes/no                 |
+   | Minimal PDF deps compile                                    | yes/no                 |
+   | PDF plugin registered in `AddPlugins()`                     | yes/no                 |
+   | `OverrideCreatePlugin()` sees internal PDF MIME type        | yes/no                 |
+   | `CreateInternalPlugin()` returns a plugin                   | yes/no/null-not-called |
+   | `IsPluginHandledExternally()` sees top-level PDF            | yes/no/not-available   |
+   | Plugin created but viewer resources/MimeHandlerView missing | yes/no                 |
+   | Evidence that MimeHandlerView/extension layer is next       | yes/no                 |
+   | Evidence that PDF stream routing is next                    | yes/no                 |
+   | Evidence that plugin/utility sandboxing is next             | yes/no                 |
 
 #### Pass Criteria
 
-The automated screenshot shows recognizable Bitcoin PDF content rendered inside
-the existing TermSurf browser overlay.
+The automated screenshot for the local HTTP fixture shows recognizable Bitcoin
+PDF content rendered inside the existing TermSurf browser overlay.
 
 The pass decision is visual. It does not require proving every PDF plumbing
-layer, and it does not require manual interaction beyond granting screenshot
-permission before the run.
+layer, and it does not require manual interaction beyond granting screenshot and
+automation permissions before the run.
+
+If the HTTP fixture renders but the `file://` fixture does not, the experiment
+still passes for browser PDF rendering and should open a follow-up focused on
+local-file MIME/path handling.
 
 #### Partial Criteria
 
