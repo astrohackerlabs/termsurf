@@ -157,13 +157,19 @@ The core question is:
 
    Record the precise roles of:
    - `shell/browser/electron_browser_client.cc::CreateURLLoaderThrottles()`;
-   - `shell/browser/extensions/api/streams_private/streams_private_api.cc`;
+   - `shell/browser/extensions/api/streams_private/streams_private_api.cc`,
+     specifically the narrow `SendExecuteMimeTypeHandlerEvent()` PDF stream
+     dispatch helper, not the general Chrome `streams_private` extension API;
+   - `shell/browser/plugins/plugin_utils.cc`, because Electron pairs the
+     response-interceptor include redirect with its own plugin-utils
+     implementation;
    - `patches/chromium/hack_plugin_response_interceptor_to_point_to_electron.patch`;
    - Electron's `PdfURLLoaderRequestInterceptor` wiring;
-   - Electron's `PdfHost` / `PDFDocumentHelper` binder, only enough to note
-     whether it is needed before or after stream handoff.
+   - Electron's `PdfHost` / `PDFDocumentHelper` binder only to record that it
+     follows stream handoff and is out of scope for Experiment 2.
 
-2. Re-audit the Chromium PDF stream path in the current Chromium branch.
+2. Re-audit the Chromium PDF stream path and GN dependency surface in the
+   current Chromium branch.
 
    Inspect the current upstream implementation and the failed Issue 776
    Experiment 8 patch:
@@ -176,6 +182,24 @@ The core question is:
      chromium/src/content/libtermsurf_chromium
    ```
 
+   Also use GN to inspect target ownership and transitive dependencies. Ripgrep
+   can find symbols, but GN is the source of truth for whether a design avoids
+   the Issue 776 Experiment 8 dependency explosion:
+
+   ```bash
+   export PATH="$PWD/chromium/depot_tools:$PATH"
+   gn desc chromium/src/out/Default //chrome/browser/plugins:plugins deps
+   gn desc chromium/src/out/Default //chrome/browser/plugins:impl deps
+   gn desc chromium/src/out/Default //chrome/browser/plugins:impl public_deps
+   gn refs chromium/src/out/Default --tree \
+     //chrome/browser/plugins/plugin_response_interceptor_url_loader_throttle.cc
+   gn desc chromium/src/out/Default //chrome/browser/pdf:pdf_viewer_stream_manager deps
+   ```
+
+   The result must record the `//chrome/browser/plugins:plugins` vs.
+   `//chrome/browser/plugins:impl` target split and identify which direct deps
+   made `:impl` too broad for Roamium.
+
    Identify the smallest pieces needed to:
    - detect an `application/pdf` response;
    - replace the PDF response body with the PDF viewer embedder/template
@@ -185,14 +209,55 @@ The core question is:
    - avoid `PluginUtils::GetExtensionIdForMimeType()` and real
      `ExtensionRegistry` lookup for the PDF-only first pass.
 
-3. Produce a dependency map.
+3. Audit the current TermSurf Chromium branch state.
+
+   Issue 776 Experiment 8 left a committed Chromium branch that may already
+   contain partial PDF interceptor patches. Before choosing a design, record the
+   current branch and the exact PDF-related patch state:
+
+   ```bash
+   git -C chromium/src branch --show-current
+   git -C chromium/src log --oneline -5
+   git -C chromium/src diff --name-only 148.0.7778.97-issue-776-exp7..HEAD
+   rg "issue-776-exp8|pdf_only|PluginResponseInterceptorURLLoaderThrottle|TsPdfNavigationThrottle" \
+     chromium/src/chrome/browser/plugins \
+     chromium/src/content/libtermsurf_chromium
+   ```
+
+   The result must decide, per existing patch:
+   - keep as-is;
+   - modify in Experiment 2;
+   - revert in Experiment 2 because it belongs to the failed direct-link path.
+
+   Also record the starting state of `TsPdfNavigationThrottle`: whether the old
+   Issue 776 wrapper cancellation path is active, disabled, or partially
+   disabled.
+
+4. Run a baseline Chromium build check.
+
+   Before designing the next implementation, confirm whether the current
+   Chromium branch links:
+
+   ```bash
+   export PATH="$PWD/chromium/depot_tools:$PATH"
+   autoninja -C chromium/src/out/Default libtermsurf_chromium
+   ```
+
+   If the baseline build fails because the current branch still contains the
+   Issue 776 Experiment 8 dependency/link failure, record that explicitly.
+   Experiment 2's branch base must then be a buildable branch before the failed
+   dependency path, or must include an explicit revert of the failed path as its
+   first implementation step.
+
+5. Produce a dependency map.
 
    Compare three candidate implementation shapes:
    - **A. Copy the stock Chrome interceptor into `content/libtermsurf_chromium/`
      and strip it to PDF-only.**
    - **B. Patch the stock Chromium interceptor to call a TermSurf
-     `streams_private` shim, following Electron's patch, but do not link
-     `//chrome/browser/plugins:impl` directly.**
+     `SendExecuteMimeTypeHandlerEvent` / PDF stream-dispatch shim, following
+     Electron's patch, and pair it with a TermSurf/Electron-style plugin-utils
+     fork as needed. Do not link `//chrome/browser/plugins:impl` directly.**
    - **C. Implement a fresh TermSurf `blink::URLLoaderThrottle` that performs
      only the PDF-specific interception and stream handoff.**
 
@@ -200,28 +265,48 @@ The core question is:
    - Chromium files touched;
    - TermSurf-owned files added;
    - BUILD.gn deps required;
+   - downstream pinned deps that remain even after avoiding
+     `//chrome/browser/plugins:impl`, including `StreamContainer`,
+     `MimeHandlerViewAttachHelper`, `PdfViewerStreamManager`, and
+     `TransferrableURLLoader`;
    - whether it depends on `chrome/browser/plugins`,
      `chrome/browser/extensions`, `extensions/browser`, `MimeHandlerViewGuest`,
      or `GuestViewManager`;
+   - which existing Issue 776 Experiment 8 patches it keeps, modifies, or
+     reverts;
    - why it should or should not avoid the Issue 776 Experiment 8 dependency
      explosion.
 
-4. Choose the Experiment 2 implementation shape.
+   The result table must include:
 
-   Prefer the smallest buildable TermSurf-owned path. The expected answer is
-   likely candidate C unless the audit proves candidate A or B is simpler and
-   still avoids the broad Chrome dependency graph.
+   | Candidate | Files | New deps | Pinned downstream deps | Broad Chrome deps? | Exp 8 patch disposition | Decision |
+   | --------- | ----- | -------- | ---------------------- | ------------------ | ----------------------- | -------- |
+
+6. Choose the Experiment 2 implementation shape.
+
+   Prefer the smallest buildable TermSurf-owned path. Do not bias the result
+   toward a fresh throttle merely because it sounds cleaner. Electron's proven
+   shape is closer to a narrow patch/fork of the Chrome path, so the audit must
+   let the GN dependency evidence decide whether A, B, C, or a hybrid is the
+   right first implementation.
 
    The selected design must specify:
    - new file names, likely under `content/libtermsurf_chromium/`;
    - exact existing files to edit;
+   - exact class/function names being added or changed;
    - exact BUILD.gn deps to add;
+   - unavoidable `chrome/browser/...` deps that remain, with justification;
    - exact Chromium branch base and branch name;
+   - exact existing Issue 776 Experiment 8 patches to keep, modify, or revert;
    - whether the old Issue 776 wrapper throttle remains disabled;
+   - whether Experiment 7's PDF extension resource bypass remains intact or is
+     replaced by a manifest/resource-policy fix;
+   - whether OOPIF PDF is enabled at runtime and how Experiment 2 should log the
+     feature flag;
    - what `[issue-789-exp2]` logs should prove at runtime;
    - which missing PDF layer is intentionally deferred after stream handoff.
 
-5. Define build verification before runtime verification.
+7. Define build verification before runtime verification.
 
    Experiment 2 must first prove the dependency surface is narrow. The design
    should require:
@@ -234,7 +319,7 @@ The core question is:
    `//chrome/browser/plugins:impl` or pulling in the Chrome browser dependency
    graph that caused Issue 776 Experiment 8 to fail.
 
-6. Define the runtime probe for Experiment 2.
+8. Define the runtime probe for Experiment 2.
 
    If Experiment 2 builds, the first runtime probe should load the vendored
    Bitcoin PDF with existing automation and inspect logs. The PDF does not need
@@ -249,21 +334,26 @@ The core question is:
    - `PdfViewerStreamManager::AddStreamContainer()` was reached, or the exact
      reason it could not be reached.
 
-7. Record the design output directly in this experiment.
+   The runtime design should also state that the teardown crash observed in
+   Issue 776's automation is residual and out of scope unless it prevents log or
+   screenshot capture.
 
-   The result must include a table:
+9. Record the design output directly in this experiment.
 
-   | Candidate | Files | New deps | Broad Chrome deps? | Decision |
-   | --------- | ----- | -------- | ------------------ | -------- |
+   The result must include the candidate table from step 5 and a concrete
+   Experiment 2 implementation checklist. Each checklist item must name:
+   - exact file path;
+   - exact class/function being added or modified;
+   - owning GN target;
+   - expected build invariant or `[issue-789-exp2]` log line proving the item
+     works.
 
-   It must also include a concrete Experiment 2 implementation checklist.
+10. Format this issue document:
 
-8. Format this issue document:
-
-   ```bash
-   prettier --write --prose-wrap always --print-width 80 \
-     issues/0789-electron-style-pdf-viewer/README.md
-   ```
+```bash
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0789-electron-style-pdf-viewer/README.md
+```
 
 #### Non-Negotiable Invariants
 
@@ -276,6 +366,10 @@ The core question is:
   `//chrome/browser/plugins:impl` as the primary path.
 - Do not design a solution that enables general user extensions.
 - Do not weaken PDF renderer or PDF origin security.
+- Do not treat "no `chrome/browser` deps" as the goal. Some bounded
+  `chrome/browser/...` deps, such as `PdfViewerStreamManager`, may be
+  unavoidable. The goal is to avoid broad Chrome product infrastructure and
+  document every unavoidable dependency.
 - Do not define success as "PDF visibly renders" for Experiment 2. Experiment 2
   success is stream handoff reaching, or precisely failing before,
   `PdfViewerStreamManager`.
@@ -300,10 +394,15 @@ The core question is:
 3. Confirm the Chromium audit cites concrete local files and identifies why
    Issue 776 Experiment 8 pulled in broad Chrome dependencies.
 
-4. Confirm the candidate table includes at least A, B, and C, and that each
-   candidate has a decision with a reason.
+4. Confirm the Chromium audit includes GN evidence, not just `rg` output.
 
-5. Confirm the selected Experiment 2 checklist is specific enough to implement
+5. Confirm the current Chromium branch / existing patch audit names which Issue
+   776 Experiment 8 patches should be kept, modified, or reverted.
+
+6. Confirm the candidate table includes at least A, B, and C, includes pinned
+   downstream deps, and gives each candidate a decision with a reason.
+
+7. Confirm the selected Experiment 2 checklist is specific enough to implement
    without another design round.
 
 #### Pass Criteria
@@ -312,7 +411,11 @@ Pass if the experiment produces:
 
 - a concrete Electron PDF stream handoff map;
 - a concrete Chromium PDF stream handoff map;
-- a candidate comparison table;
+- a GN-backed dependency map explaining the `//chrome/browser/plugins:plugins`
+  vs. `//chrome/browser/plugins:impl` split;
+- a current-branch patch disposition table for the Issue 776 Experiment 8
+  residue;
+- a candidate comparison table with pinned downstream deps;
 - a selected implementation shape for Experiment 2;
 - an explicit BUILD.gn dependency plan that avoids the Issue 776 Experiment 8
   dependency explosion;
@@ -335,6 +438,9 @@ needed to resolve it.
 - The experiment hand-waves "copy Electron" without naming files, dependencies,
   and patch points.
 - The experiment designs a fake PDF renderer or external handoff.
+- The experiment ignores current Issue 776 Experiment 8 Chromium patches.
+- The experiment uses ripgrep-only dependency reasoning when GN data is
+  available.
 - The experiment quietly expands Experiment 2 into the full
   MimeHandlerView/GuestView/pdf_viewer_private stack instead of isolating the
   first stream handoff layer.
