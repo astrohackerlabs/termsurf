@@ -1311,32 +1311,50 @@ Issue 776 Experiment 8 dependency explosion: split the upstream target, fork the
 stream manager into TermSurf-owned code, or prove that a carefully bounded
 Chrome PDF dependency can link safely.
 
-### Experiment 3: Resolve Captured PDF Streams
+### Experiment 3: Implement the PDF Stream Delegate
 
 #### Description
 
-Connect the Experiment 2 captured PDF stream to the lookup path used by
-Chromium's PDF viewer.
+Connect the Experiment 2 captured PDF stream to Chromium's supported PDF
+embedder boundary.
 
 Experiment 2 proved that TermSurf can intercept an `application/pdf` response,
 emit the PDF viewer template payload, preserve the original PDF body as a
 `blink::mojom::TransferrableURLLoader`, and store it as an
-`extensions::StreamContainer`. The remaining gap is ownership: Chromium's normal
-OOPIF PDF path stores and resolves these streams through
-`PdfViewerStreamManager`, but in this checkout that implementation is owned by
-the broad `//chrome/browser/pdf:pdf` target.
+`extensions::StreamContainer`. Claude review found the important Chromium
+boundary that this experiment should use next:
 
-This experiment should add the narrowest TermSurf-owned stream manager layer
-that can resolve the `internal_id` emitted by the viewer-template response and
-return the captured stream to the PDF viewer path. The primary Pass criterion is
-not "PDF visibly renders" yet. A Pass means the viewer-side stream request
-reaches TermSurf's stream manager and successfully claims the captured
-`StreamContainer` without importing the failed broad Chrome dependency set from
-Issue 776 Experiment 8.
+```text
+//components/pdf/browser:interceptors
+```
+
+That target exposes the PDF embedder API Chromium provides specifically to avoid
+layering directly on `//extensions/browser` or broad Chrome plugin code:
+
+- `pdf::PdfStreamDelegate`;
+- `pdf::PdfNavigationThrottle`;
+- `pdf::PdfURLLoaderRequestInterceptor`.
+
+Electron uses this shape: it implements an embedder-owned stream delegate,
+installs Chromium's PDF navigation throttle, and installs Chromium's PDF URL
+loader request interceptor. TermSurf should do the same with a small
+TermSurf-owned stream store behind the delegate.
+
+The primary Pass criterion is not "PDF visibly renders" yet. A Pass means the
+viewer-template `internal_id` is extracted from the actual PDF viewer
+navigation, the captured `StreamContainer` is claimed through a TermSurf
+`pdf::PdfStreamDelegate`, and the original PDF bytes are served through
+`pdf::PdfURLLoaderRequestInterceptor`, without importing the failed broad Chrome
+dependency set from Issue 776 Experiment 8.
 
 Visible PDF rendering is a stretch outcome. If it happens, record it. If it does
 not, the result must name the next missing layer after successful stream
-resolution.
+serving.
+
+The old `PdfViewerStreamManager` question is now secondary. TermSurf still needs
+state that maps unclaimed streams to later viewer requests, but that state
+should support `pdf::PdfStreamDelegate`; it should not be framed as replacing
+all of Chrome's PDF manager behavior.
 
 #### Changes
 
@@ -1350,72 +1368,94 @@ resolution.
 
    Update `chromium/README.md` in the main repo to list the new branch.
 
-2. Audit Chromium's stream-manager call sites before changing code.
+2. Audit Chromium's PDF delegate/interceptor flow before changing code.
 
    Run:
 
    ```bash
    cd chromium/src
-   rg "PdfViewerStreamManager|GetStreamContainer|AddStreamContainer|StreamContainer" \
+   rg "class PdfStreamDelegate|PdfNavigationThrottle|PdfURLLoaderRequestInterceptor|ChromePdfStreamDelegate|PdfViewerStreamManager|StreamContainer" \
+     components/pdf/browser \
      chrome/browser/pdf \
      chrome/browser/extensions \
      extensions/browser \
-     components/pdf \
-     pdf \
      content/libtermsurf_chromium
+   gn desc out/Default //components/pdf/browser:interceptors deps
    gn desc out/Default //chrome/browser/pdf:pdf deps
    gn desc out/Default //extensions/browser/mime_handler:stream_container deps
    ```
 
    Record in the experiment result:
-   - which function the PDF viewer uses to claim a stream by `internal_id`;
-   - whether that claim path is browser-side, renderer-side, or extension API
-     driven;
-   - which smallest source files are required for lookup/claim;
-   - whether any of those files require `//chrome/browser/pdf:pdf`,
-     `//chrome/browser/plugins:impl`, `//chrome/browser/extensions:extensions`,
-     `//components/guest_view/browser`, Chrome media permission code, Chrome
-     WebRTC capture code, or prerender browser delegates.
+   - the exact `pdf::PdfStreamDelegate` methods in Chromium 148;
+   - where Electron installs `pdf::PdfNavigationThrottle`;
+   - where Electron installs `pdf::PdfURLLoaderRequestInterceptor`;
+   - how `ChromePdfStreamDelegate` maps `internal_id` to a stream;
+   - which Chrome-only call sites must not be copied into TermSurf;
+   - whether `//components/pdf/browser:interceptors` depends only on bounded
+     component/content/network targets.
 
-3. Choose one narrow stream-manager strategy.
+3. Implement a TermSurf-owned `pdf::PdfStreamDelegate`.
 
-   Use this order:
-   1. **Split upstream target if clean.** If `PdfViewerStreamManager` and its
-      direct helpers can be moved into a smaller GN target without dragging
-      unrelated Chrome browser infrastructure, create a target such as:
+   Add:
 
-      ```text
-      //chrome/browser/pdf:pdf_viewer_stream_manager
-      ```
+   ```text
+   content/libtermsurf_chromium/ts_pdf_stream_delegate.h
+   content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+   ```
 
-      Then depend on that target from `content/libtermsurf_chromium`.
+   The delegate must implement all Chromium 148 `pdf::PdfStreamDelegate` methods
+   explicitly:
+   - `MapToOriginalUrl(content::NavigationHandle&)`;
+   - `GetStreamInfo(content::RenderFrameHost*)`;
+   - `MaybeDeleteSandboxedStream(content::FrameTreeNodeId)`;
+   - `ShouldAllowPdfFrameNavigation(content::NavigationHandle*)`;
+   - `ShouldAllowPdfExtensionFrameNavigation(content::NavigationHandle*)`.
 
-   2. **Fork the manager into TermSurf-owned code.** If the upstream file is
-      small but its owning target is too broad, copy only the required stream
-      manager behavior into:
+   The first two methods are the stream handoff:
+   - `MapToOriginalUrl(...)` is the claim entrypoint. It should parse the actual
+     PDF viewer navigation URL, extract the `internal_id`, claim the matching
+     captured stream, and return the original PDF URL.
+   - `GetStreamInfo(...)` is the serve entrypoint. It should return the claimed
+     stream info for the PDF content frame so
+     `pdf::PdfURLLoaderRequestInterceptor` can serve the original bytes.
 
-      ```text
-      content/libtermsurf_chromium/ts_pdf_stream_manager.h
-      content/libtermsurf_chromium/ts_pdf_stream_manager.cc
-      ```
+   The three security methods must mirror Chromium's intended PDF policy as
+   closely as TermSurf can support it. Do not return permissive defaults just to
+   make the smoke test advance. If one method cannot be implemented safely, mark
+   the experiment Partial and record the exact missing state.
 
-      The fork should manage only:
-      - storing an `extensions::StreamContainer` by `internal_id`;
-      - claiming/removing that stream by `internal_id`;
-      - lifecycle cleanup when the owning `WebContents` goes away.
+   Required logs:
 
-      It must not copy unrelated Chrome PDF viewer UI, preferences, metrics,
-      download, permission, or extension registry behavior.
+   ```text
+   [issue-789-exp3] delegate-created ...
+   [issue-789-exp3] map-to-original-url url=<viewer url> internal_id=<id> ...
+   [issue-789-exp3] get-stream-info frame_tree_node_id=<id> ...
+   [issue-789-exp3] maybe-delete-sandboxed-stream frame_tree_node_id=<id> ...
+   [issue-789-exp3] allow-pdf-frame-navigation url=<url> allowed=<true|false> ...
+   [issue-789-exp3] allow-pdf-extension-frame-navigation url=<url> allowed=<true|false> ...
+   ```
 
-   3. **Prove a bounded Chrome dependency.** Only use `//chrome/browser/pdf:pdf`
-      if `gn desc` and a successful link prove it does not reintroduce the Issue
-      776 Experiment 8 dependency explosion. This is expected to fail and should
-      not be the first implementation choice.
+4. Add a small TermSurf stream store behind the delegate.
 
-   If none of the three choices can build cleanly, mark the experiment Partial
-   and record the smallest unbuildable dependency boundary.
+   Add, if needed:
 
-4. Replace the Experiment 2 static map with the chosen stream manager.
+   ```text
+   content/libtermsurf_chromium/ts_pdf_stream_store.h
+   content/libtermsurf_chromium/ts_pdf_stream_store.cc
+   ```
+
+   The store is not a full `PdfViewerStreamManager` replacement. It exists only
+   to support `pdf::PdfStreamDelegate`.
+
+   Required behavior:
+   - per-`WebContents` ownership, preferably via `content::WebContentsUserData`;
+   - cleanup when the owning `WebContents` is destroyed;
+   - unclaimed lookup by `(content::FrameTreeNodeId, internal_id)`;
+   - claim transition from `(FrameTreeNodeId, internal_id)` to the relevant
+     `content::RenderFrameHost*`;
+   - claimed lookup by `RenderFrameHost*` for `GetStreamInfo(...)`;
+   - one successful claim consumes or marks the stream so a mismatched later
+     frame cannot steal it.
 
    Update:
 
@@ -1424,41 +1464,81 @@ resolution.
    content/libtermsurf_chromium/ts_pdf_stream_dispatch.h
    ```
 
-   so `TsDispatchPdfStream(...)` stores the captured `StreamContainer` in the
-   chosen stream manager rather than a standalone static map.
+   so `TsDispatchPdfStream(...)` stores the captured `StreamContainer` in this
+   stream store instead of the Experiment 2 standalone static map.
 
    Required logs:
 
    ```text
-   [issue-789-exp3] stream-manager-created ...
-   [issue-789-exp3] stream-container-added internal_id=<id> ...
+   [issue-789-exp3] stream-store-created ...
+   [issue-789-exp3] stream-container-added frame_tree_node_id=<id> internal_id=<id> ...
+   [issue-789-exp3] stream-container-claim-request frame_tree_node_id=<id> internal_id=<id> ...
+   [issue-789-exp3] stream-container-claimed render_frame_host=<ptr> internal_id=<id> ...
+   [issue-789-exp3] stream-served original_url=<url> ...
    ```
 
-   Preserve the Experiment 2 logs long enough to compare old and new behavior.
+5. Install Chromium's narrow PDF navigation throttle.
 
-5. Wire the viewer-side claim path to TermSurf's stream manager.
-
-   The exact file depends on the audit in step 2. The implementation must be
-   driven by the actual `internal_id` lookup path, not by another guessed
-   wrapper or navigation redirect.
-
-   Acceptable outcomes:
-   - the existing PDF viewer request path can call the new TermSurf manager;
-   - a narrow copied/forked lookup helper can call the new TermSurf manager;
-   - a bounded Chromium target split exposes the existing manager without broad
-     Chrome infrastructure.
-
-   Required logs:
+   Update `content/libtermsurf_chromium/ts_browser_client.cc/h` so
+   `CreateThrottlesForNavigation(...)` installs:
 
    ```text
-   [issue-789-exp3] stream-container-claim-request internal_id=<id> ...
-   [issue-789-exp3] stream-container-claimed internal_id=<id> ...
+   pdf::PdfNavigationThrottle
    ```
 
-   If the viewer never asks for the stream, do not synthesize success. Record
-   which layer failed to issue the claim.
+   using a fresh TermSurf `TsPdfStreamDelegate`.
 
-6. Keep the dependency gate strict.
+   This throttle should handle the PDF viewer's content-frame navigation. Do not
+   revive the old data-wrapper navigation throttle or cancel the top-level PDF
+   navigation.
+
+   Add a note in the result explaining the expected flow:
+   - Experiment 2's response throttle sees the original `application/pdf`
+     response and swaps in the PDF viewer embedder/template HTML;
+   - the viewer creates a PDF content frame that navigates using the emitted
+     `internal_id`;
+   - `pdf::PdfNavigationThrottle` calls
+     `TsPdfStreamDelegate::MapToOriginalUrl(...)`;
+   - the delegate claims the stored stream and returns the original PDF URL.
+
+6. Install Chromium's narrow PDF URL loader request interceptor.
+
+   Update `content/libtermsurf_chromium/ts_browser_client.cc/h` to implement or
+   extend the Chromium 148 hook that installs URL loader request interceptors
+   for a frame:
+
+   ```text
+   pdf::PdfURLLoaderRequestInterceptor::MaybeCreateInterceptor(...)
+   ```
+
+   using a fresh TermSurf `TsPdfStreamDelegate`.
+
+   This is the bytes-serving half of the handoff. A claim without this
+   interceptor can still leave a blank viewer. The experiment cannot Pass unless
+   the logs prove that the interceptor requested stream info and served the
+   captured PDF stream.
+
+   If the Chromium 148 embedder hook name differs, record the exact method name
+   in the result and keep the same behavior.
+
+7. Avoid copying Chrome-only delegate dependencies.
+
+   If `ChromePdfStreamDelegate` is used as the implementation reference, do not
+   copy its Chrome-only dependencies directly. Replace or drop:
+   - `Profile::FromBrowserContext(...)` and Chrome pref lookups;
+   - `chrome/grit/pdf_resources.h` unless a bounded resource target is already
+     available;
+   - `extensions/browser/guest_view/...` non-OOPIF fallback behavior;
+   - direct dependence on `chrome/browser/pdf/pdf_viewer_stream_manager.h`;
+   - unrelated metrics, permissions, download, viewer UI, or Chrome profile
+     code.
+
+   If the delegate requires an injected script resource, either provide a
+   bounded TermSurf-owned resource or return a clearly documented null/empty
+   value and record the expected degraded behavior. Do not silently pull in
+   `//chrome/browser/pdf:pdf` just to obtain one resource.
+
+8. Keep the dependency gate strict.
 
    `content/libtermsurf_chromium` must not add:
 
@@ -1476,7 +1556,7 @@ resolution.
    Any new `chrome/browser/...` dependency must be listed in the result with its
    reason and `gn desc` evidence.
 
-7. Preserve non-PDF behavior.
+9. Preserve non-PDF behavior.
 
    Do not modify:
    - Wezboard;
@@ -1487,28 +1567,30 @@ resolution.
    - normal HTML navigation;
    - non-PDF binary download behavior.
 
-8. Format and archive.
+10. Format and archive.
 
-   Run Chromium formatting on modified C++/GN files:
+    Run Chromium formatting on modified C++/GN files:
 
-   ```bash
-   cd chromium/src
-   ../depot_tools/clang-format -i <modified .cc/.h files>
-   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
-   gn format content/libtermsurf_chromium/BUILD.gn
-   ```
+    ```bash
+    cd chromium/src
+    ../depot_tools/clang-format -i <modified .cc/.h files>
+    export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+    gn format content/libtermsurf_chromium/BUILD.gn
+    ```
 
-   Build before committing the Chromium branch. After the branch commit,
-   regenerate the patch archive:
+    Build before committing the Chromium branch. After the branch commit,
+    regenerate the patch archive:
 
-   ```bash
-   rm -rf ../../chromium/patches/issue-789
-   git format-patch 148.0.7778.97-issue-776-exp7..HEAD \
-     -o ../../chromium/patches/issue-789/
-   ```
+    ```bash
+    tmp_dir="$(mktemp -d ../../chromium/patches/issue-789.XXXXXX)"
+    git format-patch 148.0.7778.97-issue-776-exp7..HEAD \
+      -o "$tmp_dir"
+    rm -rf ../../chromium/patches/issue-789
+    mv "$tmp_dir" ../../chromium/patches/issue-789
+    ```
 
-   The archive should include Experiment 2 and Experiment 3 commits as the
-   current Issue 789 patch stack.
+    The archive should include Experiment 2 and Experiment 3 commits as the
+    current Issue 789 patch stack.
 
 #### Verification
 
@@ -1548,13 +1630,21 @@ resolution.
    ```text
    [issue-789-exp2] pdf-response ...
    [issue-789-exp2] viewer-template-emitted internal_id=<id> ...
-   [issue-789-exp3] stream-manager-created ...
-   [issue-789-exp3] stream-container-added internal_id=<same id> ...
-   [issue-789-exp3] stream-container-claim-request internal_id=<same id> ...
-   [issue-789-exp3] stream-container-claimed internal_id=<same id> ...
+   [issue-789-exp3] stream-store-created ...
+   [issue-789-exp3] stream-container-added frame_tree_node_id=<id> internal_id=<same id> ...
+   [issue-789-exp3] map-to-original-url url=<viewer url> internal_id=<same id> ...
+   [issue-789-exp3] stream-container-claim-request frame_tree_node_id=<id> internal_id=<same id> ...
+   [issue-789-exp3] stream-container-claimed render_frame_host=<ptr> internal_id=<same id> ...
+   [issue-789-exp3] get-stream-info frame_tree_node_id=<id> ...
+   [issue-789-exp3] stream-served original_url=<url> ...
    ```
 
-   The exact `internal_id` must match from template emission through claim.
+   The exact `internal_id` must match from template emission, through the actual
+   URL passed to `MapToOriginalUrl(...)`, through claim and serve.
+
+   At least one log line from each `pdf::PdfStreamDelegate` method should appear
+   during the PDF smoke run, or the result must explain why a method did not
+   run.
 
 4. Capture screenshot output.
 
@@ -1578,7 +1668,8 @@ resolution.
    ./scripts/test-issue-776-pdf.sh http://localhost:9616/index.html
    ```
 
-   The PDF response and stream-manager logs must not appear.
+   The PDF response, stream-store, delegate, and stream-served logs must not
+   appear.
 
 6. Run non-PDF binary smoke.
 
@@ -1588,8 +1679,8 @@ resolution.
    ./scripts/test-issue-776-pdf.sh http://localhost:9616/test.bin
    ```
 
-   The PDF response and stream-manager logs must not appear. Existing download
-   behavior is acceptable.
+   The PDF response, stream-store, delegate, and stream-served logs must not
+   appear. Existing download behavior is acceptable.
 
 7. Record the known teardown crash separately.
 
@@ -1602,29 +1693,42 @@ resolution.
 - `libtermsurf_chromium` builds and links.
 - The implementation avoids the forbidden broad Chrome dependency set.
 - The PDF response reaches the Experiment 2 response throttle.
+- `pdf::PdfNavigationThrottle` and `pdf::PdfURLLoaderRequestInterceptor` are
+  installed through TermSurf's browser client.
+- A TermSurf `pdf::PdfStreamDelegate` implements all Chromium 148 delegate
+  methods without permissive security stubs.
 - The emitted viewer-template `internal_id` is stored in the Experiment 3 stream
-  manager.
-- The viewer-side claim path requests the same `internal_id`.
-- The stream manager returns the captured `StreamContainer` for that
-  `internal_id`.
-- Normal HTML and non-PDF binary smoke tests do not trigger PDF stream-manager
-  behavior.
+  store.
+- `MapToOriginalUrl(...)` receives a real viewer navigation URL containing the
+  same `internal_id`.
+- The viewer-side claim path requests and claims the same `internal_id`.
+- `GetStreamInfo(...)` returns the captured `StreamContainer` for that claimed
+  frame.
+- The PDF bytes are served through the URL loader request interceptor, proven by
+  a `stream-served` log.
+- Normal HTML and non-PDF binary smoke tests do not trigger PDF stream-store,
+  delegate, or serving behavior.
 - The patch archive is regenerated under `chromium/patches/issue-789/`.
 
 #### Partial Criteria
 
-Partial if the implementation builds and stores streams in the new manager, but
-one downstream layer still prevents a successful claim. Valid Partial outcomes
-include:
+Partial if the implementation builds and stores streams in the new store, but
+one downstream layer still prevents a successful claim or serve. Valid Partial
+outcomes include:
 
 - the viewer never requests the `internal_id`;
 - the viewer requests a different `internal_id`;
+- `MapToOriginalUrl(...)` claims the stream, but
+  `PdfURLLoaderRequestInterceptor` is never invoked;
+- `GetStreamInfo(...)` is invoked for a frame that does not match the claimed
+  stream;
 - the request path is gated by a missing extension API or PDF viewer private
   API;
-- the stream is claimed but the viewer still cannot render because `PdfHost`,
-  PDF process routing, or viewer-private bindings are missing;
-- the upstream manager can be split cleanly but requires a separate Chromium
-  target refactor to keep the experiment reviewable.
+- the stream is claimed and served, but the viewer still cannot render because
+  `PdfHost`, PDF process routing, viewer-private bindings, or PDF viewer
+  resources are missing;
+- one `pdf::PdfStreamDelegate` security method cannot be implemented safely with
+  TermSurf's available state.
 
 The result must name the next exact missing layer and include the relevant logs.
 
@@ -1639,8 +1743,8 @@ The result must name the next exact missing layer and include the relevant logs.
   claim.
 - The implementation reintroduces the data-wrapper fake PDF path as the primary
   solution.
-- The implementation claims Pass from screenshot differences without a matching
-  `stream-container-claimed` log.
+- The implementation claims Pass from screenshot differences without matching
+  `stream-container-claimed` and `stream-served` logs.
 - The PDF `internal_id` does not match from template emission through stream
-  claim.
+  claim and serve.
 - Normal HTML or non-PDF binary behavior regresses.
