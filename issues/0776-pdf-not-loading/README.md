@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-04-11"
+closed = "2026-05-27"
 +++
 
 # Issue 776: PDF files show blank white screen instead of rendering
@@ -3480,3 +3481,62 @@ The next experiment should keep the useful idea but change ownership:
 
 In short: the next attempt should be a narrow TermSurf equivalent of the Chrome
 PDF stream handoff, not a direct link to Chrome's full browser implementation.
+
+## Conclusion
+
+Issue 776 started with a narrow symptom: opening a PDF with `web file.pdf`
+produced a blank white pane instead of an inline PDF viewer. The work here
+proved that the symptom is not caused by one missing flag, one missing MIME map,
+or one missing PDFium plugin registration. PDF rendering in Chromium is a
+browser feature stack, not a standalone renderer plugin.
+
+The issue accomplished several things:
+
+- confirmed that Roamium's content-shell-derived embedding does not get Chrome's
+  PDF viewer pipeline for free;
+- added and verified the basic internal PDF plugin plumbing;
+- built automated PDF screenshot infrastructure around a vendored Bitcoin PDF
+  fixture;
+- proved the PDF viewer shell resources can be served from the Chromium PDF
+  extension URL;
+- mapped Electron's PDF implementation in detail;
+- showed that Chromium itself can manage the PDF renderer process when the
+  embedder enters the proper PDF viewer path;
+- ruled out wrapper-only approaches and direct top-level plugin creation as
+  sufficient;
+- ruled out directly linking Chrome's full
+  `PluginResponseInterceptorURLLoaderThrottle` path, because it drags in a broad
+  Chrome browser dependency graph and fails at link time in Roamium.
+
+The main architectural lesson is that TermSurf needs an Electron-style embedder
+layer for PDFs. Electron does not solve PDF viewing by turning itself into
+Chrome or by linking Chrome's full browser stack wholesale. It provides its own
+small browser-client, renderer-client, extension-resource, `streams_private`,
+`pdf_viewer_private`, MimeHandlerView, PDF stream, and `PdfHost` glue, then
+patches Chromium's PDF stream path to call Electron-owned implementations where
+Chrome would normally call Chrome-owned implementations.
+
+That is the direction TermSurf should take next.
+
+The remaining work should move to a new issue with a broader architectural
+framing: implement TermSurf's PDF viewer embedder infrastructure using Electron
+as the guide. That follow-up should not continue as another incremental patch on
+this issue. It should explicitly own the larger goal of bringing the required
+Electron-style PDF infrastructure into Roamium/Chromium:
+
+- a TermSurf-owned PDF response throttle or a narrowly patched Chromium throttle
+  that does not depend on `//chrome/browser/plugins:impl`;
+- a TermSurf `streams_private` equivalent that feeds `PdfViewerStreamManager`;
+- the PDF viewer resource and component-extension metadata path;
+- renderer-side MimeHandlerView container wiring;
+- browser-side PDF URL loader request interception;
+- `pdf_viewer_private` API coverage sufficient for the viewer shell;
+- `pdf::mojom::PdfHost` / `PDFDocumentHelper` binding;
+- process/navigation routing that lets Chromium launch the correct PDF renderer
+  role without TermSurf manually managing a separate PDF process.
+
+Issue 776 is therefore closed as a successful investigation and architecture
+discovery issue. It did not make PDFs render, but it identified why they do not
+render, documented the proven Electron path to follow, preserved the failed
+branches that rule out dead ends, and clarified the scope of the real
+implementation work that remains.

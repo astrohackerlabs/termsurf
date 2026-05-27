@@ -2,10 +2,9 @@
 
 ## Open
 
-| #                                      | Title                                                  | Opened     |
-| -------------------------------------- | ------------------------------------------------------ | ---------- |
-| [0756](0756-surfari/README.md)         | Surfari — WebKit engine for TermSurf                   | 2026-03-16 |
-| [0776](0776-pdf-not-loading/README.md) | PDF files show blank white screen instead of rendering | 2026-04-11 |
+| #                              | Title                                | Opened     |
+| ------------------------------ | ------------------------------------ | ---------- |
+| [0756](0756-surfari/README.md) | Surfari — WebKit engine for TermSurf | 2026-03-16 |
 
 ## Closed
 
@@ -23,6 +22,7 @@
 | [0779](0779-date-picker-popup-position/README.md)       | Native popups (date picker, select dropdown) render outside webview overlay   | 2026-04-15 | 2026-05-21 |
 | [0778](0778-back-nav-title-stale/README.md)             | Back navigation leaves stale title in webtui                                  | 2026-04-12 | 2026-05-23 |
 | [0777](0777-split-border-overlap/README.md)             | Split border overlaps pane content and blocks mouse resize                    | 2026-04-11 | 2026-05-19 |
+| [0776](0776-pdf-not-loading/README.md)                  | PDF files show blank white screen instead of rendering                        | 2026-04-11 | 2026-05-27 |
 | [0775](0775-devtools-multi-profile/README.md)           | DevTools gets confused with multiple profiles open                            | 2026-04-11 | 2026-05-23 |
 | [0774](0774-zoom-webview-overlay/README.md)             | Zooming non-browser pane leaves webview overlay visible                       | 2026-04-11 | 2026-05-19 |
 | [0773](0773-loading-screen/README.md)                   | Loading screen for browser startup                                            | 2026-04-05 | 2026-04-05 |
