@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-LOG_DIR="${LOG_DIR:-"$ROOT/logs/issue-776-exp3-$STAMP"}"
+LOG_DIR="${LOG_DIR:-"$ROOT/logs/issue-776-exp4-$STAMP"}"
 URL="${1:-http://localhost:9616/bitcoin.pdf}"
 
 WEZBOARD_BIN="$ROOT/wezboard/target/debug/wezboard-gui"
