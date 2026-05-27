@@ -2925,23 +2925,31 @@ Chromium 148 already has most of this path:
 TermSurf does not yet enter this path. It still uses the older custom wrapper
 throttle from Experiments 2 and 3, and it does not install Chrome's
 `PluginResponseInterceptorURLLoaderThrottle`. Even if the throttle is installed,
-Chrome's dispatch helper expects the full extension registry and MIME handler
-metadata before it will create the stream container.
+the stock throttle first asks Chrome's `PluginUtils` to map MIME type to
+extension id. That path expects a Chrome `Profile`, `ExtensionRegistry`, and
+MIME handler metadata. TermSurf uses content shell's `ShellBrowserContext`, so
+the stock MIME-to-extension lookup is expected to return no PDF extension id
+before the dispatch helper is ever reached.
 
 This experiment should make the smallest PDF-only stream path work:
 
 1. Add `PluginResponseInterceptorURLLoaderThrottle` to TermSurf's
    `CreateURLLoaderThrottles()` path.
-2. Add a TermSurf PDF-only dispatch bypass so the PDF extension id can create a
+2. Add a PDF-only MIME-to-extension shim so `application/pdf` resolves to
+   Chromium's PDF extension id without installing the general Chrome extension
+   registry.
+3. Add a TermSurf PDF-only dispatch bypass so the PDF extension id can create a
    `StreamContainer` and feed `PdfViewerStreamManager` without enabling general
    extension support.
-3. Keep the result focused on stream delivery into `PdfViewerStreamManager`.
+4. Keep the result focused on stream delivery into `PdfViewerStreamManager`.
    Visible PDF rendering is welcome but not required for this experiment.
 
 This is the deliberate smaller TermSurf equivalent of Electron's
 `streams_private` redirect. It should not port Electron's full `streams_private`
 API, `pdf_viewer_private`, MimeHandlerView, GuestView, or general extension
-system yet.
+system yet. The experiment may link `MimeHandlerViewAttachHelper` only for its
+PDF embedder-template helper used by the stock interceptor; it must not wire
+`MimeHandlerViewGuest`, `GuestViewManager`, or non-PDF MimeHandlerView behavior.
 
 #### Changes
 
@@ -2976,6 +2984,8 @@ system yet.
 
    Record in the result whether:
    - `PluginResponseInterceptorURLLoaderThrottle` can be reused directly;
+   - `PluginUtils::GetExtensionIdForMimeType()` can be bypassed narrowly for
+     `application/pdf`;
    - `SendExecuteMimeTypeHandlerEvent()` can be patched narrowly for TermSurf;
    - `PdfViewerStreamManager::Create()` and `AddStreamContainer()` can be called
      without Chrome profiles or general extensions.
@@ -2984,6 +2994,19 @@ system yet.
 
    In `content/libtermsurf_chromium/ts_browser_client.{cc,h}`, override
    `CreateURLLoaderThrottles(...)` if TermSurf does not already override it.
+
+   Use Chromium 148's signature:
+
+   ```cpp
+   std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
+   CreateURLLoaderThrottles(
+       const network::ResourceRequest& request,
+       BrowserContext* browser_context,
+       const base::RepeatingCallback<WebContents*()>& wc_getter,
+       NavigationUIData* navigation_ui_data,
+       FrameTreeNodeId frame_tree_node_id,
+       std::optional<int64_t> navigation_id) override;
+   ```
 
    The override should:
    - call `ShellContentBrowserClient::CreateURLLoaderThrottles(...)` first;
@@ -2997,7 +3020,37 @@ system yet.
    `ElectronBrowserClient::CreateURLLoaderThrottles()` PDF plugin interception
    entry point.
 
-4. Add a PDF-only dispatch bypass for TermSurf.
+4. Add a PDF-only MIME-to-extension-id bypass.
+
+   The stock interceptor calls `PluginUtils::GetExtensionIdForMimeType(...)`
+   before it creates the stream payload. In TermSurf this is expected to fail
+   because `ShellBrowserContext` is not a Chrome `Profile` and no general
+   extension registry is installed.
+
+   Add the smallest Chromium fork patch that maps only:
+
+   ```text
+   application/pdf -> mhjfbmdgcfjbbpaeojofohoefgiehjai
+   ```
+
+   for the TermSurf embedder path.
+
+   Acceptable shapes:
+   - patch `PluginResponseInterceptorURLLoaderThrottle` to call a tiny
+     TermSurf-owned helper before or instead of Chrome `PluginUtils`;
+   - add a TermSurf-owned plugin-utils shim and patch only the interceptor's
+     include/call site, mirroring Electron's
+     `hack_plugin_response_interceptor_to_point_to_electron.patch`.
+
+   Do not install a real `ExtensionRegistry` merely to satisfy this lookup. Log:
+
+   ```text
+   [issue-776-exp8] mime-extension-bypass mime=application/pdf extension_id=mhjfbmdgcfjbbpaeojofohoefgiehjai
+   ```
+
+   Unknown MIME types must continue through the stock path or be ignored.
+
+5. Add a PDF-only dispatch bypass for TermSurf.
 
    The stock
    `chrome/browser/extensions/api/mime_handlers/dispatch_mime_handler_event.cc`
@@ -3008,10 +3061,15 @@ system yet.
    Add the smallest TermSurf-specific bypass:
    - only runs when `extension_id == extension_misc::kPdfExtensionId`;
    - only runs when OOPIF PDF is enabled;
+   - logs and aborts clearly if `chrome_pdf::features::IsOopifPdfEnabled()` is
+     false, because the non-OOPIF branch requires the full MimeHandlerViewGuest
+     path;
    - uses the canonical handler URL:
      `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf/index.html`;
    - creates `extensions::StreamContainer` with the intercepted
      `TransferrableURLLoader`, original URL, extension id, and handler URL;
+   - uses `tab_id = -1`, matching Electron's no-tab fallback and TermSurf's
+     content-shell-derived embedding;
    - calls `pdf::PdfViewerStreamManager::Create(web_contents)`;
    - calls
      `PdfViewerStreamManager::FromWebContents(web_contents)->AddStreamContainer(frame_tree_node_id, internal_id, ...)`;
@@ -3024,14 +3082,23 @@ system yet.
    `PluginResponseInterceptorURLLoaderThrottle` to call that helper for the PDF
    id.
 
-5. Prevent the old wrapper path from racing the real stream path.
+   For OOPIF PDF, `stream_id` is not the lookup key that matters after dispatch;
+   `internal_id` is the value passed to
+   `PdfViewerStreamManager::AddStreamContainer(...)`. Preserve the stock
+   interceptor's ordering: dispatch the stream before resuming the intercepted
+   load.
+
+6. Prevent the old wrapper path from racing the real stream path.
 
    Experiment 3's `TsPdfNavigationThrottle` currently cancels PDF navigations
    and navigates to a `data:` wrapper. For Experiment 8, ordinary top-level PDF
    navigations must be allowed to reach the response-interceptor path.
 
-   Modify `TsPdfNavigationThrottle` only as much as needed to stop wrapping PDFs
-   when Experiment 8's stream path is active.
+   Disable the wrapper behavior for this experiment. The concrete expected
+   change is: when `TsPdfNavigationThrottle::WillProcessResponse()` sees a
+   top-level `application/pdf` response, it logs the response and returns
+   `PROCEED`; it must not return `CANCEL_AND_IGNORE` and must not navigate to
+   the `data:` wrapper.
 
    The expected behavior for a top-level `application/pdf` response is:
    - `TsPdfNavigationThrottle` logs the response but does not cancel it;
@@ -3043,14 +3110,39 @@ system yet.
    Do not delete the diagnostic logs unless they actively obscure Experiment 8
    verification.
 
-6. Add low-volume diagnostics.
+7. Add expected dependency notes before implementation.
+
+   This experiment is allowed to add narrow Chrome/extension deps required by
+   the stream path. Record the actual names after implementation, but expect to
+   inspect or add deps in these areas:
+   - `//chrome/browser/plugins` for
+     `PluginResponseInterceptorURLLoaderThrottle`;
+   - `//chrome/browser/pdf` for `PdfViewerStreamManager`;
+   - `//chrome/browser/extensions/api/mime_handlers` or a TermSurf helper
+     replacing it;
+   - `//extensions/browser/mime_handler` for `StreamContainer`;
+   - `//extensions/browser/guest_view/mime_handler_view` only for
+     `MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage()`;
+   - generated `mime_handler` Mojo/API deps required by `StreamContainer`.
+
+   Record `libtermsurf_chromium.dylib` size before and after the change. If the
+   dependency graph expands beyond these narrow PDF stream pieces, stop and mark
+   the experiment Partial rather than drifting into general extension support.
+
+8. Add low-volume diagnostics.
 
    Use `[issue-776-exp8]` for every new log. Required log points:
    - throttle installed;
+   - OOPIF PDF feature state;
+   - MIME-to-extension bypass selected the PDF extension id;
    - throttle saw an `application/pdf` response;
    - dispatch bypass selected the PDF extension id;
    - `PdfViewerStreamManager::Create()` was called;
    - `AddStreamContainer()` was called;
+   - the PDF extension URL request(s) from Experiment 7's URL-loader factory
+     during the PDF run;
+   - whether the stream container is later claimed by an embedder frame or
+     remains unclaimed;
    - the previous wrapper path did not cancel the navigation;
    - rejection / ignore logs for non-PDF responses.
 
@@ -3058,42 +3150,55 @@ system yet.
    the log close to the TermSurf hook instead and record the limitation in the
    result.
 
-7. Do not implement the remaining viewer APIs yet.
+9. Document upstream Chromium patch points.
 
-   This experiment must not add:
-   - `pdf_viewer_private`;
-   - general `streams_private` extension API bindings;
-   - MimeHandlerView;
-   - GuestView;
-   - general `ExtensionRegistry`;
-   - general extension support;
-   - `PdfHost` / `PDFDocumentHelper` bindings;
-   - arbitrary weakening of `IsPdfRenderer()` or PDF origin checks.
+   This experiment is expected to patch at least one upstream Chromium file,
+   because the relevant call site lives in
+   `chrome/browser/plugins/plugin_response_interceptor_url_loader_throttle.cc`
+   and/or
+   `chrome/browser/extensions/api/mime_handlers/dispatch_mime_handler_event.cc`.
 
-   If the stream reaches `PdfViewerStreamManager` and the next failure is a
-   missing viewer API, renderer process role, content-frame interceptor, or
-   `PdfHost`, record that precisely and make it Experiment 9.
+   Record every upstream Chromium file touched in the result and in the Chromium
+   branch notes. This is the same maintenance model Electron uses for its
+   plugin-response-interceptor redirect.
 
-8. Build Chromium and Roamium.
+10. Do not implement the remaining viewer APIs yet.
 
-   ```bash
-   autoninja -C chromium/src/out/Default libtermsurf_chromium
-   ./scripts/build.sh roamium
-   ```
+    This experiment must not add:
+    - `pdf_viewer_private`;
+    - general `streams_private` extension API bindings;
+    - `MimeHandlerViewGuest`;
+    - `GuestViewManager`;
+    - non-PDF MimeHandlerView behavior;
+    - general `ExtensionRegistry`;
+    - general extension support;
+    - `PdfHost` / `PDFDocumentHelper` bindings;
+    - arbitrary weakening of `IsPdfRenderer()` or PDF origin checks.
 
-9. Run the automated Bitcoin PDF smoke test.
+    If the stream reaches `PdfViewerStreamManager` and the next failure is a
+    missing viewer API, renderer process role, content-frame interceptor, or
+    `PdfHost`, record that precisely and make it Experiment 9.
 
-   ```bash
-   LOG_DIR="$PWD/logs/issue-776-exp8-pdf-$(date +%Y%m%d-%H%M%S)" \
-   TERMSURF_PDF_TRACE=1 \
-   TERMSURF_PDF_SETTLE_SECONDS=8 \
-   ./scripts/test-issue-776-pdf.sh
-   ```
+11. Build Chromium and Roamium.
 
-   The test URL should remain the vendored/local Bitcoin PDF served by the
-   existing test server. Do not depend on `bitcoin.org` during verification.
+    ```bash
+    autoninja -C chromium/src/out/Default libtermsurf_chromium
+    ./scripts/build.sh roamium
+    ```
 
-10. Run non-PDF regression probes.
+12. Run the automated Bitcoin PDF smoke test.
+
+    ```bash
+    LOG_DIR="$PWD/logs/issue-776-exp8-pdf-$(date +%Y%m%d-%H%M%S)" \
+    TERMSURF_PDF_TRACE=1 \
+    TERMSURF_PDF_SETTLE_SECONDS=8 \
+    ./scripts/test-issue-776-pdf.sh
+    ```
+
+    The test URL should remain the vendored/local Bitcoin PDF served by the
+    existing test server. Do not depend on `bitcoin.org` during verification.
+
+13. Run non-PDF regression probes.
 
     ```bash
     LOG_DIR="$PWD/logs/issue-776-exp8-html-$(date +%Y%m%d-%H%M%S)" \
@@ -3106,27 +3211,30 @@ system yet.
     serve one. The interceptor must ignore it unless Chromium identifies a real
     plugin-handled MIME type.
 
-11. Regenerate the Chromium patch archive if the experiment passes or produces a
+14. Regenerate the Chromium patch archive if the experiment passes or produces a
     coherent Partial worth preserving.
 
     Use `chromium/patches/issue-776-exp8/`.
 
-12. Record the result directly under this experiment.
+15. Record the result directly under this experiment.
 
     Include:
     - exact Chromium files changed;
     - exact BUILD.gn deps added;
     - whether `PluginResponseInterceptorURLLoaderThrottle` was reused directly;
+    - whether `PluginUtils::GetExtensionIdForMimeType()` was patched, shimmed,
+      or bypassed;
     - whether Chrome's dispatch helper was patched or a TermSurf helper was
       added;
     - `[issue-776-exp8]` log lines showing the PDF response was intercepted;
     - `[issue-776-exp8]` log lines showing `AddStreamContainer()` was called;
+    - log lines showing whether the stream was claimed or remained unclaimed;
     - screenshot artifact path;
     - whether the PDF visibly rendered, stayed blank, showed a viewer error, or
       failed at a later missing layer;
     - the next missing layer if rendering does not yet work.
 
-13. Format this issue document:
+16. Format this issue document:
 
     ```bash
     prettier --write --prose-wrap always --print-width 80 \
@@ -3142,8 +3250,10 @@ system yet.
 - Unknown extension ids and unknown resource paths must remain rejected by the
   Experiment 7 resource loader.
 - The experiment must not enable general user extensions.
-- The experiment must not add broad MimeHandlerView, GuestView, or
-  `pdf_viewer_private` support.
+- The experiment may link `MimeHandlerViewAttachHelper` only for the stock PDF
+  embedder-template helper. It must not add `MimeHandlerViewGuest`,
+  `GuestViewManager`, non-PDF MimeHandlerView behavior, or `pdf_viewer_private`
+  support.
 - The experiment must not weaken PDF renderer or PDF origin security checks.
 - The experiment must not change the TermSurf protocol.
 - The experiment must not close Issue 776.
@@ -3179,19 +3289,29 @@ system yet.
 
    ```text
    [issue-776-exp8] throttle-installed ...
+   [issue-776-exp8] oopif-pdf enabled=true ...
+   [issue-776-exp8] mime-extension-bypass mime=application/pdf extension_id=mhjfbmdgcfjbbpaeojofohoefgiehjai ...
    [issue-776-exp8] pdf-response ...
    [issue-776-exp8] wrapper-bypass active=false ...
    [issue-776-exp8] stream-dispatch extension_id=mhjfbmdgcfjbbpaeojofohoefgiehjai ...
    [issue-776-exp8] stream-container-added ...
+   [issue-776-exp8] stream-claimed ...
    ```
 
    The screenshot may still be blank or may show a viewer error. The pass signal
-   is the stream reaching `PdfViewerStreamManager`.
+   is the stream reaching `PdfViewerStreamManager` and either being claimed or
+   producing a logged, specific unclaimed-stream failure.
 
 4. Static viewer resource regression:
 
    Re-run the Experiment 7 direct viewer URL. It must still serve
    `pdf/index.html` with nonzero bytes and reject unknown paths / wrong ids.
+
+   During the positive PDF stream probe, also confirm Experiment 7's URL-loader
+   factory logs every `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/...`
+   request triggered by the PDF embedder. If no PDF extension URL request is
+   made during the PDF run, the embedder frame never reached the viewer shell;
+   record that as the next missing layer.
 
 5. HTML regression:
 
@@ -3214,13 +3334,17 @@ Pass if:
   path;
 - `PluginResponseInterceptorURLLoaderThrottle` sees the `application/pdf`
   response;
+- the MIME-to-extension bypass maps only `application/pdf` to
+  `extension_misc::kPdfExtensionId`;
 - the PDF-only dispatch bypass creates a `StreamContainer` for
   `extension_misc::kPdfExtensionId`;
 - `PdfViewerStreamManager::Create()` and `AddStreamContainer()` are reached;
+- the stream is either claimed by the expected PDF embedder frame or the result
+  records the exact unclaimed-stream failure;
 - Experiment 7 static viewer resource serving still works;
 - normal HTML browsing still works;
-- no general extension system, MimeHandlerView, GuestView, `pdf_viewer_private`,
-  `PdfHost`, or protocol changes are added.
+- no general extension system, `MimeHandlerViewGuest`, `GuestViewManager`,
+  `pdf_viewer_private`, `PdfHost`, or protocol changes are added.
 
 This Pass does not require the PDF to visibly render. If the stream reaches
 `PdfViewerStreamManager` and the next failure is a missing PDF viewer API,
@@ -3235,6 +3359,8 @@ Partial if:
   browser infrastructure;
 - `PluginUtils::GetExtensionIdForMimeType()` requires a real extension registry
   before the throttle can identify `application/pdf`;
+- the MIME-to-extension bypass cannot be applied narrowly without replacing too
+  much of `PluginResponseInterceptorURLLoaderThrottle`;
 - the stream can be intercepted but not represented as `StreamContainer` without
   broader extension dependencies;
 - `PdfViewerStreamManager::AddStreamContainer()` is reached but immediately
@@ -3257,7 +3383,9 @@ that layer.
 - The implementation enables general user extension support.
 - The implementation weakens PDF origin checks or marks ordinary renderers as
   PDF renderers.
+- The implementation routes MIME types other than `application/pdf` through the
+  PDF extension id bypass.
 - The implementation routes non-PDF responses into the PDF stream path.
 - The implementation fakes a rendered PDF with static HTML or screenshots.
-- The experiment silently expands into MimeHandlerView / GuestView /
+- The experiment silently expands into `MimeHandlerViewGuest` / GuestView /
   `pdf_viewer_private` instead of recording those as the next missing layer.
