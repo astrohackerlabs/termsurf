@@ -1,0 +1,136 @@
+From 7923c7bf8f0730387f3ac5625c40fd155430bbbf Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 22 May 2026 07:41:15 -0500
+Subject: [PATCH 12/30] Make Shell windows ignore mice
+
+The hidden Shell was far too keen,
+To catch the clicks it should not have seen.
+Now glass stays glass, and hands pass through,
+So dropdowns cannot steal the queue.
+---
+ .../app_shim_remote_cocoa/web_menu_runner_mac.mm    |  1 +
+ .../browser/web_contents/web_contents_view_mac.mm   |  5 +++--
+ .../libtermsurf_chromium/ts_browser_main_parts.cc   |  8 ++++++++
+ content/libtermsurf_chromium/ts_shell_window_mac.h  |  2 ++
+ content/libtermsurf_chromium/ts_shell_window_mac.mm | 13 +++++++++++++
+ 5 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index c9739250395a5..cc8ac6504c64e 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -486,6 +486,7 @@ - (void)runMenuInView:(NSView*)view
+   }
+   [cell attachPopUpWithFrame:fakeControlView.bounds inView:fakeControlView];
+   [cell performClickWithFrame:fakeControlView.bounds inView:fakeControlView];
++  [view.window setIgnoresMouseEvents:YES];
+   Issue779TraceShellWindowState(@"select_menu", @"after_return", view, self);
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index a6163efb6ee9c..4ac562ffb73dc 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -615,9 +615,10 @@ ClipboardEndpoint source_endpoint(
+ #endif
+ 
+ void WebContentsViewMac::OnMenuClosed() {
++  NSView* view = GetInProcessNSView();
++  [view.window setIgnoresMouseEvents:YES];
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
+-    NSView* view = GetInProcessNSView();
+     Issue779TraceShellWindowState(@"select_menu", @"menu_closed_before_reset",
+                                   web_contents_, view);
+     LOG(INFO) << "[issue-779-trace] WebContentsViewMac::OnMenuClosed.before"
+@@ -643,9 +644,9 @@ ClipboardEndpoint source_endpoint(
+               << " currentEvent=" << Issue779CurrentEventType();
+   }
+   popup_menu_helper_.reset();
++  [view.window setIgnoresMouseEvents:YES];
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
+-    NSView* view = GetInProcessNSView();
+     Issue779TraceShellWindowState(@"select_menu", @"menu_closed_after_reset",
+                                   web_contents_, view);
+     LOG(INFO) << "[issue-779-trace] WebContentsViewMac::OnMenuClosed.after"
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 74672f6a98732..5326dd14f20e9 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -100,6 +100,10 @@ void* TsBrowserMainParts::CreateTab(void* ctx, const char* url,
+   Shell* shell = Shell::CreateNewWindow(browser_ctx, GURL(url),
+                                         nullptr, gfx::Size());
+ 
++#if BUILDFLAG(IS_MAC)
++  ConfigureShellWindowForTermSurf(shell);
++#endif
++
+   // Resize.
+   if (width > 0 && height > 0) {
+     RenderWidgetHostView* view =
+@@ -281,6 +285,10 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, int inspected_tab_id,
+   Shell* shell = Shell::CreateNewWindow(browser_ctx, devtools_url,
+                                         nullptr, gfx::Size());
+ 
++#if BUILDFLAG(IS_MAC)
++  ConfigureShellWindowForTermSurf(shell);
++#endif
++
+   if (width > 0 && height > 0) {
+     RenderWidgetHostView* view =
+         shell->web_contents()->GetRenderWidgetHostView();
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+index 4d6d4df0adefe..9b7d1b6560c39 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.h
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -11,6 +11,8 @@ namespace content {
+ 
+ class Shell;
+ 
++void ConfigureShellWindowForTermSurf(Shell* shell);
++
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+                                          double screen_x,
+                                          double screen_y,
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index 93ac878f0b429..e7274e97d7ea4 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -62,6 +62,17 @@ NSRect PrimaryScreenFrame() {
+ 
+ }  // namespace
+ 
++void ConfigureShellWindowForTermSurf(Shell* shell) {
++  if (!shell)
++    return;
++
++  NSWindow* window = shell->window().GetNativeNSWindow();
++  if (!window)
++    return;
++
++  [window setIgnoresMouseEvents:YES];
++}
++
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+                                          double screen_x,
+                                          double screen_y,
+@@ -75,6 +86,7 @@ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+   NSWindow* window = shell->window().GetNativeNSWindow();
+   if (!window)
+     return;
++  [window setIgnoresMouseEvents:YES];
+ 
+   NSRect primary_frame = PrimaryScreenFrame();
+   if (NSIsEmptyRect(primary_frame))
+@@ -131,6 +143,7 @@ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+ 
+   if (!already_there)
+     [window setFrame:target_frame display:NO];
++  [window setIgnoresMouseEvents:YES];
+ 
+   if (Issue779TraceEnabled()) {
+     LOG(INFO) << "[issue-779-trace] content_shell_window"
+-- 
+2.50.1 (Apple Git-155)
+

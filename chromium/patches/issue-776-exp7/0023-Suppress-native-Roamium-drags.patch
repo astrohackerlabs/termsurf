@@ -1,0 +1,44 @@
+From 1b3ae99cddb180cc66ba449941c65743ada9883b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 18:22:57 -0500
+Subject: [PATCH 23/30] Suppress native Roamium drags
+
+A link reached for AppKit,
+Then froze upon the floor.
+Now hidden shells decline the trip,
+And Blink can drag no more.
+---
+ content/browser/web_contents/web_contents_view_mac.mm | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 576a98ccadae6..a7a7af057643c 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -12,6 +12,7 @@
+ #include <memory>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
+ #include "base/containers/span.h"
+ #include "base/logging.h"
+@@ -216,6 +217,15 @@ void SetReadWritePermissionsForFile(base::File& file) {
+   if (drag_source_start_rwh_) {
+     return;
+   }
++
++  // TermSurf/Roamium renders Chromium through a CALayerHost in another process.
++  // Native AppKit drag sessions cannot complete in that overlay topology, so
++  // clear Blink's drag-source state instead of starting NSDragging.
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch("hidden")) {
++    web_contents_->SystemDragEnded(source_rwh);
++    return;
++  }
++
+   url::Origin source_origin = source_rfh.GetLastCommittedOrigin();
+   // By allowing nested tasks, the code below also allows Close(),
+   // which would deallocate |this|.  The same problem can occur while
+-- 
+2.50.1 (Apple Git-155)
+

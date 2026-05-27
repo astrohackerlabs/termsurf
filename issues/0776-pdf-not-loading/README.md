@@ -2759,3 +2759,145 @@ experiment's scope.
   blank/sentinel screenshot.
 - The experiment adds a `termsurf-pdf-viewer://` scheme instead of testing the
   canonical PDF extension URL path.
+
+**Result:** Pass
+
+Experiment 7 proved that TermSurf can serve Chromium's canonical PDF viewer
+shell URL through a PDF-only `chrome-extension://` resource path.
+
+The Chromium branch is `148.0.7778.97-issue-776-exp7`. The branch adds:
+
+- `content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.{cc,h}`;
+- `TsContentClient::AddAdditionalSchemes()` to register `chrome-extension://`;
+- `TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory()` and
+  `RegisterNonNetworkSubresourceURLLoaderFactories()` hooks for the PDF-only
+  loader;
+- `gen/chrome/pdf_resources.pak` loading in
+  `TsPdfComponentExtensionResourceManager`;
+- BUILD deps for Mojo bindings, network URL-loader helpers, and net response
+  headers.
+
+The implementation did not use Chromium's full
+`extensions::ExtensionURLLoaderFactory`. The audit showed that TermSurf still
+inherits content shell behavior and does not install the full extension stack
+(`ExtensionsBrowserClient`, `ExtensionRegistry`, `ProcessMap`, and
+`ResourceRequestPolicy`). Instead, this experiment installed the narrow
+`ContentBrowserClient` non-network navigation and subresource factory hooks for
+only `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/...`, backed by the
+Experiment 6 PDF resource manager.
+
+That means Experiment 7 intentionally bypasses the general extension
+`ResourceRequestPolicy`. The bypass is narrow: it rejects every extension id
+except Chromium's PDF viewer id and rejects every path not present in the PDF
+resource map. The parsed PDF manifest's `web_accessible_resources` list does not
+expose `pdf/index.html`; this experiment serves that path directly because the
+goal was to prove TermSurf can deliver the viewer shell bytes, not to model the
+complete Chrome extension security stack.
+
+Build verification passed:
+
+```bash
+autoninja -C chromium/src/out/Default libtermsurf_chromium
+./scripts/build.sh roamium
+```
+
+The direct viewer-resource probe:
+
+```bash
+LOG_DIR="$PWD/logs/issue-776-exp7-viewer-20260527-123216" \
+TERMSURF_PDF_TRACE=1 \
+TERMSURF_PDF_SETTLE_SECONDS=8 \
+./scripts/test-issue-776-pdf.sh \
+  "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf/index.html"
+```
+
+produced:
+
+```text
+[issue-776-exp6] browser resources pack loaded=true
+[issue-776-exp7] pdf resources pack loaded=true
+[issue-776-exp7] navigation-factory scheme=chrome-extension provider=termsurf-pdf-only
+[issue-776-exp7] request url=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf/index.html
+[issue-776-exp7] served extension_id=mhjfbmdgcfjbbpaeojofohoefgiehjai path=pdf/index.html id=21596 bytes=300 mime=text/html template_replacements=true bytes_kind=decoded
+[issue-776-exp7] subresource-factory scheme=chrome-extension provider=termsurf-pdf-only render_process_id=5 render_frame_id=1
+```
+
+The positive screenshot artifact is:
+
+```text
+logs/issue-776-exp7-viewer-20260527-123216/pdf-smoke.png
+```
+
+The rejection probes also passed.
+
+Unknown resource path:
+
+```text
+logs/issue-776-exp7-missing-20260527-123242/wezboard-gui.log
+```
+
+contained:
+
+```text
+[issue-776-exp7] request url=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf/does-not-exist.html
+[issue-776-exp7] rejected reason=unknown-path extension_id=mhjfbmdgcfjbbpaeojofohoefgiehjai path=pdf/does-not-exist.html
+```
+
+Wrong extension id:
+
+```text
+logs/issue-776-exp7-wrong-id-20260527-123252/wezboard-gui.log
+```
+
+contained:
+
+```text
+[issue-776-exp7] request url=chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/pdf/index.html
+[issue-776-exp7] rejected reason=wrong-extension-id extension_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa path=pdf/index.html
+```
+
+The HTML smoke run against `https://example.com` completed and did not trigger
+PDF resource serving beyond installing the harmless subresource factory:
+
+```text
+logs/issue-776-exp7-html-20260527-123302/pdf-smoke.png
+```
+
+The ordinary PDF navigation run still followed the earlier Experiment 3 wrapper
+path and reached the renderer plugin gate:
+
+```text
+logs/issue-776-exp7-pdf-20260527-123312/wezboard-gui.log
+```
+
+contained:
+
+```text
+[issue-776-exp3] pdf throttle response url=http://localhost:9616/bitcoin.pdf response_mime=application/pdf header_mime=application/pdf primary_main_frame=1 wrapper=0 supported_scheme=1
+[issue-776-exp3] nested-wrapper probe pdf_url=http://localhost:9616/bitcoin.pdf
+[issue-776-exp3] plugin-context url=http://localhost:9616/bitcoin.pdf mime=application/x-google-chrome-pdf frame_exists=true parent_exists=true parent_is_remote=false frame_origin=null parent_origin=null parent_origin_allowed=false
+```
+
+So Experiment 7 did not make PDFs render and does not claim that. It proves only
+that the canonical PDF viewer shell URL can now receive real registered resource
+bytes.
+
+The Chromium patch archive was regenerated at:
+
+```text
+chromium/patches/issue-776-exp7/
+```
+
+#### Conclusion
+
+TermSurf can now register and serve the static PDF viewer shell resources
+without installing the full Chromium extension stack. The remaining missing
+piece is no longer "can Chromium load `chrome-extension://.../pdf/index.html`?"
+That answer is yes.
+
+The next experiment should move to the PDF document stream path. The relevant
+layer is still the Electron/Chrome path around PDF stream interception and
+`streams_private` / `PluginResponseInterceptorURLLoaderThrottle`, or a
+deliberate smaller TermSurf equivalent. Experiment 8 should not continue
+adjusting static resource serving unless a concrete dependent viewer resource
+request fails.

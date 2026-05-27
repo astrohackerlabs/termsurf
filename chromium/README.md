@@ -14,7 +14,7 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Branch: `148.0.7778.97-issue-776-exp6`
+- Branch: `148.0.7778.97-issue-776-exp7`
 - Base version: `148.0.7778.97` (tracking Electron's Chromium version)
 
 ## Branch Strategy
@@ -102,6 +102,7 @@ find the most relevant recent branch, create a new branch from it
 | `148.0.7778.97-issue-776-exp3` | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Diagnose PDF renderer process gate          |
 | `148.0.7778.97-issue-776-exp4` | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Trace PDF renderer routing                  |
 | `148.0.7778.97-issue-776-exp6` | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Register PDF viewer component resources     |
+| `148.0.7778.97-issue-776-exp7` | [Issue 776](../issues/0776-pdf-not-loading/README.md)            | Serve PDF viewer shell resources            |
 
 ## Patches
 

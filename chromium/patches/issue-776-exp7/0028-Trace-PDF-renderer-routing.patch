@@ -1,0 +1,138 @@
+From 2991c1e4fa1a0f4f684cbee07ecd333b7b160d44 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 27 May 2026 11:10:38 -0500
+Subject: [PATCH 28/30] Trace PDF renderer routing
+
+The PDF wore a renderer mask,
+But logs asked it to unhide.
+No switch, no pass, no paper trail denied.
+---
+ .../libtermsurf_chromium/ts_browser_client.cc | 24 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  6 +++++
+ .../ts_renderer_client.cc                     | 19 +++++++++++++--
+ 3 files changed, 47 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index e4bbe19169633..1cdc68c305bd0 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -4,12 +4,16 @@
+ 
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
++#include "base/command_line.h"
++#include "base/logging.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ #include "content/libtermsurf_chromium/ts_pdf_navigation_throttle.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/content_switches.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+@@ -90,6 +94,26 @@ void TsBrowserClient::CreateThrottlesForNavigation(
+   registry.AddThrottle(std::make_unique<TsPdfNavigationThrottle>(registry));
+ }
+ 
++void TsBrowserClient::AppendExtraCommandLineSwitches(
++    base::CommandLine* command_line,
++    int child_process_id) {
++  ShellContentBrowserClient::AppendExtraCommandLineSwitches(command_line,
++                                                            child_process_id);
++
++  auto* render_process_host = RenderProcessHost::FromID(child_process_id);
++  LOG(INFO) << "[issue-776-exp4] append-command-line"
++            << " child_process_id=" << child_process_id << " process_type="
++            << command_line->GetSwitchValueASCII(switches::kProcessType)
++            << " host_exists=" << (render_process_host ? "true" : "false")
++            << " host_is_pdf="
++            << (render_process_host && render_process_host->IsPdf() ? "true"
++                                                                    : "false")
++            << " has_pdf_renderer="
++            << (command_line->HasSwitch(switches::kPdfRenderer) ? "true"
++                                                                : "false")
++            << " command_line=" << command_line->GetCommandLineString();
++}
++
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+     BrowserContext* context,
+     network::mojom::NetworkContextParams* context_params,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index c872c08687790..c77515c8e05e0 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -10,6 +10,10 @@
+ #include "content/shell/browser/shell_content_browser_client.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
+ 
++namespace base {
++class CommandLine;
++}  // namespace base
++
+ namespace content {
+ 
+ // TsBrowserClient overrides ShellContentBrowserClient to return
+@@ -34,6 +38,8 @@ class TsBrowserClient : public ShellContentBrowserClient {
+                               blink::web_pref::WebPreferences* prefs) override;
+   void CreateThrottlesForNavigation(
+       NavigationThrottleRegistry& registry) override;
++  void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
++                                      int child_process_id) override;
+ 
+  protected:
+   void ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.cc b/content/libtermsurf_chromium/ts_renderer_client.cc
+index c690668886a57..6182a51cc62d3 100644
+--- a/content/libtermsurf_chromium/ts_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_renderer_client.cc
+@@ -6,11 +6,13 @@
+ 
+ #include <array>
+ 
++#include "base/command_line.h"
+ #include "base/logging.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "components/pdf/common/constants.h"
+ #include "components/pdf/common/pdf_util.h"
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
++#include "content/public/common/content_switches.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "pdf/buildflags.h"
+ #include "third_party/blink/public/platform/web_security_origin.h"
+@@ -82,8 +84,7 @@ bool TsRendererClient::OverrideCreatePlugin(
+     blink::WebLocalFrame* web_frame =
+         render_frame ? render_frame->GetWebFrame() : nullptr;
+     blink::WebFrame* parent_frame = web_frame ? web_frame->Parent() : nullptr;
+-    const bool parent_origin_allowed =
+-        IsAllowedPdfParentOrigin(parent_frame);
++    const bool parent_origin_allowed = IsAllowedPdfParentOrigin(parent_frame);
+ 
+     LOG(INFO) << "[issue-776] OverrideCreatePlugin saw PDF mime=" << mime_type
+               << " url=" << GURL(params.url).possibly_invalid_spec();
+@@ -100,6 +101,20 @@ bool TsRendererClient::OverrideCreatePlugin(
+               << " parent_origin_allowed="
+               << (parent_origin_allowed ? "true" : "false");
+ 
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    LOG(INFO)
++        << "[issue-776-exp4] renderer-plugin-state"
++        << " process_type="
++        << command_line->GetSwitchValueASCII(switches::kProcessType)
++        << " has_pdf_renderer_switch="
++        << (command_line->HasSwitch(switches::kPdfRenderer) ? "true" : "false")
++        << " pdf_IsPdfRenderer=" << (pdf::IsPdfRenderer() ? "true" : "false")
++        << " parent_exists=" << (parent_frame ? "true" : "false")
++        << " parent_is_remote="
++        << (parent_frame && parent_frame->IsWebRemoteFrame() ? "true" : "false")
++        << " command_line=" << command_line->GetCommandLineString();
++
+     blink::WebPlugin* pdf_plugin = nullptr;
+     if (parent_frame && !parent_origin_allowed) {
+       const std::array<url::Origin, 1> additional_allowed_origins = {
+-- 
+2.50.1 (Apple Git-155)
+

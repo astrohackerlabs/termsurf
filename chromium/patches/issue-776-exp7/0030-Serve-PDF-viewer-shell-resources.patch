@@ -1,0 +1,519 @@
+From 4f2faa351a9146c140a05d557132ead07840e262 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 27 May 2026 12:34:49 -0500
+Subject: [PATCH 30/30] Serve PDF viewer shell resources
+
+The chrome-extension gate stood bare,
+No viewer bytes were waiting there.
+Now one known id may ring the bell,
+And stranger paths get told: farewell.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  10 +-
+ .../libtermsurf_chromium/ts_browser_client.cc |  31 +++
+ .../libtermsurf_chromium/ts_browser_client.h  |  13 +
+ .../libtermsurf_chromium/ts_content_client.cc |  11 +
+ .../libtermsurf_chromium/ts_content_client.h  |   1 +
+ ...df_component_extension_resource_manager.cc |  24 ++
+ ...pdf_component_extension_resource_manager.h |   2 +
+ .../ts_pdf_viewer_url_loader_factory.cc       | 222 ++++++++++++++++++
+ .../ts_pdf_viewer_url_loader_factory.h        |  21 ++
+ 9 files changed, 333 insertions(+), 2 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 78ecde1b7ce7d..dd9317687ab48 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -17,10 +17,12 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_client.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
+-    "ts_pdf_navigation_throttle.cc",
+-    "ts_pdf_navigation_throttle.h",
+     "ts_pdf_component_extension_resource_manager.cc",
+     "ts_pdf_component_extension_resource_manager.h",
++    "ts_pdf_navigation_throttle.cc",
++    "ts_pdf_navigation_throttle.h",
++    "ts_pdf_viewer_url_loader_factory.cc",
++    "ts_pdf_viewer_url_loader_factory.h",
+     "ts_renderer_client.cc",
+     "ts_renderer_client.h",
+     "ts_tab_observer.cc",
+@@ -51,8 +53,12 @@ shared_library("libtermsurf_chromium") {
+     "//content/shell:content_shell_app",
+     "//content/shell:content_shell_lib",
+     "//extensions/common:common_constants",
++    "//mojo/public/cpp/bindings",
++    "//net",
+     "//pdf",
+     "//pdf:features",
++    "//services/network/public/cpp",
++    "//services/network/public/mojom",
+     "//ui/base",
+   ]
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 2c4671de53435..da96320dd9c94 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -9,6 +9,7 @@
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ #include "content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h"
+ #include "content/libtermsurf_chromium/ts_pdf_navigation_throttle.h"
++#include "content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+@@ -16,6 +17,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/shell/browser/shell_browser_context.h"
++#include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
+@@ -120,6 +122,35 @@ void TsBrowserClient::AppendExtraCommandLineSwitches(
+             << " command_line=" << command_line->GetCommandLineString();
+ }
+ 
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
++    const std::string& scheme,
++    FrameTreeNodeId frame_tree_node_id) {
++  if (scheme == extensions::kExtensionScheme) {
++    LOG(INFO) << "[issue-776-exp7] navigation-factory scheme=" << scheme
++              << " provider=termsurf-pdf-only";
++    return CreateTsPdfViewerURLLoaderFactory(pdf_resource_manager_.get());
++  }
++  return ShellContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
++      scheme, frame_tree_node_id);
++}
++
++void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
++    int render_process_id,
++    int render_frame_id,
++    const std::optional<url::Origin>& request_initiator_origin,
++    NonNetworkURLLoaderFactoryMap* factories) {
++  ShellContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
++      render_process_id, render_frame_id, request_initiator_origin, factories);
++  factories->emplace(
++      extensions::kExtensionScheme,
++      CreateTsPdfViewerURLLoaderFactory(pdf_resource_manager_.get()));
++  LOG(INFO) << "[issue-776-exp7] subresource-factory scheme="
++            << extensions::kExtensionScheme
++            << " provider=termsurf-pdf-only render_process_id="
++            << render_process_id << " render_frame_id=" << render_frame_id;
++}
++
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+     BrowserContext* context,
+     network::mojom::NetworkContextParams* context_params,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 205e5e4ed03d0..6f7de69515d2e 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -6,10 +6,14 @@
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
+ 
+ #include <memory>
++#include <optional>
++#include <string>
+ 
+ #include "content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h"
+ #include "content/shell/browser/shell_content_browser_client.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
++#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
++#include "url/origin.h"
+ 
+ namespace base {
+ class CommandLine;
+@@ -41,6 +45,15 @@ class TsBrowserClient : public ShellContentBrowserClient {
+       NavigationThrottleRegistry& registry) override;
+   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
+                                       int child_process_id) override;
++  mojo::PendingRemote<network::mojom::URLLoaderFactory>
++  CreateNonNetworkNavigationURLLoaderFactory(
++      const std::string& scheme,
++      FrameTreeNodeId frame_tree_node_id) override;
++  void RegisterNonNetworkSubresourceURLLoaderFactories(
++      int render_process_id,
++      int render_frame_id,
++      const std::optional<url::Origin>& request_initiator_origin,
++      NonNetworkURLLoaderFactoryMap* factories) override;
+ 
+  protected:
+   void ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+index e00a1087ceaf9..2f50877dd8369 100644
+--- a/content/libtermsurf_chromium/ts_content_client.cc
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -9,6 +9,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "components/pdf/common/constants.h"
+ #include "content/public/common/webplugininfo.h"
++#include "extensions/common/constants.h"
+ #include "pdf/buildflags.h"
+ 
+ namespace content {
+@@ -23,6 +24,16 @@ constexpr base::FilePath::CharType kPDFInternalPluginPath[] =
+ TsContentClient::TsContentClient() = default;
+ TsContentClient::~TsContentClient() = default;
+ 
++void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
++  ShellContentClient::AddAdditionalSchemes(schemes);
++  schemes->standard_schemes.push_back(extensions::kExtensionScheme);
++  schemes->extension_schemes.push_back(extensions::kExtensionScheme);
++  schemes->savable_schemes.push_back(extensions::kExtensionScheme);
++  schemes->secure_schemes.push_back(extensions::kExtensionScheme);
++  schemes->cors_enabled_schemes.push_back(extensions::kExtensionScheme);
++  schemes->csp_bypassing_schemes.push_back(extensions::kExtensionScheme);
++}
++
+ void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
+   ShellContentClient::AddPlugins(plugins);
+ 
+diff --git a/content/libtermsurf_chromium/ts_content_client.h b/content/libtermsurf_chromium/ts_content_client.h
+index 23a0b19a87e79..b22510012a321 100644
+--- a/content/libtermsurf_chromium/ts_content_client.h
++++ b/content/libtermsurf_chromium/ts_content_client.h
+@@ -21,6 +21,7 @@ class TsContentClient : public ShellContentClient {
+   TsContentClient(const TsContentClient&) = delete;
+   TsContentClient& operator=(const TsContentClient&) = delete;
+ 
++  void AddAdditionalSchemes(Schemes* schemes) override;
+   void AddPlugins(std::vector<content::WebPluginInfo>* plugins) override;
+ };
+ 
+diff --git a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+index c92a4cec05da1..fd62b3b100c01 100644
+--- a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+@@ -28,6 +28,7 @@ namespace {
+ 
+ constexpr char kKnownPdfResourcePath[] = "pdf/index.html";
+ constexpr char kBrowserResourcesPackPath[] = "gen/chrome/browser_resources.pak";
++constexpr char kPdfResourcesPackPath[] = "gen/chrome/pdf_resources.pak";
+ constexpr char kNameTag[] = "<NAME>";
+ 
+ bool ParseManifest(std::string_view manifest_contents) {
+@@ -97,6 +98,7 @@ TsPdfComponentExtensionResourceManager::ProbeResult
+ TsPdfComponentExtensionResourceManager::Probe() const {
+   ProbeResult result;
+   result.browser_resources_pack_loaded = EnsureBrowserResourcesPackLoaded();
++  result.pdf_resources_pack_loaded = EnsurePdfResourcesPackLoaded();
+   result.resources_registered = !path_to_resource_id_.empty();
+   result.resource_count = path_to_resource_id_.size();
+ 
+@@ -144,6 +146,8 @@ void TsPdfComponentExtensionResourceManager::LogProbeResult() const {
+             << extension_info_.internal_plugin_mime_type;
+   LOG(INFO) << "[issue-776-exp6] browser resources pack loaded="
+             << (result.browser_resources_pack_loaded ? "true" : "false");
++  LOG(INFO) << "[issue-776-exp7] pdf resources pack loaded="
++            << (result.pdf_resources_pack_loaded ? "true" : "false");
+   for (const std::string& path : result.sample_paths) {
+     LOG(INFO) << "[issue-776-exp6] pdf resource sample=" << path;
+   }
+@@ -183,4 +187,24 @@ bool TsPdfComponentExtensionResourceManager::EnsureBrowserResourcesPackLoaded()
+       IDR_PDF_MANIFEST);
+ }
+ 
++bool TsPdfComponentExtensionResourceManager::EnsurePdfResourcesPackLoaded()
++    const {
++  base::FilePath assets_path;
++  if (!base::PathService::Get(base::DIR_ASSETS, &assets_path)) {
++    return false;
++  }
++
++  base::FilePath pdf_resources_pack =
++      assets_path.AppendASCII(kPdfResourcesPackPath);
++  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++      pdf_resources_pack, ui::kScaleFactorNone);
++
++  int known_resource_id = 0;
++  return IsComponentExtensionResource(
++             base::FilePath::FromUTF8Unsafe(kKnownPdfResourcePath),
++             &known_resource_id) &&
++         ui::ResourceBundle::GetSharedInstance().HasDataResource(
++             known_resource_id);
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h
+index 1b1b778d53a3e..a56653aa2113f 100644
+--- a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h
++++ b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h
+@@ -34,6 +34,7 @@ class TsPdfComponentExtensionResourceManager {
+     bool manifest_parsed = false;
+     bool known_resource_resolved = false;
+     bool browser_resources_pack_loaded = false;
++    bool pdf_resources_pack_loaded = false;
+     int known_resource_id = 0;
+     size_t resource_count = 0;
+     std::vector<std::string> sample_paths;
+@@ -61,6 +62,7 @@ class TsPdfComponentExtensionResourceManager {
+   void AddPdfResourceEntries();
+   void RegisterTemplateReplacements();
+   bool EnsureBrowserResourcesPackLoaded() const;
++  bool EnsurePdfResourcesPackLoaded() const;
+ 
+   TsPdfExtensionInfo extension_info_;
+   std::map<base::FilePath, int> path_to_resource_id_;
+diff --git a/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc b/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc
+new file mode 100644
+index 0000000000000..4b8cc85a6a27b
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc
+@@ -0,0 +1,222 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.h"
++
++#include <memory>
++#include <string>
++#include <string_view>
++
++#include "base/files/file_path.h"
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_util.h"
++#include "content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h"
++#include "extensions/common/constants.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "mojo/public/cpp/bindings/remote.h"
++#include "mojo/public/cpp/system/data_pipe_producer.h"
++#include "mojo/public/cpp/system/string_data_source.h"
++#include "net/base/net_errors.h"
++#include "net/http/http_response_headers.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/self_deleting_url_loader_factory.h"
++#include "services/network/public/cpp/url_loader_completion_status.h"
++#include "services/network/public/mojom/url_loader.mojom.h"
++#include "services/network/public/mojom/url_response_head.mojom.h"
++#include "ui/base/resource/resource_bundle.h"
++#include "ui/base/template_expressions.h"
++#include "url/gurl.h"
++
++namespace content {
++namespace {
++
++constexpr char kPdfExtensionId[] = "mhjfbmdgcfjbbpaeojofohoefgiehjai";
++
++std::string MimeTypeForPath(std::string_view path) {
++  if (base::EndsWith(path, ".html", base::CompareCase::INSENSITIVE_ASCII)) {
++    return "text/html";
++  }
++  if (base::EndsWith(path, ".css", base::CompareCase::INSENSITIVE_ASCII)) {
++    return "text/css";
++  }
++  if (base::EndsWith(path, ".js", base::CompareCase::INSENSITIVE_ASCII) ||
++      base::EndsWith(path, ".mjs", base::CompareCase::INSENSITIVE_ASCII)) {
++    return "text/javascript";
++  }
++  if (base::EndsWith(path, ".wasm", base::CompareCase::INSENSITIVE_ASCII)) {
++    return "application/wasm";
++  }
++  if (base::EndsWith(path, ".svg", base::CompareCase::INSENSITIVE_ASCII)) {
++    return "image/svg+xml";
++  }
++  return "application/octet-stream";
++}
++
++std::string PathFromPdfViewerUrl(const GURL& url) {
++  std::string path(url.path());
++  if (!path.empty() && path.front() == '/') {
++    path.erase(0, 1);
++  }
++  return path;
++}
++
++network::mojom::URLResponseHeadPtr ResponseHeadForMimeType(
++    const std::string& mime_type) {
++  auto response = network::mojom::URLResponseHead::New();
++  response->mime_type = mime_type;
++  response->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
++      base::StrCat({"HTTP/1.1 200 OK\nContent-Type: ", mime_type, "\n"}));
++  return response;
++}
++
++struct WriteData {
++  mojo::Remote<network::mojom::URLLoaderClient> client;
++  std::string data;
++  std::unique_ptr<mojo::DataPipeProducer> producer;
++};
++
++void OnWrite(std::unique_ptr<WriteData> write_data, MojoResult result) {
++  if (result != MOJO_RESULT_OK) {
++    write_data->client->OnComplete(
++        network::URLLoaderCompletionStatus(net::ERR_FAILED));
++    return;
++  }
++
++  network::URLLoaderCompletionStatus status(net::OK);
++  status.encoded_data_length = write_data->data.size();
++  status.encoded_body_length = write_data->data.size();
++  status.decoded_body_length = write_data->data.size();
++  write_data->client->OnComplete(status);
++}
++
++class TsPdfViewerURLLoaderFactory
++    : public network::SelfDeletingURLLoaderFactory {
++ public:
++  TsPdfViewerURLLoaderFactory(
++      TsPdfComponentExtensionResourceManager* resource_manager,
++      mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
++      : network::SelfDeletingURLLoaderFactory(std::move(receiver)),
++        resource_manager_(resource_manager) {}
++
++  TsPdfViewerURLLoaderFactory(const TsPdfViewerURLLoaderFactory&) = delete;
++  TsPdfViewerURLLoaderFactory& operator=(const TsPdfViewerURLLoaderFactory&) =
++      delete;
++
++ private:
++  ~TsPdfViewerURLLoaderFactory() override = default;
++
++  void CreateLoaderAndStart(
++      mojo::PendingReceiver<network::mojom::URLLoader> loader,
++      int32_t request_id,
++      uint32_t options,
++      const network::ResourceRequest& request,
++      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
++      override {
++    mojo::Remote<network::mojom::URLLoaderClient> client_remote(
++        std::move(client));
++
++    LOG(INFO) << "[issue-776-exp7] request url=" << request.url.spec();
++
++    if (!resource_manager_) {
++      LOG(INFO) << "[issue-776-exp7] rejected reason=no-resource-manager"
++                << " url=" << request.url.spec();
++      client_remote->OnComplete(
++          network::URLLoaderCompletionStatus(net::ERR_FAILED));
++      return;
++    }
++
++    if (!request.url.SchemeIs(extensions::kExtensionScheme)) {
++      LOG(INFO) << "[issue-776-exp7] rejected reason=wrong-scheme"
++                << " url=" << request.url.spec();
++      client_remote->OnComplete(
++          network::URLLoaderCompletionStatus(net::ERR_UNKNOWN_URL_SCHEME));
++      return;
++    }
++
++    if (request.url.host() != kPdfExtensionId) {
++      LOG(INFO) << "[issue-776-exp7] rejected reason=wrong-extension-id"
++                << " extension_id=" << request.url.host()
++                << " path=" << PathFromPdfViewerUrl(request.url);
++      client_remote->OnComplete(
++          network::URLLoaderCompletionStatus(net::ERR_BLOCKED_BY_CLIENT));
++      return;
++    }
++
++    std::string resource_path = PathFromPdfViewerUrl(request.url);
++    int resource_id = 0;
++    bool found = resource_manager_->IsComponentExtensionResource(
++        base::FilePath::FromUTF8Unsafe(resource_path), &resource_id);
++    if (!found) {
++      LOG(INFO) << "[issue-776-exp7] rejected reason=unknown-path"
++                << " extension_id=" << request.url.host()
++                << " path=" << resource_path;
++      client_remote->OnComplete(
++          network::URLLoaderCompletionStatus(net::ERR_FILE_NOT_FOUND));
++      return;
++    }
++
++    std::string mime_type = MimeTypeForPath(resource_path);
++    bool template_replacements_applied = false;
++    std::string_view raw_data =
++        ui::ResourceBundle::GetSharedInstance().GetRawDataResource(resource_id);
++    std::string data(raw_data);
++    const ui::TemplateReplacements* replacements =
++        resource_manager_->GetTemplateReplacementsForExtension(kPdfExtensionId);
++    if (replacements && mime_type == "text/html") {
++      data = ui::ReplaceTemplateExpressions(data, *replacements);
++      template_replacements_applied = true;
++    }
++
++    LOG(INFO) << "[issue-776-exp7] served extension_id=" << request.url.host()
++              << " path=" << resource_path << " id=" << resource_id
++              << " bytes=" << data.size() << " mime=" << mime_type
++              << " template_replacements="
++              << (template_replacements_applied ? "true" : "false")
++              << " bytes_kind=decoded";
++
++    mojo::ScopedDataPipeProducerHandle producer;
++    mojo::ScopedDataPipeConsumerHandle consumer;
++    if (CreateDataPipe(nullptr, producer, consumer) != MOJO_RESULT_OK) {
++      client_remote->OnComplete(
++          network::URLLoaderCompletionStatus(net::ERR_INSUFFICIENT_RESOURCES));
++      return;
++    }
++
++    client_remote->OnReceiveResponse(ResponseHeadForMimeType(mime_type),
++                                     std::move(consumer), std::nullopt);
++
++    auto write_data = std::make_unique<WriteData>();
++    write_data->client = std::move(client_remote);
++    write_data->data = std::move(data);
++    write_data->producer =
++        std::make_unique<mojo::DataPipeProducer>(std::move(producer));
++
++    mojo::DataPipeProducer* producer_ptr = write_data->producer.get();
++    std::string_view data_view(write_data->data);
++    producer_ptr->Write(
++        std::make_unique<mojo::StringDataSource>(
++            data_view, mojo::StringDataSource::AsyncWritingMode::
++                           STRING_STAYS_VALID_UNTIL_COMPLETION),
++        base::BindOnce(OnWrite, std::move(write_data)));
++  }
++
++  raw_ptr<TsPdfComponentExtensionResourceManager> resource_manager_;
++};
++
++}  // namespace
++
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++CreateTsPdfViewerURLLoaderFactory(
++    TsPdfComponentExtensionResourceManager* resource_manager) {
++  mojo::PendingRemote<network::mojom::URLLoaderFactory> remote;
++  new TsPdfViewerURLLoaderFactory(resource_manager,
++                                  remote.InitWithNewPipeAndPassReceiver());
++  return remote;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.h b/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.h
+new file mode 100644
+index 0000000000000..8fe0655b06c6e
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.h
+@@ -0,0 +1,21 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_VIEWER_URL_LOADER_FACTORY_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_VIEWER_URL_LOADER_FACTORY_H_
++
++#include "mojo/public/cpp/bindings/pending_remote.h"
++#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
++
++namespace content {
++
++class TsPdfComponentExtensionResourceManager;
++
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++CreateTsPdfViewerURLLoaderFactory(
++    TsPdfComponentExtensionResourceManager* resource_manager);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_VIEWER_URL_LOADER_FACTORY_H_
+-- 
+2.50.1 (Apple Git-155)
+

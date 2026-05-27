@@ -1,0 +1,370 @@
+From 98e40c5c67ed9ea50ed2404724fabe25b147cdfb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 27 May 2026 11:50:11 -0500
+Subject: [PATCH 29/30] Register PDF viewer resources
+
+The PDF viewer knocked with a map and a key,
+Its manifest wearing a tidy ID.
+No full extension castle, no moat to patrol,
+Just resources counted and ready to roll.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   7 +
+ .../libtermsurf_chromium/ts_browser_client.cc |   6 +
+ .../libtermsurf_chromium/ts_browser_client.h  |   2 +
+ ...df_component_extension_resource_manager.cc | 186 ++++++++++++++++++
+ ...pdf_component_extension_resource_manager.h |  72 +++++++
+ 5 files changed, 273 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 6e7a6688c29b0..78ecde1b7ce7d 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -19,6 +19,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_main_delegate.h",
+     "ts_pdf_navigation_throttle.cc",
+     "ts_pdf_navigation_throttle.h",
++    "ts_pdf_component_extension_resource_manager.cc",
++    "ts_pdf_component_extension_resource_manager.h",
+     "ts_renderer_client.cc",
+     "ts_renderer_client.h",
+     "ts_tab_observer.cc",
+@@ -37,6 +39,9 @@ shared_library("libtermsurf_chromium") {
+   }
+ 
+   deps = [
++    "//base",
++    "//chrome/browser:resources",
++    "//chrome/browser/resources/pdf:resources",
+     "//components/pdf/common:constants",
+     "//components/pdf/common:util",
+     "//components/pdf/renderer",
+@@ -45,8 +50,10 @@ shared_library("libtermsurf_chromium") {
+     "//content/public/common",
+     "//content/shell:content_shell_app",
+     "//content/shell:content_shell_lib",
++    "//extensions/common:common_constants",
+     "//pdf",
+     "//pdf:features",
++    "//ui/base",
+   ]
+ 
+   if (is_mac) {
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 1cdc68c305bd0..2c4671de53435 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -7,6 +7,7 @@
+ #include "base/command_line.h"
+ #include "base/logging.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h"
+ #include "content/libtermsurf_chromium/ts_pdf_navigation_throttle.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+ #include "content/public/browser/render_frame_host.h"
+@@ -51,6 +52,11 @@ std::unique_ptr<BrowserMainParts> TsBrowserClient::CreateBrowserMainParts(
+     bool /* is_integration_test */) {
+   auto parts = std::make_unique<TsBrowserMainParts>();
+   set_browser_main_parts(parts.get());
++  if (!pdf_resource_manager_) {
++    pdf_resource_manager_ =
++        std::make_unique<TsPdfComponentExtensionResourceManager>();
++    pdf_resource_manager_->LogProbeResult();
++  }
+   return parts;
+ }
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index c77515c8e05e0..205e5e4ed03d0 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -7,6 +7,7 @@
+ 
+ #include <memory>
+ 
++#include "content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h"
+ #include "content/shell/browser/shell_content_browser_client.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
+ 
+@@ -51,6 +52,7 @@ class TsBrowserClient : public ShellContentBrowserClient {
+  private:
+   class StubBadgeService;
+   std::unique_ptr<StubBadgeService> stub_badge_service_;
++  std::unique_ptr<TsPdfComponentExtensionResourceManager> pdf_resource_manager_;
+ };
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+new file mode 100644
+index 0000000000000..c92a4cec05da1
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+@@ -0,0 +1,186 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h"
++
++#include <algorithm>
++#include <array>
++#include <memory>
++#include <string_view>
++#include <utility>
++
++#include "base/files/file_path.h"
++#include "base/json/json_string_value_serializer.h"
++#include "base/logging.h"
++#include "base/path_service.h"
++#include "base/strings/string_util.h"
++#include "base/values.h"
++#include "chrome/grit/browser_resources.h"
++#include "chrome/grit/pdf_resources_map.h"
++#include "components/pdf/common/constants.h"
++#include "extensions/common/constants.h"
++#include "ui/base/resource/resource_bundle.h"
++#include "ui/base/webui/resource_path.h"
++
++namespace content {
++namespace {
++
++constexpr char kKnownPdfResourcePath[] = "pdf/index.html";
++constexpr char kBrowserResourcesPackPath[] = "gen/chrome/browser_resources.pak";
++constexpr char kNameTag[] = "<NAME>";
++
++bool ParseManifest(std::string_view manifest_contents) {
++  JSONStringValueDeserializer deserializer(manifest_contents);
++  std::unique_ptr<base::Value> manifest =
++      deserializer.Deserialize(nullptr, nullptr);
++  return manifest && manifest->is_dict();
++}
++
++std::string GetPdfManifestForProbe() {
++  std::string manifest_contents =
++      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++          IDR_PDF_MANIFEST);
++  base::ReplaceFirstSubstringAfterOffset(&manifest_contents, 0, kNameTag,
++                                         "Chromium PDF Viewer");
++  return manifest_contents;
++}
++
++}  // namespace
++
++TsPdfComponentExtensionResourceManager::ProbeResult::ProbeResult() = default;
++TsPdfComponentExtensionResourceManager::ProbeResult::ProbeResult(
++    const ProbeResult&) = default;
++TsPdfComponentExtensionResourceManager::ProbeResult&
++TsPdfComponentExtensionResourceManager::ProbeResult::operator=(
++    const ProbeResult&) = default;
++TsPdfComponentExtensionResourceManager::ProbeResult::~ProbeResult() = default;
++
++TsPdfComponentExtensionResourceManager::TsPdfComponentExtensionResourceManager()
++    : extension_info_{
++          extension_misc::kPdfExtensionId,
++          pdf::kPDFMimeType,
++          pdf::kInternalPluginMimeType,
++      } {
++  AddPdfResourceEntries();
++  RegisterTemplateReplacements();
++}
++
++TsPdfComponentExtensionResourceManager::
++    ~TsPdfComponentExtensionResourceManager() = default;
++
++bool TsPdfComponentExtensionResourceManager::IsComponentExtensionResource(
++    const base::FilePath& resource_path,
++    int* resource_id) const {
++  base::FilePath normalized_path = resource_path.NormalizePathSeparators();
++  auto entry = path_to_resource_id_.find(normalized_path);
++  if (entry == path_to_resource_id_.end()) {
++    return false;
++  }
++  if (resource_id) {
++    *resource_id = entry->second;
++  }
++  return true;
++}
++
++const ui::TemplateReplacements*
++TsPdfComponentExtensionResourceManager::GetTemplateReplacementsForExtension(
++    const std::string& extension_id) const {
++  auto entry = template_replacements_.find(extension_id);
++  if (entry == template_replacements_.end()) {
++    return nullptr;
++  }
++  return &entry->second;
++}
++
++TsPdfComponentExtensionResourceManager::ProbeResult
++TsPdfComponentExtensionResourceManager::Probe() const {
++  ProbeResult result;
++  result.browser_resources_pack_loaded = EnsureBrowserResourcesPackLoaded();
++  result.resources_registered = !path_to_resource_id_.empty();
++  result.resource_count = path_to_resource_id_.size();
++
++  const ui::TemplateReplacements* replacements =
++      GetTemplateReplacementsForExtension(extension_info_.extension_id);
++  result.template_replacements_registered =
++      replacements && !replacements->empty();
++
++  int known_resource_id = 0;
++  result.known_resource_resolved = IsComponentExtensionResource(
++      base::FilePath::FromUTF8Unsafe(kKnownPdfResourcePath),
++      &known_resource_id);
++  result.known_resource_id = known_resource_id;
++
++  std::string manifest_contents = GetPdfManifestForProbe();
++  result.manifest_parsed = ParseManifest(manifest_contents);
++
++  for (const auto& [path, _] : path_to_resource_id_) {
++    if (result.sample_paths.size() >= 3) {
++      break;
++    }
++    result.sample_paths.push_back(path.AsUTF8Unsafe());
++  }
++
++  return result;
++}
++
++void TsPdfComponentExtensionResourceManager::LogProbeResult() const {
++  ProbeResult result = Probe();
++  LOG(INFO) << "[issue-776-exp6] pdf resources registered="
++            << (result.resources_registered ? "true" : "false")
++            << " count=" << result.resource_count;
++  LOG(INFO) << "[issue-776-exp6] pdf template replacements registered="
++            << (result.template_replacements_registered ? "true" : "false");
++  LOG(INFO) << "[issue-776-exp6] pdf manifest parsed="
++            << (result.manifest_parsed ? "true" : "false");
++  LOG(INFO) << "[issue-776-exp6] pdf known resource resolved="
++            << (result.known_resource_resolved ? "true" : "false")
++            << " path=" << kKnownPdfResourcePath
++            << " id=" << result.known_resource_id;
++  LOG(INFO) << "[issue-776-exp6] pdf extension id="
++            << extension_info_.extension_id
++            << " pdf_mime=" << extension_info_.pdf_mime_type
++            << " internal_plugin_mime="
++            << extension_info_.internal_plugin_mime_type;
++  LOG(INFO) << "[issue-776-exp6] browser resources pack loaded="
++            << (result.browser_resources_pack_loaded ? "true" : "false");
++  for (const std::string& path : result.sample_paths) {
++    LOG(INFO) << "[issue-776-exp6] pdf resource sample=" << path;
++  }
++}
++
++void TsPdfComponentExtensionResourceManager::AddPdfResourceEntries() {
++  for (const webui::ResourcePath& entry : kPdfResources) {
++    base::FilePath resource_path =
++        base::FilePath::FromUTF8Unsafe(entry.path).NormalizePathSeparators();
++    path_to_resource_id_.try_emplace(std::move(resource_path), entry.id);
++  }
++}
++
++void TsPdfComponentExtensionResourceManager::RegisterTemplateReplacements() {
++  ui::TemplateReplacements replacements;
++  replacements["name"] = "Chromium PDF Viewer";
++  replacements["errorDialogTitle"] = "Couldn't load PDF";
++  replacements["pageLoading"] = "Loading...";
++  replacements["pageLoadFailed"] = "Failed to load PDF document.";
++  replacements["pageReload"] = "Reload";
++  template_replacements_[extension_info_.extension_id] =
++      std::move(replacements);
++}
++
++bool TsPdfComponentExtensionResourceManager::EnsureBrowserResourcesPackLoaded()
++    const {
++  base::FilePath assets_path;
++  if (!base::PathService::Get(base::DIR_ASSETS, &assets_path)) {
++    return false;
++  }
++
++  base::FilePath browser_resources_pack =
++      assets_path.AppendASCII(kBrowserResourcesPackPath);
++  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++      browser_resources_pack, ui::kScaleFactorNone);
++  return ui::ResourceBundle::GetSharedInstance().HasDataResource(
++      IDR_PDF_MANIFEST);
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h
+new file mode 100644
+index 0000000000000..1b1b778d53a3e
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.h
+@@ -0,0 +1,72 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_COMPONENT_EXTENSION_RESOURCE_MANAGER_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_COMPONENT_EXTENSION_RESOURCE_MANAGER_H_
++
++#include <cstddef>
++#include <map>
++#include <string>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "ui/base/template_expressions.h"
++
++namespace content {
++
++struct TsPdfExtensionInfo {
++  const char* extension_id;
++  const char* pdf_mime_type;
++  const char* internal_plugin_mime_type;
++};
++
++class TsPdfComponentExtensionResourceManager {
++ public:
++  struct ProbeResult {
++    ProbeResult();
++    ProbeResult(const ProbeResult&);
++    ProbeResult& operator=(const ProbeResult&);
++    ~ProbeResult();
++
++    bool resources_registered = false;
++    bool template_replacements_registered = false;
++    bool manifest_parsed = false;
++    bool known_resource_resolved = false;
++    bool browser_resources_pack_loaded = false;
++    int known_resource_id = 0;
++    size_t resource_count = 0;
++    std::vector<std::string> sample_paths;
++  };
++
++  TsPdfComponentExtensionResourceManager();
++  ~TsPdfComponentExtensionResourceManager();
++
++  TsPdfComponentExtensionResourceManager(
++      const TsPdfComponentExtensionResourceManager&) = delete;
++  TsPdfComponentExtensionResourceManager& operator=(
++      const TsPdfComponentExtensionResourceManager&) = delete;
++
++  const TsPdfExtensionInfo& extension_info() const { return extension_info_; }
++
++  bool IsComponentExtensionResource(const base::FilePath& resource_path,
++                                    int* resource_id) const;
++  const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
++      const std::string& extension_id) const;
++
++  ProbeResult Probe() const;
++  void LogProbeResult() const;
++
++ private:
++  void AddPdfResourceEntries();
++  void RegisterTemplateReplacements();
++  bool EnsureBrowserResourcesPackLoaded() const;
++
++  TsPdfExtensionInfo extension_info_;
++  std::map<base::FilePath, int> path_to_resource_id_;
++  std::map<std::string, ui::TemplateReplacements> template_replacements_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_COMPONENT_EXTENSION_RESOURCE_MANAGER_H_
+-- 
+2.50.1 (Apple Git-155)
+

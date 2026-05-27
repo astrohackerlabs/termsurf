@@ -1,0 +1,235 @@
+From 7520415196a76c1dca84b55c4c6bf59df79fbfb4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 06:14:06 -0500
+Subject: [PATCH 15/30] Trace PagePopup deactivation
+
+When Wezboard leaves the stage,
+Chromium keeps the props in view;
+Now the logs catch who missed the cue.
+---
+ .../render_widget_host_view_mac.mm            |  41 ++++++-
+ .../ts_browser_main_parts.cc                  |   3 +
+ .../ts_shell_window_mac.h                     |   2 +
+ .../ts_shell_window_mac.mm                    | 111 ++++++++++++++++++
+ 4 files changed, 156 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index dd90db82df276..64078047c1a5c 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -161,6 +161,43 @@ void Issue779TraceWebviewBounds(const char* event,
+             << " is_headless=" << is_headless;
+ }
+ 
++NSString* Issue779BoolString(BOOL value) {
++  return value ? @"true" : @"false";
++}
++
++std::string Issue779PagePopupWindowsSummary() {
++  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
++  NSMutableArray<NSString*>* parts = [NSMutableArray array];
++  for (NSWindow* window in windows) {
++    NSString* class_name = NSStringFromClass(window.class);
++    if (window.level != 101 &&
++        [class_name rangeOfString:@"RenderWidgetPopupWindow"].location ==
++            NSNotFound) {
++      continue;
++    }
++    [parts addObject:[NSString
++                         stringWithFormat:
++                             @"window=%p class=%@ number=%ld frame=%@ "
++                              "level=%ld visible=%@ key=%@ main=%@ "
++                              "ignoresMouseEvents=%@ parent=%p children=%lu",
++                             window, class_name,
++                             static_cast<long>(window.windowNumber),
++                             NSStringFromRect(window.frame),
++                             static_cast<long>(window.level),
++                             Issue779BoolString(window.isVisible),
++                             Issue779BoolString(window.isKeyWindow),
++                             Issue779BoolString(window.isMainWindow),
++                             Issue779BoolString(window.ignoresMouseEvents),
++                             window.parentWindow,
++                             static_cast<unsigned long>(
++                                 window.childWindows.count)]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"pagepopup_window_count=%lu pagepopup_windows=%@",
++                       static_cast<unsigned long>(parts.count),
++                       [parts componentsJoinedByString:@"|"]]);
++}
++
+ }  // namespace
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+@@ -533,6 +570,7 @@ void Issue779TraceWebviewBounds(const char* event,
+         << " window_frame_in_screen=" << window_frame_in_screen_dip_.ToString()
+         << " view_bounds_in_window=" << view_bounds_in_window_dip_.ToString()
+         << " computed_view_bounds=" << GetViewBounds().ToString()
++        << " " << Issue779PagePopupWindowsSummary()
+         << " date_popup_y_delta"
+         << " input_anchor_top_left=" << anchor_rect.ToString()
+         << " init_as_popup_pos=" << pos.ToString()
+@@ -578,7 +616,8 @@ void Issue779TraceWebviewBounds(const char* event,
+         << " anchor_rect=" << anchor_rect.ToString()
+         << " window_frame_in_screen=" << window_frame_in_screen_dip_.ToString()
+         << " view_bounds_in_window=" << view_bounds_in_window_dip_.ToString()
+-        << " computed_view_bounds=" << GetViewBounds().ToString();
++        << " computed_view_bounds=" << GetViewBounds().ToString()
++        << " " << Issue779PagePopupWindowsSummary();
+   }
+   Show();
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 2d1b6232a7e52..50db87c66242a 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -72,6 +72,9 @@ TsBrowserMainParts::TabState::TabState() = default;
+ TsBrowserMainParts::TabState::~TabState() = default;
+ 
+ void TsBrowserMainParts::InitializeMessageLoopContext() {
++#if BUILDFLAG(IS_MAC)
++  InstallPagePopupAltTabTrace();
++#endif
+   LOG(INFO) << "[libtermsurf_chromium] Initialized, firing callback";
+   TsNotifyInitialized(this);
+ }
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+index 9b7d1b6560c39..e38402016615a 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.h
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -11,6 +11,8 @@ namespace content {
+ 
+ class Shell;
+ 
++void InstallPagePopupAltTabTrace();
++
+ void ConfigureShellWindowForTermSurf(Shell* shell);
+ 
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index e7274e97d7ea4..bcd0717aee802 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -60,8 +60,119 @@ NSRect PrimaryScreenFrame() {
+   return screen.frame;
+ }
+ 
++std::string WindowSummary(NSWindow* window) {
++  if (!window)
++    return "window=null";
++
++  NSArray<NSWindow*>* child_windows = window.childWindows;
++  NSWindow* parent_window = window.parentWindow;
++  NSView* content_view = window.contentView;
++  NSResponder* first_responder = window.firstResponder;
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:
++          @"window=%p class=%@ number=%ld frame=%@ level=%ld visible=%@ "
++           "key=%@ main=%@ ignoresMouseEvents=%@ occlusionState=%lu "
++           "parent=%p childWindowCount=%lu contentView=%p firstResponder=%p",
++          window, NSStringFromClass(window.class),
++          static_cast<long>(window.windowNumber), NSStringFromRect(window.frame),
++          static_cast<long>(window.level), BoolString(window.isVisible),
++          BoolString(window.isKeyWindow), BoolString(window.isMainWindow),
++          BoolString(window.ignoresMouseEvents),
++          static_cast<unsigned long>(window.occlusionState), parent_window,
++          static_cast<unsigned long>(child_windows.count), content_view,
++          first_responder]);
++}
++
++bool IsPagePopupFamilyWindow(NSWindow* window) {
++  if (!window)
++    return false;
++  NSString* class_name = NSStringFromClass(window.class);
++  return window.level == 101 ||
++         [class_name rangeOfString:@"RenderWidgetPopupWindow"].location !=
++             NSNotFound;
++}
++
++std::string OrderedWindowsSummary() {
++  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
++  NSMutableArray<NSString*>* parts = [NSMutableArray array];
++  NSUInteger limit = std::min<NSUInteger>(windows.count, 5);
++  for (NSUInteger index = 0; index < limit; ++index) {
++    NSWindow* window = windows[index];
++    [parts addObject:[NSString
++                         stringWithFormat:@"%lu:%p:%@:%ld:%@:%ld:%@:%@:%@",
++                                          static_cast<unsigned long>(index),
++                                          window, NSStringFromClass(window.class),
++                                          static_cast<long>(window.windowNumber),
++                                          NSStringFromRect(window.frame),
++                                          static_cast<long>(window.level),
++                                          BoolString(window.isVisible),
++                                          BoolString(window.isKeyWindow),
++                                          BoolString(window.ignoresMouseEvents)]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"ordered_windows_count=%lu ordered_windows_top5=%@",
++                       static_cast<unsigned long>(windows.count),
++                       [parts componentsJoinedByString:@"|"]]);
++}
++
++std::string PagePopupWindowsSummary() {
++  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
++  NSMutableArray<NSString*>* parts = [NSMutableArray array];
++  for (NSWindow* window in windows) {
++    if (!IsPagePopupFamilyWindow(window))
++      continue;
++    [parts addObject:[NSString stringWithUTF8String:WindowSummary(window).c_str()]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"pagepopup_window_count=%lu pagepopup_windows=%@",
++                       static_cast<unsigned long>(parts.count),
++                       [parts componentsJoinedByString:@"|"]]);
++}
++
++void TraceActivationNotification(NSString* event, NSNotification* notification) {
++  if (!Issue779TraceEnabled())
++    return;
++  Issue779TraceAnnounce();
++  LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
++            << " boundary=chromium_activation"
++            << " event=" << base::SysNSStringToUTF8(event)
++            << " app_is_active=" << BoolString(NSApp.isActive)
++            << " object=" << (__bridge void*)notification.object
++            << " key_window_summary=\"" << WindowSummary(NSApp.keyWindow)
++            << "\" main_window_summary=\"" << WindowSummary(NSApp.mainWindow)
++            << "\" " << OrderedWindowsSummary()
++            << " " << PagePopupWindowsSummary();
++}
++
+ }  // namespace
+ 
++void InstallPagePopupAltTabTrace() {
++  if (!Issue779TraceEnabled())
++    return;
++  static bool installed = false;
++  if (installed)
++    return;
++  installed = true;
++
++  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
++  NSArray<NSString*>* names = @[
++    NSApplicationWillResignActiveNotification,
++    NSApplicationDidResignActiveNotification,
++    NSApplicationDidBecomeActiveNotification,
++    NSWindowDidResignKeyNotification,
++    NSWindowDidBecomeKeyNotification,
++    NSWindowDidChangeOcclusionStateNotification
++  ];
++  for (NSString* name in names) {
++    [center addObserverForName:name
++                        object:nil
++                         queue:nil
++                    usingBlock:^(NSNotification* notification) {
++                      TraceActivationNotification(name, notification);
++                    }];
++  }
++}
++
+ void ConfigureShellWindowForTermSurf(Shell* shell) {
+   if (!shell)
+     return;
+-- 
+2.50.1 (Apple Git-155)
+
