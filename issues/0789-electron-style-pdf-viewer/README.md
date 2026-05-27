@@ -677,3 +677,391 @@ feed Chromium's PDF stream manager.
 Experiment 2 should implement the TermSurf-owned PDF response throttle and
 stream-dispatch helper on a fresh Chromium branch from the last buildable PDF
 branch. Its first success condition is build shape, not visible rendering.
+
+### Experiment 2: Build a TermSurf PDF Stream Handoff
+
+#### Description
+
+Implement the first Electron-style PDF stream handoff layer in TermSurf-owned
+Chromium code.
+
+This experiment replaces the failed Issue 776 Experiment 8 direct dependency on
+Chrome's `//chrome/browser/plugins:impl` with a narrow PDF-only response
+interceptor under `content/libtermsurf_chromium/`. The new path should observe
+PDF responses, preserve the original PDF response body as a transferable stream,
+and hand that stream to `PdfViewerStreamManager` or fail at a precise, logged
+boundary immediately before that handoff.
+
+This is still not a visible-rendering experiment. A Pass means the code builds
+without Chrome's broad plugin implementation and proves the PDF stream reaches,
+or precisely fails before, the stream-manager handoff. Visible PDF rendering,
+MimeHandlerView renderer wiring, `pdf_viewer_private`, `PdfHost`, and full
+viewer behavior remain follow-up layers unless this experiment happens to reach
+them naturally.
+
+#### Changes
+
+1. Create a new Chromium branch from the last buildable PDF branch.
+
+   ```bash
+   cd chromium/src
+   git checkout 148.0.7778.97-issue-776-exp7
+   git checkout -b 148.0.7778.97-issue-789-exp2
+   ```
+
+   Update `chromium/README.md` in the main repo to list the new branch and link
+   it to this issue.
+
+   Do not branch from `148.0.7778.97-issue-776-exp8` unless the first commit on
+   the new branch explicitly reverts the failed direct-link path from that
+   branch.
+
+2. Preserve useful Issue 776 work.
+
+   Keep these layers from the latest buildable PDF branch:
+   - internal PDF plugin registration;
+   - static PDF viewer resource serving from Issue 776 Experiment 7;
+   - vendored Bitcoin PDF fixture and screenshot automation;
+   - disabled old data-wrapper cancellation behavior, if present on the chosen
+     base.
+
+   If the chosen base branch still has the old data-wrapper cancellation active,
+   disable it before installing the new response handoff. PDF navigation must be
+   allowed to reach the response stage.
+
+3. Add a TermSurf-owned PDF response interceptor.
+
+   Add:
+
+   ```text
+   chromium/src/content/libtermsurf_chromium/ts_pdf_response_interceptor.h
+   chromium/src/content/libtermsurf_chromium/ts_pdf_response_interceptor.cc
+   ```
+
+   The implementation should be modeled on Chromium's
+   `PluginResponseInterceptorURLLoaderThrottle`, but stripped to the PDF-only
+   path.
+
+   Requirements:
+   - derive from the Chromium URL loader throttle interface used by
+     `ContentBrowserClient::CreateURLLoaderThrottles()`;
+   - inspect the post-sniff response MIME type;
+   - handle only `application/pdf`;
+   - leave all non-PDF responses untouched;
+   - do not call `PluginUtils::GetExtensionIdForMimeType()`;
+   - do not require `ExtensionRegistry` lookup for the first pass;
+   - hard-code only the PDF viewer extension identity needed for the stream
+     handoff, with a comment explaining that this is the PDF-only equivalent of
+     Electron's embedder-owned plugin-utils path;
+   - log:
+
+     ```text
+     [issue-789-exp2] pdf-response-throttle-created
+     [issue-789-exp2] pdf-response url=<url> mime=<mime> destination=<destination> oopif_pdf=<true|false>
+     ```
+
+   The response interceptor must not include
+   `chrome/browser/plugins/plugin_response_interceptor_url_loader_throttle.h` or
+   instantiate Chrome's stock `PluginResponseInterceptorURLLoaderThrottle`.
+
+4. Add a TermSurf-owned PDF stream dispatch helper.
+
+   Add:
+
+   ```text
+   chromium/src/content/libtermsurf_chromium/ts_pdf_stream_dispatch.h
+   chromium/src/content/libtermsurf_chromium/ts_pdf_stream_dispatch.cc
+   ```
+
+   This helper should implement only the PDF-specific subset of Electron's
+   `SendExecuteMimeTypeHandlerEvent(...)`.
+
+   Requirements:
+   - receive the original PDF response as a
+     `blink::mojom::TransferrableURLLoader`;
+   - create the narrow stream representation required by Chromium's PDF stream
+     manager, preferably `extensions::StreamContainer` if it can be linked
+     without dragging in the failed Chrome product graph;
+   - call `PdfViewerStreamManager::Create(web_contents)`;
+   - call
+     `PdfViewerStreamManager::AddStreamContainer(frame_tree_node_id, internal_id, stream_container)`
+     if the manager is linkable;
+   - log:
+
+     ```text
+     [issue-789-exp2] stream-dispatch frame_tree_node_id=<id> extension_id=<id> handler_url=<url> internal_id=<id>
+     [issue-789-exp2] stream-container-added internal_id=<id>
+     ```
+
+   If linking `PdfViewerStreamManager` requires `//chrome/browser/pdf:pdf` and
+   that target reproduces the broad link failure, do not silently expand the
+   dependency surface. Mark the experiment Partial, record the exact missing
+   symbols or broad deps, and design the next experiment around extracting or
+   replacing that stream-manager layer.
+
+5. Install the TermSurf response interceptor.
+
+   Edit:
+
+   ```text
+   chromium/src/content/libtermsurf_chromium/ts_browser_client.h
+   chromium/src/content/libtermsurf_chromium/ts_browser_client.cc
+   ```
+
+   In `TsBrowserClient::CreateURLLoaderThrottles()`, append the TermSurf PDF
+   response interceptor after preserving the existing shell/content-shell
+   throttles.
+
+   Log:
+
+   ```text
+   [issue-789-exp2] pdf-throttle-installed frame_tree_node_id=<id> destination=<destination>
+   ```
+
+   Do not install the stock Chrome interceptor.
+
+6. Update `content/libtermsurf_chromium/BUILD.gn`.
+
+   Add the new TermSurf files and the narrow deps needed by those files.
+
+   Required dependency rule:
+   - do not add `//chrome/browser/plugins:impl`;
+   - do not add `//chrome/browser/extensions:extensions` merely to reuse
+     Chrome's stock MIME dispatch;
+   - do not pull in `//components/guest_view/browser`,
+     `//chrome/browser/infobars`, Chrome WebRTC capture, or Chrome media
+     permission subsystems as a side effect of this handoff.
+
+   Bounded dependencies are acceptable only if the experiment result documents
+   why they are unavoidable for the PDF stream handoff. Likely candidates
+   include:
+   - `//extensions/browser/mime_handler:stream_container`;
+   - `//extensions/browser/mime_handler:stream_info`;
+   - the narrowest available PDF stream-manager target, if one exists;
+   - `//chrome/browser/pdf:pdf` only if GN and link evidence show it does not
+     recreate the Issue 776 Experiment 8 dependency failure.
+
+7. Add temporary runtime diagnostics only under the `[issue-789-exp2]` prefix.
+
+   It is acceptable to add temporary logs to the new TermSurf-owned files. Avoid
+   adding permanent diagnostic noise to stock Chrome files. If a stock Chrome
+   file must be logged to pinpoint the handoff boundary, keep the log minimal
+   and record it in the result as cleanup debt.
+
+   Required feature log:
+
+   ```text
+   [issue-789-exp2] oopif-pdf-enabled value=<true|false>
+   ```
+
+   If OOPIF PDF is false, stop treating stream handoff as a Pass. Mark the
+   experiment Partial and design the next experiment around enabling the PDF
+   process/model path.
+
+8. Commit the Chromium branch and archive patches only after the build result is
+   coherent.
+
+   If the Chromium code builds, commit the Chromium branch with git-poet and
+   regenerate the patch archive:
+
+   ```bash
+   cd chromium/src
+   git format-patch 148.0.7778.97..HEAD -o ../../chromium/patches/issue-789/
+   ```
+
+   If the implementation reaches a useful Partial but does not build because of
+   a precisely identified dependency boundary, commit only if the branch is a
+   coherent artifact for the next experiment. Otherwise, leave the code
+   uncommitted, record the failure, and revert before closing the experiment
+   result in the main repo.
+
+9. Format any touched C++ files with Chromium's formatter.
+
+   Use Chromium's normal formatting tooling for modified C++/header files. Do
+   not run `cargo fmt`; this experiment should not edit Rust.
+
+10. Format this issue document after recording the result:
+
+```bash
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0789-electron-style-pdf-viewer/README.md
+```
+
+#### Non-Negotiable Invariants
+
+- Do not link `//chrome/browser/plugins:impl`.
+- Do not instantiate Chrome's stock `PluginResponseInterceptorURLLoaderThrottle`
+  from TermSurf code.
+- Do not enable general user extensions.
+- Do not add a general Chrome `streams_private` API surface. Implement only the
+  PDF stream handoff needed by the viewer path.
+- Do not weaken PDF origin checks, bypass `IsPdfRenderer()` checks, or mark an
+  ordinary renderer as a PDF renderer.
+- Do not fake rendering by replacing PDFs with static HTML, screenshots,
+  external apps, or Preview handoff.
+- Do not make visible PDF rendering the Pass condition for this experiment.
+- Do not change the TermSurf protobuf protocol.
+- Do not edit Rust code.
+- Preserve existing non-PDF navigation behavior.
+- Preserve normal HTML browsing.
+- Preserve the Issue 776 Bitcoin PDF automation fixture.
+
+#### Verification
+
+1. Confirm the Chromium branch starts from the intended base:
+
+   ```bash
+   git -C chromium/src branch --show-current
+   git -C chromium/src merge-base --is-ancestor \
+     148.0.7778.97-issue-776-exp7 HEAD
+   ```
+
+   Expected branch: `148.0.7778.97-issue-789-exp2`.
+
+2. Confirm the failed direct-link path is not present:
+
+   ```bash
+   rg "//chrome/browser/plugins:impl|PluginResponseInterceptorURLLoaderThrottle" \
+     chromium/src/content/libtermsurf_chromium \
+     chromium/src/chrome/browser/plugins
+   ```
+
+   Expected:
+   - no `//chrome/browser/plugins:impl` in
+     `content/libtermsurf_chromium/BUILD.gn`;
+   - no TermSurf include or instantiation of Chrome's stock
+     `PluginResponseInterceptorURLLoaderThrottle`;
+   - stock Chrome files unchanged unless the result explicitly records a minimal
+     patch.
+
+3. Inspect the TermSurf GN dependency surface:
+
+   ```bash
+   export PATH="$PWD/chromium/depot_tools:$PATH"
+   gn desc chromium/src/out/Default //content/libtermsurf_chromium deps
+   ```
+
+   Record whether the output includes any of:
+   - `//chrome/browser/plugins:impl`;
+   - `//chrome/browser/extensions:extensions`;
+   - `//components/guest_view/browser`;
+   - Chrome WebRTC capture targets;
+   - Chrome media permission targets.
+
+   Any such dependency is a failure unless the result proves it is unrelated to
+   the PDF changes and already existed on the base branch.
+
+4. Build Chromium:
+
+   ```bash
+   cd chromium/src
+   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+   autoninja -C out/Default libtermsurf_chromium
+   ```
+
+   This is the primary gate. The build must link `libtermsurf_chromium.dylib`
+   without the Issue 776 Experiment 8 undefined symbols.
+
+5. If the build passes, run the existing Issue 776 Bitcoin PDF automation.
+
+   Use the vendored fixture, not the network URL. Capture the same screenshot
+   and logs as Issue 776, but evaluate only the stream-handoff logs for this
+   experiment.
+
+6. Confirm the runtime logs include:
+
+   ```text
+   [issue-789-exp2] pdf-throttle-installed
+   [issue-789-exp2] oopif-pdf-enabled value=<true|false>
+   [issue-789-exp2] pdf-response ... mime=application/pdf
+   [issue-789-exp2] stream-dispatch ...
+   ```
+
+   If the handoff reaches `PdfViewerStreamManager`, also require:
+
+   ```text
+   [issue-789-exp2] stream-container-added ...
+   ```
+
+   If the handoff fails before that line, the result must quote the last
+   `[issue-789-exp2]` line and identify the exact missing dependency or API.
+
+7. Confirm ordinary browsing still works:
+   - open a normal HTML page;
+   - click a link;
+   - type in a text field;
+   - reload.
+
+   These checks ensure the new response throttle leaves non-PDF responses alone.
+
+8. Confirm a non-PDF binary response is not intercepted.
+
+   Load a small non-PDF fixture if one exists, or add a tiny local binary
+   fixture under the existing test server assets if needed. The logs should not
+   show `pdf-response ... mime=application/pdf` for that response.
+
+9. Record the result in this experiment.
+
+   The result must include:
+   - Chromium branch name;
+   - commit hash if a Chromium commit was made;
+   - patch archive path if generated;
+   - exact new files;
+   - exact GN deps added;
+   - build result;
+   - dependency-surface result;
+   - runtime log summary;
+   - whether `PdfViewerStreamManager::AddStreamContainer()` was reached;
+   - what layer remains for Experiment 3.
+
+#### Pass Criteria
+
+Pass if:
+
+- the Chromium branch builds and links `libtermsurf_chromium`;
+- `content/libtermsurf_chromium` does not depend on
+  `//chrome/browser/plugins:impl`;
+- the TermSurf-owned PDF response interceptor is installed;
+- PDF responses reach the TermSurf-owned response interceptor;
+- the original PDF stream reaches `PdfViewerStreamManager::AddStreamContainer()`
+  or a directly equivalent stream-manager handoff;
+- normal HTML browsing still works;
+- non-PDF binary responses are not handled as PDFs;
+- all changes are committed to a Chromium branch and archived in
+  `chromium/patches/issue-789/`;
+- the main repo records the result and branch metadata.
+
+#### Partial Criteria
+
+Partial if the implementation avoids `//chrome/browser/plugins:impl` and builds
+partway, but a narrower downstream PDF layer proves missing or too broad. Valid
+Partial outcomes include:
+
+- the response interceptor builds, sees `application/pdf`, and creates the
+  transferable loader, but `PdfViewerStreamManager` cannot be linked without
+  pulling in broad Chrome product dependencies;
+- `extensions::StreamContainer` cannot be constructed without importing a larger
+  extension subsystem than expected;
+- OOPIF PDF is disabled at runtime;
+- the stream reaches `PdfViewerStreamManager`, but the viewer frame cannot claim
+  it because the MimeHandlerView renderer/container layer is still missing.
+
+The result must name the exact boundary and the next experiment must target only
+that boundary.
+
+#### Failure Criteria
+
+- The implementation adds `//chrome/browser/plugins:impl`.
+- The implementation reuses Chrome's stock
+  `PluginResponseInterceptorURLLoaderThrottle` by linking its owning target.
+- The implementation silently imports Chrome's broad extension/browser stack.
+- The implementation weakens PDF security checks to get past renderer or origin
+  gates.
+- The implementation reintroduces the data-wrapper fake PDF path as the primary
+  solution.
+- The implementation claims success because a screenshot looks different while
+  the stream handoff logs are missing.
+- Normal HTML browsing regresses.
+- Non-PDF responses are intercepted as PDFs.
+- The Chromium branch is left in an incoherent, unbuildable state without a
+  recorded Partial/Failure explanation and cleanup plan.
