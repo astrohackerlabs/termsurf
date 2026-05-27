@@ -526,6 +526,14 @@ or streams-private. If this works, it may be enough for basic in-pane PDF
 viewing. If it fails, the logs should prove exactly which PDF viewer substrate
 is still missing.
 
+Important constraint: a `data:` wrapper has an opaque origin. It may not be able
+to embed an HTTP PDF, and it is not expected to embed a `file://` PDF under
+default Chromium policy. Therefore HTTP-only success is not a full Issue 776
+Pass. Issue 776's original goal is `web file.pdf`; this experiment only Passes
+if both the HTTP fixture and the `file://` fixture render. If HTTP renders but
+`file://` does not, record Partial and design the next experiment around a
+non-opaque wrapper origin or a real MimeHandlerView path.
+
 The generated wrapper should be minimal and visible only for top-level PDF
 documents. A representative wrapper is:
 
@@ -540,16 +548,19 @@ documents. A representative wrapper is:
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: white;
+    background: #f8d7da;
   }
 </style>
+<div id="termsurf-pdf-wrapper-marker">TermSurf PDF wrapper</div>
 <embed src="{original_pdf_url}" type="application/x-google-chrome-pdf" />
 ```
 
-The experiment passes only if the automated screenshot shows recognizable
-Bitcoin PDF content. Reaching `OverrideCreatePlugin()` or
+The non-white background and marker are diagnostic scaffolding. They distinguish
+"wrapper rendered but plugin is empty" from "wrapper did not render." The
+experiment passes only if the automated screenshots show recognizable Bitcoin
+PDF content for both HTTP and `file://`. Reaching `OverrideCreatePlugin()` or
 `CreateInternalPlugin()` is useful evidence, but it is only a Partial result if
-the screenshot remains blank.
+either screenshot remains blank or the `file://` case fails.
 
 #### Changes
 
@@ -557,6 +568,9 @@ the screenshot remains blank.
    `148.0.7778.97-issue-776-exp2`.
    - Do not commit directly to `148.0.7778.97-issue-776`.
    - Add the new branch to the Branches table in `chromium/README.md`.
+   - Add a one-line note to `chromium/README.md` explaining that
+     `{version}-issue-{N}-exp{M}` branches are allowed for follow-up Chromium
+     experiments within an already-open issue.
    - Archive the branch under `chromium/patches/issue-776-exp2/` on Pass or
      Partial.
 
@@ -564,11 +578,15 @@ the screenshot remains blank.
    for example `ts_pdf_navigation_throttle.{cc,h}`.
    - Derive from `content::NavigationThrottle`.
    - Implement `WillProcessResponse()`.
-   - Inspect `navigation_handle()->GetResponseHeaders()` and read the MIME type.
+   - Use `navigation_handle()->GetMimeType()` as the primary MIME signal because
+     `file://` response headers may be synthetic or incomplete. Also log the
+     MIME type reported by `GetResponseHeaders()` when headers exist, so the
+     result can compare the two.
    - Only act when all of these are true:
      - the response MIME type is `pdf::kPDFMimeType` (`application/pdf`);
      - `navigation_handle()->IsInPrimaryMainFrame()` is true;
-     - the target URL is not already the generated wrapper URL;
+     - the target URL is not already the generated wrapper URL, as identified by
+       a real sentinel rather than substring matching;
      - the URL scheme is ordinary browser content (`http`, `https`, or `file`)
        for this experiment.
    - Log every PDF decision with an `[issue-776-exp2]` prefix: URL, MIME type,
@@ -578,12 +596,23 @@ the screenshot remains blank.
    navigation and schedule a same-tab navigation to the generated wrapper.
    - Use `content::WebContents` from the navigation handle.
    - Preserve the existing tab; do not create a new window.
-   - Use a `data:text/html;charset=utf-8,...` URL for the wrapper unless the
-     implementation reveals that `data:` origin blocks plugin loading.
+   - First probe a `data:text/html;charset=utf-8,...` URL for the wrapper,
+     because it is the smallest implementation. Treat it as a probe, not the
+     promised final architecture.
+   - Include a deterministic wrapper sentinel, for example
+     `termsurf-pdf-wrapper=1`, either in the generated URL or in a synthetic
+     wrapper scheme. Use that sentinel for recursion prevention.
    - Store the original PDF URL in the wrapper's `<embed src=...>`.
+   - Escape the original PDF URL for HTML attribute context before inserting it
+     into the wrapper. URLs containing `&`, `"`, `'`, `<`, or `>` must not break
+     the generated markup.
    - Set the `<embed>` type to `pdf::kInternalPluginMimeType`.
-   - Return `CANCEL_AND_IGNORE` or the closest correct throttle result after the
-     wrapper navigation has been posted.
+   - PostTask the wrapper navigation. Do not synchronously navigate the same
+     `WebContents` from inside `WillProcessResponse()`, because the current
+     navigation is still unwinding.
+   - Return `content::NavigationThrottle::CANCEL_AND_IGNORE` after posting the
+     wrapper navigation. Do not use `CANCEL`, `BLOCK_RESPONSE`, or an
+     unspecified "closest" result.
 
 4. Wire the throttle from `TsBrowserClient`.
    - Add a `CreateThrottlesForNavigation()` override to
@@ -599,6 +628,10 @@ the screenshot remains blank.
    - Do not remove `TsRendererClient`.
    - Keep the `[issue-776]` renderer/plugin logs for this experiment because
      they prove whether the wrapper reaches plugin creation.
+   - Extend the renderer logs, if practical, so `OverrideCreatePlugin()` records
+     the document URL/origin and PDF MIME type when it is asked to create a PDF
+     plugin. This helps distinguish "plugin registered globally" from "plugin
+     available in this document context."
 
 6. Do not implement MimeHandlerView, GuestView, component-extension loading, or
    streams-private in this experiment.
@@ -606,6 +639,10 @@ the screenshot remains blank.
      blank, record Partial and design Experiment 3 around the missing substrate.
    - Do not silently widen this experiment into a partial Chrome PDF viewer
      port.
+   - If the `data:` wrapper reaches the expected cross-origin or opaque-origin
+     blocker, record Partial. Do not spend this experiment inventing a synthetic
+     `ts-pdf://` or `chrome-untrusted://` wrapper unless the code is already
+     trivial. That should be a separately designed experiment.
 
 7. Harden the screenshot automation enough to trust the artifact.
    - Extend `scripts/test-issue-776-pdf.sh` so the log records the launched
@@ -624,6 +661,12 @@ the screenshot remains blank.
    - `./scripts/build.sh webtui`;
    - `./scripts/test-issue-776-pdf.sh`.
 
+9. Confirm whether the teardown crash seen in Experiment 1 recurs.
+   - If Roamium crashes after the screenshot is captured, attach the crash stack
+     or log excerpt to the result.
+   - If Roamium crashes before the screenshot is captured, treat the experiment
+     as Fail unless the logs still prove a clear next layer.
+
 #### Non-Negotiable Invariants
 
 - The fix remains Chromium/Roamium-side. Do not add PDF-specific logic to
@@ -638,6 +681,8 @@ the screenshot remains blank.
   downloads.
 - The implementation must not create a second tab or a second Chromium window.
 - The generated wrapper must not recurse on itself.
+- A `data:` wrapper is only a probe. HTTP-only rendering is Partial, not Pass,
+  because the issue goal is local PDF rendering via `web file.pdf`.
 - Experiment 2 must not quietly turn into a MimeHandlerView/component-extension
   port.
 
@@ -660,6 +705,8 @@ the screenshot remains blank.
      TermSurf browser pane.
    - Partial visual state: the page is still blank/white, but logs identify the
      next missing layer.
+   - Partial visual state: the wrapper's diagnostic marker or non-white
+     background appears, but no PDF content appears.
    - Fail visual state: the automation captured the wrong app/window, launched
      installed binaries, crashed before a screenshot, or regressed normal
      navigation.
@@ -672,17 +719,22 @@ the screenshot remains blank.
    | Throttle cancels top-level PDF before download path              | yes/no |
    | `ShellDownloadManagerDelegate::ChooseDownloadPath` no longer hit | yes/no |
    | Generated wrapper navigation starts in the same tab              | yes/no |
+   | Wrapper marker/background is visible in screenshot               | yes/no |
+   | `<embed>` appears to be blocked by wrapper origin                | yes/no |
    | `OverrideCreatePlugin()` sees internal PDF MIME type             | yes/no |
    | `CreateInternalPlugin()` returns a plugin                        | yes/no |
    | Screenshot shows recognizable PDF content                        | yes/no |
 
-6. If the HTTP fixture passes, run the same automation against the local file
-   URL:
+6. If the HTTP fixture renders, run the same automation against the local file
+   URL. This is required before recording Pass:
 
    ```bash
    ./scripts/test-issue-776-pdf.sh \
      file:///Users/ryan/dev/termsurf/test-html/public/bitcoin.pdf
    ```
+
+   If the HTTP fixture renders but this `file://` fixture does not, record
+   Partial. The original issue is not solved.
 
 7. Run a normal HTML smoke test after the PDF test:
    - open `https://example.com`;
@@ -690,15 +742,21 @@ the screenshot remains blank.
    - type in a text field on a simple test page;
    - confirm no download prompt, blank page, or navigation loop occurs.
 
+8. Run a non-PDF binary/download smoke test after the PDF test.
+   - Serve or open a non-PDF binary fixture, such as a `.zip` or `.bin`, from
+     the local test server.
+   - Confirm the PDF throttle does not intercept it as a PDF.
+
 #### Pass Criteria
 
-The automated screenshot for `http://localhost:9616/bitcoin.pdf` shows
-recognizable Bitcoin PDF content rendered inside the existing TermSurf browser
-overlay, and normal HTML navigation still works.
+The automated screenshot for both fixtures shows recognizable Bitcoin PDF
+content rendered inside the existing TermSurf browser overlay:
 
-If the HTTP fixture passes but the `file://` fixture fails, record Pass for
-browser PDF rendering and open a follow-up experiment specifically for local
-file URL permissions or MIME/path handling.
+- `http://localhost:9616/bitcoin.pdf`;
+- `file:///Users/ryan/dev/termsurf/test-html/public/bitcoin.pdf`.
+
+Normal HTML navigation still works, and a non-PDF binary/download fixture is not
+intercepted by the PDF throttle.
 
 #### Partial Criteria
 
@@ -706,7 +764,9 @@ The throttle prevents the Content Shell download path and reaches a later PDF
 layer, but the screenshot still does not show PDF content. The result must name
 the first missing layer, such as:
 
+- HTTP fixture renders but `file://` does not render;
 - wrapper navigation starts but `<embed>` does not create a plugin;
+- `data:` wrapper origin blocks the PDF `<embed>`;
 - `CreateInternalPlugin()` returns `nullptr`;
 - plugin is created but the viewer surface is blank;
 - plugin is created but PDF resource fetching is blocked by origin or file
