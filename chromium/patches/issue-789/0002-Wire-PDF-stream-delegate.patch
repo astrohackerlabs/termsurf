@@ -1,7 +1,7 @@
 From 332a28d1ba350a441d8f4d814b5b69b4e87f7e8e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 27 May 2026 18:50:00 -0500
-Subject: [PATCH 2/4] Wire PDF stream delegate
+Subject: [PATCH 2/5] Wire PDF stream delegate
 
 The stream now keeps a proper desk,
 With delegates on call.

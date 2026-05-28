@@ -1,0 +1,175 @@
+From 7e987fb361300a1d8362c2c68f75fd43a63b695e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 28 May 2026 18:32:03 -0500
+Subject: [PATCH 5/5] Serve PDF viewer chrome://resources
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The viewer cried for chrome's own shelf,
+For assert and lit to dress itself.
+We hand it resources through a narrow door,
+Gated by initiator, frame, and store—
+Not committed origin, which commits too late,
+Reads null mid-flight and slams the gate.
+---
+ .../libtermsurf_chromium/ts_browser_client.cc | 68 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_content_client.cc | 10 +++
+ .../ts_pdf_stream_store.cc                    | 14 ++++
+ .../ts_pdf_stream_store.h                     |  7 ++
+ 4 files changed, 99 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 6221ce153e3ab..3e79a753c9ac8 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -20,7 +20,9 @@
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_ui_url_loader_factory.h"
+ #include "content/public/common/content_switches.h"
++#include "content/public/common/url_constants.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+@@ -204,6 +206,72 @@ void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+             << extensions::kExtensionScheme
+             << " provider=termsurf-pdf-only render_process_id="
+             << render_process_id << " render_frame_id=" << render_frame_id;
++
++  // Issue 789 Exp 6: serve the PDF viewer's chrome://resources module/CSS
++  // subresources through Chromium's narrow WebUI resource factory, scoped to
++  // the active PDF viewer frame. The allowlist boundary is the single
++  // `content::kChromeUIResourcesHost` host; arbitrary chrome:// hosts are not
++  // served. The gate is intentionally strict so normal web pages — and other
++  // frames that merely share the PDF extension origin — cannot reach
++  // chrome://resources.
++  auto is_pdf_viewer_origin = [](const url::Origin& origin) {
++    return origin.scheme() == extensions::kExtensionScheme &&
++           origin.host() == extension_misc::kPdfExtensionId;
++  };
++
++  // Gate 1: the request must be initiated by the PDF viewer extension origin.
++  // `request_initiator_origin` is the origin of the document being committed
++  // (the frame that will issue these subresource loads), so it is the
++  // authoritative "who is asking" signal here. Every other case (the common
++  // normal-page path) returns silently so HTML and non-PDF traffic produces no
++  // Exp 6 logs.
++  if (!request_initiator_origin ||
++      !is_pdf_viewer_origin(*request_initiator_origin)) {
++    return;
++  }
++  const std::string initiator_origin_str =
++      request_initiator_origin->Serialize();
++
++  // The frame must exist. Its last committed origin is logged as context only,
++  // NOT used as a gate: this hook runs while the navigation is committing, so
++  // the PDF viewer frame's last committed origin is still its pre-commit
++  // (opaque "null") origin at this instant. Gating on it would reject the real
++  // viewer frame. The authoritative identity check is Gate 2 below.
++  RenderFrameHost* frame_host =
++      RenderFrameHost::FromID(render_process_id, render_frame_id);
++  if (!frame_host) {
++    LOG(INFO) << "[issue-789-exp6] webui-factory-skipped initiator_origin="
++              << initiator_origin_str
++              << " frame_origin=<none> reason=no-frame-host";
++    return;
++  }
++  const std::string frame_origin_str =
++      frame_host->GetLastCommittedOrigin().Serialize();
++
++  // Gate 2: the frame must be the active PDF viewer host frame for a stored
++  // stream (the Exp 4 attach bookkeeping), not just any frame whose subresource
++  // loads are initiated by the PDF extension origin. This is timing-correct:
++  // attach-child-found records the frame before its subresource factories are
++  // registered. It is also stricter than an origin match — only the one frame
++  // tracked as the viewer host for a live stream passes.
++  WebContents* web_contents = WebContents::FromRenderFrameHost(frame_host);
++  TsPdfStreamStore* store =
++      web_contents ? TsPdfStreamStore::FromWebContents(web_contents) : nullptr;
++  if (!store || !store->IsPdfExtensionHostFrame(frame_host)) {
++    LOG(INFO) << "[issue-789-exp6] webui-factory-skipped initiator_origin="
++              << initiator_origin_str << " frame_origin=" << frame_origin_str
++              << " reason=frame-not-active-viewer";
++    return;
++  }
++
++  factories->emplace(kChromeUIScheme,
++                     CreateWebUIURLLoaderFactory(frame_host, kChromeUIScheme,
++                                                 {kChromeUIResourcesHost}));
++  LOG(INFO) << "[issue-789-exp6] webui-factory-registered initiator_origin="
++            << initiator_origin_str << " frame_origin=" << frame_origin_str
++            << " host=resources";
++  LOG(INFO) << "[issue-789-exp6] webui-factory-registered-count web_contents="
++            << static_cast<const void*>(web_contents) << " count=1";
+ }
+ 
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+index 2f50877dd8369..704d7580a3fa8 100644
+--- a/content/libtermsurf_chromium/ts_content_client.cc
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -32,6 +32,16 @@ void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   schemes->secure_schemes.push_back(extensions::kExtensionScheme);
+   schemes->cors_enabled_schemes.push_back(extensions::kExtensionScheme);
+   schemes->csp_bypassing_schemes.push_back(extensions::kExtensionScheme);
++
++  // Issue 789 Exp 6: the `chrome` WebUI scheme is a content built-in. It is
++  // registered unconditionally by content::RegisterContentSchemes (which calls
++  // this hook, then adds `chrome` to the standard/secure scheme lists itself).
++  // We deliberately do NOT add `chrome` here — doing so would be a redundant
++  // double-registration. The PDF viewer's `chrome://resources` subresources are
++  // served by a narrowly scoped WebUI URL loader factory in TsBrowserClient,
++  // not by widening scheme registration.
++  LOG(INFO) << "[issue-789-exp6] scheme-check chrome=registered "
++               "note=content-builtin";
+ }
+ 
+ void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
+diff --git a/content/libtermsurf_chromium/ts_pdf_stream_store.cc b/content/libtermsurf_chromium/ts_pdf_stream_store.cc
+index 37832a7f6cf7c..434a30685eabc 100644
+--- a/content/libtermsurf_chromium/ts_pdf_stream_store.cc
++++ b/content/libtermsurf_chromium/ts_pdf_stream_store.cc
+@@ -134,6 +134,20 @@ bool TsPdfStreamStore::HasStreams(WebContents* web_contents) {
+   return store && !store->stream_infos_.empty();
+ }
+ 
++bool TsPdfStreamStore::IsPdfExtensionHostFrame(RenderFrameHost* frame) const {
++  if (!frame) {
++    return false;
++  }
++  const FrameTreeNodeId frame_tree_node_id = frame->GetFrameTreeNodeId();
++  for (const auto& [key, stream_info] : stream_infos_) {
++    if (stream_info && stream_info->extension_host_frame_tree_node_id() ==
++                           frame_tree_node_id) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ // static
+ void TsPdfStreamStore::AddStreamContainer(
+     FrameTreeNodeId frame_tree_node_id,
+diff --git a/content/libtermsurf_chromium/ts_pdf_stream_store.h b/content/libtermsurf_chromium/ts_pdf_stream_store.h
+index 10f80171e9915..f6742c8ba497f 100644
+--- a/content/libtermsurf_chromium/ts_pdf_stream_store.h
++++ b/content/libtermsurf_chromium/ts_pdf_stream_store.h
+@@ -43,6 +43,13 @@ class TsPdfStreamStore : public WebContentsObserver,
+       FrameTreeNodeId frame_tree_node_id);
+   static bool HasStreams(WebContents* web_contents);
+ 
++  // Returns true if `frame` is the PDF viewer extension host frame for one of
++  // this store's tracked streams, i.e. its frame tree node id matches a stored
++  // stream's `extension_host_frame_tree_node_id()`. Used by TsBrowserClient to
++  // gate the `chrome://resources` WebUI factory to the active PDF viewer frame
++  // (Issue 789 Exp 6), not merely to any frame on the PDF extension origin.
++  bool IsPdfExtensionHostFrame(RenderFrameHost* frame) const;
++
+   static void AddStreamContainer(
+       FrameTreeNodeId frame_tree_node_id,
+       const std::string& internal_id,
+-- 
+2.50.1 (Apple Git-155)
+

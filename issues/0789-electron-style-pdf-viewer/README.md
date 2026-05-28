@@ -3061,20 +3061,36 @@ stack, GuestView, or MimeHandlerView.
    stored-stream flow would also gain `chrome://resources`. Require all of the
    following before registering the factory:
    1. `request_initiator_origin` is present and equals the PDF viewer extension
-      origin `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai`. TermSurf
-      does not have Chrome's full `ExtensionRegistry`, so this is the origin
-      gate.
-   2. `frame_host = RenderFrameHost::FromID(...)` exists, and
-      `frame_host->GetLastCommittedOrigin()` is also the PDF viewer extension
-      origin. This is a real gate here, not just supporting context.
+      origin `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai`. This is the
+      origin gate and the authoritative "who is asking" signal:
+      `request_initiator_origin` is the origin of the document being committed
+      (the frame that will issue these subresource loads). TermSurf does not
+      have Chrome's full `ExtensionRegistry`, so this stands in for it.
+   2. `frame_host = RenderFrameHost::FromID(...)` exists. Its
+      `GetLastCommittedOrigin()` is logged as **context only**, not used as a
+      gate — see the timing note below.
    3. The frame is recognized by the Exp 4 attach bookkeeping /
       `TsPdfStreamStore` as the active PDF viewer frame for a stored stream.
       Reuse the same frame-identity check the Exp 4 attach path already uses; do
-      not invent a second notion of "the PDF viewer frame."
+      not invent a second notion of "the PDF viewer frame." This is the
+      authoritative identity gate.
 
-   If any of the three fails, do not register the factory. Normal web pages, and
+   If any of these fails, do not register the factory. Normal web pages, and
    PDF-extension-origin frames that are not the active stored-stream viewer
    frame, must not gain access to `chrome://resources/...`.
+
+   Timing note (discovered in this experiment's first run): this hook fires
+   while the PDF viewer frame's navigation is still committing, so at that
+   instant `frame_host->GetLastCommittedOrigin()` is the frame's pre-commit
+   (opaque `"null"`) origin, not yet the extension origin. An earlier draft of
+   this gate required the committed origin to equal the extension origin; that
+   rejected the real viewer frame every time
+   (`frame_origin=null reason=frame-origin-mismatch`). The committed-origin
+   equality check is therefore demoted to logged context. Security still holds:
+   gate 1 (`request_initiator_origin`) is authoritative for the committing
+   document, and gate 3 (`TsPdfStreamStore` recognition) is both timing-correct
+   (`attach-child-found` records the frame before its subresource factories are
+   registered) and stricter than an origin match.
 
    Do not add a top-level `CreateNonNetworkNavigationURLLoaderFactory(...)` path
    for `chrome://resources`. The PDF viewer uses these URLs as module/CSS
@@ -3082,11 +3098,13 @@ stack, GuestView, or MimeHandlerView.
 
    Add concise logs around the registration decision:
 
+   Requests whose initiator is not the PDF viewer extension origin (gate 1)
+   return silently, so normal HTML / non-PDF traffic produces no Exp 6 factory
+   logs. Once gate 1 passes, the decision is logged:
+
    ```text
    [issue-789-exp6] webui-factory-registered initiator_origin=<origin> frame_origin=<origin> host=resources
-   [issue-789-exp6] webui-factory-skipped initiator_origin=<none> frame_origin=<origin> reason=no-initiator-origin
-   [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<origin> reason=not-pdf-viewer-origin
-   [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<origin> reason=frame-origin-mismatch
+   [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<none> reason=no-frame-host
    [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<origin> reason=frame-not-active-viewer
    [issue-789-exp6] webui-factory-registered-count web_contents=<id> count=<n>
    ```
@@ -3368,3 +3386,101 @@ needs.
 - The frame gate leaks: a normal web page (or a PDF-extension-origin frame that
   is not the active stored-stream viewer frame) can load
   `chrome://resources/...`.
+
+#### Result
+
+**Result:** Partial
+
+The browser-side WebUI resource factory is implemented, correctly gated, and
+registers for the live PDF viewer frame — but `chrome://resources` loads still
+fail, now at a different and precisely identified layer: a renderer-side
+`SecurityOrigin::CanDisplay` check that runs before any browser URL loader
+factory is consulted.
+
+Chromium branch `148.0.7778.97-issue-789-exp6` (forked from
+`148.0.7778.97-issue-789-exp5`). Changes, all in
+`content/libtermsurf_chromium/`:
+
+- `ts_content_client.cc` — `scheme-check` startup log confirming `chrome` is a
+  content built-in. No scheme registration added (verified `chrome=registered`).
+- `ts_pdf_stream_store.{h,cc}` — `IsPdfExtensionHostFrame(RenderFrameHost*)`,
+  true when the frame's tree-node id matches a stored stream's
+  `extension_host_frame_tree_node_id()`.
+- `ts_browser_client.cc` — gated `chrome://resources` WebUI factory in
+  `RegisterNonNetworkSubresourceURLLoaderFactories` via
+  `content::CreateWebUIURLLoaderFactory(frame_host, kChromeUIScheme, {kChromeUIResourcesHost})`.
+
+Verification:
+
+- **Build / deps.** `libtermsurf_chromium` builds and links. `gn desc` shows
+  none of `//chrome/browser/plugins:impl`,
+  `//chrome/browser/extensions:extensions`, `//components/guest_view/browser`.
+- **Scheme check.**
+  `[issue-789-exp6] scheme-check chrome=registered note=content-builtin`.
+  Confirmed in source: `RegisterContentSchemes` unconditionally registers
+  `chrome` as standard/secure right after `AddAdditionalSchemes`
+  (`content/common/url_schemes.cc:62,72`), so no embedder registration was
+  needed or added.
+- **Gate timing discovery (first run).** The first build gated on
+  `GetLastCommittedOrigin()` equalling the extension origin. It logged
+  `webui-factory-skipped ... frame_origin=null reason=frame-origin-mismatch` on
+  every run and never registered the factory. Cause: this hook fires while the
+  viewer frame is committing, so its committed origin is still the pre-commit
+  opaque `"null"` origin. Fix: demote committed-origin to logged context; gate
+  on `request_initiator_origin` (authoritative for the committing document) plus
+  `TsPdfStreamStore` recognition (timing-correct — `attach-child-found` precedes
+  factory registration, observed at `…895896` vs `…898850`).
+- **PDF smoke after fix.** Factory now registers for the viewer frame:
+  `[issue-789-exp6] webui-factory-registered initiator_origin=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai frame_origin=null host=resources`
+  and `webui-factory-registered-count … count=1`. The Exp 4/5 sequence
+  (`attach-handler-committed`, `viewer-template`,
+  `viewer-api-installed result=ok`) is intact.
+- **`chrome://resources` served/failed.** All requested paths still **failed**,
+  but no longer for lack of a browser factory. The renderer blocks each one at
+  `BaseFetchContext::CanRequest` → `resource_request.CanDisplay(url)`
+  (`third_party/blink/renderer/core/loader/base_fetch_context.cc:233`, logged as
+  `Not allowed to load local resource: chrome://resources/...`). Observed paths
+  (all failed at this layer): `css/text_defaults_md.css`, `js/assert.js`,
+  `lit/v3_0/lit.rollup.js`, `js/load_time_data.js`,
+  `mojo/mojo/public/js/bindings.js`,
+  `cr_elements/cr_a11y_announcer/cr_a11y_announcer.css`. Evidence source:
+  renderer `CONSOLE` lines in the Wezboard log (the test harness routes the
+  Roamium child's stderr there).
+- **Screenshot.** Browser overlay is a blank white viewer shell — classified as
+  _viewer still blocked on `chrome://resources` imports_ (now at the renderer
+  `CanDisplay` layer, not the missing browser factory).
+- **HTML and non-PDF binary smoke.** `index.html` and `test.bin` produced **0**
+  `webui-factory` lines and **0** Exp 4/5 PDF-path lines; `registered-count` was
+  never logged. The benign per-process `scheme-check` startup log still appears
+  (it is not a PDF-path or factory log). Gate does not fire for non-PDF content.
+- **Negative leak.** Structurally satisfied: the factory only registers when
+  gate 1 (PDF extension initiator) and gate 3 (`TsPdfStreamStore` recognition)
+  both pass, which a normal page never does (confirmed 0 factory lines on the
+  HTML run); and Blink's `CanDisplay` independently blocks `chrome://resources`
+  for non-WebUI origins. An explicit normal-page
+  `fetch('chrome://resources/...')` assertion is left as cheap future hardening.
+
+#### Conclusion
+
+Experiment 6 achieved its scoped goal — register Chromium's narrow WebUI
+resource factory for the PDF viewer frame, gated correctly and without pulling
+in any forbidden Chrome subsystem — and, more valuably, corrected the Electron
+mental model: the browser-side `CreateWebUIURLLoaderFactory` is **necessary but
+not sufficient**. A `chrome://resources` subresource is blocked earlier, in the
+renderer, by `SecurityOrigin::CanDisplay`, because the PDF extension origin is
+not permitted to display the display-isolated `chrome` scheme.
+
+It also overturned the Codex review's high-severity recommendation in practice:
+gating on the committed frame origin is incompatible with the
+factory-registration-at-commit timing and rejected the real viewer frame. The
+`TsPdfStreamStore` recognition gate is the timing-correct and stricter identity
+check.
+
+Next layer (Experiment 7): grant the PDF viewer extension origin renderer-side
+permission to display `chrome://resources`, mirroring how Chrome lets its
+component-extension PDF viewer reach shared WebUI resources — e.g. a Blink
+scheme-registry / origin-access grant scoped to the PDF extension origin and the
+`chrome://resources` host — so the loads that now fail at
+`base_fetch_context.cc:233` are permitted and reach the browser factory this
+experiment installed. This must stay as narrow as the browser-side gate: only
+the PDF viewer extension origin, only `chrome://resources`.

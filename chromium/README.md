@@ -14,7 +14,7 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Branch: `148.0.7778.97-issue-789-exp5`
+- Branch: `148.0.7778.97-issue-789-exp6`
 - Base version: `148.0.7778.97` (tracking Electron's Chromium version)
 
 ## Branch Strategy
@@ -108,6 +108,7 @@ find the most relevant recent branch, create a new branch from it
 | `148.0.7778.97-issue-789-exp3` | [Issue 789](../issues/0789-electron-style-pdf-viewer/README.md)  | Implement PDF stream delegate               |
 | `148.0.7778.97-issue-789-exp4` | [Issue 789](../issues/0789-electron-style-pdf-viewer/README.md)  | Attach PDF extension viewer frame           |
 | `148.0.7778.97-issue-789-exp5` | [Issue 789](../issues/0789-electron-style-pdf-viewer/README.md)  | Add PDF viewer stream-info shim             |
+| `148.0.7778.97-issue-789-exp6` | [Issue 789](../issues/0789-electron-style-pdf-viewer/README.md)  | Serve PDF viewer chrome://resources         |
 
 ## Patches
 
