@@ -2809,3 +2809,110 @@ The result must name the exact next missing piece and cite the log lines.
   treating it as a stretch outcome or next-layer discovery.
 - The implementation reaches `stream-served` with a mismatched `internal_id`,
   `streamUrl`, or `originalUrl`.
+
+**Result:** Partial
+
+Implemented on Chromium branch `148.0.7778.97-issue-789-exp5`.
+
+The branch builds:
+
+```bash
+autoninja -C out/Default libtermsurf_chromium
+```
+
+The dependency guard stayed clean for TermSurf's target:
+
+```bash
+gn desc out/Default //content/libtermsurf_chromium deps |
+  rg "//chrome/browser/plugins:impl|//chrome/browser/extensions:extensions|//components/guest_view/browser"
+```
+
+No forbidden dependency appeared in `//content/libtermsurf_chromium`.
+
+What changed:
+
+- `TsPdfResponseURLLoaderThrottle` now preserves the original PDF response head
+  before rewriting the top-level navigation to the PDF embedder HTML. This keeps
+  the stored stream metadata as `application/pdf`, not `text/html`.
+- `TsDispatchPdfStream` now carries the stream metadata on the PDF viewer
+  handler URL as `termsurf_*` query parameters.
+- `TsPdfComponentExtensionResourceManager` now supplies the missing
+  `textdirection`, `language`, and empty `pdfOopifEnabled` template
+  replacements, keeping the viewer on the `mimeHandlerPrivate` path.
+- `TsPdfViewerURLLoaderFactory` now decodes PDF viewer resources with
+  `LoadDataResourceString(...)`, injects a small renderer-visible
+  `chrome.mimeHandlerPrivate` shim into `pdf/index.html`, stubs the
+  `chrome.pdfViewerPrivate` constants/events that the bundled viewer touches at
+  module load time, and logs shim installation through a TermSurf-only
+  image-beacon endpoint.
+
+The automated PDF smoke run:
+
+```text
+logs/issue-789-exp5-20260528-070057/
+```
+
+proved:
+
+- Exp 2 still captures the PDF stream:
+  `[issue-789-exp2] stream-container-captured`.
+- Exp 4 still attaches and commits the PDF extension viewer frame:
+  `[issue-789-exp4] attach-handler-committed`.
+- Exp 5 serves decoded `pdf/index.html`, applies template replacements, and
+  keeps OOPIF disabled:
+  `[issue-789-exp5] viewer-template pdf_oopif_enabled=absent`.
+- Exp 5 installs the renderer-visible shim:
+  `[issue-789-exp5] viewer-api-installed ... api=mimeHandlerPrivate ... result=ok`.
+
+The run did **not** reach `[issue-789-exp5] viewer-api-call` or
+`[issue-789-exp5] get-stream-info`.
+
+The next blocker is not stream metadata. The viewer module graph starts loading,
+but it fails before `createBrowserApi()` can call
+`chrome.mimeHandlerPrivate.getStreamInfo(...)` because the extension viewer's
+modules import `chrome://resources/...` modules and CSS that TermSurf does not
+serve in this context:
+
+```text
+Not allowed to load local resource: chrome://resources/css/text_defaults_md.css
+Not allowed to load local resource: chrome://resources/js/assert.js
+Not allowed to load local resource: chrome://resources/lit/v3_0/lit.rollup.js
+```
+
+The screenshot advanced from the earlier raw/gibberish PDF bytes to the PDF
+viewer shell's dark plugin area in the upper-left of the white embedder page,
+but the full PDF still did not render.
+
+Normal HTML and non-PDF binary smokes stayed gated:
+
+```text
+logs/issue-789-exp5-html-20260528-070228/
+logs/issue-789-exp5-bin-20260528-070228/
+```
+
+The HTML smoke emitted only the generic Exp 2 throttle creation/install logs and
+no Exp 3 stream-store logs, Exp 4 attach logs, or Exp 5 shim logs. The non-PDF
+binary smoke emitted no PDF stream/attach/shim logs.
+
+The known teardown crash still appears after artifacts are captured:
+
+```text
+Received signal 11 SEGV_ACCERR
+```
+
+That remains out of scope for this issue because the screenshot and logs are
+captured before teardown.
+
+#### Conclusion
+
+Experiment 5 proved that the next PDF blocker is no longer the first
+viewer-private API surface. TermSurf can now serve decoded PDF viewer resources,
+keep the viewer in non-OOPIF `mimeHandlerPrivate` mode, and install a
+renderer-visible `chrome.mimeHandlerPrivate` shim without pulling in Chrome's
+broad extension browser stack or GuestView.
+
+The viewer still cannot call `getStreamInfo()` because it fails earlier on
+missing `chrome://resources` imports. The next experiment should provide the
+minimal Chrome WebUI resource loading path needed by the PDF viewer's module
+graph, or rewrite those imports to equivalent TermSurf-served resources, before
+returning to stream-info delivery.

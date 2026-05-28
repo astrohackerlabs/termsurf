@@ -1,7 +1,7 @@
 From a4a2b52259f944ae040118f61cf5e99168d62495 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Wed, 27 May 2026 20:55:06 -0500
-Subject: [PATCH 3/3] Attach PDF viewer frame
+Subject: [PATCH 3/4] Attach PDF viewer frame
 
 A blank little iframe waited alone,
 With stream bytes stacked in a pile.

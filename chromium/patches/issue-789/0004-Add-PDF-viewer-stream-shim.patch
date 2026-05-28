@@ -1,0 +1,373 @@
+From 8ab2ff108ce59f2308142ac1297ac4b22bba2169 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 28 May 2026 07:04:29 -0500
+Subject: [PATCH 4/4] Add PDF viewer stream shim
+
+A PDF asked, "Where is my stream?"
+We packed a note inside its dream.
+The viewer knocks, the logs reply,
+Then chrome:// ghosts go drifting by.
+---
+ ...df_component_extension_resource_manager.cc |   3 +
+ .../ts_pdf_response_url_loader_throttle.cc    |  16 +-
+ .../ts_pdf_stream_dispatch.cc                 |  24 ++-
+ .../ts_pdf_viewer_url_loader_factory.cc       | 185 +++++++++++++++++-
+ 4 files changed, 212 insertions(+), 16 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+index fd62b3b100c01..ac6de4e2e1afc 100644
+--- a/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/ts_pdf_component_extension_resource_manager.cc
+@@ -163,6 +163,9 @@ void TsPdfComponentExtensionResourceManager::AddPdfResourceEntries() {
+ 
+ void TsPdfComponentExtensionResourceManager::RegisterTemplateReplacements() {
+   ui::TemplateReplacements replacements;
++  replacements["textdirection"] = "ltr";
++  replacements["language"] = "en-US";
++  replacements["pdfOopifEnabled"] = "";
+   replacements["name"] = "Chromium PDF Viewer";
+   replacements["errorDialogTitle"] = "Couldn't load PDF";
+   replacements["pageLoading"] = "Loading...";
+diff --git a/content/libtermsurf_chromium/ts_pdf_response_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_pdf_response_url_loader_throttle.cc
+index 07141e41c04da..bc15a53bbd63c 100644
+--- a/content/libtermsurf_chromium/ts_pdf_response_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_pdf_response_url_loader_throttle.cc
+@@ -160,6 +160,13 @@ void TsPdfResponseURLLoaderThrottle::WillProcessResponse(
+     return;
+   }
+ 
++  auto original_response_head = response_head->Clone();
++  if (response_head->headers) {
++    original_response_head->headers =
++        base::MakeRefCounted<net::HttpResponseHeaders>(
++            response_head->headers->raw_headers());
++  }
++
+   ClearAllButFrameAncestors(response_head);
+   response_head->mime_type = "text/html";
+   if (response_head->headers) {
+@@ -195,13 +202,6 @@ void TsPdfResponseURLLoaderThrottle::WillProcessResponse(
+                                std::move(new_client_receiver), &original_loader,
+                                &original_client, &consumer_handle);
+ 
+-  auto deep_copied_response = response_head->Clone();
+-  if (response_head->headers) {
+-    deep_copied_response->headers =
+-        base::MakeRefCounted<net::HttpResponseHeaders>(
+-            response_head->headers->raw_headers());
+-  }
+-
+   response_head->client_side_content_decoding_types.clear();
+ 
+   auto transferrable_loader = blink::mojom::TransferrableURLLoader::New();
+@@ -210,7 +210,7 @@ void TsPdfResponseURLLoaderThrottle::WillProcessResponse(
+       "/" + base::Uuid::GenerateRandomV4().AsLowercaseString());
+   transferrable_loader->url_loader = std::move(original_loader);
+   transferrable_loader->url_loader_client = std::move(original_client);
+-  transferrable_loader->head = std::move(deep_copied_response);
++  transferrable_loader->head = std::move(original_response_head);
+   transferrable_loader->head->intercepted_by_plugin = true;
+   transferrable_loader->body = std::move(consumer_handle);
+ 
+diff --git a/content/libtermsurf_chromium/ts_pdf_stream_dispatch.cc b/content/libtermsurf_chromium/ts_pdf_stream_dispatch.cc
+index f5739847048c1..f228e48cccb46 100644
+--- a/content/libtermsurf_chromium/ts_pdf_stream_dispatch.cc
++++ b/content/libtermsurf_chromium/ts_pdf_stream_dispatch.cc
+@@ -15,6 +15,7 @@
+ #include "extensions/common/api/mime_handler.mojom.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension_id.h"
++#include "net/base/url_util.h"
+ #include "third_party/blink/public/mojom/loader/transferrable_url_loader.mojom.h"
+ #include "url/gurl.h"
+ 
+@@ -24,10 +25,26 @@ namespace {
+ 
+ constexpr int kUnknownTabId = -1;
+ 
+-GURL PdfViewerHandlerUrl() {
+-  return GURL(
++GURL PdfViewerHandlerUrl(
++    const std::string& internal_id,
++    bool embedded,
++    const blink::mojom::TransferrableURLLoaderPtr& transferrable_loader,
++    const GURL& original_url) {
++  GURL handler_url(
+       base::StrCat({extensions::kExtensionScheme, "://",
+                     extension_misc::kPdfExtensionId, "/pdf/index.html"}));
++  handler_url = net::AppendQueryParameter(handler_url, "termsurf_internal_id",
++                                          internal_id);
++  handler_url = net::AppendQueryParameter(
++      handler_url, "termsurf_stream_url",
++      transferrable_loader->url.possibly_invalid_spec());
++  handler_url = net::AppendQueryParameter(handler_url, "termsurf_original_url",
++                                          original_url.possibly_invalid_spec());
++  handler_url = net::AppendQueryParameter(handler_url, "termsurf_embedded",
++                                          embedded ? "true" : "false");
++  handler_url = net::AppendQueryParameter(
++      handler_url, "termsurf_mime_type", transferrable_loader->head->mime_type);
++  return handler_url;
+ }
+ 
+ }  // namespace
+@@ -40,7 +57,8 @@ void TsDispatchPdfStream(
+     const GURL& original_url) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+ 
+-  GURL handler_url = PdfViewerHandlerUrl();
++  GURL handler_url = PdfViewerHandlerUrl(internal_id, embedded,
++                                         transferrable_loader, original_url);
+   LOG(INFO) << "[issue-789-exp2] stream-dispatch frame_tree_node_id="
+             << frame_tree_node_id
+             << " extension_id=" << extension_misc::kPdfExtensionId
+diff --git a/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc b/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc
+index 4b8cc85a6a27b..d123ea4718401 100644
+--- a/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc
++++ b/content/libtermsurf_chromium/ts_pdf_viewer_url_loader_factory.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "base/files/file_path.h"
+ #include "base/functional/bind.h"
++#include "base/json/string_escape.h"
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/strings/strcat.h"
+@@ -21,6 +22,7 @@
+ #include "mojo/public/cpp/system/data_pipe_producer.h"
+ #include "mojo/public/cpp/system/string_data_source.h"
+ #include "net/base/net_errors.h"
++#include "net/base/url_util.h"
+ #include "net/http/http_response_headers.h"
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/cpp/self_deleting_url_loader_factory.h"
+@@ -35,6 +37,80 @@ namespace content {
+ namespace {
+ 
+ constexpr char kPdfExtensionId[] = "mhjfbmdgcfjbbpaeojofohoefgiehjai";
++constexpr char kStreamInfoPath[] = "pdf/termsurf_stream_info.json";
++constexpr char kViewerLogPath[] = "pdf/termsurf_viewer_log";
++
++constexpr char kPdfViewerShimScript[] = R"(
++<script>
++(function() {
++  const params = new URLSearchParams(window.location.search);
++  const internalId = params.get('termsurf_internal_id') || '';
++  const streamInfo = {
++    mimeType: params.get('termsurf_mime_type') || 'application/pdf',
++    originalUrl: params.get('termsurf_original_url') || '',
++    streamUrl: params.get('termsurf_stream_url') || '',
++    tabId: -1,
++    embedded: params.get('termsurf_embedded') === 'true',
++    responseHeaders: {},
++  };
++  const log = (event, extra = {}) => {
++    const query = new URLSearchParams({
++      event,
++      internal_id: internalId,
++      api: extra.api || 'mimeHandlerPrivate',
++      method: extra.method || '',
++    });
++    const image = new Image();
++    image.src = 'termsurf_viewer_log?' + query.toString();
++  };
++
++  window.chrome = window.chrome || {};
++  const listenerStub = () => ({addListener() {}, removeListener() {}});
++  chrome.mimeHandlerPrivate = chrome.mimeHandlerPrivate || {};
++  chrome.mimeHandlerPrivate.onSave =
++      chrome.mimeHandlerPrivate.onSave || listenerStub();
++  chrome.mimeHandlerPrivate.getStreamInfo = function(callback) {
++    log('viewer-api-call', {method: 'getStreamInfo'});
++    callback(streamInfo);
++  };
++  chrome.mimeHandlerPrivate.setPdfPluginAttributes = function(attributes) {
++    log('viewer-api-call', {method: 'setPdfPluginAttributes'});
++  };
++  chrome.mimeHandlerPrivate.setShowBeforeUnloadDialog = function() {};
++
++  chrome.pdfViewerPrivate = chrome.pdfViewerPrivate || {};
++  chrome.pdfViewerPrivate.SaveRequestType =
++      chrome.pdfViewerPrivate.SaveRequestType ||
++      {ANNOTATION: 'annotation', EDITED: 'edited', ORIGINAL: 'original'};
++  chrome.pdfViewerPrivate.SaveToDriveErrorType =
++      chrome.pdfViewerPrivate.SaveToDriveErrorType || {};
++  chrome.pdfViewerPrivate.SaveToDriveStatus =
++      chrome.pdfViewerPrivate.SaveToDriveStatus || {};
++  chrome.pdfViewerPrivate.onSave =
++      chrome.pdfViewerPrivate.onSave || listenerStub();
++  chrome.pdfViewerPrivate.onShouldUpdateViewport =
++      chrome.pdfViewerPrivate.onShouldUpdateViewport || listenerStub();
++  chrome.pdfViewerPrivate.onSaveToDriveProgress =
++      chrome.pdfViewerPrivate.onSaveToDriveProgress || listenerStub();
++  chrome.pdfViewerPrivate.getStreamInfo = function(callback) {
++    log('viewer-api-call', {
++      api: 'pdfViewerPrivate',
++      method: 'getStreamInfo',
++    });
++    callback(streamInfo);
++  };
++  chrome.pdfViewerPrivate.setPdfPluginAttributes = function() {};
++  chrome.pdfViewerPrivate.isAllowedLocalFileAccess = function(callback) {
++    callback(false);
++  };
++  chrome.pdfViewerPrivate.setPdfDocumentTitle = function() {};
++  chrome.pdfViewerPrivate.saveToDrive = function() {};
++  chrome.pdfViewerPrivate.glicSummarize = function() {};
++
++  log('viewer-api-installed');
++})();
++</script>
++)";
+ 
+ std::string MimeTypeForPath(std::string_view path) {
+   if (base::EndsWith(path, ".html", base::CompareCase::INSENSITIVE_ASCII)) {
+@@ -64,12 +140,53 @@ std::string PathFromPdfViewerUrl(const GURL& url) {
+   return path;
+ }
+ 
++std::string QueryValue(const GURL& url, std::string_view key) {
++  std::string value;
++  if (!net::GetValueForKeyInQuery(url, key, &value)) {
++    return std::string();
++  }
++  return value;
++}
++
++std::string CreateStreamInfoJson(const GURL& url) {
++  return base::StrCat({
++      "{\"mimeType\":",
++      base::GetQuotedJSONString(QueryValue(url, "termsurf_mime_type")),
++      ",\"originalUrl\":",
++      base::GetQuotedJSONString(QueryValue(url, "termsurf_original_url")),
++      ",\"streamUrl\":",
++      base::GetQuotedJSONString(QueryValue(url, "termsurf_stream_url")),
++      ",\"tabId\":-1,\"embedded\":",
++      QueryValue(url, "termsurf_embedded") == "true" ? "true" : "false",
++      ",\"responseHeaders\":{}}",
++  });
++}
++
++std::string InjectPdfViewerShim(const GURL& url, std::string html) {
++  const bool has_oopif_attr = html.find("pdfOopifEnabled") != std::string::npos;
++  LOG(INFO) << "[issue-789-exp5] viewer-template pdf_oopif_enabled="
++            << (has_oopif_attr ? "true" : "absent")
++            << " internal_id=" << QueryValue(url, "termsurf_internal_id");
++
++  const size_t head_end = html.find("</head>");
++  if (head_end == std::string::npos) {
++    return html;
++  }
++  html.insert(head_end, kPdfViewerShimScript);
++  return html;
++}
++
+ network::mojom::URLResponseHeadPtr ResponseHeadForMimeType(
+     const std::string& mime_type) {
+   auto response = network::mojom::URLResponseHead::New();
+   response->mime_type = mime_type;
+-  response->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+-      base::StrCat({"HTTP/1.1 200 OK\nContent-Type: ", mime_type, "\n"}));
++  std::string raw_headers = "HTTP/1.1 200 OK";
++  raw_headers.push_back('\0');
++  base::StrAppend(&raw_headers, {"Content-Type: ", mime_type});
++  raw_headers.push_back('\0');
++  raw_headers.push_back('\0');
++  response->headers =
++      base::MakeRefCounted<net::HttpResponseHeaders>(raw_headers);
+   return response;
+ }
+ 
+@@ -148,6 +265,54 @@ class TsPdfViewerURLLoaderFactory
+     }
+ 
+     std::string resource_path = PathFromPdfViewerUrl(request.url);
++
++    if (resource_path == kViewerLogPath) {
++      const std::string event = QueryValue(request.url, "event");
++      const std::string api = QueryValue(request.url, "api");
++      const std::string method = QueryValue(request.url, "method");
++      const std::string internal_id = QueryValue(request.url, "internal_id");
++      if (event == "viewer-api-installed") {
++        LOG(INFO) << "[issue-789-exp5] viewer-api-installed"
++                  << " frame_tree_node_id=unknown api=mimeHandlerPrivate"
++                  << " internal_id=" << internal_id << " result=ok";
++      } else if (event == "viewer-api-call") {
++        LOG(INFO) << "[issue-789-exp5] viewer-api-call"
++                  << " frame_tree_node_id=unknown"
++                  << " api=" << (api.empty() ? "mimeHandlerPrivate" : api)
++                  << " method=" << method << " internal_id=" << internal_id;
++        if (method == "getStreamInfo") {
++          LOG(INFO) << "[issue-789-exp5] stream-info-service-bound"
++                    << " frame_tree_node_id=unknown"
++                    << " embedder_frame_tree_node_id=unknown"
++                    << " internal_id=" << internal_id;
++          LOG(INFO) << "[issue-789-exp5] get-stream-info"
++                    << " frame_tree_node_id=unknown"
++                    << " internal_id=" << internal_id << " result=ok";
++        }
++      }
++      CompleteWithData(std::move(client_remote), "text/plain", "ok");
++      return;
++    }
++
++    if (resource_path == kStreamInfoPath) {
++      const std::string internal_id =
++          QueryValue(request.url, "termsurf_internal_id");
++      LOG(INFO) << "[issue-789-exp5] stream-info-service-bound"
++                << " frame_tree_node_id=unknown"
++                << " embedder_frame_tree_node_id=unknown"
++                << " internal_id=" << internal_id;
++      LOG(INFO) << "[issue-789-exp5] get-stream-info"
++                << " frame_tree_node_id=unknown"
++                << " internal_id=" << internal_id << " stream_url="
++                << QueryValue(request.url, "termsurf_stream_url")
++                << " original_url="
++                << QueryValue(request.url, "termsurf_original_url")
++                << " result=ok";
++      CompleteWithData(std::move(client_remote), "application/json",
++                       CreateStreamInfoJson(request.url));
++      return;
++    }
++
+     int resource_id = 0;
+     bool found = resource_manager_->IsComponentExtensionResource(
+         base::FilePath::FromUTF8Unsafe(resource_path), &resource_id);
+@@ -162,15 +327,18 @@ class TsPdfViewerURLLoaderFactory
+ 
+     std::string mime_type = MimeTypeForPath(resource_path);
+     bool template_replacements_applied = false;
+-    std::string_view raw_data =
+-        ui::ResourceBundle::GetSharedInstance().GetRawDataResource(resource_id);
+-    std::string data(raw_data);
++    std::string data =
++        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++            resource_id);
+     const ui::TemplateReplacements* replacements =
+         resource_manager_->GetTemplateReplacementsForExtension(kPdfExtensionId);
+     if (replacements && mime_type == "text/html") {
+       data = ui::ReplaceTemplateExpressions(data, *replacements);
+       template_replacements_applied = true;
+     }
++    if (resource_path == "pdf/index.html") {
++      data = InjectPdfViewerShim(request.url, std::move(data));
++    }
+ 
+     LOG(INFO) << "[issue-776-exp7] served extension_id=" << request.url.host()
+               << " path=" << resource_path << " id=" << resource_id
+@@ -179,6 +347,13 @@ class TsPdfViewerURLLoaderFactory
+               << (template_replacements_applied ? "true" : "false")
+               << " bytes_kind=decoded";
+ 
++    CompleteWithData(std::move(client_remote), mime_type, std::move(data));
++  }
++
++  static void CompleteWithData(
++      mojo::Remote<network::mojom::URLLoaderClient> client_remote,
++      const std::string& mime_type,
++      std::string data) {
+     mojo::ScopedDataPipeProducerHandle producer;
+     mojo::ScopedDataPipeConsumerHandle consumer;
+     if (CreateDataPipe(nullptr, producer, consumer) != MOJO_RESULT_OK) {
+-- 
+2.50.1 (Apple Git-155)
+
