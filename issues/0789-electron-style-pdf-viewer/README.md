@@ -3008,14 +3008,23 @@ stack, GuestView, or MimeHandlerView.
    interpretation only. Chromium's `CreateWebUIURLLoaderFactory(...)` remains
    responsible for resolving valid `chrome://resources` paths.
 
-3. Verify or register the `chrome` scheme.
+3. Verify the `chrome` scheme. Do not register it speculatively.
 
-   Confirm whether TermSurf's content client already has `chrome` registered as
-   a non-network scheme that can reach
-   `RegisterNonNetworkSubresourceURLLoaderFactories(...)`. If it is missing, add
-   the minimal scheme registration in `TsContentClient::AddAdditionalSchemes`.
-   `chrome=registered` is the expected result; `added` or `missing` is
-   surprising and should be called out in the result before proceeding.
+   `chrome` is already a built-in WebUI scheme in content.
+   `URLDataManagerBackend` always adds the shared `chrome://resources` data
+   source (`content/browser/webui/url_data_manager_backend.cc`), and
+   content-shell already treats `chrome` as a handled scheme
+   (`content/shell/browser/shell_content_browser_client.cc`).
+   `TsContentClient::AddAdditionalSchemes` currently only adds the PDF extension
+   scheme (`content/libtermsurf_chromium/ts_content_client.cc`).
+
+   Therefore the expected result is `chrome=registered`. Treat `chrome` as
+   built-in: do **not** add it to `standard_schemes`, `secure_schemes`, or any
+   similar list, and do not otherwise broaden `chrome:` semantics, unless a
+   concrete local failure in this experiment proves that exact registration is
+   required. If you believe registration is needed, record the precise failing
+   symptom in the result before adding it. `added` or `missing` is surprising
+   and must be called out in the result before proceeding.
 
    Add a startup log so the result records what happened:
 
@@ -3043,19 +3052,29 @@ stack, GuestView, or MimeHandlerView.
            {content::kChromeUIResourcesHost}));
    ```
 
-   Scope this factory to the PDF extension viewer frame only. TermSurf does not
-   have Chrome's full `ExtensionRegistry`, so use the hook's
-   `request_initiator_origin` as the primary gate:
+   Scope this factory to the specific Exp 4 PDF viewer frame only, not merely to
+   the PDF extension origin. TermSurf already serves the PDF extension scheme
+   broadly in `TsBrowserClient`
+   (`content/libtermsurf_chromium/ts_browser_client.cc`), so origin alone is too
+   weak: any frame that reaches
+   `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai` outside the
+   stored-stream flow would also gain `chrome://resources`. Require all of the
+   following before registering the factory:
+   1. `request_initiator_origin` is present and equals the PDF viewer extension
+      origin `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai`. TermSurf
+      does not have Chrome's full `ExtensionRegistry`, so this is the origin
+      gate.
+   2. `frame_host = RenderFrameHost::FromID(...)` exists, and
+      `frame_host->GetLastCommittedOrigin()` is also the PDF viewer extension
+      origin. This is a real gate here, not just supporting context.
+   3. The frame is recognized by the Exp 4 attach bookkeeping /
+      `TsPdfStreamStore` as the active PDF viewer frame for a stored stream.
+      Reuse the same frame-identity check the Exp 4 attach path already uses; do
+      not invent a second notion of "the PDF viewer frame."
 
-   ```text
-   chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai
-   ```
-
-   `request_initiator_origin` is optional. If it is absent, do not register the
-   factory. If it is present but is not the PDF viewer extension origin, do not
-   register the factory. Normal web pages must not gain access to
-   `chrome://resources/...`. `frame_host->GetLastCommittedOrigin()` may be
-   logged as supporting context, but it is not the primary gate for this hook.
+   If any of the three fails, do not register the factory. Normal web pages, and
+   PDF-extension-origin frames that are not the active stored-stream viewer
+   frame, must not gain access to `chrome://resources/...`.
 
    Do not add a top-level `CreateNonNetworkNavigationURLLoaderFactory(...)` path
    for `chrome://resources`. The PDF viewer uses these URLs as module/CSS
@@ -3067,6 +3086,8 @@ stack, GuestView, or MimeHandlerView.
    [issue-789-exp6] webui-factory-registered initiator_origin=<origin> frame_origin=<origin> host=resources
    [issue-789-exp6] webui-factory-skipped initiator_origin=<none> frame_origin=<origin> reason=no-initiator-origin
    [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<origin> reason=not-pdf-viewer-origin
+   [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<origin> reason=frame-origin-mismatch
+   [issue-789-exp6] webui-factory-skipped initiator_origin=<origin> frame_origin=<origin> reason=frame-not-active-viewer
    [issue-789-exp6] webui-factory-registered-count web_contents=<id> count=<n>
    ```
 
@@ -3192,8 +3213,22 @@ stack, GuestView, or MimeHandlerView.
    exact next failure instead of expanding this experiment.
 
    The result must list the `chrome://resources` paths the viewer requested
-   during the smoke run, using renderer console output or runtime logs where
-   available. Mark each path as served or failed.
+   during the smoke run and mark each path as served or failed. Absence of
+   `Not allowed to load local resource` errors is not sufficient proof, because
+   `CreateWebUIURLLoaderFactory(...)` emits no per-resource TermSurf logs and a
+   resource can fail silently or never be requested because earlier JS already
+   died. Back the served/failed list with a concrete per-resource proof source,
+   in order of preference:
+   - DevTools / renderer network log entries with HTTP status per URL;
+   - a NetLog capture of the run;
+   - temporary instrumentation logging completion + net error per
+     `chrome://resources` request, if the above are impractical.
+
+   Each of the three expected paths (`text_defaults_md.css`, `assert.js`,
+   `lit/v3_0/lit.rollup.js`) plus any newly observed ones must appear in the
+   proof source as served (200/OK) or failed (with the exact error). A path that
+   was never requested must be listed as "not requested" with the earlier
+   failure that prevented it.
 
    Stretch log sequence:
 
@@ -3238,7 +3273,24 @@ stack, GuestView, or MimeHandlerView.
    PDF-viewer WebUI resource logs should appear. If
    `webui-factory-registered-count` is logged, the count must be 0.
 
-7. Record the known teardown crash separately.
+7. Run the negative `chrome://resources` leak test.
+
+   Confirm the gate does not leak `chrome://resources` to ordinary web content.
+   From a normal HTML page (not the PDF viewer frame), attempt to load a WebUI
+   resource the PDF viewer uses, for example by importing or fetching:
+
+   ```text
+   chrome://resources/js/assert.js
+   ```
+
+   This request must fail. The expected outcome is a
+   `Not allowed to load local resource: chrome://resources/...` error (or an
+   equivalent network failure), and no
+   `[issue-789-exp6] webui-factory-registered` log for that frame. If a normal
+   web page can load `chrome://resources/...`, the gate is too broad; record
+   Failure and tighten the frame gate before claiming any Pass.
+
+8. Record the known teardown crash separately.
 
    The Issue 776 teardown crash remains out of scope unless it prevents logs or
    screenshots from being captured.
@@ -3247,14 +3299,22 @@ stack, GuestView, or MimeHandlerView.
 
 - `libtermsurf_chromium` builds and links.
 - The forbidden broad Chrome dependency set is still absent.
+- `chrome` is not added to `standard_schemes`/`secure_schemes`; the scheme-check
+  records `chrome=registered` (or `added` is justified by a recorded failure).
 - `chrome://resources` is routed through Chromium's
-  `content::CreateWebUIURLLoaderFactory(...)`, scoped to the PDF viewer
-  extension frame only.
+  `content::CreateWebUIURLLoaderFactory(...)`, scoped to the active Exp 4 PDF
+  viewer frame — all three gates (initiator origin, committed frame origin, and
+  Exp 4 / `TsPdfStreamStore` frame recognition) pass.
 - The run no longer fails before `createBrowserApi()` due to missing
   `chrome://resources` dependencies.
+- Each requested `chrome://resources` path is shown served or failed via a
+  concrete per-resource proof source (network log, NetLog, or instrumentation),
+  not merely by the absence of console errors.
 - If the viewer still fails before calling
   `mimeHandlerPrivate.getStreamInfo(...)`, the new failure is named precisely
   and is not another missing `chrome://resources` load.
+- The negative leak test passes: a normal HTML page cannot load
+  `chrome://resources/...`.
 - HTML and non-PDF binary smoke tests do not bind or call the PDF resource,
   stream, attach, or shim paths.
 - The patch archive is regenerated under `chromium/patches/issue-789/`.
@@ -3279,7 +3339,11 @@ layer remains. Valid Partial outcomes include:
   plugin/content navigation;
 - the stream URL navigation starts, but `MapToOriginalUrl(...)` cannot match the
   claimed stream;
-- `stream-served` runs, but the renderer/plugin still stays blank.
+- `stream-served` runs, but the renderer/plugin still stays blank;
+- the viewer requests an unexpected `chrome://<host>` that is not
+  `content::kChromeUIResourcesHost` and the factory hard-fails or bad-messages
+  it. Record this as Partial naming the exact requested host, not as a generic
+  renderer crash.
 
 The result must name the exact next missing piece and cite log lines.
 
@@ -3301,3 +3365,6 @@ needs.
   shim instead of making the viewer module graph reach it.
 - The implementation claims Pass while `chrome://resources` loads are still the
   first failing layer.
+- The frame gate leaks: a normal web page (or a PDF-extension-origin frame that
+  is not the active stored-stream viewer frame) can load
+  `chrome://resources/...`.
