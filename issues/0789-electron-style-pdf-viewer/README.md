@@ -2916,3 +2916,301 @@ missing `chrome://resources` imports. The next experiment should provide the
 minimal Chrome WebUI resource loading path needed by the PDF viewer's module
 graph, or rewrite those imports to equivalent TermSurf-served resources, before
 returning to stream-info delivery.
+
+### Experiment 6: Serve PDF Viewer WebUI Resources
+
+#### Description
+
+Experiment 5 proved that TermSurf can serve the PDF viewer shell, keep it on the
+non-OOPIF `mimeHandlerPrivate` path, and install a renderer-visible
+`chrome.mimeHandlerPrivate` shim. The viewer still stops before calling
+`getStreamInfo()` because its JavaScript modules import shared Chrome WebUI
+resources:
+
+```text
+chrome://resources/css/text_defaults_md.css
+chrome://resources/js/assert.js
+chrome://resources/lit/v3_0/lit.rollup.js
+```
+
+Those imports are normal for Chrome's PDF viewer, but TermSurf's
+content-shell-based embedder currently only serves the PDF extension resources
+from `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/...`. It does not
+provide the `chrome://resources/...` loader that Chrome's WebUI stack provides.
+
+This experiment adds the smallest TermSurf-owned `chrome://resources` serving
+path needed by the PDF viewer's module graph. The goal is not to make PDFs
+render completely yet. The goal is to advance the viewer past the missing
+WebUI-resource failures so it can call the Experiment 5
+`chrome.mimeHandlerPrivate.getStreamInfo(...)` shim.
+
+This is still the Electron-style strategy: mirror only the narrow pieces the PDF
+viewer needs, backed by TermSurf-owned resource serving. Do not import Chrome's
+full WebUI controller stack, Chrome extension browser stack, GuestView, or
+MimeHandlerView.
+
+#### Changes
+
+1. Create a new Chromium branch from Experiment 5.
+
+   ```bash
+   cd chromium/src
+   git checkout 148.0.7778.97-issue-789-exp5
+   git checkout -b 148.0.7778.97-issue-789-exp6
+   ```
+
+   Update `chromium/README.md` in the main repo to list the new branch.
+
+2. Audit the viewer's actual missing `chrome://resources` imports.
+
+   Use the Experiment 5 logs as the starting set, then inspect the generated PDF
+   viewer JavaScript to enumerate likely follow-up imports:
+
+   ```bash
+   rg "chrome://resources" \
+     out/Default/gen/chrome/browser/resources/pdf/tsc \
+     chrome/browser/resources/pdf
+   ```
+
+   Record the initial allowlist in the result section. The expected first set
+   includes:
+
+   ```text
+   chrome://resources/css/text_defaults_md.css
+   chrome://resources/js/assert.js
+   chrome://resources/lit/v3_0/lit.rollup.js
+   ```
+
+   If the first implementation reveals additional PDF-viewer imports, add them
+   only if they are direct `chrome://resources` dependencies of the existing PDF
+   viewer graph. Do not generalize into a broad WebUI resource server.
+
+3. Add a TermSurf WebUI resource manager for the narrow allowlist.
+
+   Add a small resource manager in `content/libtermsurf_chromium`, or extend the
+   existing PDF resource manager if that keeps the code simpler. It should:
+   - map allowlisted `chrome://resources/...` paths to Chromium resource IDs;
+   - load the needed resource packs if they are not already loaded;
+   - return the correct MIME type for CSS and JavaScript modules;
+   - log every served and rejected resource.
+
+   Required logs:
+
+   ```text
+   [issue-789-exp6] webui-resource-allowlist count=<n> paths=<comma-separated>
+   [issue-789-exp6] webui-resource-served path=<path> resource_id=<id> mime=<mime> bytes=<n>
+   [issue-789-exp6] webui-resource-rejected path=<path> reason=<not-allowlisted|not-found|wrong-scheme>
+   ```
+
+   The resource path must be normalized before lookup so `../` and other path
+   tricks cannot escape the allowlist.
+
+4. Route `chrome://resources` through the narrow TermSurf factory.
+
+   In `TsBrowserClient`, add the smallest scheme handling needed for
+   `chrome://resources/...`:
+   - `CreateNonNetworkNavigationURLLoaderFactory(...)` if top-level navigation
+     asks for the scheme;
+   - `RegisterNonNetworkSubresourceURLLoaderFactories(...)` for subresource and
+     module imports from the PDF extension viewer.
+
+   Preserve the existing PDF extension resource factory. Do not replace the
+   generic `chrome-extension://` factory with `chrome://resources` handling, and
+   do not make `chrome://resources` serve arbitrary paths.
+
+5. Preserve Experiment 5's stream-info shim.
+
+   Do not redesign the `mimeHandlerPrivate` shim in this experiment. The only
+   acceptable Exp 5 changes are small compatibility adjustments needed after the
+   viewer modules actually execute.
+
+   The expected flow after Experiment 6:
+
+   ```text
+   [issue-789-exp5] viewer-template pdf_oopif_enabled=absent ...
+   [issue-789-exp5] viewer-api-installed ... api=mimeHandlerPrivate result=ok
+   [issue-789-exp6] webui-resource-served path=resources/js/assert.js ...
+   [issue-789-exp6] webui-resource-served path=resources/lit/v3_0/lit.rollup.js ...
+   [issue-789-exp5] viewer-api-call ... api=mimeHandlerPrivate method=getStreamInfo
+   [issue-789-exp5] get-stream-info ... result=ok
+   ```
+
+   If the viewer reaches `getStreamInfo()` and then fails on a later PDF plugin
+   or renderer layer, that is a valid Pass or Partial depending on how far it
+   gets. Do not expand Experiment 6 into that later layer.
+
+6. Preserve dependency boundaries.
+
+   `content/libtermsurf_chromium` must still avoid:
+
+   ```text
+   //chrome/browser/plugins:impl
+   //chrome/browser/extensions:extensions
+   //components/guest_view/browser
+   ```
+
+   Also avoid Chrome's full WebUI controller/browser stack unless this
+   experiment records Failure and redesigns around a deliberate product
+   decision. A narrow resource factory is the intended implementation.
+
+7. Format, build, archive.
+
+   Run Chromium formatting on modified C++/GN files:
+
+   ```bash
+   cd chromium/src
+   ../depot_tools/clang-format -i <modified .cc/.h files>
+   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+   gn format content/libtermsurf_chromium/BUILD.gn
+   ```
+
+   Build before committing the Chromium branch:
+
+   ```bash
+   autoninja -C out/Default libtermsurf_chromium
+   ```
+
+   After the Chromium branch commit, regenerate the Issue 789 patch archive from
+   the last buildable PDF base:
+
+   ```bash
+   tmp_dir="$(mktemp -d ../../chromium/patches/issue-789.XXXXXX)"
+   git format-patch 148.0.7778.97-issue-776-exp7..HEAD \
+     -o "$tmp_dir"
+   rm -rf ../../chromium/patches/issue-789
+   mv "$tmp_dir" ../../chromium/patches/issue-789
+   ```
+
+#### Verification
+
+1. Build `libtermsurf_chromium`.
+
+   ```bash
+   cd chromium/src
+   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+   autoninja -C out/Default libtermsurf_chromium
+   ```
+
+2. Check dependencies.
+
+   ```bash
+   gn desc out/Default //content/libtermsurf_chromium deps
+   rg "//chrome/browser/plugins:impl|//chrome/browser/extensions:extensions|//components/guest_view/browser" \
+     content/libtermsurf_chromium chrome/browser/pdf chrome/browser/plugins
+   ```
+
+   Forbidden targets must not appear as TermSurf dependencies.
+
+3. Run the automated Bitcoin PDF smoke test.
+
+   ```bash
+   LOG_DIR="$PWD/logs/issue-789-exp6-$(date +%Y%m%d-%H%M%S)" \
+   TERMSURF_PDF_SETTLE_SECONDS=10 \
+   ./scripts/test-issue-776-pdf.sh http://localhost:9616/bitcoin.pdf
+   ```
+
+   Required log sequence for Pass:
+
+   ```text
+   [issue-789-exp4] attach-handler-committed ...
+   [issue-789-exp5] viewer-template pdf_oopif_enabled=absent ...
+   [issue-789-exp5] viewer-api-installed ... result=ok
+   [issue-789-exp6] webui-resource-served path=resources/js/assert.js ...
+   [issue-789-exp6] webui-resource-served path=resources/lit/v3_0/lit.rollup.js ...
+   [issue-789-exp5] viewer-api-call ... method=getStreamInfo
+   [issue-789-exp5] get-stream-info ... result=ok
+   ```
+
+   The log must not contain new
+   `Not allowed to load local resource: chrome://resources/...` failures for
+   allowlisted resources. If new non-allowlisted PDF-viewer resources appear,
+   record them and decide whether they belong in this experiment's narrow
+   allowlist.
+
+4. Capture screenshot output.
+
+   Classify the screenshot as one of:
+   - PDF visibly rendered;
+   - viewer advanced past the Exp 5 blank/dark-shell state but PDF still blank;
+   - viewer reached `getStreamInfo()` but failed on plugin/renderer creation;
+   - viewer still blocked on `chrome://resources` imports;
+   - renderer crash;
+   - automation failure.
+
+   If the PDF visibly renders, also test whether the first page scrolls.
+
+5. Run normal HTML smoke.
+
+   ```bash
+   LOG_DIR="$PWD/logs/issue-789-exp6-html-$(date +%Y%m%d-%H%M%S)" \
+   TERMSURF_PDF_SETTLE_SECONDS=4 \
+   ./scripts/test-issue-776-pdf.sh http://localhost:9616/index.html
+   ```
+
+   No Exp 3 stream-store logs, Exp 4 attach logs, Exp 5 shim logs, or Exp 6
+   PDF-viewer WebUI resource logs should appear.
+
+6. Run non-PDF binary smoke.
+
+   ```bash
+   LOG_DIR="$PWD/logs/issue-789-exp6-bin-$(date +%Y%m%d-%H%M%S)" \
+   TERMSURF_PDF_SETTLE_SECONDS=4 \
+   ./scripts/test-issue-776-pdf.sh http://localhost:9616/test.bin
+   ```
+
+   No Exp 3 stream-store logs, Exp 4 attach logs, Exp 5 shim logs, or Exp 6
+   PDF-viewer WebUI resource logs should appear.
+
+7. Record the known teardown crash separately.
+
+   The Issue 776 teardown crash remains out of scope unless it prevents logs or
+   screenshots from being captured.
+
+#### Pass Criteria
+
+- `libtermsurf_chromium` builds and links.
+- The forbidden broad Chrome dependency set is still absent.
+- The PDF viewer's allowlisted `chrome://resources` imports are served by a
+  narrow TermSurf-owned resource factory.
+- The run no longer fails before `createBrowserApi()` due to missing
+  `chrome://resources` dependencies.
+- The viewer calls the Experiment 5 `mimeHandlerPrivate.getStreamInfo(...)`
+  shim, and the shim returns stream metadata with the same `internal_id`,
+  `streamUrl`, and `originalUrl` lineage from Exp 2-5.
+- HTML and non-PDF binary smoke tests do not bind or call the PDF resource,
+  stream, attach, or shim paths.
+- The patch archive is regenerated under `chromium/patches/issue-789/`.
+
+Stretch Pass: Experiment 3's delegate/interceptor path reaches `stream-served`,
+and the screenshot visibly renders the first page of the PDF.
+
+#### Partial Criteria
+
+Partial if the build succeeds and the viewer gets farther, but a narrower next
+layer remains. Valid Partial outcomes include:
+
+- additional direct `chrome://resources` imports appear and are clearly part of
+  the PDF viewer graph, but the allowlist was intentionally kept smaller for
+  this run;
+- all allowlisted resources load, but a non-WebUI viewer API is missing before
+  `getStreamInfo()`;
+- `getStreamInfo()` succeeds, but the viewer does not create the inner PDF
+  plugin/content navigation;
+- the stream URL navigation starts, but `MapToOriginalUrl(...)` cannot match the
+  claimed stream;
+- `stream-served` runs, but the renderer/plugin still stays blank.
+
+The result must name the exact next missing piece and cite log lines.
+
+#### Failure Criteria
+
+- The experiment imports Chrome's broad WebUI controller stack, broad extension
+  browser stack, GuestView, or MimeHandlerView instead of a narrow resource
+  serving path.
+- The implementation serves arbitrary `chrome://resources` paths without an
+  allowlist.
+- The implementation changes normal HTML or non-PDF binary behavior.
+- The implementation removes or bypasses Experiment 5's `mimeHandlerPrivate`
+  shim instead of making the viewer module graph reach it.
+- The implementation claims Pass without a `[issue-789-exp5] viewer-api-call`
+  log for `mimeHandlerPrivate.getStreamInfo(...)`.
