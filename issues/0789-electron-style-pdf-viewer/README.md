@@ -1955,3 +1955,284 @@ equivalent needed for OOPIF PDF:
   stream;
 - keep using the delegate/interceptor/store built in Experiment 3 rather than
   returning to the broad Chrome plugin stack.
+
+### Experiment 4: Make the Viewer Ask for the PDF
+
+#### Description
+
+Connect the blank PDF viewer shell to the PDF stream that Experiment 3 already
+stores.
+
+In plain terms, Experiment 3 got the PDF file into TermSurf's hands, but the
+viewer page never asked for it. The pane now shows a mostly blank white viewer
+area because the static `pdf_embedder.html` wrapper creates an inert
+`internalid` iframe. In Chrome, extra MimeHandlerView machinery notices that
+iframe and turns it into the real PDF viewer/content-frame setup. TermSurf does
+not have that machinery yet.
+
+This experiment should first prove the exact missing callback, then add the
+smallest TermSurf-owned connection that makes the viewer ask for the PDF bytes.
+It must build on the Experiment 3 delegate/store path. Do not replace it with a
+new wrapper, do not return to Chrome's broad plugin stack, and do not implement
+full MimeHandlerView/GuestView unless the minimal path proves impossible.
+
+The preferred implementation is a narrow TermSurf attach shim:
+
+1. detect that a PDF stream has been stored for the current embedder frame;
+2. navigate the blank PDF iframe/content frame to the stored stream URL;
+3. let Experiment 3's `pdf::PdfNavigationThrottle` claim the stream;
+4. let Experiment 3's `pdf::PdfURLLoaderRequestInterceptor` serve the original
+   PDF bytes.
+
+Visible PDF rendering is still a stretch outcome, but this experiment should get
+past "blank viewer shell." A Pass requires the viewer/request path to ask for
+and receive the stored PDF stream, proven by logs.
+
+#### Changes
+
+1. Create a new Chromium branch from Experiment 3.
+
+   ```bash
+   cd chromium/src
+   git checkout 148.0.7778.97-issue-789-exp3
+   git checkout -b 148.0.7778.97-issue-789-exp4
+   ```
+
+   Update `chromium/README.md` in the main repo to list the new branch.
+
+2. Add focused tracing around the missing connection.
+
+   Add logs, gated only by issue tags for now, at these points:
+   - when Experiment 2 emits the `pdf_embedder.html` payload;
+   - when `TsPdfStreamStore` stores a stream;
+   - when any navigation starts/commits in the same `WebContents` after the PDF
+     stream is stored;
+   - when `pdf::PdfNavigationThrottle` is installed;
+   - when `TsPdfStreamDelegate::MapToOriginalUrl(...)` runs;
+   - when `TsPdfStreamDelegate::GetStreamInfo(...)` runs;
+   - when `TsPdfStreamStore::ReadyToCommitNavigation(...)` attempts
+     `RegisterSubresourceOverride(...)`.
+
+   The result must answer:
+   - Did the viewer shell commit as `text/html`?
+   - Did any child frame navigate after the stream was stored?
+   - Did any navigation URL equal the stored stream URL?
+   - Did `MapToOriginalUrl(...)` run?
+   - Did `GetStreamInfo(...)` run?
+
+3. Add a minimal stored-stream navigation trigger.
+
+   Preferred implementation: in `TsPdfStreamStore`, after adding the captured
+   stream, post a UI task that finds the frame represented by the stored
+   `FrameTreeNodeId` and navigates an appropriate child/content frame to the
+   stream URL.
+
+   Use the existing stored data:
+   - stored frame tree node id;
+   - `extensions::StreamContainer::stream_url()`;
+   - `extensions::StreamContainer::handler_url()`;
+   - `internal_id`.
+
+   The navigation target must be the PDF stream URL, not the original PDF URL.
+   The original PDF URL is returned later by
+   `TsPdfStreamDelegate::MapToOriginalUrl(...)`.
+
+   Required logs:
+
+   ```text
+   [issue-789-exp4] attach-attempt frame_tree_node_id=<id> internal_id=<id> stream_url=<url> handler_url=<url>
+   [issue-789-exp4] attach-navigate frame_tree_node_id=<id> target=<stream_url>
+   ```
+
+   If there is no safe frame to navigate, do not guess blindly. Record exactly
+   which frame lookup failed and mark the experiment Partial.
+
+4. Keep Experiment 3 as the stream handoff owner.
+
+   Do not duplicate the stream claim or stream serving logic. The expected
+   sequence after the attach shim is:
+
+   ```text
+   [issue-789-exp3] stream-container-added ...
+   [issue-789-exp4] attach-navigate ... target=<stream_url>
+   [issue-789-exp3] map-to-original-url ... internal_id=<same id>
+   [issue-789-exp3] stream-container-claimed ... internal_id=<same id>
+   [issue-789-exp3] get-stream-info ...
+   [issue-789-exp3] stream-served ...
+   ```
+
+5. Preserve dependency boundaries.
+
+   `content/libtermsurf_chromium` must still avoid:
+
+   ```text
+   //chrome/browser/plugins:impl
+   //chrome/browser/extensions:extensions
+   //components/guest_view/browser
+   ```
+
+   Do not copy Chrome's full `MimeHandlerViewAttachHelper`,
+   `MimeHandlerViewGuest`, or GuestView stack in this experiment. If the minimal
+   attach shim cannot work without those pieces, record that as the Partial
+   result and design the next experiment around the smallest specific missing
+   piece.
+
+6. Preserve non-PDF behavior.
+
+   Normal HTML and non-PDF binary navigations must not run the attach shim. They
+   may still create the always-present Experiment 2 response throttle, but they
+   must not emit:
+
+   ```text
+   [issue-789-exp4] attach-attempt ...
+   [issue-789-exp4] attach-navigate ...
+   [issue-789-exp3] stream-container-added ...
+   [issue-789-exp3] stream-served ...
+   ```
+
+7. Format, build, archive.
+
+   Run Chromium formatting on modified C++/GN files:
+
+   ```bash
+   cd chromium/src
+   ../depot_tools/clang-format -i <modified .cc/.h files>
+   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+   gn format content/libtermsurf_chromium/BUILD.gn
+   ```
+
+   Build before committing the Chromium branch:
+
+   ```bash
+   autoninja -C out/Default libtermsurf_chromium
+   ```
+
+   After the Chromium branch commit, regenerate the Issue 789 patch archive from
+   the last buildable PDF base:
+
+   ```bash
+   tmp_dir="$(mktemp -d ../../chromium/patches/issue-789.XXXXXX)"
+   git format-patch 148.0.7778.97-issue-776-exp7..HEAD \
+     -o "$tmp_dir"
+   rm -rf ../../chromium/patches/issue-789
+   mv "$tmp_dir" ../../chromium/patches/issue-789
+   ```
+
+#### Verification
+
+1. Build `libtermsurf_chromium`.
+
+   ```bash
+   cd chromium/src
+   export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+   autoninja -C out/Default libtermsurf_chromium
+   ```
+
+2. Check dependencies.
+
+   ```bash
+   gn desc out/Default //content/libtermsurf_chromium deps
+   rg "//chrome/browser/plugins:impl|//chrome/browser/extensions:extensions|//components/guest_view/browser" \
+     content/libtermsurf_chromium chrome/browser/pdf chrome/browser/plugins
+   ```
+
+   Forbidden targets must not appear as TermSurf dependencies.
+
+3. Run the automated Bitcoin PDF smoke test.
+
+   ```bash
+   LOG_DIR="$PWD/logs/issue-789-exp4-$(date +%Y%m%d-%H%M%S)" \
+   TERMSURF_PDF_SETTLE_SECONDS=8 \
+   ./scripts/test-issue-776-pdf.sh http://localhost:9616/bitcoin.pdf
+   ```
+
+   Required log sequence for Pass:
+
+   ```text
+   [issue-789-exp2] viewer-template-emitted internal_id=<id> ...
+   [issue-789-exp3] stream-container-added ... internal_id=<same id> ...
+   [issue-789-exp4] attach-attempt ... internal_id=<same id> ...
+   [issue-789-exp4] attach-navigate ... target=<stream_url> ...
+   [issue-789-exp3] map-to-original-url ... internal_id=<same id> ...
+   [issue-789-exp3] stream-container-claimed ... internal_id=<same id> ...
+   [issue-789-exp3] get-stream-info ...
+   [issue-789-exp3] stream-served ...
+   ```
+
+4. Capture screenshot output.
+
+   Classify the screenshot as one of:
+   - PDF visibly rendered;
+   - PDF plugin/content frame loaded but page still blank;
+   - viewer shell only, no claim;
+   - download/error page;
+   - renderer crash;
+   - automation failure.
+
+   If the PDF visibly renders, also test whether the first page can scroll.
+
+5. Run normal HTML smoke.
+
+   ```bash
+   LOG_DIR="$PWD/logs/issue-789-exp4-html-$(date +%Y%m%d-%H%M%S)" \
+   TERMSURF_PDF_SETTLE_SECONDS=4 \
+   ./scripts/test-issue-776-pdf.sh http://localhost:9616/index.html
+   ```
+
+   No Exp 3 stream-store logs or Exp 4 attach logs should appear.
+
+6. Run non-PDF binary smoke.
+
+   ```bash
+   LOG_DIR="$PWD/logs/issue-789-exp4-bin-$(date +%Y%m%d-%H%M%S)" \
+   TERMSURF_PDF_SETTLE_SECONDS=4 \
+   ./scripts/test-issue-776-pdf.sh http://localhost:9616/test.bin
+   ```
+
+   No Exp 3 stream-store logs or Exp 4 attach logs should appear. Existing
+   content-shell download behavior is acceptable.
+
+7. Record the known teardown crash separately.
+
+   The Issue 776 teardown crash remains out of scope unless it prevents logs or
+   screenshots from being captured.
+
+#### Pass Criteria
+
+- `libtermsurf_chromium` builds and links.
+- The forbidden broad Chrome dependency set is still absent.
+- A PDF response stores the original PDF stream.
+- The new attach shim causes a navigation to the stored stream URL.
+- Experiment 3's delegate receives the stream URL and claims the matching
+  `internal_id`.
+- `GetStreamInfo(...)` runs for the claimed frame.
+- `stream-served` appears, proving the PDF bytes were handed to the viewer path.
+- HTML and non-PDF binary smoke tests do not run the attach shim.
+- The patch archive is regenerated under `chromium/patches/issue-789/`.
+
+#### Partial Criteria
+
+Partial if the build succeeds and the logs identify a narrower missing layer,
+but the stream still is not served. Valid Partial outcomes include:
+
+- the embedder document loads, but no child/content frame exists to navigate;
+- a child frame exists, but navigating it to the stream URL is blocked;
+- `MapToOriginalUrl(...)` runs but cannot match the stored stream URL;
+- the stream is claimed but `GetStreamInfo(...)` never runs;
+- `GetStreamInfo(...)` runs but the PDF plugin/content frame still stays blank;
+- the minimal attach shim proves impossible without a specific
+  MimeHandlerViewContainerManager or PDF viewer private API piece.
+
+The result must name the exact next missing piece and cite the log lines.
+
+#### Failure Criteria
+
+- The experiment reintroduces the old data-wrapper fake PDF solution.
+- The experiment bypasses Experiment 3's delegate/store/interceptor path.
+- The implementation imports `//chrome/browser/plugins:impl`.
+- The implementation imports broad Chrome extension/browser or GuestView
+  infrastructure without recording a Partial and redesigning around that scope.
+- The attach shim runs for normal HTML or non-PDF binary navigations.
+- The implementation claims Pass without a `stream-served` log.
+- The PDF `internal_id` does not match from template emission through attach,
+  claim, and serve.
