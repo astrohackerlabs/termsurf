@@ -225,3 +225,5 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
 - [Experiment 22: Trace wrapper body delivery](22-trace-wrapper-body-delivery.md)
   — **Pass** (Blink receives and parses fallback plugin HTML, not the generated
   PDF wrapper body)
+- [Experiment 23: Register PDF MIME in plugin data](23-register-pdf-mime-in-plugin-data.md)
+  — **Designed**
