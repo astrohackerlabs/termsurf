@@ -1063,3 +1063,61 @@ component extension that handles `application/pdf` — mirroring Electron's
 `ElectronExtensionSystem` / `ElectronExtensionsBrowserClient`, scoped to what
 the PDF OOPIF flow needs. Then wire the response interceptor +
 `PdfViewerStreamManager` on top.
+
+### Experiment 6: Stand up the extensions browser infrastructure
+
+#### Description
+
+Stand up the minimal extensions browser system in TermSurf's content_shell base
+so the PDF viewer registers as the `application/pdf` mime handler and the
+canonical OOPIF flow can engage. Research mapped the exact minimal port from
+Electron's `shell/browser/extensions/`.
+
+#### Scope (honest assessment from research)
+
+This is the largest single experiment in the project — a real port, not a hook.
+The minimal pieces (~1,500–2,000 LOC of new scaffolding across ~12 files,
+adapted from Electron):
+
+- `TsExtensionsBrowserClient` (subclass `extensions::ExtensionsBrowserClient`) —
+  `Init`, `GetExtensionSystemFactory`, `GetComponentExtensionResourceManager`
+  (TermSurf already has `TsPdfComponentExtensionResourceManager`),
+  `GetProcessManagerDelegate`, `CreateExtensionHostDelegate`,
+  `GetPrefServiceForContext`, `AllowCrossRendererResourceLoad`, etc.
+- `TsExtensionSystem` + `TsExtensionSystemFactory` (subclass
+  `extensions::ExtensionSystem`) — `InitForRegularProfile`,
+  `LoadComponentExtensions` (loads the PDF viewer via
+  `pdf_extension_util::GetManifest()` → `Extension::Create(kComponent)` →
+  `registrar()->AddExtension`).
+- `TsExtensionLoader`, `TsProcessManagerDelegate`, `TsExtensionHostDelegate`,
+  `TsExtensionsAPIClient`, an extension `WebContentsObserver`, and the
+  `EnsureBrowserContextKeyedServiceFactoriesBuilt` registration.
+
+Init sequence (from research):
+
+1. In `TsBrowserMainParts` (PreMainMessageLoopRun): set `ExtensionsClient`, set
+   `TsExtensionsBrowserClient` + `Init()`, build the keyed-service factories.
+2. Per `ShellBrowserContext`: `CreateBrowserContextServices`, then
+   `TsExtensionSystem::InitForRegularProfile(true)` (loads the PDF component
+   extension), then `FinishInitialization()`.
+
+Required keyed services: `ExtensionRegistry`, `ExtensionSystem`, `EventRouter`,
+`ProcessManager`, `ServiceWorkerManager`. PDF manifest declares
+`"mime_types": ["application/pdf"]` + `"mime_types_handler": "index.html"`,
+which `MimeTypesHandlerParser` ties to the extension — making the `<embed>`
+externally handled (the condition Exp 4 found missing).
+
+Because this is large, it will likely be split across more than one experiment
+(stand up the system; then wire `PdfViewerStreamManager` + the response
+interceptor; then debug content-shell gaps). It may not fit within the remaining
+experiment budget — see the issue's running note.
+
+#### Changes / Verification / Criteria
+
+To be detailed as implementation proceeds (the port is being built
+incrementally, each build verified for link + no-regression, mirroring the Issue
+789 cadence). Pass for this experiment: the extensions system initializes, the
+PDF component extension is registered in the `ExtensionRegistry` (logged), and
+`application/pdf` is recognized as externally handled — with no regression to
+HTML/non-PDF behavior. The PDF need not render yet; that follows once
+`PdfViewerStreamManager` is wired on top.
