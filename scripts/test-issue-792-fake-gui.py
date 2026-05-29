@@ -114,6 +114,10 @@ def resize_payload(tab_id: int, width: int, height: int) -> bytes:
     return varint_field(1, tab_id) + varint_field(2, width) + varint_field(3, height)
 
 
+class ReusableTcpServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
 class PdfHandler(http.server.BaseHTTPRequestHandler):
     log_dir: pathlib.Path
 
@@ -135,12 +139,21 @@ class PdfHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def start_pdf_server(log_dir: pathlib.Path, port: int) -> socketserver.TCPServer | None:
+def start_pdf_server(log_dir: pathlib.Path, port: int) -> socketserver.TCPServer:
     PdfHandler.log_dir = log_dir
     try:
-        server = socketserver.TCPServer(("127.0.0.1", port), PdfHandler)
-    except OSError:
-        return None
+        server = ReusableTcpServer(("127.0.0.1", port), PdfHandler)
+    except OSError as err:
+        (log_dir / "http-server.log").write_text(
+            f"failed to bind 127.0.0.1:{port}: {err}\n",
+            encoding="utf-8",
+        )
+        raise SystemExit(f"failed to bind PDF fixture server on 127.0.0.1:{port}: {err}")
+    host, bound_port = server.server_address
+    (log_dir / "http-server.log").write_text(
+        f"listening on {host}:{bound_port}\n",
+        encoding="utf-8",
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server

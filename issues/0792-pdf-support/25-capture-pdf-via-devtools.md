@@ -227,8 +227,129 @@ Experiment 25 fails if:
 
 ## Result
 
-Not run yet.
+**Result:** Partial
+
+Experiment 25 successfully replaced the broken macOS `screencapture` path with
+DevTools `Page.captureScreenshot`, and it produced trustworthy visual evidence.
+The PDF still does not render: the captured page shows Chromium's plugin
+fallback box, **"Couldn't load plugin."**
+
+Runs:
+
+- Fake-GUI preflight: `logs/issue-792-exp25-fakegui-20260529-162703`
+- HTML DevTools sanity: `logs/issue-792-exp25-html-devtools-20260529-162737`
+- PDF DevTools capture: `logs/issue-792-exp25-pdf-devtools-20260529-162751`
+
+Fake-GUI preflight passed. The fixture server now logs its bind and request:
+
+```text
+listening on 127.0.0.1:9787
+"GET /bitcoin.pdf HTTP/1.1" 200 -
+```
+
+The fake-GUI log reproduced the Experiment 23 stream-info chain:
+
+```text
+[issue-792-exp18] real-mime-handler-get-stream-info has_stream=1 ... original_url=http://127.0.0.1:9787/bitcoin.pdf
+```
+
+HTML DevTools sanity passed. The helper selected the expected page target and
+captured rendered `example.com` content:
+
+- PNG: `logs/issue-792-exp25-html-devtools-20260529-162737/devtools-smoke.png`
+- sidecar:
+  `logs/issue-792-exp25-html-devtools-20260529-162737/devtools-smoke.png.json`
+
+The sidecar shows:
+
+```json
+{
+  "urlContains": "example.com",
+  "selectedTarget": {
+    "url": "https://example.com/"
+  },
+  "waitMode": "load-event",
+  "screenshotBytes": 46024
+}
+```
+
+PDF DevTools capture succeeded as automation but failed as product behavior:
+
+- PNG: `logs/issue-792-exp25-pdf-devtools-20260529-162751/devtools-smoke.png`
+- sidecar:
+  `logs/issue-792-exp25-pdf-devtools-20260529-162751/devtools-smoke.png.json`
+
+Visual classification: **Viewer/plugin fallback**. The screenshot captures the
+correct PDF target, but the visible content is a dark plugin rectangle with the
+message **"Couldn't load plugin."**
+
+The PDF sidecar confirms the correct target:
+
+```json
+{
+  "urlContains": "bitcoin.pdf",
+  "selectedTarget": {
+    "url": "http://localhost:9616/bitcoin.pdf"
+  },
+  "waitMode": "fixed-settle",
+  "screenshotBytes": 20457
+}
+```
+
+The real-GUI logs prove the run used the repo-built Roamium binary and created
+the TermSurf overlay:
+
+```text
+SetOverlay: pane_id=0 profile=default browser=/Users/ryan/dev/termsurf/chromium/src/out/Default/roamium url=http://localhost:9616/bitcoin.pdf
+CALayerHost created at ... pane_id=0 contextId=3141116658 ...
+```
+
+The real-GUI PDF run also reproduced the Experiment 23 stream-info chain:
+
+```text
+[issue-792-exp18] real-mime-handler-get-stream-info has_stream=1 ... original_url=http://localhost:9616/bitcoin.pdf
+[issue-792-exp18] real-mime-handler-set-pdf-attributes has_stream=1 ...
+```
+
+The first failing point after stream-info is renderer-side plugin creation for
+the internal PDF plugin MIME:
+
+```text
+[issue-792-exp15] is-plugin-handled-externally mime_type=application/x-google-chrome-pdf ... plugin_lookup=missing handled=0
+[issue-792-exp19] renderer-plugin-external ... mime_type=application/x-google-chrome-pdf has_internal_id=0 handled=0
+[issue-792-exp19] renderer-override-create-plugin ... mime_type=application/x-google-chrome-pdf ... delegated_to_extensions=1
+```
+
+The browser process registered the internal PDF plugin earlier in the same run:
+
+```text
+[issue-792-exp15] internal-pdf-plugin-registered mime_type=application/x-google-chrome-pdf document_mime_type=application/pdf path=internal-pdf-viewer
+```
+
+So the remaining problem is not stream ownership, extension loading, viewer JS,
+or visual capture. The PDF extension receives the stream, calls
+`mimeHandlerPrivate.getStreamInfo`, sets PDF attributes, and then Blink tries to
+instantiate `application/x-google-chrome-pdf`. The renderer-side plugin lookup
+does not find a usable plugin and `OverrideCreatePlugin` delegates to the
+extensions renderer path instead of creating the internal PDF plugin, producing
+the visible "Couldn't load plugin" fallback.
 
 ## Conclusion
 
-Pending verification.
+Experiment 25 succeeded as a verification repair and narrowed the product
+failure:
+
+1. DevTools `Page.captureScreenshot` is now the reliable visual evidence path.
+2. Fake-GUI and real-GUI runs both reproduce the stream-info chain.
+3. The PDF viewer shell reaches the point where it tries to load the internal
+   PDF plugin stream URL.
+4. The visible failure is the renderer plugin fallback, **"Couldn't load
+   plugin."**
+
+The next experiment should fix the internal PDF plugin instantiation path for
+the PDF extension's `application/x-google-chrome-pdf` embed. It should start at
+`TsContentRendererClient::IsPluginHandledExternally` / `OverrideCreatePlugin`,
+compare the current TermSurf behavior to Electron's renderer-client PDF path,
+and ensure the internal plugin MIME is visible to the renderer-side plugin
+lookup or is routed directly to `pdf::CreateInternalPlugin` when the document is
+the PDF extension viewer loading the claimed stream URL.
