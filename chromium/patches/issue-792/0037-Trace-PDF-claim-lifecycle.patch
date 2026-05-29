@@ -1,7 +1,7 @@
 From f7ae097036de9f53e8229f6ed2b28beae0329a27 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 13:52:37 -0500
-Subject: [PATCH 37/44] Trace PDF claim lifecycle
+Subject: [PATCH 37/45] Trace PDF claim lifecycle
 
 A claim stood beside the stream,
 But downloads cut short the dream.

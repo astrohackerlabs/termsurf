@@ -240,8 +240,78 @@ Experiment 26 fails if:
 
 ## Result
 
-Not run yet.
+**Result:** Partial
+
+Chromium branch: `148.0.7778.97-issue-792-exp26`
+
+Chromium commit: `8b03d99ffc4eb` (`Route the PDF plugin gate`)
+
+Patch archive: regenerated at `chromium/patches/issue-792/`.
+
+Build:
+
+```bash
+cd chromium/src
+export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+autoninja -C out/Default libtermsurf_chromium
+```
+
+Result: success.
+
+Fake-GUI preflight:
+
+- Log directory: `logs/issue-792-exp26-fakegui-20260529-164254`
+- Result: stream-info remained healthy.
+
+Relevant log:
+
+```text
+[issue-792-exp18] real-mime-handler-get-stream-info has_stream=1 ... original_url=http://127.0.0.1:9787/bitcoin.pdf
+[issue-792-exp26] internal-plugin-create-check ... mime_type=application/x-google-chrome-pdf ... has_pdf_renderer=0
+[issue-792-exp26] internal-plugin-create-skipped reason=missing-pdf-renderer
+```
+
+HTML DevTools sanity:
+
+- Log directory: `logs/issue-792-exp26-html-devtools-20260529-164328`
+- Screenshot:
+  `logs/issue-792-exp26-html-devtools-20260529-164328/devtools-smoke.png`
+- Result: pass. The screenshot showed the rendered Example Domain page.
+
+PDF DevTools capture:
+
+- Log directory: `logs/issue-792-exp26-pdf-devtools-20260529-164346`
+- Screenshot:
+  `logs/issue-792-exp26-pdf-devtools-20260529-164346/devtools-smoke.png`
+- Result: plugin fallback. The screenshot still showed `Couldn't load plugin`.
+
+Relevant PDF logs:
+
+```text
+[issue-792-exp18] real-mime-handler-get-stream-info has_stream=1 ... original_url=http://localhost:9616/bitcoin.pdf
+[issue-792-exp18] real-mime-handler-set-pdf-attributes has_stream=1 ...
+[issue-792-exp15] is-plugin-handled-externally mime_type=application/x-google-chrome-pdf ... plugin_lookup=missing handled=0
+[issue-792-exp19] renderer-plugin-external ... mime_type=application/x-google-chrome-pdf has_internal_id=0 handled=0
+[issue-792-exp26] internal-plugin-create-check document_url=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html mime_type=application/x-google-chrome-pdf url=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/49b64209-9afa-4fdb-894e-60f92695b0dd has_pdf_renderer=0
+[issue-792-exp26] internal-plugin-create-skipped reason=missing-pdf-renderer
+```
+
+`pdf::CreateInternalPlugin()` was not called, by design, because
+`pdf::IsPdfRenderer()` returned false. The experiment avoided crashing the
+renderer and proved the internal plugin route is now reached before extension
+delegation, but the process hosting the PDF extension's internal plugin embed is
+not a PDF renderer process.
+
+The known pre-existing teardown crash still appeared after artifacts were
+captured. It did not invalidate this run because the HTML screenshot, PDF
+screenshot, and logs were already written, and the failure mode was the expected
+`missing-pdf-renderer` gate rather than a crash during plugin creation.
 
 ## Conclusion
 
-Pending verification.
+Experiment 26 moved the failure forward from "plugin fallback with no internal
+plugin route" to "internal plugin route reached, but the renderer process lacks
+Chromium's PDF renderer process model." The next experiment should target the
+browser-side renderer-process assignment that adds the PDF renderer state
+(`--pdf-renderer` / `pdf::IsPdfRenderer()` true) for the process that hosts the
+PDF extension's internal plugin frame.

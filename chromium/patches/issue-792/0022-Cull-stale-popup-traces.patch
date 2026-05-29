@@ -1,7 +1,7 @@
 From ae630730d826bfc6b965b34638afabb7625ded1e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 23 May 2026 10:33:09 -0500
-Subject: [PATCH 22/44] Cull stale popup traces
+Subject: [PATCH 22/45] Cull stale popup traces
 
 The logs grew thick as ivy vines,
 They climbed through every popup line.

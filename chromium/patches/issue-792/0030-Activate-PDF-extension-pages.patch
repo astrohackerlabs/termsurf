@@ -1,7 +1,7 @@
 From 5734f0cd27c94514910cfa0e2a13b8998e2387b9 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 11:32:29 -0500
-Subject: [PATCH 30/44] Activate PDF extension pages
+Subject: [PATCH 30/45] Activate PDF extension pages
 
 The viewer knocked with private keys,
 But no one blessed its Chrome-ish ways.

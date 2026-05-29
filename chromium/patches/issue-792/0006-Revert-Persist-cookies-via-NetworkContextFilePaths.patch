@@ -1,7 +1,7 @@
 From 52c5f68f2ab84fe484dfc552662cb2a25aeebc38 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 20 Mar 2026 07:03:25 -0500
-Subject: [PATCH 06/44] Revert "Persist cookies via NetworkContextFilePaths"
+Subject: [PATCH 06/45] Revert "Persist cookies via NetworkContextFilePaths"
 
 This reverts commit 4e1c734847f06ef316ac96cd94e793d118589322.
 ---

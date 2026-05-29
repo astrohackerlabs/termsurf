@@ -235,4 +235,4 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
   **Partial** (DevTools visual capture works; PDF reaches stream-info, then
   falls back to "Couldn't load plugin")
 - [Experiment 26: Route internal PDF plugin](26-route-internal-pdf-plugin.md) —
-  **Designed**
+  **Partial** (internal plugin route reached; renderer lacks PDF process model)

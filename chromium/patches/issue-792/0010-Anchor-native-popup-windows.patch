@@ -1,7 +1,7 @@
 From 533b04fe1b2d0e2364655bac8db0a1358bcdc26a Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Thu, 21 May 2026 07:38:54 -0500
-Subject: [PATCH 10/44] Anchor native popup windows
+Subject: [PATCH 10/45] Anchor native popup windows
 
 A hidden window learned the map,
 And shuffled to the pane;

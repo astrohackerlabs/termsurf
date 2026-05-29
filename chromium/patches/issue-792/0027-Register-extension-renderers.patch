@@ -1,7 +1,7 @@
 From 13b6ef911da27950b9a6352f93e9e961f42a2d1d Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 10:18:29 -0500
-Subject: [PATCH 27/44] Register extension renderers
+Subject: [PATCH 27/45] Register extension renderers
 
 The viewer knocked with chrome-extension keys,
 A nameless scheme on process seas.

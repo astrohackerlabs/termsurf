@@ -1,7 +1,7 @@
 From 7fb8d7c4cfdc20825fd48d21a969694cd01c4648 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 13:11:51 -0500
-Subject: [PATCH 35/44] Wire PDF stream hooks
+Subject: [PATCH 35/45] Wire PDF stream hooks
 
 A PDF knocked politely at the door,
 We gave it a stream and a key to the floor.

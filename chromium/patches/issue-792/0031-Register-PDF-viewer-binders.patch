@@ -1,7 +1,7 @@
 From f6c82ef027b7e85331b5f80ed90962ad526a461c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 11:48:13 -0500
-Subject: [PATCH 31/44] Register PDF viewer binders
+Subject: [PATCH 31/45] Register PDF viewer binders
 
 The viewer rang a Mojo bell,
 We answered softly: all is well.

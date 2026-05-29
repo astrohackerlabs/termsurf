@@ -1,7 +1,7 @@
 From f6b9fc306a2b1cf754f948d649154cfda1f9b173 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 09:26:25 -0500
-Subject: [PATCH 25/44] Load PDF viewer resources
+Subject: [PATCH 25/45] Load PDF viewer resources
 
 A viewer knocks at the pak-file door,
 Finds index.html on the resource-store.

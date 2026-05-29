@@ -1,7 +1,7 @@
 From 79fda5873a6ff9bfd67dea1bc2527c9cf99d3d31 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 11:10:26 -0500
-Subject: [PATCH 29/44] Expose PDF API surface
+Subject: [PATCH 29/45] Expose PDF API surface
 
 Two private keys stayed on the ring,
 Chrome's common map began to sing.

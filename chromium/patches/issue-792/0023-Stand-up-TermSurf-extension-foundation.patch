@@ -1,7 +1,7 @@
 From eba06286b8700a0fae4e69d32f7967a2be015218 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 08:28:45 -0500
-Subject: [PATCH 23/44] Stand up TermSurf extension foundation
+Subject: [PATCH 23/45] Stand up TermSurf extension foundation
 
 ---
  content/libtermsurf_chromium/BUILD.gn         |  35 +-
