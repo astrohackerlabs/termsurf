@@ -2,15 +2,16 @@
 
 ## Open
 
-| #                                                | Title                                    | Opened     |
-| ------------------------------------------------ | ---------------------------------------- | ---------- |
-| [0756](0756-surfari/README.md)                   | Surfari — WebKit engine for TermSurf     | 2026-03-16 |
-| [0789](0789-electron-style-pdf-viewer/README.md) | Electron-Style PDF Viewer Infrastructure | 2026-05-27 |
+| #                                               | Title                                           | Opened     |
+| ----------------------------------------------- | ----------------------------------------------- | ---------- |
+| [0756](0756-surfari/README.md)                  | Surfari — WebKit engine for TermSurf            | 2026-03-16 |
+| [0790](0790-pdf-viewer-mojo-bindings/README.md) | Expose Mojo JS Bindings to the PDF Viewer Frame | 2026-05-28 |
 
 ## Closed
 
 | #                                                       | Title                                                                         | Opened     | Closed     |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0789](0789-electron-style-pdf-viewer/README.md)        | Electron-Style PDF Viewer Infrastructure                                      | 2026-05-27 | 2026-05-28 |
 | [0788](0788-native-popup-split-pane-y/README.md)        | Native Popup Y Is Wrong in Top Split Webviews                                 | 2026-05-27 | 2026-05-27 |
 | [0787](0787-split-border-outer-margin/README.md)        | Split border has extra outer margin                                           | 2026-05-23 | 2026-05-23 |
 | [0786](0786-grid-native-split-borders/README.md)        | Grid-Native Split Borders                                                     | 2026-05-23 | 2026-05-23 |

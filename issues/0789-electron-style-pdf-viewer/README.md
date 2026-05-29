@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-05-27"
+closed = "2026-05-28"
 +++
 
 # Issue 789: Electron-Style PDF Viewer Infrastructure
@@ -3825,3 +3826,64 @@ viewer frame so `chrome://resources/mojo/mojo/public/js/bindings.js` finds its
 to its browser-side plugin/host over Mojo; it is the next thing standing between
 `getStreamInfo()` and a rendered page. As with every step here, keep it narrow —
 enable Mojo JS for the PDF viewer frame only, not broadly.
+
+## Conclusion
+
+This issue built the Electron-style embedder layer that Chromium's PDF viewer
+path requires, advancing Roamium from "blank white shell, no viewer" (the state
+Issue 776 left) to "viewer modules execute, the viewer calls `getStreamInfo()`,
+and is blocked only on Mojo JS bindings." Each experiment isolated one layer:
+
+- **Exp 1–2 (Pass):** Designed and built the TermSurf PDF stream handoff — the
+  `TsPdfStreamStore`, the response throttle that rewrites a PDF response into
+  the viewer shell, and the length-prefixed stream bookkeeping that mirrors
+  Chrome's `streams_private` without importing Chrome's stack.
+- **Exp 3 (Partial):** Wired the `PdfStreamDelegate` so the navigation throttle
+  and URL-loader interceptor enter Chromium's real PDF stream pipeline; left the
+  viewer frame not yet attached.
+- **Exp 4 (Pass):** Made the viewer ask for the PDF — the attach bookkeeping
+  (`attach-child-found`, `attach-handler-committed`) that identifies the PDF
+  extension host frame for a stored stream. This frame-identity record later
+  became the security gate for Exp 6.
+- **Exp 5 (Partial):** Served the viewer shell on the non-OOPIF
+  `mimeHandlerPrivate` path and installed a renderer-visible
+  `chrome.mimeHandlerPrivate` shim. The viewer stalled before `getStreamInfo()`
+  because its JS modules import `chrome://resources/...`.
+- **Exp 6 (Partial):** Registered Chromium's narrow WebUI resource factory
+  (`CreateWebUIURLLoaderFactory`) for `chrome://resources`, gated to the active
+  viewer frame. Discovered the Electron model is incomplete: the browser factory
+  is necessary but not sufficient — the renderer blocks the load earlier at
+  `SecurityOrigin::CanDisplay`. Also corrected a Codex-recommended gate that was
+  incompatible with factory-registration-at-commit timing; the
+  `TsPdfStreamStore` frame-recognition gate is the timing-correct and stricter
+  check.
+- **Exp 7 (Pass, Stretch):** Added the renderer half — a single
+  `WebSecurityPolicy::AddOriginAccessAllowListEntry` granting the PDF viewer
+  origin display access to `chrome://resources`. With both layers in place
+  `chrome://resources` loads, the viewer's module graph executes, and the viewer
+  reaches the Exp 5 `getStreamInfo()` shim — confirming the entire Exp 1–5
+  stream-handoff chain is sound.
+
+The defining lesson: serving a Chromium WebUI resource to an embedder frame is a
+**two-layer** problem — a browser-side URL-loader factory _and_ a renderer-side
+origin-access grant — and each layer is independently gated. Throughout, the
+strategy held: mirror only the narrow pieces Electron provides, backed by
+Chromium's existing embeddable helpers, never importing
+`//chrome/browser/plugins:impl`, the extensions browser/renderer stack,
+GuestView, or MimeHandlerView.
+
+**Where it stands:** the PDF still does not render. The viewer now fails at a
+new, precisely identified layer — `Mojo is not defined` in
+`chrome://resources/mojo/mojo/public/js/bindings.js`, which makes
+`viewer.init()` throw. Exposing Mojo JS bindings to the PDF viewer frame is the
+next step, and it continues in **Issue 790**.
+
+**Project lineage (inline PDF rendering in Roamium):**
+
+- [Issue 776: PDF files show blank white screen instead of rendering](../0776-pdf-not-loading/README.md)
+  — closed; established that no single toggle/wrapper/MIME hack works and that
+  TermSurf needs its own Electron-style embedder layer.
+- Issue 789 (this issue) — built that embedder layer through the
+  `chrome://resources` loading path.
+- [Issue 790: PDF viewer Mojo JS bindings](../0790-pdf-viewer-mojo-bindings/README.md)
+  — continues from here: expose Mojo JS to the viewer frame.
