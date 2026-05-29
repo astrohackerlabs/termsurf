@@ -222,3 +222,5 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
 - [Experiment 21: Trace wrapper HTML parsing](21-trace-wrapper-html-parsing.md)
   — **Pass** (wrapper commits as HTML and opens an HTML parser; wrapper body
   does not reach declarative shadow-root parsing)
+- [Experiment 22: Trace wrapper body delivery](22-trace-wrapper-body-delivery.md)
+  — **Designed**
