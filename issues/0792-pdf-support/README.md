@@ -199,3 +199,5 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
 - [Experiment 12: Register MIME-handler binders](12-register-mime-handler-binders.md)
   — **Partial** (MIME-handler binders registered; next gate is
   `extensions.KeepAlive`)
+- [Experiment 13: Register PDF KeepAlive binder](13-register-pdf-keepalive-binder.md)
+  — **Designed**
