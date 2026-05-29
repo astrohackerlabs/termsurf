@@ -152,6 +152,55 @@ local `file://` PDFs, and extensionless local PDF files.
 
 TermSurf should not treat HTTP-only PDF rendering as complete support.
 
+## Automation Strategy
+
+The remaining PDF work should be tested automatically wherever possible. Manual
+visual inspection is useful as a final sanity check, but the experiments should
+produce objective pass/fail evidence for the interaction surface.
+
+Use two levels of automation:
+
+- **Chromium-level automation:** Drive Roamium through the Chrome DevTools
+  Protocol. Use `Input.dispatchMouseEvent` for clicks, drags, and wheel events;
+  use `Input.dispatchKeyEvent` for keyboard navigation; use screenshots and
+  JavaScript evaluation to inspect viewer state, scroll position, page number,
+  selected text, toolbar state, and resize behavior. This is the most precise
+  way to prove whether the Chromium/PDF internals work.
+- **Real app-path automation:** Drive the actual Wezboard window with macOS
+  input events, then inspect screenshots and logs. This tests the complete
+  TermSurf path: Wezboard input forwarding, protocol messages, Roamium dispatch,
+  Chromium input routing, PDF extension focus, and the internal PDF plugin.
+
+The first diagnostic harness should cover:
+
+- **Render:** The PDF screenshot contains visible PDF text/pages.
+- **Scroll:** Wheel input changes PDF viewer scroll state or visibly changes the
+  screenshot.
+- **Resize/reflow:** Resizing the webview changes PDF viewer viewport and page
+  dimensions.
+- **Click/focus:** Clicking inside the PDF focuses the PDF/plugin frame or
+  produces the expected focus logs/state.
+- **Drag selection:** Dragging across known text produces selected text through
+  Chromium selection APIs or through the clipboard after copy.
+- **Keyboard navigation:** PageDown, Arrow keys, and Space change scroll
+  position or page number.
+- **Toolbar controls:** Zoom, page navigation, fit mode, and rotate controls
+  change viewer state.
+- **Save/download:** Save/download actions fire the expected browser-side path
+  or produce an output file in a controlled test directory.
+- **Print:** Print actions reach the print pathway. The automated test should
+  stop before invoking a real printer.
+- **Title:** The tab/title state reflects the PDF title or the expected URL
+  fallback for untitled PDFs.
+- **Local file:** `file://` PDFs behave the same as the local HTTP fixture.
+- **Normal web regression:** A non-PDF page still scrolls, clicks, resizes, and
+  accepts text selection normally.
+
+Some checks will be inherently easier to automate than others. Native print
+dialogs, OS save panels, and subjective visual quality can remain screenshot or
+log triage points. The core question, "does PDF support work as an interactive
+viewer," should be automated with state checks, screenshots, and targeted logs.
+
 ## Proposed Direction
 
 This issue should not be solved with one giant patch. The work should proceed as
