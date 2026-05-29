@@ -1,7 +1,7 @@
 From 8ab2ff108ce59f2308142ac1297ac4b22bba2169 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Thu, 28 May 2026 07:04:29 -0500
-Subject: [PATCH 4/5] Add PDF viewer stream shim
+Subject: [PATCH 4/6] Add PDF viewer stream shim
 
 A PDF asked, "Where is my stream?"
 We packed a note inside its dream.

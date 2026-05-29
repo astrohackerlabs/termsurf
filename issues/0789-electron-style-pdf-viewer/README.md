@@ -3740,3 +3740,88 @@ blank. Name the exact next failure and cite log lines.
 - The implementation imports the extensions renderer/browser stack, GuestView,
   or MimeHandlerView instead of the single `WebSecurityPolicy` call.
 - The implementation changes normal HTML or non-PDF binary behavior.
+
+#### Result
+
+**Result:** Pass (Stretch)
+
+The renderer-side display permission was the missing half. With it,
+`chrome://resources` now loads, the viewer's module graph executes, and the
+viewer calls the Exp 5 `getStreamInfo()` shim — the stretch goal. The viewer
+then stops at a new, unrelated layer (Mojo JS bindings), which becomes the next
+experiment.
+
+Chromium branch `148.0.7778.97-issue-789-exp7` (forked from
+`148.0.7778.97-issue-789-exp6`). One change, in
+`content/libtermsurf_chromium/ts_renderer_client.{h,cc}`: override
+`RenderThreadStarted()`, call the base, then
+`blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(pdf_extension_origin, "chrome", "resources", 0, kDisallowSubdomains, kAllowAnyPort, kDefaultPriority)`.
+(`WebString::FromUTF8`, not `FromASCII` — `WebString` has no `FromASCII`.)
+
+Verification:
+
+- **Build / deps.** `libtermsurf_chromium` builds and links; the forbidden
+  Chrome dependency set is still absent.
+- **Grant log.**
+  `[issue-789-exp7] origin-access-granted source=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/ dest=chrome://resources`,
+  once per renderer process.
+- **`chrome://resources` now loads.** Zero
+  `Not allowed to load local resource: chrome://resources/...` errors in the PDF
+  run (down from six in Exp 6). All previously failing paths
+  (`css/text_defaults_md.css`, `js/assert.js`, `lit/v3_0/lit.rollup.js`,
+  `js/load_time_data.js`, `mojo/mojo/public/js/bindings.js`,
+  `cr_elements/cr_a11y_announcer/cr_a11y_announcer.css`) are served. The browser
+  factory (`webui-factory-registered`) and the renderer grant now line up:
+  browser serves bytes, renderer permits display.
+- **Stretch reached.** The viewer modules execute far enough to call the Exp 5
+  shim: `[issue-789-exp5] viewer-api-call ... method=getStreamInfo` followed by
+  `[issue-789-exp5] get-stream-info ... result=ok`.
+- **Next failure (new layer).** Immediately after, the renderer logs
+  `Uncaught ReferenceError: Mojo is not defined`, source
+  `chrome://resources/mojo/mojo/public/js/bindings.js`, then
+  `Uncaught (in promise) TypeError: viewer.init is not a function`
+  (`pdf/main.js`). The Mojo JS module is now served, but the `Mojo` JS interface
+  is not exposed to the PDF viewer frame, and `viewer.init` failing is
+  downstream of that. This is a distinct layer from `chrome://resources` display
+  permission and is out of Exp 7's scope.
+- **Screenshot.** Still a blank viewer shell — classified as _viewer advanced
+  past the Exp 5 state (modules execute, `getStreamInfo` reached) but PDF still
+  blank_, now blocked at Mojo JS bindings.
+- **HTML and non-PDF binary smoke.** `index.html` and `test.bin` produced 0
+  `webui-factory-registered` lines and 0 Exp 4/5 PDF-path lines. The
+  `[issue-789-exp7] origin-access-granted` startup log appears (3x per run, one
+  per renderer) as expected and allowed.
+- **Negative test 5a (normal page).** A localhost page calling
+  `fetch('chrome://resources/js/assert.js')`
+  (`test-html/public/test-chrome-resources-leak.html`) was blocked:
+  `LEAKTEST result=BLOCKED error=TypeError: Failed to fetch`. The grant does not
+  extend to non-PDF-viewer origins.
+- **Negative test 5b (non-active PDF-extension frame).** Verified structurally,
+  not empirically. The renderer grant is process-global, so any PDF-extension
+  document passes `CanDisplay`; the containment is Exp 6's browser-side frame
+  gate, already proven in Exp 6 to register the factory only for the active
+  viewer frame (`webui-factory-skipped reason=frame-not-active-viewer`
+  otherwise). Constructing a second, non-active PDF-extension-origin frame in
+  the smoke harness is contrived; an empirical 5b is left as future hardening.
+
+#### Conclusion
+
+Experiment 7 closed the renderer-side gap Experiment 6 identified, and the
+two-layer model now works end to end for resource loading: the browser-side
+WebUI factory (Exp 6) serves `chrome://resources`, and the renderer-side
+origin-access grant (Exp 7) lets the PDF viewer document display them. The
+viewer gets all the way to `getStreamInfo()` — the Exp 5 shim earlier
+experiments built toward — confirming the whole stream-handoff chain (Exp 1-5)
+is sound once the resources load.
+
+The mechanism matched the Codex-reviewed design exactly: a single
+`AddOriginAccessAllowListEntry` at `RenderThreadStarted`, scoped to one origin
+and one host, with Exp 6's browser gate as the per-frame enforcement. No
+forbidden subsystems, no normal-page regression.
+
+Next layer (Experiment 8): expose the `Mojo` JS bindings interface to the PDF
+viewer frame so `chrome://resources/mojo/mojo/public/js/bindings.js` finds its
+`Mojo` global and the viewer's `init()` runs. This is how the PDF viewer talks
+to its browser-side plugin/host over Mojo; it is the next thing standing between
+`getStreamInfo()` and a rendered page. As with every step here, keep it narrow —
+enable Mojo JS for the PDF viewer frame only, not broadly.

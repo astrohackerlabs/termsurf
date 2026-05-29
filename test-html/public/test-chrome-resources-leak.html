@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>chrome://resources leak test</title>
+  </head>
+  <body>
+    <h1>chrome://resources leak test</h1>
+    <p>
+      A normal (non-PDF-viewer) page tries to fetch a WebUI resource. It must be
+      blocked. Used by Issue 789 Experiment 7 negative test 5a.
+    </p>
+    <script>
+      fetch("chrome://resources/js/assert.js")
+        .then((r) => console.log("LEAKTEST result=LOADED status=" + r.status))
+        .catch((e) => console.log("LEAKTEST result=BLOCKED error=" + e));
+    </script>
+  </body>
+</html>

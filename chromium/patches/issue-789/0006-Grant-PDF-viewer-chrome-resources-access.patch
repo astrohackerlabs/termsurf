@@ -1,0 +1,94 @@
+From 0379d395b75a03ea2160c09e56e85ff62c2171b0 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 28 May 2026 19:05:58 -0500
+Subject: [PATCH 6/6] Grant PDF viewer chrome://resources access
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The renderer held one final gate—
+CanDisplay judged the extension's fate.
+One allowlist entry, origin to host,
+and chrome's locked shelf gave up its post.
+The modules ran, getStreamInfo too;
+now only Mojo stands between us and the view.
+---
+ .../ts_renderer_client.cc                     | 33 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_renderer_client.h |  2 ++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.cc b/content/libtermsurf_chromium/ts_renderer_client.cc
+index 6182a51cc62d3..917c52984d8a9 100644
+--- a/content/libtermsurf_chromium/ts_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_renderer_client.cc
+@@ -13,7 +13,9 @@
+ #include "components/pdf/common/pdf_util.h"
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+ #include "content/public/common/content_switches.h"
++#include "content/public/common/url_constants.h"
+ #include "content/public/renderer/render_frame.h"
++#include "extensions/common/constants.h"
+ #include "pdf/buildflags.h"
+ #include "third_party/blink/public/platform/web_security_origin.h"
+ #include "third_party/blink/public/platform/web_string.h"
+@@ -22,6 +24,8 @@
+ #include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_plugin.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
++#include "third_party/blink/public/web/web_security_policy.h"
++#include "url/gurl.h"
+ #include "url/origin.h"
+ 
+ namespace content {
+@@ -53,6 +57,35 @@ url::Origin UrlOriginForFrame(blink::WebFrame* frame) {
+ TsRendererClient::TsRendererClient() = default;
+ TsRendererClient::~TsRendererClient() = default;
+ 
++void TsRendererClient::RenderThreadStarted() {
++  ShellContentRendererClient::RenderThreadStarted();
++
++  // Issue 789 Exp 6 installed the browser-side WebUI resource factory for
++  // chrome://resources, but the renderer blocks the load earlier in
++  // SecurityOrigin::CanDisplay because `chrome` is a display-isolated scheme
++  // and the PDF viewer extension origin has no origin-access entry permitting
++  // it. Add that entry here so CanDisplay returns true for (PDF viewer
++  // extension origin -> chrome://resources). The origin-access list is
++  // process-global, so register once at renderer thread start; the entry is
++  // scoped to exactly one source origin, the `chrome` scheme, and the
++  // `resources` host (no subdomains), so no other origin gains access and the
++  // PDF viewer gains nothing beyond that host. Exp 6's browser-side frame gate
++  // (TsPdfStreamStore::IsPdfExtensionHostFrame) remains the per-frame
++  // enforcement that decides which frame is actually served the bytes.
++  const GURL pdf_extension_origin(std::string("chrome-extension://") +
++                                  extension_misc::kPdfExtensionId + "/");
++  blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
++      pdf_extension_origin, blink::WebString::FromUTF8(kChromeUIScheme),
++      blink::WebString::FromUTF8(kChromeUIResourcesHost),
++      /*destination_port=*/0,
++      network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
++      network::mojom::CorsPortMatchMode::kAllowAnyPort,
++      network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority);
++
++  LOG(INFO) << "[issue-789-exp7] origin-access-granted source="
++            << pdf_extension_origin.spec() << " dest=chrome://resources";
++}
++
+ bool TsRendererClient::IsPluginHandledExternally(
+     RenderFrame* embedder_frame,
+     const blink::WebElement& plugin_element,
+diff --git a/content/libtermsurf_chromium/ts_renderer_client.h b/content/libtermsurf_chromium/ts_renderer_client.h
+index 7f9cce0fb50f9..629619d001e94 100644
+--- a/content/libtermsurf_chromium/ts_renderer_client.h
++++ b/content/libtermsurf_chromium/ts_renderer_client.h
+@@ -29,6 +29,8 @@ class TsRendererClient : public ShellContentRendererClient {
+   TsRendererClient(const TsRendererClient&) = delete;
+   TsRendererClient& operator=(const TsRendererClient&) = delete;
+ 
++  void RenderThreadStarted() override;
++
+   bool IsPluginHandledExternally(
+       RenderFrame* embedder_frame,
+       const blink::WebElement& plugin_element,
+-- 
+2.50.1 (Apple Git-155)
+

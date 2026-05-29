@@ -1,7 +1,7 @@
 From 7e987fb361300a1d8362c2c68f75fd43a63b695e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Thu, 28 May 2026 18:32:03 -0500
-Subject: [PATCH 5/5] Serve PDF viewer chrome://resources
+Subject: [PATCH 5/6] Serve PDF viewer chrome://resources
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
