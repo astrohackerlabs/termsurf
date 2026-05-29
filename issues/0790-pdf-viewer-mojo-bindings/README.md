@@ -783,3 +783,177 @@ URL, the existing `PdfNavigationThrottle` marks it `is_pdf`, it gets a
 manager is reachable **without** `//components/guest_view/browser` or the
 forbidden extensions stacks; if it is not, find the narrowest external-routing
 mechanism that is.
+
+## Architectural decision point (before Experiment 4)
+
+Experiment 4 research (verified in Chromium + Electron) found that the OOPIF PDF
+content frame cannot be created by a renderer-only change. The chain is:
+
+```text
+TsRendererClient::IsPluginHandledExternally() returns true for the PDF mime
+  -> MimeHandlerViewContainerManager::CreateFrameContainer() returns true
+     (renderer side; deps are SAFE: //extensions/renderer guest_view code +
+      //components/guest_view/renderer + :common mojom)
+  -> Blink HTMLPlugInElement::LoadOrRedirectSubframe() creates a child frame
+  -> BUT the frame stays in-process unless the BROWSER hoists it into an OOPIF.
+```
+
+The browser-side hoist is provided by either:
+
+- `//extensions/browser` guest-view `MimeHandlerViewAttachHelper`
+  (`PrepareForInnerWebContentsAttach`) — transitively pulls
+  `//components/guest_view/browser`, which Issue 789/790 **explicitly forbid**;
+  or
+- `//chrome/browser/pdf` `PdfViewerStreamManager` — the modern OOPIF path; not
+  on the explicit forbidden list, but a Chrome product subsystem the "narrow
+  Electron-glue" philosophy avoids, and the component Issue 789 deliberately
+  reimplemented as the custom `TsPdfStreamStore`.
+
+Electron pulls **both** `//extensions/browser` and `//chrome/browser/pdf`. The
+custom `TsPdfStreamStore` stack carried the viewer all the way to plugin
+creation, but it has no equivalent of the browser-side OOPIF attach. This is a
+genuine fork in the project's architecture and a relaxation of a
+user-established constraint, so the direction was put to the user before
+spending the remaining experiment budget.
+
+**Decision (user, 2026-05-28): adopt `//chrome/browser/pdf` — accept the full
+footprint.** Verification with `gn desc //chrome/browser/pdf:pdf deps --all`
+confirmed that adopting it transitively pulls `//components/guest_view/browser`,
+`//extensions:extensions`, `//chrome/common/extensions:extensions`, and
+`//chrome/browser/plugins` — i.e. the full Electron-style footprint, not a
+narrow add. The user accepted this: TermSurf will use Chromium's canonical OOPIF
+PDF infrastructure (`PdfViewerStreamManager` + the guest-view mime-handler
+attach + the renderer `MimeHandlerViewContainerManager`), mirroring Electron.
+
+**Consequence for the constraints above:** the "no forbidden subsystems"
+constraint (`//components/guest_view/browser`,
+`//chrome/browser/extensions:extensions`, `//chrome/browser/plugins:impl`, broad
+WebUI/extensions stacks) is **retired for the PDF feature** as of this decision.
+The "narrow Electron-glue" philosophy still applies everywhere else, but PDF
+support adopts the canonical Chrome infrastructure. Much of Issue 789's custom
+stack (`TsPdfStreamStore`, the `mimeHandlerPrivate` shim, the bespoke stream
+delegate) is expected to be superseded by `PdfViewerStreamManager` /
+`chrome_pdf_stream_delegate`; later experiments will remove the now-dead custom
+code once the canonical path renders a PDF, so the final implementation stays
+clean (no dual stacks left behind).
+
+### Experiment 4: Adopt the canonical OOPIF PDF infrastructure (first integration)
+
+#### Description
+
+Begin adopting Chromium's canonical OOPIF PDF stack (the decision above): wire
+the renderer-side external plugin routing and the browser-side
+`PdfViewerStreamManager` so the PDF content embed becomes a real out-of-process
+PDF frame. This is a large integration that may span more than one experiment;
+Experiment 4 is the first concrete step and a probe of what content-shell wiring
+the canonical stack still needs.
+
+The canonical pieces (verified, mirroring Electron):
+
+- Renderer: `ContentRendererClient::IsPluginHandledExternally()` routes the PDF
+  mime through `MimeHandlerViewContainerManager::CreateFrameContainer()`, and
+  the container manager interface is bound in `RenderFrameCreated()`
+  (`extensions/renderer` guest-view, `//components/guest_view/renderer`).
+- Browser: `PdfViewerStreamManager` (`//chrome/browser/pdf`) observes the
+  WebContents, intercepts the PDF stream, and orchestrates the OOPIF attach;
+  `ChromePdfStreamDelegate` supplies the stream/`injected_script`. This is what
+  designates the content frame `is_pdf` and lets `CreateInternalPlugin` run in a
+  `--pdf-renderer` process.
+
+#### Changes
+
+1. New Chromium branch `148.0.7778.97-issue-790-exp3` →
+   `148.0.7778.97-issue-790-exp4`. Add it to `chromium/README.md`.
+
+2. `content/libtermsurf_chromium/BUILD.gn`: add the canonical deps —
+   `//chrome/browser/pdf:pdf`, `//extensions/renderer`,
+   `//components/guest_view/renderer`, `//components/guest_view/common:mojom`,
+   and whatever `PdfViewerStreamManager` registration needs. (Accept the
+   guest_view/browser + extensions + plugins footprint per the decision.)
+
+3. Renderer (`ts_renderer_client.cc`): implement `IsPluginHandledExternally()`
+   for the PDF mime via `MimeHandlerViewContainerManager` (mirror Electron's
+   `renderer_client_base.cc`), and bind
+   `extensions::mojom::MimeHandlerViewContainerManager` in
+   `RenderThreadStarted`/ the frame-created path. Keep the Exp 1 Mojo enable.
+
+4. Browser: drive `pdf::PdfViewerStreamManager` (the canonical replacement for
+   `TsPdfStreamStore`). Per Codex, registration alone is insufficient — wire
+   these explicitly:
+   - **Feed the captured stream in:** call `PdfViewerStreamManager::Create(...)`
+     - `AddStreamContainer(...)` with the intercepted PDF stream (the same
+       stream TermSurf already captures), so the manager has the data it needs.
+   - **Content-shell-safe delegate:** `ChromePdfStreamDelegate` assumes a Chrome
+     `Profile`, which Roamium lacks. Use a TermSurf `PdfStreamDelegate` (keep
+     `TsPdfStreamDelegate`'s logic) that feeds `PdfViewerStreamManager`, rather
+     than `ChromePdfStreamDelegate`, unless/until Roamium has a real `Profile`.
+   - **Preserve `pdf_plugin_attributes`:**
+     `ChromePdfStreamDelegate::MapToOriginalUrl` (and the canonical path)
+     rejects streams without `pdf_plugin_attributes()`. Keep the Issue 789
+     pre-population in `ts_pdf_stream_dispatch.cc`, or make
+     `pdfViewerPrivate.setPdfPluginAttributes` actually store them — the shim's
+     no-op is not acceptable on the canonical path.
+
+5. **Swap, don't dual-stack (Codex).** Disable TermSurf's custom
+   `pdf::PdfNavigationThrottle` + `PdfURLLoaderRequestInterceptor` wired to
+   `TsPdfStreamDelegate` for PDF navigations when the canonical manager is
+   active, so the two stacks do not double-intercept the same stream. Move the
+   `chrome://resources` factory gate and the Exp 1 Mojo-enable gate off
+   `TsPdfStreamStore::IsPdfExtensionHostFrame` and onto canonical PDF-frame
+   recognition (e.g. `pdf_frame_util::GetEmbedderHost` /
+   `PdfViewerStreamManager` frame identity), so the Issue 789 gates still fire
+   for the right frame under the canonical stack. Leave the now-unused custom
+   code in place but inert for this experiment; a later experiment deletes it
+   once the canonical path renders (no dual stacks in the final tree).
+
+6. Determine during implementation whether the content-shell base needs
+   additional extensions/guest-view wiring (an `ExtensionsBrowserClient` /
+   guest-view manager / `MimeHandlerViewAttachHelper`) for the OOPIF attach to
+   function, and record exactly what is missing — that is the most likely
+   Partial outcome and defines Experiment 5.
+
+7. Format, build, regenerate patches.
+
+#### Verification
+
+1. Build; the new deps link. (Forbidden-deps check no longer applies to PDF;
+   instead confirm the HTML/binary smokes still pass — no regression to
+   non-PDF.)
+2. Bitcoin PDF smoke. Record:
+   - whether the PDF content frame is now created out-of-process and navigates
+     to the stream (`host_is_pdf=true`, `has_pdf_renderer=true`);
+   - whether `Check failed: IsPdfRenderer()` is gone and the plugin
+     instantiates;
+   - whether the PDF visibly renders (the goal) or the exact next failure;
+   - which stack drove it (`PdfViewerStreamManager` vs leftover
+     `TsPdfStreamStore` logs).
+3. Screenshot: classify (PDF rendered / advanced / new crash).
+4. HTML and non-PDF binary smoke: no regression.
+
+#### Pass Criteria
+
+- Builds and links with the canonical deps.
+- The PDF content frame is out-of-process and PDF-designated; the
+  `IsPdfRenderer()` crash is gone.
+- The PDF visibly renders, **or** the viewer advances to a precisely named next
+  layer (e.g. the `injected_script` / plugin-wrapper layer Codex flagged).
+- HTML and non-PDF binary smoke show no regression.
+
+Stretch Pass: the PDF visibly renders and the first page scrolls.
+
+#### Partial Criteria
+
+Partial if the canonical stack is wired and builds, but the OOPIF attach needs
+additional content-shell extensions/guest-view wiring that is not yet present
+(e.g. `PdfViewerStreamManager` has no `ExtensionsBrowserClient`/guest-view
+manager to attach through). Name the exact missing wiring; it defines
+Experiment 5.
+
+#### Failure Criteria
+
+- The new deps fail to build/link in the content-shell configuration with no
+  tractable fix.
+- Normal HTML or non-PDF binary behavior regresses.
+- The canonical stack cannot function without effectively rebuilding the full
+  Chrome browser (i.e. the adoption is not viable) — would force reconsidering
+  the custom-attach path.
