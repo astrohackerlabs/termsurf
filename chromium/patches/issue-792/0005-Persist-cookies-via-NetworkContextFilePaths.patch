@@ -1,7 +1,7 @@
 From b9422ee66ade67f95caea8e5dad99fea07d41df0 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 20 Mar 2026 06:28:05 -0500
-Subject: [PATCH 05/25] Persist cookies via NetworkContextFilePaths
+Subject: [PATCH 05/26] Persist cookies via NetworkContextFilePaths
 
 The cookies lived in RAM alone,
 No file, no path, no disk, no home.

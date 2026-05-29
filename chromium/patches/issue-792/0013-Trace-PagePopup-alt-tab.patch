@@ -1,7 +1,7 @@
 From fb8a64ffe7386689d20575bca006f4db05bc23fd Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 22 May 2026 08:28:24 -0500
-Subject: [PATCH 13/25] Trace PagePopup alt-tab
+Subject: [PATCH 13/26] Trace PagePopup alt-tab
 
 The old traces made a terrible stew,
 With mouse crumbs and router goo.

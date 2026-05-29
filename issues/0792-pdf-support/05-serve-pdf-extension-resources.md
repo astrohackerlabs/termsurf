@@ -330,3 +330,136 @@ Partial if:
   renderer IPC crash.
 - The experiment proceeds without Claude design review or ignores real Claude
   findings.
+
+## Result
+
+**Result:** Pass
+
+Experiment 5 built and verified the PDF component extension resource-serving
+layer.
+
+Implementation branch:
+
+```text
+148.0.7778.97-issue-792-exp5
+```
+
+Build command:
+
+```bash
+export PATH="$HOME/dev/termsurf/chromium/depot_tools:$PATH"
+git -C chromium/src cl format --upstream=148.0.7778.97-issue-792-exp4 --full
+autoninja -C chromium/src/out/Default libtermsurf_chromium
+```
+
+Final build result:
+
+```text
+Build Succeeded: 2 steps
+```
+
+Direct extension-resource smoke artifact:
+
+```text
+logs/issue-792-exp5-extension-20260529-094357/
+```
+
+Required diagnostics appeared:
+
+```text
+[issue-792-exp5] extension-factory scheme=chrome-extension type=navigation
+[issue-792-exp5] bundle-resource url=chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html path=index.html resource_id=21596 found=1
+[issue-792-exp5] bundle-resource-load path=index.html resource_id=21596 bytes=529 mime=text/html ok=1
+```
+
+The run also created a subresource factory:
+
+```text
+[issue-792-exp5] extension-factory scheme=chrome-extension type=subresource
+```
+
+The viewer shell then hit expected next-layer browser policy gaps:
+
+```text
+Not allowed to load local resource: chrome://resources/css/text_defaults_md.css
+Loading the script 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/main.js' violates the following Content Security Policy directive...
+Loading the script 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js' violates the following Content Security Policy directive...
+```
+
+Those are not failures for this experiment. The pass claim is deliberately only
+that the direct `index.html` extension resource reaches Chromium's extension
+URL-loader path and is served from `ui::ResourceBundle`. CSP, process-map,
+`web_accessible_resources`, `chrome://resources`, and viewer API wiring remain
+future layers.
+
+Normal HTML regression-smoke artifact:
+
+```text
+logs/issue-792-exp5-html-20260529-094500/
+```
+
+The HTML run reached the expected lifecycle messages:
+
+```text
+LoadingState
+TitleChanged
+LoadingState
+```
+
+PDF unchanged-smoke artifact:
+
+```text
+logs/issue-792-exp5-pdf-20260529-094515/
+```
+
+The PDF run still takes the pre-existing content_shell download path:
+
+```text
+ShellDownloadManagerDelegate::ChooseDownloadPath(...)
+```
+
+That is expected because this experiment does not install PDF navigation or
+stream handling.
+
+Experiment 3 and 4 behavior remained intact in the verification runs:
+
+```text
+[issue-792-exp3] pdf-component-extension-registered context=<ptr> enabled=1 inserted=1
+[issue-792-exp4] pdf-resource-pak path=/Users/ryan/dev/termsurf/chromium/src/out/Default/gen/chrome/pdf_resources.pak found=1 loaded=1
+[issue-792-exp4] pdf-resource-bytes id=21596 bytes=529 html_signature=1
+```
+
+During implementation, two early direct-extension smokes found real bugs that
+were fixed before this result:
+
+- empty template replacements caused a fatal `$i18n{textdirection}` check; fixed
+  by skipping template replacement when the replacement map is empty and by
+  using the non-fatal HTML replacement mode;
+- a malformed/non-root extension subresource request hit a debug DCHECK inside
+  Chromium's cross-renderer resource helper; fixed by delegating to that helper
+  only for well-formed extension URLs whose root matches the extension being
+  checked.
+
+All final runs still show the known teardown `SEGV_ACCERR` after artifacts were
+captured. This is the same cleanup crash recorded in earlier PDF experiments and
+is not caused by the Experiment 5 resource-serving layer.
+
+Bookkeeping status: Chromium branch commit, patch archive refresh,
+`chromium/README.md` branch row, and the issue README status flip are deferred
+until Claude after-review accepts this result.
+
+## Conclusion
+
+TermSurf can now serve the PDF component extension's `index.html` through the
+canonical `chrome-extension://` URL-loader path, using a TermSurf-owned loader
+that reads from `ui::ResourceBundle`. This proves the registered extension is no
+longer just metadata plus bytes; Chromium can navigate to the extension URL and
+receive the viewer shell as `text/html`.
+
+The next experiment should address the first viewer-shell policy gap surfaced by
+this run. The likely next layer is making the PDF extension's own scripts and
+`chrome://resources` dependencies load under an appropriate, narrow security
+model: either process-map insertion for the extension renderer, restoring the
+needed manifest permissions/resources, and/or serving the required
+`chrome://resources` assets. It should still avoid PDF navigation and stream
+handoff until the viewer shell's static dependency graph loads cleanly.

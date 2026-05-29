@@ -181,4 +181,4 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
 - [Experiment 4: Load PDF viewer resource bytes](04-load-pdf-resource-pack.md) —
   **Pass**
 - [Experiment 5: Serve PDF extension resources](05-serve-pdf-extension-resources.md)
-  — **Designed**
+  — **Pass**
