@@ -376,3 +376,140 @@ the internal PDF plugin — i.e. get the PDF content frame into a process
 designated as a PDF renderer (the `--pdf-renderer` process flag / the OOPIF PDF
 process path), or route plugin creation so the CHECK is satisfied. This is the
 process-model layer beneath the JS the viewer has now fully executed.
+
+### Experiment 2: Enable the OOPIF PDF process path
+
+#### Description
+
+Make the PDF content frame land in a renderer process designated as a PDF
+renderer, so `pdf::IsPdfRenderer()` is true and `CreateInternalPlugin` no longer
+crashes. Research (verified in source) traced the full chain and found a single
+root cause.
+
+The designation is automatic in Chromium **once a navigation is marked
+`is_pdf`**:
+
+```text
+PdfNavigationThrottle sets OpenURLParams.is_pdf=true   components/pdf/browser/pdf_navigation_throttle.cc:117
+  -> NavigationRequest::is_pdf_ -> UrlInfo.is_pdf
+  -> SiteInfo::is_pdf_  (also forces a dedicated process)   content/browser/site_info.cc
+  -> SiteInstanceImpl::IsPdf()
+  -> RenderProcessHostImpl sets RenderProcessFlags::kPdf      render_process_host_impl.cc:1574
+  -> RenderProcessHostImpl appends switches::kPdfRenderer      render_process_host_impl.cc:3621
+  -> renderer: pdf::IsPdfRenderer() == true                   internal_plugin_renderer_helpers.cc:30
+```
+
+Electron does **nothing** special for this — it relies entirely on the stock
+throttle. But the throttle is gated:
+
+```text
+PdfNavigationThrottle::MaybeCreateThrottleFor / WillStartRequest
+  if (!chrome_pdf::features::IsOopifPdfEnabled()) { return; }   pdf_navigation_throttle.cc:34
+```
+
+The Issue 790 Exp 1 run confirms the consequence empirically: every renderer
+logged `host_is_pdf=false has_pdf_renderer=false`, and the viewer template
+logged `pdf_oopif_enabled=absent`. So the OOPIF PDF feature
+(`chrome_pdf::features::kPdfOopif`) is **off**, the throttle early-returns, no
+navigation is ever marked `is_pdf`, and the PDF content process is never
+designated — exactly why the plugin CHECK crashes.
+
+Issue 789 deliberately built the **non-OOPIF** `mimeHandlerPrivate` viewer path.
+But the modern PDF process model — the one Chrome and Electron ship — is the
+OOPIF path, and the internal plugin's `IsPdfRenderer()` CHECK is part of it. So
+the correct, "works exactly like Chrome" architecture is to enable OOPIF PDF.
+This experiment makes the minimal change — turn the feature on — and observes
+the consequences, because enabling it touches the viewer-attach path Issue 789
+built non-OOPIF. The experiment is intentionally a small, high-information
+probe: flip the feature, then learn whether the existing attach still works,
+whether `is_pdf` now flows and the crash resolves, and what (if anything) the
+OOPIF path needs reworked.
+
+#### Changes
+
+1. New Chromium branch `148.0.7778.97-issue-790-exp1` →
+   `148.0.7778.97-issue-790-exp2`. Add it to `chromium/README.md`.
+
+2. **Diagnose before flipping (Codex).** The viewer template's
+   `pdf_oopif_enabled=absent` seen in Issue 789 may be a TermSurf-hardcoded
+   template replacement (set where the Exp 5 viewer shell is built in
+   `ts_pdf_viewer_url_loader_factory.cc`), which is **independent** of the real
+   `chrome_pdf::features::IsOopifPdfEnabled()` feature/policy state. Flipping
+   the feature while the template still hardcodes "absent" (or vice versa) would
+   give an ambiguous result. So first log all three and reconcile them:
+   - `[issue-790-exp2] oopif-state feature=<IsOopifPdfEnabled()> ...` (the real
+     `chrome_pdf::features` state, including any policy bool it consults);
+   - the actual `pdf_oopif_enabled` value TermSurf injects into the viewer
+     template, and where it is set.
+
+   Then enable OOPIF where it is actually off: if `IsOopifPdfEnabled()` is
+   false, turn on `chrome_pdf::features::kPdfOopif` in the narrowest clean way
+   (preferred: a scoped default-state override in TermSurf's main/feature setup,
+   part of the build, not a hand-typed `--enable-features` flag); and if the
+   viewer template hardcodes OOPIF off, make the template reflect the real
+   feature state. Keep the `[issue-790-exp2] oopif-state ...` log so the result
+   records the reconciled state.
+
+3. Preserve all prior layers. Do not delete the Issue 789 non-OOPIF attach code
+   in this experiment; observe whether OOPIF supersedes it. If OOPIF changes the
+   viewer-attach flow, record exactly what changes — that informs whether later
+   experiments simplify or remove the non-OOPIF path.
+
+4. Preserve dependency boundaries (no forbidden subsystems). Enabling a
+   `chrome_pdf` feature does not add a forbidden dependency.
+
+5. Format, build, regenerate the patch archive.
+
+#### Verification
+
+1. Build; confirm forbidden deps absent.
+2. Bitcoin PDF smoke. Record:
+   - `[issue-790-exp2] oopif-state feature=true` with the viewer template
+     `pdf_oopif_enabled` now present/true (the two reconciled);
+   - **Decisive proof the throttle ran (Codex):** `PdfNavigationThrottle` fired
+     for the inner content navigation — the Issue 789 `MapToOriginalUrl(...)`
+     log with the same `internal_id`, then
+     `[issue-776-exp4] append-command-line ... host_is_pdf=true has_pdf_renderer=true`
+     for the PDF content process. Without this chain a "pass" could conflate
+     feature state with unrelated process behavior;
+   - whether the `Check failed: IsPdfRenderer()` crash is gone;
+   - how far the viewer now gets (does the PDF plugin instantiate? does a page
+     render? name the next failure precisely);
+   - **Which viewer API path fires (Codex):** confirm whether the Issue 789
+     attach sequence (`attach-handler-committed`, `viewer-api-installed`, Exp 1
+     `mojo-js-enabled`, the `chrome://resources` factory, `getStreamInfo`) still
+     fires unchanged under OOPIF — the `mimeHandlerPrivate` hybrid path — or
+     whether OOPIF routes the viewer through a different (`pdfViewerPrivate`)
+     attach so our hooks no longer match. Record exactly which hooks still
+     match.
+3. Screenshot: classify (PDF rendered / advanced-but-blank / new crash / etc.).
+   If the PDF renders, test first-page scroll.
+4. HTML and non-PDF binary smoke: no regression; normal pages unaffected by the
+   feature flip.
+
+#### Pass Criteria
+
+- Builds; forbidden deps absent.
+- `IsOopifPdfEnabled()` is true; the `IsPdfRenderer()` crash is gone; the PDF
+  content process is PDF-designated (`host_is_pdf=true`).
+- The viewer advances past plugin creation to a new, precisely named layer (or
+  the PDF renders — the ultimate goal).
+- HTML and non-PDF binary smoke show no regression.
+
+Stretch Pass: the PDF visibly renders.
+
+#### Partial Criteria
+
+Partial if the crash is resolved and the process is designated, but the viewer
+attach regresses under OOPIF (e.g. the Issue 789 `mimeHandlerPrivate` attach no
+longer fires and the viewer needs the OOPIF attach path) or a new layer blocks
+rendering. Name the exact next failure and whether it is an OOPIF-attach gap.
+
+#### Failure Criteria
+
+- Enabling OOPIF breaks the viewer entirely (no attach, no `getStreamInfo`) with
+  no clear next step — would require reconsidering the OOPIF-vs-non-OOPIF
+  decision.
+- Normal HTML or non-PDF binary behavior regresses.
+- The crash persists despite `IsOopifPdfEnabled()` being true (mechanism wrong;
+  re-investigate where `is_pdf` is lost).
