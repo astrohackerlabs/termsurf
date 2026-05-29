@@ -172,5 +172,5 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
 
 ## Experiments
 
-- [Experiment 1: Stand up the extensions browser system (Electron-mirrored)](01-stand-up-extensions-system.md)
-  — **In progress**
+_None yet. The first experiment will be designed after the issue principles and
+scope have been reviewed._
