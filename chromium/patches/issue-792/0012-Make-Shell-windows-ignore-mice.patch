@@ -1,7 +1,7 @@
 From 7923c7bf8f0730387f3ac5625c40fd155430bbbf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 22 May 2026 07:41:15 -0500
-Subject: [PATCH 12/26] Make Shell windows ignore mice
+Subject: [PATCH 12/27] Make Shell windows ignore mice
 
 The hidden Shell was far too keen,
 To catch the clicks it should not have seen.

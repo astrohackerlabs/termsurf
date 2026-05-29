@@ -183,4 +183,4 @@ stream/extension portion and should be mined rather than rebuilt from scratch.
 - [Experiment 5: Serve PDF extension resources](05-serve-pdf-extension-resources.md)
   — **Pass**
 - [Experiment 6: Register extension renderer processes](06-register-extension-renderer-process.md)
-  — **Designed**
+  — **Pass**

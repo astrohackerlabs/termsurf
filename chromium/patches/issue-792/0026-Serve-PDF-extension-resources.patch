@@ -1,7 +1,7 @@
 From e05792213f8e71ae360f793d77c33afcaf7b523e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 09:48:49 -0500
-Subject: [PATCH 26/26] Serve PDF extension resources
+Subject: [PATCH 26/27] Serve PDF extension resources
 
 The viewer found a tiny gate,
 Where bundled bytes could navigate.
