@@ -221,6 +221,13 @@ completion:
 Electron remains the guide for embedder-owned browser infrastructure. Chromium's
 PDF tests remain the feature checklist.
 
+## Experiments
+
+- [Experiment 1: Build PDF interaction harness](01-build-pdf-interaction-harness.md)
+  — **Pass**
+- [Experiment 2: Trace real wheel input](02-trace-real-wheel-input.md) —
+  **Partial** (agent-side macOS wheel injection did not reach Wezboard)
+
 ## Constraints
 
 - Do not reopen or modify closed Issues 792 and 793.

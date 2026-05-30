@@ -1,4 +1,8 @@
 use std::ffi::{c_void, CString};
+use std::fs::{create_dir_all, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::ffi::{self, TsWebContents};
 use crate::proto::{self, Msg, TermSurfMessage};
@@ -11,6 +15,34 @@ struct TabEntry {
     pane_id: String,
     inspected_tab_id: i64,
     last_url: String,
+}
+
+static PDF_INPUT_TRACE_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+pub fn init_pdf_input_trace() {
+    trace_pdf_input(format!("trace-init pid={}", std::process::id()));
+}
+
+fn trace_pdf_input(line: impl AsRef<str>) {
+    let path = PDF_INPUT_TRACE_PATH.get_or_init(|| {
+        if std::env::var_os("TERMSURF_PDF_INPUT_TRACE").is_none() {
+            return None;
+        }
+        let path = std::env::var_os("TERMSURF_PDF_INPUT_TRACE_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("termsurf").join("pdf-input.log"));
+        if let Some(parent) = path.parent() {
+            let _ = create_dir_all(parent);
+        }
+        Some(path)
+    });
+
+    let Some(path) = path else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "roamium {}", line.as_ref());
+    }
 }
 
 /// Global tab registry. Only accessed from the UI thread (via ts_post_task
@@ -161,6 +193,19 @@ pub fn handle_message(msg: &TermSurfMessage) {
         }
         Msg::ScrollEvent(m) => {
             if let Some(t) = find_by_tab_id(m.tab_id) {
+                trace_pdf_input(format!(
+                    "scroll-event tab={} pane={} ffi=ts_forward_scroll_event coords=({:.2}, {:.2}) delta=({:.2}, {:.2}) phase={} momentum_phase={} precise={} modifiers={}",
+                    m.tab_id,
+                    t.pane_id,
+                    m.x,
+                    m.y,
+                    m.delta_x,
+                    m.delta_y,
+                    m.phase,
+                    m.momentum_phase,
+                    m.precise,
+                    m.modifiers
+                ));
                 unsafe {
                     ffi::ts_forward_scroll_event(
                         t.handle,
@@ -174,6 +219,11 @@ pub fn handle_message(msg: &TermSurfMessage) {
                         m.modifiers as i32,
                     );
                 }
+            } else {
+                trace_pdf_input(format!(
+                    "scroll-event tab={} result=no-tab coords=({:.2}, {:.2}) delta=({:.2}, {:.2})",
+                    m.tab_id, m.x, m.y, m.delta_x, m.delta_y
+                ));
             }
         }
         Msg::KeyEvent(m) => {

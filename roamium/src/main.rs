@@ -62,6 +62,8 @@ unsafe extern "C" fn on_initialized(_user_data: *mut c_void) {
 // --- main ---
 
 fn main() {
+    dispatch::init_pdf_input_trace();
+
     // Parse --ipc-socket= and --user-data-dir= from argv.
     for arg in std::env::args().skip(1) {
         if let Some(val) = arg.strip_prefix("--ipc-socket=") {

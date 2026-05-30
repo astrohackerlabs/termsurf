@@ -5,6 +5,9 @@ use ::window::{
     KeyCode, Modifiers, MouseButtons, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
 };
 use prost::Message;
+use std::fs::{create_dir_all, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -17,6 +20,7 @@ struct MouseState {
 }
 
 static MOUSE_STATE: OnceLock<Mutex<MouseState>> = OnceLock::new();
+static PDF_INPUT_TRACE_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 fn mouse_state() -> &'static Mutex<MouseState> {
     MOUSE_STATE.get_or_init(|| {
@@ -28,6 +32,37 @@ fn mouse_state() -> &'static Mutex<MouseState> {
             drag_pane: None,
         })
     })
+}
+
+pub fn init_pdf_input_trace() {
+    trace_pdf_input(format!("trace-init pid={}", std::process::id()));
+}
+
+pub fn trace_pdf_input(line: impl AsRef<str>) {
+    let path = PDF_INPUT_TRACE_PATH.get_or_init(|| {
+        if std::env::var_os("TERMSURF_PDF_INPUT_TRACE").is_none() {
+            return None;
+        }
+        let path = std::env::var_os("TERMSURF_PDF_INPUT_TRACE_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("termsurf").join("pdf-input.log"));
+        if let Some(parent) = path.parent() {
+            let _ = create_dir_all(parent);
+        }
+        let _ = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path);
+        Some(path)
+    });
+
+    let Some(path) = path else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "wezboard {}", line.as_ref());
+    }
 }
 
 fn compute_click_count(x: f64, y: f64) -> i64 {
@@ -589,6 +624,10 @@ pub fn try_forward_raw_scroll(
 ) -> bool {
     let pane_id_str = pane_id.to_string();
     let Some(state) = super::shared_state() else {
+        trace_pdf_input(format!(
+            "raw-scroll pane={} result=no-shared-state coords=({}, {}) delta=({}, {})",
+            pane_id, coords.x, coords.y, delta_x, delta_y
+        ));
         return false;
     };
     let (has_pane, has_tab) = {
@@ -599,6 +638,10 @@ pub fn try_forward_raw_scroll(
         }
     };
     if !has_pane || !has_tab {
+        trace_pdf_input(format!(
+            "raw-scroll pane={} result=no-pane-or-tab has_pane={} has_tab={} coords=({}, {}) delta=({}, {})",
+            pane_id, has_pane, has_tab, coords.x, coords.y, delta_x, delta_y
+        ));
         return false;
     }
 
@@ -606,6 +649,10 @@ pub fn try_forward_raw_scroll(
         hit_test_overlay_at(&pane_id_str, coords.x as f64, coords.y as f64)
     {
         let mods = modifiers_to_termsurf(modifiers);
+        trace_pdf_input(format!(
+            "raw-scroll pane={} result=hit rel=({:.2}, {:.2}) coords=({}, {}) delta=({:.2}, {:.2}) phase={} momentum_phase={} precise={} modifiers={}",
+            pane_id, rel_x, rel_y, coords.x, coords.y, delta_x, delta_y, phase, momentum_phase, precise, mods
+        ));
         send_to_chromium(
             &pane_id_str,
             Msg::ScrollEvent(proto::ScrollEvent {
@@ -622,6 +669,10 @@ pub fn try_forward_raw_scroll(
         );
         return true;
     }
+    trace_pdf_input(format!(
+        "raw-scroll pane={} result=miss coords=({}, {}) delta=({:.2}, {:.2})",
+        pane_id, coords.x, coords.y, delta_x, delta_y
+    ));
     false
 }
 
@@ -638,6 +689,10 @@ pub fn try_forward_scroll_any_pane(
     modifiers: Modifiers,
 ) -> bool {
     let Some(state) = super::shared_state() else {
+        trace_pdf_input(format!(
+            "raw-scroll-any result=no-shared-state coords=({}, {}) delta=({}, {})",
+            coords.x, coords.y, delta_x, delta_y
+        ));
         return false;
     };
     let candidates: Vec<usize> = {
@@ -648,6 +703,10 @@ pub fn try_forward_scroll_any_pane(
             .filter_map(|p| p.pane_id.parse().ok())
             .collect()
     };
+    trace_pdf_input(format!(
+        "raw-scroll-any candidates={:?} coords=({}, {}) delta=({:.2}, {:.2}) phase={} momentum_phase={} precise={}",
+        candidates, coords.x, coords.y, delta_x, delta_y, phase, momentum_phase, precise
+    ));
     for pane_id in candidates {
         if try_forward_raw_scroll(
             pane_id,
@@ -659,8 +718,16 @@ pub fn try_forward_scroll_any_pane(
             precise,
             modifiers,
         ) {
+            trace_pdf_input(format!(
+                "raw-scroll-any result=consumed pane={} coords=({}, {})",
+                pane_id, coords.x, coords.y
+            ));
             return true;
         }
     }
+    trace_pdf_input(format!(
+        "raw-scroll-any result=not-consumed coords=({}, {})",
+        coords.x, coords.y
+    ));
     false
 }

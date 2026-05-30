@@ -654,6 +654,11 @@ impl super::TermWindow {
         // Raw scroll already forwarded to browser — suppress duplicate.
         if matches!(event.kind, WMEK::VertWheel(_) | WMEK::HorzWheel(_)) && self.raw_scroll_consumed
         {
+            crate::termsurf::input::trace_pdf_input(format!(
+                "terminal-wheel-suppressed pane={} kind={:?}",
+                pane.pane_id(),
+                event.kind
+            ));
             self.raw_scroll_consumed = false;
             return;
         }

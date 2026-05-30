@@ -86,6 +86,7 @@ static GLOBAL_STATE: OnceLock<SharedState> = OnceLock::new();
 
 pub fn init_global(state: SharedState) {
     GLOBAL_STATE.set(state).ok();
+    crate::termsurf::input::init_pdf_input_trace();
 }
 
 pub fn global() -> Option<&'static SharedState> {

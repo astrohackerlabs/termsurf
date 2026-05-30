@@ -1083,6 +1083,10 @@ impl TermWindow {
                 modifiers,
                 ..
             } => {
+                crate::termsurf::input::trace_pdf_input(format!(
+                    "window-raw-scroll coords=({}, {}) delta=({:.2}, {:.2}) phase={} momentum_phase={} precise={}",
+                    coords.x, coords.y, delta_x, delta_y, phase, momentum_phase, precise
+                ));
                 self.raw_scroll_consumed = crate::termsurf::input::try_forward_scroll_any_pane(
                     coords,
                     delta_x,
