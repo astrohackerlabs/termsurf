@@ -222,6 +222,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 53: Port PageList Cell Lookup](53-port-pagelist-cell-lookup.md) —
   **Pass**
+- [Experiment 54: Port PageList Row Iterator](54-port-pagelist-row-iterator.md)
+  — **Designed**
 
 ## Non-Goals
 
