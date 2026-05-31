@@ -445,7 +445,7 @@ impl Page {
         })
     }
 
-    fn reinit(&mut self) {
+    pub(super) fn reinit(&mut self) {
         let capacity = self.capacity;
         self.reinit_with_capacity(capacity);
     }

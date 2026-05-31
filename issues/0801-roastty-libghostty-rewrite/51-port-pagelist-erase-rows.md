@@ -230,3 +230,72 @@ The experiment fails if:
 - the implementation expands into parser, renderer, app, ABI, resize/reflow, or
   unrelated terminal work;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+`PageList::erase_rows` is implemented as the private range-erasure layer, with
+`erase_history` and `erase_active` wrappers. The helper collects `PageIterator`
+chunks before mutation, validates that full history-page deletion is
+front-removable, validates that full active-page deletion is back-removable, and
+rejects middle full-page deletion before mutation.
+
+Full-page chunks are removed through Experiment 50's `erase_page` helper. The
+only-page full-erasure case reinitializes the page in place, sets its row count
+to zero, and moves pins in that page to `(0, 0)` so active regrowth can rebuild
+the page list without leaving dangling or invalid pin state. `Page::reinit` was
+made `pub(super)` only for this PageList-only case.
+
+Partial chunks now support nonzero starts. Rows after the erased range rotate up
+to fill the gap, vacated rows are cleared, the page row count shrinks, the page
+is marked dirty, and tracked pins are updated. Pins below the erased range shift
+up by the erased row count. Pins inside the erased range move to the first row
+after the erased range when that row is in the next page, or to the replacement
+position in the same page otherwise. This covers the Rust PageIterator case
+where active rows begin mid-page because history and active rows share a page.
+
+After chunk mutation, `erase_rows` subtracts the total erased row count from
+`total_rows`. Active erasure then regrows one row per erased row, and
+`fixup_viewport` runs after accounting and regrowth. Successful erasure ends
+with full `verify_integrity`.
+
+Tests added coverage for:
+
+- erasing all history and re-accounting page size;
+- bounded history erasure that leaves history above active;
+- active erasure with regrowth and tracked-pin shifting;
+- active erasure where active starts mid-page;
+- active erasure to the end of a mid-page chunk, with erased pins moving to the
+  next page;
+- rejection of a full active-page deletion that would remove a middle page;
+- one-row active erasure;
+- managed-memory cleanup and preservation for style, grapheme, and hyperlink
+  data in partial range erasure;
+- viewport top becoming active after all history is erased;
+- pinned viewport cache adjustment after bounded history erasure.
+
+Verification:
+
+- `cargo fmt -- roastty/src/terminal/page.rs roastty/src/terminal/page_list.rs`
+- `cargo test -p roastty terminal::page_list` — 184 PageList tests passed, ABI
+  harness filtered out
+- `cargo test -p roastty` — 465 unit tests passed, ABI harness passed, doc-tests
+  passed
+
+Independent result review initially found three real gaps: end-of-page
+nonzero-start pin remapping, missing managed-memory coverage, and missing erase
+viewport coverage. Those were fixed and re-reviewed. The final review approved
+Experiment 51 as a Pass with no remaining blockers.
+
+## Conclusion
+
+Experiment 51 completed the PageList range-erasure layer that ties together the
+row and page erasure primitives from Experiments 48-50. Roastty now has internal
+history and active range erasure with edge-safe full-page deletion, arbitrary
+partial-chunk starts, active regrowth, viewport fixup, and integrity coverage.
+
+The implementation deliberately rejects middle full-page deletion rather than
+creating serial invalidation gaps. The next experiment can move to the next
+unported PageList surface above range erasure, such as scroll-clear or the
+row/cell iteration helpers, using this erase stack as a foundation.

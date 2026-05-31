@@ -217,7 +217,7 @@ No experiment may proceed to the next stage until the required review passes.
 - [Experiment 50: Port PageList Erase Page](50-port-pagelist-erase-page.md) —
   **Pass**
 - [Experiment 51: Port PageList Erase Rows](51-port-pagelist-erase-rows.md) —
-  **Designed**
+  **Pass**
 
 ## Non-Goals
 
