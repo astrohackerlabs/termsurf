@@ -349,6 +349,13 @@ impl Set {
         self.inner.ref_count(base, id)
     }
 
+    pub(super) fn contains_id<B>(&self, base: B, id: Id) -> bool
+    where
+        B: BaseAddress + Copy,
+    {
+        self.inner.contains_id(base, id)
+    }
+
     pub(super) fn count(&self) -> usize {
         self.inner.count()
     }

@@ -185,3 +185,63 @@ The experiment fails if:
   behavior outside the checker;
 - the implementation expands into parser/screen lifecycle, public ABI, or
   unrelated behavior.
+
+## Result
+
+**Result:** Pass
+
+Implemented internal `Page::verify_integrity` in `roastty/src/terminal/page.rs`,
+plus the supporting `IntegrityError` enum.
+
+The checker validates the upstream Page invariants that Roastty can now model:
+zero size rejection, grapheme cell/map/row consistency, style existence and row
+flag consistency, hyperlink cell/map/set/row consistency, lower-bound style and
+hyperlink refcount checks, and wide-character spacer placement rules.
+
+Added a non-panicking `contains_id` helper to `RefCountedSet` and exposed it
+through `style::Set` so the integrity checker can return `MissingStyle` and
+`MissingHyperlinkData` instead of relying on assertion failures for corrupt
+internal IDs.
+
+The upstream `InvalidStyleCount` variant is retained for enum parity but is not
+currently produced, matching upstream's deliberate choice not to check exact
+style counts. The disabled zombie-style check also remains disabled.
+
+Added focused tests covering:
+
+- fresh and reinitialized Pages passing integrity;
+- zero row and zero column errors;
+- valid grapheme rows and unmarked/missing grapheme corruption;
+- valid styled cells, missing styles, unmarked style rows, and style refcount
+  mismatches;
+- extra live style refs being accepted by the lower-bound refcount rule;
+- valid hyperlink cells, missing hyperlink data, unmarked hyperlink cells,
+  unmarked hyperlink rows, and hyperlink refcount mismatches;
+- extra live hyperlink refs being accepted by the lower-bound refcount rule;
+- invalid spacer tails and spacer heads.
+
+`InvalidGraphemeCount` is retained and implemented for upstream parity, but it
+is not directly covered by a corruption test. In the current Roastty data model,
+every visible grapheme lookup is backed by a map entry, and `grapheme_count()`
+is the same map's entry count, so producing "seen graphemes > grapheme count"
+without corrupting private map header metadata would require an artificial
+memory-level corruption path outside this experiment's scope.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page
+cargo test -p roastty
+```
+
+The targeted Page suite reported 153 passing tests. The full `roastty` suite
+reported 262 unit tests, the ABI harness, and doc tests passing.
+
+## Conclusion
+
+Roastty now has an internal Page integrity checker equivalent to the currently
+ported upstream Page state. This experiment deliberately did not wire the
+checker into mutation paths or add pause/assert runtime-safety plumbing. Those
+integration pieces should be considered only after the next Page or screen
+lifecycle slices require them.

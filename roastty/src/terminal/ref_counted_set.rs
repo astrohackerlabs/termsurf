@@ -306,6 +306,13 @@ impl<T: Copy + Default> RefCountedSet<T> {
         self.item_ref_count(base, id)
     }
 
+    pub(super) fn contains_id<B>(&self, base: B, id: Id) -> bool
+    where
+        B: BaseAddress + Copy,
+    {
+        id > 0 && (id as usize) < self.layout.cap && self.item_ref_count(base, id) > 0
+    }
+
     pub(super) const fn count(&self) -> usize {
         self.living
     }

@@ -179,7 +179,7 @@ No experiment may proceed to the next stage until the required review passes.
 - [Experiment 26: Port Page Clear Cells](26-port-page-clear-cells.md) — **Pass**
 - [Experiment 27: Port Page Reinit](27-port-page-reinit.md) — **Pass**
 - [Experiment 28: Port Page Integrity Checks](28-port-page-integrity-checks.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

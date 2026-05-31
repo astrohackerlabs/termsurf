@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::mem::{align_of, size_of};
 use std::ptr::NonNull;
@@ -342,6 +343,27 @@ pub(super) enum CloneFromError {
     HyperlinkSetNeedsRehash,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntegrityError {
+    ZeroRowCount,
+    ZeroColCount,
+    UnmarkedGraphemeRow,
+    MissingGraphemeData,
+    InvalidGraphemeCount,
+    UnmarkedGraphemeCell,
+    MissingStyle,
+    UnmarkedStyleRow,
+    MismatchedStyleRef,
+    InvalidStyleCount,
+    MissingHyperlinkData,
+    MismatchedHyperlinkRef,
+    UnmarkedHyperlinkCell,
+    UnmarkedHyperlinkRow,
+    InvalidSpacerTailLocation,
+    InvalidSpacerHeadLocation,
+    UnwrappedSpacerHead,
+}
+
 impl From<GraphemeError> for CloneFromError {
     fn from(value: GraphemeError) -> Self {
         Self::Grapheme(value)
@@ -406,6 +428,110 @@ impl Page {
         self.string_alloc = regions.string_alloc;
         self.hyperlink_set = regions.hyperlink_set;
         self.hyperlink_map = regions.hyperlink_map;
+    }
+
+    fn verify_integrity(&self) -> Result<(), IntegrityError> {
+        if self.size.rows == 0 {
+            return Err(IntegrityError::ZeroRowCount);
+        }
+        if self.size.cols == 0 {
+            return Err(IntegrityError::ZeroColCount);
+        }
+
+        let mut graphemes_seen = 0_usize;
+        let grapheme_count = self.grapheme_count();
+        let mut styles_seen: HashMap<style::Id, usize> = HashMap::new();
+        let mut hyperlinks_seen: HashMap<hyperlink::Id, usize> = HashMap::new();
+
+        for y in 0..self.size.rows as usize {
+            let row = self.get_row(y);
+            self.assert_row_cells_range(row);
+            let graphemes_start = graphemes_seen;
+            for (x, cell) in self.get_cells(row).iter().copied().enumerate() {
+                let offset = self.row_cell_offset(row, x);
+
+                if cell.has_grapheme() {
+                    if self.lookup_grapheme_at_offset(offset).is_none() {
+                        return Err(IntegrityError::MissingGraphemeData);
+                    }
+                    graphemes_seen += 1;
+                } else if grapheme_count > 0 && self.lookup_grapheme_at_offset(offset).is_some() {
+                    return Err(IntegrityError::UnmarkedGraphemeCell);
+                }
+
+                let style_id = cell.style_id();
+                if style_id != style::DEFAULT_ID {
+                    if !self.styles.contains_id(self.style_base(), style_id) {
+                        return Err(IntegrityError::MissingStyle);
+                    }
+                    if !row.styled() {
+                        return Err(IntegrityError::UnmarkedStyleRow);
+                    }
+                    *styles_seen.entry(style_id).or_insert(0) += 1;
+                }
+
+                if cell.hyperlink() {
+                    let id = self
+                        .lookup_hyperlink_at_offset(offset)
+                        .ok_or(IntegrityError::MissingHyperlinkData)?;
+                    if !row.hyperlink() {
+                        return Err(IntegrityError::UnmarkedHyperlinkRow);
+                    }
+                    if !self
+                        .hyperlink_set
+                        .contains_id(self.hyperlink_set_base(), id)
+                    {
+                        return Err(IntegrityError::MissingHyperlinkData);
+                    }
+                    *hyperlinks_seen.entry(id).or_insert(0) += 1;
+                } else if self.lookup_hyperlink_at_offset(offset).is_some() {
+                    return Err(IntegrityError::UnmarkedHyperlinkCell);
+                }
+
+                match cell.wide() {
+                    Wide::Narrow | Wide::Wide => {}
+                    Wide::SpacerTail => {
+                        if x == 0 {
+                            return Err(IntegrityError::InvalidSpacerTailLocation);
+                        }
+                        let previous = self.cell_copy_at(x - 1, y);
+                        if previous.wide() != Wide::Wide {
+                            return Err(IntegrityError::InvalidSpacerTailLocation);
+                        }
+                    }
+                    Wide::SpacerHead => {
+                        if x != self.size.cols as usize - 1 {
+                            return Err(IntegrityError::InvalidSpacerHeadLocation);
+                        }
+                        if !row.wrap() {
+                            return Err(IntegrityError::UnwrappedSpacerHead);
+                        }
+                    }
+                }
+            }
+
+            if graphemes_seen > graphemes_start && !row.grapheme() {
+                return Err(IntegrityError::UnmarkedGraphemeRow);
+            }
+        }
+
+        if graphemes_seen > self.grapheme_count() {
+            return Err(IntegrityError::InvalidGraphemeCount);
+        }
+
+        for (id, seen) in styles_seen {
+            if (self.style_ref_count(id) as usize) < seen {
+                return Err(IntegrityError::MismatchedStyleRef);
+            }
+        }
+
+        for (id, seen) in hyperlinks_seen {
+            if (self.hyperlink_ref_count(id) as usize) < seen {
+                return Err(IntegrityError::MismatchedHyperlinkRef);
+            }
+        }
+
+        Ok(())
     }
 
     fn init_regions(memory: &mut PageMemory, layout: PageLayout) -> PageRegions {
@@ -3193,6 +3319,357 @@ mod tests {
         assert_eq!(page.hyperlink_ref_count(link_id), 1);
         assert_eq!(page.lookup_hyperlink_at(1, 0), Some(link_id));
         assert!(page.get_row(0).managed_memory());
+    }
+
+    #[test]
+    fn page_verify_integrity_fresh_and_reinit_pages() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+
+        assert_eq!(page.verify_integrity(), Ok(()));
+
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('x' as u32);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        page.reinit();
+
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_verify_integrity_rejects_zero_size() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        page.size.rows = 0;
+        assert_eq!(page.verify_integrity(), Err(IntegrityError::ZeroRowCount));
+
+        page.size.rows = 2;
+        page.size.cols = 0;
+        assert_eq!(page.verify_integrity(), Err(IntegrityError::ZeroColCount));
+    }
+
+    #[test]
+    fn page_verify_integrity_graphemes_good() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+
+        for x in 0..page.size.cols as usize {
+            *page.get_row_and_cell_mut(x, 0).cell = Cell::init((x + 1) as u32);
+            page.append_grapheme_at(x, 0, 0x0301).unwrap();
+        }
+
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_verify_integrity_grapheme_row_not_marked() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        page.get_row_mut(0).set_grapheme(false);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::UnmarkedGraphemeRow)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_missing_grapheme_data() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        let offset = page.cell_offset_at(0, 0);
+        page.grapheme_map_mut()
+            .unwrap()
+            .fetch_remove(offset)
+            .unwrap();
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::MissingGraphemeData)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_unmarked_grapheme_cell() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        page.get_row_and_cell_mut(0, 0)
+            .cell
+            .set_content_tag(ContentTag::Codepoint);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::UnmarkedGraphemeCell)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_styles_good() {
+        let mut page = Page::init(Capacity {
+            cols: 5,
+            rows: 2,
+            styles: 8,
+            ..Capacity::new(5, 2)
+        })
+        .unwrap();
+        let id = page
+            .add_style(style::Style {
+                flags: style::Flags {
+                    bold: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            })
+            .unwrap();
+
+        for x in 0..page.size.cols as usize {
+            let rac = page.get_row_and_cell_mut(x, 0);
+            *rac.cell = Cell::init((x + 1) as u32);
+            rac.row.set_styled(true);
+            rac.cell.set_style_id(id);
+            page.use_style(id);
+        }
+        page.release_style(id);
+
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_verify_integrity_style_extra_ref_is_valid() {
+        let mut page = Page::init(Capacity {
+            cols: 5,
+            rows: 2,
+            styles: 8,
+            ..Capacity::new(5, 2)
+        })
+        .unwrap();
+        let id = page.add_style(style::Style::default()).unwrap();
+        let rac = page.get_row_and_cell_mut(0, 0);
+        *rac.cell = Cell::init('s' as u32);
+        rac.row.set_styled(true);
+        rac.cell.set_style_id(id);
+        page.use_style(id);
+
+        assert_eq!(page.style_ref_count(id), 2);
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_verify_integrity_missing_style() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let rac = page.get_row_and_cell_mut(0, 0);
+        *rac.cell = Cell::init('s' as u32);
+        rac.row.set_styled(true);
+        rac.cell.set_style_id(42);
+
+        assert_eq!(page.verify_integrity(), Err(IntegrityError::MissingStyle));
+    }
+
+    #[test]
+    fn page_verify_integrity_unmarked_style_row() {
+        let mut page = Page::init(Capacity {
+            cols: 5,
+            rows: 2,
+            styles: 8,
+            ..Capacity::new(5, 2)
+        })
+        .unwrap();
+        let id = page.add_style(style::Style::default()).unwrap();
+        let rac = page.get_row_and_cell_mut(0, 0);
+        *rac.cell = Cell::init('s' as u32);
+        rac.cell.set_style_id(id);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::UnmarkedStyleRow)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_style_ref_count_mismatch() {
+        let mut page = Page::init(Capacity {
+            cols: 5,
+            rows: 2,
+            styles: 8,
+            ..Capacity::new(5, 2)
+        })
+        .unwrap();
+        let id = page.add_style(style::Style::default()).unwrap();
+        for x in 0..2 {
+            let rac = page.get_row_and_cell_mut(x, 0);
+            *rac.cell = Cell::init((x + 1) as u32);
+            rac.row.set_styled(true);
+            rac.cell.set_style_id(id);
+        }
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::MismatchedStyleRef)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_hyperlinks_good() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(0, 0, id).unwrap();
+
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_verify_integrity_hyperlink_extra_ref_is_valid() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(0, 0, id).unwrap();
+        page.use_hyperlink(id);
+
+        assert_eq!(page.hyperlink_ref_count(id), 2);
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_verify_integrity_missing_hyperlink_data() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(0, 0, id).unwrap();
+        let offset = page.cell_offset_at(0, 0);
+        page.hyperlink_map_mut()
+            .unwrap()
+            .fetch_remove(offset)
+            .unwrap();
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::MissingHyperlinkData)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_unmarked_hyperlink_cell() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(0, 0, id).unwrap();
+        page.get_row_and_cell_mut(0, 0).cell.set_hyperlink(false);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::UnmarkedHyperlinkCell)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_unmarked_hyperlink_row() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(0, 0, id).unwrap();
+        page.get_row_mut(0).set_hyperlink(false);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::UnmarkedHyperlinkRow)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_hyperlink_ref_count_mismatch() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        for x in 0..2 {
+            *page.get_row_and_cell_mut(x, 0).cell = Cell::init((x + 1) as u32);
+            page.set_hyperlink(x, 0, id).unwrap();
+        }
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::MismatchedHyperlinkRef)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_spacer_tail_at_column_zero() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        page.get_row_and_cell_mut(0, 0)
+            .cell
+            .set_wide(Wide::SpacerTail);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::InvalidSpacerTailLocation)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_spacer_tail_after_non_wide() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        page.get_row_and_cell_mut(1, 0)
+            .cell
+            .set_wide(Wide::SpacerTail);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::InvalidSpacerTailLocation)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_spacer_head_not_at_end() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        page.get_row_and_cell_mut(1, 0)
+            .cell
+            .set_wide(Wide::SpacerHead);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::InvalidSpacerHeadLocation)
+        );
+    }
+
+    #[test]
+    fn page_verify_integrity_unwrapped_spacer_head() {
+        let mut page = Page::init(Capacity::new(5, 2)).unwrap();
+        page.get_row_and_cell_mut(4, 0)
+            .cell
+            .set_wide(Wide::SpacerHead);
+
+        assert_eq!(
+            page.verify_integrity(),
+            Err(IntegrityError::UnwrappedSpacerHead)
+        );
     }
 
     #[test]
