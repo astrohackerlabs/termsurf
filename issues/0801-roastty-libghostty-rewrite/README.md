@@ -158,6 +158,8 @@ No experiment may proceed to the next stage until the required review passes.
   **Pass**
 - [Experiment 15: Port Style Hashing and Set Storage](15-port-style-set.md) —
   **Pass**
+- [Experiment 16: Port Page Style Storage and Clone](16-port-page-style-clone.md)
+  — **Designed**
 
 ## Non-Goals
 
