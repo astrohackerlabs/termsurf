@@ -297,6 +297,18 @@ pub(super) struct Page {
     hyperlink_map: Option<offset_hash_map::OffsetHashMap<Offset<Cell>, HyperlinkId>>,
 }
 
+#[derive(Debug)]
+struct PageRegions {
+    rows: Offset<Row>,
+    cells: Offset<Cell>,
+    styles: style::Set,
+    grapheme_alloc: GraphemeAlloc,
+    grapheme_map: Option<offset_hash_map::OffsetHashMap<Offset<Cell>, OffsetSlice<u32>>>,
+    string_alloc: StringAlloc,
+    hyperlink_set: hyperlink::Set,
+    hyperlink_map: Option<offset_hash_map::OffsetHashMap<Offset<Cell>, HyperlinkId>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GraphemeError {
     GraphemeMapOutOfMemory,
@@ -348,6 +360,56 @@ impl Page {
         assert_eq!(layout.total_size % PAGE_SIZE_MIN, 0);
 
         let mut memory = PageMemory::new(layout.total_size)?;
+        let regions = Self::init_regions(&mut memory, layout);
+
+        Ok(Self {
+            memory,
+            rows: regions.rows,
+            cells: regions.cells,
+            dirty: false,
+            size: Size {
+                cols: capacity.cols,
+                rows: capacity.rows,
+            },
+            capacity,
+            layout,
+            styles: regions.styles,
+            grapheme_alloc: regions.grapheme_alloc,
+            grapheme_map: regions.grapheme_map,
+            string_alloc: regions.string_alloc,
+            hyperlink_set: regions.hyperlink_set,
+            hyperlink_map: regions.hyperlink_map,
+        })
+    }
+
+    fn reinit(&mut self) {
+        let capacity = self.capacity;
+        let layout = page_layout(capacity);
+        assert_eq!(layout, self.layout);
+        assert_eq!(layout.total_size, self.memory.len());
+
+        self.memory.as_mut_slice().fill(0);
+        let regions = Self::init_regions(&mut self.memory, layout);
+
+        self.rows = regions.rows;
+        self.cells = regions.cells;
+        self.dirty = false;
+        self.size = Size {
+            cols: capacity.cols,
+            rows: capacity.rows,
+        };
+        self.capacity = capacity;
+        self.layout = layout;
+        self.styles = regions.styles;
+        self.grapheme_alloc = regions.grapheme_alloc;
+        self.grapheme_map = regions.grapheme_map;
+        self.string_alloc = regions.string_alloc;
+        self.hyperlink_set = regions.hyperlink_set;
+        self.hyperlink_map = regions.hyperlink_map;
+    }
+
+    fn init_regions(memory: &mut PageMemory, layout: PageLayout) -> PageRegions {
+        let capacity = layout.capacity;
         let buf = super::size::OffsetBuf::init(memory.as_mut_ptr());
         let rows = buf.member::<Row>(layout.rows_start);
         let cells = buf.member::<Cell>(layout.cells_start);
@@ -440,24 +502,16 @@ impl Page {
             });
         }
 
-        Ok(Self {
-            memory,
+        PageRegions {
             rows,
             cells,
-            dirty: false,
-            size: Size {
-                cols: capacity.cols,
-                rows: capacity.rows,
-            },
-            capacity,
-            layout,
             styles,
             grapheme_alloc,
             grapheme_map,
             string_alloc,
             hyperlink_set,
             hyperlink_map,
-        })
+        }
     }
 
     pub(super) fn backing_len(&self) -> usize {
@@ -2957,6 +3011,188 @@ mod tests {
         assert_eq!(page.capacity().rows, 80);
         assert_eq!(page.size.cols, 120);
         assert_eq!(page.size.rows, 80);
+    }
+
+    #[test]
+    fn page_reinit_reuses_backing_and_resets_cells() {
+        let capacity = Capacity {
+            cols: 6,
+            rows: 4,
+            styles: 8,
+            ..Capacity::new(6, 4)
+        };
+        let mut page = Page::init(capacity).unwrap();
+        let backing_ptr = page.backing_ptr();
+        let backing_len = page.backing_len();
+        let backing_capacity = page.capacity();
+
+        for y in 0..page.size.rows as usize {
+            for x in 0..page.size.cols as usize {
+                *page.get_row_and_cell_mut(x, y).cell = Cell::init((x + y + 1) as u32);
+            }
+        }
+        {
+            let row = page.get_row_mut(1);
+            row.set_wrap(true);
+            row.set_dirty(true);
+        }
+        page.dirty = true;
+        page.size = Size { cols: 3, rows: 2 };
+
+        page.reinit();
+
+        assert_eq!(page.backing_ptr(), backing_ptr);
+        assert_eq!(page.backing_len(), backing_len);
+        assert_eq!(page.capacity(), backing_capacity);
+        assert_eq!(page.size, Size { cols: 6, rows: 4 });
+        assert!(!page.is_dirty());
+
+        for y in 0..page.capacity.rows as usize {
+            let row = page.get_row(y);
+            let expected =
+                page.layout.cells_start + y * page.capacity.cols as usize * size_of::<Cell>();
+            assert_eq!(row.cells().offset() as usize, expected);
+            assert_eq!(row.cval() & !Row::CELLS_MASK, 0);
+            for cell in page.get_cells(row) {
+                assert_eq!(*cell, Cell::default());
+            }
+        }
+    }
+
+    #[test]
+    fn page_reinit_resets_managed_memory() {
+        let mut page = Page::init(Capacity {
+            cols: 6,
+            rows: 2,
+            styles: 8,
+            ..Capacity::new(6, 2)
+        })
+        .unwrap();
+        let style_id = page
+            .add_style(style::Style {
+                flags: style::Flags {
+                    italic: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            })
+            .unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"id"),
+                uri: b"https://example.com/reinit",
+            })
+            .unwrap();
+
+        let rac = page.get_row_and_cell_mut(0, 0);
+        *rac.cell = Cell::init('s' as u32);
+        rac.row.set_styled(true);
+        rac.cell.set_style_id(style_id);
+        *page.get_row_and_cell_mut(1, 0).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(1, 0, 0x0301).unwrap();
+        *page.get_row_and_cell_mut(2, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(2, 0, link_id).unwrap();
+
+        assert_eq!(page.style_count(), 1);
+        assert_eq!(page.grapheme_count(), 1);
+        assert_eq!(page.hyperlink_count(), 1);
+        assert_eq!(page.hyperlink_set_count(), 1);
+        assert!(page.grapheme_used_bytes() > 0);
+        assert!(page.string_used_bytes() > 0);
+        assert!(page.get_row(0).managed_memory());
+
+        page.reinit();
+
+        assert_eq!(page.style_count(), 0);
+        assert_eq!(page.grapheme_count(), 0);
+        assert_eq!(page.hyperlink_count(), 0);
+        assert_eq!(page.hyperlink_set_count(), 0);
+        assert_eq!(page.grapheme_used_bytes(), 0);
+        assert_eq!(page.string_used_bytes(), 0);
+        assert!(!page.get_row(0).managed_memory());
+        assert_eq!(page.lookup_grapheme_at(1, 0), None);
+        assert_eq!(page.lookup_hyperlink_at(2, 0), None);
+        for cell in page.get_cells(page.get_row(0)) {
+            assert_eq!(*cell, Cell::default());
+        }
+    }
+
+    #[test]
+    fn page_reinit_resets_dirty_and_row_metadata() {
+        let mut page = Page::init(Capacity::new(4, 2)).unwrap();
+        page.dirty = true;
+        {
+            let row = page.get_row_mut(0);
+            row.set_wrap(true);
+            row.set_wrap_continuation(true);
+            row.set_grapheme(true);
+            row.set_styled(true);
+            row.set_hyperlink(true);
+            row.set_semantic_prompt(SemanticPrompt::PromptContinuation);
+            row.set_kitty_virtual_placeholder(true);
+            row.set_dirty(true);
+        }
+
+        page.reinit();
+
+        assert!(!page.is_dirty());
+        let row = page.get_row(0);
+        assert!(!row.wrap());
+        assert!(!row.wrap_continuation());
+        assert!(!row.grapheme());
+        assert!(!row.styled());
+        assert!(!row.hyperlink());
+        assert_eq!(row.semantic_prompt(), SemanticPrompt::None);
+        assert!(!row.kitty_virtual_placeholder());
+        assert!(!row.dirty());
+    }
+
+    #[test]
+    fn page_reinit_page_remains_usable() {
+        let mut page = Page::init(Capacity {
+            cols: 5,
+            rows: 2,
+            styles: 8,
+            ..Capacity::new(5, 2)
+        })
+        .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('x' as u32);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        page.reinit();
+
+        let style_id = page
+            .add_style(style::Style {
+                flags: style::Flags {
+                    underline: Underline::Single,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            })
+            .unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(7),
+                uri: b"https://example.com/after-reinit",
+            })
+            .unwrap();
+
+        let rac = page.get_row_and_cell_mut(1, 0);
+        *rac.cell = Cell::init('a' as u32);
+        rac.row.set_styled(true);
+        rac.cell.set_style_id(style_id);
+        page.use_style(style_id);
+        page.append_grapheme_at(1, 0, 0x0301).unwrap();
+        page.set_hyperlink(1, 0, link_id).unwrap();
+
+        assert_eq!(page.style_count(), 1);
+        assert_eq!(page.style_ref_count(style_id), 2);
+        assert_eq!(page.grapheme_count(), 1);
+        assert_eq!(page.lookup_grapheme_at(1, 0), Some(vec![0x0301]));
+        assert_eq!(page.hyperlink_count(), 1);
+        assert_eq!(page.hyperlink_set_count(), 1);
+        assert_eq!(page.hyperlink_ref_count(link_id), 1);
+        assert_eq!(page.lookup_hyperlink_at(1, 0), Some(link_id));
+        assert!(page.get_row(0).managed_memory());
     }
 
     #[test]

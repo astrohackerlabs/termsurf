@@ -151,3 +151,43 @@ The experiment fails if:
 - row offsets are wrong after reinit;
 - the implementation expands into parser/screen lifecycle, public ABI, or
   unrelated behavior.
+
+## Result
+
+**Result:** Pass
+
+Implemented internal `Page::reinit` in `roastty/src/terminal/page.rs`.
+
+The implementation factors Page region construction into `Page::init_regions`,
+so `Page::init` and `Page::reinit` rebuild rows, cells, style storage, grapheme
+storage, string storage, hyperlink storage, and row offsets through the same
+code path. `reinit` preserves the existing `PageMemory` owner, asserts the same
+capacity/layout, clears the backing memory, rebuilds Page metadata in place,
+restores size to full capacity, and resets dirty state.
+
+Added focused tests covering:
+
+- backing pointer, backing length, and capacity preservation;
+- non-vacuous size restoration after shrinking `page.size`;
+- row cell offset rebuilds and cell zeroing;
+- managed-memory reset for styles, graphemes, hyperlinks, and strings;
+- dirty state and row metadata reset;
+- Page reuse after reinit for styles, graphemes, and hyperlinks.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page
+cargo test -p roastty
+```
+
+The targeted Page suite reported 132 passing tests. The full `roastty` suite
+reported 241 unit tests, the ABI harness, and doc tests passing.
+
+## Conclusion
+
+Roastty now has the upstream Page same-allocation reset primitive. This
+completes the Page lifecycle operation needed before higher-level screen and
+terminal reset behavior can be ported in later experiments. No parser/screen
+lifecycle, public ABI, or app-facing API was added in this experiment.
