@@ -27,6 +27,12 @@ enum Scroll {
     Pin(Pin),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    RightDown,
+    LeftUp,
+}
+
 #[derive(Debug)]
 pub(super) struct PageList {
     cols: CellCountInt,
@@ -57,6 +63,161 @@ struct Pin {
     y: CellCountInt,
     x: CellCountInt,
     garbage: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PageChunk {
+    node: NonNull<Node>,
+    start: CellCountInt,
+    end: CellCountInt,
+}
+
+impl PageChunk {
+    fn full_page(&self, list: &PageList) -> bool {
+        let Some(node) = list.node_for_ptr(self.node) else {
+            return false;
+        };
+
+        self.start == 0 && self.end == node.page.size_rows()
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        if self.node != other.node {
+            return false;
+        }
+        if self.end <= other.start {
+            return false;
+        }
+        if self.start >= other.end {
+            return false;
+        }
+        true
+    }
+}
+
+#[derive(Debug)]
+struct PageIterator<'a> {
+    list: &'a PageList,
+    row: Option<Pin>,
+    limit: Option<Pin>,
+    direction: Direction,
+}
+
+impl Iterator for PageIterator<'_> {
+    type Item = PageChunk;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.direction {
+            Direction::RightDown => self.next_down(),
+            Direction::LeftUp => self.next_up(),
+        }
+    }
+}
+
+impl PageIterator<'_> {
+    fn next_down(&mut self) -> Option<PageChunk> {
+        let row = self.row?;
+        let row_index = self.list.node_index(row.node)?;
+
+        match self.limit {
+            None => {
+                let node = &self.list.pages[row_index];
+                self.row = self.list.pages.get(row_index + 1).map(|next| Pin {
+                    node: NonNull::from(next.as_ref()),
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                });
+
+                Some(PageChunk {
+                    node: row.node,
+                    start: row.y,
+                    end: node.page.size_rows(),
+                })
+            }
+            Some(limit) if limit.node != row.node => {
+                let node = &self.list.pages[row_index];
+                self.row = self.list.pages.get(row_index + 1).map(|next| Pin {
+                    node: NonNull::from(next.as_ref()),
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                });
+
+                Some(PageChunk {
+                    node: row.node,
+                    start: row.y,
+                    end: node.page.size_rows(),
+                })
+            }
+            Some(limit) => {
+                self.row = None;
+                if row.y > limit.y {
+                    return None;
+                }
+
+                Some(PageChunk {
+                    node: row.node,
+                    start: row.y,
+                    end: limit.y + 1,
+                })
+            }
+        }
+    }
+
+    fn next_up(&mut self) -> Option<PageChunk> {
+        let row = self.row?;
+        let row_index = self.list.node_index(row.node)?;
+
+        match self.limit {
+            None => {
+                self.row = row_index.checked_sub(1).map(|prev_index| {
+                    let prev = &self.list.pages[prev_index];
+                    Pin {
+                        node: NonNull::from(prev.as_ref()),
+                        y: prev.page.size_rows() - 1,
+                        x: 0,
+                        garbage: false,
+                    }
+                });
+
+                Some(PageChunk {
+                    node: row.node,
+                    start: 0,
+                    end: row.y + 1,
+                })
+            }
+            Some(limit) if limit.node != row.node => {
+                self.row = row_index.checked_sub(1).map(|prev_index| {
+                    let prev = &self.list.pages[prev_index];
+                    Pin {
+                        node: NonNull::from(prev.as_ref()),
+                        y: prev.page.size_rows() - 1,
+                        x: 0,
+                        garbage: false,
+                    }
+                });
+
+                Some(PageChunk {
+                    node: row.node,
+                    start: 0,
+                    end: row.y + 1,
+                })
+            }
+            Some(limit) => {
+                self.row = None;
+                if row.y < limit.y {
+                    return None;
+                }
+
+                Some(PageChunk {
+                    node: row.node,
+                    start: limit.y,
+                    end: row.y + 1,
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,10 +441,14 @@ impl PageList {
     }
 
     fn node_for_pin(&self, pin: &Pin) -> Option<&Node> {
+        self.node_for_ptr(pin.node)
+    }
+
+    fn node_for_ptr(&self, node_ptr: NonNull<Node>) -> Option<&Node> {
         self.pages
             .iter()
             .map(Box::as_ref)
-            .find(|node| NonNull::from(*node) == pin.node)
+            .find(|node| NonNull::from(*node) == node_ptr)
     }
 
     fn node_index(&self, node_ptr: NonNull<Node>) -> Option<usize> {
@@ -429,6 +594,39 @@ impl PageList {
             point::Tag::Screen => point::Point::screen(coord),
             point::Tag::History => point::Point::history(coord),
         })
+    }
+
+    fn page_iterator(
+        &self,
+        direction: Direction,
+        top_left: point::Point,
+        bottom_left: Option<point::Point>,
+    ) -> PageIterator<'_> {
+        let top_pin = self.pin(top_left);
+        let bottom_pin = bottom_left
+            .map(|point| self.pin(point))
+            .unwrap_or_else(|| self.get_bottom_right(top_left.tag()));
+
+        match (direction, top_pin, bottom_pin) {
+            (Direction::RightDown, Some(top_pin), Some(bottom_pin)) => PageIterator {
+                list: self,
+                row: Some(top_pin),
+                limit: Some(bottom_pin),
+                direction,
+            },
+            (Direction::LeftUp, Some(top_pin), Some(bottom_pin)) => PageIterator {
+                list: self,
+                row: Some(bottom_pin),
+                limit: Some(top_pin),
+                direction,
+            },
+            _ => PageIterator {
+                list: self,
+                row: None,
+                limit: None,
+                direction,
+            },
+        }
     }
 
     fn track_pin(&mut self, pin: Pin) -> Option<NonNull<Pin>> {
@@ -932,6 +1130,21 @@ mod tests {
         list.point_from_pin(point::Tag::Screen, pin)
             .expect("active top-left must map to screen")
             .coord()
+    }
+
+    fn chunk_tuple(list: &PageList, chunk: PageChunk) -> (usize, CellCountInt, CellCountInt) {
+        (
+            list.node_index(chunk.node).expect("chunk node must exist"),
+            chunk.start,
+            chunk.end,
+        )
+    }
+
+    fn chunk_tuples(
+        list: &PageList,
+        iterator: PageIterator<'_>,
+    ) -> Vec<(usize, CellCountInt, CellCountInt)> {
+        iterator.map(|chunk| chunk_tuple(list, chunk)).collect()
     }
 
     #[test]
@@ -1536,6 +1749,264 @@ mod tests {
         assert_eq!(list.viewport, Viewport::Active);
         assert_eq!(list.viewport_pin_row_offset, None);
         list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_page_iterator_full_active_region_one_page() {
+        let list = PageList::init(80, 24, None).unwrap();
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::active(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 0, 24)]);
+        let chunk = list
+            .page_iterator(
+                Direction::RightDown,
+                point::Point::active(Coordinate::new(0, 0)),
+                None,
+            )
+            .next()
+            .unwrap();
+        assert!(chunk.full_page(&list));
+    }
+
+    #[test]
+    fn page_list_page_iterator_trimmed_bottom_one_page() {
+        let list = PageList::init(80, 20, None).unwrap();
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 0)),
+                Some(point::Point::screen(Coordinate::new(0, 9))),
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 0, 10)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_trimmed_top_one_page() {
+        let list = PageList::init(80, 20, None).unwrap();
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 10)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 10, 20)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_trimmed_both_sides_one_page() {
+        let list = PageList::init(80, 20, None).unwrap();
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 5)),
+                Some(point::Point::screen(Coordinate::new(0, 12))),
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 5, 13)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_cross_page_right_down() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(3).unwrap();
+
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 0, 1), (1, 0, 1), (2, 0, 1), (3, 0, 1)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_cross_page_left_up() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(3).unwrap();
+
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::LeftUp,
+                point::Point::screen(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(3, 0, 1), (2, 0, 1), (1, 0, 1), (0, 0, 1)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_active_cross_page_partial_right_down() {
+        let capacity_rows = initial_capacity(80).rows();
+        assert!(capacity_rows > 2);
+        let mut list = PageList::init(80, capacity_rows, None).unwrap();
+        list.grow_rows(2).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
+
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::active(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 2, capacity_rows), (1, 0, 2)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_active_cross_page_partial_left_up() {
+        let capacity_rows = initial_capacity(80).rows();
+        assert!(capacity_rows > 2);
+        let mut list = PageList::init(80, capacity_rows, None).unwrap();
+        list.grow_rows(2).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
+
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::LeftUp,
+                point::Point::active(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(1, 0, 2), (0, 2, capacity_rows)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_history_right_down_stops_before_active() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(4).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 4));
+
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::history(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(0, 0, 1), (1, 0, 1), (2, 0, 1), (3, 0, 1)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_history_left_up_stops_before_active() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(4).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 4));
+
+        let chunks = chunk_tuples(
+            &list,
+            list.page_iterator(
+                Direction::LeftUp,
+                point::Point::history(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(chunks, vec![(3, 0, 1), (2, 0, 1), (1, 0, 1), (0, 0, 1)]);
+    }
+
+    #[test]
+    fn page_list_page_iterator_invalid_endpoint_is_empty() {
+        let list = PageList::init(80, 20, None).unwrap();
+
+        assert_eq!(
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(80, 0)),
+                None,
+            )
+            .count(),
+            0
+        );
+        assert_eq!(
+            list.page_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 0)),
+                Some(point::Point::screen(Coordinate::new(80, 0))),
+            )
+            .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn page_chunk_full_page_and_overlaps() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(1).unwrap();
+        let first = list.first_node_ptr();
+        let second = list.last_node_ptr();
+
+        let full = PageChunk {
+            node: first,
+            start: 0,
+            end: 1,
+        };
+        let partial = PageChunk {
+            node: first,
+            start: 0,
+            end: 0,
+        };
+        let same_overlap = PageChunk {
+            node: first,
+            start: 0,
+            end: 1,
+        };
+        let same_disjoint = PageChunk {
+            node: first,
+            start: 1,
+            end: 1,
+        };
+        let other_node = PageChunk {
+            node: second,
+            start: 0,
+            end: 1,
+        };
+
+        assert!(full.full_page(&list));
+        assert!(!partial.full_page(&list));
+        assert!(full.overlaps(&same_overlap));
+        assert!(!full.overlaps(&same_disjoint));
+        assert!(!full.overlaps(&other_node));
     }
 
     #[test]

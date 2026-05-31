@@ -200,7 +200,7 @@ No experiment may proceed to the next stage until the required review passes.
   **Pass**
 - [Experiment 40: Port PageList Reset](40-port-pagelist-reset.md) — **Pass**
 - [Experiment 41: Port PageList Page Iterator](41-port-pagelist-page-iterator.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

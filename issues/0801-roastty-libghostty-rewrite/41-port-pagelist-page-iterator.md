@@ -202,3 +202,62 @@ The experiment fails if:
 - invalid points panic in normal test paths;
 - the implementation expands into PageList clone or other non-iterator work;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Experiment 41 implemented PageList page-iterator traversal as a private
+PageList-local facility for the upcoming clone work.
+
+The implementation adds:
+
+- `Direction` with `RightDown` and `LeftUp`;
+- `PageChunk` with page-local `start..end` row bounds;
+- `PageChunk::full_page`;
+- `PageChunk::overlaps`;
+- a private allocation-free `PageIterator`;
+- `PageList::page_iterator` with tagged point conversion and default bottom
+  endpoints.
+
+Right-down traversal yields page-local chunks from the top pin toward the bottom
+pin. Left-up traversal starts from the bottom pin and moves toward the top pin
+while preserving upstream's ascending row-bound shape inside each chunk.
+Explicit bottom points are inclusive and represented with exclusive chunk ends.
+Missing or invalid endpoints produce an empty iterator.
+
+Tests now cover:
+
+- full active-region iteration on one page;
+- trimmed bottom bounds on one page;
+- trimmed top bounds on one page;
+- both-side trimming on one page;
+- cross-page right-down traversal;
+- cross-page left-up traversal;
+- active-region cross-page partial-boundary traversal in both directions;
+- history right-down default boundary stopping before active rows;
+- history left-up default boundary stopping before active rows;
+- invalid endpoint behavior;
+- `PageChunk::full_page`;
+- `PageChunk::overlaps`.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/terminal/page_list.rs
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+The focused PageList suite passed with 96 tests. The full `roastty` package
+passed with 377 unit tests plus the ABI harness test.
+
+## Conclusion
+
+PageList now has the row-chunk traversal primitive that upstream `clone` uses to
+count and copy page-local row ranges. The iterator is private, read-only, and
+allocation-free, and it preserves the important history-boundary behavior where
+history iteration stops before the active area.
+
+The next experiment can implement PageList `clone` on top of this iterator,
+without also having to design the page-chunk traversal contract.
