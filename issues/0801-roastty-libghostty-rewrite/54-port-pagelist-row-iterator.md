@@ -139,3 +139,65 @@ The experiment fails if:
   output, semantic highlighting, parser, renderer, app, ABI, resize/reflow,
   selection, or search work;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Added a private `RowIterator<'a>` that stores the underlying `PageIterator<'a>`,
+current `PageChunk`, and current row offset. The iterator returns `Pin` values
+with `x = 0`, matching upstream row-pin behavior, and keeps the traversal
+surface internal to PageList.
+
+`RowIterator` now preserves upstream direction behavior:
+
+- `RightDown` starts at the current chunk's `start`, yields rows up to `end`,
+  and advances through the next `PageIterator` chunk.
+- `LeftUp` starts at the current chunk's `end - 1`, yields down to `start`, and
+  preserves upstream's distinction between `start == 0` page-boundary movement
+  and nonzero-start explicit-limit termination.
+
+Added PageList constructors equivalent to upstream `Pin.rowIterator` and
+`PageList.rowIterator`, shaped for Rust borrowing:
+
+- `row_iterator_from_pin`;
+- `empty_row_iterator`;
+- `row_iterator`.
+
+The public-facing behavior remains internal and builds on existing
+`PageIterator` chunk logic instead of duplicating page traversal.
+
+Tests cover:
+
+- active single-page iteration in both directions;
+- cross-page iteration in both directions;
+- partial active top-left starts across page boundaries;
+- implicit history bounds in both directions, stopping before active rows;
+- explicit right/down limits;
+- explicit left/up limits with a nonzero-start boundary row;
+- invalid endpoint handling;
+- `x = 0` row-pin normalization;
+- row-pin conversion back to points via `point_from_pin`.
+
+Verification:
+
+- `cargo fmt`
+- `cargo test -p roastty terminal::page_list` — 209 PageList tests passed, ABI
+  harness filtered out
+- `cargo test -p roastty` — 490 unit tests passed, ABI harness passed, doc-tests
+  passed
+
+Independent result review approved the experiment as a Pass with no required
+code or test findings. The review specifically confirmed that the Rust
+`RowIterator` state machine matches upstream, including the `LeftUp`
+nonzero-start boundary behavior, and that the scope stayed PageList-local.
+
+## Conclusion
+
+Experiment 54 completed the PageList row-iteration layer. Roastty now has the
+row traversal primitive that upstream uses as the base for cell iteration and
+other higher-level PageList traversal features.
+
+The next PageList experiment can build on this by porting `CellIterator` as a
+separate focused layer, while continuing to defer prompt iteration, semantic
+highlighting, diagrams, parser, renderer, app, and ABI work.

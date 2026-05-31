@@ -118,6 +118,13 @@ struct PageIterator<'a> {
     direction: Direction,
 }
 
+#[derive(Debug)]
+struct RowIterator<'a> {
+    page_it: PageIterator<'a>,
+    chunk: Option<PageChunk>,
+    offset: CellCountInt,
+}
+
 #[derive(Debug, Default)]
 struct TrackedPinsRemap {
     entries: Vec<(NonNull<Pin>, NonNull<Pin>)>,
@@ -410,6 +417,46 @@ impl PageIterator<'_> {
                 })
             }
         }
+    }
+}
+
+impl Iterator for RowIterator<'_> {
+    type Item = Pin;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let chunk = self.chunk?;
+        let row = Pin {
+            node: chunk.node,
+            y: self.offset,
+            x: 0,
+            garbage: false,
+        };
+
+        match self.page_it.direction {
+            Direction::RightDown => {
+                self.offset += 1;
+                if self.offset >= chunk.end {
+                    self.chunk = self.page_it.next();
+                    if let Some(next_chunk) = self.chunk {
+                        self.offset = next_chunk.start;
+                    }
+                }
+            }
+            Direction::LeftUp => {
+                if self.offset == 0 {
+                    self.chunk = self.page_it.next();
+                    if let Some(next_chunk) = self.chunk {
+                        self.offset = next_chunk.end - 1;
+                    }
+                } else if self.offset == chunk.start {
+                    self.chunk = None;
+                } else {
+                    self.offset -= 1;
+                }
+            }
+        }
+
+        Some(row)
     }
 }
 
@@ -893,6 +940,67 @@ impl PageList {
                 limit: None,
                 direction,
             },
+        }
+    }
+
+    fn row_iterator_from_pin(
+        &self,
+        direction: Direction,
+        pin: Pin,
+        limit: Option<Pin>,
+    ) -> RowIterator<'_> {
+        let mut page_it = PageIterator {
+            list: self,
+            row: Some(pin),
+            limit,
+            direction,
+        };
+        let chunk = page_it.next();
+        let offset = match (direction, chunk) {
+            (_, None) => 0,
+            (Direction::RightDown, Some(chunk)) => chunk.start,
+            (Direction::LeftUp, Some(chunk)) => chunk.end - 1,
+        };
+
+        RowIterator {
+            page_it,
+            chunk,
+            offset,
+        }
+    }
+
+    fn empty_row_iterator(&self, direction: Direction) -> RowIterator<'_> {
+        RowIterator {
+            page_it: PageIterator {
+                list: self,
+                row: None,
+                limit: None,
+                direction,
+            },
+            chunk: None,
+            offset: 0,
+        }
+    }
+
+    fn row_iterator(
+        &self,
+        direction: Direction,
+        top_left: point::Point,
+        bottom_left: Option<point::Point>,
+    ) -> RowIterator<'_> {
+        let top_pin = self.pin(top_left);
+        let bottom_pin = bottom_left
+            .map(|point| self.pin(point))
+            .unwrap_or_else(|| self.get_bottom_right(top_left.tag()));
+
+        match (direction, top_pin, bottom_pin) {
+            (Direction::RightDown, Some(top_pin), Some(bottom_pin)) => {
+                self.row_iterator_from_pin(direction, top_pin, Some(bottom_pin))
+            }
+            (Direction::LeftUp, Some(top_pin), Some(bottom_pin)) => {
+                self.row_iterator_from_pin(direction, bottom_pin, Some(top_pin))
+            }
+            _ => self.empty_row_iterator(direction),
         }
     }
 
@@ -2307,6 +2415,21 @@ mod tests {
         iterator: PageIterator<'_>,
     ) -> Vec<(usize, CellCountInt, CellCountInt)> {
         iterator.map(|chunk| chunk_tuple(list, chunk)).collect()
+    }
+
+    fn row_tuple(list: &PageList, pin: Pin) -> (usize, CellCountInt, CellCountInt) {
+        (
+            list.node_index(pin.node).expect("row node must exist"),
+            pin.y,
+            pin.x,
+        )
+    }
+
+    fn row_tuples(
+        list: &PageList,
+        iterator: RowIterator<'_>,
+    ) -> Vec<(usize, CellCountInt, CellCountInt)> {
+        iterator.map(|pin| row_tuple(list, pin)).collect()
     }
 
     fn clone_options(top: point::Point) -> CloneOptions<'static> {
@@ -4126,6 +4249,266 @@ mod tests {
             )
             .count(),
             0
+        );
+    }
+
+    #[test]
+    fn page_list_row_iterator_active_single_page_right_down() {
+        let list = PageList::init(80, 4, None).unwrap();
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::active(Coordinate::new(7, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(rows, vec![(0, 0, 0), (0, 1, 0), (0, 2, 0), (0, 3, 0)]);
+    }
+
+    #[test]
+    fn page_list_row_iterator_active_single_page_left_up() {
+        let list = PageList::init(80, 4, None).unwrap();
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::LeftUp,
+                point::Point::active(Coordinate::new(9, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(rows, vec![(0, 3, 0), (0, 2, 0), (0, 1, 0), (0, 0, 0)]);
+    }
+
+    #[test]
+    fn page_list_row_iterator_cross_page_right_down() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(3).unwrap();
+
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(rows, vec![(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)]);
+    }
+
+    #[test]
+    fn page_list_row_iterator_cross_page_left_up() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(3).unwrap();
+
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::LeftUp,
+                point::Point::screen(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(rows, vec![(3, 0, 0), (2, 0, 0), (1, 0, 0), (0, 0, 0)]);
+    }
+
+    #[test]
+    fn page_list_row_iterator_active_cross_page_partial_right_down() {
+        let capacity_rows = initial_capacity(80).rows();
+        assert!(capacity_rows > 2);
+        let mut list = PageList::init(80, capacity_rows, None).unwrap();
+        list.grow_rows(2).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
+
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::active(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+        let mut expected = (2..capacity_rows).map(|y| (0, y, 0)).collect::<Vec<_>>();
+        expected.extend([(1, 0, 0), (1, 1, 0)]);
+
+        assert_eq!(rows, expected);
+    }
+
+    #[test]
+    fn page_list_row_iterator_active_cross_page_partial_left_up() {
+        let capacity_rows = initial_capacity(80).rows();
+        assert!(capacity_rows > 2);
+        let mut list = PageList::init(80, capacity_rows, None).unwrap();
+        list.grow_rows(2).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
+
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::LeftUp,
+                point::Point::active(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+        let mut expected = vec![(1, 1, 0), (1, 0, 0)];
+        expected.extend((2..capacity_rows).rev().map(|y| (0, y, 0)));
+
+        assert_eq!(rows, expected);
+    }
+
+    #[test]
+    fn page_list_row_iterator_history_right_down_stops_before_active() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(4).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 4));
+
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::history(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(rows, vec![(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)]);
+    }
+
+    #[test]
+    fn page_list_row_iterator_history_left_up_stops_before_active() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(4).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 4));
+
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::LeftUp,
+                point::Point::history(Coordinate::new(0, 0)),
+                None,
+            ),
+        );
+
+        assert_eq!(rows, vec![(3, 0, 0), (2, 0, 0), (1, 0, 0), (0, 0, 0)]);
+    }
+
+    #[test]
+    fn page_list_row_iterator_explicit_limit_right_down() {
+        let list = PageList::init(80, 20, None).unwrap();
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(6, 5)),
+                Some(point::Point::screen(Coordinate::new(2, 12))),
+            ),
+        );
+
+        assert_eq!(
+            rows,
+            vec![
+                (0, 5, 0),
+                (0, 6, 0),
+                (0, 7, 0),
+                (0, 8, 0),
+                (0, 9, 0),
+                (0, 10, 0),
+                (0, 11, 0),
+                (0, 12, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn page_list_row_iterator_explicit_limit_left_up_nonzero_start() {
+        let list = PageList::init(80, 20, None).unwrap();
+        let rows = row_tuples(
+            &list,
+            list.row_iterator(
+                Direction::LeftUp,
+                point::Point::screen(Coordinate::new(6, 5)),
+                Some(point::Point::screen(Coordinate::new(2, 12))),
+            ),
+        );
+
+        assert_eq!(
+            rows,
+            vec![
+                (0, 12, 0),
+                (0, 11, 0),
+                (0, 10, 0),
+                (0, 9, 0),
+                (0, 8, 0),
+                (0, 7, 0),
+                (0, 6, 0),
+                (0, 5, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn page_list_row_iterator_invalid_endpoint_is_empty() {
+        let list = PageList::init(80, 20, None).unwrap();
+
+        assert_eq!(
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(80, 0)),
+                None,
+            )
+            .count(),
+            0
+        );
+        assert_eq!(
+            list.row_iterator(
+                Direction::RightDown,
+                point::Point::screen(Coordinate::new(0, 0)),
+                Some(point::Point::screen(Coordinate::new(80, 0))),
+            )
+            .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn page_list_row_iterator_pins_convert_back_to_points() {
+        let list = PageList::init(80, 4, None).unwrap();
+        let points = list
+            .row_iterator(
+                Direction::RightDown,
+                point::Point::active(Coordinate::new(3, 1)),
+                Some(point::Point::active(Coordinate::new(9, 3))),
+            )
+            .map(|pin| {
+                list.point_from_pin(point::Tag::Active, pin)
+                    .expect("row pin must map to active point")
+                    .coord()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            points,
+            vec![
+                Coordinate::new(0, 1),
+                Coordinate::new(0, 2),
+                Coordinate::new(0, 3)
+            ]
         );
     }
 
