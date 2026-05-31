@@ -192,6 +192,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 36: Port PageList Scrollbar State](36-port-pagelist-scrollbar.md)
   — **Pass**
+- [Experiment 37: Port PageList Viewport Scrolling](37-port-pagelist-scroll.md)
+  — **Designed**
 
 ## Non-Goals
 
