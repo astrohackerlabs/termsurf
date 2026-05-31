@@ -134,6 +134,7 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 2: Define Zig-to-Rust Porting Patterns](02-zig-rust-porting-patterns.md)
   — **Pass**
+- [Experiment 3: Port Terminal Tabstops](03-port-tabstops.md) — **Designed**
 
 ## Non-Goals
 
