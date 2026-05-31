@@ -166,6 +166,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 19: Port Page CloneFrom Styles](19-port-page-clone-from-styles.md)
   — **Pass**
+- [Experiment 20: Port Page Hyperlink Storage](20-port-page-hyperlink-storage.md)
+  — **Designed**
 
 ## Non-Goals
 
