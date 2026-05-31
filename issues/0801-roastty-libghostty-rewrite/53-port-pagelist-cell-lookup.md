@@ -147,3 +147,55 @@ The experiment fails if:
 - the implementation expands into diagrams, semantic highlighting, iterators,
   parser, renderer, app, ABI, resize/reflow, selection, or search work;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Added a private read-only `PageListCell<'a>` view with a safe borrowed owner,
+node identity pointer, borrowed row, borrowed cell, and row/column indexes. The
+view provides upstream-aligned helpers for dirty state, style lookup, and
+screen-point conversion without unsafe raw-node dereference.
+
+`PageList::get_cell` now resolves points through the existing `pin` path and
+returns `None` for unpinnable or out-of-bounds points. It supports active,
+screen, and history coordinates, including existing upstream-preserving
+no-history behavior. `PageList::is_dirty` now routes through `get_cell` while
+preserving the Rust helper behavior of returning false for invalid points.
+
+`PageList::total_pages` was added as a narrow internal debug/test helper that
+returns `self.pages.len()`.
+
+Tests cover:
+
+- active, screen, and history lookup;
+- lookup across page boundaries;
+- invalid x and out-of-range row handling;
+- dirty state from page/row dirtiness;
+- default and stored style lookup;
+- screen-point conversion across pages and partial active starts;
+- page count before and after growth.
+
+Verification:
+
+- `cargo fmt -- roastty/src/terminal/page_list.rs`
+- `cargo test -p roastty terminal::page_list` — 197 PageList tests passed, ABI
+  harness filtered out
+- `cargo test -p roastty` — 478 unit tests passed, ABI harness passed, doc-tests
+  passed
+
+Independent result review approved the experiment as a Pass with no required
+findings. The review accepted the safe owner-borrow shape, lookup behavior,
+dirty/style/screen-point semantics, `total_pages` scope, `is_dirty` routing, and
+scope boundaries. It noted that `Pin::is_dirty` appears unused after the
+`is_dirty` routing change, but this was non-blocking.
+
+## Conclusion
+
+Experiment 53 completed the PageList cell lookup/debug surface. Roastty now has
+the read-only cell view needed by later debugging, iterator, and semantic
+inspection work while keeping the API internal and borrow-safe.
+
+The next PageList experiments can build above this by porting row/cell/prompt
+iterators, diagram/debug output, or semantic highlighting in separate scoped
+steps.

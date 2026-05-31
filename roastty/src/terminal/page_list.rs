@@ -1,7 +1,8 @@
 use std::ptr::NonNull;
 
 use super::page::{
-    page_layout, Capacity, CapacityAdjustment, CloneFromError, Page, PageAllocError, STD_CAPACITY,
+    page_layout, Capacity, CapacityAdjustment, Cell, CloneFromError, Page, PageAllocError, Row,
+    STD_CAPACITY,
 };
 use super::point::{self, Coordinate};
 use super::size::{
@@ -67,6 +68,16 @@ struct Pin {
     y: CellCountInt,
     x: CellCountInt,
     garbage: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PageListCell<'a> {
+    node: &'a Node,
+    node_ptr: NonNull<Node>,
+    row: &'a Row,
+    cell: &'a Cell,
+    row_idx: CellCountInt,
+    col_idx: CellCountInt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +265,34 @@ impl Pin {
                 .get_row_mut(self.y as usize)
                 .set_dirty(true);
         }
+    }
+}
+
+impl PageListCell<'_> {
+    fn is_dirty(self) -> bool {
+        self.node.page.is_dirty() || self.row.dirty()
+    }
+
+    fn style(self) -> super::style::Style {
+        let style_id = self.cell.style_id();
+        if style_id == super::style::DEFAULT_ID {
+            super::style::Style::default()
+        } else {
+            self.node.page.get_style(style_id)
+        }
+    }
+
+    fn screen_point(self, list: &PageList) -> Option<point::Point> {
+        let mut y = self.row_idx as u32;
+        for node in &list.pages {
+            let ptr = NonNull::from(node.as_ref());
+            if ptr == self.node_ptr {
+                return Some(point::Point::screen(Coordinate::new(self.col_idx, y)));
+            }
+            y += node.page.size_rows() as u32;
+        }
+
+        None
     }
 }
 
@@ -973,9 +1012,28 @@ impl PageList {
         }
     }
 
+    fn total_pages(&self) -> usize {
+        self.pages.len()
+    }
+
+    fn get_cell(&self, point: point::Point) -> Option<PageListCell<'_>> {
+        let pin = self.pin(point)?;
+        let node = self.node_for_pin(&pin)?;
+        let row = node.page.get_row(pin.y as usize);
+        let cell = &node.page.get_cells(row)[pin.x as usize];
+        Some(PageListCell {
+            node,
+            node_ptr: pin.node,
+            row,
+            cell,
+            row_idx: pin.y,
+            col_idx: pin.x,
+        })
+    }
+
     fn is_dirty(&self, point: point::Point) -> bool {
-        self.pin(point)
-            .map(|pin| pin.is_dirty(self))
+        self.get_cell(point)
+            .map(PageListCell::is_dirty)
             .unwrap_or(false)
     }
 
@@ -4403,6 +4461,132 @@ mod tests {
                 .unwrap_err(),
             CloneRegionError::Empty
         );
+    }
+
+    #[test]
+    fn page_list_get_cell_active_screen_and_history() {
+        let capacity_rows = initial_capacity(80).rows();
+        let mut list = PageList::init(80, capacity_rows, None).unwrap();
+        list.grow_rows(2).unwrap();
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
+        set_row_marker(&mut list.pages[0].page, 0, 10);
+        set_active_row_marker(&mut list, 0, 20);
+        set_active_row_marker(&mut list, 1, 30);
+
+        let history = list
+            .get_cell(point::Point::history(Coordinate::new(0, 0)))
+            .unwrap();
+        assert_eq!(history.cell.codepoint(), 10);
+        assert_eq!(history.row_idx, 0);
+        assert_eq!(history.col_idx, 0);
+
+        let active = list
+            .get_cell(point::Point::active(Coordinate::new(0, 1)))
+            .unwrap();
+        assert_eq!(active.cell.codepoint(), 30);
+        assert_eq!(
+            active.screen_point(&list).unwrap().coord(),
+            Coordinate::new(0, 3)
+        );
+
+        let screen = list
+            .get_cell(point::Point::screen(Coordinate::new(0, 2)))
+            .unwrap();
+        assert_eq!(screen.cell.codepoint(), 20);
+        assert_eq!(
+            screen.screen_point(&list).unwrap().coord(),
+            Coordinate::new(0, 2)
+        );
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_get_cell_crosses_page_boundaries() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit one row");
+        let mut list = PageList::init(cols, 1, None).unwrap();
+        list.grow_rows(2).unwrap();
+        set_row_marker(&mut list.pages[0].page, 0, 11);
+        set_row_marker(&mut list.pages[1].page, 0, 22);
+        set_row_marker(&mut list.pages[2].page, 0, 33);
+
+        for (screen_y, expected) in [(0, 11), (1, 22), (2, 33)] {
+            let cell = list
+                .get_cell(point::Point::screen(Coordinate::new(0, screen_y)))
+                .unwrap();
+            assert_eq!(cell.cell.codepoint(), expected);
+            assert_eq!(cell.screen_point(&list).unwrap().coord().y, screen_y);
+        }
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_get_cell_returns_none_for_invalid_points() {
+        let list = PageList::init(80, 24, None).unwrap();
+
+        assert!(list
+            .get_cell(point::Point::active(Coordinate::new(80, 0)))
+            .is_none());
+        assert!(list
+            .get_cell(point::Point::history(Coordinate::new(0, 24)))
+            .is_none());
+        assert!(list
+            .get_cell(point::Point::screen(Coordinate::new(0, 24)))
+            .is_none());
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_cell_dirty_style_and_screen_point() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let styled = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let style_id = list.pages[0].page.add_style(styled).unwrap();
+        {
+            let rac = list.pages[0].page.get_row_and_cell_mut(4, 3);
+            let mut cell = Cell::init('S' as u32);
+            cell.set_style_id(style_id);
+            *rac.cell = cell;
+            rac.row.set_dirty(true);
+        }
+        list.pages[0].page.use_style(style_id);
+        list.pages[0].page.release_style(style_id);
+
+        let cell = list
+            .get_cell(point::Point::active(Coordinate::new(4, 3)))
+            .unwrap();
+        assert!(cell.is_dirty());
+        assert_eq!(cell.style(), styled);
+        assert_eq!(
+            cell.screen_point(&list).unwrap().coord(),
+            Coordinate::new(4, 3)
+        );
+
+        let default = list
+            .get_cell(point::Point::active(Coordinate::new(0, 0)))
+            .unwrap();
+        assert_eq!(default.style(), style::Style::default());
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_total_pages_reports_current_count() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        assert_eq!(list.total_pages(), list.pages.len());
+        let initial = list.total_pages();
+
+        let page_rows = list.pages[0].page.capacity().rows() as usize;
+        list.grow_rows(page_rows * 2).unwrap();
+
+        assert!(list.total_pages() > initial);
+        assert_eq!(list.total_pages(), list.pages.len());
+        list.verify_integrity().unwrap();
     }
 
     #[test]
