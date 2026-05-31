@@ -141,7 +141,7 @@ No experiment may proceed to the next stage until the required review passes.
   **Pass**
 - [Experiment 6: Port Bitmap Allocator](06-port-bitmap-allocator.md) — **Pass**
 - [Experiment 7: Port Terminal Style Value Types](07-port-style-value-types.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

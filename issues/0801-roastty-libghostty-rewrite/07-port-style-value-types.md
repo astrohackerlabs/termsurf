@@ -177,3 +177,81 @@ The experiment fails if:
 This experiment design must be reviewed by Codex before implementation. Any real
 design issues must be fixed before committing the plan or implementing the
 slice.
+
+## Result
+
+**Result:** Pass
+
+Experiment 7 ported the bounded terminal style value layer needed before the
+next page-storage slices. The implementation added:
+
+- `roastty/src/terminal/color.rs`
+- `roastty/src/terminal/sgr.rs`
+- `roastty/src/terminal/style.rs`
+- module wiring in `roastty/src/terminal/mod.rs`
+
+The slice is safe Rust. No `unsafe` code was needed because no ABI pointer
+boundary or packed page-memory layout is exposed by these value types yet.
+
+### Upstream Tests Ported
+
+The implementation ports the relevant value-only behavior from upstream
+`style.zig`:
+
+- VT reset formatting
+- individual style flag VT formatting
+- underline style VT formatting for single, double, curly, dotted, and dashed
+- palette and RGB VT formatting for foreground, background, and underline color
+- palette-to-RGB VT formatting when a palette is provided
+- combined flags/colors VT formatting
+- HTML formatting for bold, RGB foreground, palette background, combined
+  colors/flags, text decoration line/style, and palette-to-RGB output
+
+Additional direct tests cover:
+
+- `Rgb` C-value conversion
+- C RGB layout
+- selected default palette indexes used by the style formatting tests
+- default xterm cube/grayscale palette indexes
+- `Style` default/equality behavior
+- foreground bold behavior
+- style-color-only background and underline lookup behavior
+
+### Deferred Upstream Tests
+
+The following upstream tests remain intentionally deferred:
+
+| Deferred area                                     | Reason                                                                 |
+| ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `style.zig` `Set basic usage` / `Set capacities`  | Requires `StyleSet` and `RefCountedSet`, which are a later page slice. |
+| `Style::bg` and `Style::bgCell` cell-aware checks | Require `page.Cell`; this experiment explicitly avoided fake cells.    |
+| `color.zig` RGB parser tests                      | Parser behavior is not needed by this value slice.                     |
+| `color.zig` dynamic palette tests                 | Dynamic palette/config behavior is a later terminal/config slice.      |
+| `color.zig` LAB and generated palette tests       | LAB interpolation was explicitly out of scope for this slice.          |
+| `color.zig` X11 named-color tests                 | X11 named-color parsing is not part of the current value dependency.   |
+| `sgr.zig` parser and full `Attribute` union tests | Only `Underline` is needed by `Style` flags in this slice.             |
+
+### Verification
+
+Ran and passed:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::color
+cargo test -p roastty terminal::sgr
+cargo test -p roastty terminal::style
+cargo test -p roastty
+```
+
+The full `cargo test -p roastty` run passed 63 Rust unit tests, the C ABI
+harness, and doc tests.
+
+## Conclusion
+
+Experiment 7 succeeds. Roastty now has durable terminal color, SGR underline,
+and style value types with behavior tests covering the formatting and lookup
+surface needed by future `Cell`, `Page`, and `StyleSet` work.
+
+The next experiment should port the packed `Row` / `Cell` value model from
+`page.zig`, using these style/color primitives and explicit tests for zero-cell
+behavior, helper methods, and layout-sensitive decisions.
