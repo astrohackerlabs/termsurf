@@ -132,6 +132,8 @@ No experiment may proceed to the next stage until the required review passes.
 
 - [Experiment 1: Audit Dependencies and Platform Readiness](01-dependency-platform-audit.md)
   — **Pass**
+- [Experiment 2: Define Zig-to-Rust Porting Patterns](02-zig-rust-porting-patterns.md)
+  — **Designed**
 
 ## Non-Goals
 
