@@ -157,3 +157,68 @@ The experiment fails if:
 - the implementation expands into grow/erase/reset/resize/split, scrolling,
   screen/parser behavior, or public ABI;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Implemented arbitrary tracked-pin lifecycle in
+`roastty/src/terminal/page_list.rs`.
+
+The owned storage shape is:
+
+- viewport pin remains boxed and permanently tracked;
+- arbitrary tracked pins live in `tracked_pin_storage: Vec<Box<Pin>>`;
+- `tracked_pins: Vec<NonNull<Pin>>` mirrors upstream's tracked pointer set;
+- moving the `Vec<Box<Pin>>` moves box handles, not the allocated `Pin` values,
+  so returned tracked-pin handles remain stable.
+
+Added PageList methods for:
+
+- `track_pin`;
+- `untrack_pin`;
+- `count_tracked_pins`;
+- `tracked_pins`.
+
+The implementation intentionally rejects invalid pins before tracking them. That
+is a safe Rust adaptation of upstream's slow-runtime-safety assertion. Duplicate
+pin coordinates are not deduplicated; each `track_pin` call creates a distinct
+tracked handle.
+
+`untrack_pin` matches upstream semantics:
+
+- untracking the viewport pin panics;
+- untracking a tracked arbitrary pin removes it from both the tracked pointer
+  list and owned storage;
+- untracking a missing/stale handle is a no-op and uses pointer comparison only.
+
+Added tests for:
+
+- initial PageList tracking exactly the viewport pin;
+- tracking a valid active pin;
+- tracking duplicate coordinates as distinct handles;
+- `tracked_pins()` including viewport and arbitrary pins;
+- untracking an arbitrary pin;
+- idempotent untrack after the first removal;
+- panic when untracking the viewport pin;
+- rejecting invalid pins without changing counts;
+- untracking removing a corrupt pin from integrity consideration.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+The targeted PageList suite reported 34 passing tests. The full `roastty` suite
+reported 315 unit tests, the ABI harness, and doc tests passing.
+
+## Conclusion
+
+Roastty now supports the upstream tracked-pin ownership lifecycle for
+initialized PageLists. Arbitrary pins can become stable tracked handles, be
+listed and counted with the always-tracked viewport pin, and be removed without
+destabilizing other tracked pins. Mutation-time remapping remains a later
+PageList operation.

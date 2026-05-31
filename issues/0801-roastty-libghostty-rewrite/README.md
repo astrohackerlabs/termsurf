@@ -189,7 +189,7 @@ No experiment may proceed to the next stage until the required review passes.
 - [Experiment 33: Port PageList Init](33-port-pagelist-init.md) — **Pass**
 - [Experiment 34: Port PageList Points](34-port-pagelist-points.md) — **Pass**
 - [Experiment 35: Port PageList Tracked Pins](35-port-pagelist-tracked-pins.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

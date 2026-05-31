@@ -23,6 +23,7 @@ pub(super) struct PageList {
     min_max_size: usize,
     total_rows: CellCountInt,
     tracked_pins: Vec<NonNull<Pin>>,
+    tracked_pin_storage: Vec<Box<Pin>>,
     viewport: Viewport,
     viewport_pin: Box<Pin>,
 }
@@ -118,6 +119,7 @@ impl PageList {
             min_max_size: min_max_size(cols, rows),
             total_rows: rows,
             tracked_pins,
+            tracked_pin_storage: Vec::new(),
             viewport: Viewport::Active,
             viewport_pin,
         };
@@ -306,6 +308,44 @@ impl PageList {
             point::Tag::Screen => point::Point::screen(coord),
             point::Tag::History => point::Point::history(coord),
         })
+    }
+
+    fn track_pin(&mut self, pin: Pin) -> Option<NonNull<Pin>> {
+        if !self.pin_is_valid(&pin) {
+            return None;
+        }
+
+        let mut tracked = Box::new(pin);
+        let ptr = NonNull::from(tracked.as_mut());
+        self.tracked_pin_storage.push(tracked);
+        self.tracked_pins.push(ptr);
+        Some(ptr)
+    }
+
+    fn untrack_pin(&mut self, pin: NonNull<Pin>) {
+        assert_ne!(pin, NonNull::from(&*self.viewport_pin));
+
+        let Some(tracked_index) = self.tracked_pins.iter().position(|tracked| *tracked == pin)
+        else {
+            return;
+        };
+        self.tracked_pins.swap_remove(tracked_index);
+
+        if let Some(storage_index) = self
+            .tracked_pin_storage
+            .iter()
+            .position(|tracked| NonNull::from(tracked.as_ref()) == pin)
+        {
+            self.tracked_pin_storage.swap_remove(storage_index);
+        }
+    }
+
+    fn count_tracked_pins(&self) -> usize {
+        self.tracked_pins.len()
+    }
+
+    fn tracked_pins(&self) -> &[NonNull<Pin>] {
+        &self.tracked_pins
     }
 
     fn pin_down(&self, pin: Pin, rows: usize) -> Option<Pin> {
@@ -780,5 +820,134 @@ mod tests {
             garbage: false,
         };
         assert_eq!(list.point_from_pin(point::Tag::Active, before_active), None);
+    }
+
+    #[test]
+    fn page_list_initially_tracks_viewport_pin() {
+        let list = PageList::init(80, 24, None).unwrap();
+
+        assert_eq!(list.count_tracked_pins(), 1);
+        assert_eq!(list.tracked_pins(), &[NonNull::from(&*list.viewport_pin)]);
+    }
+
+    #[test]
+    fn page_list_track_pin_adds_stable_valid_pin() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let pin = list
+            .pin(point::Point::active(Coordinate::new(4, 2)))
+            .unwrap();
+        let tracked = list.track_pin(pin).unwrap();
+
+        assert_eq!(list.count_tracked_pins(), 2);
+        assert_eq!(list.tracked_pin_storage.len(), 1);
+        assert_eq!(list.tracked_pins()[1], tracked);
+        let tracked_pin = unsafe {
+            // Safety: tracked was just returned by track_pin and remains owned
+            // by list.tracked_pin_storage.
+            tracked.as_ref()
+        };
+        assert_eq!(*tracked_pin, pin);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_track_pin_keeps_duplicate_pins_distinct() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let pin = list
+            .pin(point::Point::active(Coordinate::new(4, 2)))
+            .unwrap();
+        let first = list.track_pin(pin).unwrap();
+        let second = list.track_pin(pin).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(list.count_tracked_pins(), 3);
+        assert_eq!(list.tracked_pin_storage.len(), 2);
+        assert_eq!(
+            list.tracked_pins(),
+            &[NonNull::from(&*list.viewport_pin), first, second]
+        );
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_untrack_pin_removes_arbitrary_pin() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let pin = list
+            .pin(point::Point::active(Coordinate::new(4, 2)))
+            .unwrap();
+        let tracked = list.track_pin(pin).unwrap();
+
+        list.untrack_pin(tracked);
+
+        assert_eq!(list.count_tracked_pins(), 1);
+        assert_eq!(list.tracked_pin_storage.len(), 0);
+        assert_eq!(list.tracked_pins(), &[NonNull::from(&*list.viewport_pin)]);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_untrack_pin_is_idempotent_after_first_removal() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let pin = list
+            .pin(point::Point::active(Coordinate::new(4, 2)))
+            .unwrap();
+        let tracked = list.track_pin(pin).unwrap();
+
+        list.untrack_pin(tracked);
+        list.untrack_pin(tracked);
+
+        assert_eq!(list.count_tracked_pins(), 1);
+        assert_eq!(list.tracked_pin_storage.len(), 0);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left != right` failed")]
+    fn page_list_untrack_viewport_pin_panics() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+
+        list.untrack_pin(NonNull::from(&*list.viewport_pin));
+    }
+
+    #[test]
+    fn page_list_track_pin_rejects_invalid_pin() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let invalid = Pin {
+            node: NonNull::from(list.pages[0].as_ref()),
+            y: 0,
+            x: list.pages[0].page.size_cols(),
+            garbage: false,
+        };
+
+        assert_eq!(list.track_pin(invalid), None);
+        assert_eq!(list.count_tracked_pins(), 1);
+        assert_eq!(list.tracked_pin_storage.len(), 0);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_untrack_removes_pin_from_integrity_consideration() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let pin = list
+            .pin(point::Point::active(Coordinate::new(4, 2)))
+            .unwrap();
+        let tracked = list.track_pin(pin).unwrap();
+        unsafe {
+            // Safety: tracked remains owned by list.tracked_pin_storage until
+            // untrack_pin removes it below.
+            tracked.as_ptr().write(Pin {
+                x: list.pages[0].page.size_cols(),
+                ..pin
+            });
+        }
+        assert_eq!(
+            list.verify_integrity(),
+            Err(IntegrityError::TrackedPinInvalid)
+        );
+
+        list.untrack_pin(tracked);
+
+        assert_eq!(list.count_tracked_pins(), 1);
+        list.verify_integrity().unwrap();
     }
 }
