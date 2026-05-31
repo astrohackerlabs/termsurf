@@ -847,7 +847,7 @@ impl Page {
         Ok(())
     }
 
-    fn clone_row_from(
+    pub(super) fn clone_row_from(
         &mut self,
         other: &Page,
         dst_y: usize,
@@ -1204,6 +1204,20 @@ impl Page {
         self.update_row_grapheme_flag(row_index);
         self.update_row_hyperlink_flag(row_index);
         self.update_row_styled_flag(row_index);
+    }
+
+    pub(super) fn rotate_rows_left(&mut self, start: usize, end: usize) {
+        assert!(start < end);
+        assert!(end <= self.size.rows as usize);
+        unsafe {
+            // Safety: bounds were checked above and the rows region belongs to
+            // this live page backing allocation.
+            std::slice::from_raw_parts_mut(
+                self.rows.ptr_mut(self.memory.as_mut_ptr()).add(start),
+                end - start,
+            )
+            .rotate_left(1);
+        }
     }
 
     fn move_grapheme_at(&mut self, src_x: usize, src_y: usize, dst_x: usize, dst_y: usize) {
@@ -2059,12 +2073,7 @@ impl Page {
     fn cell_offset_at(&self, x: usize, y: usize) -> Offset<Cell> {
         assert!(y < self.size.rows as usize);
         assert!(x < self.size.cols as usize);
-        let index = y * self.size.cols as usize + x;
-        Offset::new(
-            (self.layout.cells_start + index * size_of::<Cell>())
-                .try_into()
-                .expect("cell offset must fit OffsetInt"),
-        )
+        self.cell_offset_from_row_cells(self.get_row(y).cells(), x)
     }
 
     fn row_cell_offset(&self, row: &Row, x: usize) -> Offset<Cell> {

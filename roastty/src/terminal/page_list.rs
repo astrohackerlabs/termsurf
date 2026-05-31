@@ -159,6 +159,12 @@ enum SplitError {
     OutOfSpace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EraseRowError {
+    InvalidPoint,
+    CloneFrom(CloneFromError),
+}
+
 impl From<PageAllocError> for CloneRegionError {
     fn from(_: PageAllocError) -> Self {
         Self::PageAlloc
@@ -188,6 +194,12 @@ impl From<PageAllocError> for IncreaseCapacityError {
 impl From<PageAllocError> for SplitError {
     fn from(_: PageAllocError) -> Self {
         Self::OutOfMemory
+    }
+}
+
+impl From<CloneFromError> for EraseRowError {
+    fn from(err: CloneFromError) -> Self {
+        Self::CloneFrom(err)
     }
 }
 
@@ -1430,6 +1442,74 @@ impl PageList {
         Ok(())
     }
 
+    fn erase_row(&mut self, point: point::Point) -> Result<(), EraseRowError> {
+        let pin = self.pin(point).ok_or(EraseRowError::InvalidPoint)?;
+        let Some(mut index) = self.node_index(pin.node) else {
+            return Err(EraseRowError::InvalidPoint);
+        };
+
+        let page_rows = self.pages[index].page.size_rows() as usize;
+        self.pages[index]
+            .page
+            .rotate_rows_left(pin.y as usize, page_rows);
+
+        let current = NonNull::from(self.pages[index].as_ref());
+        for tracked in &mut self.tracked_pins {
+            let tracked_pin = unsafe {
+                // Safety: tracked pins are owned by this PageList and remain
+                // allocated while we update their target node.
+                tracked.as_mut()
+            };
+            if tracked_pin.node == current && tracked_pin.y > pin.y {
+                tracked_pin.y -= 1;
+            }
+        }
+
+        self.fixup_viewport(1);
+        self.pages[index].page.set_dirty(true);
+
+        while index + 1 < self.pages.len() {
+            let (left, right) = self.pages.split_at_mut(index + 1);
+            let previous = &mut left[index];
+            let next = &mut right[0];
+            let previous_last = previous.page.size_rows() as usize - 1;
+            previous.page.clone_row_from(&next.page, previous_last, 0)?;
+
+            index += 1;
+            let current = NonNull::from(self.pages[index].as_ref());
+            let previous = NonNull::from(self.pages[index - 1].as_ref());
+            let previous_last = self.pages[index - 1].page.size_rows() - 1;
+            let page_rows = self.pages[index].page.size_rows() as usize;
+            self.pages[index].page.rotate_rows_left(0, page_rows);
+            self.pages[index].page.set_dirty(true);
+
+            for tracked in &mut self.tracked_pins {
+                let tracked_pin = unsafe {
+                    // Safety: tracked pins are owned by this PageList and
+                    // remain allocated while we update their target node.
+                    tracked.as_mut()
+                };
+                if tracked_pin.node != current {
+                    continue;
+                }
+                if tracked_pin.y == 0 {
+                    tracked_pin.node = previous;
+                    tracked_pin.y = previous_last;
+                } else {
+                    tracked_pin.y -= 1;
+                }
+            }
+        }
+
+        let last_row = self.pages[index].page.size_rows() as usize - 1;
+        let cols = self.pages[index].page.size_cols() as usize;
+        self.pages[index].page.clear_cells(last_row, 0, cols);
+
+        self.verify_integrity()
+            .expect("erase_row result must preserve PageList integrity");
+        Ok(())
+    }
+
     fn grow(&mut self) -> Result<Option<NonNull<Node>>, GrowError> {
         let last = self
             .pages
@@ -1714,6 +1794,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn set_row_marker(page: &mut Page, y: usize, value: u32) {
+        *page.get_row_and_cell_mut(0, y).cell = Cell::init(value);
+    }
+
+    fn row_marker(page: &Page, y: usize) -> u32 {
+        page_cell(page, 0, y).codepoint()
     }
 
     fn replace_first_page_capacity(list: &mut PageList, capacity: Capacity) {
@@ -4088,6 +4176,336 @@ mod tests {
         list.fixup_viewport(1);
 
         assert_eq!(list.viewport, Viewport::Top);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_single_page_shifts_rows() {
+        let mut list = PageList::init(10, 5, Some(0)).unwrap();
+        for y in 0..5 {
+            set_row_marker(&mut list.pages[0].page, y, y as u32);
+        }
+        let page_size = list.page_size;
+        let page_serial = list.page_serial;
+        let total_rows = list.total_rows();
+
+        list.erase_row(point::Point::active(Coordinate::new(0, 2)))
+            .unwrap();
+
+        assert_eq!(list.pages.len(), 1);
+        assert_eq!(list.pages[0].page.size_rows(), 5);
+        assert_eq!(list.total_rows(), total_rows);
+        assert_eq!(list.page_size, page_size);
+        assert_eq!(list.page_serial, page_serial);
+        assert!(list.pages[0].page.is_dirty());
+        assert_eq!(row_marker(&list.pages[0].page, 0), 0);
+        assert_eq!(row_marker(&list.pages[0].page, 1), 1);
+        assert_eq!(row_marker(&list.pages[0].page, 2), 3);
+        assert_eq!(row_marker(&list.pages[0].page, 3), 4);
+        assert_eq!(row_marker(&list.pages[0].page, 4), 0);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_shifts_across_pages() {
+        let (mut list, first_rows) = multi_page_list(100);
+        let second_rows = list.pages[1].page.size_rows();
+        for y in 0..first_rows as usize {
+            set_row_marker(&mut list.pages[0].page, y, 1000 + y as u32);
+        }
+        for y in 0..second_rows as usize {
+            set_row_marker(&mut list.pages[1].page, y, 2000 + y as u32);
+        }
+        let first = list.first_node_ptr();
+        let second = NonNull::from(list.pages[1].as_ref());
+        let page_size = list.page_size;
+        let page_serial = list.page_serial;
+        let total_rows = list.total_rows();
+
+        list.erase_row(point::Point::screen(Coordinate::new(
+            0,
+            first_rows as u32 - 2,
+        )))
+        .unwrap();
+
+        assert_eq!(list.first_node_ptr(), first);
+        assert_eq!(NonNull::from(list.pages[1].as_ref()), second);
+        assert_eq!(list.page_size, page_size);
+        assert_eq!(list.page_serial, page_serial);
+        assert_eq!(list.total_rows(), total_rows);
+        assert_eq!(
+            row_marker(&list.pages[0].page, first_rows as usize - 2),
+            1000 + first_rows as u32 - 1
+        );
+        assert_eq!(
+            row_marker(&list.pages[0].page, first_rows as usize - 1),
+            2000
+        );
+        assert_eq!(row_marker(&list.pages[1].page, 0), 2001);
+        assert_eq!(row_marker(&list.pages[1].page, second_rows as usize - 1), 0);
+        assert!(list.pages[0].page.is_dirty());
+        assert!(list.pages[1].page.is_dirty());
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_updates_tracked_pins() {
+        let (mut list, first_rows) = multi_page_list(100);
+        let first = list.first_node_ptr();
+        let second = NonNull::from(list.pages[1].as_ref());
+        let pin_before = list
+            .track_pin(Pin {
+                node: first,
+                y: first_rows - 3,
+                x: 1,
+                garbage: false,
+            })
+            .unwrap();
+        let pin_erased = list
+            .track_pin(Pin {
+                node: first,
+                y: first_rows - 2,
+                x: 5,
+                garbage: false,
+            })
+            .unwrap();
+        let pin_after = list
+            .track_pin(Pin {
+                node: first,
+                y: first_rows - 1,
+                x: 2,
+                garbage: false,
+            })
+            .unwrap();
+        let pin_next_top = list
+            .track_pin(Pin {
+                node: second,
+                y: 0,
+                x: 3,
+                garbage: false,
+            })
+            .unwrap();
+        let pin_next_after = list
+            .track_pin(Pin {
+                node: second,
+                y: 2,
+                x: 4,
+                garbage: false,
+            })
+            .unwrap();
+
+        list.erase_row(point::Point::screen(Coordinate::new(
+            0,
+            first_rows as u32 - 2,
+        )))
+        .unwrap();
+
+        let before = unsafe { pin_before.as_ref() };
+        let erased = unsafe { pin_erased.as_ref() };
+        let after = unsafe { pin_after.as_ref() };
+        let next_top = unsafe { pin_next_top.as_ref() };
+        let next_after = unsafe { pin_next_after.as_ref() };
+        assert_eq!(before.node, first);
+        assert_eq!(before.y, first_rows - 3);
+        assert_eq!(before.x, 1);
+        assert_eq!(erased.node, first);
+        assert_eq!(erased.y, first_rows - 2);
+        assert_eq!(erased.x, 5);
+        assert_eq!(after.node, first);
+        assert_eq!(after.y, first_rows - 2);
+        assert_eq!(after.x, 2);
+        assert_eq!(next_top.node, first);
+        assert_eq!(next_top.y, first_rows - 1);
+        assert_eq!(next_top.x, 3);
+        assert_eq!(next_after.node, second);
+        assert_eq!(next_after.y, 1);
+        assert_eq!(next_after.x, 4);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_preserves_row_dirty_flags() {
+        let (mut list, first_rows) = multi_page_list(100);
+        for node in &mut list.pages {
+            node.page.set_dirty(false);
+            for y in 0..node.page.size_rows() as usize {
+                node.page.get_row_mut(y).set_dirty(false);
+            }
+        }
+        list.pages[0]
+            .page
+            .get_row_mut(first_rows as usize - 1)
+            .set_dirty(true);
+        list.pages[1].page.get_row_mut(0).set_dirty(true);
+        list.pages[1].page.get_row_mut(1).set_dirty(true);
+
+        list.erase_row(point::Point::screen(Coordinate::new(
+            0,
+            first_rows as u32 - 2,
+        )))
+        .unwrap();
+
+        assert!(list.pages[0].page.get_row(first_rows as usize - 2).dirty());
+        assert!(list.pages[0].page.get_row(first_rows as usize - 1).dirty());
+        assert!(list.pages[1].page.get_row(0).dirty());
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_updates_pinned_viewport_cache() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.grow_rows(80).unwrap();
+        let pin = list
+            .pin(point::Point::screen(Coordinate::new(0, 10)))
+            .unwrap();
+        list.scroll(Scroll::Pin(pin));
+        assert_eq!(list.viewport, Viewport::Pin);
+        assert_eq!(list.scrollbar().offset, 10);
+        assert_eq!(list.viewport_pin_row_offset, Some(10));
+
+        list.erase_row(point::Point::history(Coordinate::new(0, 0)))
+            .unwrap();
+
+        assert_eq!(list.scrollbar().offset, 9);
+        assert_eq!(list.viewport_pin_row_offset, Some(9));
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_releases_erased_managed_memory() {
+        let mut list = PageList::init(10, 5, Some(0)).unwrap();
+        let erased_style = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let moved_style = style::Style {
+            flags: style::Flags {
+                italic: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let erased_style_id = list.pages[0].page.add_style(erased_style).unwrap();
+        let moved_style_id = list.pages[0].page.add_style(moved_style).unwrap();
+        let erased_link_id = list.pages[0]
+            .page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"erased"),
+                uri: b"https://example.com/erased",
+            })
+            .unwrap();
+        let moved_link_id = list.pages[0]
+            .page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"moved"),
+                uri: b"https://example.com/moved",
+            })
+            .unwrap();
+        {
+            let page = &mut list.pages[0].page;
+            let rac = page.get_row_and_cell_mut(0, 1);
+            rac.row.set_styled(true);
+            let mut cell = Cell::init('E' as u32);
+            cell.set_style_id(erased_style_id);
+            *rac.cell = cell;
+            page.use_style(erased_style_id);
+            page.set_hyperlink(0, 1, erased_link_id).unwrap();
+            page.append_grapheme_at(0, 1, 0x0301).unwrap();
+
+            let rac = page.get_row_and_cell_mut(0, 2);
+            rac.row.set_styled(true);
+            let mut cell = Cell::init('M' as u32);
+            cell.set_style_id(moved_style_id);
+            *rac.cell = cell;
+            page.use_style(moved_style_id);
+            page.set_hyperlink(0, 2, moved_link_id).unwrap();
+            page.append_grapheme_at(0, 2, 0x0302).unwrap();
+        }
+        list.pages[0].page.release_style(erased_style_id);
+        list.pages[0].page.release_style(moved_style_id);
+
+        list.erase_row(point::Point::active(Coordinate::new(0, 1)))
+            .unwrap();
+
+        let page = &list.pages[0].page;
+        assert_eq!(page.style_count(), 1);
+        assert_eq!(page.hyperlink_count(), 1);
+        assert_eq!(page.grapheme_count(), 1);
+        let moved = page_cell(page, 0, 1);
+        assert_eq!(moved.codepoint(), 'M' as u32);
+        assert_eq!(page.get_style(moved.style_id()), moved_style);
+        assert_eq!(page.lookup_grapheme_at(0, 1).unwrap(), vec![0x0302]);
+        let moved_link = page.lookup_hyperlink_at(0, 1).unwrap();
+        assert_eq!(
+            page.get_hyperlink(moved_link),
+            HyperlinkSnapshot {
+                id: HyperlinkSnapshotId::Explicit(b"moved".to_vec()),
+                uri: b"https://example.com/moved".to_vec(),
+            }
+        );
+        let final_row = page.get_row(4);
+        assert!(!final_row.managed_memory());
+        assert_eq!(row_marker(page, 4), 0);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_erase_row_preserves_boundary_managed_memory() {
+        let (mut list, first_rows) = multi_page_list(100);
+        let boundary_style = style::Style {
+            flags: style::Flags {
+                italic: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let style_id = list.pages[1].page.add_style(boundary_style).unwrap();
+        let link_id = list.pages[1]
+            .page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"boundary"),
+                uri: b"https://example.com/boundary",
+            })
+            .unwrap();
+        {
+            let page = &mut list.pages[1].page;
+            let rac = page.get_row_and_cell_mut(0, 0);
+            rac.row.set_styled(true);
+            let mut cell = Cell::init('B' as u32);
+            cell.set_style_id(style_id);
+            *rac.cell = cell;
+            page.use_style(style_id);
+            page.set_hyperlink(0, 0, link_id).unwrap();
+            page.append_grapheme_at(0, 0, 0x0303).unwrap();
+        }
+        list.pages[1].page.release_style(style_id);
+
+        list.erase_row(point::Point::screen(Coordinate::new(
+            0,
+            first_rows as u32 - 1,
+        )))
+        .unwrap();
+
+        let page = &list.pages[0].page;
+        let moved_y = first_rows as usize - 1;
+        let moved = page_cell(page, 0, moved_y);
+        assert_eq!(moved.codepoint(), 'B' as u32);
+        assert_eq!(page.get_style(moved.style_id()), boundary_style);
+        assert_eq!(page.lookup_grapheme_at(0, moved_y).unwrap(), vec![0x0303]);
+        let moved_link = page.lookup_hyperlink_at(0, moved_y).unwrap();
+        assert_eq!(
+            page.get_hyperlink(moved_link),
+            HyperlinkSnapshot {
+                id: HyperlinkSnapshotId::Explicit(b"boundary".to_vec()),
+                uri: b"https://example.com/boundary".to_vec(),
+            }
+        );
+        assert_eq!(list.pages[1].page.hyperlink_count(), 0);
+        assert_eq!(list.pages[1].page.style_count(), 0);
+        assert_eq!(list.pages[1].page.grapheme_count(), 0);
         list.verify_integrity().unwrap();
     }
 

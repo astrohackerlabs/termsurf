@@ -191,3 +191,71 @@ The experiment fails if:
 - row counts, total rows, page_size, serials, or page order change;
 - the implementation expands into bounded/history/active erase or page deletion;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Implemented `PageList::erase_row` for one-row physical removal semantics. The
+new path resolves the target point to a pin, rotates target-page row metadata
+left from the erased row, updates tracked pins, calls `fixup_viewport(1)` in the
+upstream order, shifts following pages across page boundaries by cloning each
+next page's first row into the previous page's final row, rotates following-page
+rows, clears the final row of the last touched page, marks touched pages dirty,
+and verifies PageList integrity after mutation.
+
+Narrow Page helpers were added for this operation:
+
+- `Page::clone_row_from` is now `pub(super)` so PageList can copy a whole row
+  through Page's existing managed-memory-aware clone path.
+- `Page::rotate_rows_left` rotates row metadata inside one page without exposing
+  raw storage more broadly.
+- `Page::cell_offset_at` now derives the cell offset from the logical row's
+  `cells()` offset instead of assuming `y * cols`. This is required once row
+  metadata can rotate, because logical row `y` may legitimately point at a
+  different physical cell range.
+
+The implementation returns `EraseRowError::InvalidPoint` when the input point
+does not resolve and `EraseRowError::CloneFrom` if a cross-page clone fails. It
+does not add rollback after earlier rotations or pin updates, matching upstream
+behavior. Existing Page clone failure tests cover the managed-memory rollback
+inside failed clone operations, and `erase_row` verifies PageList integrity on
+successful mutation.
+
+Tests added:
+
+- single-page erase shifts following rows up, clears the final row, preserves
+  accounting, and marks the page dirty;
+- cross-page erase pulls the next page's top row into the previous page's final
+  row, rotates the next page, preserves page order/accounting, and marks both
+  pages dirty;
+- tracked pins above, at, and below the erased row follow upstream semantics,
+  including following-page row-0 pins moving to the previous page's final row;
+- pinned viewport cached offset decrements after erasing a row before the
+  viewport;
+- erased-row style, grapheme, hyperlink, and string-backed data is released;
+- boundary style, grapheme, and hyperlink data survives the cross-page clone and
+  is released from the source page after rotation/clear;
+- row-level dirty flags survive target-page shifts, cross-page boundary clone,
+  and following-page rotation.
+
+Verification:
+
+- `cargo fmt -- roastty/src/terminal/page_list.rs`
+- `cargo test -p roastty terminal::page_list` — 159 PageList tests passed.
+- `cargo test -p roastty` — 440 unit tests passed; ABI harness passed.
+
+Independent result review initially found two real test gaps: a missing tracked
+pin exactly at the erased-row boundary, and missing row-level dirty preservation
+coverage. Both were fixed. The follow-up review approved recording Experiment 48
+as Pass with no concrete blockers remaining.
+
+## Conclusion
+
+PageList now has the upstream-style one-row erase primitive needed by later
+bounded/history/active erase operations. The most important implementation
+lesson is that row metadata rotation changes the invariant for logical row cell
+addressing: helpers must follow each row's stored cell offset rather than derive
+physical offsets from row indexes. The next experiment can build on this by
+porting the next source-order PageList erase operation without reopening the
+row-rotation or managed-memory mechanics.
