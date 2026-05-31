@@ -202,3 +202,59 @@ The experiment fails if:
 - page size or row accounting becomes inconsistent;
 - the implementation expands beyond PageList reset;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Experiment 40 implemented PageList reset as a PageList-local lifecycle
+operation. The Rust implementation preserves upstream's observable reset
+behavior while adapting it to Roastty's current `Vec<Box<Node>>` storage model.
+
+Reset now:
+
+- invalidates old page serials by moving `page_serial_min` to the pre-reset
+  `page_serial`;
+- reuses the existing front page nodes needed to cover the active area;
+- resets retained pages in place with `Page::reinit_with_capacity`;
+- assigns fresh serials to retained pages;
+- drops extra history pages;
+- recomputes `page_size`;
+- restores `total_rows` to `rows`;
+- moves every tracked pin to the new first page at `(0, 0)` and marks it
+  garbage;
+- keeps the viewport pin valid, at `(0, 0)`, and non-garbage;
+- returns the viewport to `Viewport::Active`;
+- clears the cached viewport pin row offset.
+
+Tests now cover:
+
+- basic reset;
+- clearing history;
+- reset across two active pages;
+- tracked-pin and viewport-pin remapping;
+- old serial invalidation and fresh retained-page serials;
+- dropping extra non-standard pages and recomputing page size;
+- clearing cached viewport offsets.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/terminal/page_list.rs
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+The focused PageList suite passed with 84 tests. The full `roastty` package
+passed with 365 unit tests plus the ABI harness test.
+
+## Conclusion
+
+PageList now supports initialization, point/pin conversion, tracked pins,
+scrollbar and viewport state, scrolling, growth, pruning, and reset. Reset
+preserves the important upstream pin-stability and serial-invalidation semantics
+without introducing fresh allocation or a memory-pool abstraction.
+
+The next experiment should continue with the next PageList-local behavior from
+upstream, likely clone or erase, before moving into the larger resize/reflow and
+screen/parser integration work.

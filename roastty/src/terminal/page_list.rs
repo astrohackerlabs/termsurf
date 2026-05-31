@@ -164,6 +164,60 @@ impl PageList {
         self.explicit_max_size.max(self.min_max_size)
     }
 
+    fn reset(&mut self) {
+        self.page_serial_min = self.page_serial;
+
+        let capacity = initial_capacity(self.cols);
+        let capacity_rows = capacity.rows() as usize;
+        assert!(capacity_rows > 0);
+        let page_count = (self.rows as usize).div_ceil(capacity_rows);
+        assert!(page_count > 0);
+        assert!(
+            self.pages.len() >= page_count,
+            "PageList must contain enough pages to cover active area"
+        );
+
+        self.pages.truncate(page_count);
+        self.page_size = 0;
+
+        let mut remaining_rows = self.rows as usize;
+        for node in &mut self.pages {
+            node.page.reinit_with_capacity(capacity);
+            let active_rows = remaining_rows.min(capacity_rows);
+            node.page.set_size_rows(
+                active_rows
+                    .try_into()
+                    .expect("active page row count must fit CellCountInt"),
+            );
+            remaining_rows -= active_rows;
+            node.serial = self.page_serial;
+            self.page_serial += 1;
+            self.page_size += node.page.backing_len();
+        }
+        debug_assert_eq!(remaining_rows, 0);
+
+        self.total_rows = self.rows;
+
+        let first_node = self.first_node_ptr();
+        for tracked in &mut self.tracked_pins {
+            let pin = unsafe {
+                // Safety: tracked pins are owned by this PageList. Reset keeps
+                // the Pin allocations stable and only mutates their values.
+                tracked.as_mut()
+            };
+            pin.node = first_node;
+            pin.x = 0;
+            pin.y = 0;
+            pin.garbage = true;
+        }
+        self.viewport_pin.garbage = false;
+
+        self.viewport = Viewport::Active;
+        self.viewport_pin_row_offset = None;
+        self.verify_integrity()
+            .expect("reset result must preserve PageList integrity");
+    }
+
     fn verify_integrity(&self) -> Result<(), IntegrityError> {
         let mut actual_total_rows = 0usize;
         for node in &self.pages {
@@ -1340,6 +1394,147 @@ mod tests {
         };
         assert_eq!(tracked_pin.node, list.first_node_ptr());
         assert!(tracked_pin.garbage);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_basic() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+
+        list.reset();
+
+        assert_eq!(list.viewport, Viewport::Active);
+        assert_eq!(list.total_rows, list.rows);
+        assert_eq!(
+            list.get_top_left(point::Tag::Active),
+            Pin {
+                node: list.first_node_ptr(),
+                y: 0,
+                x: 0,
+                garbage: false,
+            }
+        );
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_clears_history() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.grow_rows(30).unwrap();
+        assert!(list.total_rows > list.rows);
+
+        list.reset();
+
+        assert_eq!(list.viewport, Viewport::Active);
+        assert_eq!(list.total_rows, list.rows);
+        assert_eq!(
+            list.get_top_left(point::Tag::Active),
+            Pin {
+                node: list.first_node_ptr(),
+                y: 0,
+                x: 0,
+                garbage: false,
+            }
+        );
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_across_two_active_pages() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row")
+            + 1;
+        let capacity = initial_capacity(cols);
+        let rows = capacity.rows() + 2;
+        let mut list = PageList::init(cols, rows, None).unwrap();
+        assert_eq!(list.pages.len(), 2);
+
+        list.reset();
+
+        assert_eq!(list.pages.len(), 2);
+        assert_eq!(list.total_rows, rows);
+        assert_eq!(list.pages[0].page.size_rows(), capacity.rows());
+        assert_eq!(list.pages[1].page.size_rows(), 2);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_moves_tracked_pins_and_marks_them_garbage() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let tracked = list
+            .track_pin(
+                list.pin(point::Point::active(Coordinate::new(42, 12)))
+                    .unwrap(),
+            )
+            .unwrap();
+
+        list.reset();
+
+        let tracked_pin = unsafe {
+            // Safety: tracked remains owned by list.tracked_pin_storage.
+            tracked.as_ref()
+        };
+        assert_eq!(tracked_pin.node, list.first_node_ptr());
+        assert_eq!(tracked_pin.x, 0);
+        assert_eq!(tracked_pin.y, 0);
+        assert!(tracked_pin.garbage);
+        assert_eq!(list.viewport_pin.node, list.first_node_ptr());
+        assert_eq!(list.viewport_pin.x, 0);
+        assert_eq!(list.viewport_pin.y, 0);
+        assert!(!list.viewport_pin.garbage);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_invalidates_old_page_serials() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let old_serial = list.pages[0].serial;
+        assert!(old_serial >= list.page_serial_min);
+        assert!(old_serial < list.page_serial);
+
+        list.reset();
+
+        assert!(old_serial < list.page_serial_min);
+        for node in &list.pages {
+            assert!(node.serial >= list.page_serial_min);
+            assert!(node.serial < list.page_serial);
+        }
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_drops_extra_non_standard_pages() {
+        let cols = STD_CAPACITY
+            .max_cols()
+            .expect("standard capacity should fit at least one row")
+            + 1;
+        let rows = initial_capacity(cols).rows();
+        let mut list = PageList::init(cols, rows, None).unwrap();
+        list.grow().unwrap();
+        assert_eq!(list.pages.len(), 2);
+        assert!(list.pages[0].page.backing_len() > standard_page_size());
+
+        list.reset();
+
+        assert_eq!(list.pages.len(), 1);
+        assert_eq!(list.total_rows, rows);
+        assert_eq!(list.page_size, list.pages[0].page.backing_len());
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_reset_clears_cached_viewport_offset() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.grow_rows(30).unwrap();
+        list.scroll(Scroll::Row(1));
+        assert_eq!(list.viewport, Viewport::Pin);
+        assert_eq!(list.viewport_pin_row_offset, Some(1));
+
+        list.reset();
+
+        assert_eq!(list.viewport, Viewport::Active);
+        assert_eq!(list.viewport_pin_row_offset, None);
         list.verify_integrity().unwrap();
     }
 
