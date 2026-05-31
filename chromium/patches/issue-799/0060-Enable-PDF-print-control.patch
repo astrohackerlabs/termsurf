@@ -1,7 +1,7 @@
 From 00c280eb3bda4a25f0465cfe7c92f52e9eb06fcc Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 14:49:06 -0500
-Subject: [PATCH 60/65] Enable PDF print control
+Subject: [PATCH 60/66] Enable PDF print control
 
 ---
  ...ts_component_extension_resource_manager.cc | 19 ++++---------------

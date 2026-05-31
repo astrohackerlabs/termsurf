@@ -312,6 +312,143 @@ setTimeout(() => link.click(), 250);
 return {{status: 'download_triggered', expectedFile: 'termsurf-blob-download.txt'}};
 """,
     ),
+    Probe(
+        name="javascript-alert",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf JavaScript dialog request/reply protocol",
+        reference_evidence="Content Shell opens native dialogs; TermSurf must route through protocol.",
+        termsurf_evidence="Experiment 5 adds protocol-mediated dialogs.",
+        requires_user_activation=False,
+        script="""
+alert('alpha');
+return {status: 'resolved', value: 'resumed'};
+""",
+    ),
+    Probe(
+        name="javascript-confirm-accept",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf JavaScript dialog request/reply protocol",
+        reference_evidence="Content Shell opens native dialogs; TermSurf must route through protocol.",
+        termsurf_evidence="Experiment 5 adds protocol-mediated dialogs.",
+        requires_user_activation=False,
+        script="""
+const value = confirm('beta');
+return {status: 'resolved', value};
+""",
+    ),
+    Probe(
+        name="javascript-confirm-cancel",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf JavaScript dialog request/reply protocol",
+        reference_evidence="Content Shell opens native dialogs; TermSurf must route through protocol.",
+        termsurf_evidence="Experiment 5 adds protocol-mediated dialogs.",
+        requires_user_activation=False,
+        script="""
+const value = confirm('gamma');
+return {status: 'resolved', value};
+""",
+    ),
+    Probe(
+        name="javascript-prompt",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf JavaScript dialog request/reply protocol",
+        reference_evidence="Content Shell opens native dialogs; TermSurf must route through protocol.",
+        termsurf_evidence="Experiment 5 adds protocol-mediated dialogs.",
+        requires_user_activation=False,
+        script="""
+const value = prompt('delta', 'default');
+return {status: 'resolved', value};
+""",
+    ),
+    Probe(
+        name="javascript-prompt-cancel",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf JavaScript dialog request/reply protocol",
+        reference_evidence="Content Shell opens native dialogs; TermSurf must route through protocol.",
+        termsurf_evidence="Experiment 5 adds protocol-mediated dialogs.",
+        requires_user_activation=False,
+        script="""
+const value = prompt('epsilon', 'default');
+return {status: 'resolved', value};
+""",
+    ),
+    Probe(
+        name="javascript-initial-load-alert",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf JavaScript dialog request/reply protocol",
+        reference_evidence="Content Shell opens native dialogs; TermSurf must route through protocol.",
+        termsurf_evidence="Experiment 5 adds protocol-mediated dialogs.",
+        requires_user_activation=False,
+        script="""
+alert('load');
+return {status: 'resolved', value: 'initial-load-resumed'};
+""",
+    ),
+    Probe(
+        name="javascript-beforeunload-proceed",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf beforeunload dialog request/reply protocol",
+        reference_evidence="Chromium requires sticky user activation for blocking beforeunload dialogs.",
+        termsurf_evidence="Experiment 5 routes beforeunload through TermSurf dialogs.",
+        requires_user_activation=True,
+        script="""
+const button = document.createElement('button');
+button.textContent = 'activate';
+button.style.position = 'absolute';
+button.style.left = '8px';
+button.style.top = '8px';
+button.style.width = '120px';
+button.style.height = '40px';
+button.onpointerdown = () => sendReport({status: 'pointerdown'});
+button.onmousedown = () => sendReport({status: 'mousedown'});
+button.onclick = () => sendReport({status: 'activated'});
+document.body.appendChild(button);
+document.body.tabIndex = 0;
+document.body.focus();
+document.addEventListener('keydown', () => sendReport({
+  status: 'activated',
+  activation: 'keyboard'
+}), {once: true});
+window.addEventListener('beforeunload', (event) => {
+  event.preventDefault();
+  event.returnValue = '';
+});
+return {status: 'ready'};
+""",
+    ),
+    Probe(
+        name="javascript-beforeunload-stay",
+        feature="JavaScript dialogs",
+        expected_surface="TermSurf beforeunload dialog request/reply protocol",
+        reference_evidence="Chromium requires sticky user activation for blocking beforeunload dialogs.",
+        termsurf_evidence="Experiment 5 routes beforeunload through TermSurf dialogs.",
+        requires_user_activation=True,
+        script="""
+const button = document.createElement('button');
+button.textContent = 'activate';
+button.style.position = 'absolute';
+button.style.left = '8px';
+button.style.top = '8px';
+button.style.width = '120px';
+button.style.height = '40px';
+button.onpointerdown = () => sendReport({status: 'pointerdown'});
+button.onmousedown = () => sendReport({status: 'mousedown'});
+button.onclick = () => sendReport({status: 'activated'});
+document.body.appendChild(button);
+document.body.tabIndex = 0;
+document.body.focus();
+document.addEventListener('keydown', () => sendReport({
+  status: 'activated',
+  activation: 'keyboard'
+}), {once: true});
+window.addEventListener('beforeunload', (event) => {
+  event.preventDefault();
+  event.returnValue = '';
+  setTimeout(() => sendReport({status: 'stayed'}), 500);
+});
+return {status: 'ready'};
+""",
+    ),
 ]
 
 
@@ -354,6 +491,10 @@ def bool_field(number: int, value: bool) -> bytes:
     return field(number, 0) + varint(1 if value else 0)
 
 
+def fixed_double_field(number: int, value: float) -> bytes:
+    return field(number, 1) + struct.pack("<d", float(value))
+
+
 def wrap(inner_field: int, payload: bytes) -> bytes:
     return field(inner_field, 2) + varint(len(payload)) + payload
 
@@ -387,6 +528,133 @@ def tab_ready_id(payload: bytes) -> int | None:
     return None
 
 
+def parse_message_fields(payload: bytes) -> dict[int, Any]:
+    values: dict[int, Any] = {}
+    index = 0
+    while index < len(payload):
+        key, index = read_varint(payload, index)
+        field_number = key >> 3
+        wire_type = key & 7
+        if wire_type == 0:
+            value, index = read_varint(payload, index)
+            values[field_number] = value
+        elif wire_type == 2:
+            length, index = read_varint(payload, index)
+            data = payload[index : index + length]
+            index += length
+            try:
+                values[field_number] = data.decode("utf-8")
+            except UnicodeDecodeError:
+                values[field_number] = data
+        else:
+            break
+    return values
+
+
+def javascript_dialog_reply_payload(
+    tab_id: int,
+    request_id: int,
+    accepted: bool,
+    prompt_text: str,
+) -> bytes:
+    return (
+        varint_field(1, tab_id)
+        + varint_field(2, request_id)
+        + bool_field(3, accepted)
+        + string_field(4, prompt_text)
+    )
+
+
+def dialog_response_for(probe_name: str) -> tuple[bool, str]:
+    if probe_name in (
+        "javascript-confirm-cancel",
+        "javascript-prompt-cancel",
+        "javascript-beforeunload-stay",
+    ):
+        return False, ""
+    if probe_name == "javascript-prompt":
+        return True, "typed value"
+    return True, ""
+
+
+def verify_javascript_dialog_probe(
+    probe_name: str,
+    report: dict[str, Any] | None,
+    dialogs: list[dict[str, Any]],
+    beforeunload_activation_observed: bool,
+) -> dict[str, Any] | None:
+    if not probe_name.startswith("javascript-"):
+        return None
+    expected: dict[str, Any] = {
+        "javascript-alert": {"dialog_type": "alert", "message": "alpha", "value": "resumed"},
+        "javascript-confirm-accept": {
+            "dialog_type": "confirm",
+            "message": "beta",
+            "value": True,
+        },
+        "javascript-confirm-cancel": {
+            "dialog_type": "confirm",
+            "message": "gamma",
+            "value": False,
+        },
+        "javascript-prompt": {
+            "dialog_type": "prompt",
+            "message": "delta",
+            "value": "typed value",
+        },
+        "javascript-prompt-cancel": {
+            "dialog_type": "prompt",
+            "message": "epsilon",
+            "value": None,
+        },
+        "javascript-initial-load-alert": {
+            "dialog_type": "alert",
+            "message": "load",
+            "value": "initial-load-resumed",
+        },
+        "javascript-beforeunload-proceed": {
+            "dialog_type": "beforeunload",
+            "message": "Is it OK to leave this page?",
+            "final_status": "destination_loaded",
+        },
+        "javascript-beforeunload-stay": {
+            "dialog_type": "beforeunload",
+            "message": "Is it OK to leave this page?",
+            "final_status": "stayed",
+        },
+    }[probe_name]
+    status = "completed"
+    reasons: list[str] = []
+    if len(dialogs) != 1:
+        status = "failed"
+        reasons.append(f"expected one dialog, got {len(dialogs)}")
+    elif dialogs[0].get("dialog_type") != expected["dialog_type"]:
+        status = "failed"
+        reasons.append(f"wrong dialog type {dialogs[0].get('dialog_type')}")
+    elif dialogs[0].get("message") != expected["message"]:
+        status = "failed"
+        reasons.append(f"wrong message {dialogs[0].get('message')}")
+    if "final_status" in expected:
+        if (
+            probe_name.startswith("javascript-beforeunload-")
+            and not beforeunload_activation_observed
+        ):
+            status = "failed"
+            reasons.append("page did not report activation before navigation")
+        if not report or report.get("status") != expected["final_status"]:
+            status = "failed"
+            reasons.append(
+                f"page did not report final status {expected['final_status']}"
+            )
+    elif not report or report.get("status") != "resolved":
+        status = "failed"
+        reasons.append("page did not report resolved")
+    elif report.get("value") != expected["value"]:
+        status = "failed"
+        reasons.append(f"wrong page value {report.get('value')!r}")
+    return {"status": status, "reasons": reasons, "expected": expected}
+
+
 def create_tab_payload(url: str, width: int, height: int) -> bytes:
     return (
         string_field(1, url)
@@ -399,6 +667,38 @@ def create_tab_payload(url: str, width: int, height: int) -> bytes:
 
 def resize_payload(tab_id: int, width: int, height: int) -> bytes:
     return varint_field(1, tab_id) + varint_field(2, width) + varint_field(3, height)
+
+
+def focus_changed_payload(tab_id: int, focused: bool) -> bytes:
+    return varint_field(1, tab_id) + bool_field(2, focused)
+
+
+def navigate_payload(tab_id: int, url: str) -> bytes:
+    return varint_field(1, tab_id) + string_field(3, url)
+
+
+def mouse_move_payload(tab_id: int, x: int, y: int) -> bytes:
+    return varint_field(1, tab_id) + fixed_double_field(2, x) + fixed_double_field(3, y)
+
+
+def mouse_event_payload(tab_id: int, event_type: str, x: int, y: int) -> bytes:
+    return (
+        varint_field(1, tab_id)
+        + string_field(2, event_type)
+        + string_field(3, "left")
+        + fixed_double_field(4, x)
+        + fixed_double_field(5, y)
+        + varint_field(6, 1)
+    )
+
+
+def key_event_payload(tab_id: int, event_type: str, keycode: int, utf8: str = "") -> bytes:
+    return (
+        varint_field(1, tab_id)
+        + string_field(2, event_type)
+        + varint_field(3, keycode)
+        + string_field(4, utf8)
+    )
 
 
 class ProbeState:
@@ -458,6 +758,28 @@ def make_handler(state: ProbeState) -> type[http.server.BaseHTTPRequestHandler]:
                 self.send_header("Content-Length", str(len(ATTACHMENT_DOWNLOAD_BYTES)))
                 self.end_headers()
                 self.wfile.write(ATTACHMENT_DOWNLOAD_BYTES)
+                return
+            if parsed.path == "/beforeunload-destination.html":
+                query = parse_qs(parsed.query)
+                probe = query.get("probe", ["unknown"])[-1]
+                body = f"""<!doctype html>
+<meta charset="utf-8">
+<title>beforeunload destination</title>
+<script>
+fetch('/report', {{
+  method: 'POST',
+  headers: {{'Content-Type': 'application/json'}},
+  body: JSON.stringify({{
+    probe: {json.dumps(probe)},
+    status: 'destination_loaded',
+    reportedAt: new Date().toISOString()
+  }}),
+  keepalive: true
+}});
+</script>
+destination
+""".encode("utf-8")
+                self.send_bytes(body, "text/html; charset=utf-8")
                 return
             if parsed.path == "/summary":
                 self.send_bytes(
@@ -561,7 +883,7 @@ def start_server(state: ProbeState) -> ReusableThreadingTcpServer:
 
 
 def timestamp() -> str:
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def write_json(path: pathlib.Path, value: Any) -> None:
@@ -688,7 +1010,7 @@ def run_probe(
     probe_dir.mkdir(parents=True, exist_ok=True)
     socket_path = (
         pathlib.Path(tempfile.gettempdir())
-        / f"termsurf-799-{os.getpid()}-{probe.name}.sock"
+        / f"ts799-{os.getpid()}-{hashlib.sha1(probe.name.encode()).hexdigest()[:8]}.sock"
     )
     try:
         socket_path.unlink()
@@ -722,16 +1044,26 @@ def run_probe(
         "--enable-logging=stderr",
         "--v=1",
     ]
+    env = os.environ.copy()
+    env["TERMSURF_PDF_INPUT_TRACE"] = "1"
+    env["TERMSURF_PDF_INPUT_TRACE_FILE"] = str(probe_dir / "input-trace.log")
     proc = subprocess.Popen(
         command,
         cwd=str(ROOT / "chromium/src"),
         stdout=stdout,
         stderr=stderr,
+        env=env,
     )
 
     sent_create = False
     tab_id: int | None = None
     socket_disconnect = False
+    javascript_dialogs: list[dict[str, Any]] = []
+    activation_sent = False
+    activation_ready_at: float | None = None
+    activation_sent_at: float | None = None
+    activation_observed_at: float | None = None
+    navigation_sent = False
     start = time.time()
 
     try:
@@ -747,6 +1079,36 @@ def run_probe(
                 if conn is None:
                     time.sleep(0.1)
                     continue
+                if probe.name.startswith("javascript-beforeunload-") and tab_id:
+                    reports = state_reports_for_probe(run_dir, probe.name)
+                    statuses = {str(report.get("status")) for report in reports}
+                    if "ready" in statuses and activation_ready_at is None:
+                        activation_ready_at = time.time()
+                    if "activated" in statuses and activation_observed_at is None:
+                        activation_observed_at = time.time()
+                    if (
+                        activation_ready_at is not None
+                        and time.time() - activation_ready_at >= 0.5
+                        and not activation_sent
+                    ):
+                        send_message(conn, 10, focus_changed_payload(tab_id, True))
+                        send_message(conn, 7, mouse_move_payload(tab_id, 20, 20))
+                        send_message(conn, 6, mouse_event_payload(tab_id, "down", 20, 20))
+                        send_message(conn, 6, mouse_event_payload(tab_id, "up", 20, 20))
+                        send_message(conn, 9, key_event_payload(tab_id, "down", 65, "a"))
+                        send_message(conn, 9, key_event_payload(tab_id, "up", 65))
+                        activation_sent = True
+                        activation_sent_at = time.time()
+                        messages.write("sent beforeunload refocus and activation input\n")
+                        messages.flush()
+                    if activation_observed_at is not None and not navigation_sent:
+                        destination = (
+                            f"{base_url}/beforeunload-destination.html?probe={probe.name}"
+                        )
+                        send_message(conn, 5, navigate_payload(tab_id, destination))
+                        navigation_sent = True
+                        messages.write(f"sent beforeunload Navigate url={destination}\n")
+                        messages.flush()
                 try:
                     header = conn.recv(4)
                     if not header:
@@ -775,7 +1137,47 @@ def run_probe(
                         messages.write(f"tab_ready id={tab_id}\n")
                         if tab_id:
                             send_message(conn, 3, resize_payload(tab_id, width, height))
+                            send_message(conn, 10, focus_changed_payload(tab_id, True))
                             messages.write("sent Resize\n")
+                            messages.write("sent FocusChanged focused=true\n")
+                        messages.flush()
+                    elif top == 34:
+                        fields = parse_message_fields(body)
+                        request_tab_id = int(fields.get(1, 0) or 0)
+                        request_id = int(fields.get(2, 0) or 0)
+                        dialog_type = str(fields.get(3, ""))
+                        origin_url = str(fields.get(4, ""))
+                        message = str(fields.get(5, ""))
+                        default_prompt_text = str(fields.get(6, ""))
+                        accepted, prompt_text = dialog_response_for(probe.name)
+                        send_message(
+                            conn,
+                            35,
+                            javascript_dialog_reply_payload(
+                                request_tab_id,
+                                request_id,
+                                accepted,
+                                prompt_text,
+                            ),
+                        )
+                        evidence = {
+                            "request_time": time.time() - start,
+                            "tab_id": request_tab_id,
+                            "request_id": request_id,
+                            "dialog_type": dialog_type,
+                            "origin_url": origin_url,
+                            "message": message,
+                            "default_prompt_text": default_prompt_text,
+                            "accepted": accepted,
+                            "prompt_text": prompt_text,
+                            "reply_time": time.time() - start,
+                        }
+                        javascript_dialogs.append(evidence)
+                        messages.write(
+                            "javascript_dialog "
+                            f"type={dialog_type} request_id={request_id} "
+                            f"accepted={accepted}\n"
+                        )
                         messages.flush()
                 except socket.timeout:
                     pass
@@ -825,6 +1227,26 @@ def run_probe(
             classification = "download_completed"
         elif classification == "exercised":
             classification = "download_failed"
+    javascript_dialog_result = verify_javascript_dialog_probe(
+        probe.name,
+        report,
+        javascript_dialogs,
+        activation_observed_at is not None,
+    )
+    if javascript_dialog_result:
+        if (
+            classification
+            not in (
+                "missing_binder",
+                "bad_mojo",
+                "renderer_or_browser_crash",
+                "process_exit",
+            )
+            and javascript_dialog_result["status"] == "completed"
+        ):
+            classification = "dialog_completed"
+        elif classification == "exercised":
+            classification = "dialog_failed"
     result = {
         "probe": probe.name,
         "feature": probe.feature,
@@ -842,6 +1264,18 @@ def run_probe(
         "empty_interfaces": log_scan["empty_interfaces"],
         "classification": classification,
         "download": download_result,
+        "javascript_dialogs": javascript_dialogs,
+        "javascript_dialog_result": javascript_dialog_result,
+        "beforeunload_activation": (
+            {
+                "ready": activation_ready_at is not None,
+                "input_sent": activation_sent,
+                "activation_observed": activation_observed_at is not None,
+                "navigation_sent": navigation_sent,
+            }
+            if probe.name.startswith("javascript-beforeunload-")
+            else None
+        ),
         "log_dir": str(probe_dir),
     }
     write_json(probe_dir / "probe-result.json", result)
@@ -925,6 +1359,10 @@ def write_coverage_map(path: pathlib.Path, results: list[dict[str, Any]]) -> Non
             next_action = "Generic download completed with verified file bytes."
         elif classification == "download_failed":
             next_action = "Inspect download target selection and file evidence."
+        elif classification == "dialog_completed":
+            next_action = "JavaScript dialog completed through request/reply protocol."
+        elif classification == "dialog_failed":
+            next_action = "Inspect JavaScript dialog request/reply evidence."
         elif classification == "unsupported":
             next_action = "No runtime surface exposed in this build."
         else:

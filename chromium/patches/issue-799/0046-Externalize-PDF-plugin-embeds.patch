@@ -1,7 +1,7 @@
 From d3608ed6f5e6d2cc96699ec7d77b1d19889dc643 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 17:02:34 -0500
-Subject: [PATCH 46/65] Externalize PDF plugin embeds
+Subject: [PATCH 46/66] Externalize PDF plugin embeds
 
 A trusted frame held out a key,
 The plugin took the proper hall.

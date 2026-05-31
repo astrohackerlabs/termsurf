@@ -54,6 +54,10 @@ message TermSurfMessage {
 
     // GUI → TUI (direct browser connection)
     BrowserReady browser_ready = 31;
+
+    // JavaScript dialogs (Chromium ↔ TUI / automation harness)
+    JavaScriptDialogRequest javascript_dialog_request = 34;
+    JavaScriptDialogReply javascript_dialog_reply = 35;
   }
 }
 
@@ -198,6 +202,22 @@ message CursorChanged {
 message TargetUrlChanged {
   int64 tab_id = 1;
   string url = 2;    // empty = hover ended
+}
+
+message JavaScriptDialogRequest {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  string dialog_type = 3;          // "alert", "confirm", "prompt", "beforeunload"
+  string origin_url = 4;
+  string message = 5;
+  string default_prompt_text = 6;
+}
+
+message JavaScriptDialogReply {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  bool accepted = 3;
+  string prompt_text = 4;
 }
 
 // --- TUI → GUI ---

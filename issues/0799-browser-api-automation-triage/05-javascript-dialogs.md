@@ -345,3 +345,75 @@ If this passes, the next Issue 799 experiment should continue with another
 automatable browser feature from Experiment 1, likely page zoom, console
 capture, HTTP Basic Auth, or a focused cleanup of remaining actionable empty
 binders.
+
+## Result
+
+**Result:** Pass
+
+Experiment 5 added protocol-mediated JavaScript dialogs and removed TermSurf's
+dependency on native Content Shell dialog UI for `alert`, `confirm`, `prompt`,
+and beforeunload confirmation.
+
+Implemented pieces:
+
+- extended `termsurf.proto` with `JavaScriptDialogRequest` and
+  `JavaScriptDialogReply`;
+- added `TsJavaScriptDialogManager` in `libtermsurf_chromium`;
+- routed Content Shell through a TermSurf `ShellPlatformDelegate`;
+- added Chromium C FFI callbacks and reply entry points;
+- routed request/reply messages through Roamium and Wezboard;
+- added an inline webtui dialog mode for alert, confirm, prompt, and
+  beforeunload;
+- changed Chromium tab creation to publish `TabReady` before loading the
+  requested URL, so initial-load dialogs are not lost;
+- extended the Issue 799 harness with eight dialog probes;
+- tightened beforeunload automation so navigation only happens after the fixture
+  reports activation, and the verifier fails beforeunload probes without that
+  activation evidence.
+
+Verification:
+
+- `autoninja -C out/Default libtermsurf_chromium` succeeded on branch
+  `148.0.7778.97-issue-799-exp5`;
+- `./scripts/build.sh roamium`, `./scripts/build.sh webtui`, and
+  `./scripts/build.sh wezboard` succeeded;
+- focused strict JavaScript dialog matrix:
+  `logs/issue-799-browser-api-audit/20260531-001351-996812`;
+- full strict Issue 799 harness:
+  `logs/issue-799-browser-api-audit/20260531-001518-237131`.
+
+The focused matrix classified all eight dialog probes as `dialog_completed`:
+
+- `javascript-alert`;
+- `javascript-confirm-accept`;
+- `javascript-confirm-cancel`;
+- `javascript-prompt`;
+- `javascript-prompt-cancel`;
+- `javascript-initial-load-alert`;
+- `javascript-beforeunload-proceed`;
+- `javascript-beforeunload-stay`.
+
+The full harness completed 19 probes. The JavaScript dialogs remained
+`dialog_completed`, generic downloads remained `download_completed`, and
+`missing_interfaces` was empty. The remaining non-green classifications were the
+already-known deferred surfaces: `file-system-access` requires contained
+activation/permission work, and `webauthn-create` requires virtual authenticator
+coverage.
+
+Codex completion review initially found one real blocker: beforeunload
+activation was visible in raw logs but not enforced by the harness result. The
+harness was updated to require an observed `activated` page report before
+navigating and to record `beforeunload_activation` in `probe-results.json`.
+Follow-up Codex review reported no blocking findings and said Experiment 5 is
+good enough to record as `Pass`.
+
+## Conclusion
+
+JavaScript dialogs are now ordinary TermSurf protocol events instead of native
+Roamium dialogs. The implementation covers delayed dialogs, initial-load
+dialogs, accepted and canceled confirm/prompt cases, and accepted/canceled
+beforeunload navigation.
+
+The next Issue 799 experiment should continue down the automatable queue from
+Experiment 1. The best next targets are page zoom, console capture, HTTP Basic
+Auth, or a focused cleanup of the remaining actionable empty binders.

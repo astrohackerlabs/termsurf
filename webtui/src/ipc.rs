@@ -43,6 +43,14 @@ pub enum CompositorMessage {
         browser_socket: String,
         browser: String,
     },
+    JavaScriptDialogRequest {
+        tab_id: i64,
+        request_id: u64,
+        dialog_type: String,
+        origin_url: String,
+        message: String,
+        default_prompt_text: String,
+    },
 }
 
 /// A direct connection to the TermSurf app via Unix domain socket.
@@ -263,6 +271,21 @@ impl CompositorConnection {
         }));
     }
 
+    pub fn send_javascript_dialog_reply(
+        &self,
+        tab_id: i64,
+        request_id: u64,
+        accepted: bool,
+        prompt_text: &str,
+    ) {
+        self.send(Msg::JavascriptDialogReply(proto::JavaScriptDialogReply {
+            tab_id,
+            request_id,
+            accepted,
+            prompt_text: prompt_text.into(),
+        }));
+    }
+
     /// Notify the compositor of a mode change.
     pub fn send_mode_changed(&self, pane_id: &str, browsing: bool) {
         self.send(Msg::ModeChanged(proto::ModeChanged {
@@ -375,6 +398,15 @@ impl BrowserConnection {
         }));
     }
 
+    pub fn send_javascript_dialog_reply(&self, request_id: u64, accepted: bool, prompt_text: &str) {
+        self.send(Msg::JavascriptDialogReply(proto::JavaScriptDialogReply {
+            tab_id: self.tab_id,
+            request_id,
+            accepted,
+            prompt_text: prompt_text.into(),
+        }));
+    }
+
     fn send(&self, msg: Msg) {
         let wrapper = TermSurfMessage { msg: Some(msg) };
         let payload = wrapper.encode_to_vec();
@@ -449,6 +481,21 @@ fn dispatch_message(
                 browser_socket: m.browser_socket.clone(),
                 browser: m.browser.clone(),
             }));
+        }
+        Some(Msg::JavascriptDialogRequest(m)) => {
+            if tab_id != 0 && m.tab_id != 0 && m.tab_id != tab_id {
+                return;
+            }
+            let _ = event_tx.send(super::LoopEvent::Ipc(
+                CompositorMessage::JavaScriptDialogRequest {
+                    tab_id: m.tab_id,
+                    request_id: m.request_id,
+                    dialog_type: m.dialog_type.clone(),
+                    origin_url: m.origin_url.clone(),
+                    message: m.message.clone(),
+                    default_prompt_text: m.default_prompt_text.clone(),
+                },
+            ));
         }
 
         _ => {} // Ignore unexpected messages.

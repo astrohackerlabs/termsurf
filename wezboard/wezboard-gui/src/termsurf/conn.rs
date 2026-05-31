@@ -130,6 +130,8 @@ fn msg_type_name(msg: &TermSurfMessage) -> &'static str {
         Some(Msg::CreateTab(_)) => "CreateTab",
         Some(Msg::CloseTab(_)) => "CloseTab",
         Some(Msg::CursorChanged(_)) => "CursorChanged",
+        Some(Msg::JavascriptDialogRequest(_)) => "JavaScriptDialogRequest",
+        Some(Msg::JavascriptDialogReply(_)) => "JavaScriptDialogReply",
         Some(Msg::OpenSplit(_)) => "OpenSplit",
         Some(Msg::SetDevtoolsOverlay(_)) => "SetDevtoolsOverlay",
         Some(_) => "Other",
@@ -246,6 +248,59 @@ async fn handle_message(
                 if let Some(pane) = st.panes.get_mut(&pane_id) {
                     pane.cursor_type = c.cursor_type;
                 }
+            }
+        }
+        Some(Msg::JavascriptDialogRequest(r)) => {
+            log::info!(
+                "JavaScriptDialogRequest: tab_id={} request_id={} type={}",
+                r.tab_id,
+                r.request_id,
+                r.dialog_type
+            );
+            let target = {
+                let st = state.lock().unwrap();
+                let skey = server_key.as_deref().unwrap_or("");
+                let lookup = (skey.to_string(), r.tab_id);
+                st.tab_to_pane
+                    .get(&lookup)
+                    .and_then(|pane_id| st.panes.get(pane_id))
+                    .map(|pane| pane.tui_tx.clone())
+            };
+            if let Some(tui_tx) = target {
+                let msg = TermSurfMessage {
+                    msg: Some(Msg::JavascriptDialogRequest(r)),
+                };
+                let _ = tui_tx.try_send(msg.encode_to_vec());
+            } else {
+                log::warn!("JavaScriptDialogRequest: no pane for tab_id={}", r.tab_id);
+            }
+        }
+        Some(Msg::JavascriptDialogReply(r)) => {
+            log::info!(
+                "JavaScriptDialogReply: tab_id={} request_id={} accepted={}",
+                r.tab_id,
+                r.request_id,
+                r.accepted
+            );
+            let target = {
+                let st = state.lock().unwrap();
+                st.panes
+                    .values()
+                    .find(|pane| pane.tab_id == r.tab_id)
+                    .and_then(|pane| {
+                        let key = TermSurfState::server_key(&pane.profile, &pane.browser);
+                        st.servers
+                            .get(&key)
+                            .and_then(|server| server.tx.as_ref().cloned())
+                    })
+            };
+            if let Some(server_tx) = target {
+                let msg = TermSurfMessage {
+                    msg: Some(Msg::JavascriptDialogReply(r)),
+                };
+                let _ = server_tx.try_send(msg.encode_to_vec());
+            } else {
+                log::warn!("JavaScriptDialogReply: no server for tab_id={}", r.tab_id);
             }
         }
         Some(Msg::QueryLastRequest(q)) => {

@@ -1,7 +1,7 @@
 From c110412589eb8a82260b4227caa10058d6cd9cf9 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 14:15:54 -0500
-Subject: [PATCH 38/65] Mark PDF wrapper responses
+Subject: [PATCH 38/66] Mark PDF wrapper responses
 
 A wrapper wore the wrong old tag,
 So downloads grabbed the browsing bag.

@@ -1,7 +1,7 @@
 From a40294c71f32d469f07cee437d763cc371c7e491 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 17:15:08 -0500
-Subject: [PATCH 47/65] Load PDF localized strings
+Subject: [PATCH 47/66] Load PDF localized strings
 
 The PDF knew its portrait face,
 But not the string nor where to place.

@@ -1,7 +1,7 @@
 From f9dbeb9e627229b1204a6c60389f949729494116 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 16:07:47 -0500
-Subject: [PATCH 62/65] Organize TermSurf PDF support
+Subject: [PATCH 62/66] Organize TermSurf PDF support
 
 The PDF code packed a crowded hall,
 So helpers formed a tidy wall.

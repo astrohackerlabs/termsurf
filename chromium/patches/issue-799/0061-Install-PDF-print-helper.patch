@@ -1,7 +1,7 @@
 From e64e70c265cdb64670b9aa1c6ebe5c1edd2d9d61 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 15:24:38 -0500
-Subject: [PATCH 61/65] Install PDF print helper
+Subject: [PATCH 61/66] Install PDF print helper
 
 The print button knocked and found no door,
 So we taught each frame a helper more.

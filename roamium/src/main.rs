@@ -90,6 +90,10 @@ fn main() {
         ffi::ts_set_on_title_changed(Some(dispatch::on_title_changed), ptr::null_mut());
         ffi::ts_set_on_cursor_changed(Some(dispatch::on_cursor_changed), ptr::null_mut());
         ffi::ts_set_on_target_url_changed(Some(dispatch::on_target_url_changed), ptr::null_mut());
+        ffi::ts_set_on_javascript_dialog_request(
+            Some(dispatch::on_javascript_dialog_request),
+            ptr::null_mut(),
+        );
     }
 
     // Enter Chromium's message loop (blocks until shutdown).

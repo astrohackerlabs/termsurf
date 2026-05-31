@@ -1,7 +1,7 @@
 From dba20bee6c5d65248a2a8f0260c139f1ab385c3e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 11:22:01 -0500
-Subject: [PATCH 54/65] Wire PDF resourcesPrivate strings
+Subject: [PATCH 54/66] Wire PDF resourcesPrivate strings
 
 ---
  content/libtermsurf_chromium/BUILD.gn         |   3 +

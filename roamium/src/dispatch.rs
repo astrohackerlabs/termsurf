@@ -335,6 +335,29 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 }
             }
         }
+        Msg::JavascriptDialogReply(m) => {
+            if let Some(t) = find_by_tab_id(m.tab_id) {
+                let prompt_text = CString::new(m.prompt_text.as_str())
+                    .unwrap_or_else(|_| CString::new("").unwrap());
+                let ok = unsafe {
+                    ffi::ts_reply_javascript_dialog(
+                        t.handle,
+                        m.request_id,
+                        m.accepted,
+                        prompt_text.as_ptr(),
+                    )
+                };
+                eprintln!(
+                    "[termsurf-js-dialog] reply tab_id={} request_id={} accepted={} ok={}",
+                    m.tab_id, m.request_id, m.accepted, ok
+                );
+            } else {
+                eprintln!(
+                    "[termsurf-js-dialog] reply-missing-tab tab_id={} request_id={}",
+                    m.tab_id, m.request_id
+                );
+            }
+        }
         Msg::SetColorScheme(m) => {
             if let Some(t) = find_by_tab_id(m.tab_id) {
                 unsafe { ffi::ts_set_color_scheme(t.handle, m.dark) };
@@ -504,6 +527,53 @@ pub unsafe extern "C" fn on_target_url_changed(
             tab_id: t.tab_id,
             url: url_str,
         })),
+    };
+    crate::ipc::send(&msg);
+}
+
+pub unsafe extern "C" fn on_javascript_dialog_request(
+    wc: TsWebContents,
+    request_id: u64,
+    dialog_type: *const std::os::raw::c_char,
+    origin_url: *const std::os::raw::c_char,
+    message: *const std::os::raw::c_char,
+    default_prompt_text: *const std::os::raw::c_char,
+    _user_data: *mut c_void,
+) {
+    let Some(t) = find_by_handle(wc) else {
+        eprintln!(
+            "[termsurf-js-dialog] request-missing-tab request_id={}",
+            request_id
+        );
+        return;
+    };
+    let dialog_type = unsafe { std::ffi::CStr::from_ptr(dialog_type) }
+        .to_string_lossy()
+        .into_owned();
+    let origin_url = unsafe { std::ffi::CStr::from_ptr(origin_url) }
+        .to_string_lossy()
+        .into_owned();
+    let message = unsafe { std::ffi::CStr::from_ptr(message) }
+        .to_string_lossy()
+        .into_owned();
+    let default_prompt_text = unsafe { std::ffi::CStr::from_ptr(default_prompt_text) }
+        .to_string_lossy()
+        .into_owned();
+    eprintln!(
+        "[termsurf-js-dialog] request tab_id={} request_id={} type={} origin={}",
+        t.tab_id, request_id, dialog_type, origin_url
+    );
+    let msg = TermSurfMessage {
+        msg: Some(Msg::JavascriptDialogRequest(
+            proto::termsurf::JavaScriptDialogRequest {
+                tab_id: t.tab_id,
+                request_id,
+                dialog_type,
+                origin_url,
+                message,
+                default_prompt_text,
+            },
+        )),
     };
     crate::ipc::send(&msg);
 }

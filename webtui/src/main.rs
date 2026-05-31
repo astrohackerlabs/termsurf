@@ -44,12 +44,25 @@ fn submode_color(mode: &EditorMode) -> Color {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Mode {
     Browse,
     Control,
     Edit,
     Command,
+    Dialog,
+}
+
+#[derive(Clone)]
+struct PendingJsDialog {
+    tab_id: i64,
+    request_id: u64,
+    dialog_type: String,
+    origin_url: String,
+    message: String,
+    default_prompt_text: String,
+    input: String,
+    previous_mode: Mode,
 }
 
 // Loading screen stages (Issue 773).
@@ -399,6 +412,8 @@ fn main() -> io::Result<()> {
     let mut page_title = String::new();
     let mut target_url = String::new();
     let mut browser_conn: Option<ipc::BrowserConnection> = None;
+    let mut pending_dialog: Option<PendingJsDialog> = None;
+    let mut handled_dialogs: Vec<(i64, u64)> = Vec::new();
     // edtui state (Issue 637, 658).
     let mut editor_state = EditorState::new(Lines::from(url.as_str()));
     editor_state.set_clipboard(UrlClipboard::new());
@@ -440,6 +455,7 @@ fn main() -> io::Result<()> {
                 &command_error,
                 browser_label,
                 &target_url,
+                &pending_dialog,
                 &loading_log,
                 browser_ready,
                 chromium_wait_start,
@@ -521,6 +537,73 @@ fn main() -> io::Result<()> {
                 // Ctrl+C quits from any mode.
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     break;
+                }
+
+                if let Some(dialog) = pending_dialog.as_mut() {
+                    let mut reply: Option<(bool, String)> = None;
+                    match dialog.dialog_type.as_str() {
+                        "alert" => {
+                            if key.code == KeyCode::Enter {
+                                reply = Some((true, String::new()));
+                            } else if key.code == KeyCode::Esc {
+                                reply = Some((false, String::new()));
+                            }
+                        }
+                        "confirm" | "beforeunload" => match key.code {
+                            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                reply = Some((true, String::new()));
+                            }
+                            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                                reply = Some((false, String::new()));
+                            }
+                            _ => {}
+                        },
+                        "prompt" => match key.code {
+                            KeyCode::Enter => {
+                                reply = Some((true, dialog.input.clone()));
+                            }
+                            KeyCode::Esc => {
+                                reply = Some((false, String::new()));
+                            }
+                            KeyCode::Backspace => {
+                                dialog.input.pop();
+                            }
+                            KeyCode::Char(ch) => {
+                                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT
+                                {
+                                    dialog.input.push(ch);
+                                }
+                            }
+                            _ => {}
+                        },
+                        _ => {
+                            reply = Some((false, String::new()));
+                        }
+                    }
+
+                    if let Some((accepted, prompt_text)) = reply {
+                        let tab_id = dialog.tab_id;
+                        let request_id = dialog.request_id;
+                        let previous_mode = dialog.previous_mode.clone();
+                        if let Some(ref bc) = browser_conn {
+                            bc.send_javascript_dialog_reply(request_id, accepted, &prompt_text);
+                        }
+                        if let Some(ref conn) = compositor {
+                            conn.send_javascript_dialog_reply(
+                                tab_id,
+                                request_id,
+                                accepted,
+                                &prompt_text,
+                            );
+                        }
+                        pending_dialog = None;
+                        handled_dialogs.push((tab_id, request_id));
+                        if handled_dialogs.len() > 32 {
+                            handled_dialogs.remove(0);
+                        }
+                        mode = previous_mode;
+                    }
+                    continue;
                 }
 
                 match mode {
@@ -746,6 +829,7 @@ fn main() -> io::Result<()> {
                             cmd_handler.on_key_event(key, &mut cmd_state);
                         }
                     }
+                    Mode::Dialog => {}
                 }
             }
             Ok(LoopEvent::Terminal(_)) => {
@@ -837,6 +921,36 @@ fn main() -> io::Result<()> {
                             }
                         }
                         loading_log.push((LoadingStage::LoadingPage, StageStatus::InProgress));
+                    }
+                    ipc::CompositorMessage::JavaScriptDialogRequest {
+                        tab_id,
+                        request_id,
+                        dialog_type,
+                        origin_url,
+                        message,
+                        default_prompt_text,
+                    } => {
+                        let duplicate = pending_dialog
+                            .as_ref()
+                            .map(|dialog| {
+                                dialog.tab_id == tab_id && dialog.request_id == request_id
+                            })
+                            .unwrap_or(false)
+                            || handled_dialogs.contains(&(tab_id, request_id));
+                        if !duplicate {
+                            let previous_mode = mode.clone();
+                            mode = Mode::Dialog;
+                            pending_dialog = Some(PendingJsDialog {
+                                tab_id,
+                                request_id,
+                                dialog_type,
+                                origin_url,
+                                message,
+                                input: default_prompt_text.clone(),
+                                default_prompt_text,
+                                previous_mode,
+                            });
+                        }
                     }
                 }
             }
@@ -965,6 +1079,7 @@ fn ui(
     command_error: &Option<String>,
     browser_label: &str,
     target_url: &str,
+    pending_dialog: &Option<PendingJsDialog>,
     loading_log: &[(LoadingStage, StageStatus)],
     browser_ready: bool,
     chromium_wait_start: Option<Instant>,
@@ -988,6 +1103,7 @@ fn ui(
         Mode::Control => (CYAN, BORDER),
         Mode::Edit => (PURPLE, BORDER),
         Mode::Command => (YELLOW, BORDER),
+        Mode::Dialog => (YELLOW, YELLOW),
     };
 
     // URL bar / Command bar (Issue 659).
@@ -1117,7 +1233,41 @@ fn ui(
     }
     let inner = viewport_block.inner(layout[0]);
 
-    if !browser_ready && !loading_log.is_empty() {
+    if let Some(dialog) = pending_dialog {
+        let prompt_line = match dialog.dialog_type.as_str() {
+            "alert" => "Enter accepts, Esc cancels".to_string(),
+            "confirm" => "Enter/y accepts, n/Esc cancels".to_string(),
+            "prompt" => format!(
+                "Input: {}{}",
+                dialog.input,
+                if dialog.default_prompt_text.is_empty() {
+                    ""
+                } else {
+                    " "
+                }
+            ),
+            "beforeunload" => "Enter/y proceeds, n/Esc stays".to_string(),
+            _ => "Enter accepts, Esc cancels".to_string(),
+        };
+        let lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  JavaScript ").style(Style::default().fg(YELLOW).bg(BG)),
+                Span::raw(dialog.dialog_type.as_str()).style(Style::default().fg(CYAN).bg(BG)),
+            ]),
+            Line::from(
+                Span::raw(format!("  {}", dialog.origin_url)).style(Style::default().fg(DIM)),
+            ),
+            Line::from(""),
+            Line::from(Span::raw(format!("  {}", dialog.message)).style(Style::default().fg(FG))),
+            Line::from(""),
+            Line::from(Span::raw(format!("  {}", prompt_line)).style(Style::default().fg(COMMENT))),
+        ];
+        let dialog_widget = Paragraph::new(lines)
+            .style(Style::default().fg(FG).bg(BG))
+            .block(viewport_block);
+        frame.render_widget(dialog_widget, layout[0]);
+    } else if !browser_ready && !loading_log.is_empty() {
         // Render loading log (Issue 773).
         const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let spinner_frame = chromium_wait_start
@@ -1237,6 +1387,12 @@ fn ui(
             Span::styled("esc ", f),
             Span::styled("control", d),
         ]),
+        Mode::Dialog => Line::from(vec![
+            Span::styled("\u{23CE}/y ", f),
+            Span::styled("accept  ", d),
+            Span::styled("n/esc ", f),
+            Span::styled("cancel", d),
+        ]),
     };
 
     let label = match mode {
@@ -1244,6 +1400,7 @@ fn ui(
         Mode::Control => "\u{F11C} CONTROL".to_string(),
         Mode::Edit => "\u{F044} EDIT".to_string(),
         Mode::Command => "\u{F120} COMMAND".to_string(),
+        Mode::Dialog => "\u{F27A} DIALOG".to_string(),
     };
 
     let hints_widget = Paragraph::new(hints);

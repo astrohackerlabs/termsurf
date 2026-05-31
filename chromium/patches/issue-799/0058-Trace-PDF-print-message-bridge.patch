@@ -1,7 +1,7 @@
 From a1700bc8473edaec090fdcaac301b02c2dbbb533 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 14:12:52 -0500
-Subject: [PATCH 58/65] Trace PDF print message bridge
+Subject: [PATCH 58/66] Trace PDF print message bridge
 
 ---
  chrome/browser/resources/pdf/controller.ts    | 53 ++++++++++++++++++

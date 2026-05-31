@@ -1,7 +1,7 @@
 From b9dd932ab3c869886d2d89598a0eec32956f6f20 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 15:31:56 -0500
-Subject: [PATCH 42/65] Trace PDF wrapper parsing
+Subject: [PATCH 42/66] Trace PDF wrapper parsing
 
 The wrapper knocked in HTML shoes,
 But parser crumbs gave scanty clues.

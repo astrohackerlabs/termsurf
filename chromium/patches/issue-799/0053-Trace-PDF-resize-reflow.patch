@@ -1,7 +1,7 @@
 From 7538ea05fee1f32ff7871875b374f9674a28a92e Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 09:45:44 -0500
-Subject: [PATCH 53/65] Trace PDF resize reflow
+Subject: [PATCH 53/66] Trace PDF resize reflow
 
 ---
  .../ts_browser_main_parts.cc                  | 11 ++++++++

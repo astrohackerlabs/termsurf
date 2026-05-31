@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::os::raw::{c_char, c_double, c_int};
+use std::os::raw::{c_char, c_double, c_int, c_ulonglong};
 
 pub type TsBrowserContext = *mut c_void;
 pub type TsWebContents = *mut c_void;
@@ -96,6 +96,13 @@ extern "C" {
         screen_scale: c_double,
     );
 
+    pub fn ts_reply_javascript_dialog(
+        wc: TsWebContents,
+        request_id: c_ulonglong,
+        accepted: bool,
+        prompt_text: *const c_char,
+    ) -> bool;
+
     // --- Callbacks ---
 
     pub fn ts_set_on_tab_ready(
@@ -130,6 +137,21 @@ extern "C" {
 
     pub fn ts_set_on_target_url_changed(
         cb: Option<unsafe extern "C" fn(TsWebContents, *const c_char, *mut c_void)>,
+        user_data: *mut c_void,
+    );
+
+    pub fn ts_set_on_javascript_dialog_request(
+        cb: Option<
+            unsafe extern "C" fn(
+                TsWebContents,
+                c_ulonglong,
+                *const c_char,
+                *const c_char,
+                *const c_char,
+                *const c_char,
+                *mut c_void,
+            ),
+        >,
         user_data: *mut c_void,
     );
 }
