@@ -213,3 +213,132 @@ The experiment fails if:
 This experiment design must be reviewed by Codex before implementation. Any real
 design issues must be fixed before committing the plan or implementing the
 slice.
+
+## Result
+
+**Result:** Pass
+
+Experiment 14 added Roastty's reusable offset-backed ref-counted set foundation.
+
+The implementation added:
+
+- `roastty/src/terminal/ref_counted_set.rs`
+- `terminal::ref_counted_set` registration in `roastty/src/terminal/mod.rs`
+
+### API Shape
+
+The Rust port uses:
+
+- `RefCountedSet<T>`
+- `Layout`
+- `Item<T>`
+- `Metadata`
+- `Context<T>`
+- `AddError`
+
+The value type `T` is generic and currently requires `Copy + Default` for the
+offset-backed item array initialization model.
+
+IDs and reference counts are fixed to the aliases used by both current upstream
+call sites:
+
+- `Id = CellCountInt = u16`
+- `RefCount = CellCountInt = u16`
+
+That keeps the first port focused on `style.Set` and `hyperlink.Set`, whose
+upstream IDs/ref counts are also `CellCountInt` aliases.
+
+`add_with_id` preserves Ghostty's nullable return semantics as
+`Result<Option<Id>, AddError>`:
+
+- `Ok(None)` means the requested ID was used;
+- `Ok(Some(id))` means an alternate ID was chosen;
+- `Err(...)` means the add failed.
+
+### Storage and Layout
+
+The set preserves Ghostty's storage model:
+
+- caller-provided backing memory;
+- table stores IDs;
+- ID `0` is reserved;
+- items live in a flat item array;
+- open-addressed linear probing;
+- Robin Hood insertion;
+- `max_psl` and `psl_stats`;
+- dead items remain until reused or trimmed.
+
+The implementation does not replace Page's temporary style/hyperlink layout
+helpers yet. That keeps this experiment limited to the reusable module. Existing
+Page layout numeric tests remained green.
+
+### Unsafe Boundary
+
+Unsafe code is limited to converting offset-backed table/item regions into
+slices. The conversion sites document the backing-memory and alignment
+invariants.
+
+Deletion callbacks are treated as non-reentrant for the same set. The
+implementation avoids holding long-lived mutable table/item slices across
+callback calls, which is important for future hyperlink deletion callbacks that
+will free page-backed string allocations.
+
+### Tests Added
+
+The new `terminal::ref_counted_set` test suite covers:
+
+- zero-capacity layout;
+- exact normal layout values;
+- `capacity_for_count`;
+- new add;
+- duplicate add and incoming deletion callback;
+- lookup excluding dead items;
+- `use`, `useMultiple`, `release`, and `releaseMultiple`;
+- dead item reuse;
+- `add_with_id` requested-ID and alternate-ID semantics;
+- add-with-id duplicate reuse;
+- OutOfMemory;
+- NeedsRehash;
+- resident deletion callback on overwrite;
+- trailing deletion callback on trim;
+- collision-heavy lookup.
+
+Upstream `ref_counted_set.zig` has no dedicated tests, so these tests are direct
+Rust equivalents derived from the documented behavior and from the Page
+style/hyperlink requirements.
+
+### Deferred
+
+This experiment intentionally did not add:
+
+- `style.Set` integration;
+- `hyperlink.Set` / `PageEntry`;
+- Page style operations;
+- Page hyperlink operations;
+- Page style clone;
+- Page hyperlink clone/copy/exact-capacity behavior.
+
+### Verification
+
+The required verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::ref_counted_set
+cargo test -p roastty terminal::page
+cargo test -p roastty
+```
+
+Observed results:
+
+- `terminal::ref_counted_set`: 16 passed
+- `terminal::page`: 50 passed
+- full `roastty` suite: 152 Rust unit tests passed, C ABI harness passed, doc
+  tests passed
+
+## Conclusion
+
+Roastty now has the ref-counted set foundation needed for Page styles and
+hyperlinks. The next experiment can use this module to wire style storage into
+`Page` and port the first style-backed Page behavior, most likely
+`Page clone styles`.
