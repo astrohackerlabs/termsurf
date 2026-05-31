@@ -8,29 +8,29 @@ use std::ptr;
 // - Runtime callback userdata, surface config pointers, strings, env arrays,
 //   platform pointers, and app pointers stored on surfaces are borrowed from the
 //   caller; this skeleton records scalar values but never frees borrowed data.
-// - GhosttyString values are freed only by ghostty_string_free and only when
+// - RoasttyString values are freed only by roastty_string_free and only when
 //   they were returned by Roastty string-returning functions.
-pub type GhosttyApp = *mut c_void;
-pub type GhosttyConfig = *mut c_void;
-pub type GhosttySurface = *mut c_void;
+pub type RoasttyApp = *mut c_void;
+pub type RoasttyConfig = *mut c_void;
+pub type RoasttySurface = *mut c_void;
 
-const GHOSTTY_SUCCESS: c_int = 0;
-const GHOSTTY_BUILD_MODE_DEBUG: c_int = 0;
+const ROASTTY_SUCCESS: c_int = 0;
+const ROASTTY_BUILD_MODE_DEBUG: c_int = 0;
 
 #[repr(C)]
-pub struct GhosttyInfo {
+pub struct RoasttyInfo {
     build_mode: c_int,
     version: *const c_char,
     version_len: usize,
 }
 
 #[repr(C)]
-pub struct GhosttyDiagnostic {
+pub struct RoasttyDiagnostic {
     message: *const c_char,
 }
 
 #[repr(C)]
-pub struct GhosttyString {
+pub struct RoasttyString {
     ptr: *const c_char,
     len: usize,
     sentinel: bool,
@@ -38,41 +38,41 @@ pub struct GhosttyString {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyEnvVar {
+pub struct RoasttyEnvVar {
     key: *const c_char,
     value: *const c_char,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyPlatformMacos {
+pub struct RoasttyPlatformMacos {
     nsview: *mut c_void,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyPlatformIos {
+pub struct RoasttyPlatformIos {
     uiview: *mut c_void,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub union GhosttyPlatform {
-    macos: GhosttyPlatformMacos,
-    ios: GhosttyPlatformIos,
+pub union RoasttyPlatform {
+    macos: RoasttyPlatformMacos,
+    ios: RoasttyPlatformIos,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttySurfaceConfig {
+pub struct RoasttySurfaceConfig {
     platform_tag: c_int,
-    platform: GhosttyPlatform,
+    platform: RoasttyPlatform,
     userdata: *mut c_void,
     scale_factor: f64,
     font_size: f32,
     working_directory: *const c_char,
     command: *const c_char,
-    env_vars: *mut GhosttyEnvVar,
+    env_vars: *mut RoasttyEnvVar,
     env_var_count: usize,
     initial_input: *const c_char,
     wait_after_command: bool,
@@ -81,7 +81,7 @@ pub struct GhosttySurfaceConfig {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GhosttySurfaceSize {
+pub struct RoasttySurfaceSize {
     columns: u16,
     rows: u16,
     width_px: u32,
@@ -92,38 +92,38 @@ pub struct GhosttySurfaceSize {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyClipboardContent {
+pub struct RoasttyClipboardContent {
     mime: *const c_char,
     data: *const c_char,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyTarget {
+pub struct RoasttyTarget {
     tag: c_int,
-    surface: GhosttySurface,
+    surface: RoasttySurface,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyAction {
+pub struct RoasttyAction {
     tag: c_int,
     storage: [usize; 8],
 }
 
 type WakeupCallback = Option<unsafe extern "C" fn(*mut c_void)>;
 type ActionCallback =
-    Option<unsafe extern "C" fn(GhosttyApp, GhosttyTarget, GhosttyAction) -> bool>;
+    Option<unsafe extern "C" fn(RoasttyApp, RoasttyTarget, RoasttyAction) -> bool>;
 type ReadClipboardCallback = Option<unsafe extern "C" fn(*mut c_void, c_int, *mut c_void) -> bool>;
 type ConfirmReadClipboardCallback =
     Option<unsafe extern "C" fn(*mut c_void, *const c_char, *mut c_void, c_int)>;
 type WriteClipboardCallback =
-    Option<unsafe extern "C" fn(*mut c_void, c_int, *const GhosttyClipboardContent, usize, bool)>;
+    Option<unsafe extern "C" fn(*mut c_void, c_int, *const RoasttyClipboardContent, usize, bool)>;
 type CloseSurfaceCallback = Option<unsafe extern "C" fn(*mut c_void, bool)>;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct GhosttyRuntimeConfig {
+pub struct RoasttyRuntimeConfig {
     userdata: *mut c_void,
     supports_selection_clipboard: bool,
     wakeup_cb: WakeupCallback,
@@ -139,26 +139,26 @@ struct Config {
 }
 
 struct App {
-    runtime: GhosttyRuntimeConfig,
+    runtime: RoasttyRuntimeConfig,
     focused: bool,
     color_scheme: c_int,
 }
 
 struct Surface {
-    app: GhosttyApp,
+    app: RoasttyApp,
     userdata: *mut c_void,
     scale_factor_x: f64,
     scale_factor_y: f64,
     focused: bool,
     occluded: bool,
-    size: GhosttySurfaceSize,
+    size: RoasttySurfaceSize,
     color_scheme: c_int,
 }
 
 static VERSION: &[u8] = b"0.1.0-roastty\0";
 static EMPTY_DIAGNOSTIC: &[u8] = b"\0";
 
-fn config_from_handle<'a>(handle: GhosttyConfig) -> Option<&'a mut Config> {
+fn config_from_handle<'a>(handle: RoasttyConfig) -> Option<&'a mut Config> {
     if handle.is_null() {
         None
     } else {
@@ -166,7 +166,7 @@ fn config_from_handle<'a>(handle: GhosttyConfig) -> Option<&'a mut Config> {
     }
 }
 
-fn app_from_handle<'a>(handle: GhosttyApp) -> Option<&'a mut App> {
+fn app_from_handle<'a>(handle: RoasttyApp) -> Option<&'a mut App> {
     if handle.is_null() {
         None
     } else {
@@ -174,7 +174,7 @@ fn app_from_handle<'a>(handle: GhosttyApp) -> Option<&'a mut App> {
     }
 }
 
-fn surface_from_handle<'a>(handle: GhosttySurface) -> Option<&'a mut Surface> {
+fn surface_from_handle<'a>(handle: RoasttySurface) -> Option<&'a mut Surface> {
     if handle.is_null() {
         None
     } else {
@@ -182,30 +182,30 @@ fn surface_from_handle<'a>(handle: GhosttySurface) -> Option<&'a mut Surface> {
     }
 }
 
-fn empty_string() -> GhosttyString {
-    GhosttyString {
+fn empty_string() -> RoasttyString {
+    RoasttyString {
         ptr: ptr::null(),
         len: 0,
         sentinel: false,
     }
 }
 
-fn allocated_string(bytes: &[u8]) -> GhosttyString {
+fn allocated_string(bytes: &[u8]) -> RoasttyString {
     let owned = bytes.to_vec().into_boxed_slice();
     let len = owned.len();
     let ptr = Box::into_raw(owned).cast::<u8>();
-    GhosttyString {
+    RoasttyString {
         ptr: ptr.cast::<c_char>(),
         len,
         sentinel: false,
     }
 }
 
-fn allocated_c_string(value: &str) -> GhosttyString {
+fn allocated_c_string(value: &str) -> RoasttyString {
     let c_string = CString::new(value).expect("static strings must not contain interior nuls");
     let len = c_string.as_bytes().len();
     let ptr = c_string.into_raw();
-    GhosttyString {
+    RoasttyString {
         ptr,
         len,
         sentinel: true,
@@ -213,21 +213,21 @@ fn allocated_c_string(value: &str) -> GhosttyString {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_init(_argc: usize, _argv: *mut *mut c_char) -> c_int {
-    GHOSTTY_SUCCESS
+pub extern "C" fn roastty_init(_argc: usize, _argv: *mut *mut c_char) -> c_int {
+    ROASTTY_SUCCESS
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_info() -> GhosttyInfo {
-    GhosttyInfo {
-        build_mode: GHOSTTY_BUILD_MODE_DEBUG,
+pub extern "C" fn roastty_info() -> RoasttyInfo {
+    RoasttyInfo {
+        build_mode: ROASTTY_BUILD_MODE_DEBUG,
         version: VERSION.as_ptr().cast::<c_char>(),
         version_len: VERSION.len() - 1,
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_string_free(value: GhosttyString) {
+pub extern "C" fn roastty_string_free(value: RoasttyString) {
     if value.ptr.is_null() || value.len == 0 {
         return;
     }
@@ -243,12 +243,12 @@ pub extern "C" fn ghostty_string_free(value: GhosttyString) {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_new() -> GhosttyConfig {
+pub extern "C" fn roastty_config_new() -> RoasttyConfig {
     Box::into_raw(Box::new(Config { finalized: false })).cast()
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_free(config: GhosttyConfig) {
+pub extern "C" fn roastty_config_free(config: RoasttyConfig) {
     if !config.is_null() {
         unsafe {
             drop(Box::from_raw(config.cast::<Config>()));
@@ -257,7 +257,7 @@ pub extern "C" fn ghostty_config_free(config: GhosttyConfig) {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_clone(config: GhosttyConfig) -> GhosttyConfig {
+pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
     let finalized = config_from_handle(config)
         .map(|config| config.finalized)
         .unwrap_or(false);
@@ -265,51 +265,51 @@ pub extern "C" fn ghostty_config_clone(config: GhosttyConfig) -> GhosttyConfig {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_load_cli_args(_config: GhosttyConfig) {}
+pub extern "C" fn roastty_config_load_cli_args(_config: RoasttyConfig) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_load_file(_config: GhosttyConfig, _path: *const c_char) {}
+pub extern "C" fn roastty_config_load_file(_config: RoasttyConfig, _path: *const c_char) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_load_default_files(_config: GhosttyConfig) {}
+pub extern "C" fn roastty_config_load_default_files(_config: RoasttyConfig) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_load_recursive_files(_config: GhosttyConfig) {}
+pub extern "C" fn roastty_config_load_recursive_files(_config: RoasttyConfig) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_finalize(config: GhosttyConfig) {
+pub extern "C" fn roastty_config_finalize(config: RoasttyConfig) {
     if let Some(config) = config_from_handle(config) {
         config.finalized = true;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_diagnostics_count(_config: GhosttyConfig) -> u32 {
+pub extern "C" fn roastty_config_diagnostics_count(_config: RoasttyConfig) -> u32 {
     0
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_get_diagnostic(
-    _config: GhosttyConfig,
+pub extern "C" fn roastty_config_get_diagnostic(
+    _config: RoasttyConfig,
     _index: u32,
-) -> GhosttyDiagnostic {
-    GhosttyDiagnostic {
+) -> RoasttyDiagnostic {
+    RoasttyDiagnostic {
         message: EMPTY_DIAGNOSTIC.as_ptr().cast::<c_char>(),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_config_open_path() -> GhosttyString {
+pub extern "C" fn roastty_config_open_path() -> RoasttyString {
     allocated_string(b"roastty-config")
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_new(
-    runtime: *const GhosttyRuntimeConfig,
-    _config: GhosttyConfig,
-) -> GhosttyApp {
+pub extern "C" fn roastty_app_new(
+    runtime: *const RoasttyRuntimeConfig,
+    _config: RoasttyConfig,
+) -> RoasttyApp {
     let runtime = if runtime.is_null() {
-        GhosttyRuntimeConfig {
+        RoasttyRuntimeConfig {
             userdata: ptr::null_mut(),
             supports_selection_clipboard: false,
             wakeup_cb: None,
@@ -332,7 +332,7 @@ pub extern "C" fn ghostty_app_new(
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_free(app: GhosttyApp) {
+pub extern "C" fn roastty_app_free(app: RoasttyApp) {
     if !app.is_null() {
         unsafe {
             drop(Box::from_raw(app.cast::<App>()));
@@ -341,48 +341,48 @@ pub extern "C" fn ghostty_app_free(app: GhosttyApp) {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_tick(_app: GhosttyApp) {}
+pub extern "C" fn roastty_app_tick(_app: RoasttyApp) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_userdata(app: GhosttyApp) -> *mut c_void {
+pub extern "C" fn roastty_app_userdata(app: RoasttyApp) -> *mut c_void {
     app_from_handle(app)
         .map(|app| app.runtime.userdata)
         .unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_set_focus(app: GhosttyApp, focused: bool) {
+pub extern "C" fn roastty_app_set_focus(app: RoasttyApp, focused: bool) {
     if let Some(app) = app_from_handle(app) {
         app.focused = focused;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_update_config(_app: GhosttyApp, _config: GhosttyConfig) {}
+pub extern "C" fn roastty_app_update_config(_app: RoasttyApp, _config: RoasttyConfig) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_needs_confirm_quit(_app: GhosttyApp) -> bool {
+pub extern "C" fn roastty_app_needs_confirm_quit(_app: RoasttyApp) -> bool {
     false
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_has_global_keybinds(_app: GhosttyApp) -> bool {
+pub extern "C" fn roastty_app_has_global_keybinds(_app: RoasttyApp) -> bool {
     false
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_app_set_color_scheme(app: GhosttyApp, color_scheme: c_int) {
+pub extern "C" fn roastty_app_set_color_scheme(app: RoasttyApp, color_scheme: c_int) {
     if let Some(app) = app_from_handle(app) {
         app.color_scheme = color_scheme;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_config_new() -> GhosttySurfaceConfig {
-    GhosttySurfaceConfig {
+pub extern "C" fn roastty_surface_config_new() -> RoasttySurfaceConfig {
+    RoasttySurfaceConfig {
         platform_tag: 0,
-        platform: GhosttyPlatform {
-            macos: GhosttyPlatformMacos {
+        platform: RoasttyPlatform {
+            macos: RoasttyPlatformMacos {
                 nsview: ptr::null_mut(),
             },
         },
@@ -400,16 +400,16 @@ pub extern "C" fn ghostty_surface_config_new() -> GhosttySurfaceConfig {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_new(
-    app: GhosttyApp,
-    config: *const GhosttySurfaceConfig,
-) -> GhosttySurface {
+pub extern "C" fn roastty_surface_new(
+    app: RoasttyApp,
+    config: *const RoasttySurfaceConfig,
+) -> RoasttySurface {
     if app.is_null() {
         return ptr::null_mut();
     }
 
     let config = if config.is_null() {
-        ghostty_surface_config_new()
+        roastty_surface_config_new()
     } else {
         unsafe { *config }
     };
@@ -421,7 +421,7 @@ pub extern "C" fn ghostty_surface_new(
         scale_factor_y: config.scale_factor,
         focused: false,
         occluded: false,
-        size: GhosttySurfaceSize {
+        size: RoasttySurfaceSize {
             columns: 0,
             rows: 0,
             width_px: 0,
@@ -435,7 +435,7 @@ pub extern "C" fn ghostty_surface_new(
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_free(surface: GhosttySurface) {
+pub extern "C" fn roastty_surface_free(surface: RoasttySurface) {
     if !surface.is_null() {
         unsafe {
             drop(Box::from_raw(surface.cast::<Surface>()));
@@ -444,34 +444,34 @@ pub extern "C" fn ghostty_surface_free(surface: GhosttySurface) {
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_userdata(surface: GhosttySurface) -> *mut c_void {
+pub extern "C" fn roastty_surface_userdata(surface: RoasttySurface) -> *mut c_void {
     surface_from_handle(surface)
         .map(|surface| surface.userdata)
         .unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_app(surface: GhosttySurface) -> GhosttyApp {
+pub extern "C" fn roastty_surface_app(surface: RoasttySurface) -> RoasttyApp {
     surface_from_handle(surface)
         .map(|surface| surface.app)
         .unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_update_config(_surface: GhosttySurface, _config: GhosttyConfig) {}
+pub extern "C" fn roastty_surface_update_config(_surface: RoasttySurface, _config: RoasttyConfig) {}
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_needs_confirm_quit(_surface: GhosttySurface) -> bool {
+pub extern "C" fn roastty_surface_needs_confirm_quit(_surface: RoasttySurface) -> bool {
     false
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_process_exited(_surface: GhosttySurface) -> bool {
+pub extern "C" fn roastty_surface_process_exited(_surface: RoasttySurface) -> bool {
     false
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_set_content_scale(surface: GhosttySurface, x: f64, y: f64) {
+pub extern "C" fn roastty_surface_set_content_scale(surface: RoasttySurface, x: f64, y: f64) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.scale_factor_x = x;
         surface.scale_factor_y = y;
@@ -479,21 +479,21 @@ pub extern "C" fn ghostty_surface_set_content_scale(surface: GhosttySurface, x: 
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_set_focus(surface: GhosttySurface, focused: bool) {
+pub extern "C" fn roastty_surface_set_focus(surface: RoasttySurface, focused: bool) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.focused = focused;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_set_occlusion(surface: GhosttySurface, occluded: bool) {
+pub extern "C" fn roastty_surface_set_occlusion(surface: RoasttySurface, occluded: bool) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.occluded = occluded;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_set_size(surface: GhosttySurface, width: u32, height: u32) {
+pub extern "C" fn roastty_surface_set_size(surface: RoasttySurface, width: u32, height: u32) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.size.width_px = width;
         surface.size.height_px = height;
@@ -501,10 +501,10 @@ pub extern "C" fn ghostty_surface_set_size(surface: GhosttySurface, width: u32, 
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_size(surface: GhosttySurface) -> GhosttySurfaceSize {
+pub extern "C" fn roastty_surface_size(surface: RoasttySurface) -> RoasttySurfaceSize {
     surface_from_handle(surface)
         .map(|surface| surface.size)
-        .unwrap_or(GhosttySurfaceSize {
+        .unwrap_or(RoasttySurfaceSize {
             columns: 0,
             rows: 0,
             width_px: 0,
@@ -515,12 +515,12 @@ pub extern "C" fn ghostty_surface_size(surface: GhosttySurface) -> GhosttySurfac
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_foreground_pid(_surface: GhosttySurface) -> u64 {
+pub extern "C" fn roastty_surface_foreground_pid(_surface: RoasttySurface) -> u64 {
     0
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_tty_name(surface: GhosttySurface) -> GhosttyString {
+pub extern "C" fn roastty_surface_tty_name(surface: RoasttySurface) -> RoasttyString {
     if surface.is_null() {
         empty_string()
     } else {
@@ -529,41 +529,41 @@ pub extern "C" fn ghostty_surface_tty_name(surface: GhosttySurface) -> GhosttySt
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_set_color_scheme(surface: GhosttySurface, color_scheme: c_int) {
+pub extern "C" fn roastty_surface_set_color_scheme(surface: RoasttySurface, color_scheme: c_int) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.color_scheme = color_scheme;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn ghostty_surface_request_close(_surface: GhosttySurface) {}
+pub extern "C" fn roastty_surface_request_close(_surface: RoasttySurface) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn empty_string_shape_matches_ghostty() {
+    fn empty_string_shape_matches_roastty() {
         let value = empty_string();
         assert!(value.ptr.is_null());
         assert_eq!(value.len, 0);
         assert!(!value.sentinel);
-        ghostty_string_free(value);
+        roastty_string_free(value);
     }
 
     #[test]
     fn allocated_non_sentinel_string_can_be_freed() {
-        let value = ghostty_config_open_path();
+        let value = roastty_config_open_path();
         assert!(!value.ptr.is_null());
         assert_eq!(value.len, "roastty-config".len());
         assert!(!value.sentinel);
-        ghostty_string_free(value);
+        roastty_string_free(value);
     }
 
     #[test]
     fn allocated_sentinel_string_can_be_freed() {
-        let config = ghostty_config_new();
-        let runtime = GhosttyRuntimeConfig {
+        let config = roastty_config_new();
+        let runtime = RoasttyRuntimeConfig {
             userdata: ptr::null_mut(),
             supports_selection_clipboard: false,
             wakeup_cb: None,
@@ -573,18 +573,18 @@ mod tests {
             write_clipboard_cb: None,
             close_surface_cb: None,
         };
-        let app = ghostty_app_new(&runtime, config);
-        let surface_config = ghostty_surface_config_new();
-        let surface = ghostty_surface_new(app, &surface_config);
+        let app = roastty_app_new(&runtime, config);
+        let surface_config = roastty_surface_config_new();
+        let surface = roastty_surface_new(app, &surface_config);
 
-        let value = ghostty_surface_tty_name(surface);
+        let value = roastty_surface_tty_name(surface);
         assert!(!value.ptr.is_null());
         assert_eq!(value.len, "roastty-skeleton-tty".len());
         assert!(value.sentinel);
-        ghostty_string_free(value);
+        roastty_string_free(value);
 
-        ghostty_surface_free(surface);
-        ghostty_app_free(app);
-        ghostty_config_free(config);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
     }
 }

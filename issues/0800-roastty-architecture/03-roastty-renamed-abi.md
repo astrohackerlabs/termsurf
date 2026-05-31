@@ -272,3 +272,151 @@ Final review:
 Codex confirmed the contradiction is resolved and found no remaining blockers.
 Experiment 3 is approved for implementation after this reviewed plan is
 committed as its own plan commit.
+
+## Result
+
+**Result:** Pass
+
+Replaced the failed `ghostty_*` compatibility ABI with a Roastty-owned
+`roastty_*` lifecycle ABI.
+
+Changes made:
+
+- Renamed the Roastty-owned exported functions from `ghostty_*` to `roastty_*`.
+- Renamed Rust C-facing types from `Ghostty...` to `Roastty...`.
+- Added `roastty/include/roastty.h` as the public scoped Roastty lifecycle
+  header.
+- Updated the external C harness to include `roastty.h` and call only
+  `roastty_*` symbols.
+- Updated the Rust harness wrapper to include from `roastty/include` instead of
+  the vendored upstream header directory.
+- Rewrote `roastty/ABI_INVENTORY.md` as an upstream-reference-to-Roastty mapping
+  so upstream names are citations only and implemented ABI names are Roastty
+  names.
+- Kept the implementation inert: no terminal emulation, PTY IO, rendering,
+  fonts, config semantics, Swift app integration, or browser-overlay behavior.
+- Did not modify Wezboard.
+- Did not modify the vendored upstream checkout.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/tests/abi_harness.rs
+prettier --write --prose-wrap always --print-width 80 \
+  roastty/ABI_INVENTORY.md \
+  issues/0800-roastty-architecture/03-roastty-renamed-abi.md
+cargo test -p roastty
+cargo build -p roastty
+cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | "\(.name) \(.manifest_path)"'
+nm -gU target/debug/libroastty.dylib | rg 'roastty_'
+! nm -gU target/debug/libroastty.dylib | rg 'ghostty_'
+for sym in \
+  roastty_init \
+  roastty_info \
+  roastty_string_free \
+  roastty_config_new \
+  roastty_config_free \
+  roastty_config_clone \
+  roastty_config_load_cli_args \
+  roastty_config_load_file \
+  roastty_config_load_default_files \
+  roastty_config_load_recursive_files \
+  roastty_config_finalize \
+  roastty_config_diagnostics_count \
+  roastty_config_get_diagnostic \
+  roastty_config_open_path \
+  roastty_app_new \
+  roastty_app_free \
+  roastty_app_tick \
+  roastty_app_userdata \
+  roastty_app_set_focus \
+  roastty_app_update_config \
+  roastty_app_needs_confirm_quit \
+  roastty_app_has_global_keybinds \
+  roastty_app_set_color_scheme \
+  roastty_surface_config_new \
+  roastty_surface_new \
+  roastty_surface_free \
+  roastty_surface_userdata \
+  roastty_surface_app \
+  roastty_surface_update_config \
+  roastty_surface_needs_confirm_quit \
+  roastty_surface_process_exited \
+  roastty_surface_set_content_scale \
+  roastty_surface_set_focus \
+  roastty_surface_set_occlusion \
+  roastty_surface_set_size \
+  roastty_surface_size \
+  roastty_surface_foreground_pid \
+  roastty_surface_tty_name \
+  roastty_surface_set_color_scheme \
+  roastty_surface_request_close
+do
+  nm -gU target/debug/libroastty.dylib | rg "_${sym}$"
+done
+! rg -n -i 'ghostty' roastty -g '!ABI_INVENTORY.md'
+rg -n '#include "roastty.h"|#include "roastty/include/roastty.h"' \
+  roastty/tests/abi_harness.c
+! rg -n '#include "ghostty.h"|vendor/ghostty/include/ghostty.h' \
+  roastty/tests roastty/include
+cargo check -p webtui
+cargo check -p roamium
+./scripts/build.sh webtui
+./scripts/build.sh roamium
+git status --short
+```
+
+All verification commands passed.
+
+The metadata check listed exactly the top-level TermSurf-owned workspace
+members:
+
+```text
+webtui /Users/ryan/dev/termsurf/webtui/Cargo.toml
+roamium /Users/ryan/dev/termsurf/roamium/Cargo.toml
+roastty /Users/ryan/dev/termsurf/roastty/Cargo.toml
+```
+
+The complete symbol loop found every scoped `roastty_*` export. The negative
+symbol check found no `ghostty_*` exports. The case-insensitive source scan
+found no forbidden upstream-name references in Roastty-owned code outside
+`roastty/ABI_INVENTORY.md`.
+
+The only expected uncommitted files after implementation were:
+
+```text
+M issues/0800-roastty-architecture/README.md
+M issues/0800-roastty-architecture/03-roastty-renamed-abi.md
+M roastty/ABI_INVENTORY.md
+M roastty/src/lib.rs
+M roastty/tests/abi_harness.c
+M roastty/tests/abi_harness.rs
+?? roastty/include/
+```
+
+## AI Completion Review
+
+- `logs/codex-review/20260531-075759-117272-last-message.md`
+- Result: **Pass**
+
+Codex found no blocking implementation findings. It confirmed the implementation
+satisfies Experiment 3 and the Issue 800 naming policy: Roastty-owned code uses
+`roastty` / `Roastty` names, the C harness includes `roastty.h`, no `ghostty_*`
+symbols are exported, and the forbidden-name scan found no disallowed
+upstream-name references outside `roastty/ABI_INVENTORY.md`.
+
+The only commit-readiness items were to record this completion review and ensure
+the new public header is included in the result commit.
+
+## Conclusion
+
+Roastty now has the correct first ABI skeleton: a Rust-built `libroastty` with
+Roastty-owned `roastty_*` public symbols, a Roastty-owned public C header, and
+an external C harness that proves the lifecycle ABI without relying on upstream
+compatibility names.
+
+The next experiment can move past naming repair and start adding the next
+behavioral layer. The likely next target is config and lifecycle behavior:
+implement a small, tested subset of config lookup/defaults and app/surface
+lifecycle semantics behind the renamed Roastty ABI, still without terminal
+emulation, PTY IO, rendering, fonts, Swift app integration, or browser features.
