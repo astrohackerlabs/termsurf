@@ -215,3 +215,93 @@ The experiment fails if:
 This experiment design must be reviewed by Codex before implementation. Any real
 design issues must be fixed before committing the plan or implementing the
 slice.
+
+## Result
+
+**Result:** Pass
+
+Experiment 17 added the plain-row fast path for upstream `Page.cloneFrom` under
+the deliberately scoped internal method:
+
+- `Page::clone_plain_rows_from`
+- `Page::clone_plain_row_from`
+
+The method copies rows from `other[y_start..y_end]` into destination rows
+starting at `0`, preserves each destination row's cell offset, copies only the
+overlapping cell range, truncates wider source rows to the destination width,
+and leaves destination rows outside the copied range unchanged.
+
+The method is not named `clone_from` yet. That name remains reserved for the
+later full Ghostty behavior that migrates managed memory.
+
+### Upstream Tests Ported
+
+The three upstream plain `cloneFrom` tests were ported:
+
+- `Page cloneFrom` -> `page_clone_from_plain_rows`
+- `Page cloneFrom shrink columns` -> `page_clone_from_plain_rows_shrink_columns`
+- `Page cloneFrom partial` -> `page_clone_from_plain_rows_partial`
+
+The tests verify full-row copy, source/destination independence after source
+mutation, narrower destination truncation, and partial row-range copy.
+
+### Extra Roastty Checks
+
+The experiment added a Roastty-specific test for Ghostty's observed
+source-narrower-than-destination behavior:
+
+- trailing destination cells past the copied range are preserved, not zeroed;
+- the copied trailing spacer-head cell is cleared back to narrow.
+
+This follows the actual upstream `clonePartialRowFrom` implementation. Ghostty's
+comment above `cloneFrom` says extra destination columns are zeroed, but the
+code does not do that. The design and implementation follow the code.
+
+The experiment also added temporary managed-memory guards. Until later
+experiments implement style, grapheme, and hyperlink migration for row copy, the
+plain-row API rejects:
+
+- source rows with `Row::styled`, `Row::grapheme`, or `Row::hyperlink`;
+- destination rows with those managed-memory flags;
+- copied source cells with grapheme, style, or hyperlink markers;
+- copied destination cells with those markers.
+
+These guards are unconditional, not debug-only.
+
+### Style Initialization Bug Found
+
+The new managed-memory cell guard exposed a real bug from the prior Page style
+wiring: `Page::init` initialized `style::Set` through an `OffsetBuf`, but
+`RefCountedSet` treats its base argument as an address and `OffsetBuf`'s
+`BaseAddress` implementation returns the underlying base pointer without the
+offset. That caused style-set initialization to write at the start of Page
+memory instead of the style region, corrupting cells.
+
+This experiment fixed the initialization by passing the actual style-region
+pointer (`memory + layout.styles_start`) to `style::Set::init`. Existing style
+lookup/use paths already used the style-region pointer, so this makes
+initialization match the rest of the style-set API.
+
+### Verification
+
+Commands run:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo test -p roastty terminal::page`: 58 passed.
+- `cargo test -p roastty`: 167 Rust unit tests passed, ABI harness passed, doc
+  tests passed.
+
+## Conclusion
+
+Roastty now has the plain-row foundation of Ghostty's `Page.cloneFrom`. The
+slice intentionally stops before full managed-memory row copy. The next Page
+clone experiment should replace the temporary guards one managed-memory class at
+a time, likely starting with grapheme or style migration before hyperlinks,
+because hyperlink storage is not implemented yet.

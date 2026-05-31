@@ -298,6 +298,14 @@ pub(super) enum GraphemeError {
     GraphemeAllocOutOfMemory,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CloneFromError {
+    SourceRowManagedMemory,
+    DestinationRowManagedMemory,
+    SourceCellManagedMemory,
+    DestinationCellManagedMemory,
+}
+
 impl Page {
     pub(super) fn init(capacity: Capacity) -> Result<Self, PageAllocError> {
         let layout = page_layout(capacity);
@@ -308,7 +316,10 @@ impl Page {
         let rows = buf.member::<Row>(layout.rows_start);
         let cells = buf.member::<Cell>(layout.cells_start);
         let styles = style::Set::init(
-            super::size::OffsetBuf::init_offset(memory.as_mut_ptr(), layout.styles_start),
+            unsafe {
+                // Safety: styles_start is inside this page's live backing memory.
+                memory.as_mut_ptr().add(layout.styles_start)
+            },
             layout.styles_layout.into(),
         );
         let grapheme_alloc = unsafe {
@@ -413,6 +424,87 @@ impl Page {
             grapheme_alloc: self.grapheme_alloc,
             grapheme_map: self.grapheme_map,
         })
+    }
+
+    fn clone_plain_rows_from(
+        &mut self,
+        other: &Page,
+        y_start: usize,
+        y_end: usize,
+    ) -> Result<(), CloneFromError> {
+        assert!(y_start <= y_end);
+        assert!(y_end <= other.size.rows as usize);
+        assert!(y_end - y_start <= self.size.rows as usize);
+
+        for (dst_y, src_y) in (y_start..y_end).enumerate() {
+            self.clone_plain_row_from(other, dst_y, src_y)?;
+        }
+
+        Ok(())
+    }
+
+    fn clone_plain_row_from(
+        &mut self,
+        other: &Page,
+        dst_y: usize,
+        src_y: usize,
+    ) -> Result<(), CloneFromError> {
+        let src_row = *other.get_row(src_y);
+        let dst_row = *self.get_row(dst_y);
+        if src_row.managed_memory() {
+            return Err(CloneFromError::SourceRowManagedMemory);
+        }
+        if dst_row.managed_memory() {
+            return Err(CloneFromError::DestinationRowManagedMemory);
+        }
+
+        let copy_len = (self.size.cols as usize).min(other.size.cols as usize);
+        {
+            let src_cells = other.get_cells(other.get_row(src_y));
+            if src_cells[..copy_len]
+                .iter()
+                .any(|cell| cell.managed_memory())
+            {
+                return Err(CloneFromError::SourceCellManagedMemory);
+            }
+        }
+        {
+            let dst_cells = self.get_cells(self.get_row(dst_y));
+            if dst_cells[..copy_len]
+                .iter()
+                .any(|cell| cell.managed_memory())
+            {
+                return Err(CloneFromError::DestinationCellManagedMemory);
+            }
+        }
+
+        let mut row_copy = src_row;
+        row_copy.set_cells(dst_row.cells());
+
+        if copy_len < self.size.cols as usize {
+            row_copy.set_wrap(dst_row.wrap());
+            row_copy.set_wrap_continuation(dst_row.wrap_continuation());
+            row_copy.set_grapheme(dst_row.grapheme());
+            row_copy.set_hyperlink(dst_row.hyperlink());
+            row_copy.set_styled(dst_row.styled());
+            row_copy.set_dirty(src_row.dirty() || dst_row.dirty());
+        }
+
+        *self.get_row_mut(dst_y) = row_copy;
+
+        let should_clear_spacer_head = self.size.cols > other.size.cols && copy_len > 0;
+        let src_cells = other.get_cells(other.get_row(src_y));
+        let cells = self.get_cells_mut(dst_y);
+        cells[..copy_len].copy_from_slice(&src_cells[..copy_len]);
+
+        if should_clear_spacer_head {
+            let last = &mut cells[copy_len - 1];
+            if last.wide() == Wide::SpacerHead {
+                last.set_wide(Wide::Narrow);
+            }
+        }
+
+        Ok(())
     }
 
     pub(super) fn get_row(&self, y: usize) -> &Row {
@@ -1406,6 +1498,10 @@ impl Cell {
         matches!(self.content_tag(), ContentTag::CodepointGrapheme)
     }
 
+    const fn managed_memory(self) -> bool {
+        self.has_grapheme() || self.has_styling() || self.hyperlink()
+    }
+
     pub(super) fn has_text_any(cells: &[Cell]) -> bool {
         cells.iter().any(|cell| cell.has_text())
     }
@@ -2163,6 +2259,181 @@ mod tests {
 
         assert_eq!(page.lookup_grapheme_at(0, 0), Some(vec![0x0301]));
         assert!(page.cell_copy_at(0, 0).has_grapheme());
+    }
+
+    #[test]
+    fn page_clone_from_plain_rows() {
+        let mut page = Page::init(Capacity {
+            cols: 10,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        for y in 0..page.capacity.rows as usize {
+            *page.get_row_and_cell_mut(1, y).cell = Cell::init(y as u32);
+        }
+
+        let mut page2 = Page::init(Capacity {
+            cols: 10,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        page2
+            .clone_plain_rows_from(&page, 0, page.size.rows as usize)
+            .unwrap();
+
+        for y in 0..page2.capacity.rows as usize {
+            assert_eq!(page2.get_cells(page2.get_row(y))[1].codepoint(), y as u32);
+        }
+
+        for y in 0..page.capacity.rows as usize {
+            *page.get_row_and_cell_mut(1, y).cell = Cell::init(0);
+        }
+
+        for y in 0..page2.capacity.rows as usize {
+            assert_eq!(page2.get_cells(page2.get_row(y))[1].codepoint(), y as u32);
+        }
+        for y in 0..page.capacity.rows as usize {
+            assert_eq!(page.get_cells(page.get_row(y))[1].codepoint(), 0);
+        }
+    }
+
+    #[test]
+    fn page_clone_from_plain_rows_shrink_columns() {
+        let mut page = Page::init(Capacity {
+            cols: 10,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        for y in 0..page.capacity.rows as usize {
+            *page.get_row_and_cell_mut(1, y).cell = Cell::init(y as u32);
+        }
+
+        let mut page2 = Page::init(Capacity {
+            cols: 5,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(5, 10)
+        })
+        .unwrap();
+        page2
+            .clone_plain_rows_from(&page, 0, page.size.rows as usize)
+            .unwrap();
+        assert_eq!(page2.size.cols, 5);
+
+        for y in 0..page2.capacity.rows as usize {
+            assert_eq!(page2.get_cells(page2.get_row(y))[1].codepoint(), y as u32);
+        }
+    }
+
+    #[test]
+    fn page_clone_from_plain_rows_partial() {
+        let mut page = Page::init(Capacity {
+            cols: 10,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        for y in 0..page.capacity.rows as usize {
+            *page.get_row_and_cell_mut(1, y).cell = Cell::init(y as u32);
+        }
+
+        let mut page2 = Page::init(Capacity {
+            cols: 10,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        page2.clone_plain_rows_from(&page, 0, 5).unwrap();
+
+        for y in 0..5 {
+            assert_eq!(page2.get_cells(page2.get_row(y))[1].codepoint(), y as u32);
+        }
+        for y in 5..page2.size.rows as usize {
+            assert_eq!(page2.get_cells(page2.get_row(y))[1].codepoint(), 0);
+        }
+    }
+
+    #[test]
+    fn page_clone_from_plain_rows_preserves_trailing_destination_cells() {
+        let mut page = Page::init(Capacity::new(3, 1)).unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('a' as u32);
+        *page.get_row_and_cell_mut(1, 0).cell = Cell::init('b' as u32);
+        let mut spacer_head = Cell::init('c' as u32);
+        spacer_head.set_wide(Wide::SpacerHead);
+        *page.get_row_and_cell_mut(2, 0).cell = spacer_head;
+
+        let mut page2 = Page::init(Capacity::new(5, 1)).unwrap();
+        *page2.get_row_and_cell_mut(3, 0).cell = Cell::init('x' as u32);
+        *page2.get_row_and_cell_mut(4, 0).cell = Cell::init('y' as u32);
+
+        page2.clone_plain_rows_from(&page, 0, 1).unwrap();
+        let cells = page2.get_cells(page2.get_row(0));
+        assert_eq!(cells[0].codepoint(), 'a' as u32);
+        assert_eq!(cells[1].codepoint(), 'b' as u32);
+        assert_eq!(cells[2].codepoint(), 'c' as u32);
+        assert_eq!(cells[2].wide(), Wide::Narrow);
+        assert_eq!(cells[3].codepoint(), 'x' as u32);
+        assert_eq!(cells[4].codepoint(), 'y' as u32);
+    }
+
+    #[test]
+    fn page_clone_from_plain_rows_rejects_managed_rows_and_cells() {
+        let mut source = Page::init(Capacity {
+            cols: 2,
+            rows: 1,
+            styles: 8,
+            ..Capacity::new(2, 1)
+        })
+        .unwrap();
+        let mut destination = Page::init(Capacity {
+            cols: 2,
+            rows: 1,
+            styles: 8,
+            ..Capacity::new(2, 1)
+        })
+        .unwrap();
+
+        source.get_row_mut(0).set_styled(true);
+        assert_eq!(
+            destination.clone_plain_rows_from(&source, 0, 1),
+            Err(CloneFromError::SourceRowManagedMemory)
+        );
+        source.get_row_mut(0).set_styled(false);
+
+        destination.get_row_mut(0).set_grapheme(true);
+        assert_eq!(
+            destination.clone_plain_rows_from(&source, 0, 1),
+            Err(CloneFromError::DestinationRowManagedMemory)
+        );
+        destination.get_row_mut(0).set_grapheme(false);
+
+        let mut source_cell = Cell::init('s' as u32);
+        source_cell.set_style_id(1);
+        *source.get_row_and_cell_mut(0, 0).cell = source_cell;
+        assert_eq!(
+            destination.clone_plain_rows_from(&source, 0, 1),
+            Err(CloneFromError::SourceCellManagedMemory)
+        );
+        *source.get_row_and_cell_mut(0, 0).cell = Cell::init('s' as u32);
+
+        let mut destination_cell = Cell::init('d' as u32);
+        destination_cell.set_hyperlink(true);
+        *destination.get_row_and_cell_mut(0, 0).cell = destination_cell;
+        assert_eq!(
+            destination.clone_plain_rows_from(&source, 0, 1),
+            Err(CloneFromError::DestinationCellManagedMemory)
+        );
     }
 
     #[test]
