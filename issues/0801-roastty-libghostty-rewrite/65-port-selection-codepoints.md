@@ -140,3 +140,57 @@ The experiment fails if:
 - selection logic, ABI, Screen, formatter, search, renderer, parser, app, or
   unrelated terminal behavior is added prematurely;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Experiment 65 added `roastty/src/terminal/selection_codepoints.rs` and
+registered it in `roastty/src/terminal/mod.rs` using the existing internal
+module pattern.
+
+The new module contains terminal-internal constants:
+
+- `DEFAULT_WORD_BOUNDARIES`;
+- `DEFAULT_LINE_WHITESPACE`.
+
+Both constants are `pub(super)`, so future sibling terminal modules can use them
+without exposing them as crate-public API or C ABI surface. The entries are
+stored as `u32` codepoints, matching Roastty cell codepoint storage and the
+upstream `u21` table values.
+
+The tests added coverage for:
+
+- exact `DEFAULT_WORD_BOUNDARIES` contents and order;
+- exact `DEFAULT_LINE_WHITESPACE` contents and order;
+- every line-whitespace codepoint being present in the word-boundary table;
+- duplicate-free word-boundary and line-whitespace tables.
+
+Verification:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::selection_codepoints
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo fmt` passed.
+- `cargo test -p roastty terminal::selection_codepoints` passed: 4 tests, 0
+  failed.
+- `cargo test -p roastty` passed: 569 unit tests plus 1 ABI harness test, 0
+  failed.
+
+Independent result review approved the experiment with no blocking findings. The
+reviewer confirmed exact upstream parity, correct `pub(super)` visibility, no
+crate-public or ABI exposure, and no scope drift into selection logic, gestures,
+C ABI, formatter, Screen, search, renderer, parser, app, highlight, PageList,
+Page, style, or other behavior.
+
+## Conclusion
+
+Roastty now has the shared default selection codepoint tables that future word
+selection, line selection, selection gesture, and selection formatting slices
+can reuse. The next experiment can begin porting a narrow selection value-type
+slice without first inventing or duplicating these defaults.
