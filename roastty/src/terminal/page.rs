@@ -287,6 +287,7 @@ pub(super) struct Page {
     size: Size,
     capacity: Capacity,
     layout: PageLayout,
+    styles: style::Set,
     grapheme_alloc: GraphemeAlloc,
     grapheme_map: Option<offset_hash_map::OffsetHashMap<Offset<Cell>, OffsetSlice<u32>>>,
 }
@@ -306,6 +307,10 @@ impl Page {
         let buf = super::size::OffsetBuf::init(memory.as_mut_ptr());
         let rows = buf.member::<Row>(layout.rows_start);
         let cells = buf.member::<Cell>(layout.cells_start);
+        let styles = style::Set::init(
+            super::size::OffsetBuf::init_offset(memory.as_mut_ptr(), layout.styles_start),
+            layout.styles_layout.into(),
+        );
         let grapheme_alloc = unsafe {
             // Safety: PageMemory is live for the lifetime of Page, and the
             // layout range is inside the page backing allocation.
@@ -368,6 +373,7 @@ impl Page {
             },
             capacity,
             layout,
+            styles,
             grapheme_alloc,
             grapheme_map,
         })
@@ -403,6 +409,7 @@ impl Page {
             size: self.size,
             capacity: self.capacity,
             layout: self.layout,
+            styles: self.styles,
             grapheme_alloc: self.grapheme_alloc,
             grapheme_map: self.grapheme_map,
         })
@@ -579,6 +586,41 @@ impl Page {
             .unwrap_or(0)
     }
 
+    pub(super) fn add_style(
+        &mut self,
+        style: style::Style,
+    ) -> Result<style::Id, super::ref_counted_set::AddError> {
+        let base = unsafe {
+            // Safety: styles_start is inside this page's live backing memory.
+            self.memory.as_mut_ptr().add(self.layout.styles_start)
+        };
+        self.styles.add(base, style)
+    }
+
+    pub(super) fn get_style(&self, id: style::Id) -> style::Style {
+        self.styles.get(self.style_base(), id)
+    }
+
+    pub(super) fn use_style(&self, id: style::Id) {
+        self.styles.use_one(self.style_base(), id);
+    }
+
+    pub(super) fn release_style(&mut self, id: style::Id) {
+        let base = unsafe {
+            // Safety: styles_start is inside this page's live backing memory.
+            self.memory.as_mut_ptr().add(self.layout.styles_start)
+        };
+        self.styles.release(base, id);
+    }
+
+    pub(super) fn style_ref_count(&self, id: style::Id) -> style::Id {
+        self.styles.ref_count(self.style_base(), id)
+    }
+
+    pub(super) fn style_count(&self) -> usize {
+        self.styles.count()
+    }
+
     #[cfg(test)]
     fn grapheme_used_bytes(&self) -> usize {
         unsafe {
@@ -660,6 +702,14 @@ impl Page {
     ) -> Option<offset_hash_map::Map<'_, Offset<Cell>, OffsetSlice<u32>>> {
         let map = self.grapheme_map?;
         Some(map.map(self.memory.as_mut_slice()))
+    }
+
+    fn style_base(&self) -> *const u8 {
+        unsafe {
+            // Safety: styles_start is produced by Page layout and is inside
+            // this page's live backing memory.
+            self.memory.as_ptr().add(self.layout.styles_start)
+        }
     }
 
     fn cell_offset_at(&self, x: usize, y: usize) -> Offset<Cell> {
@@ -826,10 +876,10 @@ pub(super) struct StyleSetLayout {
 }
 
 impl StyleSetLayout {
-    const BASE_ALIGN: usize = 8;
+    const BASE_ALIGN: usize = style::Set::BASE_ALIGN;
 
     fn init(capacity: usize) -> Self {
-        ref_counted_set_layout(capacity, STYLE_SET_ITEM_SIZE, STYLE_SET_ITEM_ALIGN).into()
+        style::Set::layout(capacity).into()
     }
 }
 
@@ -863,6 +913,32 @@ struct RefCountedSetLayout {
 
 impl From<RefCountedSetLayout> for StyleSetLayout {
     fn from(value: RefCountedSetLayout) -> Self {
+        Self {
+            cap: value.cap,
+            table_cap: value.table_cap,
+            table_mask: value.table_mask,
+            table_start: value.table_start,
+            items_start: value.items_start,
+            total_size: value.total_size,
+        }
+    }
+}
+
+impl From<super::ref_counted_set::Layout> for StyleSetLayout {
+    fn from(value: super::ref_counted_set::Layout) -> Self {
+        Self {
+            cap: value.cap,
+            table_cap: value.table_cap,
+            table_mask: value.table_mask,
+            table_start: value.table_start,
+            items_start: value.items_start,
+            total_size: value.total_size,
+        }
+    }
+}
+
+impl From<StyleSetLayout> for super::ref_counted_set::Layout {
+    fn from(value: StyleSetLayout) -> Self {
         Self {
             cap: value.cap,
             table_cap: value.table_cap,
@@ -1927,6 +2003,132 @@ mod tests {
         assert!(page2.get_row(0).grapheme());
         assert!(page2.cell_copy_at(0, 0).has_grapheme());
         assert_eq!(page2.lookup_grapheme_at(0, 0).unwrap(), vec![0x0a, 0x0b]);
+    }
+
+    #[test]
+    fn page_clone_styles() {
+        let mut page = Page::init(Capacity {
+            cols: 10,
+            rows: 10,
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+
+        let id = page.add_style(bold).unwrap();
+        for x in 0..page.size.cols as usize {
+            let rac = page.get_row_and_cell_mut(x, 0);
+            rac.row.set_styled(true);
+            let mut cell = Cell::init((x + 1) as u32);
+            cell.set_style_id(id);
+            *rac.cell = cell;
+            page.use_style(id);
+        }
+        let expected_ref_count = page.size.cols + 1;
+
+        let page2 = page.clone_page().unwrap();
+        assert_eq!(page2.capacity, page.capacity);
+        assert_ne!(page2.backing_ptr(), page.backing_ptr());
+        assert_eq!(page2.style_count(), 1);
+
+        let cloned_id = page2.cell_copy_at(0, 0).style_id();
+        assert_eq!(cloned_id, id);
+        for x in 0..page2.size.cols as usize {
+            let row = page2.get_row(0);
+            let cell = page2.get_cells(row)[x];
+            assert!(row.styled());
+            assert_eq!(cell.codepoint(), (x + 1) as u32);
+            assert_eq!(cell.style_id(), cloned_id);
+        }
+        assert_eq!(page2.get_style(cloned_id), bold);
+        assert_eq!(page2.style_ref_count(cloned_id), expected_ref_count);
+    }
+
+    #[test]
+    fn page_clone_styles_survive_source_release_and_drop() {
+        let (page2, id, expected_ref_count, bold) = {
+            let mut page = Page::init(Capacity {
+                cols: 5,
+                rows: 5,
+                styles: 8,
+                ..Capacity::new(5, 5)
+            })
+            .unwrap();
+            let bold = style::Style {
+                flags: style::Flags {
+                    bold: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            };
+            let italic = style::Style {
+                flags: style::Flags {
+                    italic: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            };
+
+            let id = page.add_style(bold).unwrap();
+            for x in 0..page.size.cols as usize {
+                let rac = page.get_row_and_cell_mut(x, 0);
+                rac.row.set_styled(true);
+                let mut cell = Cell::init((x + 1) as u32);
+                cell.set_style_id(id);
+                *rac.cell = cell;
+                page.use_style(id);
+            }
+            let expected_ref_count = page.size.cols + 1;
+
+            let page2 = page.clone_page().unwrap();
+            for _ in 0..expected_ref_count {
+                page.release_style(id);
+            }
+            assert_eq!(page.style_ref_count(id), 0);
+            assert_eq!(page.style_count(), 0);
+            let replacement = page.add_style(italic).unwrap();
+            assert_eq!(page.get_style(replacement), italic);
+
+            (page2, id, expected_ref_count, bold)
+        };
+
+        assert_eq!(page2.get_style(id), bold);
+        assert_eq!(page2.style_ref_count(id), expected_ref_count);
+        assert_eq!(page2.cell_copy_at(0, 0).style_id(), id);
+        assert!(page2.get_row(0).styled());
+    }
+
+    #[test]
+    fn page_zero_capacity_style_insert_fails() {
+        let mut page = Page::init(Capacity::with_metadata(
+            5,
+            5,
+            0,
+            HYPERLINK_BYTES_DEFAULT,
+            GRAPHEME_BYTES_DEFAULT,
+            STRING_BYTES_DEFAULT,
+        ))
+        .unwrap();
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+
+        assert_eq!(
+            page.add_style(bold),
+            Err(super::super::ref_counted_set::AddError::OutOfMemory)
+        );
+        assert_eq!(page.style_count(), 0);
     }
 
     #[test]

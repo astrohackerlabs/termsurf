@@ -173,3 +173,115 @@ The experiment fails if:
 This experiment design must be reviewed by Codex before implementation. Any real
 design issues must be fixed before committing the plan or implementing the
 slice.
+
+## Result
+
+**Result:** Pass
+
+Experiment 16 wired the real `style::Set` from Experiment 15 into `Page` and
+ported the first style-backed Page behavior, `Page clone styles`.
+
+### Page Fields and API
+
+`Page` now owns:
+
+- `styles: style::Set`
+
+`Page::init` initializes that set from the existing style region in Page backing
+memory:
+
+- `layout.styles_start`
+- `layout.styles_layout`
+
+The Page wrappers added for tests and future internal Page style behavior are:
+
+- `Page::add_style`
+- `Page::get_style`
+- `Page::use_style`
+- `Page::release_style`
+- `Page::style_ref_count`
+- `Page::style_count`
+
+These wrappers remain internal to `terminal::page`. The experiment did not add a
+general `setStyle` API.
+
+### Layout
+
+`StyleSetLayout::init` now delegates to `style::Set::layout`, and
+`StyleSetLayout::BASE_ALIGN` uses `style::Set::BASE_ALIGN`.
+
+The style layout remains byte-for-byte compatible with the existing Page layout
+tests. No Page layout numeric tests changed.
+
+### Clone Strategy
+
+`Page::clone_page` continues to use whole-page byte-copy:
+
+1. allocate fresh `PageMemory`;
+2. copy the source page backing bytes;
+3. copy offset-backed metadata fields by value, including `styles`.
+
+The copied `style::Set` carries only offset/layout/value metadata. It does not
+store a base pointer into the source page, so style lookups on the clone use the
+clone's style-region base pointer.
+
+Style IDs are not rewritten.
+
+### Tests Ported
+
+The upstream test ported is:
+
+- `Page clone styles`
+
+Additional Roastty checks cover:
+
+- source and clone have different backing pointers;
+- cloned style IDs are unchanged;
+- cloned style ref count is `1 + styled_cell_count`, matching upstream's
+  add-reference plus explicit cell uses;
+- releasing all source style references after clone does not affect the clone;
+- adding another style to the source after release does not affect the clone;
+- dropping the source before reading the clone leaves clone style data readable;
+- zero-style-capacity pages still initialize `style::Set`, and style insertion
+  fails with `OutOfMemory` rather than using a heap fallback.
+
+### Deferred
+
+This experiment intentionally did not add:
+
+- Page `setStyle`;
+- Page `clearCells` style release behavior;
+- Page `moveCells` style behavior;
+- Page `verifyIntegrity styles ...`;
+- Page `exactRowCapacity styles ...`;
+- `cloneFrom`;
+- `cloneRowFrom`;
+- hyperlink behavior.
+
+### Verification
+
+The required verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page
+cargo test -p roastty terminal::style
+cargo test -p roastty
+```
+
+Observed results:
+
+- `terminal::page`: 53 passed
+- `terminal::style`: 21 passed
+- full `roastty` suite: 162 Rust unit tests passed, C ABI harness passed, doc
+  tests passed
+
+## Conclusion
+
+Roastty Page storage now includes real style metadata and whole-page clone
+preserves it through the same byte-copy/offset-copy invariant used for rows,
+cells, and graphemes.
+
+The next Page style work can move to a distinct operation such as style-aware
+`cloneFrom`, style clearing/release behavior, style integrity checks, or
+`exactRowCapacity styles`; it should remain one focused experiment.
