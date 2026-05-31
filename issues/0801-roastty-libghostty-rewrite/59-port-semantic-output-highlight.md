@@ -155,3 +155,66 @@ The experiment fails if:
 - the implementation expands into renderer highlights, search selection, diagram
   output, parser, renderer, app, ABI, resize/reflow, selection, or search work;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Experiment 59 ported the upstream `SemanticContent::Output` branch as a private
+`PageList::highlight_semantic_output` helper. The helper uses the same
+prompt-zone end calculation as the prompt and input branches, scans from the
+caller-provided `Pin`, skips prompt/input while finding the start, skips
+textless default-output cells, starts at the first text-bearing output cell,
+stops before prompt/input after output begins, and advances `end` only on
+text-bearing output cells.
+
+The implementation preserves upstream's important empty-cell behavior:
+default-empty cells may have `SemanticContent::Output`, but they are not real
+command output. Empty output cells before the first text-bearing output are not
+selected, and empty output cells inside an output range do not advance `end` or
+split the returned contiguous start/end range.
+
+The implementation deliberately remains narrow: renderer highlight
+flattening/tracking, search selection, diagrams, parser behavior, renderer
+delivery, app behavior, public ABI, resize/reflow, selection, and search work
+are still deferred.
+
+Tests added:
+
+- basic single-row output highlighting;
+- multiline output highlighting;
+- output stops at the next prompt;
+- output with no following prompt scans to the bottom prompt zone;
+- no text-bearing output returns `None`;
+- empty default-output cells before output are skipped;
+- empty output cells inside the returned range do not advance `end`;
+- nonzero `at.x` starts scanning from the provided pin;
+- cross-page output-zone highlighting;
+- returned highlight pins are untracked.
+
+Verification:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo test -p roastty terminal::page_list`: 260 passed, 0 failed.
+- `cargo test -p roastty`: 541 unit tests passed, ABI harness 1 passed,
+  doctests 0.
+
+Independent result review approved the experiment as Pass with no required
+findings. The reviewer confirmed that the implementation matches upstream's
+two-phase output branch, uses `Cell::has_text` for the text-bearing distinction,
+covers the required cases, and does not expand beyond the intended scope.
+
+## Conclusion
+
+Roastty now has private PageList helpers for all three upstream semantic
+highlight branches: prompt, input, and output. The next experiment should decide
+how to expose or compose these branches within the remaining highlight pipeline
+without jumping ahead into renderer/app-visible behavior before the required
+intermediate structures are ready.
