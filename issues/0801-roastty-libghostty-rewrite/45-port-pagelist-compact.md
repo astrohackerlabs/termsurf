@@ -156,3 +156,55 @@ The experiment fails if:
 - no-op compaction mutates the PageList;
 - the implementation expands into unrelated PageList operations;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Implemented `PageList::compact` in `roastty/src/terminal/page_list.rs`.
+Compaction now:
+
+- returns `Ok(None)` for standard-size pages and for oversized pages where exact
+  capacity does not save memory;
+- computes exact live-row capacity with `Page::exact_row_capacity`;
+- allocates a replacement page, preserves rows, columns, cells, styles,
+  graphemes, hyperlinks, page-level dirty state, and row-level dirty state;
+- replaces the old node in place when compaction succeeds;
+- remaps tracked pins and `viewport_pin` from the old node to the replacement
+  node;
+- preserves page order and `page_size` accounting; and
+- verifies PageList integrity after successful replacement.
+
+The tests added coverage for standard no-op compaction, oversized compaction,
+managed-memory exactness, viewport remapping, insufficient-savings safety, and
+multi-page page-order preservation.
+
+Verification:
+
+```bash
+cargo fmt && cargo test -p roastty terminal::page_list
+```
+
+Result: 129 PageList tests passed.
+
+```bash
+cargo test -p roastty
+```
+
+Result: 410 unit tests passed, plus the ABI harness passed.
+
+Independent result review: Codex reviewer approved recording Experiment 45 as
+Pass with no findings. The reviewer specifically confirmed that the earlier
+multi-page page-order test gap is covered by
+`page_list_compact_multi_page_preserves_order`.
+
+## Conclusion
+
+PageList compaction is now ported for the currently implemented PageList
+surface. The implementation follows the same replacement-node pattern as
+capacity growth while shrinking oversized backing storage to exact live-row
+capacity and preserving externally tracked pointers through remapping.
+
+The next experiment should continue with the next upstream PageList operation in
+source order, keeping the same design-review, implementation, verification, and
+result-review cadence.

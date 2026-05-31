@@ -1261,6 +1261,68 @@ impl PageList {
         Ok(replacement_ptr)
     }
 
+    fn compact(&mut self, target: NonNull<Node>) -> Result<Option<NonNull<Node>>, PageAllocError> {
+        let Some(index) = self.node_index(target) else {
+            return Ok(None);
+        };
+
+        let old_backing_len = self.pages[index].page.backing_len();
+        if old_backing_len <= standard_page_size() {
+            return Ok(None);
+        }
+
+        let old_rows = self.pages[index].page.size_rows();
+        let old_cols = self.pages[index].page.size_cols();
+        let old_dirty = self.pages[index].page.is_dirty();
+        let required_capacity = self.pages[index]
+            .page
+            .exact_row_capacity(0, old_rows as usize);
+        let new_size = page_layout(required_capacity).total_size();
+        if new_size >= old_backing_len {
+            return Ok(None);
+        }
+
+        let page_size_before = self.page_size;
+        let page_serial_before = self.page_serial;
+        let mut replacement = self.create_page(required_capacity)?;
+        replacement.page.set_size_rows(old_rows);
+        replacement.page.set_size_cols(old_cols);
+        if replacement
+            .page
+            .clone_rows_from(&self.pages[index].page, 0, old_rows as usize)
+            .is_err()
+        {
+            self.page_size = page_size_before;
+            self.page_serial = page_serial_before;
+            return Ok(None);
+        }
+        replacement.page.set_dirty(old_dirty);
+
+        let replacement_ptr = NonNull::from(replacement.as_ref());
+        self.pages.insert(index, replacement);
+        let old = self.pages.remove(index + 1);
+        self.page_size -= old_backing_len;
+        drop(old);
+
+        for tracked in &mut self.tracked_pins {
+            let pin = unsafe {
+                // Safety: tracked pins are owned by this PageList and remain
+                // allocated while we update their target node.
+                tracked.as_mut()
+            };
+            if pin.node == target {
+                pin.node = replacement_ptr;
+            }
+        }
+        if self.viewport_pin.node == target {
+            self.viewport_pin.node = replacement_ptr;
+        }
+
+        self.verify_integrity()
+            .expect("compact result must preserve PageList integrity");
+        Ok(Some(replacement_ptr))
+    }
+
     fn grow(&mut self) -> Result<Option<NonNull<Node>>, GrowError> {
         let last = self
             .pages
@@ -1554,6 +1616,16 @@ mod tests {
         list.pages[0].page = page;
         list.page_size = list.page_size - old_len + list.pages[0].page.backing_len();
         list.verify_integrity().unwrap();
+    }
+
+    fn make_first_page_oversized(list: &mut PageList) -> NonNull<Node> {
+        let mut node = list.first_node_ptr();
+        while list.node_for_ptr(node).unwrap().page.backing_len() <= standard_page_size() {
+            node = list
+                .increase_capacity(node, Some(IncreaseCapacity::GraphemeBytes))
+                .unwrap();
+        }
+        node
     }
 
     #[test]
@@ -1939,6 +2011,176 @@ mod tests {
         assert!(!page.get_row(1).dirty());
         assert!(page.get_row(2).dirty());
         assert!(!page.get_row(3).dirty());
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_compact_standard_page_returns_none() {
+        let mut list = PageList::init(80, 24, Some(0)).unwrap();
+        let node = list.first_node_ptr();
+        let page_size = list.page_size;
+        let page_serial = list.page_serial;
+        let node_serial = list.pages[0].serial;
+
+        let result = list.compact(node).unwrap();
+
+        assert_eq!(result, None);
+        assert_eq!(list.first_node_ptr(), node);
+        assert_eq!(list.pages[0].serial, node_serial);
+        assert_eq!(list.page_size, page_size);
+        assert_eq!(list.page_serial, page_serial);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_compact_oversized_page() {
+        let mut list = PageList::init(80, 24, Some(0)).unwrap();
+        let node = make_first_page_oversized(&mut list);
+        fill_visible_cells(&mut list.pages[0].page, 80, 24);
+        list.pages[0].page.set_dirty(true);
+        list.pages[0].page.get_row_mut(0).set_dirty(true);
+        list.pages[0].page.get_row_mut(2).set_dirty(true);
+        let tracked = list
+            .track_pin(Pin {
+                node,
+                x: 5,
+                y: 10,
+                garbage: false,
+            })
+            .unwrap();
+        let oversized_len = list.pages[0].page.backing_len();
+        let page_size = list.page_size;
+
+        let compacted = list.compact(node).unwrap().unwrap();
+        let page = &list.node_for_ptr(compacted).unwrap().page;
+        let tracked_pin = unsafe {
+            // Safety: tracked remains owned by list and remains tracked.
+            tracked.as_ref()
+        };
+
+        assert!(page.backing_len() < oversized_len);
+        assert_eq!(
+            list.page_size,
+            page_size - oversized_len + page.backing_len()
+        );
+        assert_eq!(list.first_node_ptr(), compacted);
+        assert_eq!(page.size_rows(), 24);
+        assert_eq!(page.size_cols(), 80);
+        assert_visible_cells(page, 80, 24);
+        assert!(page.is_dirty());
+        assert!(page.get_row(0).dirty());
+        assert!(!page.get_row(1).dirty());
+        assert!(page.get_row(2).dirty());
+        assert!(!page.get_row(3).dirty());
+        assert_eq!(tracked_pin.node, compacted);
+        assert_eq!(tracked_pin.x, 5);
+        assert_eq!(tracked_pin.y, 10);
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_compact_preserves_managed_memory_exactly() {
+        let mut list = PageList::init(3, 2, Some(0)).unwrap();
+        let node = make_first_page_oversized(&mut list);
+        let page = &mut list.pages[0].page;
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let style_id = page.add_style(bold).unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"compact"),
+                uri: b"https://example.com/compact",
+            })
+            .unwrap();
+
+        {
+            let rac = page.get_row_and_cell_mut(0, 0);
+            rac.row.set_styled(true);
+            let mut cell = Cell::init('s' as u32);
+            cell.set_style_id(style_id);
+            *rac.cell = cell;
+        }
+        page.use_style(style_id);
+        *page.get_row_and_cell_mut(1, 0).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(1, 0, 0x0301).unwrap();
+        *page.get_row_and_cell_mut(2, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(2, 0, link_id).unwrap();
+        let exact_capacity = page.exact_row_capacity(0, page.size_rows() as usize);
+
+        let compacted = list.compact(node).unwrap().unwrap();
+        let page = &list.node_for_ptr(compacted).unwrap().page;
+        let cloned_style_id = page_cell(page, 0, 0).style_id();
+        let cloned_link_id = page.lookup_hyperlink_at(2, 0).unwrap();
+
+        assert_eq!(page.capacity(), exact_capacity);
+        assert_eq!(page.style_count(), 1);
+        assert_eq!(page.get_style(cloned_style_id), bold);
+        assert_eq!(page.lookup_grapheme_at(1, 0).unwrap(), vec![0x0301]);
+        assert_eq!(
+            page.get_hyperlink(cloned_link_id),
+            HyperlinkSnapshot {
+                id: HyperlinkSnapshotId::Explicit(b"compact".to_vec()),
+                uri: b"https://example.com/compact".to_vec(),
+            }
+        );
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_compact_remaps_viewport_pin() {
+        let mut list = PageList::init(80, 24, Some(0)).unwrap();
+        let node = make_first_page_oversized(&mut list);
+        assert_eq!(list.viewport_pin.node, node);
+
+        let compacted = list.compact(node).unwrap().unwrap();
+
+        assert_eq!(list.viewport_pin.node, compacted);
+        assert_eq!(list.tracked_pins[0], NonNull::from(&*list.viewport_pin));
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_compact_insufficient_savings_is_safe() {
+        let mut list = PageList::init(80, 24, Some(0)).unwrap();
+        let node = list
+            .increase_capacity(list.first_node_ptr(), Some(IncreaseCapacity::GraphemeBytes))
+            .unwrap();
+        let old_len = list.node_for_ptr(node).unwrap().page.backing_len();
+
+        let result = list.compact(node).unwrap();
+
+        if let Some(compacted) = result {
+            assert!(list.node_for_ptr(compacted).unwrap().page.backing_len() < old_len);
+        } else {
+            assert_eq!(list.first_node_ptr(), node);
+        }
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_compact_multi_page_preserves_order() {
+        let (mut list, _) = multi_page_list(100);
+        let first = make_first_page_oversized(&mut list);
+        let second_rows = list.pages[1].page.size_rows();
+        fill_visible_cells(&mut list.pages[1].page, list.cols, second_rows);
+        let second = NonNull::from(list.pages[1].as_ref());
+        let second_capacity = list.pages[1].page.capacity();
+        let second_backing = list.pages[1].page.backing_len();
+        let second_serial = list.pages[1].serial;
+
+        let compacted = list.compact(first).unwrap().unwrap();
+
+        assert_eq!(list.first_node_ptr(), compacted);
+        assert_eq!(NonNull::from(list.pages[1].as_ref()), second);
+        assert_eq!(list.pages[1].page.capacity(), second_capacity);
+        assert_eq!(list.pages[1].page.backing_len(), second_backing);
+        assert_eq!(list.pages[1].serial, second_serial);
+        assert_visible_cells(&list.pages[1].page, list.cols, second_rows);
         list.verify_integrity().unwrap();
     }
 
