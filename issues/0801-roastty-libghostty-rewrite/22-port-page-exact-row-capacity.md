@@ -196,3 +196,50 @@ The experiment fails if:
 This experiment design must be reviewed by Codex before implementation. Any real
 design issues must be fixed before committing the plan or implementing the
 slice.
+
+## Result
+
+**Result:** Pass
+
+Implemented `Page::exact_row_capacity(y_start, y_end)`.
+
+The new method matches upstream row-range semantics:
+
+- validates `y_start < y_end` and `y_end <= self.size.rows`;
+- preserves current Page width and selected row count;
+- counts unique non-default style IDs and converts the unique count through
+  `style::Set::capacity_for_count`;
+- sums grapheme allocator chunk bytes with
+  `GraphemeAlloc::bytes_required::<u32>`;
+- counts hyperlink cells separately from unique hyperlink IDs;
+- computes hyperlink bytes from the larger of unique hyperlink set capacity and
+  hyperlink map cell-capacity needs;
+- counts URI and explicit-ID string allocation chunks once per unique hyperlink;
+- ignores styles, graphemes, and hyperlinks outside the selected row range.
+
+Tests added cover empty rows, invalid ranges, style deduplication and
+out-of-range exclusion, grapheme chunk sizing including a multi-chunk grapheme,
+implicit and explicit hyperlink string sizing, repeated hyperlink use,
+hyperlink-map capacity for many cells sharing one hyperlink, mixed
+managed-memory rows, exact-capacity clone success, and invalid-range panics.
+
+Verification run:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo test -p roastty terminal::page`: 93 passed.
+- `cargo test -p roastty`: 202 unit tests passed, ABI harness passed, doc tests
+  passed.
+
+## Conclusion
+
+Roastty Page can now compute the exact capacity required for a selected row
+range across styles, graphemes, hyperlinks, and Page-backed strings. This
+matches the upstream sizing primitive needed before porting partial-row clone,
+page splitting, or reflow-oriented behavior.

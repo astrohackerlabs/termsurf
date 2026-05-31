@@ -476,6 +476,91 @@ impl Page {
         self.capacity
     }
 
+    fn exact_row_capacity(&self, y_start: usize, y_end: usize) -> Capacity {
+        assert!(y_start < y_end);
+        assert!(y_end <= self.size.rows as usize);
+
+        let mut ids_seen = [false; CellCountInt::MAX as usize + 1];
+        let mut style_count = 0_usize;
+        let mut grapheme_bytes = 0_usize;
+
+        for y in y_start..y_end {
+            let row = self.get_row(y);
+            for (x, cell) in self.get_cells(row).iter().enumerate() {
+                let style_id = cell.style_id();
+                if style_id != style::DEFAULT_ID && !ids_seen[style_id as usize] {
+                    ids_seen[style_id as usize] = true;
+                    style_count += 1;
+                }
+
+                if cell.has_grapheme() {
+                    let offset = self.row_cell_offset(row, x);
+                    let slice = self
+                        .grapheme_map_ref()
+                        .and_then(|map| map.get(offset))
+                        .expect("grapheme cell must have map data");
+                    grapheme_bytes += GraphemeAlloc::bytes_required::<u32>(slice.len());
+                }
+            }
+        }
+        let styles = style::Set::capacity_for_count(style_count);
+
+        ids_seen.fill(false);
+        let mut hyperlink_count = 0_usize;
+        let mut hyperlink_cells = 0_usize;
+        let mut string_bytes = 0_usize;
+
+        for y in y_start..y_end {
+            let row = self.get_row(y);
+            for (x, cell) in self.get_cells(row).iter().enumerate() {
+                if !cell.hyperlink() {
+                    continue;
+                }
+
+                hyperlink_cells += 1;
+                let offset = self.row_cell_offset(row, x);
+                let id = self
+                    .lookup_hyperlink_at_offset(offset)
+                    .expect("hyperlink cell must have map data");
+                if ids_seen[id as usize] {
+                    continue;
+                }
+                ids_seen[id as usize] = true;
+                hyperlink_count += 1;
+
+                let entry = *self.hyperlink_set.get(self.hyperlink_set_base(), id);
+                string_bytes += StringAlloc::bytes_required::<u8>(entry.uri().len());
+                if entry.id().tag() == hyperlink::PageEntryIdTag::Explicit {
+                    string_bytes +=
+                        StringAlloc::bytes_required::<u8>(entry.id().explicit_value().len());
+                }
+            }
+        }
+
+        let hyperlink_set_cap = hyperlink::Set::capacity_for_count(hyperlink_count);
+        let hyperlink_map_min = hyperlink_cells.div_ceil(HYPERLINK_CELL_MULTIPLIER);
+        let hyperlink_cap = hyperlink_set_cap.max(hyperlink_map_min);
+
+        Capacity {
+            cols: self.size.cols,
+            rows: (y_end - y_start)
+                .try_into()
+                .expect("row capacity must fit CellCountInt"),
+            styles: styles
+                .try_into()
+                .expect("style capacity must fit CellCountInt"),
+            hyperlink_bytes: (hyperlink_cap * HYPERLINK_SET_ITEM_SIZE)
+                .try_into()
+                .expect("hyperlink byte capacity must fit HyperlinkCountInt"),
+            grapheme_bytes: grapheme_bytes
+                .try_into()
+                .expect("grapheme byte capacity must fit GraphemeBytesInt"),
+            string_bytes: string_bytes
+                .try_into()
+                .expect("string byte capacity must fit StringBytesInt"),
+        }
+    }
+
     pub(super) fn clone_page(&self) -> Result<Self, PageAllocError> {
         let mut memory = PageMemory::new(self.memory.len())?;
         memory
@@ -2385,6 +2470,7 @@ const fn bits_to_rgb(bits: u64) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::sgr::Underline;
     use std::mem::{align_of, size_of};
 
     #[test]
@@ -4251,6 +4337,296 @@ mod tests {
 
         let row = page.get_row(0);
         let _ = page.get_cells(row);
+    }
+
+    #[test]
+    fn page_exact_row_capacity_empty_rows() {
+        let page = Page::init(Capacity::with_metadata(
+            10,
+            10,
+            8,
+            HYPERLINK_BYTES_DEFAULT,
+            GRAPHEME_BYTES_DEFAULT,
+            STRING_BYTES_DEFAULT,
+        ))
+        .unwrap();
+
+        let cap = page.exact_row_capacity(0, 5);
+        assert_eq!(cap.cols, 10);
+        assert_eq!(cap.rows, 5);
+        assert_eq!(cap.styles, 0);
+        assert_eq!(cap.grapheme_bytes, 0);
+        assert_eq!(cap.hyperlink_bytes, 0);
+        assert_eq!(cap.string_bytes, 0);
+    }
+
+    #[test]
+    fn page_exact_row_capacity_styles() {
+        let mut page = Page::init(Capacity::new(10, 10)).unwrap();
+        assert_eq!(page.exact_row_capacity(0, 5).styles, 0);
+
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let italic = style::Style {
+            flags: style::Flags {
+                italic: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let underline = style::Style {
+            flags: style::Flags {
+                underline: Underline::Single,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+
+        let bold_id = page.add_style(bold).unwrap();
+        let rac = page.get_row_and_cell_mut(0, 0);
+        rac.row.set_styled(true);
+        *rac.cell = Cell::init('a' as u32);
+        rac.cell.set_style_id(bold_id);
+
+        let one_style = page.exact_row_capacity(0, 5);
+        assert_eq!(
+            one_style.styles,
+            style::Set::capacity_for_count(1) as CellCountInt
+        );
+
+        let rac = page.get_row_and_cell_mut(1, 0);
+        rac.cell.set_style_id(bold_id);
+        assert_eq!(page.exact_row_capacity(0, 5).styles, one_style.styles);
+
+        let italic_id = page.add_style(italic).unwrap();
+        let rac = page.get_row_and_cell_mut(2, 0);
+        rac.cell.set_style_id(italic_id);
+        let two_styles = page.exact_row_capacity(0, 5);
+        assert_eq!(
+            two_styles.styles,
+            style::Set::capacity_for_count(2) as CellCountInt
+        );
+
+        let underline_id = page.add_style(underline).unwrap();
+        let rac = page.get_row_and_cell_mut(0, 7);
+        rac.row.set_styled(true);
+        rac.cell.set_style_id(underline_id);
+        assert_eq!(page.exact_row_capacity(0, 5).styles, two_styles.styles);
+        assert_eq!(
+            page.exact_row_capacity(0, 10).styles,
+            style::Set::capacity_for_count(3) as CellCountInt
+        );
+
+        let mut cloned = Page::init(two_styles).unwrap();
+        cloned.clone_rows_from(&page, 0, 5).unwrap();
+        assert_eq!(cloned.exact_row_capacity(0, 5), two_styles);
+    }
+
+    #[test]
+    fn page_exact_row_capacity_graphemes() {
+        let mut page = Page::init(Capacity::new(10, 10)).unwrap();
+        assert_eq!(page.exact_row_capacity(0, 5).grapheme_bytes, 0);
+
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('a' as u32);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        assert_eq!(
+            page.exact_row_capacity(0, 5).grapheme_bytes,
+            GRAPHEME_CHUNK as GraphemeBytesInt
+        );
+
+        *page.get_row_and_cell_mut(1, 0).cell = Cell::init('e' as u32);
+        page.append_grapheme_at(1, 0, 0x0300).unwrap();
+        assert_eq!(
+            page.exact_row_capacity(0, 5).grapheme_bytes,
+            (GRAPHEME_CHUNK * 2) as GraphemeBytesInt
+        );
+
+        *page.get_row_and_cell_mut(2, 0).cell = Cell::init('o' as u32);
+        for cp in [0x0301, 0x0302, 0x0303] {
+            page.append_grapheme_at(2, 0, cp).unwrap();
+        }
+        assert_eq!(
+            page.exact_row_capacity(0, 5).grapheme_bytes,
+            (GRAPHEME_CHUNK * 3) as GraphemeBytesInt
+        );
+
+        *page.get_row_and_cell_mut(0, 7).cell = Cell::init('x' as u32);
+        page.append_grapheme_at(0, 7, 0x0304).unwrap();
+        assert_eq!(
+            page.exact_row_capacity(0, 5).grapheme_bytes,
+            (GRAPHEME_CHUNK * 3) as GraphemeBytesInt
+        );
+        assert_eq!(
+            page.exact_row_capacity(0, 10).grapheme_bytes,
+            (GRAPHEME_CHUNK * 4) as GraphemeBytesInt
+        );
+
+        *page.get_row_and_cell_mut(4, 4).cell = Cell::init('z' as u32);
+        for i in 0..6 {
+            page.append_grapheme_at(4, 4, 0x0320 + i).unwrap();
+        }
+        assert_eq!(
+            page.exact_row_capacity(4, 5).grapheme_bytes,
+            (GRAPHEME_CHUNK * 2) as GraphemeBytesInt
+        );
+
+        let cap = page.exact_row_capacity(0, 5);
+        let mut cloned = Page::init(cap).unwrap();
+        cloned.clone_rows_from(&page, 0, 5).unwrap();
+        assert_eq!(cloned.exact_row_capacity(0, 5), cap);
+    }
+
+    #[test]
+    fn page_exact_row_capacity_hyperlinks() {
+        let mut page = Page::init(Capacity::with_metadata(
+            10,
+            10,
+            8,
+            (16 * HYPERLINK_SET_ITEM_SIZE) as HyperlinkCountInt,
+            GRAPHEME_BYTES_DEFAULT,
+            STRING_BYTES_DEFAULT,
+        ))
+        .unwrap();
+        let empty = page.exact_row_capacity(0, 5);
+        assert_eq!(empty.hyperlink_bytes, 0);
+        assert_eq!(empty.string_bytes, 0);
+
+        let implicit = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('a' as u32);
+        page.set_hyperlink(0, 0, implicit).unwrap();
+
+        let one_link = page.exact_row_capacity(0, 5);
+        assert_eq!(
+            one_link.hyperlink_bytes,
+            (hyperlink::Set::capacity_for_count(1) * HYPERLINK_SET_ITEM_SIZE) as HyperlinkCountInt
+        );
+        assert_eq!(one_link.string_bytes, STRING_CHUNK as StringBytesInt);
+
+        *page.get_row_and_cell_mut(1, 0).cell = Cell::init('b' as u32);
+        page.use_hyperlink(implicit);
+        page.set_hyperlink(1, 0, implicit).unwrap();
+        assert_eq!(page.exact_row_capacity(0, 5), one_link);
+
+        let explicit = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"my-link-id"),
+                uri: b"https://other.example.org/path",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(2, 0).cell = Cell::init('c' as u32);
+        page.set_hyperlink(2, 0, explicit).unwrap();
+        let two_links = page.exact_row_capacity(0, 5);
+        assert_eq!(
+            two_links.hyperlink_bytes,
+            (hyperlink::Set::capacity_for_count(2) * HYPERLINK_SET_ITEM_SIZE) as HyperlinkCountInt
+        );
+        assert_eq!(two_links.string_bytes, (STRING_CHUNK * 3) as StringBytesInt);
+
+        let outside = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(99),
+                uri: b"https://outside.example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 7).cell = Cell::init('x' as u32);
+        page.set_hyperlink(0, 7, outside).unwrap();
+        assert_eq!(page.exact_row_capacity(0, 5), two_links);
+        assert_eq!(
+            page.exact_row_capacity(0, 10).string_bytes,
+            (STRING_CHUNK * 4) as StringBytesInt
+        );
+
+        let mut cloned = Page::init(two_links).unwrap();
+        cloned.clone_rows_from(&page, 0, 5).unwrap();
+        assert_eq!(cloned.exact_row_capacity(0, 5), two_links);
+    }
+
+    #[test]
+    fn page_exact_row_capacity_hyperlink_map_for_many_cells() {
+        let cols = 50_usize;
+        let mut page = Page::init(Capacity::new(cols as CellCountInt, 2)).unwrap();
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+
+        for x in 0..cols {
+            *page.get_row_and_cell_mut(x, 0).cell = Cell::init('x' as u32);
+            if x > 0 {
+                page.use_hyperlink(id);
+            }
+            page.set_hyperlink(x, 0, id).unwrap();
+        }
+
+        let cap = page.exact_row_capacity(0, 1);
+        let min_for_map = cols.div_ceil(HYPERLINK_CELL_MULTIPLIER);
+        let min_bytes = min_for_map * HYPERLINK_SET_ITEM_SIZE;
+        assert!(cap.hyperlink_bytes as usize >= min_bytes);
+
+        let mut cloned = Page::init(cap).unwrap();
+        cloned.clone_rows_from(&page, 0, 1).unwrap();
+        assert_eq!(cloned.hyperlink_count(), cols);
+        assert_eq!(cloned.exact_row_capacity(0, 1), cap);
+    }
+
+    #[test]
+    fn page_exact_row_capacity_mixed_data_clone() {
+        let mut page = Page::init(Capacity::new(5, 3)).unwrap();
+        let style_id = page
+            .add_style(style::Style {
+                flags: style::Flags {
+                    bold: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(0, 1).cell = Cell::init('s' as u32);
+        page.get_row_and_cell_mut(0, 1).cell.set_style_id(style_id);
+        page.get_row_mut(1).set_styled(true);
+
+        *page.get_row_and_cell_mut(1, 1).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(1, 1, 0x0301).unwrap();
+
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"id"),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        *page.get_row_and_cell_mut(2, 1).cell = Cell::init('h' as u32);
+        page.set_hyperlink(2, 1, link_id).unwrap();
+
+        let cap = page.exact_row_capacity(1, 2);
+        let mut cloned = Page::init(cap).unwrap();
+        cloned.clone_rows_from(&page, 1, 2).unwrap();
+        assert_eq!(cloned.exact_row_capacity(0, 1), cap);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: y_start < y_end")]
+    fn page_exact_row_capacity_rejects_empty_range() {
+        let page = Page::init(Capacity::new(2, 2)).unwrap();
+        let _ = page.exact_row_capacity(1, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: y_end <= self.size.rows as usize")]
+    fn page_exact_row_capacity_rejects_end_out_of_bounds() {
+        let page = Page::init(Capacity::new(2, 2)).unwrap();
+        let _ = page.exact_row_capacity(0, 3);
     }
 
     #[test]
