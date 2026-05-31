@@ -170,6 +170,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 21: Port Page CloneFrom Hyperlinks](21-port-page-hyperlink-row-copy.md)
   — **Pass**
+- [Experiment 22: Port Page Exact Row Capacity](22-port-page-exact-row-capacity.md)
+  — **Designed**
 
 ## Non-Goals
 
