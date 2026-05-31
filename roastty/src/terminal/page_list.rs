@@ -1,6 +1,8 @@
 use std::ptr::NonNull;
 
-use super::page::{page_layout, Capacity, CapacityAdjustment, Page, PageAllocError, STD_CAPACITY};
+use super::page::{
+    page_layout, Capacity, CapacityAdjustment, CloneFromError, Page, PageAllocError, STD_CAPACITY,
+};
 use super::point::{self, Coordinate};
 use super::size::CellCountInt;
 
@@ -101,6 +103,57 @@ struct PageIterator<'a> {
     row: Option<Pin>,
     limit: Option<Pin>,
     direction: Direction,
+}
+
+#[derive(Debug, Default)]
+struct TrackedPinsRemap {
+    entries: Vec<(NonNull<Pin>, NonNull<Pin>)>,
+}
+
+impl TrackedPinsRemap {
+    fn insert(&mut self, old: NonNull<Pin>, new: NonNull<Pin>) {
+        self.entries.push((old, new));
+    }
+
+    fn get(&self, old: NonNull<Pin>) -> Option<NonNull<Pin>> {
+        self.entries
+            .iter()
+            .find_map(|(candidate, new)| (*candidate == old).then_some(*new))
+    }
+}
+
+#[derive(Debug)]
+struct CloneOptions<'a> {
+    top: point::Point,
+    bottom: Option<point::Point>,
+    tracked_pins: Option<&'a mut TrackedPinsRemap>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloneRegionError {
+    Empty,
+    PageAlloc,
+    CloneFrom(CloneFromError),
+}
+
+impl From<PageAllocError> for CloneRegionError {
+    fn from(_: PageAllocError) -> Self {
+        Self::PageAlloc
+    }
+}
+
+impl From<CloneFromError> for CloneRegionError {
+    fn from(err: CloneFromError) -> Self {
+        Self::CloneFrom(err)
+    }
+}
+
+impl From<GrowError> for CloneRegionError {
+    fn from(err: GrowError) -> Self {
+        match err {
+            GrowError::PageAlloc => Self::PageAlloc,
+        }
+    }
 }
 
 impl Iterator for PageIterator<'_> {
@@ -629,6 +682,113 @@ impl PageList {
         }
     }
 
+    fn clone_region(&self, mut opts: CloneOptions<'_>) -> Result<Self, CloneRegionError> {
+        let chunks = self
+            .page_iterator(Direction::RightDown, opts.top, opts.bottom)
+            .collect::<Vec<_>>();
+        if chunks.is_empty() {
+            return Err(CloneRegionError::Empty);
+        }
+
+        let mut pages = Vec::with_capacity(chunks.len());
+        let mut chunk_nodes = Vec::with_capacity(chunks.len());
+        let mut page_serial = 0_u64;
+        let mut page_size = 0_usize;
+        let mut total_rows = 0_usize;
+
+        for chunk in &chunks {
+            let source_node = self
+                .node_for_ptr(chunk.node)
+                .ok_or(CloneRegionError::Empty)?;
+            let start = chunk.start as usize;
+            let end = chunk.end as usize;
+            let capacity = source_node.page.exact_row_capacity(start, end);
+            let mut page = Page::init(capacity)?;
+            page.set_size_rows(
+                (end - start)
+                    .try_into()
+                    .expect("cloned chunk row count must fit CellCountInt"),
+            );
+            page.clone_rows_from(&source_node.page, start, end)?;
+            page.set_dirty(source_node.page.is_dirty());
+
+            page_size += page.backing_len();
+            total_rows += end - start;
+
+            let node = Box::new(Node {
+                page,
+                serial: page_serial,
+            });
+            page_serial += 1;
+            let node_ptr = NonNull::from(node.as_ref());
+            chunk_nodes.push((*chunk, node_ptr));
+            pages.push(node);
+        }
+
+        let mut viewport_pin = Box::new(Pin {
+            node: NonNull::from(pages[0].as_ref()),
+            y: 0,
+            x: 0,
+            garbage: false,
+        });
+        let mut tracked_pins = vec![NonNull::from(viewport_pin.as_mut())];
+        let mut tracked_pin_storage = Vec::new();
+
+        if let Some(remap) = &mut opts.tracked_pins {
+            for (chunk, clone_node) in &chunk_nodes {
+                for tracked in &self.tracked_pins {
+                    let pin = unsafe {
+                        // Safety: tracked pins are owned by self and are only
+                        // read while self is immutably borrowed.
+                        tracked.as_ref()
+                    };
+                    if pin.node != chunk.node || pin.y < chunk.start || pin.y >= chunk.end {
+                        continue;
+                    }
+
+                    let mut clone_pin = Box::new(Pin {
+                        node: *clone_node,
+                        y: pin.y - chunk.start,
+                        x: pin.x,
+                        garbage: pin.garbage,
+                    });
+                    let clone_pin_ptr = NonNull::from(clone_pin.as_mut());
+                    tracked_pin_storage.push(clone_pin);
+                    tracked_pins.push(clone_pin_ptr);
+                    remap.insert(*tracked, clone_pin_ptr);
+                }
+            }
+        }
+
+        let mut result = Self {
+            cols: self.cols,
+            rows: self.rows,
+            pages,
+            page_serial,
+            page_serial_min: 0,
+            page_size,
+            explicit_max_size: self.explicit_max_size,
+            min_max_size: self.min_max_size,
+            total_rows: total_rows
+                .try_into()
+                .expect("cloned total row count must fit CellCountInt"),
+            tracked_pins,
+            tracked_pin_storage,
+            viewport: Viewport::Active,
+            viewport_pin,
+            viewport_pin_row_offset: None,
+        };
+
+        while result.total_rows < result.rows {
+            result.grow()?;
+        }
+
+        result
+            .verify_integrity()
+            .expect("clone result must preserve PageList integrity");
+        Ok(result)
+    }
+
     fn track_pin(&mut self, pin: Pin) -> Option<NonNull<Pin>> {
         if !self.pin_is_valid(&pin) {
             return None;
@@ -1111,7 +1271,8 @@ fn init_pages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::page::page_layout;
+    use crate::terminal::page::{page_layout, Cell, HyperlinkSnapshot, HyperlinkSnapshotId};
+    use crate::terminal::{hyperlink, style};
 
     fn simulate_history(list: &mut PageList, total_rows: CellCountInt) {
         list.pages[0].page.set_size_rows(total_rows);
@@ -1145,6 +1306,18 @@ mod tests {
         iterator: PageIterator<'_>,
     ) -> Vec<(usize, CellCountInt, CellCountInt)> {
         iterator.map(|chunk| chunk_tuple(list, chunk)).collect()
+    }
+
+    fn clone_options(top: point::Point) -> CloneOptions<'static> {
+        CloneOptions {
+            top,
+            bottom: None,
+            tracked_pins: None,
+        }
+    }
+
+    fn page_cell(page: &Page, x: usize, y: usize) -> Cell {
+        page.get_cells(page.get_row(y))[x]
     }
 
     #[test]
@@ -2007,6 +2180,297 @@ mod tests {
         assert!(full.overlaps(&same_overlap));
         assert!(!full.overlaps(&same_disjoint));
         assert!(!full.overlaps(&other_node));
+    }
+
+    #[test]
+    fn page_list_clone_region_basic() {
+        let list = PageList::init(80, 24, None).unwrap();
+
+        let clone = list
+            .clone_region(clone_options(point::Point::screen(Coordinate::new(0, 0))))
+            .unwrap();
+
+        assert_eq!(clone.total_rows, list.total_rows);
+        assert_eq!(clone.viewport, Viewport::Active);
+        assert_eq!(clone.page_serial_min, 0);
+        assert_eq!(clone.pages.len(), 1);
+        assert_eq!(clone.pages[0].serial, 0);
+        assert_eq!(clone.page_serial, 1);
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_partial_trimmed_right() {
+        let mut list = PageList::init(80, 20, None).unwrap();
+        list.grow_rows(30).unwrap();
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::screen(Coordinate::new(0, 0)),
+                bottom: Some(point::Point::screen(Coordinate::new(0, 39))),
+                tracked_pins: None,
+            })
+            .unwrap();
+
+        assert_eq!(clone.total_rows, 40);
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_partial_trimmed_left() {
+        let mut list = PageList::init(80, 20, None).unwrap();
+        list.grow_rows(30).unwrap();
+
+        let clone = list
+            .clone_region(clone_options(point::Point::screen(Coordinate::new(0, 10))))
+            .unwrap();
+
+        assert_eq!(clone.total_rows, 40);
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_partial_trimmed_both() {
+        let mut list = PageList::init(80, 20, None).unwrap();
+        list.grow_rows(30).unwrap();
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::screen(Coordinate::new(0, 10)),
+                bottom: Some(point::Point::screen(Coordinate::new(0, 35))),
+                tracked_pins: None,
+            })
+            .unwrap();
+
+        assert_eq!(clone.total_rows, 26);
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_less_than_active_pads_blank_rows() {
+        let list = PageList::init(80, 24, None).unwrap();
+
+        let clone = list
+            .clone_region(clone_options(point::Point::active(Coordinate::new(0, 5))))
+            .unwrap();
+
+        assert_eq!(clone.total_rows, clone.rows);
+        let last = clone.pages.last().unwrap();
+        let last_row = last.page.get_row(last.page.size_rows() as usize - 1);
+        assert!(last
+            .page
+            .get_cells(last_row)
+            .iter()
+            .all(|cell| cell.is_zero()));
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_copies_row_data() {
+        let mut list = PageList::init(80, 20, None).unwrap();
+        for y in 10..=12 {
+            *list.pages[0].page.get_row_and_cell_mut(0, y).cell =
+                Cell::init(('a' as usize + y) as u32);
+        }
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::screen(Coordinate::new(0, 10)),
+                bottom: Some(point::Point::screen(Coordinate::new(0, 12))),
+                tracked_pins: None,
+            })
+            .unwrap();
+
+        assert_eq!(
+            page_cell(&clone.pages[0].page, 0, 0).codepoint(),
+            'k' as u32
+        );
+        assert_eq!(
+            page_cell(&clone.pages[0].page, 0, 1).codepoint(),
+            'l' as u32
+        );
+        assert_eq!(
+            page_cell(&clone.pages[0].page, 0, 2).codepoint(),
+            'm' as u32
+        );
+        assert!(page_cell(&clone.pages[0].page, 1, 0).is_zero());
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_reclaims_trimmed_managed_memory() {
+        let mut list = PageList::init(80, 20, None).unwrap();
+        let page = &mut list.pages[0].page;
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let style_id = page.add_style(bold).unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(7),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+
+        {
+            let rac = page.get_row_and_cell_mut(0, 0);
+            rac.row.set_styled(true);
+            rac.row.set_grapheme(true);
+            rac.row.set_hyperlink(true);
+            let mut cell = Cell::init('x' as u32);
+            cell.set_style_id(style_id);
+            cell.set_hyperlink(true);
+            *rac.cell = cell;
+        }
+        page.use_style(style_id);
+        page.append_grapheme_at(0, 0, 0x0301).unwrap();
+        page.set_hyperlink(0, 0, link_id).unwrap();
+        *page.get_row_and_cell_mut(0, 1).cell = Cell::init('y' as u32);
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::screen(Coordinate::new(0, 1)),
+                bottom: Some(point::Point::screen(Coordinate::new(0, 1))),
+                tracked_pins: None,
+            })
+            .unwrap();
+
+        assert_eq!(clone.pages[0].page.style_count(), 0);
+        assert_eq!(clone.pages[0].page.grapheme_count(), 0);
+        assert_eq!(clone.pages[0].page.hyperlink_count(), 0);
+        assert_eq!(
+            page_cell(&clone.pages[0].page, 0, 0).codepoint(),
+            'y' as u32
+        );
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_copies_managed_memory_inside_range() {
+        let mut list = PageList::init(80, 20, None).unwrap();
+        let page = &mut list.pages[0].page;
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let style_id = page.add_style(bold).unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"clone"),
+                uri: b"https://example.com/clone",
+            })
+            .unwrap();
+
+        {
+            let rac = page.get_row_and_cell_mut(0, 1);
+            rac.row.set_styled(true);
+            let mut cell = Cell::init('s' as u32);
+            cell.set_style_id(style_id);
+            *rac.cell = cell;
+        }
+        page.use_style(style_id);
+        *page.get_row_and_cell_mut(1, 1).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(1, 1, 0x0301).unwrap();
+        *page.get_row_and_cell_mut(2, 1).cell = Cell::init('h' as u32);
+        page.set_hyperlink(2, 1, link_id).unwrap();
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::screen(Coordinate::new(0, 1)),
+                bottom: Some(point::Point::screen(Coordinate::new(0, 1))),
+                tracked_pins: None,
+            })
+            .unwrap();
+        let cloned_page = &clone.pages[0].page;
+        let cloned_style_id = page_cell(cloned_page, 0, 0).style_id();
+        let cloned_link_id = cloned_page.lookup_hyperlink_at(2, 0).unwrap();
+
+        assert_eq!(cloned_page.style_count(), 1);
+        assert_eq!(cloned_page.get_style(cloned_style_id), bold);
+        assert_eq!(cloned_page.grapheme_count(), 1);
+        assert_eq!(cloned_page.lookup_grapheme_at(1, 0).unwrap(), vec![0x0301]);
+        assert_eq!(cloned_page.hyperlink_count(), 1);
+        assert_eq!(
+            cloned_page.get_hyperlink(cloned_link_id),
+            HyperlinkSnapshot {
+                id: HyperlinkSnapshotId::Explicit(b"clone".to_vec()),
+                uri: b"https://example.com/clone".to_vec(),
+            }
+        );
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_remaps_tracked_pin_inside_range() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let tracked = list
+            .track_pin(
+                list.pin(point::Point::active(Coordinate::new(0, 6)))
+                    .unwrap(),
+            )
+            .unwrap();
+        let mut remap = TrackedPinsRemap::default();
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::active(Coordinate::new(0, 5)),
+                bottom: None,
+                tracked_pins: Some(&mut remap),
+            })
+            .unwrap();
+
+        let cloned_pin = unsafe {
+            // Safety: remapped pins are owned by clone.tracked_pin_storage.
+            remap.get(tracked).unwrap().as_ref()
+        };
+        assert_eq!(
+            clone
+                .point_from_pin(point::Tag::Active, *cloned_pin)
+                .unwrap(),
+            point::Point::active(Coordinate::new(0, 1))
+        );
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_does_not_remap_tracked_pin_outside_range() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        let tracked = list
+            .track_pin(
+                list.pin(point::Point::active(Coordinate::new(0, 3)))
+                    .unwrap(),
+            )
+            .unwrap();
+        let mut remap = TrackedPinsRemap::default();
+
+        let clone = list
+            .clone_region(CloneOptions {
+                top: point::Point::active(Coordinate::new(0, 5)),
+                bottom: None,
+                tracked_pins: Some(&mut remap),
+            })
+            .unwrap();
+
+        assert_eq!(remap.get(tracked), None);
+        clone.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clone_region_invalid_request_returns_empty_error() {
+        let list = PageList::init(80, 24, None).unwrap();
+
+        assert_eq!(
+            list.clone_region(clone_options(point::Point::screen(Coordinate::new(80, 0))))
+                .unwrap_err(),
+            CloneRegionError::Empty
+        );
     }
 
     #[test]

@@ -251,3 +251,78 @@ The experiment fails if:
 - clone can create invalid PageList metadata or serial state;
 - the implementation expands beyond PageList clone;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Experiment 42 implemented a private `PageList::clone_region` that mirrors
+upstream PageList clone behavior for the current Roastty storage model:
+
+- clone options and tracked-pin remap state are private to PageList;
+- `Page::exact_row_capacity`, `Page::clone_rows_from`, and `Page::set_dirty` are
+  exposed only as `pub(super)` helpers for PageList clone;
+- clone traversal uses `page_iterator(Direction::RightDown, top, bottom)`;
+- each source chunk becomes one destination page with exact row capacity;
+- row data is copied through the existing Page clone helpers;
+- clone metadata preserves sizing and max-size state while resetting page
+  serials and viewport state;
+- clones shorter than the active area are padded with blank rows;
+- tracked pins inside cloned chunks are remapped to clone-owned pins with
+  adjusted row offsets;
+- tracked pins outside the cloned region are not remapped;
+- invalid/empty clone requests return `CloneRegionError::Empty` instead of
+  panicking.
+
+Tests added:
+
+- basic full-region clone;
+- partial trimmed-right clone;
+- partial trimmed-left clone;
+- partial trimmed-both clone;
+- less-than-active clone with blank-row padding;
+- plain row-data copy;
+- managed style/grapheme/hyperlink data copy inside the cloned range;
+- managed-memory reclamation when marked rows are trimmed away;
+- tracked-pin remap inside the cloned range;
+- tracked-pin non-remap outside the cloned range;
+- invalid clone request error handling.
+
+The upstream `PageList clone full dirty` test remains deferred because
+PageList-level dirty tracking is not implemented yet. Page-level dirty state is
+copied when the source page has it, but dirty-region behavior belongs to the
+future dirty-tracking experiment.
+
+Verification:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Observed result:
+
+- `cargo test -p roastty terminal::page_list`: 107 passed;
+- `cargo test -p roastty`: 388 unit tests passed, plus 1 ABI harness test
+  passed.
+
+Independent review:
+
+- Initial result review found two real issues: test-only visibility expansion
+  for `Page::set_graphemes_at`, and missing PageList-level verification that
+  style/grapheme/hyperlink data inside the cloned region survives clone.
+- Both issues were fixed.
+- Follow-up review found no required changes and approved Experiment 42 as ready
+  to record as `Pass`.
+
+## Conclusion
+
+PageList can now clone tagged regions using upstream-compatible row-chunk
+semantics. The clone path preserves Page-local row data, trims managed memory
+outside the selected region, pads short clones to the active row count, resets
+viewport/serial metadata, and remaps tracked pins when requested.
+
+The next experiment should continue with the next PageList operation that builds
+on clone/page-iterator behavior. Dirty-specific clone verification should remain
+deferred until PageList dirty tracking exists.

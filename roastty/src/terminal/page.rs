@@ -680,6 +680,10 @@ impl Page {
         self.dirty
     }
 
+    pub(super) fn set_dirty(&mut self, value: bool) {
+        self.dirty = value;
+    }
+
     pub(super) fn capacity(&self) -> Capacity {
         self.capacity
     }
@@ -697,7 +701,7 @@ impl Page {
         self.size.rows = rows;
     }
 
-    fn exact_row_capacity(&self, y_start: usize, y_end: usize) -> Capacity {
+    pub(super) fn exact_row_capacity(&self, y_start: usize, y_end: usize) -> Capacity {
         assert!(y_start < y_end);
         assert!(y_end <= self.size.rows as usize);
 
@@ -805,7 +809,7 @@ impl Page {
         })
     }
 
-    fn clone_rows_from(
+    pub(super) fn clone_rows_from(
         &mut self,
         other: &Page,
         y_start: usize,
