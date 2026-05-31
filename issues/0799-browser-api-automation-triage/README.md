@@ -177,3 +177,5 @@ and reviewed.
 - [Experiment 8: Add protocol HTTP Basic Auth](08-http-basic-auth.md) — **Pass**
 - [Experiment 9: Add renderer crash recovery UX](09-renderer-crash-recovery.md)
   — **Pass**
+- [Experiment 10: Add explicit default-deny permissions](10-default-deny-permissions.md)
+  — **Designed**
