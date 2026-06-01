@@ -128,6 +128,31 @@ Every experiment must follow the current project process:
 
 No experiment may proceed to the next stage until the required review passes.
 
+## Experiment Granularity
+
+Early experiments may be small when they establish correctness-critical
+foundation: page storage, managed metadata, pin tracking, parser state,
+formatters, selection, and row/cell mutation primitives. These areas are allowed
+to advance one primitive or one control sequence at a time because bugs are hard
+to localize and can corrupt later layers.
+
+Once the relevant foundation exists, experiments should grow to coherent
+subsystem slices rather than one tiny behavior at a time. Prefer grouping
+related features when they share the same implementation surface and can be
+verified together, for example:
+
+- remaining related CSI row/scroll mutations;
+- SGR execution plus styled printing;
+- OSC parsing and action dispatch;
+- mouse modes plus mouse encoding;
+- PTY spawn/read/write/resize;
+- macOS input/key translation.
+
+The goal is not to maximize experiment count. The goal is to preserve
+reviewable, testable progress toward full `libroastty` parity. If an experiment
+can cover a larger subsystem without blurring failure diagnosis or weakening
+tests, choose the larger subsystem.
+
 ## Experiments
 
 - [Experiment 1: Audit Dependencies and Platform Readiness](01-dependency-platform-audit.md)
@@ -351,6 +376,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 123: Port CSI Insert Lines](123-port-csi-insert-lines.md) —
   **Pass**
+- [Experiment 124: Port CSI Delete Lines](124-port-csi-delete-lines.md) —
+  **Designed**
 
 ## Non-Goals
 
