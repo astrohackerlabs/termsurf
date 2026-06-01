@@ -380,6 +380,8 @@ tests, choose the larger subsystem.
   **Pass**
 - [Experiment 125: Port CSI Scroll Up and Down](125-port-csi-scroll-up-down.md)
   — **Pass**
+- [Experiment 126: Port CSI Insert and Erase Characters](126-port-csi-insert-erase-characters.md)
+  — **Designed**
 
 ## Non-Goals
 
