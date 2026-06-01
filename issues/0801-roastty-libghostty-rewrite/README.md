@@ -452,6 +452,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 162: Port Legacy Ctrl/CSI-u/Alt Matrix](162-port-legacy-ctrl-csiu-alt-matrix.md)
   — **Pass**
+- [Experiment 163: Port Key Encoder C ABI](163-port-key-encoder-c-abi.md) —
+  **Designed**
 
 ## Non-Goals
 
