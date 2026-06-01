@@ -422,7 +422,7 @@ tests, choose the larger subsystem.
 - [Experiment 146: Port Terminal Query Responses](146-port-terminal-query-responses.md)
   — **Pass**
 - [Experiment 147: Port DCS and APC Framing](147-port-dcs-apc-framing.md) —
-  **Designed**
+  **Pass**
 
 ## Non-Goals
 

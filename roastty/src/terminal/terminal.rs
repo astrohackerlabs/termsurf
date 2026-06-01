@@ -641,6 +641,12 @@ impl Handler for TerminalStreamHandler<'_> {
                 self.set_mode_basic(mode, enabled);
                 Ok(())
             }
+            Action::DcsHook { .. }
+            | Action::DcsPut { .. }
+            | Action::DcsUnhook
+            | Action::ApcStart
+            | Action::ApcPut { .. }
+            | Action::ApcEnd => Ok(()),
             Action::RequestMode { mode } => {
                 let report = self.modes.get_report(modes::ModeTag::from_mode(mode));
                 self.write_pty_response(&report.encode_vt());
@@ -2225,6 +2231,25 @@ mod tests {
         terminal.next_slice(b"\x1b[6n").unwrap();
 
         assert_eq!(terminal.take_pty_response_for_tests(), b"\x1b[3;4R");
+    }
+
+    #[test]
+    fn terminal_stream_dcs_apc_sequences_are_runtime_noops() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(5, 1);
+        terminal.clear_dirty_for_tests();
+        terminal
+            .next_slice(b"\x1bP$qm\x1b\\\x1b_Gpayload\x1b\\")
+            .unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert_eq!(terminal.cursor_position_for_tests(), (5, 1));
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(9, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
     }
 
     #[test]

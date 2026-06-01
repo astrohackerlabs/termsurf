@@ -188,3 +188,64 @@ Implementation note from Codex: be precise in tests around `ESC X` after
 DCS/APC. Ghostty treats `ESC X` as SOS/PM/APC string entry; Roastty's narrower
 7-bit APC scope may consume it as unsupported. Either is acceptable only if the
 test expectation explicitly pins which bytes print or remain contained.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has first-class DCS and APC stream framing:
+
+- `ESC P` enters DCS header parsing, emits typed `DcsHook` metadata on valid
+  final bytes, emits `DcsPut` for payload bytes, and emits `DcsUnhook` when ESC
+  exits the DCS string.
+- `ESC _` enters APC string parsing, emits `ApcStart`, emits `ApcPut` for
+  payload bytes, and emits `ApcEnd` when ESC exits the APC string.
+- DCS hook metadata matches Ghostty's event shape: intermediates, params, and
+  final byte.
+- DCS malformed headers and metadata-capacity overflow enter an ignore state
+  that contains payload bytes until ESC without dispatching DCS actions.
+- BEL is payload for both DCS and APC; it does not terminate either string.
+- Split-feed sequences preserve DCS/APC state across `next_slice` calls.
+- Handler errors during DCS hook, DCS payload, DCS unhook, APC start, APC
+  payload, and APC end leave the stream in a recoverable state before the error
+  is surfaced.
+- `TerminalStreamHandler` intentionally treats all DCS/APC actions as runtime
+  no-ops for now, so framed payloads do not mutate visible content or PTY
+  responses.
+
+This experiment does not implement command-specific DCS or APC protocols.
+DECRQSS, XTGETTCAP, tmux control mode, and Kitty graphics remain future work on
+top of this framing layer.
+
+Verification run:
+
+```bash
+cargo fmt
+cargo test -p roastty dcs_apc
+cargo test -p roastty stream_dcs
+cargo test -p roastty stream_apc
+cargo test -p roastty
+```
+
+All tests passed. The full Roastty suite reported 1610 unit tests, 1 ABI harness
+test, and 0 doc tests passing.
+
+## Result Review
+
+Codex reviewed the completed implementation and initially found one missing
+test-coverage item: handler-error recovery was only covered for `DcsHook` and
+`ApcStart`, while the approved design required recovery coverage for hook,
+payload, and end actions.
+
+The implementation was updated with recovery tests for `DcsPut`, `DcsUnhook`,
+`ApcPut`, and `ApcEnd`. Codex reviewed the revised result and approved it with
+no remaining code or test findings. It specifically confirmed that the added
+tests adequately cover the previously missing error paths and that the DCS/APC
+stream implementation is correct for this experiment's scope.
+
+## Conclusion
+
+Experiment 147 completed the DCS/APC containment and framing layer needed before
+Roastty can implement protocol-specific DCS and APC behavior. The next
+experiment should build on this by selecting a coherent DCS/APC protocol slice,
+most likely one of DECRQSS, XTGETTCAP, tmux control mode, or Kitty graphics.
