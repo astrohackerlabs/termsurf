@@ -3370,10 +3370,73 @@ impl PageList {
         self.is_dirty(point)
     }
 
+    #[cfg(test)]
+    pub(super) fn clear_dirty_for_tests(&mut self) {
+        self.clear_dirty();
+    }
+
     fn mark_dirty(&mut self, point: point::Point) {
         if let Some(pin) = self.pin(point) {
             pin.mark_dirty(self);
         }
+    }
+
+    pub(super) fn set_screen_row_wrap(
+        &mut self,
+        y: u32,
+        wrap: bool,
+    ) -> Result<(), BasicCellWriteError> {
+        let pin = self
+            .pin(point::Point::screen(point::Coordinate::new(0, y)))
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let index = self
+            .node_index(pin.node)
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let row = self.pages[index].page.get_row_mut(pin.y as usize);
+        row.set_wrap(wrap);
+        row.set_dirty(true);
+        Ok(())
+    }
+
+    pub(super) fn set_screen_row_wrap_continuation(
+        &mut self,
+        y: u32,
+        wrap: bool,
+    ) -> Result<(), BasicCellWriteError> {
+        let pin = self
+            .pin(point::Point::screen(point::Coordinate::new(0, y)))
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let index = self
+            .node_index(pin.node)
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let row = self.pages[index].page.get_row_mut(pin.y as usize);
+        row.set_wrap_continuation(wrap);
+        row.set_dirty(true);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn screen_row_wrap_for_tests(&self, y: u32) -> bool {
+        let pin = self
+            .pin(point::Point::screen(point::Coordinate::new(0, y)))
+            .expect("test screen row must resolve");
+        self.node_for_pin(&pin)
+            .expect("test screen node must exist")
+            .page
+            .get_row(pin.y as usize)
+            .wrap()
+    }
+
+    #[cfg(test)]
+    pub(super) fn screen_row_wrap_continuation_for_tests(&self, y: u32) -> bool {
+        let pin = self
+            .pin(point::Point::screen(point::Coordinate::new(0, y)))
+            .expect("test screen row must resolve");
+        self.node_for_pin(&pin)
+            .expect("test screen node must exist")
+            .page
+            .get_row(pin.y as usize)
+            .wrap_continuation()
     }
 
     pub(super) fn write_basic_screen_cell(
@@ -3382,6 +3445,7 @@ impl PageList {
         y: u32,
         codepoint: char,
     ) -> Result<(), BasicCellWriteError> {
+        self.check_basic_screen_cell(x, y)?;
         let point = point::Point::screen(point::Coordinate::new(x, y));
         let pin = self.pin(point).ok_or(BasicCellWriteError::InvalidPoint)?;
         let index = self
@@ -3389,12 +3453,32 @@ impl PageList {
             .ok_or(BasicCellWriteError::InvalidPoint)?;
         let page = &mut self.pages[index].page;
         let rac = page.get_row_and_cell_mut(pin.x as usize, pin.y as usize);
-        if cell_has_managed_print_state(*rac.cell) {
-            return Err(BasicCellWriteError::ManagedCell);
-        }
 
         *rac.cell = Cell::init(codepoint as u32);
         rac.row.set_dirty(true);
+        Ok(())
+    }
+
+    pub(super) fn check_basic_screen_cell(
+        &self,
+        x: CellCountInt,
+        y: u32,
+    ) -> Result<(), BasicCellWriteError> {
+        let point = point::Point::screen(point::Coordinate::new(x, y));
+        let pin = self.pin(point).ok_or(BasicCellWriteError::InvalidPoint)?;
+        let node = self
+            .node_for_pin(&pin)
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let row = node.page.get_row(pin.y as usize);
+        let cell = node
+            .page
+            .get_cells(row)
+            .get(pin.x as usize)
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        if cell_has_managed_print_state(*cell) {
+            return Err(BasicCellWriteError::ManagedCell);
+        }
+
         Ok(())
     }
 

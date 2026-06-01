@@ -317,7 +317,7 @@ No experiment may proceed to the next stage until the required review passes.
 - [Experiment 103: Port Basic Stream Print Mutation](103-port-basic-stream-print-mutation.md)
   — **Pass**
 - [Experiment 104: Port Basic Pending Wrap](104-port-basic-pending-wrap.md) —
-  **Designed**
+  **Pass**
 
 ## Non-Goals
 

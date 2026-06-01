@@ -210,3 +210,129 @@ Clean design re-review artifacts:
 - Result: `logs/codex-review/20260601-010954-614212-last-message.md`
 
 Codex found no remaining real design findings and approved implementation.
+
+## Result
+
+**Result:** Pass.
+
+Implemented basic pending-wrap behavior for Experiment 103's narrow print path.
+
+Pending-wrap state:
+
+- `ScreenCursor` now has a private `pending_wrap: bool` field.
+- The field defaults to `false`.
+- Test-only accessors expose cursor position, pending-wrap state, row wrap
+  metadata, row wrap-continuation metadata, and dirty state.
+
+Right-edge behavior:
+
+- Supported one-cell printable characters at the right edge now write the cell
+  and set `pending_wrap = true`.
+- The cursor remains on the right-edge cell after that write.
+- The row is not marked wrapped until the next printable character actually
+  consumes the pending wrap.
+
+Wrap-before-next-print behavior:
+
+- If `pending_wrap` is true and another supported printable character arrives,
+  the screen marks the old row wrapped, moves the cursor to the next row at
+  column 0, marks the destination row as a wrap continuation, clears
+  `pending_wrap`, and then writes the new character.
+- Dirty state is marked on both affected rows. The dirty test clears prior dirty
+  state after filling the right edge and before triggering the wrap, so it
+  proves the wrap/write operation itself marks both rows.
+
+Bottom-row behavior:
+
+- If `pending_wrap` is true on the bottom row, the next printable character
+  returns `TerminalStreamError::ScrollUnsupported`.
+- The failure preserves cursor position, pending-wrap state, existing cells, and
+  row wrap metadata.
+- Scrolling and history growth remain deferred.
+
+Managed-destination behavior:
+
+- If a pending wrap would move into a managed destination cell, the destination
+  cell is preflighted before any pending-wrap mutation.
+- The failure preserves cursor position, pending-wrap state, existing cells,
+  old-row wrap metadata, destination-row wrap-continuation metadata, and dirty
+  state.
+- This keeps the managed-cell guard from Experiment 103 transactional across
+  pending-wrap movement.
+
+Formatting behavior:
+
+- `helloworldabc12` on a 5-column terminal formats as `hello\nworld\nabc12` when
+  unwrap is disabled.
+- With unwrap enabled, the same soft-wrapped content formats as
+  `helloworldabc12`.
+- Rows 0 and 1 are marked wrapped; rows 1 and 2 are marked wrap-continuation.
+
+This experiment did not implement scrolling, margins, insert mode, Unicode
+width, wide characters, zero-width characters, grapheme clustering, charsets,
+styles, hyperlinks, semantic prompt state, CSI, OSC, DCS, APC, PTY IO, public
+API, or public ABI.
+
+Verification run:
+
+```text
+cargo fmt
+cargo test -p roastty stream
+cargo test -p roastty terminal_formatter
+cargo test -p roastty terminal::terminal
+cargo test -p roastty screen_formatter
+cargo test -p roastty page_string
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo fmt` passed.
+- `cargo test -p roastty stream` passed 87 tests.
+- `cargo test -p roastty terminal_formatter` passed 67 tests.
+- `cargo test -p roastty terminal::terminal` passed 82 tests.
+- `cargo test -p roastty screen_formatter` passed 55 tests.
+- `cargo test -p roastty page_string` passed 12 tests.
+- `cargo test -p roastty terminal::page_list` passed 524 tests.
+- Full `cargo test -p roastty` passed 988 unit tests, the ABI harness, and
+  doc-tests.
+
+Codex design review passed after the three design findings above were fixed.
+
+Initial result-review artifacts:
+
+- Prompt: `logs/codex-review/20260601-011433-798144-prompt.md`
+- Result: `logs/codex-review/20260601-011433-798144-last-message.md`
+
+Codex found one real result issue: pending wrap into a managed destination cell
+could mark the old row wrapped, move the cursor, clear pending wrap, mark the
+destination row as a wrap continuation, and then fail with a managed-cell error.
+That would make the failure path partially mutating.
+
+The implementation now preflights the destination cell before pending-wrap
+movement, and a regression test verifies that managed-destination failure
+preserves cursor position, pending-wrap state, cells, row wrap metadata, and
+dirty state. A clean result re-review will be recorded before this result is
+committed.
+
+Clean result re-review artifacts:
+
+- Prompt: `logs/codex-review/20260601-011843-079493-prompt.md`
+- Result: `logs/codex-review/20260601-011843-079493-last-message.md`
+
+Codex found no remaining correctness, transactionality, upstream-fidelity,
+dirty/wrap metadata, formatter, bottom-row state preservation, missing-test, or
+scope findings. Codex approved the result for commit.
+
+## Conclusion
+
+Roastty now has basic Ghostty-style pending wrap for the active screen's full
+width. The runtime print path can write through the right edge, carry pending
+wrap state across terminal feed calls, wrap before the next printable character,
+and preserve formatter soft-wrap metadata.
+
+The next print experiment should handle the bottom-row case by porting the
+smallest useful scrolling/index behavior. That will remove this experiment's
+`ScrollUnsupported` stop while still keeping margins, insert mode, wide
+characters, Unicode width, styles, hyperlinks, and graphemes deferred.

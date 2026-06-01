@@ -62,7 +62,7 @@ struct TerminalPwd {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TerminalStreamError {
-    RightEdgeUnsupported,
+    ScrollUnsupported,
     ManagedCellUnsupported,
     InvalidPoint,
     UnsupportedCodepoint(char),
@@ -240,8 +240,28 @@ impl Terminal {
     }
 
     #[cfg(test)]
+    pub(super) fn cursor_pending_wrap_for_tests(&self) -> bool {
+        self.screens.active.cursor_pending_wrap_for_tests()
+    }
+
+    #[cfg(test)]
     pub(super) fn is_dirty_for_tests(&self, x: CellCountInt, y: u32) -> bool {
         self.screens.active.is_dirty_for_tests(x, y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_dirty_for_tests(&mut self) {
+        self.screens.active.clear_dirty_for_tests();
+    }
+
+    #[cfg(test)]
+    pub(super) fn row_wrap_for_tests(&self, y: u32) -> bool {
+        self.screens.active.row_wrap_for_tests(y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn row_wrap_continuation_for_tests(&self, y: u32) -> bool {
+        self.screens.active.row_wrap_continuation_for_tests(y)
     }
 }
 
@@ -262,7 +282,7 @@ impl TerminalStreamHandler<'_> {
         }
 
         self.screen
-            .print_basic_cell(self.size.cols, cp)
+            .print_basic_cell(self.size.cols, self.size.rows, cp)
             .map_err(TerminalStreamError::from)
     }
 }
@@ -270,7 +290,7 @@ impl TerminalStreamHandler<'_> {
 impl From<BasicPrintError> for TerminalStreamError {
     fn from(err: BasicPrintError) -> Self {
         match err {
-            BasicPrintError::RightEdge => Self::RightEdgeUnsupported,
+            BasicPrintError::ScrollUnsupported => Self::ScrollUnsupported,
             BasicPrintError::Cell(err) => match err {
                 super::page_list::BasicCellWriteError::InvalidPoint => Self::InvalidPoint,
                 super::page_list::BasicCellWriteError::ManagedCell => Self::ManagedCellUnsupported,
@@ -673,6 +693,14 @@ mod tests {
         TerminalFormatter::init(terminal, TerminalFormatterOptions::new(emit).unwrap(true))
     }
 
+    fn plain_with_unwrap(terminal: &Terminal, unwrap: bool) -> String {
+        TerminalFormatter::init(
+            terminal,
+            TerminalFormatterOptions::new(PageOutputFormat::Plain).unwrap(unwrap),
+        )
+        .format()
+    }
+
     fn screen_formatter<'a>(terminal: &'a Terminal, emit: PageOutputFormat) -> ScreenFormatter<'a> {
         ScreenFormatter::init(
             &terminal.screens.active,
@@ -800,6 +828,7 @@ mod tests {
             "hello"
         );
         assert_eq!(terminal.cursor_position_for_tests(), (5, 0));
+        assert!(!terminal.cursor_pending_wrap_for_tests());
     }
 
     #[test]
@@ -882,15 +911,117 @@ mod tests {
     }
 
     #[test]
-    fn terminal_stream_right_edge_returns_private_error_without_writing() {
-        let mut terminal = Terminal::init(1, 2, None).unwrap();
+    fn terminal_stream_right_edge_writes_cell_and_sets_pending_wrap() {
+        let mut terminal = Terminal::init(5, 3, None).unwrap();
+
+        terminal.next_slice(b"hello").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "hello");
+        assert_eq!(terminal.cursor_position_for_tests(), (4, 0));
+        assert!(terminal.cursor_pending_wrap_for_tests());
+        assert!(!terminal.row_wrap_for_tests(0));
+        assert!(!terminal.row_wrap_continuation_for_tests(0));
+    }
+
+    #[test]
+    fn terminal_stream_pending_wrap_prints_next_cell_on_next_row() {
+        let mut terminal = Terminal::init(5, 3, None).unwrap();
+
+        terminal.next_slice(b"hello").unwrap();
+        terminal.next_slice(b"w").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "hello\nw");
+        assert_eq!(plain_with_unwrap(&terminal, true), "hellow");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 1));
+        assert!(!terminal.cursor_pending_wrap_for_tests());
+        assert!(terminal.row_wrap_for_tests(0));
+        assert!(terminal.row_wrap_continuation_for_tests(1));
+    }
+
+    #[test]
+    fn terminal_stream_basic_wraparound_matches_upstream_case() {
+        let mut terminal = Terminal::init(5, 40, None).unwrap();
+
+        terminal.next_slice(b"helloworldabc12").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "hello\nworld\nabc12");
+        assert_eq!(plain_with_unwrap(&terminal, true), "helloworldabc12");
+        assert_eq!(terminal.cursor_position_for_tests(), (4, 2));
+        assert!(terminal.cursor_pending_wrap_for_tests());
+        assert!(terminal.row_wrap_for_tests(0));
+        assert!(terminal.row_wrap_for_tests(1));
+        assert!(!terminal.row_wrap_for_tests(2));
+        assert!(!terminal.row_wrap_continuation_for_tests(0));
+        assert!(terminal.row_wrap_continuation_for_tests(1));
+        assert!(terminal.row_wrap_continuation_for_tests(2));
+    }
+
+    #[test]
+    fn terminal_stream_pending_wrap_marks_old_and_new_rows_dirty() {
+        let mut terminal = Terminal::init(5, 3, None).unwrap();
+
+        terminal.next_slice(b"hello").unwrap();
+        terminal.clear_dirty_for_tests();
+        terminal.next_slice(b"w").unwrap();
+
+        assert!(terminal.is_dirty_for_tests(0, 0));
+        assert!(terminal.is_dirty_for_tests(4, 0));
+        assert!(terminal.is_dirty_for_tests(0, 1));
+        assert!(terminal.is_dirty_for_tests(4, 1));
+        assert!(!terminal.is_dirty_for_tests(0, 2));
+    }
+
+    #[test]
+    fn terminal_stream_bottom_row_pending_wrap_returns_error_without_mutating() {
+        let mut terminal = Terminal::init(2, 1, None).unwrap();
+
+        terminal.next_slice(b"AB").unwrap();
+        assert_eq!(plain_with_unwrap(&terminal, false), "AB");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+        assert!(terminal.cursor_pending_wrap_for_tests());
+        assert!(!terminal.row_wrap_for_tests(0));
+        assert!(!terminal.row_wrap_continuation_for_tests(0));
 
         assert_eq!(
-            terminal.next_slice(b"A"),
-            Err(TerminalStreamError::RightEdgeUnsupported)
+            terminal.next_slice(b"C"),
+            Err(TerminalStreamError::ScrollUnsupported)
         );
-        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "");
-        assert_eq!(terminal.cursor_position_for_tests(), (0, 0));
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "AB");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+        assert!(terminal.cursor_pending_wrap_for_tests());
+        assert!(!terminal.row_wrap_for_tests(0));
+        assert!(!terminal.row_wrap_continuation_for_tests(0));
+    }
+
+    #[test]
+    fn terminal_stream_pending_wrap_managed_destination_errors_without_mutating() {
+        let mut terminal = Terminal::init(5, 3, None).unwrap();
+
+        terminal.next_slice(b"hello").unwrap();
+        terminal.screens.active.set_styled_cell_for_tests(
+            0,
+            1,
+            'x',
+            style::Style {
+                fg_color: style::Color::Palette(1),
+                ..style::Style::default()
+            },
+        );
+        terminal.clear_dirty_for_tests();
+
+        assert_eq!(
+            terminal.next_slice(b"w"),
+            Err(TerminalStreamError::ManagedCellUnsupported)
+        );
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "hello\nx");
+        assert_eq!(terminal.cursor_position_for_tests(), (4, 0));
+        assert!(terminal.cursor_pending_wrap_for_tests());
+        assert!(!terminal.row_wrap_for_tests(0));
+        assert!(!terminal.row_wrap_continuation_for_tests(1));
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
     }
 
     #[test]

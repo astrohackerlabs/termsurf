@@ -22,7 +22,7 @@ pub(super) struct Screen {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BasicPrintError {
-    RightEdge,
+    ScrollUnsupported,
     Cell(BasicCellWriteError),
 }
 
@@ -30,6 +30,7 @@ pub(super) enum BasicPrintError {
 struct ScreenCursor {
     x: CellCountInt,
     y: CellCountInt,
+    pending_wrap: bool,
     style: style::Style,
     protected: bool,
     hyperlink: Option<ScreenCursorHyperlink>,
@@ -113,16 +114,37 @@ impl Screen {
     pub(super) fn print_basic_cell(
         &mut self,
         cols: CellCountInt,
+        rows: CellCountInt,
         codepoint: char,
     ) -> Result<(), BasicPrintError> {
-        if self.cursor.x >= cols - 1 {
-            return Err(BasicPrintError::RightEdge);
+        if self.cursor.pending_wrap {
+            if self.cursor.y >= rows - 1 {
+                return Err(BasicPrintError::ScrollUnsupported);
+            }
+
+            self.pages
+                .check_basic_screen_cell(0, (self.cursor.y + 1).into())
+                .map_err(BasicPrintError::Cell)?;
+            self.pages
+                .set_screen_row_wrap(self.cursor.y.into(), true)
+                .map_err(BasicPrintError::Cell)?;
+            self.cursor.y += 1;
+            self.cursor.x = 0;
+            self.cursor.pending_wrap = false;
+            self.pages
+                .set_screen_row_wrap_continuation(self.cursor.y.into(), true)
+                .map_err(BasicPrintError::Cell)?;
         }
 
         self.pages
             .write_basic_screen_cell(self.cursor.x, self.cursor.y.into(), codepoint)
             .map_err(BasicPrintError::Cell)?;
-        self.cursor.x += 1;
+        if self.cursor.x == cols - 1 {
+            self.cursor.pending_wrap = true;
+        } else {
+            self.cursor.x += 1;
+            self.cursor.pending_wrap = false;
+        }
         Ok(())
     }
 
@@ -229,9 +251,29 @@ impl Screen {
     }
 
     #[cfg(test)]
+    pub(super) fn cursor_pending_wrap_for_tests(&self) -> bool {
+        self.cursor.pending_wrap
+    }
+
+    #[cfg(test)]
     pub(super) fn is_dirty_for_tests(&self, x: CellCountInt, y: u32) -> bool {
         self.pages
             .is_dirty_for_tests(point::Point::screen(point::Coordinate::new(x, y)))
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_dirty_for_tests(&mut self) {
+        self.pages.clear_dirty_for_tests();
+    }
+
+    #[cfg(test)]
+    pub(super) fn row_wrap_for_tests(&self, y: u32) -> bool {
+        self.pages.screen_row_wrap_for_tests(y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn row_wrap_continuation_for_tests(&self, y: u32) -> bool {
+        self.pages.screen_row_wrap_continuation_for_tests(y)
     }
 }
 
@@ -240,6 +282,7 @@ impl Default for ScreenCursor {
         Self {
             x: 0,
             y: 0,
+            pending_wrap: false,
             style: style::Style::default(),
             protected: false,
             hyperlink: None,
