@@ -403,7 +403,7 @@ tests, choose the larger subsystem.
 - [Experiment 136: Port OSC Dynamic Colors](136-port-osc-dynamic-colors.md) —
   **Pass**
 - [Experiment 137: Port RGB Parser Parity](137-port-rgb-parser-parity.md) —
-  **Designed**
+  **Pass**
 
 ## Non-Goals
 

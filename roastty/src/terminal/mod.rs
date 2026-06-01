@@ -8,6 +8,9 @@ mod charsets;
 mod color;
 
 #[allow(dead_code)]
+mod x11_color;
+
+#[allow(dead_code)]
 mod hyperlink;
 
 #[allow(dead_code)]

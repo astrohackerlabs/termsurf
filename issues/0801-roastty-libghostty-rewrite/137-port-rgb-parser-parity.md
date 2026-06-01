@@ -167,3 +167,58 @@ Codex reviewed the initial design and found three real issues:
 The design now pins those behaviors and requires verification coverage for them.
 Codex re-reviewed the revised design and approved it for implementation with no
 remaining blocking findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented the approved shared RGB parser parity slice:
+
+- moved RGB parsing into `roastty/src/terminal/color.rs` as `Rgb::parse`;
+- routed OSC palette and dynamic color parsing through that shared parser;
+- preserved existing `rgb:` and `#...` hex scaling behavior;
+- added `rgbi:` intensity parsing with truncating conversion;
+- kept `rgb:` and `rgbi:` prefixes lowercase-only;
+- embedded X11 `rgb.txt` data under Roastty source;
+- added a private X11 named-color lookup with Ghostty-compatible
+  case-insensitive matching;
+- trimmed only literal edge spaces for named colors;
+- added MIT/X11 provenance comments adjacent to the embedded lookup/data; and
+- kept special colors, Kitty OSC 21, renderer, config, ABI, and surface-message
+  work out of scope.
+
+Verification:
+
+```bash
+cargo fmt -- roastty/src/terminal/mod.rs roastty/src/terminal/x11_color.rs roastty/src/terminal/color.rs roastty/src/terminal/osc.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty color
+cargo test -p roastty osc
+cargo test -p roastty terminal_stream_osc
+cargo test -p roastty
+```
+
+Observed results:
+
+- `cargo test -p roastty color`: 32 passed.
+- `cargo test -p roastty osc`: 49 passed.
+- `cargo test -p roastty terminal_stream_osc`: 22 passed.
+- `cargo test -p roastty`: 1507 unit tests passed; ABI harness passed.
+
+## Result Review
+
+Codex reviewed the completed implementation and recorded result. It found no
+blocking issues and approved the experiment output as a Pass. The review
+specifically confirmed the centralized parser, OSC routing through it,
+lowercase-only `rgb:`/`rgbi:`, truncating `rgbi:` conversion, literal-space-only
+X11 edge trimming, embedded X11 data provenance, and test coverage. Codex noted
+that the new `x11_color.rs` and `res/rgb.txt` files must be staged with the rest
+of the result commit.
+
+## Conclusion
+
+Roastty now has one shared Ghostty-compatible RGB parser for the color syntaxes
+used by OSC color operations so far. This unlocks named colors and `rgbi:`
+colors for both palette and dynamic color operations without adding new terminal
+state. The remaining OSC color work is now more cleanly isolated to missing
+operation families, such as OSC 5/105 special colors, extended dynamic colors,
+Kitty OSC 21, report-format configuration, and renderer/config integration.

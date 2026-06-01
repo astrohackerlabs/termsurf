@@ -231,7 +231,7 @@ fn parse_osc4(bytes: &[u8], terminator: Terminator) -> Option<ColorRequests> {
         let request = if spec == b"?" {
             ColorRequest::QueryPalette { index, terminator }
         } else {
-            let Some(rgb) = parse_rgb(spec) else {
+            let Some(rgb) = super::color::Rgb::parse(spec) else {
                 break;
             };
             ColorRequest::SetPalette { index, rgb }
@@ -284,7 +284,7 @@ fn parse_dynamic_set_query(
         let request = if spec == b"?" {
             ColorRequest::QueryDynamic { target, terminator }
         } else {
-            let Some(rgb) = parse_rgb(spec) else {
+            let Some(rgb) = super::color::Rgb::parse(spec) else {
                 break;
             };
             ColorRequest::SetDynamic { target, rgb }
@@ -316,53 +316,6 @@ fn parse_dynamic_reset(bytes: &[u8], target: DynamicColor) -> Option<ColorReques
 fn parse_palette_index(bytes: &[u8]) -> Result<u8, ()> {
     let text = std::str::from_utf8(bytes).map_err(|_| ())?;
     text.parse::<u8>().map_err(|_| ())
-}
-
-fn parse_rgb(bytes: &[u8]) -> Option<super::color::Rgb> {
-    if let Some(hex) = bytes.strip_prefix(b"#") {
-        return parse_hash_rgb(hex);
-    }
-
-    let hex = bytes.strip_prefix(b"rgb:")?;
-    let mut parts = hex.split(|byte| *byte == b'/');
-    let r = parse_hex_channel(parts.next()?)?;
-    let g = parse_hex_channel(parts.next()?)?;
-    let b = parse_hex_channel(parts.next()?)?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some(super::color::Rgb::new(r, g, b))
-}
-
-fn parse_hash_rgb(hex: &[u8]) -> Option<super::color::Rgb> {
-    let width = match hex.len() {
-        3 => 1,
-        6 => 2,
-        9 => 3,
-        12 => 4,
-        _ => return None,
-    };
-    Some(super::color::Rgb::new(
-        parse_hex_channel(&hex[..width])?,
-        parse_hex_channel(&hex[width..width * 2])?,
-        parse_hex_channel(&hex[width * 2..])?,
-    ))
-}
-
-fn parse_hex_channel(bytes: &[u8]) -> Option<u8> {
-    if !(1..=4).contains(&bytes.len()) {
-        return None;
-    }
-    let text = std::str::from_utf8(bytes).ok()?;
-    let value = u16::from_str_radix(text, 16).ok()? as u32;
-    let max = match bytes.len() {
-        1 => 0x0f,
-        2 => 0xff,
-        3 => 0x0fff,
-        4 => 0xffff,
-        _ => return None,
-    };
-    Some(((value * 0xff) / max) as u8)
 }
 
 trait SplitOnce {
@@ -558,7 +511,7 @@ mod tests {
     #[test]
     fn osc_parser_palette_invalid_data_preserves_prior_requests() {
         assert_eq!(
-            parse(b"4;1;#ff0000;2;red;3;#00ff00"),
+            parse(b"4;1;#ff0000;2;nosuchcolor;3;#00ff00"),
             Some(OwnedCommand::ColorOperation {
                 requests: vec![ColorRequest::SetPalette {
                     index: 1,
@@ -567,6 +520,19 @@ mod tests {
             })
         );
         assert_eq!(parse(b"4;300;#ff0000"), None);
+    }
+
+    #[test]
+    fn osc_parser_palette_accepts_named_colors() {
+        assert_eq!(
+            parse(b"4;1;red"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(255, 0, 0),
+                }],
+            })
+        );
     }
 
     #[test]
@@ -676,7 +642,7 @@ mod tests {
     #[test]
     fn osc_parser_dynamic_color_invalid_data_preserves_prior_requests() {
         assert_eq!(
-            parse(b"10;#010203;red;#040506"),
+            parse(b"10;#010203;nosuchcolor;#040506"),
             Some(OwnedCommand::ColorOperation {
                 requests: vec![ColorRequest::SetDynamic {
                     target: DynamicColor::Foreground,
@@ -684,7 +650,20 @@ mod tests {
                 }],
             })
         );
-        assert_eq!(parse(b"10;red"), None);
+        assert_eq!(parse(b"10;nosuchcolor"), None);
+    }
+
+    #[test]
+    fn osc_parser_dynamic_colors_accept_rgbi() {
+        assert_eq!(
+            parse(b"10;rgbi:1.0/0.5/0"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetDynamic {
+                    target: DynamicColor::Foreground,
+                    rgb: super::super::color::Rgb::new(255, 127, 0),
+                }],
+            })
+        );
     }
 
     #[test]

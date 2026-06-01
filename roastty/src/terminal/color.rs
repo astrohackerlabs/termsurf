@@ -41,6 +41,92 @@ impl Rgb {
             b: self.b,
         }
     }
+
+    pub(super) fn parse(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() {
+            return None;
+        }
+
+        if let Some(hex) = bytes.strip_prefix(b"#") {
+            return parse_hash_rgb(hex);
+        }
+
+        if let Some(rgb) = super::x11_color::get(bytes) {
+            return Some(rgb);
+        }
+
+        if !bytes.starts_with(b"rgb") {
+            return None;
+        }
+        let mut offset = 3;
+        let use_intensity = if bytes.get(offset) == Some(&b'i') {
+            offset += 1;
+            true
+        } else {
+            false
+        };
+        if bytes.get(offset) != Some(&b':') {
+            return None;
+        }
+        offset += 1;
+
+        let mut parts = bytes[offset..].split(|byte| *byte == b'/');
+        let r = parse_component(parts.next()?, use_intensity)?;
+        let g = parse_component(parts.next()?, use_intensity)?;
+        let b = parse_component(parts.next()?, use_intensity)?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self::new(r, g, b))
+    }
+}
+
+fn parse_hash_rgb(hex: &[u8]) -> Option<Rgb> {
+    let width = match hex.len() {
+        3 => 1,
+        6 => 2,
+        9 => 3,
+        12 => 4,
+        _ => return None,
+    };
+    Some(Rgb::new(
+        parse_hex_channel(&hex[..width])?,
+        parse_hex_channel(&hex[width..width * 2])?,
+        parse_hex_channel(&hex[width * 2..])?,
+    ))
+}
+
+fn parse_component(bytes: &[u8], use_intensity: bool) -> Option<u8> {
+    if use_intensity {
+        parse_intensity_channel(bytes)
+    } else {
+        parse_hex_channel(bytes)
+    }
+}
+
+fn parse_hex_channel(bytes: &[u8]) -> Option<u8> {
+    if !(1..=4).contains(&bytes.len()) {
+        return None;
+    }
+    let text = std::str::from_utf8(bytes).ok()?;
+    let value = u16::from_str_radix(text, 16).ok()? as u32;
+    let max = match bytes.len() {
+        1 => 0x0f,
+        2 => 0xff,
+        3 => 0x0fff,
+        4 => 0xffff,
+        _ => return None,
+    };
+    Some(((value * 0xff) / max) as u8)
+}
+
+fn parse_intensity_channel(bytes: &[u8]) -> Option<u8> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let value = text.parse::<f64>().ok()?;
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return None;
+    }
+    Some((value * 255.0) as u8)
 }
 
 impl DynamicRgb {
@@ -180,6 +266,69 @@ mod tests {
 
         rgb.reset();
         assert_eq!(rgb.get(), Some(Rgb::new(4, 5, 6)));
+    }
+
+    #[test]
+    fn rgb_parse_hex_forms() {
+        assert_eq!(Rgb::parse(b"rgb:f/ff/fff"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(Rgb::parse(b"rgb:7f/a0a0/0"), Some(Rgb::new(127, 160, 0)));
+        assert_eq!(Rgb::parse(b"#fff"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(Rgb::parse(b"#ffffff"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(Rgb::parse(b"#fffffffff"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(Rgb::parse(b"#ffffffffffff"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(Rgb::parse(b"#ff0010"), Some(Rgb::new(255, 0, 16)));
+    }
+
+    #[test]
+    fn rgb_parse_rgbi_intensity_forms() {
+        assert_eq!(Rgb::parse(b"rgbi:1.0/0/0"), Some(Rgb::new(255, 0, 0)));
+        assert_eq!(Rgb::parse(b"rgbi:0.5/0.25/0"), Some(Rgb::new(127, 63, 0)));
+    }
+
+    #[test]
+    fn rgb_parse_x11_named_colors() {
+        assert_eq!(Rgb::parse(b"red"), Some(Rgb::new(255, 0, 0)));
+        assert_eq!(Rgb::parse(b"white"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(Rgb::parse(b"black"), Some(Rgb::new(0, 0, 0)));
+        assert_eq!(Rgb::parse(b"blue"), Some(Rgb::new(0, 0, 255)));
+        assert_eq!(
+            Rgb::parse(b"medium spring green"),
+            Some(Rgb::new(0, 250, 154))
+        );
+        assert_eq!(
+            Rgb::parse(b"mediumspringgreen"),
+            Some(Rgb::new(0, 250, 154))
+        );
+        assert_eq!(Rgb::parse(b"ForestGreen"), Some(Rgb::new(34, 139, 34)));
+        assert_eq!(Rgb::parse(b"FoReStGReen"), Some(Rgb::new(34, 139, 34)));
+        assert_eq!(Rgb::parse(b" red "), Some(Rgb::new(255, 0, 0)));
+    }
+
+    #[test]
+    fn rgb_parse_rejects_invalid_forms() {
+        assert_eq!(Rgb::parse(b""), None);
+        assert_eq!(Rgb::parse(b"RGB:f/0/0"), None);
+        assert_eq!(Rgb::parse(b"RGBI:1.0/0/0"), None);
+        assert_eq!(Rgb::parse(b"rgb:"), None);
+        assert_eq!(Rgb::parse(b"rgb:a/a/a/"), None);
+        assert_eq!(Rgb::parse(b"rgb:00000///"), None);
+        assert_eq!(Rgb::parse(b"rgb:000/"), None);
+        assert_eq!(Rgb::parse(b"rgbi:a/a/a"), None);
+        assert_eq!(Rgb::parse(b"rgbi:-0.1/0/0"), None);
+        assert_eq!(Rgb::parse(b"rgbi:1.1/0/0"), None);
+        assert_eq!(Rgb::parse(b"rgbi:NaN/0/0"), None);
+        assert_eq!(Rgb::parse(b"rgbi:inf/0/0"), None);
+        assert_eq!(Rgb::parse(b"rgbi:0.5/0.0/1.0/0"), None);
+        assert_eq!(Rgb::parse(b"rgb:0.5/0.0/1.0"), None);
+        assert_eq!(Rgb::parse(b"rgb:not/hex/zz"), None);
+        assert_eq!(Rgb::parse(b"#"), None);
+        assert_eq!(Rgb::parse(b"#ff"), None);
+        assert_eq!(Rgb::parse(b"#ffff"), None);
+        assert_eq!(Rgb::parse(b"#fffff"), None);
+        assert_eq!(Rgb::parse(b"#gggggg"), None);
+        assert_eq!(Rgb::parse(b"\tred\t"), None);
+        assert_eq!(Rgb::parse(b"\nred\n"), None);
+        assert_eq!(Rgb::parse(b"nosuchcolor"), None);
     }
 
     #[test]
