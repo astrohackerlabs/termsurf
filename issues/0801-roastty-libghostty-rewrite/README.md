@@ -465,7 +465,7 @@ tests, choose the larger subsystem.
 - [Experiment 168: Port Terminal Metadata Setters C ABI](168-port-terminal-metadata-setters-c-abi.md)
   — **Pass**
 - [Experiment 169: Port Terminal Color Set/Get C ABI](169-port-terminal-color-set-get-c-abi.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

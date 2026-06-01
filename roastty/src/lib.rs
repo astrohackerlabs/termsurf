@@ -5,7 +5,9 @@ use std::slice;
 
 use input::{key, key_encode, key_mods};
 use terminal::kitty::KeyFlags;
-use terminal::terminal::{Terminal as InnerTerminal, TerminalScreen, TerminalStreamError};
+use terminal::terminal::{
+    Terminal as InnerTerminal, TerminalColorKind, TerminalScreen, TerminalStreamError,
+};
 use terminal::{mouse, mouse_encode, osc, point};
 
 mod input;
@@ -80,6 +82,10 @@ const ROASTTY_TERMINAL_SCREEN_ALTERNATE: c_int = 1;
 
 const ROASTTY_TERMINAL_OPTION_TITLE: c_int = 9;
 const ROASTTY_TERMINAL_OPTION_PWD: c_int = 10;
+const ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND: c_int = 11;
+const ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND: c_int = 12;
+const ROASTTY_TERMINAL_OPTION_COLOR_CURSOR: c_int = 13;
+const ROASTTY_TERMINAL_OPTION_COLOR_PALETTE: c_int = 14;
 
 #[repr(C)]
 pub struct RoasttyInfo {
@@ -105,6 +111,16 @@ pub struct RoasttyString {
     len: usize,
     sentinel: bool,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyRgb {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+type RoasttyPalette = [RoasttyRgb; 256];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -773,6 +789,59 @@ fn staged_terminal_pwd(value: *const c_void) -> Result<Option<String>, c_int> {
     Ok(Some(stored))
 }
 
+fn read_rgb(value: *const c_void) -> Option<(u8, u8, u8)> {
+    if value.is_null() {
+        return None;
+    }
+    let rgb = unsafe { value.cast::<RoasttyRgb>().read() };
+    Some((rgb.r, rgb.g, rgb.b))
+}
+
+fn read_palette(value: *const c_void) -> Option<[(u8, u8, u8); 256]> {
+    if value.is_null() {
+        return None;
+    }
+    let palette = unsafe { value.cast::<RoasttyPalette>().read() };
+    Some(palette_to_tuples(palette))
+}
+
+fn palette_to_tuples(palette: RoasttyPalette) -> [(u8, u8, u8); 256] {
+    let mut result = [(0, 0, 0); 256];
+    for (index, rgb) in palette.into_iter().enumerate() {
+        result[index] = (rgb.r, rgb.g, rgb.b);
+    }
+    result
+}
+
+fn palette_from_tuples(palette: [(u8, u8, u8); 256]) -> RoasttyPalette {
+    let mut result = [RoasttyRgb::default(); 256];
+    for (index, rgb) in palette.into_iter().enumerate() {
+        result[index] = RoasttyRgb {
+            r: rgb.0,
+            g: rgb.1,
+            b: rgb.2,
+        };
+    }
+    result
+}
+
+fn write_rgb(out: *mut c_void, rgb: (u8, u8, u8)) {
+    unsafe {
+        out.cast::<RoasttyRgb>().write(RoasttyRgb {
+            r: rgb.0,
+            g: rgb.1,
+            b: rgb.2,
+        });
+    }
+}
+
+fn write_palette(out: *mut c_void, palette: [(u8, u8, u8); 256]) {
+    unsafe {
+        out.cast::<RoasttyPalette>()
+            .write(palette_from_tuples(palette));
+    }
+}
+
 unsafe fn terminal_get_write(terminal: &InnerTerminal, data: c_int, out: *mut c_void) -> c_int {
     match data {
         ROASTTY_TERMINAL_DATA_COLS => out.cast::<u16>().write(terminal.columns()),
@@ -798,20 +867,52 @@ unsafe fn terminal_get_write(terminal: &InnerTerminal, data: c_int, out: *mut c_
         ROASTTY_TERMINAL_DATA_SCROLLBACK_ROWS => {
             out.cast::<usize>().write(terminal.scrollback_rows())
         }
+        ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND => {
+            let Some(rgb) = terminal.color_effective(TerminalColorKind::Foreground) else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_rgb(out, rgb);
+        }
+        ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND => {
+            let Some(rgb) = terminal.color_effective(TerminalColorKind::Background) else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_rgb(out, rgb);
+        }
+        ROASTTY_TERMINAL_DATA_COLOR_CURSOR => {
+            let Some(rgb) = terminal.color_effective(TerminalColorKind::Cursor) else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_rgb(out, rgb);
+        }
+        ROASTTY_TERMINAL_DATA_COLOR_PALETTE => write_palette(out, terminal.palette_current()),
+        ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT => {
+            let Some(rgb) = terminal.color_default(TerminalColorKind::Foreground) else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_rgb(out, rgb);
+        }
+        ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT => {
+            let Some(rgb) = terminal.color_default(TerminalColorKind::Background) else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_rgb(out, rgb);
+        }
+        ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT => {
+            let Some(rgb) = terminal.color_default(TerminalColorKind::Cursor) else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_rgb(out, rgb);
+        }
+        ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT => {
+            write_palette(out, terminal.palette_default())
+        }
         ROASTTY_TERMINAL_DATA_SCROLLBAR
         | ROASTTY_TERMINAL_DATA_CURSOR_STYLE
         | ROASTTY_TERMINAL_DATA_TITLE
         | ROASTTY_TERMINAL_DATA_PWD
         | ROASTTY_TERMINAL_DATA_WIDTH_PX
         | ROASTTY_TERMINAL_DATA_HEIGHT_PX
-        | ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND
-        | ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND
-        | ROASTTY_TERMINAL_DATA_COLOR_CURSOR
-        | ROASTTY_TERMINAL_DATA_COLOR_PALETTE
-        | ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT
-        | ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT
-        | ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT
-        | ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT
         | ROASTTY_TERMINAL_DATA_KITTY_IMAGE_STORAGE_LIMIT
         | ROASTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_FILE
         | ROASTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE
@@ -1180,6 +1281,28 @@ pub extern "C" fn roastty_terminal_set(
             }
             Err(error) => error,
         },
+        ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND => {
+            terminal
+                .terminal
+                .set_color_default(TerminalColorKind::Foreground, read_rgb(value));
+            ROASTTY_SUCCESS
+        }
+        ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND => {
+            terminal
+                .terminal
+                .set_color_default(TerminalColorKind::Background, read_rgb(value));
+            ROASTTY_SUCCESS
+        }
+        ROASTTY_TERMINAL_OPTION_COLOR_CURSOR => {
+            terminal
+                .terminal
+                .set_color_default(TerminalColorKind::Cursor, read_rgb(value));
+            ROASTTY_SUCCESS
+        }
+        ROASTTY_TERMINAL_OPTION_COLOR_PALETTE => {
+            terminal.terminal.set_palette_default(read_palette(value));
+            ROASTTY_SUCCESS
+        }
         _ => ROASTTY_INVALID_VALUE,
     }
 }
@@ -2278,6 +2401,89 @@ mod tests {
         take_roastty_string(out)
     }
 
+    fn terminal_get_rgb_result(
+        terminal: RoasttyTerminal,
+        data: c_int,
+        out: &mut RoasttyRgb,
+    ) -> c_int {
+        roastty_terminal_get(terminal, data, out as *mut _ as *mut c_void)
+    }
+
+    fn terminal_get_rgb(terminal: RoasttyTerminal, data: c_int) -> RoasttyRgb {
+        let mut out = RoasttyRgb::default();
+        assert_eq!(
+            terminal_get_rgb_result(terminal, data, &mut out),
+            ROASTTY_SUCCESS
+        );
+        out
+    }
+
+    fn terminal_get_palette(terminal: RoasttyTerminal, data: c_int) -> RoasttyPalette {
+        let mut out = [RoasttyRgb::default(); 256];
+        assert_eq!(
+            roastty_terminal_get(terminal, data, &mut out as *mut _ as *mut c_void),
+            ROASTTY_SUCCESS
+        );
+        out
+    }
+
+    fn assert_rgb_override_survives_default_path(
+        option: c_int,
+        effective_data: c_int,
+        default_data: c_int,
+        set_override: &[u8],
+        reset_override: &[u8],
+        default: RoasttyRgb,
+        changed_default: RoasttyRgb,
+        override_rgb: RoasttyRgb,
+    ) {
+        let terminal = new_terminal(5, 3);
+        assert_eq!(
+            roastty_terminal_set(terminal, option, &default as *const _ as *const c_void),
+            ROASTTY_SUCCESS
+        );
+        write_terminal(terminal, set_override);
+        assert_eq!(terminal_get_rgb(terminal, effective_data), override_rgb);
+
+        assert_eq!(
+            roastty_terminal_set(
+                terminal,
+                option,
+                &changed_default as *const _ as *const c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(terminal_get_rgb(terminal, effective_data), override_rgb);
+        assert_eq!(terminal_get_rgb(terminal, default_data), changed_default);
+
+        assert_eq!(
+            roastty_terminal_set(terminal, option, ptr::null()),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(terminal_get_rgb(terminal, effective_data), override_rgb);
+        let mut out = RoasttyRgb::default();
+        assert_eq!(
+            terminal_get_rgb_result(terminal, default_data, &mut out),
+            ROASTTY_NO_VALUE
+        );
+
+        write_terminal(terminal, reset_override);
+        assert_eq!(
+            terminal_get_rgb_result(terminal, effective_data, &mut out),
+            ROASTTY_NO_VALUE
+        );
+
+        assert_eq!(
+            roastty_terminal_set(terminal, option, &default as *const _ as *const c_void),
+            ROASTTY_SUCCESS
+        );
+        write_terminal(terminal, set_override);
+        write_terminal(terminal, reset_override);
+        assert_eq!(terminal_get_rgb(terminal, effective_data), default);
+
+        roastty_terminal_free(terminal);
+    }
+
     fn borrowed_roastty_string(bytes: &[u8]) -> RoasttyString {
         RoasttyString {
             ptr: bytes.as_ptr().cast::<c_char>(),
@@ -2544,6 +2750,10 @@ mod tests {
     fn terminal_metadata_setters_abi_option_values_are_stable() {
         assert_eq!(ROASTTY_TERMINAL_OPTION_TITLE, 9);
         assert_eq!(ROASTTY_TERMINAL_OPTION_PWD, 10);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND, 11);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND, 12);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_CURSOR, 13);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_PALETTE, 14);
     }
 
     #[test]
@@ -2581,7 +2791,7 @@ mod tests {
             ROASTTY_INVALID_VALUE
         );
         assert_eq!(
-            roastty_terminal_set(terminal, 11, &title as *const _ as *const c_void),
+            roastty_terminal_set(terminal, 15, &title as *const _ as *const c_void),
             ROASTTY_INVALID_VALUE
         );
 
@@ -2797,6 +3007,353 @@ mod tests {
         assert_eq!(
             terminal_string(terminal, roastty_terminal_pwd),
             b"file://host/direct"
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_color_set_get_abi_rgb_layout_and_option_values_are_stable() {
+        assert_eq!(std::mem::size_of::<RoasttyRgb>(), 3);
+        assert_eq!(std::mem::align_of::<RoasttyRgb>(), 1);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND, 11);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND, 12);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_CURSOR, 13);
+        assert_eq!(ROASTTY_TERMINAL_OPTION_COLOR_PALETTE, 14);
+    }
+
+    #[test]
+    fn terminal_color_set_get_abi_rgb_defaults_are_initially_unset() {
+        let terminal = new_terminal(5, 3);
+        let mut out = RoasttyRgb { r: 1, g: 2, b: 3 };
+
+        for data in [
+            ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+            ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND,
+            ROASTTY_TERMINAL_DATA_COLOR_CURSOR,
+            ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT,
+            ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
+            ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT,
+        ] {
+            assert_eq!(
+                terminal_get_rgb_result(terminal, data, &mut out),
+                ROASTTY_NO_VALUE
+            );
+            assert_eq!(out, RoasttyRgb { r: 1, g: 2, b: 3 });
+        }
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_color_set_get_abi_set_get_and_clear_rgb_defaults() {
+        let terminal = new_terminal(5, 3);
+
+        for (option, effective_data, default_data, rgb) in [
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT,
+                RoasttyRgb { r: 1, g: 2, b: 3 },
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
+                RoasttyRgb { r: 4, g: 5, b: 6 },
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_CURSOR,
+                ROASTTY_TERMINAL_DATA_COLOR_CURSOR,
+                ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT,
+                RoasttyRgb { r: 7, g: 8, b: 9 },
+            ),
+        ] {
+            assert_eq!(
+                roastty_terminal_set(terminal, option, &rgb as *const _ as *const c_void),
+                ROASTTY_SUCCESS
+            );
+            assert_eq!(terminal_get_rgb(terminal, effective_data), rgb);
+            assert_eq!(terminal_get_rgb(terminal, default_data), rgb);
+            assert_eq!(
+                roastty_terminal_set(terminal, option, ptr::null()),
+                ROASTTY_SUCCESS
+            );
+            let mut out = RoasttyRgb { r: 9, g: 8, b: 7 };
+            assert_eq!(
+                terminal_get_rgb_result(terminal, effective_data, &mut out),
+                ROASTTY_NO_VALUE
+            );
+            assert_eq!(out, RoasttyRgb { r: 9, g: 8, b: 7 });
+            assert_eq!(
+                terminal_get_rgb_result(terminal, default_data, &mut out),
+                ROASTTY_NO_VALUE
+            );
+            assert_eq!(out, RoasttyRgb { r: 9, g: 8, b: 7 });
+        }
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_color_set_get_abi_runtime_overrides_survive_default_changes() {
+        let default = RoasttyRgb {
+            r: 0x10,
+            g: 0x20,
+            b: 0x30,
+        };
+        let changed_default = RoasttyRgb {
+            r: 0x40,
+            g: 0x50,
+            b: 0x60,
+        };
+        let override_rgb = RoasttyRgb {
+            r: 0xaa,
+            g: 0xbb,
+            b: 0xcc,
+        };
+
+        for (
+            option,
+            effective_data,
+            default_data,
+            set_override,
+            reset_override,
+            default,
+            changed_default,
+            override_rgb,
+        ) in [
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT,
+                b"\x1b]10;#aabbcc\x1b\\".as_slice(),
+                b"\x1b]110\x1b\\".as_slice(),
+                default,
+                changed_default,
+                override_rgb,
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT,
+                b"\x1b]21;foreground=#aabbcc\x1b\\".as_slice(),
+                b"\x1b]21;foreground=\x1b\\".as_slice(),
+                default,
+                changed_default,
+                override_rgb,
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
+                b"\x1b]11;#aabbcc\x1b\\".as_slice(),
+                b"\x1b]111\x1b\\".as_slice(),
+                default,
+                changed_default,
+                override_rgb,
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_CURSOR,
+                ROASTTY_TERMINAL_DATA_COLOR_CURSOR,
+                ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT,
+                b"\x1b]12;#aabbcc\x1b\\".as_slice(),
+                b"\x1b]112\x1b\\".as_slice(),
+                default,
+                changed_default,
+                override_rgb,
+            ),
+        ] {
+            assert_rgb_override_survives_default_path(
+                option,
+                effective_data,
+                default_data,
+                set_override,
+                reset_override,
+                default,
+                changed_default,
+                override_rgb,
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_color_set_get_abi_kitty_background_and_cursor_override_paths() {
+        let default = RoasttyRgb {
+            r: 0x10,
+            g: 0x20,
+            b: 0x30,
+        };
+        let changed_default = RoasttyRgb {
+            r: 0x40,
+            g: 0x50,
+            b: 0x60,
+        };
+        let override_rgb = RoasttyRgb {
+            r: 0xaa,
+            g: 0xbb,
+            b: 0xcc,
+        };
+
+        for (option, effective_data, default_data, set_override, reset_override) in [
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
+                b"\x1b]21;background=#aabbcc\x1b\\".as_slice(),
+                b"\x1b]21;background=\x1b\\".as_slice(),
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT,
+                b"\x1b]21;foreground=#aabbcc\x1b\\".as_slice(),
+                b"\x1b]21;foreground=\x1b\\".as_slice(),
+            ),
+            (
+                ROASTTY_TERMINAL_OPTION_COLOR_CURSOR,
+                ROASTTY_TERMINAL_DATA_COLOR_CURSOR,
+                ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT,
+                b"\x1b]21;cursor=#aabbcc\x1b\\".as_slice(),
+                b"\x1b]21;cursor=\x1b\\".as_slice(),
+            ),
+        ] {
+            assert_rgb_override_survives_default_path(
+                option,
+                effective_data,
+                default_data,
+                set_override,
+                reset_override,
+                default,
+                changed_default,
+                override_rgb,
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_color_set_get_abi_palette_current_default_and_copy_semantics() {
+        let terminal = new_terminal(5, 3);
+        let initial_current = terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE);
+        let initial_default =
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT);
+        assert_eq!(initial_current, initial_default);
+
+        let mut custom = initial_default;
+        custom[1] = RoasttyRgb {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        };
+        custom[2] = RoasttyRgb {
+            r: 0x44,
+            g: 0x55,
+            b: 0x66,
+        };
+        assert_eq!(
+            roastty_terminal_set(
+                terminal,
+                ROASTTY_TERMINAL_OPTION_COLOR_PALETTE,
+                &custom as *const _ as *const c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        custom[1] = RoasttyRgb { r: 0, g: 0, b: 0 };
+        assert_eq!(custom[1], RoasttyRgb { r: 0, g: 0, b: 0 });
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE)[1],
+            RoasttyRgb {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+            }
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT)[2],
+            RoasttyRgb {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+            }
+        );
+
+        write_terminal(terminal, b"\x1b]4;1;#aabbcc\x1b\\");
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE)[1],
+            RoasttyRgb {
+                r: 0xaa,
+                g: 0xbb,
+                b: 0xcc,
+            }
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT)[1],
+            RoasttyRgb {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+            }
+        );
+
+        let mut replacement = initial_default;
+        replacement[1] = RoasttyRgb {
+            r: 0x77,
+            g: 0x88,
+            b: 0x99,
+        };
+        replacement[3] = RoasttyRgb {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        assert_eq!(
+            roastty_terminal_set(
+                terminal,
+                ROASTTY_TERMINAL_OPTION_COLOR_PALETTE,
+                &replacement as *const _ as *const c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE)[1],
+            RoasttyRgb {
+                r: 0xaa,
+                g: 0xbb,
+                b: 0xcc,
+            }
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE)[3],
+            RoasttyRgb {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT)[1],
+            RoasttyRgb {
+                r: 0x77,
+                g: 0x88,
+                b: 0x99,
+            }
+        );
+
+        assert_eq!(
+            roastty_terminal_set(terminal, ROASTTY_TERMINAL_OPTION_COLOR_PALETTE, ptr::null(),),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE)[1],
+            RoasttyRgb {
+                r: 0xaa,
+                g: 0xbb,
+                b: 0xcc,
+            }
+        );
+        assert_eq!(
+            terminal_get_palette(terminal, ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT),
+            initial_default
         );
 
         roastty_terminal_free(terminal);
@@ -3152,14 +3709,6 @@ mod tests {
             ROASTTY_TERMINAL_DATA_PWD,
             ROASTTY_TERMINAL_DATA_WIDTH_PX,
             ROASTTY_TERMINAL_DATA_HEIGHT_PX,
-            ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
-            ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND,
-            ROASTTY_TERMINAL_DATA_COLOR_CURSOR,
-            ROASTTY_TERMINAL_DATA_COLOR_PALETTE,
-            ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT,
-            ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
-            ROASTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT,
-            ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
             ROASTTY_TERMINAL_DATA_KITTY_IMAGE_STORAGE_LIMIT,
             ROASTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_FILE,
             ROASTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE,

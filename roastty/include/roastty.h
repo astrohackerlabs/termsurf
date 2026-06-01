@@ -89,6 +89,10 @@ typedef enum {
 typedef enum {
   ROASTTY_TERMINAL_OPTION_TITLE = 9,
   ROASTTY_TERMINAL_OPTION_PWD = 10,
+  ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND = 11,
+  ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND = 12,
+  ROASTTY_TERMINAL_OPTION_COLOR_CURSOR = 13,
+  ROASTTY_TERMINAL_OPTION_COLOR_PALETTE = 14,
 } roastty_terminal_option_e;
 
 typedef enum {
@@ -118,6 +122,14 @@ typedef struct {
   uintptr_t len;
   bool sentinel;
 } roastty_string_s;
+
+typedef struct {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+} roastty_rgb_s;
+
+typedef roastty_rgb_s roastty_palette_t[256];
 
 typedef struct {
   const char* key;

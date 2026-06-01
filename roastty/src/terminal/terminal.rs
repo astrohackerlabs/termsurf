@@ -186,10 +186,17 @@ struct TerminalSize {
 
 #[derive(Debug, Clone, Copy)]
 struct TerminalColors {
-    palette: color::Palette,
+    palette: color::DynamicPalette,
     foreground: color::DynamicRgb,
     background: color::DynamicRgb,
     cursor: color::DynamicRgb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalColorKind {
+    Foreground,
+    Background,
+    Cursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,9 +291,9 @@ impl Terminal {
             screens: TerminalScreens::init(cols, rows, max_scrollback_rows)
                 .map_err(|_| TerminalInitError::PageAlloc)?,
             colors: TerminalColors {
-                palette: color::DEFAULT_PALETTE,
-                foreground: color::DynamicRgb::init(color::DEFAULT_PALETTE[7]),
-                background: color::DynamicRgb::init(color::DEFAULT_PALETTE[0]),
+                palette: color::DynamicPalette::init(color::DEFAULT_PALETTE),
+                foreground: color::DynamicRgb::unset(),
+                background: color::DynamicRgb::unset(),
                 cursor: color::DynamicRgb::unset(),
             },
             modes: modes::ModeState::default(),
@@ -369,6 +376,52 @@ impl Terminal {
 
     pub(crate) fn set_pwd(&mut self, stored_value: Option<String>) {
         self.pwd.text = stored_value.unwrap_or_default();
+    }
+
+    pub(crate) fn color_effective(&self, kind: TerminalColorKind) -> Option<(u8, u8, u8)> {
+        self.dynamic_color_by_kind(kind).get().map(rgb_tuple)
+    }
+
+    pub(crate) fn color_default(&self, kind: TerminalColorKind) -> Option<(u8, u8, u8)> {
+        self.dynamic_color_by_kind(kind)
+            .default_rgb()
+            .map(rgb_tuple)
+    }
+
+    pub(crate) fn set_color_default(&mut self, kind: TerminalColorKind, rgb: Option<(u8, u8, u8)>) {
+        self.dynamic_color_mut_by_kind(kind)
+            .set_default(rgb.map(rgb_from_tuple));
+    }
+
+    fn dynamic_color_mut_by_kind(&mut self, kind: TerminalColorKind) -> &mut color::DynamicRgb {
+        match kind {
+            TerminalColorKind::Foreground => &mut self.colors.foreground,
+            TerminalColorKind::Background => &mut self.colors.background,
+            TerminalColorKind::Cursor => &mut self.colors.cursor,
+        }
+    }
+
+    fn dynamic_color_by_kind(&self, kind: TerminalColorKind) -> &color::DynamicRgb {
+        match kind {
+            TerminalColorKind::Foreground => &self.colors.foreground,
+            TerminalColorKind::Background => &self.colors.background,
+            TerminalColorKind::Cursor => &self.colors.cursor,
+        }
+    }
+
+    pub(crate) fn palette_current(&self) -> [(u8, u8, u8); 256] {
+        palette_tuple(*self.colors.palette.current())
+    }
+
+    pub(crate) fn palette_default(&self) -> [(u8, u8, u8); 256] {
+        palette_tuple(*self.colors.palette.original())
+    }
+
+    pub(crate) fn set_palette_default(&mut self, palette: Option<[(u8, u8, u8); 256]>) {
+        self.colors.palette.change_default(match palette {
+            Some(palette) => palette_from_tuple(palette),
+            None => color::DEFAULT_PALETTE,
+        });
     }
 
     pub(crate) fn cursor_position(&self) -> (CellCountInt, CellCountInt) {
@@ -457,7 +510,7 @@ impl Terminal {
 
     #[cfg(test)]
     pub(super) fn set_palette_entry_for_tests(&mut self, index: usize, rgb: color::Rgb) {
-        self.colors.palette[index] = rgb;
+        self.colors.palette.set(index as u8, rgb);
     }
 
     #[cfg(test)]
@@ -1497,16 +1550,16 @@ impl TerminalStreamHandler<'_> {
         for request in requests.iter() {
             match request {
                 osc::ColorRequest::SetPalette { index, rgb } => {
-                    self.colors.palette[index as usize] = rgb;
+                    self.colors.palette.set(index, rgb);
                 }
                 osc::ColorRequest::QueryPalette { index, terminator } => {
                     self.write_palette_query_response(index, terminator);
                 }
                 osc::ColorRequest::ResetPalette { index } => {
-                    self.colors.palette[index as usize] = color::DEFAULT_PALETTE[index as usize];
+                    self.colors.palette.reset(index);
                 }
                 osc::ColorRequest::ResetAllPalette => {
-                    self.colors.palette = color::DEFAULT_PALETTE;
+                    self.colors.palette.reset_all();
                 }
                 osc::ColorRequest::SetDynamic { target, rgb } => {
                     self.dynamic_color_mut(target).set(rgb);
@@ -1542,7 +1595,7 @@ impl TerminalStreamHandler<'_> {
     }
 
     fn write_palette_query_response(&mut self, index: u8, terminator: osc::Terminator) {
-        let rgb = self.colors.palette[index as usize];
+        let rgb = self.colors.palette.current()[index as usize];
         let response = format!(
             "\x1b]4;{};rgb:{:04x}/{:04x}/{:04x}",
             index,
@@ -1679,7 +1732,7 @@ impl TerminalStreamHandler<'_> {
     fn set_kitty_color(&mut self, key: super::kitty::ColorKind, rgb: color::Rgb) {
         match key {
             super::kitty::ColorKind::Palette(index) => {
-                self.colors.palette[index as usize] = rgb;
+                self.colors.palette.set(index, rgb);
             }
             super::kitty::ColorKind::Special(special) => match special {
                 super::kitty::ColorSpecial::Foreground => self.colors.foreground.set(rgb),
@@ -1697,7 +1750,7 @@ impl TerminalStreamHandler<'_> {
     fn reset_kitty_color(&mut self, key: super::kitty::ColorKind) {
         match key {
             super::kitty::ColorKind::Palette(index) => {
-                self.colors.palette[index as usize] = color::DEFAULT_PALETTE[index as usize];
+                self.colors.palette.reset(index);
             }
             super::kitty::ColorKind::Special(special) => match special {
                 super::kitty::ColorSpecial::Foreground => self.colors.foreground.reset(),
@@ -1722,7 +1775,7 @@ impl TerminalStreamHandler<'_> {
                 append_kitty_color_response(
                     response,
                     key,
-                    Some(self.colors.palette[index as usize]),
+                    Some(self.colors.palette.current()[index as usize]),
                 );
             }
             super::kitty::ColorKind::Special(special) => match special {
@@ -2002,7 +2055,7 @@ impl<'a> TerminalFormatter<'a> {
             return String::new();
         }
 
-        let palette = &self.terminal.colors.palette;
+        let palette = self.terminal.colors.palette.current();
         match self.options.screen.emit() {
             PageOutputFormat::Plain => String::new(),
             PageOutputFormat::Vt => palette_vt_string(palette),
@@ -2121,6 +2174,30 @@ fn palette_html_string(palette: &color::Palette) -> String {
     }
     output.push_str("}</style>");
     output
+}
+
+fn rgb_tuple(rgb: color::Rgb) -> (u8, u8, u8) {
+    (rgb.r, rgb.g, rgb.b)
+}
+
+fn rgb_from_tuple(rgb: (u8, u8, u8)) -> color::Rgb {
+    color::Rgb::new(rgb.0, rgb.1, rgb.2)
+}
+
+fn palette_tuple(palette: color::Palette) -> [(u8, u8, u8); 256] {
+    let mut result = [(0, 0, 0); 256];
+    for (index, rgb) in palette.into_iter().enumerate() {
+        result[index] = rgb_tuple(rgb);
+    }
+    result
+}
+
+fn palette_from_tuple(palette: [(u8, u8, u8); 256]) -> color::Palette {
+    let mut result = [color::Rgb::new(0, 0, 0); 256];
+    for (index, rgb) in palette.into_iter().enumerate() {
+        result[index] = rgb_from_tuple(rgb);
+    }
+    result
 }
 
 fn append_kitty_color_response(
@@ -2355,11 +2432,11 @@ mod tests {
     }
 
     fn palette_vt_prefix_len(terminal: &Terminal) -> usize {
-        palette_vt_string(&terminal.colors.palette).len()
+        palette_vt_string(terminal.colors.palette.current()).len()
     }
 
     fn palette_html_prefix_len(terminal: &Terminal) -> usize {
-        palette_html_string(&terminal.colors.palette).len()
+        palette_html_string(terminal.colors.palette.current()).len()
     }
 
     fn modes_prefix_len(terminal: &Terminal) -> usize {
@@ -5036,8 +5113,14 @@ mod tests {
             .next_slice(b"\x1b]4;1;rgb:ff/00/80;2;#00ff00\x1b\\")
             .unwrap();
 
-        assert_eq!(terminal.colors.palette[1], color::Rgb::new(255, 0, 128));
-        assert_eq!(terminal.colors.palette[2], color::Rgb::new(0, 255, 0));
+        assert_eq!(
+            terminal.colors.palette.current()[1],
+            color::Rgb::new(255, 0, 128)
+        );
+        assert_eq!(
+            terminal.colors.palette.current()[2],
+            color::Rgb::new(0, 255, 0)
+        );
         assert_eq!(terminal.pty_response_for_tests(), b"");
         terminal.verify_integrity_for_tests();
     }
@@ -5050,13 +5133,19 @@ mod tests {
             .next_slice(b"\x1b]4;1;#ff0000;1;#0000ff\x1b\\")
             .unwrap();
 
-        assert_eq!(terminal.colors.palette[1], color::Rgb::new(0, 0, 255));
+        assert_eq!(
+            terminal.colors.palette.current()[1],
+            color::Rgb::new(0, 0, 255)
+        );
     }
 
     #[test]
     fn terminal_stream_osc4_query_reports_palette_with_bel_terminator() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        terminal.colors.palette[3] = color::Rgb::new(1, 0x80, 0xff);
+        terminal
+            .colors
+            .palette
+            .set(3, color::Rgb::new(1, 0x80, 0xff));
 
         terminal.next_slice(b"\x1b]4;3;?\x07").unwrap();
 
@@ -5069,7 +5158,10 @@ mod tests {
     #[test]
     fn terminal_stream_osc4_query_reports_palette_with_st_terminator() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        terminal.colors.palette[4] = color::Rgb::new(0x12, 0x34, 0x56);
+        terminal
+            .colors
+            .palette
+            .set(4, color::Rgb::new(0x12, 0x34, 0x56));
 
         terminal.next_slice(b"\x1b]4;4;?\x1b\\").unwrap();
 
@@ -5082,30 +5174,36 @@ mod tests {
     #[test]
     fn terminal_stream_osc104_resets_indexed_palette_entry() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        terminal.colors.palette[1] = color::Rgb::new(255, 0, 0);
-        terminal.colors.palette[2] = color::Rgb::new(0, 255, 0);
+        terminal.colors.palette.set(1, color::Rgb::new(255, 0, 0));
+        terminal.colors.palette.set(2, color::Rgb::new(0, 255, 0));
 
         terminal.next_slice(b"\x1b]104;1\x1b\\").unwrap();
 
-        assert_eq!(terminal.colors.palette[1], color::DEFAULT_PALETTE[1]);
-        assert_eq!(terminal.colors.palette[2], color::Rgb::new(0, 255, 0));
+        assert_eq!(
+            terminal.colors.palette.current()[1],
+            color::DEFAULT_PALETTE[1]
+        );
+        assert_eq!(
+            terminal.colors.palette.current()[2],
+            color::Rgb::new(0, 255, 0)
+        );
     }
 
     #[test]
     fn terminal_stream_osc104_resets_all_palette_entries() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        terminal.colors.palette[1] = color::Rgb::new(255, 0, 0);
-        terminal.colors.palette[2] = color::Rgb::new(0, 255, 0);
+        terminal.colors.palette.set(1, color::Rgb::new(255, 0, 0));
+        terminal.colors.palette.set(2, color::Rgb::new(0, 255, 0));
 
         terminal.next_slice(b"\x1b]104\x1b\\").unwrap();
 
-        assert_eq!(terminal.colors.palette, color::DEFAULT_PALETTE);
+        assert_eq!(terminal.colors.palette.current(), &color::DEFAULT_PALETTE);
     }
 
     #[test]
     fn terminal_stream_osc_dynamic_colors_set_without_changing_palette() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        let original_palette = terminal.colors.palette;
+        let original_palette = *terminal.colors.palette.current();
 
         terminal
             .next_slice(b"\x1b]10;#112233\x1b\\\x1b]11;#445566\x1b\\\x1b]12;#778899\x1b\\")
@@ -5123,7 +5221,7 @@ mod tests {
             terminal.colors.cursor.get(),
             Some(color::Rgb::new(0x77, 0x88, 0x99))
         );
-        assert_eq!(terminal.colors.palette, original_palette);
+        assert_eq!(terminal.colors.palette.current(), &original_palette);
     }
 
     #[test]
@@ -5159,14 +5257,8 @@ mod tests {
             .next_slice(b"\x1b]110\x1b\\\x1b]111;\x1b\\\x1b]112\x1b\\")
             .unwrap();
 
-        assert_eq!(
-            terminal.colors.foreground.get(),
-            Some(color::DEFAULT_PALETTE[7])
-        );
-        assert_eq!(
-            terminal.colors.background.get(),
-            Some(color::DEFAULT_PALETTE[0])
-        );
+        assert_eq!(terminal.colors.foreground.get(), None);
+        assert_eq!(terminal.colors.background.get(), None);
         assert_eq!(terminal.colors.cursor.get(), None);
     }
 
@@ -5206,7 +5298,10 @@ mod tests {
             .next_slice(b"\x1b]21;2=#010203;2=?;2=\x1b\\")
             .unwrap();
 
-        assert_eq!(terminal.colors.palette[2], color::DEFAULT_PALETTE[2]);
+        assert_eq!(
+            terminal.colors.palette.current()[2],
+            color::DEFAULT_PALETTE[2]
+        );
         assert_eq!(
             terminal.pty_response_for_tests(),
             b"\x1b]21;2=rgb:01/02/03\x1b\\"
@@ -5237,7 +5332,7 @@ mod tests {
 
         assert_eq!(
             terminal.pty_response_for_tests(),
-            b"\x1b]21;foreground=rgb:c5/c8/c6;background=rgb:1d/1f/21;cursor=\x1b\\"
+            b"\x1b]21;foreground=;background=;cursor=\x1b\\"
         );
     }
 
@@ -5262,14 +5357,14 @@ mod tests {
 
         assert_eq!(
             terminal.pty_response_for_tests(),
-            b"\x1b]21;foreground=rgb:c5/c8/c6;foreground=rgb:01/02/03\x1b\\"
+            b"\x1b]21;foreground=;foreground=rgb:01/02/03\x1b\\"
         );
     }
 
     #[test]
     fn terminal_stream_kitty_osc21_unsupported_specials_are_inert() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        let original_palette = terminal.colors.palette;
+        let original_palette = *terminal.colors.palette.current();
 
         terminal
             .next_slice(
@@ -5277,15 +5372,9 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(terminal.colors.palette, original_palette);
-        assert_eq!(
-            terminal.colors.foreground.get(),
-            Some(color::DEFAULT_PALETTE[7])
-        );
-        assert_eq!(
-            terminal.colors.background.get(),
-            Some(color::DEFAULT_PALETTE[0])
-        );
+        assert_eq!(terminal.colors.palette.current(), &original_palette);
+        assert_eq!(terminal.colors.foreground.get(), None);
+        assert_eq!(terminal.colors.background.get(), None);
         assert_eq!(terminal.colors.cursor.get(), None);
         assert_eq!(terminal.pty_response_for_tests(), b"\x1b]21\x1b\\");
     }
@@ -5293,7 +5382,7 @@ mod tests {
     #[test]
     fn terminal_stream_unsupported_color_osc_does_not_mutate_palette() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
-        let original = terminal.colors.palette;
+        let original = *terminal.colors.palette.current();
 
         for input in [
             b"\x1b]5;0;#ff0000\x1b\\".as_slice(),
@@ -5305,7 +5394,7 @@ mod tests {
             terminal.next_slice(input).unwrap();
         }
 
-        assert_eq!(terminal.colors.palette, original);
+        assert_eq!(terminal.colors.palette.current(), &original);
     }
 
     #[test]

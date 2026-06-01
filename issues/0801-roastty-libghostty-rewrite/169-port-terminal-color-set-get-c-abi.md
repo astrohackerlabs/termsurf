@@ -308,3 +308,52 @@ This experiment fails if:
   unset-initial-default correction;
 - the C harness does not exercise the new ABI from C;
 - the design or result proceeds without the required Codex review gate.
+
+## Result
+
+**Result:** Pass
+
+Implemented the terminal color C ABI slice:
+
+- added public `roastty_rgb_s` and `roastty_palette_t` types;
+- added implemented terminal color option values `11..14`;
+- ported `DynamicPalette` with current/original/mask semantics;
+- changed newly-created terminals so foreground/background/cursor dynamic colors
+  start unset, matching upstream terminal core behavior;
+- routed OSC and Kitty palette operations through runtime palette overrides;
+- implemented color default setters through `roastty_terminal_set`;
+- implemented existing color `roastty_terminal_get` selectors `18..25`;
+- kept effective RGB getters distinct from default RGB getters;
+- kept current palette getters distinct from default/original palette getters;
+- copied all C RGB and palette inputs at the ABI boundary;
+- updated Rust tests and the C harness.
+
+Roastty does not currently represent the upstream renderer `flags.dirty.palette`
+field, so there was no dirty-palette flag to set or test in this experiment. The
+color state and ABI behavior are otherwise covered by the new tests.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/terminal.rs roastty/src/terminal/color.rs
+cargo test -p roastty dynamic_palette
+cargo test -p roastty terminal_color_set_get_abi
+cargo test -p roastty terminal_get_abi
+cargo test -p roastty terminal_metadata_setters_abi
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty terminal_stream
+cargo test -p roastty
+! rg -n "ghostty|Ghostty|ghostty_" roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c roastty/src/terminal/color.rs
+```
+
+All commands passed. `cargo test -p roastty` passed with 1817 Rust unit tests,
+the C ABI harness, and doc tests.
+
+The implementation result must still pass Codex result review before the result
+commit.
+
+## Conclusion
+
+Experiment 169 completes the terminal color defaults/palette C ABI slice. The
+next experiment can move to the next coherent upstream terminal ABI surface
+without carrying unresolved color-storage debt.

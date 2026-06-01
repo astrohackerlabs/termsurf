@@ -662,7 +662,7 @@ static void assert_terminal_abi(void) {
                               (roastty_terminal_option_e)0,
                               &title_input) == ROASTTY_INVALID_VALUE);
   assert(roastty_terminal_set(terminal,
-                              (roastty_terminal_option_e)11,
+                              (roastty_terminal_option_e)15,
                               &title_input) == ROASTTY_INVALID_VALUE);
   assert(roastty_terminal_set(terminal,
                               ROASTTY_TERMINAL_OPTION_TITLE,
@@ -803,6 +803,89 @@ static void assert_terminal_abi(void) {
   assert(roastty_terminal_get(NULL,
                               ROASTTY_TERMINAL_DATA_COLS,
                               &cols) == ROASTTY_INVALID_VALUE);
+
+  assert(sizeof(roastty_rgb_s) == 3);
+  assert(_Alignof(roastty_rgb_s) == 1);
+  assert(ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND == 11);
+  assert(ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND == 12);
+  assert(ROASTTY_TERMINAL_OPTION_COLOR_CURSOR == 13);
+  assert(ROASTTY_TERMINAL_OPTION_COLOR_PALETTE == 14);
+
+  roastty_rgb_s rgb_out = {.r = 9, .g = 8, .b = 7};
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                              &rgb_out) == ROASTTY_NO_VALUE);
+  assert(rgb_out.r == 9 && rgb_out.g == 8 && rgb_out.b == 7);
+  roastty_rgb_s rgb = {.r = 1, .g = 2, .b = 3};
+  assert(roastty_terminal_set(terminal,
+                              ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND,
+                              &rgb) == ROASTTY_SUCCESS);
+  rgb = (roastty_rgb_s){.r = 4, .g = 5, .b = 6};
+  assert(roastty_terminal_set(terminal,
+                              ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND,
+                              &rgb) == ROASTTY_SUCCESS);
+  rgb = (roastty_rgb_s){.r = 7, .g = 8, .b = 9};
+  assert(roastty_terminal_set(terminal,
+                              ROASTTY_TERMINAL_OPTION_COLOR_CURSOR,
+                              &rgb) == ROASTTY_SUCCESS);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                              &rgb_out) == ROASTTY_SUCCESS);
+  assert(rgb_out.r == 1 && rgb_out.g == 2 && rgb_out.b == 3);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
+                              &rgb_out) == ROASTTY_SUCCESS);
+  assert(rgb_out.r == 4 && rgb_out.g == 5 && rgb_out.b == 6);
+  assert(roastty_terminal_set(terminal,
+                              ROASTTY_TERMINAL_OPTION_COLOR_CURSOR,
+                              NULL) == ROASTTY_SUCCESS);
+  rgb_out = (roastty_rgb_s){.r = 9, .g = 8, .b = 7};
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_CURSOR,
+                              &rgb_out) == ROASTTY_NO_VALUE);
+  assert(rgb_out.r == 9 && rgb_out.g == 8 && rgb_out.b == 7);
+
+  roastty_palette_t initial_palette = {0};
+  roastty_palette_t initial_default_palette = {0};
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_PALETTE,
+                              &initial_palette) == ROASTTY_SUCCESS);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
+                              &initial_default_palette) == ROASTTY_SUCCESS);
+  assert(memcmp(initial_palette,
+                initial_default_palette,
+                sizeof(initial_palette)) == 0);
+  roastty_palette_t palette = {0};
+  memcpy(palette, initial_default_palette, sizeof(palette));
+  palette[1] = (roastty_rgb_s){.r = 0x11, .g = 0x22, .b = 0x33};
+  palette[2] = (roastty_rgb_s){.r = 0x44, .g = 0x55, .b = 0x66};
+  assert(roastty_terminal_set(terminal,
+                              ROASTTY_TERMINAL_OPTION_COLOR_PALETTE,
+                              &palette) == ROASTTY_SUCCESS);
+  palette[1] = (roastty_rgb_s){0};
+  roastty_palette_t got_palette = {0};
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_PALETTE,
+                              &got_palette) == ROASTTY_SUCCESS);
+  assert(got_palette[1].r == 0x11);
+  assert(got_palette[1].g == 0x22);
+  assert(got_palette[1].b == 0x33);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
+                              &got_palette) == ROASTTY_SUCCESS);
+  assert(got_palette[2].r == 0x44);
+  assert(got_palette[2].g == 0x55);
+  assert(got_palette[2].b == 0x66);
+  assert(roastty_terminal_set(terminal,
+                              ROASTTY_TERMINAL_OPTION_COLOR_PALETTE,
+                              NULL) == ROASTTY_SUCCESS);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
+                              &got_palette) == ROASTTY_SUCCESS);
+  assert(memcmp(got_palette,
+                initial_default_palette,
+                sizeof(got_palette)) == 0);
 
   roastty_mode_tag_t ansi_insert = ROASTTY_MODE_TAG_ANSI_BIT | 4;
   roastty_mode_tag_t dec_wraparound = 7;
