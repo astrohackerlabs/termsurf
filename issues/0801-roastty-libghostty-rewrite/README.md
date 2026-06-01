@@ -314,6 +314,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 102: Port Stream UTF-8 Print Core](102-port-stream-utf8-print-core.md)
   — **Pass**
+- [Experiment 103: Port Basic Stream Print Mutation](103-port-basic-stream-print-mutation.md)
+  — **Designed**
 
 ## Non-Goals
 
