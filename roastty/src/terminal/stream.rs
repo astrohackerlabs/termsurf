@@ -1,6 +1,6 @@
 //! Terminal byte stream decoding.
 
-use super::{modes, sgr};
+use super::{modes, osc, sgr};
 
 const CSI_PARAM_CAPACITY: usize = 24;
 
@@ -102,6 +102,8 @@ pub(super) enum Action {
     },
 }
 
+pub(super) type OscAction<'a> = osc::Command<'a>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EraseDisplayMode {
     Below,
@@ -122,6 +124,10 @@ pub(super) trait Handler {
     type Error;
 
     fn vt(&mut self, action: Action) -> Result<(), Self::Error>;
+
+    fn osc(&mut self, _action: OscAction<'_>) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,12 +136,17 @@ enum EscapeState {
     Escape,
     EscapeInvalidIntermediate,
     Csi(CsiState),
+    Osc,
+    OscEscape,
+    OscInvalid,
+    OscInvalidEscape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Stream {
     utf8: Utf8Decoder,
     escape: EscapeState,
+    osc: osc::Parser,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -189,6 +200,7 @@ impl Stream {
         Self {
             utf8: Utf8Decoder::new(),
             escape: EscapeState::Ground,
+            osc: osc::Parser::new(),
         }
     }
 
@@ -212,6 +224,16 @@ impl Stream {
                 Ok(())
             }
             EscapeState::Csi(state) => self.next_csi(byte, state, handler),
+            EscapeState::Osc => self.next_osc(byte, handler),
+            EscapeState::OscEscape => self.next_osc_escape(byte, handler),
+            EscapeState::OscInvalid => {
+                self.next_osc_invalid(byte);
+                Ok(())
+            }
+            EscapeState::OscInvalidEscape => {
+                self.next_osc_invalid_escape(byte);
+                Ok(())
+            }
         }
     }
 
@@ -249,6 +271,11 @@ impl Stream {
             }
             b'[' => {
                 self.escape = EscapeState::Csi(CsiState::new());
+                Ok(())
+            }
+            b']' => {
+                self.osc.reset();
+                self.escape = EscapeState::Osc;
                 Ok(())
             }
             b'D' => {
@@ -290,6 +317,73 @@ impl Stream {
         state.push(byte);
         self.escape = EscapeState::Csi(state);
         Ok(())
+    }
+
+    fn next_osc<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
+        match byte {
+            0x07 => self.finish_osc(handler),
+            0x1b => {
+                self.escape = EscapeState::OscEscape;
+                Ok(())
+            }
+            _ => {
+                self.osc.push(byte);
+                Ok(())
+            }
+        }
+    }
+
+    fn next_osc_escape<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
+        match byte {
+            0x07 => self.finish_osc(handler),
+            b'\\' => self.finish_osc(handler),
+            b']' => {
+                self.osc.invalidate();
+                self.escape = EscapeState::OscInvalid;
+                Ok(())
+            }
+            _ => {
+                self.osc.push_escape_and(byte);
+                self.escape = EscapeState::Osc;
+                Ok(())
+            }
+        }
+    }
+
+    fn next_osc_invalid(&mut self, byte: u8) {
+        match byte {
+            0x07 => {
+                self.osc.reset();
+                self.escape = EscapeState::Ground;
+            }
+            0x1b => {
+                self.escape = EscapeState::OscInvalidEscape;
+            }
+            _ => {}
+        }
+    }
+
+    fn next_osc_invalid_escape(&mut self, byte: u8) {
+        match byte {
+            0x07 | b'\\' => {
+                self.osc.reset();
+                self.escape = EscapeState::Ground;
+            }
+            _ => {
+                self.escape = EscapeState::OscInvalid;
+            }
+        }
+    }
+
+    fn finish_osc<H: Handler>(&mut self, handler: &mut H) -> Result<(), H::Error> {
+        self.escape = EscapeState::Ground;
+        let result = if let Some(action) = self.osc.command() {
+            handler.osc(action)
+        } else {
+            Ok(())
+        };
+        self.osc.reset();
+        result
     }
 
     fn next_utf8<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
@@ -990,6 +1084,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingHandler {
         actions: Vec<Action>,
+        osc_actions: Vec<OwnedOscAction>,
     }
 
     impl Handler for RecordingHandler {
@@ -998,6 +1093,37 @@ mod tests {
         fn vt(&mut self, action: Action) -> Result<(), Self::Error> {
             self.actions.push(action);
             Ok(())
+        }
+
+        fn osc(&mut self, action: OscAction<'_>) -> Result<(), Self::Error> {
+            self.osc_actions.push(OwnedOscAction::from(action));
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum OwnedOscAction {
+        WindowTitle { title: String },
+        ReportPwd { url: String },
+        StartHyperlink { id: Option<String>, uri: String },
+        EndHyperlink,
+    }
+
+    impl From<OscAction<'_>> for OwnedOscAction {
+        fn from(action: OscAction<'_>) -> Self {
+            match action {
+                OscAction::WindowTitle { title } => Self::WindowTitle {
+                    title: title.to_string(),
+                },
+                OscAction::ReportPwd { url } => Self::ReportPwd {
+                    url: url.to_string(),
+                },
+                OscAction::StartHyperlink { id, uri } => Self::StartHyperlink {
+                    id: id.map(ToString::to_string),
+                    uri: uri.to_string(),
+                },
+                OscAction::EndHyperlink => Self::EndHyperlink,
+            }
         }
     }
 
@@ -1048,6 +1174,10 @@ mod tests {
 
     fn actions(handler: &RecordingHandler) -> &[Action] {
         &handler.actions
+    }
+
+    fn osc_actions(handler: &RecordingHandler) -> &[OwnedOscAction] {
+        &handler.osc_actions
     }
 
     fn next_slice(stream: &mut Stream, handler: &mut RecordingHandler, input: &[u8]) {
@@ -5369,6 +5499,191 @@ mod tests {
         );
 
         assert_eq!(actions(&handler), &[Action::Print { cp: 'Z' }]);
+    }
+
+    #[test]
+    fn stream_osc_dispatches_basic_commands() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(
+            &mut stream,
+            &mut handler,
+            b"\x1b]0;zero\x07\x1b]2;two\x1b\\\x1b]1;icon\x07\x1b]7;file://host/p\x07",
+        );
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[
+                OwnedOscAction::WindowTitle {
+                    title: "zero".to_string(),
+                },
+                OwnedOscAction::WindowTitle {
+                    title: "two".to_string(),
+                },
+                OwnedOscAction::ReportPwd {
+                    url: "file://host/p".to_string(),
+                },
+            ]
+        );
+        assert_eq!(actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_dispatches_hyperlinks() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(
+            &mut stream,
+            &mut handler,
+            b"\x1b]8;;https://implicit\x1b\\\x1b]8;id=explicit;https://explicit\x07\x1b]8;;\x1b\\",
+        );
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[
+                OwnedOscAction::StartHyperlink {
+                    id: None,
+                    uri: "https://implicit".to_string(),
+                },
+                OwnedOscAction::StartHyperlink {
+                    id: Some("explicit".to_string()),
+                    uri: "https://explicit".to_string(),
+                },
+                OwnedOscAction::EndHyperlink,
+            ]
+        );
+        assert_eq!(actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_consumes_invalid_unsupported_and_over_capacity_without_leak() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+        let mut input = b"A\x1b]9;notify\x07B\x1b]8;bad=value;https://bad\x1b\\C\x1b]0;".to_vec();
+        input.extend(std::iter::repeat_n(b'x', osc::MAX_BUF + 1));
+        input.extend_from_slice(b"\x07D\x1b]0;\xff\x07E");
+
+        next_slice(&mut stream, &mut handler, &input);
+
+        assert_eq!(
+            actions(&handler),
+            &[
+                Action::Print { cp: 'A' },
+                Action::Print { cp: 'B' },
+                Action::Print { cp: 'C' },
+                Action::Print { cp: 'D' },
+                Action::Print { cp: 'E' },
+            ]
+        );
+        assert_eq!(osc_actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_split_feed_and_nested_escape_behavior() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"\x1b]");
+        next_slice(&mut stream, &mut handler, b"0;split");
+        next_slice(&mut stream, &mut handler, b"\x1b");
+        next_slice(&mut stream, &mut handler, b"\\A");
+        next_slice(&mut stream, &mut handler, b"\x1b]0;bad\x1b]ignored");
+        next_slice(&mut stream, &mut handler, b"\x07B");
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[OwnedOscAction::WindowTitle {
+                title: "split".to_string(),
+            }]
+        );
+        assert_eq!(
+            actions(&handler),
+            &[Action::Print { cp: 'A' }, Action::Print { cp: 'B' }]
+        );
+    }
+
+    #[test]
+    fn stream_osc_bel_terminates_after_pending_escape() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"\x1b]0;title\x1b\x07A");
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[OwnedOscAction::WindowTitle {
+                title: "title".to_string(),
+            }]
+        );
+        assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
+    }
+
+    #[test]
+    fn stream_osc_invalid_bel_terminates_after_pending_escape() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"\x1b]0;bad\x1b]\x1b\x07A");
+
+        assert_eq!(osc_actions(&handler), &[]);
+        assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
+    }
+
+    #[derive(Debug, Default)]
+    struct ErrorOnOscHandler {
+        fail: Option<OwnedOscAction>,
+        osc_actions: Vec<OwnedOscAction>,
+        actions: Vec<Action>,
+    }
+
+    impl ErrorOnOscHandler {
+        fn new(fail: OwnedOscAction) -> Self {
+            Self {
+                fail: Some(fail),
+                osc_actions: Vec::new(),
+                actions: Vec::new(),
+            }
+        }
+    }
+
+    impl Handler for ErrorOnOscHandler {
+        type Error = ();
+
+        fn vt(&mut self, action: Action) -> Result<(), Self::Error> {
+            self.actions.push(action);
+            Ok(())
+        }
+
+        fn osc(&mut self, action: OscAction<'_>) -> Result<(), Self::Error> {
+            let owned = OwnedOscAction::from(action);
+            if self.fail == Some(owned.clone()) {
+                self.fail = None;
+                return Err(());
+            }
+            self.osc_actions.push(owned);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stream_osc_restores_ground_before_handler_error() {
+        let mut stream = Stream::init();
+        let mut handler = ErrorOnOscHandler::new(OwnedOscAction::WindowTitle {
+            title: "fail".to_string(),
+        });
+
+        assert_eq!(stream.next_slice(b"\x1b]0;fail\x07", &mut handler), Err(()));
+        stream.next_slice(b"A\x1b]0;ok\x07", &mut handler).unwrap();
+
+        assert_eq!(handler.actions, &[Action::Print { cp: 'A' }]);
+        assert_eq!(
+            handler.osc_actions,
+            &[OwnedOscAction::WindowTitle {
+                title: "ok".to_string(),
+            }]
+        );
     }
 
     #[derive(Debug, Default)]

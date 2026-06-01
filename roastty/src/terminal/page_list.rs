@@ -4010,6 +4010,21 @@ impl PageList {
     }
 
     #[cfg(test)]
+    pub(super) fn active_cell_hyperlink_for_tests(&self, x: CellCountInt, y: u32) -> bool {
+        let pin = self
+            .pin(point::Point::active(point::Coordinate::new(x, y)))
+            .expect("test active point must resolve to a pin");
+        let node = self.node_for_pin(&pin).expect("test node must exist");
+        let row = node.page.get_row(pin.y as usize);
+        let cell = node
+            .page
+            .get_cells(row)
+            .get(pin.x as usize)
+            .expect("test cell must exist");
+        cell.hyperlink()
+    }
+
+    #[cfg(test)]
     pub(super) fn active_row_styled_for_tests(&self, y: u32) -> bool {
         let pin = self
             .pin(point::Point::active(point::Coordinate::new(0, y)))

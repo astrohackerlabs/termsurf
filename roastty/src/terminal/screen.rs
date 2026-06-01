@@ -806,6 +806,17 @@ impl Screen {
         }
     }
 
+    pub(super) fn set_cursor_hyperlink(&mut self, id: ScreenCursorHyperlinkId, uri: &str) {
+        self.cursor.hyperlink = Some(ScreenCursorHyperlink {
+            id,
+            uri: uri.to_string(),
+        });
+    }
+
+    pub(super) fn clear_cursor_hyperlink(&mut self) {
+        self.cursor.hyperlink = None;
+    }
+
     #[cfg(test)]
     pub(super) fn set_cursor_position_for_tests(&mut self, x: CellCountInt, y: CellCountInt) {
         self.cursor.x = x;
@@ -833,15 +844,20 @@ impl Screen {
         id: ScreenCursorHyperlinkId,
         uri: &str,
     ) {
-        self.cursor.hyperlink = Some(ScreenCursorHyperlink {
-            id,
-            uri: uri.to_string(),
-        });
+        self.set_cursor_hyperlink(id, uri);
     }
 
     #[cfg(test)]
     pub(super) fn clear_cursor_hyperlink_for_tests(&mut self) {
-        self.cursor.hyperlink = None;
+        self.clear_cursor_hyperlink();
+    }
+
+    #[cfg(test)]
+    pub(super) fn cursor_hyperlink_for_tests(&self) -> Option<(ScreenCursorHyperlinkId, &str)> {
+        self.cursor
+            .hyperlink
+            .as_ref()
+            .map(|link| (link.id.clone(), link.uri.as_str()))
     }
 
     #[cfg(test)]
@@ -991,6 +1007,11 @@ impl Screen {
         y: u32,
     ) -> style::Id {
         self.pages.active_cell_style_ref_count_for_tests(x, y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_cell_hyperlink_for_tests(&self, x: CellCountInt, y: u32) -> bool {
+        self.pages.active_cell_hyperlink_for_tests(x, y)
     }
 
     #[cfg(test)]

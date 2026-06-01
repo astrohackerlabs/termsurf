@@ -6,8 +6,8 @@ use super::page_list::{
     CodepointMapEntry, PageListAllocError, PageOutputFormat, PageStringWithPinMap,
 };
 use super::screen::{
-    BasicPrintError, EraseDisplayError, Screen, ScreenFormatter, ScreenFormatterContent,
-    ScreenFormatterExtra, ScreenFormatterOptions,
+    BasicPrintError, EraseDisplayError, Screen, ScreenCursorHyperlinkId, ScreenFormatter,
+    ScreenFormatterContent, ScreenFormatterExtra, ScreenFormatterOptions,
 };
 use super::size::CellCountInt;
 use super::stream::{self, Action, Handler};
@@ -28,7 +28,9 @@ pub(super) struct Terminal {
     pty_response: Vec<u8>,
     stream: stream::Stream,
     flags: TerminalFlags,
+    title: TerminalTitle,
     pwd: TerminalPwd,
+    next_implicit_hyperlink_id: u32,
 }
 
 #[derive(Debug)]
@@ -61,6 +63,11 @@ struct TerminalFlags {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TerminalTitle {
+    text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TerminalPwd {
     text: String,
 }
@@ -80,6 +87,9 @@ struct TerminalStreamHandler<'a> {
     scrolling_region: &'a mut ScrollingRegion,
     tabstops: &'a mut tabstops::Tabstops,
     pty_response: &'a mut Vec<u8>,
+    title: &'a mut TerminalTitle,
+    pwd: &'a mut TerminalPwd,
+    next_implicit_hyperlink_id: &'a mut u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -128,7 +138,9 @@ impl Terminal {
             pty_response: Vec::new(),
             stream: stream::Stream::init(),
             flags: TerminalFlags::default(),
+            title: TerminalTitle::default(),
             pwd: TerminalPwd::default(),
+            next_implicit_hyperlink_id: 0,
         })
     }
 
@@ -141,6 +153,9 @@ impl Terminal {
             tabstops,
             pty_response,
             stream,
+            title,
+            pwd,
+            next_implicit_hyperlink_id,
             ..
         } = self;
         let mut handler = TerminalStreamHandler {
@@ -150,6 +165,9 @@ impl Terminal {
             scrolling_region,
             tabstops,
             pty_response,
+            title,
+            pwd,
+            next_implicit_hyperlink_id,
         };
         stream.next_slice(input, &mut handler)
     }
@@ -248,6 +266,11 @@ impl Terminal {
     }
 
     #[cfg(test)]
+    pub(super) fn title_for_tests(&self) -> &str {
+        self.title.as_str()
+    }
+
+    #[cfg(test)]
     pub(super) fn set_pwd_for_tests(&mut self, pwd: &str) {
         self.pwd.set(pwd);
     }
@@ -337,6 +360,11 @@ impl Terminal {
     }
 
     #[cfg(test)]
+    pub(super) fn cursor_hyperlink_for_tests(&self) -> Option<(ScreenCursorHyperlinkId, &str)> {
+        self.screens.active.cursor_hyperlink_for_tests()
+    }
+
+    #[cfg(test)]
     pub(super) fn active_cell_style_for_tests(&self, x: CellCountInt, y: u32) -> style::Style {
         self.screens.active.active_cell_style_for_tests(x, y)
     }
@@ -350,6 +378,11 @@ impl Terminal {
         self.screens
             .active
             .active_cell_style_ref_count_for_tests(x, y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_cell_hyperlink_for_tests(&self, x: CellCountInt, y: u32) -> bool {
+        self.screens.active.active_cell_hyperlink_for_tests(x, y)
     }
 
     #[cfg(test)]
@@ -560,6 +593,32 @@ impl Handler for TerminalStreamHandler<'_> {
             }
         }
     }
+
+    fn osc(&mut self, action: stream::OscAction<'_>) -> Result<(), Self::Error> {
+        match action {
+            stream::OscAction::WindowTitle { title } => {
+                self.title.set(title);
+            }
+            stream::OscAction::ReportPwd { url } => {
+                self.pwd.set(url);
+            }
+            stream::OscAction::StartHyperlink { id, uri } => {
+                let id = match id {
+                    Some(id) => ScreenCursorHyperlinkId::Explicit(id.to_string()),
+                    None => {
+                        let id = *self.next_implicit_hyperlink_id;
+                        *self.next_implicit_hyperlink_id = id.wrapping_add(1);
+                        ScreenCursorHyperlinkId::Implicit(id)
+                    }
+                };
+                self.screen.set_cursor_hyperlink(id, uri);
+            }
+            stream::OscAction::EndHyperlink => {
+                self.screen.clear_cursor_hyperlink();
+            }
+        }
+        Ok(())
+    }
 }
 
 impl TerminalStreamHandler<'_> {
@@ -674,6 +733,18 @@ impl ScrollingRegion {
         if size.cols > 1 {
             assert!(self.left < self.right);
         }
+    }
+}
+
+impl TerminalTitle {
+    fn set(&mut self, title: &str) {
+        self.text.clear();
+        self.text.push_str(title);
+    }
+
+    #[cfg(test)]
+    fn as_str(&self) -> &str {
+        &self.text
     }
 }
 
@@ -1709,6 +1780,120 @@ mod tests {
                 ..style::Style::default()
             }
         );
+    }
+
+    #[test]
+    fn terminal_stream_osc_updates_title_pwd_and_hyperlink_state() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal
+            .next_slice(
+                b"\x1b]0;window title\x07\x1b]7;file://host/home\x1b\\\x1b]8;id=tab;https://e\x07",
+            )
+            .unwrap();
+
+        assert_eq!(terminal.title_for_tests(), "window title");
+        assert_eq!(terminal.pwd_for_tests(), Some("file://host/home"));
+        assert_eq!(
+            terminal.cursor_hyperlink_for_tests(),
+            Some((
+                ScreenCursorHyperlinkId::Explicit("tab".to_string()),
+                "https://e"
+            ))
+        );
+
+        terminal.next_slice(b"\x1b]8;;\x1b\\").unwrap();
+        assert_eq!(terminal.cursor_hyperlink_for_tests(), None);
+    }
+
+    #[test]
+    fn terminal_stream_osc_icon_unsupported_and_malformed_leave_state_unchanged() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]0;original\x07\x1b]7;file://host/original\x07")
+            .unwrap();
+        terminal
+            .next_slice(
+                b"\x1b]1;icon\x07\x1b]9;notify\x07\x1b]8;bad=value;https://bad\x1b\\\x1b]0;\xff\x07",
+            )
+            .unwrap();
+
+        assert_eq!(terminal.title_for_tests(), "original");
+        assert_eq!(terminal.pwd_for_tests(), Some("file://host/original"));
+        assert_eq!(terminal.cursor_hyperlink_for_tests(), None);
+        assert_eq!(plain_with_unwrap(&terminal, false), "");
+    }
+
+    #[test]
+    fn terminal_stream_osc_actions_do_not_mutate_display_or_responses() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal.set_mode_for_tests(Mode::Insert, true);
+        terminal.screens.active.set_cursor_position_for_tests(5, 1);
+        terminal.clear_dirty_for_tests();
+
+        terminal
+            .next_slice(b"\x1b]0;t\x07\x1b]7;file://host/p\x07\x1b]8;;https://e\x1b\\")
+            .unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert_eq!(terminal.cursor_position_for_tests(), (5, 1));
+        assert!(!terminal.cursor_pending_wrap_for_tests());
+        assert!(terminal.get_mode_for_tests(Mode::Insert));
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(9, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
+    }
+
+    #[test]
+    fn terminal_stream_osc_hyperlink_formatter_observes_active_state() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"hi\x1b]8;;https://implicit\x1b\\")
+            .unwrap();
+
+        let actual = formatter(&terminal, PageOutputFormat::Vt)
+            .with_extra(
+                TerminalFormatterExtra::none().screen(ScreenFormatterExtra::none().hyperlink(true)),
+            )
+            .format();
+
+        assert_eq!(actual, "hi\x1b]8;;https://implicit\x1b\\");
+    }
+
+    #[test]
+    fn terminal_stream_osc_does_not_write_page_hyperlink_metadata() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]8;;https://e\x1b\\AB\x1b]8;;\x1b\\")
+            .unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "AB");
+        assert!(!terminal.active_cell_hyperlink_for_tests(0, 0));
+        assert!(!terminal.active_cell_hyperlink_for_tests(1, 0));
+        assert_eq!(terminal.cursor_hyperlink_for_tests(), None);
+        terminal.verify_integrity_for_tests();
+    }
+
+    #[test]
+    fn terminal_stream_osc_split_feed() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1b]").unwrap();
+        terminal.next_slice(b"0;split").unwrap();
+        terminal.next_slice(b"\x1b").unwrap();
+        terminal.next_slice(b"\\").unwrap();
+        terminal.next_slice(b"\x1b]7;file://host/s").unwrap();
+        terminal.next_slice(b"plit\x07").unwrap();
+
+        assert_eq!(terminal.title_for_tests(), "split");
+        assert_eq!(terminal.pwd_for_tests(), Some("file://host/split"));
+        assert_eq!(plain_with_unwrap(&terminal, false), "");
     }
 
     #[test]

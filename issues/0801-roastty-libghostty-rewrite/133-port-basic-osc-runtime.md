@@ -303,3 +303,82 @@ Codex re-reviewed the updated design and found no remaining required changes:
 `logs/codex-review/20260601-075917-927945-last-message.md`.
 
 The design is approved for implementation.
+
+## Result
+
+**Result:** Pass
+
+Experiment 133 implemented the first private OSC runtime path for Roastty.
+
+The new `roastty/src/terminal/osc.rs` parser uses a fixed 2048-byte buffer and
+parses BEL (`0x07`) and ST (`ESC \`) terminated OSC sequences. It supports:
+
+- OSC 0 and OSC 2 as `WindowTitle`;
+- OSC 1 as a valid but ignored icon title command with no stream action;
+- OSC 7 as `ReportPwd`;
+- OSC 8 implicit start, explicit `id=` start, and end.
+
+Unsupported commands, malformed OSC 8 parameters, invalid UTF-8, over-capacity
+payloads, and nested `ESC ]` inside an open OSC are consumed without leaking
+payload bytes into visible text. The stream also handles BEL correctly when it
+arrives after a pending `ESC` inside either normal or invalid OSC state.
+
+`stream::Action` remains `Copy`. OSC dispatch uses the separate borrowed
+`stream::OscAction<'_>` path so test handlers can copy payloads into owned test
+records and terminal handlers can clone payloads only at the state mutation
+boundary. This preserves CSI dispatch storage and avoids owned string variants
+in the existing CSI/VT action enum.
+
+Terminal state now includes private `TerminalTitle`, reuses private
+`TerminalPwd`, and adds a private `next_implicit_hyperlink_id` counter. OSC 0/2
+updates only `TerminalTitle`. OSC 7 updates `TerminalPwd`; its logical test view
+returns the exact OSC 7 URL, while the internal stored string keeps the existing
+trailing NUL used by formatter output. OSC 8 updates only active cursor
+hyperlink state on the active screen. Explicit links keep the parsed `id=`
+value; implicit links get terminal-owned numeric identities that are not emitted
+by the VT hyperlink formatter.
+
+Page-cell hyperlink writes remain deferred. This experiment deliberately does
+not extend managed cell writes from Experiment 132, so printing while an OSC 8
+link is active does not mark page cells as hyperlink cells. That keeps the
+ref-count and rollback surface for stored hyperlink metadata isolated for a
+follow-up experiment.
+
+No palette mutation, clipboard protocol, notifications, mouse shape, semantic
+prompt state, Kitty protocols, ConEmu protocols, public API, public ABI,
+renderer behavior, app callbacks, PTY spawning, or non-macOS behavior was added.
+
+Verification passed after `cargo fmt`:
+
+- `cargo test -p roastty stream_osc` — 13 passed;
+- `cargo test -p roastty terminal_stream_osc` — 6 passed;
+- `cargo test -p roastty screen_formatter_vt_hyperlink` — 9 passed;
+- `cargo test -p roastty terminal::stream` — 206 passed;
+- `cargo test -p roastty terminal::terminal` — 333 passed;
+- `cargo test -p roastty terminal_formatter` — 67 passed;
+- `cargo test -p roastty` — 1460 unit tests passed, ABI harness passed, 0 doc
+  tests.
+
+Codex result review first found two real issues:
+`logs/codex-review/20260601-080739-726907-last-message.md`.
+
+- OSC state did not treat BEL as a terminator after a pending `ESC` inside
+  normal or invalid OSC.
+- OSC 1 incorrectly dispatched an observable action even though the design
+  required parse-and-ignore behavior.
+
+Both issues were fixed and covered by regression tests. Codex re-reviewed the
+revised implementation and approved the result with no findings:
+`logs/codex-review/20260601-081001-821081-last-message.md`.
+
+## Conclusion
+
+Roastty now has a basic OSC runtime foundation for state-only commands. OSC
+state survives split feeds, terminates on BEL and ST, consumes bad payloads
+without visible leakage, and can mutate private terminal title, pwd, and active
+cursor hyperlink state through a borrowed dispatch path.
+
+The next OSC-related work should be a separate experiment for page-cell OSC 8
+hyperlink writes. That experiment needs to extend the managed print path so
+active hyperlinks are attached to newly printed cells with the same ref-count
+and rollback discipline used by style and existing page hyperlink storage.

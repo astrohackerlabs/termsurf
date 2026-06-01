@@ -23,6 +23,9 @@ mod modes;
 mod offset_hash_map;
 
 #[allow(dead_code)]
+mod osc;
+
+#[allow(dead_code)]
 mod page;
 
 #[allow(dead_code)]

@@ -395,7 +395,7 @@ tests, choose the larger subsystem.
 - [Experiment 132: Port SGR and Styled Printing](132-port-sgr-styled-printing.md)
   — **Pass**
 - [Experiment 133: Port Basic OSC Runtime](133-port-basic-osc-runtime.md) —
-  **Designed**
+  **Pass**
 
 ## Non-Goals
 
