@@ -1,6 +1,7 @@
 //! Terminal state.
 
 use super::color;
+use super::modes;
 use super::page_list::{
     CodepointMapEntry, PageListAllocError, PageOutputFormat, PageStringWithPinMap,
 };
@@ -13,6 +14,7 @@ use super::size::CellCountInt;
 pub(super) struct Terminal {
     screens: TerminalScreens,
     colors: TerminalColors,
+    modes: modes::ModeState,
 }
 
 #[derive(Debug)]
@@ -41,6 +43,7 @@ pub(super) struct TerminalFormatter<'a> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct TerminalFormatterExtra {
     palette: bool,
+    modes: bool,
     screen: ScreenFormatterExtra,
 }
 
@@ -57,12 +60,33 @@ impl Terminal {
             colors: TerminalColors {
                 palette: color::DEFAULT_PALETTE,
             },
+            modes: modes::ModeState::default(),
         })
     }
 
     #[cfg(test)]
     pub(super) fn set_palette_entry_for_tests(&mut self, index: usize, rgb: color::Rgb) {
         self.colors.palette[index] = rgb;
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_mode_for_tests(&mut self, mode: modes::Mode, value: bool) {
+        self.modes.set(mode, value);
+    }
+
+    #[cfg(test)]
+    pub(super) fn get_mode_for_tests(&self, mode: modes::Mode) -> bool {
+        self.modes.get(mode)
+    }
+
+    #[cfg(test)]
+    pub(super) fn save_mode_for_tests(&mut self, mode: modes::Mode) {
+        self.modes.save(mode);
+    }
+
+    #[cfg(test)]
+    pub(super) fn restore_mode_for_tests(&mut self, mode: modes::Mode) -> bool {
+        self.modes.restore(mode)
     }
 }
 
@@ -118,7 +142,7 @@ impl<'a> TerminalFormatter<'a> {
     }
 
     pub(super) fn format(self) -> String {
-        let mut output = self.palette_string();
+        let mut output = self.terminal_prefix_string();
         output.push_str(
             &ScreenFormatter::init(&self.terminal.screens.active, self.options.screen)
                 .with_content(self.content)
@@ -129,7 +153,7 @@ impl<'a> TerminalFormatter<'a> {
     }
 
     pub(super) fn format_with_pin_map(self) -> PageStringWithPinMap {
-        let prefix = self.palette_string();
+        let prefix = self.terminal_prefix_string();
         let mut output = ScreenFormatter::init(&self.terminal.screens.active, self.options.screen)
             .with_content(self.content)
             .with_extra(self.extra.screen)
@@ -147,6 +171,12 @@ impl<'a> TerminalFormatter<'a> {
         output
     }
 
+    fn terminal_prefix_string(&self) -> String {
+        let mut output = self.palette_string();
+        output.push_str(&self.modes_string());
+        output
+    }
+
     fn palette_string(&self) -> String {
         if !self.extra.palette {
             return String::new();
@@ -159,18 +189,32 @@ impl<'a> TerminalFormatter<'a> {
             PageOutputFormat::Html => palette_html_string(palette),
         }
     }
+
+    fn modes_string(&self) -> String {
+        if !self.extra.modes || self.options.screen.emit() != PageOutputFormat::Vt {
+            return String::new();
+        }
+
+        modes_vt_string(&self.terminal.modes)
+    }
 }
 
 impl TerminalFormatterExtra {
     pub(super) const fn none() -> Self {
         Self {
             palette: false,
+            modes: false,
             screen: ScreenFormatterExtra::none(),
         }
     }
 
     pub(super) const fn palette(mut self, palette: bool) -> Self {
         self.palette = palette;
+        self
+    }
+
+    pub(super) const fn modes(mut self, modes: bool) -> Self {
+        self.modes = modes;
         self
     }
 
@@ -203,12 +247,31 @@ fn palette_html_string(palette: &color::Palette) -> String {
     output
 }
 
+fn modes_vt_string(state: &modes::ModeState) -> String {
+    let mut output = String::new();
+    for entry in modes::entries() {
+        let current = state.get(entry.mode);
+        if current == state.default_for(entry.mode) {
+            continue;
+        }
+
+        output.push_str(&format!(
+            "\x1b[{}{}{}",
+            if entry.ansi { "" } else { "?" },
+            entry.value,
+            if current { "h" } else { "l" }
+        ));
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::terminal::charsets;
     use crate::terminal::color;
     use crate::terminal::kitty::{KeyFlags, KeySetMode};
+    use crate::terminal::modes::Mode;
     use crate::terminal::page_list::{CodepointReplacement, Pin};
     use crate::terminal::screen::ScreenCursorHyperlinkId;
     use crate::terminal::selection;
@@ -314,6 +377,14 @@ mod tests {
         TerminalFormatterExtra::none().palette(true)
     }
 
+    const fn terminal_modes_extra() -> TerminalFormatterExtra {
+        TerminalFormatterExtra::none().modes(true)
+    }
+
+    const fn terminal_palette_modes_extra() -> TerminalFormatterExtra {
+        TerminalFormatterExtra::none().palette(true).modes(true)
+    }
+
     fn set_test_palette_entries(terminal: &mut Terminal) {
         terminal.set_palette_entry_for_tests(0, color::Rgb::new(0x12, 0x34, 0x56));
         terminal.set_palette_entry_for_tests(1, color::Rgb::new(0xab, 0xcd, 0xef));
@@ -326,6 +397,10 @@ mod tests {
 
     fn palette_html_prefix_len(terminal: &Terminal) -> usize {
         palette_html_string(&terminal.colors.palette).len()
+    }
+
+    fn modes_prefix_len(terminal: &Terminal) -> usize {
+        modes_vt_string(&terminal.modes).len()
     }
 
     #[test]
@@ -777,6 +852,177 @@ mod tests {
         assert_eq!(output.matches("\x1b]4;").count(), 256);
         assert_eq!(&output[prefix_len..prefix_len + 2], "hi");
         assert!(output[prefix_len + 2..].starts_with("\x1b[0m"));
+        assert!(output.ends_with("\x1b[3;5H"));
+    }
+
+    #[test]
+    fn terminal_formatter_default_path_does_not_emit_modes() {
+        let mut terminal = terminal_with_lines(&["hi"]);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+        terminal.set_mode_for_tests(Mode::Wraparound, false);
+
+        let output = formatter(&terminal, PageOutputFormat::Vt).format();
+
+        assert_eq!(output, "hi");
+        assert!(!output.contains("\x1b[?2004h"));
+        assert!(!output.contains("\x1b[?7l"));
+    }
+
+    #[test]
+    fn terminal_formatter_vt_modes_extra_emits_only_differences_before_content() {
+        let mut terminal = terminal_with_lines(&["hello"]);
+        terminal.set_mode_for_tests(Mode::Insert, true);
+        terminal.set_mode_for_tests(Mode::SendReceiveMode, false);
+        terminal.set_mode_for_tests(Mode::CursorKeys, true);
+        terminal.set_mode_for_tests(Mode::Wraparound, false);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+
+        let output = formatter(&terminal, PageOutputFormat::Vt)
+            .with_extra(terminal_modes_extra())
+            .format();
+
+        assert_eq!(output, "\x1b[4h\x1b[12l\x1b[?1h\x1b[?7l\x1b[?2004hhello");
+        assert!(output.find("\x1b[4h").unwrap() < output.find("\x1b[12l").unwrap());
+        assert!(output.find("\x1b[12l").unwrap() < output.find("\x1b[?1h").unwrap());
+        assert!(output.find("\x1b[?1h").unwrap() < output.find("\x1b[?7l").unwrap());
+        assert!(output.find("\x1b[?7l").unwrap() < output.find("\x1b[?2004h").unwrap());
+        assert!(output.find("\x1b[?2004h").unwrap() < output.find("hello").unwrap());
+    }
+
+    #[test]
+    fn terminal_formatter_vt_modes_extra_ignores_default_true_modes_at_default() {
+        let terminal = terminal_with_lines(&["hello"]);
+
+        assert!(terminal.get_mode_for_tests(Mode::SendReceiveMode));
+        let output = formatter(&terminal, PageOutputFormat::Vt)
+            .with_extra(terminal_modes_extra())
+            .format();
+
+        assert_eq!(output, "hello");
+        assert!(!output.contains("\x1b[12"));
+    }
+
+    #[test]
+    fn terminal_formatter_plain_and_html_ignore_modes_extra() {
+        let mut terminal = terminal_with_lines(&["<hi"]);
+        terminal.set_mode_for_tests(Mode::Insert, true);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+
+        for emit in [PageOutputFormat::Plain, PageOutputFormat::Html] {
+            let default_output = formatter(&terminal, emit).format();
+            let modes_output = formatter(&terminal, emit)
+                .with_extra(terminal_modes_extra())
+                .format();
+
+            assert_eq!(modes_output, default_output);
+            assert!(!modes_output.contains("\x1b[4h"));
+            assert!(!modes_output.contains("\x1b[?2004h"));
+        }
+    }
+
+    #[test]
+    fn terminal_formatter_modes_extra_without_content_emits_for_vt_only() {
+        let mut terminal = terminal_with_lines(&["ignored"]);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+
+        let vt = formatter(&terminal, PageOutputFormat::Vt)
+            .with_content(ScreenFormatterContent::None)
+            .with_extra(terminal_modes_extra())
+            .format();
+        let html = formatter(&terminal, PageOutputFormat::Html)
+            .with_content(ScreenFormatterContent::None)
+            .with_extra(terminal_modes_extra())
+            .format();
+        let plain = formatter(&terminal, PageOutputFormat::Plain)
+            .with_content(ScreenFormatterContent::None)
+            .with_extra(terminal_modes_extra())
+            .format();
+
+        assert_eq!(vt, "\x1b[?2004h");
+        assert_eq!(html, "");
+        assert_eq!(plain, "");
+    }
+
+    #[test]
+    fn terminal_formatter_modes_pin_map_uses_top_left_before_selected_content() {
+        let mut terminal = terminal_with_lines(&["top", "éB"]);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+        let selection = active_selection(&terminal, (0, 1), (1, 1));
+
+        let output = formatter(&terminal, PageOutputFormat::Vt)
+            .with_content(ScreenFormatterContent::Selection(Some(selection)))
+            .with_extra(terminal_modes_extra())
+            .format_with_pin_map();
+        let prefix_len = modes_prefix_len(&terminal);
+
+        assert_eq!(output.text, "\x1b[?2004héB");
+        assert_eq!(output.text.len(), output.pin_map.len());
+        for pin in &output.pin_map[..prefix_len] {
+            assert_eq!(*pin, active_pin(&terminal, 0, 0));
+        }
+        assert_eq!(
+            &output.pin_map[prefix_len..],
+            pins(&terminal, &[(0, 1), (0, 1), (1, 1)])
+        );
+    }
+
+    #[test]
+    fn terminal_formatter_palette_and_modes_pin_map_order_before_selected_content() {
+        let mut terminal = terminal_with_lines(&["top", "éB"]);
+        set_test_palette_entries(&mut terminal);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+        let selection = active_selection(&terminal, (0, 1), (1, 1));
+
+        let output = formatter(&terminal, PageOutputFormat::Vt)
+            .with_content(ScreenFormatterContent::Selection(Some(selection)))
+            .with_extra(terminal_palette_modes_extra())
+            .format_with_pin_map();
+        let palette_len = palette_vt_prefix_len(&terminal);
+        let modes_len = modes_prefix_len(&terminal);
+
+        assert_eq!(output.text.len(), output.pin_map.len());
+        assert!(output.text.starts_with("\x1b]4;0;rgb:12/34/56\x1b\\"));
+        assert_eq!(
+            &output.text[palette_len..palette_len + modes_len],
+            "\x1b[?2004h"
+        );
+        assert!(output.text.ends_with("éB"));
+        for pin in &output.pin_map[..palette_len] {
+            assert_eq!(*pin, active_pin(&terminal, 0, 0));
+        }
+        for pin in &output.pin_map[palette_len..palette_len + modes_len] {
+            assert_eq!(*pin, active_pin(&terminal, 0, 0));
+        }
+        assert_eq!(
+            &output.pin_map[palette_len + modes_len..],
+            pins(&terminal, &[(0, 1), (0, 1), (1, 1)])
+        );
+    }
+
+    #[test]
+    fn terminal_formatter_palette_modes_content_and_screen_extras_order() {
+        let mut terminal = terminal_with_lines(&["hi"]);
+        set_test_palette_entries(&mut terminal);
+        terminal.set_mode_for_tests(Mode::BracketedPaste, true);
+        set_active_screen_extras(&mut terminal);
+
+        let output = formatter(&terminal, PageOutputFormat::Vt)
+            .with_extra(
+                TerminalFormatterExtra::none()
+                    .palette(true)
+                    .modes(true)
+                    .screen(all_screen_extras()),
+            )
+            .format();
+        let palette_len = palette_vt_prefix_len(&terminal);
+        let modes_len = modes_prefix_len(&terminal);
+
+        assert_eq!(&output[palette_len..palette_len + modes_len], "\x1b[?2004h");
+        assert_eq!(
+            &output[palette_len + modes_len..palette_len + modes_len + 2],
+            "hi"
+        );
+        assert!(output[palette_len + modes_len + 2..].starts_with("\x1b[0m"));
         assert!(output.ends_with("\x1b[3;5H"));
     }
 

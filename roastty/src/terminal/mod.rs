@@ -17,6 +17,9 @@ mod highlight;
 mod kitty;
 
 #[allow(dead_code)]
+mod modes;
+
+#[allow(dead_code)]
 mod offset_hash_map;
 
 #[allow(dead_code)]
