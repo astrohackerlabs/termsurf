@@ -280,6 +280,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 85: Port Plain Formatter Pin Map](85-port-plain-formatter-pin-map.md)
   — **Pass**
+- [Experiment 86: Port VT Formatter Point Map](86-port-vt-formatter-point-map.md)
+  — **Designed**
 
 ## Non-Goals
 
