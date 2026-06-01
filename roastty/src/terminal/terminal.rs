@@ -343,6 +343,18 @@ impl Terminal {
         stream.next_slice(input, &mut handler)
     }
 
+    pub(crate) fn reset(&mut self) {
+        self.screens.reset();
+        self.modes.reset();
+        self.scrolling_region = ScrollingRegion::full(self.size);
+        self.tabstops.reset(TABSTOP_INTERVAL);
+        self.title.clear();
+        self.pwd.clear();
+        self.dcs = dcs::Handler::new();
+        self.flags = TerminalFlags::default();
+        self.previous_char = None;
+    }
+
     pub(crate) fn title(&self) -> &str {
         self.title.as_str()
     }
@@ -383,7 +395,10 @@ impl Terminal {
     }
 
     pub(crate) fn mouse_tracking(&self) -> bool {
-        self.flags.mouse_event != mouse::MouseEventMode::None
+        self.modes.get(modes::Mode::MouseEventX10)
+            || self.modes.get(modes::Mode::MouseEventNormal)
+            || self.modes.get(modes::Mode::MouseEventButton)
+            || self.modes.get(modes::Mode::MouseEventAny)
     }
 
     pub(crate) fn total_rows(&self) -> usize {
@@ -392,6 +407,18 @@ impl Terminal {
 
     pub(crate) fn scrollback_rows(&self) -> usize {
         self.screens.active().scrollback_rows()
+    }
+
+    pub(crate) fn mode_get(&self, value: u16, ansi: bool) -> Option<bool> {
+        modes::mode_from_int(value, ansi).map(|mode| self.modes.get(mode))
+    }
+
+    pub(crate) fn mode_set(&mut self, value: u16, ansi: bool, enabled: bool) -> bool {
+        let Some(mode) = modes::mode_from_int(value, ansi) else {
+            return false;
+        };
+        self.modes.set(mode, enabled);
+        true
     }
 
     pub(crate) fn plain_screen(&self, unwrap: bool) -> String {

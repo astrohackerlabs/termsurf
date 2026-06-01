@@ -30,6 +30,13 @@ typedef void* roastty_osc_parser_t;
 typedef void* roastty_surface_t;
 typedef void* roastty_terminal_t;
 
+typedef uint16_t roastty_mode_tag_t;
+
+enum {
+  ROASTTY_MODE_TAG_VALUE_MASK = 0x7fff,
+  ROASTTY_MODE_TAG_ANSI_BIT = 0x8000,
+};
+
 typedef enum {
   ROASTTY_SUCCESS = 0,
   ROASTTY_OUT_OF_MEMORY = 1,
@@ -591,9 +598,16 @@ ROASTTY_API roastty_result_e roastty_terminal_new(uint16_t,
                                                   size_t,
                                                   roastty_terminal_t*);
 ROASTTY_API void roastty_terminal_free(roastty_terminal_t);
+ROASTTY_API void roastty_terminal_reset(roastty_terminal_t);
 ROASTTY_API roastty_result_e roastty_terminal_vt_write(roastty_terminal_t,
                                                        const uint8_t*,
                                                        size_t);
+ROASTTY_API roastty_result_e roastty_terminal_mode_get(roastty_terminal_t,
+                                                       roastty_mode_tag_t,
+                                                       bool*);
+ROASTTY_API roastty_result_e roastty_terminal_mode_set(roastty_terminal_t,
+                                                       roastty_mode_tag_t,
+                                                       bool);
 ROASTTY_API roastty_result_e
 roastty_terminal_read_screen_plain(roastty_terminal_t,
                                    bool,

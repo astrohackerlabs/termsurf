@@ -623,6 +623,9 @@ static void assert_terminal_abi(void) {
   assert(ROASTTY_TERMINAL_DATA_VIEWPORT_ACTIVE == 32);
   assert(ROASTTY_TERMINAL_SCREEN_PRIMARY == 0);
   assert(ROASTTY_TERMINAL_SCREEN_ALTERNATE == 1);
+  assert(sizeof(roastty_mode_tag_t) == sizeof(uint16_t));
+  assert(ROASTTY_MODE_TAG_VALUE_MASK == 0x7fff);
+  assert(ROASTTY_MODE_TAG_ANSI_BIT == 0x8000);
 
   roastty_terminal_t terminal = NULL;
   assert(roastty_terminal_new(5, 3, SIZE_MAX, NULL) == ROASTTY_INVALID_VALUE);
@@ -728,6 +731,111 @@ static void assert_terminal_abi(void) {
   assert(roastty_terminal_get(NULL,
                               ROASTTY_TERMINAL_DATA_COLS,
                               &cols) == ROASTTY_INVALID_VALUE);
+
+  roastty_mode_tag_t ansi_insert = ROASTTY_MODE_TAG_ANSI_BIT | 4;
+  roastty_mode_tag_t dec_wraparound = 7;
+  roastty_mode_tag_t dec_alt_screen = 1049;
+  roastty_mode_tag_t invalid_ansi_mouse = ROASTTY_MODE_TAG_ANSI_BIT | 9;
+  roastty_mode_tag_t unknown_dec = 9999;
+  bool mode_value = true;
+  assert(roastty_terminal_mode_get(NULL, ansi_insert, &mode_value) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_mode_get(terminal, ansi_insert, NULL) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_mode_get(terminal, invalid_ansi_mouse, &mode_value) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_mode_get(terminal, unknown_dec, &mode_value) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_mode_set(NULL, ansi_insert, true) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_mode_set(terminal, invalid_ansi_mouse, true) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_mode_set(terminal, unknown_dec, true) ==
+         ROASTTY_INVALID_VALUE);
+
+  assert(roastty_terminal_mode_get(terminal, ansi_insert, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(!mode_value);
+  assert(roastty_terminal_mode_set(terminal, ansi_insert, true) ==
+         ROASTTY_SUCCESS);
+  assert(roastty_terminal_mode_get(terminal, ansi_insert, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(mode_value);
+  assert(roastty_terminal_mode_set(terminal, ansi_insert, false) ==
+         ROASTTY_SUCCESS);
+  assert(roastty_terminal_mode_get(terminal, ansi_insert, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(!mode_value);
+
+  assert(roastty_terminal_mode_get(terminal, dec_wraparound, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(mode_value);
+  assert(roastty_terminal_mode_set(terminal, dec_wraparound, false) ==
+         ROASTTY_SUCCESS);
+  assert(roastty_terminal_mode_get(terminal, dec_wraparound, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(!mode_value);
+  assert(roastty_terminal_mode_set(terminal, dec_wraparound, true) ==
+         ROASTTY_SUCCESS);
+
+  assert(roastty_terminal_mode_set(terminal, dec_alt_screen, true) ==
+         ROASTTY_SUCCESS);
+  assert(roastty_terminal_mode_get(terminal, dec_alt_screen, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(mode_value);
+  active_screen = ROASTTY_TERMINAL_SCREEN_ALTERNATE;
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+                              &active_screen) == ROASTTY_SUCCESS);
+  assert(active_screen == ROASTTY_TERMINAL_SCREEN_PRIMARY);
+  assert(roastty_terminal_mode_set(terminal, dec_alt_screen, false) ==
+         ROASTTY_SUCCESS);
+
+  roastty_mode_tag_t mouse_modes[] = {9, 1000, 1002, 1003};
+  for (size_t i = 0; i < sizeof(mouse_modes) / sizeof(mouse_modes[0]); i++) {
+    assert(roastty_terminal_mode_set(terminal, mouse_modes[i], true) ==
+           ROASTTY_SUCCESS);
+    mouse_tracking = false;
+    assert(roastty_terminal_get(terminal,
+                                ROASTTY_TERMINAL_DATA_MOUSE_TRACKING,
+                                &mouse_tracking) == ROASTTY_SUCCESS);
+    assert(mouse_tracking);
+    assert(roastty_terminal_mode_set(terminal, mouse_modes[i], false) ==
+           ROASTTY_SUCCESS);
+  }
+  mouse_tracking = true;
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_MOUSE_TRACKING,
+                              &mouse_tracking) == ROASTTY_SUCCESS);
+  assert(!mouse_tracking);
+
+  terminal_write(terminal, "\x1b]0;reset me\x07\x1b[?1049hALT\x1b[?1000h");
+  roastty_terminal_reset(NULL);
+  roastty_terminal_reset(terminal);
+  assert(roastty_terminal_get(terminal, ROASTTY_TERMINAL_DATA_COLS, &cols) ==
+         ROASTTY_SUCCESS);
+  assert(cols == 10);
+  assert(roastty_terminal_get(terminal, ROASTTY_TERMINAL_DATA_ROWS, &rows) ==
+         ROASTTY_SUCCESS);
+  assert(rows == 4);
+  assert(roastty_terminal_mode_get(terminal, ansi_insert, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(!mode_value);
+  assert(roastty_terminal_mode_get(terminal, dec_wraparound, &mode_value) ==
+         ROASTTY_SUCCESS);
+  assert(mode_value);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+                              &active_screen) == ROASTTY_SUCCESS);
+  assert(active_screen == ROASTTY_TERMINAL_SCREEN_PRIMARY);
+  assert(roastty_terminal_get(terminal,
+                              ROASTTY_TERMINAL_DATA_MOUSE_TRACKING,
+                              &mouse_tracking) == ROASTTY_SUCCESS);
+  assert(!mouse_tracking);
+  assert(roastty_terminal_read_screen_plain(terminal, false, &plain) ==
+         ROASTTY_SUCCESS);
+  assert_roastty_string_eq(plain, "");
+  terminal_write(terminal, "abc");
 
   roastty_terminal_data_e keys[] = {
       ROASTTY_TERMINAL_DATA_COLS,

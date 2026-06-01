@@ -276,3 +276,69 @@ found three real verification gaps:
 
 The design was updated with those required checks. Codex's second review found
 no remaining blocking issues and approved the experiment for implementation.
+
+## Result
+
+**Result:** Pass
+
+Experiment 167 implemented the terminal mode-control C ABI slice:
+
+- added `roastty_mode_tag_t` plus the packed mode-tag constants
+  `ROASTTY_MODE_TAG_VALUE_MASK` and `ROASTTY_MODE_TAG_ANSI_BIT`;
+- added `roastty_terminal_reset`;
+- added `roastty_terminal_mode_get`;
+- added `roastty_terminal_mode_set`;
+- aligned `ROASTTY_TERMINAL_DATA_MOUSE_TRACKING` with upstream getter semantics
+  by reading the terminal mode table instead of the runtime mouse-event cache.
+
+The direct mode setter intentionally updates the mode table only. DEC 1049
+therefore becomes observable through `roastty_terminal_mode_get`, but it does
+not switch the active screen. Escape-sequence processing remains responsible for
+the higher-level alternate-screen side effects.
+
+The reset entry point uses the same terminal-state reset surface as RIS-visible
+full reset while preserving dimensions and the wrapper stream parser.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/terminal.rs roastty/src/terminal/modes.rs
+cargo test -p roastty terminal_mode_control_abi
+cargo test -p roastty terminal_get_abi
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty terminal_stream
+cargo test -p roastty
+! rg -n "ghostty|Ghostty|ghostty_" roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c
+```
+
+Observed results:
+
+- `terminal_mode_control_abi`: 6 passed;
+- `terminal_get_abi`: 6 passed;
+- C ABI harness: passed;
+- `terminal_stream`: 381 passed;
+- full `roastty`: 1799 unit tests, C harness, and doc-tests passed;
+- forbidden public/source name grep over touched ABI files passed.
+
+## Codex Result Review
+
+**Result:** Approved.
+
+Codex reviewed the completed diff and found no blocking implementation issues.
+It confirmed that:
+
+- the packed `roastty_mode_tag_t` ABI and Rust decoding match upstream's
+  low-15-bit value plus high ANSI bit layout;
+- reset preserves dimensions, resets terminal state, and does not reset the
+  wrapper stream parser;
+- `MOUSE_TRACKING` now reads the mode table while leaving the runtime mouse
+  cache available for stream/input behavior;
+- Rust tests and the C harness cover the experiment requirements.
+
+## Conclusion
+
+Roastty now exposes the next terminal control-state ABI slice needed by the
+macOS frontend: direct full reset, mode get, and mode set. The implementation
+keeps mode-table mutation separate from CSI side effects, matching upstream's C
+ABI behavior and preserving the active-screen semantics already owned by stream
+processing.

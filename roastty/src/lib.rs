@@ -30,6 +30,9 @@ pub type RoasttyOscParser = *mut c_void;
 pub type RoasttySurface = *mut c_void;
 pub type RoasttyTerminal = *mut c_void;
 
+const ROASTTY_MODE_TAG_VALUE_MASK: u16 = 0x7fff;
+const ROASTTY_MODE_TAG_ANSI_BIT: u16 = 0x8000;
+
 const ROASTTY_SUCCESS: c_int = 0;
 #[allow(dead_code)]
 const ROASTTY_OUT_OF_MEMORY: c_int = 1;
@@ -719,6 +722,13 @@ fn terminal_data_selector_is_valid(data: c_int) -> bool {
         )
 }
 
+fn mode_tag_parts(tag: u16) -> (u16, bool) {
+    (
+        tag & ROASTTY_MODE_TAG_VALUE_MASK,
+        tag & ROASTTY_MODE_TAG_ANSI_BIT != 0,
+    )
+}
+
 unsafe fn terminal_get_write(terminal: &InnerTerminal, data: c_int, out: *mut c_void) -> c_int {
     match data {
         ROASTTY_TERMINAL_DATA_COLS => out.cast::<u16>().write(terminal.columns()),
@@ -1072,6 +1082,13 @@ pub extern "C" fn roastty_terminal_free(terminal: RoasttyTerminal) {
 }
 
 #[no_mangle]
+pub extern "C" fn roastty_terminal_reset(terminal: RoasttyTerminal) {
+    if let Some(terminal) = terminal_from_handle(terminal) {
+        terminal.terminal.reset();
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn roastty_terminal_vt_write(
     terminal: RoasttyTerminal,
     bytes: *const u8,
@@ -1092,6 +1109,46 @@ pub extern "C" fn roastty_terminal_vt_write(
         Ok(()) => ROASTTY_SUCCESS,
         Err(error) => terminal_stream_error_result(error),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_mode_get(
+    terminal: RoasttyTerminal,
+    tag: u16,
+    out: *mut bool,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+
+    let (value, ansi) = mode_tag_parts(tag);
+    let Some(enabled) = terminal.terminal.mode_get(value, ansi) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    unsafe {
+        out.write(enabled);
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_mode_set(
+    terminal: RoasttyTerminal,
+    tag: u16,
+    enabled: bool,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    let (value, ansi) = mode_tag_parts(tag);
+    if !terminal.terminal.mode_set(value, ansi, enabled) {
+        return ROASTTY_INVALID_VALUE;
+    }
+    ROASTTY_SUCCESS
 }
 
 #[no_mangle]
@@ -2139,6 +2196,15 @@ mod tests {
         take_roastty_string(out)
     }
 
+    fn terminal_plain_string(terminal: RoasttyTerminal) -> Vec<u8> {
+        let mut out = empty_string();
+        assert_eq!(
+            roastty_terminal_read_screen_plain(terminal, false, &mut out),
+            ROASTTY_SUCCESS
+        );
+        take_roastty_string(out)
+    }
+
     fn feed_osc(parser: RoasttyOscParser, bytes: &[u8]) {
         for &byte in bytes {
             roastty_osc_next(parser, byte);
@@ -2163,6 +2229,54 @@ mod tests {
             alt_side: 0,
             super_side: 0,
         }
+    }
+
+    const fn ansi_mode_tag(value: u16) -> u16 {
+        value | ROASTTY_MODE_TAG_ANSI_BIT
+    }
+
+    const fn dec_mode_tag(value: u16) -> u16 {
+        value
+    }
+
+    fn terminal_get_bool(terminal: RoasttyTerminal, data: c_int) -> bool {
+        let mut out = false;
+        assert_eq!(
+            roastty_terminal_get(terminal, data, &mut out as *mut _ as *mut c_void),
+            ROASTTY_SUCCESS
+        );
+        out
+    }
+
+    fn terminal_get_u16(terminal: RoasttyTerminal, data: c_int) -> u16 {
+        let mut out = 0u16;
+        assert_eq!(
+            roastty_terminal_get(terminal, data, &mut out as *mut _ as *mut c_void),
+            ROASTTY_SUCCESS
+        );
+        out
+    }
+
+    fn terminal_get_screen(terminal: RoasttyTerminal) -> c_int {
+        let mut out = ROASTTY_TERMINAL_SCREEN_ALTERNATE;
+        assert_eq!(
+            roastty_terminal_get(
+                terminal,
+                ROASTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+                &mut out as *mut _ as *mut c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        out
+    }
+
+    fn terminal_mode_get(terminal: RoasttyTerminal, tag: u16) -> bool {
+        let mut out = false;
+        assert_eq!(
+            roastty_terminal_mode_get(terminal, tag, &mut out),
+            ROASTTY_SUCCESS
+        );
+        out
     }
 
     #[test]
@@ -2843,6 +2957,259 @@ mod tests {
             ),
             ROASTTY_INVALID_VALUE
         );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_mode_control_abi_tag_constants_match_packed_layout() {
+        assert_eq!(ROASTTY_MODE_TAG_VALUE_MASK, 0x7fff);
+        assert_eq!(ROASTTY_MODE_TAG_ANSI_BIT, 0x8000);
+        assert_eq!(dec_mode_tag(1), 0x0001);
+        assert_eq!(ansi_mode_tag(4), 0x8004);
+        assert_eq!(dec_mode_tag(7), 0x0007);
+        assert_eq!(dec_mode_tag(2004), 0x07d4);
+        assert_eq!(ansi_mode_tag(20), 0x8014);
+        assert_eq!(mode_tag_parts(ansi_mode_tag(4)), (4, true));
+        assert_eq!(mode_tag_parts(dec_mode_tag(1000)), (1000, false));
+    }
+
+    #[test]
+    fn terminal_mode_control_abi_validates_mode_get_inputs() {
+        let terminal = new_terminal(5, 3);
+        let mut out = false;
+
+        assert_eq!(
+            roastty_terminal_mode_get(ptr::null_mut(), ansi_mode_tag(4), &mut out),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_mode_get(terminal, ansi_mode_tag(4), ptr::null_mut()),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_mode_get(terminal, ansi_mode_tag(9), &mut out),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_mode_get(terminal, dec_mode_tag(9999), &mut out),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_mode_set(ptr::null_mut(), ansi_mode_tag(4), true),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_mode_set(terminal, ansi_mode_tag(9), true),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_mode_set(terminal, dec_mode_tag(9999), true),
+            ROASTTY_INVALID_VALUE
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_mode_control_abi_gets_defaults_and_round_trips_mode_set() {
+        let terminal = new_terminal(5, 3);
+
+        assert!(!terminal_mode_get(terminal, ansi_mode_tag(4)));
+        assert!(terminal_mode_get(terminal, ansi_mode_tag(12)));
+        assert!(terminal_mode_get(terminal, dec_mode_tag(7)));
+        assert!(!terminal_mode_get(terminal, dec_mode_tag(2004)));
+
+        for (tag, enabled) in [
+            (ansi_mode_tag(4), true),
+            (ansi_mode_tag(20), true),
+            (dec_mode_tag(7), false),
+            (dec_mode_tag(2004), true),
+        ] {
+            assert_eq!(
+                roastty_terminal_mode_set(terminal, tag, enabled),
+                ROASTTY_SUCCESS
+            );
+            assert_eq!(terminal_mode_get(terminal, tag), enabled);
+            assert_eq!(
+                roastty_terminal_mode_set(terminal, tag, !enabled),
+                ROASTTY_SUCCESS
+            );
+            assert_eq!(terminal_mode_get(terminal, tag), !enabled);
+        }
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_mode_control_abi_side_effect_modes_update_table_only() {
+        let terminal = new_terminal(5, 3);
+
+        assert_eq!(
+            roastty_terminal_mode_set(terminal, dec_mode_tag(1049), true),
+            ROASTTY_SUCCESS
+        );
+        assert!(terminal_mode_get(terminal, dec_mode_tag(1049)));
+        assert_eq!(
+            terminal_get_screen(terminal),
+            ROASTTY_TERMINAL_SCREEN_PRIMARY
+        );
+
+        assert_eq!(
+            roastty_terminal_mode_set(terminal, dec_mode_tag(1049), false),
+            ROASTTY_SUCCESS
+        );
+        assert!(!terminal_mode_get(terminal, dec_mode_tag(1049)));
+        assert_eq!(
+            terminal_get_screen(terminal),
+            ROASTTY_TERMINAL_SCREEN_PRIMARY
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_mode_control_abi_reset_restores_terminal_state() {
+        let terminal = new_terminal(10, 4);
+
+        write_terminal(terminal, b"abcde");
+        write_terminal(terminal, b"\x1b[?1049hALT");
+        write_terminal(terminal, b"\x1b[?25l\x1b[?1000h\x1b[>4u");
+        write_terminal(terminal, b"\x1b[2;3r\x1b[3g\x1b]0;title\x07");
+        write_terminal(terminal, b"\x1b]1337;CurrentDir=file://host/tmp\x07");
+
+        assert_eq!(terminal_get_u16(terminal, ROASTTY_TERMINAL_DATA_COLS), 10);
+        assert_eq!(terminal_get_u16(terminal, ROASTTY_TERMINAL_DATA_ROWS), 4);
+        assert_eq!(
+            terminal_get_screen(terminal),
+            ROASTTY_TERMINAL_SCREEN_ALTERNATE
+        );
+        assert!(!terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_CURSOR_VISIBLE
+        ));
+        assert!(terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+        ));
+        assert_eq!(
+            terminal_string(terminal, roastty_terminal_title),
+            b"title".to_vec()
+        );
+        assert_eq!(
+            terminal_string(terminal, roastty_terminal_pwd),
+            b"file://host/tmp".to_vec()
+        );
+
+        roastty_terminal_reset(ptr::null_mut());
+        roastty_terminal_reset(terminal);
+
+        assert_eq!(terminal_get_u16(terminal, ROASTTY_TERMINAL_DATA_COLS), 10);
+        assert_eq!(terminal_get_u16(terminal, ROASTTY_TERMINAL_DATA_ROWS), 4);
+        assert_eq!(
+            terminal_get_screen(terminal),
+            ROASTTY_TERMINAL_SCREEN_PRIMARY
+        );
+        assert!(terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_CURSOR_VISIBLE
+        ));
+        assert!(!terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP
+        ));
+        assert!(!terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+        ));
+        let mut key_flags = 99u8;
+        assert_eq!(
+            roastty_terminal_get(
+                terminal,
+                ROASTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS,
+                &mut key_flags as *mut _ as *mut c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(key_flags, 0);
+        assert!(terminal_string(terminal, roastty_terminal_title).is_empty());
+        assert!(terminal_string(terminal, roastty_terminal_pwd).is_empty());
+
+        write_terminal(terminal, b"\x1b[b");
+        assert!(terminal_plain_string(terminal).is_empty());
+
+        write_terminal(terminal, b"\tX");
+        assert_eq!(terminal_plain_string(terminal), b"        X".to_vec());
+
+        roastty_terminal_reset(terminal);
+        write_terminal(terminal, b"A\r\nB\r\nC");
+        assert_eq!(terminal_plain_string(terminal), b"A\nB\nC".to_vec());
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_mode_control_abi_mouse_tracking_getter_reads_mode_table() {
+        let terminal = new_terminal(5, 3);
+
+        for tag in [
+            dec_mode_tag(9),
+            dec_mode_tag(1000),
+            dec_mode_tag(1002),
+            dec_mode_tag(1003),
+        ] {
+            roastty_terminal_reset(terminal);
+            assert_eq!(
+                roastty_terminal_mode_set(terminal, tag, true),
+                ROASTTY_SUCCESS
+            );
+            assert!(terminal_get_bool(
+                terminal,
+                ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+            ));
+        }
+
+        for tag in [
+            dec_mode_tag(9),
+            dec_mode_tag(1000),
+            dec_mode_tag(1002),
+            dec_mode_tag(1003),
+        ] {
+            assert_eq!(
+                roastty_terminal_mode_set(terminal, tag, true),
+                ROASTTY_SUCCESS
+            );
+        }
+        assert!(terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+        ));
+        for tag in [
+            dec_mode_tag(9),
+            dec_mode_tag(1000),
+            dec_mode_tag(1002),
+            dec_mode_tag(1003),
+        ] {
+            assert_eq!(
+                roastty_terminal_mode_set(terminal, tag, false),
+                ROASTTY_SUCCESS
+            );
+        }
+        assert!(!terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+        ));
+
+        write_terminal(terminal, b"\x1b[?1000h");
+        assert!(terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+        ));
+        write_terminal(terminal, b"\x1b[?1000l");
+        assert!(!terminal_get_bool(
+            terminal,
+            ROASTTY_TERMINAL_DATA_MOUSE_TRACKING
+        ));
 
         roastty_terminal_free(terminal);
     }
