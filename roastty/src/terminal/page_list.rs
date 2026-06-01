@@ -66,6 +66,19 @@ pub(super) struct Node {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct GridRef {
+    pub(super) node: *const (),
+    pub(super) x: CellCountInt,
+    pub(super) y: CellCountInt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GridRefPointError {
+    InvalidValue,
+    NoValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Pin {
     node: NonNull<Node>,
     y: CellCountInt,
@@ -86,6 +99,16 @@ impl Pin {
     #[cfg(test)]
     pub(super) fn mark_garbage_for_tests(&mut self) {
         self.garbage = true;
+    }
+}
+
+impl From<Pin> for GridRef {
+    fn from(pin: Pin) -> Self {
+        Self {
+            node: pin.node.as_ptr().cast_const().cast(),
+            x: pin.x,
+            y: pin.y,
+        }
     }
 }
 
@@ -1983,6 +2006,46 @@ impl PageList {
         let mut pin = self.pin_down(self.get_top_left(point.tag()), coord.y as usize)?;
         pin.x = coord.x;
         Some(pin)
+    }
+
+    pub(super) fn grid_ref(&self, point: point::Point) -> Option<GridRef> {
+        self.pin(point).map(GridRef::from)
+    }
+
+    pub(super) fn point_from_grid_ref(
+        &self,
+        node_ptr: *const (),
+        x: CellCountInt,
+        y: CellCountInt,
+        tag: point::Tag,
+    ) -> Result<point::Coordinate, GridRefPointError> {
+        if node_ptr.is_null() {
+            return Err(GridRefPointError::InvalidValue);
+        }
+
+        let mut matching_node = None;
+        for page_node in &self.pages {
+            let current = NonNull::from(page_node.as_ref());
+            if current.as_ptr().cast_const().cast::<()>() == node_ptr {
+                matching_node = Some(current);
+                break;
+            }
+        }
+
+        let Some(node) = matching_node else {
+            return Err(GridRefPointError::NoValue);
+        };
+
+        let page_node = self.node_for_ptr(node).ok_or(GridRefPointError::NoValue)?;
+        if x >= page_node.page.size_cols() || y >= page_node.page.size_rows() {
+            return Err(GridRefPointError::InvalidValue);
+        }
+
+        let pin = Pin::new(node, y, x);
+        let point = self
+            .point_from_pin(tag, pin)
+            .ok_or(GridRefPointError::NoValue)?;
+        Ok(point.coord())
     }
 
     fn point_from_pin(&self, tag: point::Tag, pin: Pin) -> Option<point::Point> {

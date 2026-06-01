@@ -10,12 +10,12 @@ pub(super) enum Tag {
 
 #[derive(Debug, Clone, Copy, Default, Hash, PartialEq, Eq)]
 pub(crate) struct Coordinate {
-    pub(super) x: CellCountInt,
-    pub(super) y: u32,
+    pub(crate) x: CellCountInt,
+    pub(crate) y: u32,
 }
 
 impl Coordinate {
-    pub(super) const fn new(x: CellCountInt, y: u32) -> Self {
+    pub(crate) const fn new(x: CellCountInt, y: u32) -> Self {
         Self { x, y }
     }
 }

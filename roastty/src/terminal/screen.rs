@@ -7,8 +7,8 @@ use super::hyperlink;
 use super::kitty;
 use super::page::{SemanticContent, SemanticPrompt};
 use super::page_list::{
-    BasicCellWriteError, CodepointMapEntry, PageList, PageListAllocError, PageOutputFormat,
-    PageStringWithPinMap, StyledCellWriteError,
+    BasicCellWriteError, CodepointMapEntry, GridRef, GridRefPointError, PageList,
+    PageListAllocError, PageOutputFormat, PageStringWithPinMap, StyledCellWriteError,
 };
 use super::point;
 use super::selection;
@@ -1019,6 +1019,20 @@ impl Screen {
 
     pub(super) fn scrollback_rows(&self) -> usize {
         self.pages.scrollback_rows()
+    }
+
+    pub(super) fn grid_ref(&self, point: point::Point) -> Option<GridRef> {
+        self.pages.grid_ref(point)
+    }
+
+    pub(super) fn point_from_grid_ref(
+        &self,
+        node: *const (),
+        x: CellCountInt,
+        y: CellCountInt,
+        tag: point::Tag,
+    ) -> Result<point::Coordinate, GridRefPointError> {
+        self.pages.point_from_grid_ref(node, x, y, tag)
     }
 
     pub(super) fn set_kitty_keyboard(&mut self, mode: kitty::KeySetMode, flags: kitty::KeyFlags) {

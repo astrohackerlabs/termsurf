@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -773,9 +774,34 @@ static void assert_terminal_abi(void) {
   assert(ROASTTY_SIZE_REPORT_CSI_14_T == 1);
   assert(ROASTTY_SIZE_REPORT_CSI_16_T == 2);
   assert(ROASTTY_SIZE_REPORT_CSI_18_T == 3);
+  assert(ROASTTY_POINT_ACTIVE == 0);
+  assert(ROASTTY_POINT_VIEWPORT == 1);
+  assert(ROASTTY_POINT_SCREEN == 2);
+  assert(ROASTTY_POINT_HISTORY == 3);
   assert(sizeof(roastty_mode_tag_t) == sizeof(uint16_t));
   assert(ROASTTY_MODE_TAG_VALUE_MASK == 0x7fff);
   assert(ROASTTY_MODE_TAG_ANSI_BIT == 0x8000);
+  assert(sizeof(roastty_point_coordinate_s) == 8);
+  assert(_Alignof(roastty_point_coordinate_s) == 4);
+  assert(offsetof(roastty_point_coordinate_s, x) == 0);
+  assert(offsetof(roastty_point_coordinate_s, y) == 4);
+  assert(sizeof(roastty_point_value_u) == 16);
+  assert(_Alignof(roastty_point_value_u) == 8);
+  assert(offsetof(roastty_point_value_u, active) == 0);
+  assert(offsetof(roastty_point_value_u, viewport) == 0);
+  assert(offsetof(roastty_point_value_u, screen) == 0);
+  assert(offsetof(roastty_point_value_u, history) == 0);
+  assert(offsetof(roastty_point_value_u, _padding) == 0);
+  assert(sizeof(roastty_point_s) == 24);
+  assert(_Alignof(roastty_point_s) == 8);
+  assert(offsetof(roastty_point_s, tag) == 0);
+  assert(offsetof(roastty_point_s, value) == 8);
+  assert(sizeof(roastty_grid_ref_s) == 24);
+  assert(_Alignof(roastty_grid_ref_s) == 8);
+  assert(offsetof(roastty_grid_ref_s, size) == 0);
+  assert(offsetof(roastty_grid_ref_s, node) == 8);
+  assert(offsetof(roastty_grid_ref_s, x) == 16);
+  assert(offsetof(roastty_grid_ref_s, y) == 18);
 
   roastty_size_report_size_s report_size = {
       .rows = 24,
@@ -823,6 +849,90 @@ static void assert_terminal_abi(void) {
   assert(roastty_terminal_vt_write(terminal, NULL, 1) ==
          ROASTTY_INVALID_VALUE);
   assert(roastty_terminal_vt_write(terminal, NULL, 0) == ROASTTY_SUCCESS);
+
+  roastty_point_s point = {
+      .tag = ROASTTY_POINT_ACTIVE,
+      .value = {.active = {.x = 1, .y = 0}},
+  };
+  roastty_grid_ref_s grid_ref = {0};
+  assert(roastty_terminal_grid_ref(NULL, point, &grid_ref) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_grid_ref(terminal, point, NULL) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_grid_ref(terminal,
+                                   (roastty_point_s){
+                                       .tag = (roastty_point_tag_e)99,
+                                       .value = {.active = {.x = 0, .y = 0}},
+                                   },
+                                   &grid_ref) == ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_grid_ref(terminal,
+                                   (roastty_point_s){
+                                       .tag = ROASTTY_POINT_ACTIVE,
+                                       .value = {.active = {.x = 10, .y = 0}},
+                                   },
+                                   &grid_ref) == ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_grid_ref(terminal, point, &grid_ref) ==
+         ROASTTY_SUCCESS);
+  assert(grid_ref.size == sizeof(roastty_grid_ref_s));
+  assert(grid_ref.node != NULL);
+  assert(grid_ref.x == 1);
+  assert(grid_ref.y == 0);
+
+  roastty_point_coordinate_s coord = {0};
+  assert(roastty_terminal_point_from_grid_ref(NULL,
+                                              &grid_ref,
+                                              ROASTTY_POINT_ACTIVE,
+                                              &coord) == ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              NULL,
+                                              ROASTTY_POINT_ACTIVE,
+                                              &coord) == ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &grid_ref,
+                                              ROASTTY_POINT_ACTIVE,
+                                              NULL) == ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &grid_ref,
+                                              (roastty_point_tag_e)99,
+                                              &coord) == ROASTTY_INVALID_VALUE);
+  roastty_grid_ref_s undersized = grid_ref;
+  undersized.size = sizeof(roastty_grid_ref_s) - 1;
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &undersized,
+                                              ROASTTY_POINT_ACTIVE,
+                                              &coord) == ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &grid_ref,
+                                              ROASTTY_POINT_ACTIVE,
+                                              &coord) == ROASTTY_SUCCESS);
+  assert(coord.x == 1);
+  assert(coord.y == 0);
+
+  roastty_grid_ref_s forged = grid_ref;
+  forged.x = 10;
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &forged,
+                                              ROASTTY_POINT_ACTIVE,
+                                              &coord) == ROASTTY_INVALID_VALUE);
+  forged = grid_ref;
+  forged.y = 99;
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &forged,
+                                              ROASTTY_POINT_ACTIVE,
+                                              &coord) == ROASTTY_INVALID_VALUE);
+
+  point = (roastty_point_s){
+      .tag = ROASTTY_POINT_VIEWPORT,
+      .value = {.viewport = {.x = 2, .y = 0}},
+  };
+  assert(roastty_terminal_grid_ref(terminal, point, &grid_ref) ==
+         ROASTTY_SUCCESS);
+  assert(roastty_terminal_point_from_grid_ref(terminal,
+                                              &grid_ref,
+                                              ROASTTY_POINT_VIEWPORT,
+                                              &coord) == ROASTTY_SUCCESS);
+  assert(coord.x == 2);
+  assert(coord.y == 0);
 
   char title_buf[] = "c title";
   roastty_string_s title_input = {

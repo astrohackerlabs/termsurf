@@ -8,7 +8,8 @@ use terminal::kitty::KeyFlags;
 use terminal::terminal::{
     Terminal as InnerTerminal, TerminalBellCallback, TerminalColorKind,
     TerminalColorSchemeCallback, TerminalDeviceAttributesCallback, TerminalEnquiryCallback,
-    TerminalScreen, TerminalSizeCallback, TerminalStreamError, TerminalTitleChangedCallback,
+    TerminalGridRef, TerminalGridRefPointError, TerminalPointTag, TerminalScreen,
+    TerminalSizeCallback, TerminalStreamError, TerminalTitleChangedCallback,
     TerminalWritePtyCallback, TerminalXtversionCallback,
 };
 use terminal::{mouse, mouse_encode, osc, point, size_report};
@@ -112,6 +113,15 @@ const ROASTTY_SIZE_REPORT_CSI_14_T: c_int = 1;
 const ROASTTY_SIZE_REPORT_CSI_16_T: c_int = 2;
 #[allow(dead_code)]
 const ROASTTY_SIZE_REPORT_CSI_18_T: c_int = 3;
+
+#[allow(dead_code)]
+const ROASTTY_POINT_ACTIVE: c_int = 0;
+#[allow(dead_code)]
+const ROASTTY_POINT_VIEWPORT: c_int = 1;
+#[allow(dead_code)]
+const ROASTTY_POINT_SCREEN: c_int = 2;
+#[allow(dead_code)]
+const ROASTTY_POINT_HISTORY: c_int = 3;
 
 #[repr(C)]
 pub struct RoasttyInfo {
@@ -230,6 +240,45 @@ pub struct RoasttySizeReportSize {
     columns: u16,
     cell_width: u32,
     cell_height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyPointCoordinate {
+    x: u16,
+    y: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union RoasttyPointValue {
+    active: RoasttyPointCoordinate,
+    viewport: RoasttyPointCoordinate,
+    screen: RoasttyPointCoordinate,
+    history: RoasttyPointCoordinate,
+    _padding: [u64; 2],
+}
+
+impl Default for RoasttyPointValue {
+    fn default() -> Self {
+        Self { _padding: [0; 2] }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct RoasttyPoint {
+    tag: c_int,
+    value: RoasttyPointValue,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyGridRef {
+    size: usize,
+    node: *mut c_void,
+    x: u16,
+    y: u16,
 }
 
 #[repr(C)]
@@ -981,6 +1030,32 @@ fn terminal_stream_error_result(error: TerminalStreamError) -> c_int {
     }
 }
 
+fn point_tag_from_raw(value: c_int) -> Option<TerminalPointTag> {
+    TerminalPointTag::from_raw(value)
+}
+
+fn point_coordinate(point: RoasttyPoint, tag: TerminalPointTag) -> RoasttyPointCoordinate {
+    unsafe {
+        match tag {
+            TerminalPointTag::Active => point.value.active,
+            TerminalPointTag::Viewport => point.value.viewport,
+            TerminalPointTag::Screen => point.value.screen,
+            TerminalPointTag::History => point.value.history,
+        }
+    }
+}
+
+fn write_grid_ref(out: *mut RoasttyGridRef, grid_ref: TerminalGridRef) {
+    unsafe {
+        out.write(RoasttyGridRef {
+            size: std::mem::size_of::<RoasttyGridRef>(),
+            node: grid_ref.node.cast_mut().cast(),
+            x: grid_ref.x,
+            y: grid_ref.y,
+        });
+    }
+}
+
 fn allocated_c_string(value: &str) -> RoasttyString {
     let c_string = CString::new(value).expect("static strings must not contain interior nuls");
     let len = c_string.as_bytes().len();
@@ -1633,6 +1708,77 @@ pub extern "C" fn roastty_terminal_take_pty_response(
         terminal.terminal.clear_pty_response();
     }
     result
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_grid_ref(
+    terminal: RoasttyTerminal,
+    point: RoasttyPoint,
+    out_ref: *mut RoasttyGridRef,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_ref.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let Some(tag) = point_tag_from_raw(point.tag) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    let coord = point_coordinate(point, tag);
+    let Some(grid_ref) = terminal
+        .terminal
+        .grid_ref(tag, point::Coordinate::new(coord.x, coord.y))
+    else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    write_grid_ref(out_ref, grid_ref);
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_point_from_grid_ref(
+    terminal: RoasttyTerminal,
+    grid_ref: *const RoasttyGridRef,
+    tag: c_int,
+    out_coordinate: *mut RoasttyPointCoordinate,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if grid_ref.is_null() || out_coordinate.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let Some(tag) = point_tag_from_raw(tag) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    let grid_ref_size = unsafe { (*grid_ref).size };
+    if grid_ref_size < std::mem::size_of::<RoasttyGridRef>() {
+        return ROASTTY_INVALID_VALUE;
+    }
+
+    let grid_ref = unsafe { grid_ref.read() };
+    let grid_ref = TerminalGridRef {
+        node: grid_ref.node.cast_const().cast(),
+        x: grid_ref.x,
+        y: grid_ref.y,
+    };
+    match terminal.terminal.point_from_grid_ref(grid_ref, tag) {
+        Ok(coord) => {
+            unsafe {
+                out_coordinate.write(RoasttyPointCoordinate {
+                    x: coord.x,
+                    y: coord.y,
+                });
+            }
+            ROASTTY_SUCCESS
+        }
+        Err(TerminalGridRefPointError::InvalidValue) => ROASTTY_INVALID_VALUE,
+        Err(TerminalGridRefPointError::NoValue) => ROASTTY_NO_VALUE,
+    }
 }
 
 #[no_mangle]
@@ -2672,6 +2818,22 @@ mod tests {
             roastty_terminal_vt_write(terminal, bytes.as_ptr(), bytes.len()),
             ROASTTY_SUCCESS
         );
+    }
+
+    fn c_point(tag: c_int, x: u16, y: u32) -> RoasttyPoint {
+        let coordinate = RoasttyPointCoordinate { x, y };
+        let value = match tag {
+            ROASTTY_POINT_ACTIVE => RoasttyPointValue { active: coordinate },
+            ROASTTY_POINT_VIEWPORT => RoasttyPointValue {
+                viewport: coordinate,
+            },
+            ROASTTY_POINT_SCREEN => RoasttyPointValue { screen: coordinate },
+            ROASTTY_POINT_HISTORY => RoasttyPointValue {
+                history: coordinate,
+            },
+            _ => RoasttyPointValue { active: coordinate },
+        };
+        RoasttyPoint { tag, value }
     }
 
     fn take_roastty_string(value: RoasttyString) -> Vec<u8> {
@@ -4261,6 +4423,265 @@ mod tests {
         assert_eq!(ROASTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, 32);
         assert_eq!(ROASTTY_TERMINAL_SCREEN_PRIMARY, 0);
         assert_eq!(ROASTTY_TERMINAL_SCREEN_ALTERNATE, 1);
+        assert_eq!(ROASTTY_POINT_ACTIVE, 0);
+        assert_eq!(ROASTTY_POINT_VIEWPORT, 1);
+        assert_eq!(ROASTTY_POINT_SCREEN, 2);
+        assert_eq!(ROASTTY_POINT_HISTORY, 3);
+    }
+
+    #[test]
+    fn terminal_grid_ref_abi_layout_is_stable() {
+        assert_eq!(std::mem::size_of::<RoasttyPointCoordinate>(), 8);
+        assert_eq!(std::mem::align_of::<RoasttyPointCoordinate>(), 4);
+        assert_eq!(std::mem::offset_of!(RoasttyPointCoordinate, x), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyPointCoordinate, y), 4);
+        assert_eq!(std::mem::size_of::<RoasttyPointValue>(), 16);
+        assert_eq!(std::mem::align_of::<RoasttyPointValue>(), 8);
+        assert_eq!(std::mem::offset_of!(RoasttyPointValue, active), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyPointValue, viewport), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyPointValue, screen), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyPointValue, history), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyPointValue, _padding), 0);
+        assert_eq!(std::mem::size_of::<RoasttyPoint>(), 24);
+        assert_eq!(std::mem::align_of::<RoasttyPoint>(), 8);
+        assert_eq!(std::mem::offset_of!(RoasttyPoint, tag), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyPoint, value), 8);
+        assert_eq!(std::mem::size_of::<RoasttyGridRef>(), 24);
+        assert_eq!(std::mem::align_of::<RoasttyGridRef>(), 8);
+        assert_eq!(std::mem::offset_of!(RoasttyGridRef, size), 0);
+        assert_eq!(std::mem::offset_of!(RoasttyGridRef, node), 8);
+        assert_eq!(std::mem::offset_of!(RoasttyGridRef, x), 16);
+        assert_eq!(std::mem::offset_of!(RoasttyGridRef, y), 18);
+    }
+
+    #[test]
+    fn terminal_grid_ref_abi_round_trips_active_and_viewport_points() {
+        let terminal = new_terminal(10, 4);
+        write_terminal(terminal, b"hello");
+
+        let mut grid_ref = RoasttyGridRef::default();
+        assert_eq!(
+            roastty_terminal_grid_ref(terminal, c_point(ROASTTY_POINT_ACTIVE, 1, 0), &mut grid_ref),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(grid_ref.size, std::mem::size_of::<RoasttyGridRef>());
+        assert!(!grid_ref.node.is_null());
+        assert_eq!((grid_ref.x, grid_ref.y), (1, 0));
+
+        let mut coord = RoasttyPointCoordinate::default();
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &grid_ref,
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(coord, RoasttyPointCoordinate { x: 1, y: 0 });
+
+        let mut viewport_ref = RoasttyGridRef::default();
+        assert_eq!(
+            roastty_terminal_grid_ref(
+                terminal,
+                c_point(ROASTTY_POINT_VIEWPORT, 2, 0),
+                &mut viewport_ref
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &viewport_ref,
+                ROASTTY_POINT_VIEWPORT,
+                &mut coord
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(coord, RoasttyPointCoordinate { x: 2, y: 0 });
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_grid_ref_abi_round_trips_screen_history_and_rejects_active_miss() {
+        let terminal = new_terminal(5, 3);
+        for _ in 0..8 {
+            write_terminal(terminal, b"line\n");
+        }
+
+        let mut screen_ref = RoasttyGridRef::default();
+        assert_eq!(
+            roastty_terminal_grid_ref(
+                terminal,
+                c_point(ROASTTY_POINT_SCREEN, 0, 0),
+                &mut screen_ref
+            ),
+            ROASTTY_SUCCESS
+        );
+        let mut coord = RoasttyPointCoordinate::default();
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &screen_ref,
+                ROASTTY_POINT_SCREEN,
+                &mut coord
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(coord, RoasttyPointCoordinate { x: 0, y: 0 });
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &screen_ref,
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_NO_VALUE
+        );
+
+        let mut history_ref = RoasttyGridRef::default();
+        assert_eq!(
+            roastty_terminal_grid_ref(
+                terminal,
+                c_point(ROASTTY_POINT_HISTORY, 0, 0),
+                &mut history_ref
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &history_ref,
+                ROASTTY_POINT_HISTORY,
+                &mut coord
+            ),
+            ROASTTY_SUCCESS
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_grid_ref_abi_validates_inputs() {
+        let terminal = new_terminal(4, 2);
+        let mut grid_ref = RoasttyGridRef::default();
+        let mut coord = RoasttyPointCoordinate::default();
+
+        assert_eq!(
+            roastty_terminal_grid_ref(
+                ptr::null_mut(),
+                c_point(ROASTTY_POINT_ACTIVE, 0, 0),
+                &mut grid_ref
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_grid_ref(
+                terminal,
+                c_point(ROASTTY_POINT_ACTIVE, 0, 0),
+                ptr::null_mut()
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_grid_ref(terminal, c_point(99, 0, 0), &mut grid_ref),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_grid_ref(terminal, c_point(ROASTTY_POINT_ACTIVE, 4, 0), &mut grid_ref),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_grid_ref(
+                terminal,
+                c_point(ROASTTY_POINT_VIEWPORT, 0, 99),
+                &mut grid_ref
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+
+        assert_eq!(
+            roastty_terminal_grid_ref(terminal, c_point(ROASTTY_POINT_ACTIVE, 1, 0), &mut grid_ref),
+            ROASTTY_SUCCESS
+        );
+        let mut undersized = grid_ref;
+        undersized.size = std::mem::size_of::<RoasttyGridRef>() - 1;
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &undersized,
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                ptr::null_mut(),
+                &grid_ref,
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                ptr::null(),
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &grid_ref,
+                ROASTTY_POINT_ACTIVE,
+                ptr::null_mut()
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(terminal, &grid_ref, 99, &mut coord),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let mut forged_x = grid_ref;
+        forged_x.x = 4;
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &forged_x,
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        let mut forged_y = grid_ref;
+        forged_y.y = 99;
+        assert_eq!(
+            roastty_terminal_point_from_grid_ref(
+                terminal,
+                &forged_y,
+                ROASTTY_POINT_ACTIVE,
+                &mut coord
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let other = new_terminal(4, 2);
+        let foreign_result = roastty_terminal_point_from_grid_ref(
+            other,
+            &grid_ref,
+            ROASTTY_POINT_ACTIVE,
+            &mut coord,
+        );
+        assert!(foreign_result == ROASTTY_NO_VALUE || foreign_result == ROASTTY_INVALID_VALUE);
+
+        roastty_terminal_free(other);
+        roastty_terminal_free(terminal);
     }
 
     #[test]

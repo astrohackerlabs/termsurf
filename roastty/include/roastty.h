@@ -151,6 +151,48 @@ typedef struct {
   uint32_t cell_height;
 } roastty_size_report_size_s;
 
+typedef enum {
+  ROASTTY_POINT_ACTIVE = 0,
+  ROASTTY_POINT_VIEWPORT = 1,
+  ROASTTY_POINT_SCREEN = 2,
+  ROASTTY_POINT_HISTORY = 3,
+} roastty_point_tag_e;
+
+typedef struct {
+  uint16_t x;
+  uint32_t y;
+} roastty_point_coordinate_s;
+
+typedef union {
+  roastty_point_coordinate_s active;
+  roastty_point_coordinate_s viewport;
+  roastty_point_coordinate_s screen;
+  roastty_point_coordinate_s history;
+  uint64_t _padding[2];
+} roastty_point_value_u;
+
+typedef struct {
+  roastty_point_tag_e tag;
+  roastty_point_value_u value;
+} roastty_point_s;
+
+/*
+ * Borrowed snapshot reference into terminal page storage.
+ *
+ * The node field is opaque and must not be inspected, dereferenced, retained
+ * as an owned value, or freed by C callers. A grid ref is valid only for
+ * immediate calls back into the same terminal, before terminal mutation. Do not
+ * use it after roastty_terminal_free, roastty_terminal_vt_write, reset, resize,
+ * or future APIs that mutate scrollback, selection, or gestures. Long-lived
+ * references belong to the future tracked-grid-ref ABI.
+ */
+typedef struct {
+  size_t size;
+  void* node;
+  uint16_t x;
+  uint16_t y;
+} roastty_grid_ref_s;
+
 typedef struct {
   uint16_t conformance_level;
   uint16_t features[64];
@@ -728,6 +770,15 @@ ROASTTY_API roastty_result_e roastty_terminal_get_multi(
     size_t*);
 ROASTTY_API roastty_result_e
 roastty_terminal_take_pty_response(roastty_terminal_t, roastty_string_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_grid_ref(roastty_terminal_t,
+                          roastty_point_s,
+                          roastty_grid_ref_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_point_from_grid_ref(roastty_terminal_t,
+                                     const roastty_grid_ref_s*,
+                                     roastty_point_tag_e,
+                                     roastty_point_coordinate_s*);
 
 ROASTTY_API roastty_result_e roastty_key_event_new(roastty_key_event_t*);
 ROASTTY_API void roastty_key_event_free(roastty_key_event_t);

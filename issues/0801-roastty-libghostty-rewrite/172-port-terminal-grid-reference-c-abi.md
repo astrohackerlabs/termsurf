@@ -318,3 +318,55 @@ approves the design.
 After implementation, run Codex review again against the code diff, test output,
 and recorded result. Fix every real issue before marking the experiment `Pass`,
 `Partial`, or `Fail`.
+
+## Result
+
+**Result:** Pass
+
+Implemented the non-owning terminal grid-reference C ABI:
+
+- added public `roastty_point_tag_e`, `roastty_point_coordinate_s`,
+  `roastty_point_value_u`, `roastty_point_s`, and `roastty_grid_ref_s`;
+- added `roastty_terminal_grid_ref`;
+- added `roastty_terminal_point_from_grid_ref`;
+- documented the borrowed snapshot lifetime contract in `roastty.h`;
+- preserved the upstream tagged-union point ABI shape with `[2]u64` padding;
+- kept incoming C point tags as raw integer storage in Rust until validation;
+- validated `roastty_grid_ref_s.size` before reading trailing fields;
+- validated node membership before using the opaque node pointer;
+- validated same-terminal forged `x` / `y` coordinates before constructing an
+  internal pin;
+- added Rust and C ABI coverage for layout, successful round trips, null
+  pointers, unknown tags, undersized refs, foreign-terminal refs, and forged
+  coordinates.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/page_list.rs \
+  roastty/src/terminal/point.rs roastty/src/terminal/screen.rs \
+  roastty/src/terminal/terminal.rs
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty terminal_grid_ref
+cargo test -p roastty terminal_get_abi
+cargo test -p roastty terminal_stream
+cargo test -p roastty
+if rg -n "ghostty|Ghostty|ghostty_" roastty/src/lib.rs \
+  roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+All verification commands passed. The full `cargo test -p roastty` run passed
+1830 Rust tests plus the C harness.
+
+## Conclusion
+
+Experiment 172 establishes the public coordinate/ref bridge needed by later
+selection, selection gesture, formatter-selection, render-selection, and
+tracked-ref work. The implementation intentionally stops at non-owning grid refs
+and does not expose cell, row, style, hyperlink, selection, or tracked-ref APIs.
+
+The next experiment can build on this by porting the selection C ABI foundation:
+`roastty_selection_s`, active selection set/get, basic selection derivation
+helpers, and selection formatting, while continuing to defer gesture and
+tracked-reference lifecycles if they do not fit the same reviewable slice.

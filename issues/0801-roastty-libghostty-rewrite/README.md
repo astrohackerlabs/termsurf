@@ -471,7 +471,7 @@ tests, choose the larger subsystem.
 - [Experiment 171: Port Terminal Query Callback C ABI](171-port-terminal-query-callbacks-c-abi.md)
   — **Pass**
 - [Experiment 172: Port Terminal Grid Reference C ABI](172-port-terminal-grid-reference-c-abi.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

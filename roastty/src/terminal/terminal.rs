@@ -14,7 +14,8 @@ use super::mouse;
 use super::osc;
 use super::page::SemanticPrompt;
 use super::page_list::{
-    CodepointMapEntry, PageListAllocError, PageOutputFormat, PageStringWithPinMap,
+    CodepointMapEntry, GridRef, GridRefPointError, PageListAllocError, PageOutputFormat,
+    PageStringWithPinMap,
 };
 use super::screen::{
     BasicPrintError, EraseDisplayError, Screen, ScreenCursorHyperlinkId, ScreenFormatter,
@@ -66,6 +67,69 @@ enum TerminalScreenKey {
 pub(crate) enum TerminalScreen {
     Primary,
     Alternate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalPointTag {
+    Active,
+    Viewport,
+    Screen,
+    History,
+}
+
+impl TerminalPointTag {
+    pub(crate) fn from_raw(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Active),
+            1 => Some(Self::Viewport),
+            2 => Some(Self::Screen),
+            3 => Some(Self::History),
+            _ => None,
+        }
+    }
+}
+
+impl From<TerminalPointTag> for super::point::Tag {
+    fn from(value: TerminalPointTag) -> Self {
+        match value {
+            TerminalPointTag::Active => Self::Active,
+            TerminalPointTag::Viewport => Self::Viewport,
+            TerminalPointTag::Screen => Self::Screen,
+            TerminalPointTag::History => Self::History,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TerminalGridRef {
+    pub(crate) node: *const (),
+    pub(crate) x: CellCountInt,
+    pub(crate) y: CellCountInt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalGridRefPointError {
+    InvalidValue,
+    NoValue,
+}
+
+impl From<GridRef> for TerminalGridRef {
+    fn from(value: GridRef) -> Self {
+        Self {
+            node: value.node,
+            x: value.x,
+            y: value.y,
+        }
+    }
+}
+
+impl From<GridRefPointError> for TerminalGridRefPointError {
+    fn from(value: GridRefPointError) -> Self {
+        match value {
+            GridRefPointError::InvalidValue => Self::InvalidValue,
+            GridRefPointError::NoValue => Self::NoValue,
+        }
+    }
 }
 
 #[repr(C)]
@@ -645,6 +709,32 @@ impl Terminal {
 
     pub(crate) fn scrollback_rows(&self) -> usize {
         self.screens.active().scrollback_rows()
+    }
+
+    pub(crate) fn grid_ref(
+        &self,
+        tag: TerminalPointTag,
+        coord: super::point::Coordinate,
+    ) -> Option<TerminalGridRef> {
+        let point = match tag {
+            TerminalPointTag::Active => super::point::Point::active(coord),
+            TerminalPointTag::Viewport => super::point::Point::viewport(coord),
+            TerminalPointTag::Screen => super::point::Point::screen(coord),
+            TerminalPointTag::History => super::point::Point::history(coord),
+        };
+
+        self.screens.active().grid_ref(point).map(Into::into)
+    }
+
+    pub(crate) fn point_from_grid_ref(
+        &self,
+        grid_ref: TerminalGridRef,
+        tag: TerminalPointTag,
+    ) -> Result<super::point::Coordinate, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .point_from_grid_ref(grid_ref.node, grid_ref.x, grid_ref.y, tag.into())
+            .map_err(Into::into)
     }
 
     pub(crate) fn mode_get(&self, value: u16, ansi: bool) -> Option<bool> {
