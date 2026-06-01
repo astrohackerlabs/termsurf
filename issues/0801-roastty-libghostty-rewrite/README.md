@@ -386,6 +386,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 128: Port CSI Mode Set and Reset](128-port-csi-mode-set-reset.md)
   — **Pass**
+- [Experiment 129: Port Basic Print Mode Effects](129-port-basic-print-mode-effects.md)
+  — **Designed**
 
 ## Non-Goals
 
