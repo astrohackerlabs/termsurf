@@ -1,6 +1,8 @@
 //! Terminal state.
 
 use super::color;
+#[cfg(test)]
+use super::cursor;
 use super::dcs;
 use super::device_attributes;
 use super::device_status;
@@ -390,6 +392,11 @@ impl Terminal {
     }
 
     #[cfg(test)]
+    pub(super) fn cursor_visual_style_for_tests(&self) -> cursor::VisualStyle {
+        self.screens.active.cursor_visual_style_for_tests()
+    }
+
+    #[cfg(test)]
     pub(super) fn cursor_hyperlink_for_tests(&self) -> Option<(ScreenCursorHyperlinkId, &str)> {
         self.screens.active.cursor_hyperlink_for_tests()
     }
@@ -647,6 +654,11 @@ impl Handler for TerminalStreamHandler<'_> {
                 self.set_mode_basic(mode, enabled);
                 Ok(())
             }
+            Action::CursorVisualStyle { style, blinking } => {
+                self.modes.set(modes::Mode::CursorBlinking, blinking);
+                self.screen.set_cursor_visual_style(style);
+                Ok(())
+            }
             Action::DcsHook { value } => {
                 if let Some(command) = self.dcs.hook(value) {
                     self.dcs_command(command);
@@ -808,8 +820,14 @@ impl TerminalStreamHandler<'_> {
 
     fn decrqss(&mut self, request: dcs::Decrqss) {
         let payload = match request {
-            dcs::Decrqss::None | dcs::Decrqss::Decscusr => None,
+            dcs::Decrqss::None => None,
             dcs::Decrqss::Sgr => Some(format!("{}m", self.decrqss_sgr_payload())),
+            dcs::Decrqss::Decscusr => Some(format!(
+                "{} q",
+                self.screen
+                    .cursor_visual_style()
+                    .decscusr_report(self.modes.get(modes::Mode::CursorBlinking))
+            )),
             dcs::Decrqss::Decstbm => Some(format!(
                 "{};{}r",
                 self.scrolling_region.top + 1,
@@ -835,7 +853,7 @@ impl TerminalStreamHandler<'_> {
     }
 
     fn decrqss_sgr_payload(&self) -> String {
-        let style = self.screen.cursor_style();
+        let style = self.screen.cursor_text_style();
         let mut output = String::from("0");
 
         if style.flags.bold {
@@ -1587,6 +1605,7 @@ mod tests {
     use super::*;
     use crate::terminal::charsets;
     use crate::terminal::color;
+    use crate::terminal::cursor;
     use crate::terminal::kitty::{KeyFlags, KeySetMode};
     use crate::terminal::modes::Mode;
     use crate::terminal::page::{HyperlinkSnapshotId, SemanticContent, SemanticPrompt};
@@ -2406,7 +2425,7 @@ mod tests {
 
     #[test]
     fn terminal_stream_decrqss_unsupported_requests_return_invalid() {
-        for input in [b"\x1bP$qz\x1b\\".as_slice(), b"\x1bP$q q\x1b\\"] {
+        for input in [b"\x1bP$qz\x1b\\".as_slice(), b"\x1bP$qx\x1b\\"] {
             let mut terminal = Terminal::init(10, 2, None).unwrap();
             terminal.next_slice(b"abc").unwrap();
             terminal.clear_dirty_for_tests();
@@ -2418,6 +2437,97 @@ mod tests {
             assert!(!terminal.is_dirty_for_tests(0, 0));
             assert!(!terminal.is_dirty_for_tests(9, 0));
         }
+    }
+
+    #[test]
+    fn terminal_stream_decscusr_sets_cursor_visual_style_and_blinking() {
+        for (input, expected_style, expected_blinking) in [
+            (b"\x1b[1 q".as_slice(), cursor::VisualStyle::Block, true),
+            (b"\x1b[2 q", cursor::VisualStyle::Block, false),
+            (b"\x1b[3 q", cursor::VisualStyle::Underline, true),
+            (b"\x1b[4 q", cursor::VisualStyle::Underline, false),
+            (b"\x1b[5 q", cursor::VisualStyle::Bar, true),
+            (b"\x1b[6 q", cursor::VisualStyle::Bar, false),
+        ] {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+            terminal.next_slice(input).unwrap();
+
+            assert_eq!(terminal.cursor_visual_style_for_tests(), expected_style);
+            assert_eq!(
+                terminal.get_mode_for_tests(Mode::CursorBlinking),
+                expected_blinking
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_stream_decscusr_default_sets_steady_block() {
+        for input in [b"\x1b[ q".as_slice(), b"\x1b[0 q"] {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+            terminal.next_slice(b"\x1b[5 q").unwrap();
+            terminal.next_slice(input).unwrap();
+
+            assert_eq!(
+                terminal.cursor_visual_style_for_tests(),
+                cursor::VisualStyle::Block
+            );
+            assert!(!terminal.get_mode_for_tests(Mode::CursorBlinking));
+        }
+    }
+
+    #[test]
+    fn terminal_stream_decscusr_does_not_mutate_visible_terminal_content() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"abc\x1b[1;31m").unwrap();
+        let text_style = terminal.cursor_style_for_tests();
+        terminal.screens.active.set_cursor_position_for_tests(5, 1);
+        terminal.clear_dirty_for_tests();
+
+        terminal.next_slice(b"\x1b[5 q").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert_eq!(terminal.cursor_position_for_tests(), (5, 1));
+        assert_eq!(terminal.cursor_style_for_tests(), text_style);
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(9, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
+        assert_eq!(
+            terminal.cursor_visual_style_for_tests(),
+            cursor::VisualStyle::Bar
+        );
+        assert!(terminal.get_mode_for_tests(Mode::CursorBlinking));
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_decscusr_reports_current_cursor_visual_style() {
+        for (setup, expected) in [
+            (b"".as_slice(), b"\x1bP1$r2 q\x1b\\".as_slice()),
+            (b"\x1b[1 q", b"\x1bP1$r1 q\x1b\\"),
+            (b"\x1b[4 q", b"\x1bP1$r4 q\x1b\\"),
+            (b"\x1b[5 q", b"\x1bP1$r5 q\x1b\\"),
+        ] {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+            terminal.next_slice(setup).unwrap();
+            terminal.next_slice(b"\x1bP$q q\x1b\\").unwrap();
+
+            assert_eq!(terminal.take_pty_response_for_tests(), expected);
+        }
+    }
+
+    #[test]
+    fn terminal_stream_decscusr_split_feed_then_decrqss_reports_updated_style() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1b[5").unwrap();
+        terminal.next_slice(b" q").unwrap();
+        terminal.next_slice(b"\x1bP$q q\x1b\\").unwrap();
+
+        assert_eq!(terminal.take_pty_response_for_tests(), b"\x1bP1$r5 q\x1b\\");
     }
 
     #[test]

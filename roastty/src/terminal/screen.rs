@@ -2,6 +2,7 @@
 
 use super::charsets;
 use super::color;
+use super::cursor;
 use super::hyperlink;
 use super::kitty;
 use super::page::{SemanticContent, SemanticPrompt};
@@ -72,6 +73,7 @@ struct ScreenCursor {
     y: CellCountInt,
     pending_wrap: bool,
     style: style::Style,
+    visual_style: cursor::VisualStyle,
     protected: bool,
     hyperlink: Option<ScreenCursorHyperlink>,
     semantic_content: SemanticContent,
@@ -901,8 +903,16 @@ impl Screen {
         self.cursor.hyperlink = None;
     }
 
-    pub(super) fn cursor_style(&self) -> style::Style {
+    pub(super) fn cursor_text_style(&self) -> style::Style {
         self.cursor.style
+    }
+
+    pub(super) fn cursor_visual_style(&self) -> cursor::VisualStyle {
+        self.cursor.visual_style
+    }
+
+    pub(super) fn set_cursor_visual_style(&mut self, visual_style: cursor::VisualStyle) {
+        self.cursor.visual_style = visual_style;
     }
 
     #[cfg(test)]
@@ -919,6 +929,11 @@ impl Screen {
     #[cfg(test)]
     pub(super) fn cursor_style_for_tests(&self) -> style::Style {
         self.cursor.style
+    }
+
+    #[cfg(test)]
+    pub(super) fn cursor_visual_style_for_tests(&self) -> cursor::VisualStyle {
+        self.cursor.visual_style
     }
 
     #[cfg(test)]
@@ -1153,6 +1168,7 @@ impl Default for ScreenCursor {
             y: 0,
             pending_wrap: false,
             style: style::Style::default(),
+            visual_style: cursor::VisualStyle::default(),
             protected: false,
             hyperlink: None,
             semantic_content: SemanticContent::Output,

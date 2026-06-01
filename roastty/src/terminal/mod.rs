@@ -14,6 +14,9 @@ mod context_signal;
 mod color;
 
 #[allow(dead_code)]
+mod cursor;
+
+#[allow(dead_code)]
 mod device_attributes;
 
 #[allow(dead_code)]

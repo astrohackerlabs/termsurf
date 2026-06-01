@@ -1,6 +1,6 @@
 //! Terminal byte stream decoding.
 
-use super::{device_attributes, device_status, modes, osc, sgr};
+use super::{cursor, device_attributes, device_status, modes, osc, sgr};
 
 const CSI_PARAM_CAPACITY: usize = 24;
 
@@ -90,6 +90,10 @@ pub(super) enum Action {
     },
     RestoreMode {
         mode: modes::Mode,
+    },
+    CursorVisualStyle {
+        style: cursor::VisualStyle,
+        blinking: bool,
     },
     DcsHook {
         value: DcsHook,
@@ -566,7 +570,7 @@ impl CsiState {
             {
                 self.private = Some(byte);
             }
-            b'$' => self.intermediate = Some(byte),
+            0x20..=0x2f => self.intermediate = Some(byte),
             b';' => self.push_param_separator(sgr::Separator::Semicolon),
             b':' => self.push_param_separator(sgr::Separator::Colon),
             b'0'..=b'9' => {
@@ -601,7 +605,8 @@ impl CsiState {
     fn dispatch(&self, final_byte: u8) -> CsiDispatch {
         if self.intermediate.is_some() {
             return self
-                .mode_request_dispatch(final_byte)
+                .cursor_visual_style_dispatch(final_byte)
+                .or_else(|| self.mode_request_dispatch(final_byte))
                 .unwrap_or(CsiDispatch::None);
         }
 
@@ -1058,6 +1063,33 @@ impl CsiState {
         Some(CsiDispatch::One(action))
     }
 
+    fn cursor_visual_style_dispatch(&self, final_byte: u8) -> Option<CsiDispatch> {
+        if final_byte != b'q' || self.private.is_some() || self.intermediate != Some(b' ') {
+            return None;
+        }
+
+        let params = self.finalized_params()?;
+        if params.len > 1 || params.separator_seen() {
+            return None;
+        }
+
+        let (style, blinking) = match (params.len == 1).then_some(params.values[0]).unwrap_or(0) {
+            0 => (cursor::VisualStyle::Block, false),
+            1 => (cursor::VisualStyle::Block, true),
+            2 => (cursor::VisualStyle::Block, false),
+            3 => (cursor::VisualStyle::Underline, true),
+            4 => (cursor::VisualStyle::Underline, false),
+            5 => (cursor::VisualStyle::Bar, true),
+            6 => (cursor::VisualStyle::Bar, false),
+            _ => return None,
+        };
+
+        Some(CsiDispatch::One(Action::CursorVisualStyle {
+            style,
+            blinking,
+        }))
+    }
+
     fn sgr_dispatch(&self, final_byte: u8) -> Option<CsiDispatch> {
         if final_byte != b'm' || self.private.is_some() || self.intermediate.is_some() {
             return None;
@@ -1433,7 +1465,7 @@ impl Utf8Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::{color, kitty, mouse};
+    use crate::terminal::{color, cursor, kitty, mouse};
 
     #[derive(Debug, Default)]
     struct RecordingHandler {
@@ -1610,6 +1642,7 @@ mod tests {
                 | Action::ResetMode { .. }
                 | Action::SaveMode { .. }
                 | Action::RestoreMode { .. }
+                | Action::CursorVisualStyle { .. }
                 | Action::DcsHook { .. }
                 | Action::DcsPut { .. }
                 | Action::DcsUnhook
@@ -2362,6 +2395,119 @@ mod tests {
 
             assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
         }
+    }
+
+    #[test]
+    fn stream_decscusr_dispatches_cursor_visual_style() {
+        for (input, expected) in [
+            (
+                b"\x1b[ qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Block,
+                    blinking: false,
+                },
+            ),
+            (
+                b"\x1b[0 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Block,
+                    blinking: false,
+                },
+            ),
+            (
+                b"\x1b[1 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Block,
+                    blinking: true,
+                },
+            ),
+            (
+                b"\x1b[2 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Block,
+                    blinking: false,
+                },
+            ),
+            (
+                b"\x1b[3 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Underline,
+                    blinking: true,
+                },
+            ),
+            (
+                b"\x1b[4 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Underline,
+                    blinking: false,
+                },
+            ),
+            (
+                b"\x1b[5 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Bar,
+                    blinking: true,
+                },
+            ),
+            (
+                b"\x1b[6 qA".as_slice(),
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Bar,
+                    blinking: false,
+                },
+            ),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(actions(&handler), &[expected, Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
+    fn stream_decscusr_rejects_malformed_forms_without_leaking_final_byte() {
+        for input in [
+            b"\x1b[?0 qA".as_slice(),
+            b"\x1b[>1 qA".as_slice(),
+            b"\x1b[=1 qA".as_slice(),
+            b"\x1b[qA".as_slice(),
+            b"\x1b[1qA".as_slice(),
+            b"\x1b[1;2 qA".as_slice(),
+            b"\x1b[1:2 qA".as_slice(),
+            b"\x1b[7 qA".as_slice(),
+            b"\x1b[1!qA".as_slice(),
+            b"\x1b[1$qA".as_slice(),
+            b"\x1b[1  qA".as_slice(),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
+    fn stream_decscusr_split_feed_dispatches() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"\x1b[5");
+        next_slice(&mut stream, &mut handler, b" qA");
+
+        assert_eq!(
+            actions(&handler),
+            &[
+                Action::CursorVisualStyle {
+                    style: cursor::VisualStyle::Bar,
+                    blinking: true,
+                },
+                Action::Print { cp: 'A' },
+            ]
+        );
     }
 
     #[test]
@@ -7118,6 +7264,7 @@ mod tests {
                 | Action::ResetMode { .. }
                 | Action::SaveMode { .. }
                 | Action::RestoreMode { .. }
+                | Action::CursorVisualStyle { .. }
                 | Action::DcsHook { .. }
                 | Action::DcsPut { .. }
                 | Action::DcsUnhook

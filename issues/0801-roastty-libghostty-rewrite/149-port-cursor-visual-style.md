@@ -196,3 +196,66 @@ that the verification now covers exact `CSI Ps SP q` handling,
 non-space/repeated-intermediate rejection, broader private-form rejection,
 split-feed DECSCUSR, module wiring, runtime state mapping, DECRQSS payloads, no
 unwanted terminal mutations, and preservation of `CSI ? Ps $ p`.
+
+## Result
+
+**Result:** Pass
+
+Experiment 149 ported cursor visual style state into Roastty and completed
+DECSCUSR handling.
+
+Implemented changes:
+
+- Added `roastty/src/terminal/cursor.rs` with `VisualStyle` values for bar,
+  block, underline, and block-hollow, plus DECSCUSR report mapping.
+- Registered the new cursor module in `roastty/src/terminal/mod.rs`.
+- Added separate cursor visual style storage to `ScreenCursor`, leaving cursor
+  text `style::Style` as a separate field.
+- Added stream parsing for exact `CSI Ps SP q` DECSCUSR forms.
+- Rejected missing-space, private, multi-param, colon/semicolon, out-of-range,
+  non-space-intermediate, and repeated-intermediate forms without leaking final
+  bytes.
+- Preserved `CSI ? Ps $ p` mode-request parsing after broadening CSI
+  intermediate-byte handling.
+- Wired runtime DECSCUSR behavior to set `Mode::CursorBlinking` and the screen
+  cursor visual style.
+- Changed DECRQSS DECSCUSR from invalid to valid, reporting the current cursor
+  visual style and blink state as `ESC P1$r<value> q ESC \`.
+
+Verification commands:
+
+```bash
+cargo fmt
+cargo test -p roastty cursor_visual
+cargo test -p roastty decscusr
+cargo test -p roastty decrqss
+cargo test -p roastty
+```
+
+Verification results:
+
+- `cargo test -p roastty cursor_visual`: 5 passed, 0 failed.
+- `cargo test -p roastty decscusr`: 9 passed, 0 failed.
+- `cargo test -p roastty decrqss`: 12 passed, 0 failed.
+- `cargo test -p roastty`: 1639 unit tests passed, 1 ABI harness test passed, 0
+  doc tests.
+
+## Conclusion
+
+Roastty now has Ghostty-parity cursor visual style state for DECSCUSR and
+DECRQSS reporting. Cursor shape is separate from text styling, DECSCUSR does not
+mutate terminal content or PTY responses, and the existing dollar-intermediate
+mode-report parser still works.
+
+The next experiment can move to another terminal-control slice that depends on
+cursor state, or continue through the remaining DCS/query surface based on the
+current upstream parity gap.
+
+## Result Review
+
+Codex reviewed the completed implementation, issue result record, diff, new
+cursor module, and verification summary. It reported no findings and confirmed
+that the implementation matches the approved design, preserves mode-request
+parsing, keeps cursor visual style separate from text style, updates only cursor
+visual state plus blink mode at runtime, and records accurate verification
+results.
