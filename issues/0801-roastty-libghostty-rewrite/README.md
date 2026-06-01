@@ -335,7 +335,7 @@ No experiment may proceed to the next stage until the required review passes.
 - [Experiment 114: Port Basic CSI Cursor Movement](114-port-basic-csi-cursor-movement.md)
   — **Pass**
 - [Experiment 115: Port CSI Next and Previous Line](115-port-csi-next-previous-line.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

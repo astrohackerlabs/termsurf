@@ -283,3 +283,87 @@ Clean design re-review artifacts:
 Codex found no remaining blockers and approved implementation. It noted one
 minor spacing typo in the non-goals sentence; that typo was fixed before the
 design commit.
+
+## Result
+
+**Result:** Pass
+
+Implemented the `CSI E` and `CSI F` parser slice:
+
+- `CSI E` dispatches `Action::CursorDown { count }` followed by
+  `Action::CarriageReturn`.
+- `CSI F` dispatches `Action::CursorUp { count }` followed by
+  `Action::CarriageReturn`.
+
+The stream parser now uses a small internal `CsiDispatch` representation for
+zero, one, or two ordered actions. This preserves the existing single-action
+paths for `CSI A/B/C/D/k/a/j` cursor movement and the `CSI W` tab family, while
+allowing `CSI E/F` to mirror Ghostty's two-handler-action dispatch boundary. The
+parser transitions to ground before invoking either action. If the first action
+errors, the second action is skipped; if the second action errors, the error is
+returned; in both cases the next byte is parsed from ground state.
+
+Accepted forms:
+
+- `CSI E` / `CSI F`;
+- `CSI 0 E` / `CSI 0 F`, treated as count `1`;
+- `CSI n E` / `CSI n F`, with numeric params saturating at `u16::MAX` before
+  terminal movement clamps to the screen edge.
+
+Rejected forms:
+
+- private forms such as `CSI ? 3 E` and `CSI ? 3 F`;
+- unsupported private markers such as `CSI > 3 E` and `CSI > 3 F`;
+- semicolon params such as `CSI 5 ; 4 E` and `CSI 5 ; 4 F`;
+- colon params such as `CSI 1 : 2 E` and `CSI 1 : 2 F`;
+- intermediate-bearing forms such as `CSI SP E` and `CSI SP F`.
+
+Rejected forms dispatch no cursor action and do not leak printable final bytes.
+Direct C1 CSI byte `0x9b` remains out of scope and follows the current raw-C1
+UTF-8 replacement behavior.
+
+Terminal behavior uses the existing basic movement helpers from Experiment 114:
+
+- `CSI E` moves down, clamps to the full-screen bottom, clears pending wrap, and
+  returns to column zero.
+- `CSI F` moves up, clamps to the full-screen top, clears pending wrap, and
+  returns to column zero.
+- Neither sequence writes cells, dirties rows, or scrolls.
+- Bottom-row `CSI E` does not behave like `ESC E` / next-line scrolling.
+- Top-row `CSI F` does not behave like reverse index.
+
+Existing `CSI A/B/C/D/k/a/j` cursor behavior and `CSI W` tab behavior did not
+regress. Scrolling-region-aware cursor movement, origin mode, absolute
+positioning, direct C1 CSI, public API, and ABI behavior remain deferred.
+
+Verification:
+
+```text
+cargo fmt
+cargo test -p roastty stream
+cargo test -p roastty terminal::terminal
+cargo test -p roastty terminal_formatter
+cargo test -p roastty screen_formatter
+cargo test -p roastty page_string
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+All commands passed. The full `cargo test -p roastty` run reported 1114 unit
+tests passed, the ABI harness passed, and doc-tests had zero tests.
+
+Codex result review artifacts:
+
+- Prompt: `logs/codex-review/20260601-030935-070184-prompt.md`
+- Result: `logs/codex-review/20260601-030935-070184-last-message.md`
+
+Codex found no implementation blockers and approved recording a Pass.
+
+## Conclusion
+
+Experiment 115 completed the next adjacent CSI cursor-movement slice. Roastty
+now parses `CSI E` and `CSI F` with Ghostty's ordered handler-action boundary
+while intentionally preserving the current simplified full-screen movement
+semantics. The next cursor parser slice can move to absolute/row/column
+positioning (`CSI G`, `CSI H`, `CSI f`, `CSI d`, `CSI e`) or first broaden
+cursor movement to Ghostty's scrolling-region-aware semantics.
