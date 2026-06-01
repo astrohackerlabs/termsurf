@@ -20,6 +20,9 @@ mod device_attributes;
 mod device_status;
 
 #[allow(dead_code)]
+mod dcs;
+
+#[allow(dead_code)]
 mod x11_color;
 
 #[allow(dead_code)]

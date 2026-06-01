@@ -219,10 +219,65 @@ Experiment 147, but did not approve until these points were pinned down:
 - Unsupported DECRQSS variants must return the invalid DECRPSS envelope, while
   XTGETTCAP/tmux deferrals must produce no PTY response.
 
-The design was updated with those requirements. Pending follow-up Codex review.
-
 Codex reviewed the revised design and approved it with no blocking findings. It
 confirmed that the scope is coherent, the deferrals are accurate and testable,
 and the verification/failure criteria cover the main risks: split DCS command
 state, containment, exact DECRPSS envelopes, SGR payload shape, DECSLRM mode
 gating, no-op deferrals, and unrelated subsystem creep.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has a DCS command layer above the DCS byte framing from Experiment
+147:
+
+- `terminal::dcs::Handler` recognizes Ghostty-shaped DCS commands for DECRQSS
+  and XTGETTCAP.
+- Unknown DCS commands and tmux `DCS 1000 p` remain contained and ignored.
+- XTGETTCAP payloads are captured, uppercased on unhook, and split by `;` in the
+  parser layer, but terminal runtime responses remain deferred until the
+  terminfo source/map/resource layer is ported.
+- DECRQSS now answers supported terminal state:
+  - `m` returns active SGR attributes using a dedicated Ghostty
+    `printAttributes`-style payload helper;
+  - `r` returns the vertical scrolling region;
+  - `s` returns horizontal margins only when left/right margin mode is enabled.
+- Unsupported DECRQSS requests, including DECSCUSR while cursor visual style is
+  unported, return the invalid DECRPSS response.
+- DCS command state is owned by `Terminal` and survives split
+  `Terminal::next_slice` calls.
+
+The implementation intentionally does not add tmux viewer behavior, terminfo
+XTGETTCAP responses, cursor visual style state, public ABI, PTY, renderer, or
+app/frontend behavior.
+
+Verification run:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal_dcs
+cargo test -p roastty dcs_command
+cargo test -p roastty decrqss
+cargo test -p roastty
+```
+
+All tests passed. The full Roastty suite reported 1629 unit tests, 1 ABI harness
+test, and 0 doc tests passing.
+
+## Result Review
+
+Codex reviewed the completed implementation and approved it with no blocking
+code findings. It confirmed that the DCS parser matches the approved non-tmux
+scope, DECRQSS terminal handling is correct for this slice, XTGETTCAP and tmux
+remain runtime no-ops, and the tests cover exact SGR payload forms, DECSCUSR
+invalid response, XTGETTCAP split-feed no-op behavior, tmux ignored behavior,
+DECSLRM mode gating, and split DCS command state.
+
+## Conclusion
+
+Experiment 148 completed the non-tmux DCS command parser and the DECRQSS
+responses that can be answered from Roastty's current terminal state. The
+remaining DCS-related work is now clearly split into separate future slices:
+cursor visual style for DECSCUSR, terminfo resources for XTGETTCAP responses,
+and tmux control mode/viewer support.

@@ -1134,19 +1134,30 @@ impl CsiState {
 }
 
 impl DcsHook {
-    #[cfg(test)]
-    fn intermediates(&self) -> &[u8] {
+    pub(super) fn intermediates(&self) -> &[u8] {
         &self.intermediates[..usize::from(self.intermediates_len)]
     }
 
-    #[cfg(test)]
-    fn params(&self) -> &[u16] {
+    pub(super) fn params(&self) -> &[u16] {
         &self.params[..usize::from(self.params_len)]
     }
 
-    #[cfg(test)]
-    fn final_byte(&self) -> u8 {
+    pub(super) const fn final_byte(&self) -> u8 {
         self.final_byte
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_for_tests(intermediates: &[u8], params: &[u16], final_byte: u8) -> Self {
+        let mut hook = Self {
+            intermediates: [0; 4],
+            intermediates_len: intermediates.len().try_into().unwrap(),
+            params: [0; CSI_PARAM_CAPACITY],
+            params_len: params.len().try_into().unwrap(),
+            final_byte,
+        };
+        hook.intermediates[..intermediates.len()].copy_from_slice(intermediates);
+        hook.params[..params.len()].copy_from_slice(params);
+        hook
     }
 }
 

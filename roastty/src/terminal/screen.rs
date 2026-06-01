@@ -901,6 +901,10 @@ impl Screen {
         self.cursor.hyperlink = None;
     }
 
+    pub(super) fn cursor_style(&self) -> style::Style {
+        self.cursor.style
+    }
+
     #[cfg(test)]
     pub(super) fn set_cursor_position_for_tests(&mut self, x: CellCountInt, y: CellCountInt) {
         self.cursor.x = x;

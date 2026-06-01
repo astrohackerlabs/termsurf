@@ -1,6 +1,7 @@
 //! Terminal state.
 
 use super::color;
+use super::dcs;
 use super::device_attributes;
 use super::device_status;
 use super::modes;
@@ -14,9 +15,9 @@ use super::screen::{
     BasicPrintError, EraseDisplayError, Screen, ScreenCursorHyperlinkId, ScreenFormatter,
     ScreenFormatterContent, ScreenFormatterExtra, ScreenFormatterOptions,
 };
+use super::sgr;
 use super::size::CellCountInt;
 use super::stream::{self, Action, Handler};
-#[cfg(test)]
 use super::style;
 use super::tabstops;
 
@@ -32,6 +33,7 @@ pub(super) struct Terminal {
     tabstops: tabstops::Tabstops,
     pty_response: Vec<u8>,
     stream: stream::Stream,
+    dcs: dcs::Handler,
     flags: TerminalFlags,
     title: TerminalTitle,
     pwd: TerminalPwd,
@@ -101,6 +103,7 @@ struct TerminalStreamHandler<'a> {
     pwd: &'a mut TerminalPwd,
     mouse_shape: &'a mut mouse::MouseShape,
     next_implicit_hyperlink_id: &'a mut u32,
+    dcs: &'a mut dcs::Handler,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -151,6 +154,7 @@ impl Terminal {
                 .map_err(|_| PageListAllocError::PageAlloc)?,
             pty_response: Vec::new(),
             stream: stream::Stream::init(),
+            dcs: dcs::Handler::new(),
             flags: TerminalFlags::default(),
             title: TerminalTitle::default(),
             pwd: TerminalPwd::default(),
@@ -169,6 +173,7 @@ impl Terminal {
             tabstops,
             pty_response,
             stream,
+            dcs,
             title,
             pwd,
             mouse_shape,
@@ -187,6 +192,7 @@ impl Terminal {
             pwd,
             mouse_shape,
             next_implicit_hyperlink_id,
+            dcs,
         };
         stream.next_slice(input, &mut handler)
     }
@@ -641,12 +647,25 @@ impl Handler for TerminalStreamHandler<'_> {
                 self.set_mode_basic(mode, enabled);
                 Ok(())
             }
-            Action::DcsHook { .. }
-            | Action::DcsPut { .. }
-            | Action::DcsUnhook
-            | Action::ApcStart
-            | Action::ApcPut { .. }
-            | Action::ApcEnd => Ok(()),
+            Action::DcsHook { value } => {
+                if let Some(command) = self.dcs.hook(value) {
+                    self.dcs_command(command);
+                }
+                Ok(())
+            }
+            Action::DcsPut { byte } => {
+                if let Some(command) = self.dcs.put(byte) {
+                    self.dcs_command(command);
+                }
+                Ok(())
+            }
+            Action::DcsUnhook => {
+                if let Some(command) = self.dcs.unhook() {
+                    self.dcs_command(command);
+                }
+                Ok(())
+            }
+            Action::ApcStart | Action::ApcPut { .. } | Action::ApcEnd => Ok(()),
             Action::RequestMode { mode } => {
                 let report = self.modes.get_report(modes::ModeTag::from_mode(mode));
                 self.write_pty_response(&report.encode_vt());
@@ -778,6 +797,76 @@ impl TerminalStreamHandler<'_> {
 
     fn write_pty_response_bytes(&mut self, bytes: &[u8]) {
         self.pty_response.extend_from_slice(bytes);
+    }
+
+    fn dcs_command(&mut self, command: dcs::Command) {
+        match command {
+            dcs::Command::Decrqss(request) => self.decrqss(request),
+            dcs::Command::XtGettcap(mut request) => while request.next().is_some() {},
+        }
+    }
+
+    fn decrqss(&mut self, request: dcs::Decrqss) {
+        let payload = match request {
+            dcs::Decrqss::None | dcs::Decrqss::Decscusr => None,
+            dcs::Decrqss::Sgr => Some(format!("{}m", self.decrqss_sgr_payload())),
+            dcs::Decrqss::Decstbm => Some(format!(
+                "{};{}r",
+                self.scrolling_region.top + 1,
+                self.scrolling_region.bottom + 1
+            )),
+            dcs::Decrqss::Decslrm => {
+                self.modes
+                    .get(modes::Mode::EnableLeftAndRightMargin)
+                    .then(|| {
+                        format!(
+                            "{};{}s",
+                            self.scrolling_region.left + 1,
+                            self.scrolling_region.right + 1
+                        )
+                    })
+            }
+        };
+
+        match payload {
+            Some(payload) => self.write_pty_response(&format!("\x1bP1$r{payload}\x1b\\")),
+            None => self.write_pty_response("\x1bP0$r\x1b\\"),
+        }
+    }
+
+    fn decrqss_sgr_payload(&self) -> String {
+        let style = self.screen.cursor_style();
+        let mut output = String::from("0");
+
+        if style.flags.bold {
+            output.push_str(";1");
+        }
+        if style.flags.faint {
+            output.push_str(";2");
+        }
+        if style.flags.italic {
+            output.push_str(";3");
+        }
+        if style.flags.underline != sgr::Underline::None {
+            output.push_str(";4");
+        }
+        if style.flags.blink {
+            output.push_str(";5");
+        }
+        if style.flags.inverse {
+            output.push_str(";7");
+        }
+        if style.flags.invisible {
+            output.push_str(";8");
+        }
+        if style.flags.strikethrough {
+            output.push_str(";9");
+        }
+
+        push_decrqss_color(&mut output, 38, 3, 9, style.fg_color);
+        push_decrqss_color(&mut output, 48, 4, 10, style.bg_color);
+
+        output
     }
 
     fn device_status(&mut self, request: device_status::Request) {
@@ -1057,6 +1146,33 @@ impl TerminalStreamHandler<'_> {
             self.size.rows,
             self.size.cols,
         );
+    }
+}
+
+fn push_decrqss_color(
+    output: &mut String,
+    extended_prefix: u8,
+    normal_prefix: u8,
+    bright_prefix: u8,
+    color: style::Color,
+) {
+    match color {
+        style::Color::None => {}
+        style::Color::Palette(idx) if idx < 8 => {
+            output.push_str(&format!(";{}{}", normal_prefix, idx));
+        }
+        style::Color::Palette(idx) if idx < 16 => {
+            output.push_str(&format!(";{}{}", bright_prefix, idx - 8));
+        }
+        style::Color::Palette(idx) => {
+            output.push_str(&format!(";{}:5:{}", extended_prefix, idx));
+        }
+        style::Color::Rgb(rgb) => {
+            output.push_str(&format!(
+                ";{}:2::{}:{}:{}",
+                extended_prefix, rgb.r, rgb.g, rgb.b
+            ));
+        }
     }
 }
 
@@ -2210,6 +2326,162 @@ mod tests {
     }
 
     #[test]
+    fn terminal_stream_decrqss_default_sgr_response() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1bP$qm\x1b\\").unwrap();
+
+        assert_eq!(terminal.take_pty_response_for_tests(), b"\x1bP1$r0m\x1b\\");
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_sgr_flags_use_ghostty_order() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1b[1;2;3;4;5;7;8;9m").unwrap();
+        terminal.next_slice(b"\x1bP$qm\x1b\\").unwrap();
+
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1bP1$r0;1;2;3;4;5;7;8;9m\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_sgr_palette_colors() {
+        for (sgr, expected) in [
+            (
+                b"\x1b[30;40m".as_slice(),
+                b"\x1bP1$r0;30;40m\x1b\\".as_slice(),
+            ),
+            (b"\x1b[91;103m", b"\x1bP1$r0;91;103m\x1b\\"),
+            (
+                b"\x1b[38;5;16;48;5;255m",
+                b"\x1bP1$r0;38:5:16;48:5:255m\x1b\\",
+            ),
+        ] {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+            terminal.next_slice(sgr).unwrap();
+            terminal.next_slice(b"\x1bP$qm\x1b\\").unwrap();
+
+            assert_eq!(terminal.take_pty_response_for_tests(), expected);
+        }
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_sgr_rgb_colors() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1b[38;2;1;2;3;48;2;4;5;6m").unwrap();
+        terminal.next_slice(b"\x1bP$qm\x1b\\").unwrap();
+
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1bP1$r0;38:2::1:2:3;48:2::4:5:6m\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_scrolling_region_responses() {
+        let mut terminal = Terminal::init(10, 5, None).unwrap();
+
+        terminal.set_scrolling_region_for_tests(1, 3, 2, 8);
+        terminal.next_slice(b"\x1bP$qr\x1b\\").unwrap();
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1bP1$r2;4r\x1b\\"
+        );
+
+        terminal.next_slice(b"\x1bP$qs\x1b\\").unwrap();
+        assert_eq!(terminal.take_pty_response_for_tests(), b"\x1bP0$r\x1b\\");
+
+        terminal.set_mode_for_tests(Mode::EnableLeftAndRightMargin, true);
+        terminal.next_slice(b"\x1bP$qs\x1b\\").unwrap();
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1bP1$r3;9s\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_unsupported_requests_return_invalid() {
+        for input in [b"\x1bP$qz\x1b\\".as_slice(), b"\x1bP$q q\x1b\\"] {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+            terminal.next_slice(b"abc").unwrap();
+            terminal.clear_dirty_for_tests();
+
+            terminal.next_slice(input).unwrap();
+
+            assert_eq!(terminal.take_pty_response_for_tests(), b"\x1bP0$r\x1b\\");
+            assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+            assert!(!terminal.is_dirty_for_tests(0, 0));
+            assert!(!terminal.is_dirty_for_tests(9, 0));
+        }
+    }
+
+    #[test]
+    fn terminal_stream_decrqss_over_capacity_is_ignored() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal.clear_dirty_for_tests();
+        terminal.next_slice(b"\x1bP$q\" q\x1b\\").unwrap();
+
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(9, 0));
+    }
+
+    #[test]
+    fn terminal_stream_dcs_command_state_survives_split_feed() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1bP$q").unwrap();
+        terminal.next_slice(b"m").unwrap();
+        terminal.next_slice(b"\x1b").unwrap();
+        terminal.next_slice(b"\\").unwrap();
+
+        assert_eq!(terminal.take_pty_response_for_tests(), b"\x1bP1$r0m\x1b\\");
+    }
+
+    #[test]
+    fn terminal_stream_dcs_command_xtgettcap_runtime_deferred() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal.clear_dirty_for_tests();
+        terminal.next_slice(b"\x1bP+q").unwrap();
+        terminal.next_slice(b"536d756C78").unwrap();
+        terminal.next_slice(b"\x1b\\").unwrap();
+
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(9, 0));
+    }
+
+    #[test]
+    fn terminal_stream_dcs_command_tmux_and_unknown_are_ignored() {
+        for input in [
+            b"\x1bP1000ppayload\x1b\\".as_slice(),
+            b"\x1bPApayload\x1b\\",
+        ] {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+            terminal.next_slice(b"abc").unwrap();
+            terminal.clear_dirty_for_tests();
+
+            terminal.next_slice(input).unwrap();
+
+            assert!(terminal.pty_response_for_tests().is_empty());
+            assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+            assert!(!terminal.is_dirty_for_tests(0, 0));
+            assert!(!terminal.is_dirty_for_tests(9, 0));
+        }
+    }
+
+    #[test]
     fn terminal_stream_query_response_device_status_reports() {
         let mut terminal = Terminal::init(10, 5, None).unwrap();
 
@@ -2234,14 +2506,14 @@ mod tests {
     }
 
     #[test]
-    fn terminal_stream_dcs_apc_sequences_are_runtime_noops() {
+    fn terminal_stream_dcs_unknown_and_apc_sequences_are_runtime_noops() {
         let mut terminal = Terminal::init(10, 3, None).unwrap();
 
         terminal.next_slice(b"abc").unwrap();
         terminal.screens.active.set_cursor_position_for_tests(5, 1);
         terminal.clear_dirty_for_tests();
         terminal
-            .next_slice(b"\x1bP$qm\x1b\\\x1b_Gpayload\x1b\\")
+            .next_slice(b"\x1bPAignored\x1b\\\x1b_Gpayload\x1b\\")
             .unwrap();
 
         assert_eq!(plain_with_unwrap(&terminal, false), "abc");
