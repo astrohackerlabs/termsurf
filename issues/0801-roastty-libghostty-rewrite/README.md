@@ -271,8 +271,7 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 80: Port Prompt Click Movement](80-port-prompt-click-movement.md)
   — **Pass**
-- [Experiment 81: Port Dump String Helpers](81-port-dump-string.md) —
-  **Designed**
+- [Experiment 81: Port Dump String Helpers](81-port-dump-string.md) — **Pass**
 
 ## Non-Goals
 

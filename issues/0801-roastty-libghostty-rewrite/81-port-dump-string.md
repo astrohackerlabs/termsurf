@@ -211,3 +211,81 @@ high-value improvements before implementation:
 The design now requires those tests and clarifies that visual-row output emits
 newlines only when followed by later text, matching upstream's trailing-state
 behavior. Codex found the slice otherwise coherent and appropriately narrow.
+
+## Result
+
+**Result:** Pass
+
+Implemented private dump-string support in `roastty/src/terminal/page_list.rs`:
+
+- added private `PlainStringOptions` so plain formatting can choose `trim` and
+  `unwrap` independently;
+- kept `PageList::selection_string()` routed through the shared formatter with
+  `unwrap: true`, preserving Experiment 79 selection-copy behavior;
+- added `PlainPageFormat::unwrap` so unwrapped output joins soft-wrapped rows
+  while visual-row output resets trailing cell state at row boundaries;
+- added private `PageList::dump_string(top_left, bottom_right, unwrap)`, which
+  normalizes endpoint x values to full rows, defaults a missing bottom-right pin
+  to the screen bottom-right, emits plain text with `trim: false`, and returns
+  an empty string for invalid or garbage pins.
+
+The implementation intentionally does not add `Screen`, `Terminal`, cursor
+state, parser state, VT formatter, HTML formatter, pin-map formatter, writer
+abstraction, public ABI, app, renderer, clipboard, PTY, or UI behavior.
+
+Added 13 dump-string tests covering:
+
+- basic single-row and multi-row output;
+- endpoint x values being ignored;
+- default bottom-right screen pin behavior;
+- `unwrap: true` soft-wrap joining;
+- `unwrap: false` visual-row preservation;
+- explicit spaces not being trimmed;
+- wide cells and `Wide::SpacerHead` behavior in both unwrap modes;
+- invalid and garbage pins returning an empty string;
+- tracked pin locations;
+- screen-domain dumping across scrollback;
+- cross-page trailing-state behavior for both unwrapped and visual-row output;
+- leading blank rows before later text being emitted while trailing blank screen
+  rows are not flushed.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty dump_string
+cargo test -p roastty selection_string
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Observed results:
+
+- `cargo test -p roastty dump_string`: 13 passed.
+- `cargo test -p roastty selection_string`: 22 passed.
+- `cargo test -p roastty terminal::page_list`: 439 passed.
+- `cargo test -p roastty`: 732 unit tests passed, ABI harness passed, and
+  doctests passed.
+
+Codex reviewed the completed implementation and found one real test gap: the
+wide/spacer test proved `unwrap: true` extended from an end pin on
+`Wide::SpacerHead`, but it did not directly prove `unwrap: false` avoided that
+extension. Added an explicit `unwrap: false` assertion ending on the
+`Wide::SpacerHead` itself and reran the full verification sequence.
+
+Follow-up Codex review approved the updated result with no remaining blockers.
+It confirmed that the formatter unwrap refactor, dump-string row normalization,
+cross-page trailing-state tests, spacer-head end handling, and final-newline
+behavior satisfy the Experiment 81 design.
+
+## Conclusion
+
+Experiment 81 successfully ports the reusable plain dump-string core behind
+upstream `Screen.dumpString()` into Roastty's private PageList layer. Roastty
+can now produce full-row plain dumps with either upstream unwrapped soft-wrap
+semantics or visual-row semantics, without exposing public API or introducing
+the later `Screen` wrapper.
+
+The next experiment can continue with the remaining formatter surface after the
+plain dump-string path, most likely the VT/HTML/pin-map formatter variants or
+the next upstream terminal helper that depends on copied screen text.
