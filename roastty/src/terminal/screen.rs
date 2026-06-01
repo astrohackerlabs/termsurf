@@ -105,7 +105,7 @@ pub(super) enum ScreenCursorHyperlinkId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ScreenCharsetState {
+pub(super) struct ScreenCharsetState {
     g0: charsets::Charset,
     g1: charsets::Charset,
     g2: charsets::Charset,
@@ -172,6 +172,10 @@ impl Screen {
         self.kitty_keyboard = kitty::KeyFlagStack::default();
     }
 
+    pub(super) fn mark_active_rows_dirty(&mut self) {
+        self.pages.mark_active_rows_dirty();
+    }
+
     pub(super) fn top_left_pin(&self) -> super::page_list::Pin {
         self.pages
             .pin(point::Point::active(point::Coordinate::new(0, 0)))
@@ -198,17 +202,23 @@ impl Screen {
         if self.cursor.pending_wrap && wraparound {
             let mark_wrap = self.cursor.x == cols.saturating_sub(1);
             if self.cursor.y == rows - 1 {
-                let old_row = self
-                    .pages
-                    .active_row_pin(self.cursor.y.into())
-                    .map_err(BasicPrintError::Cell)?;
-                self.pages
-                    .grow_active()
-                    .map_err(|_| BasicPrintError::PageAlloc)?;
-                if mark_wrap {
+                if self.pages.scrollback_disabled() {
                     self.pages
-                        .set_row_wrap_at_pin(old_row, true)
+                        .delete_active_lines(0, rows - 1, 0, cols - 1, 1, true)
                         .map_err(BasicPrintError::Cell)?;
+                } else {
+                    let old_row = self
+                        .pages
+                        .active_row_pin(self.cursor.y.into())
+                        .map_err(BasicPrintError::Cell)?;
+                    self.pages
+                        .grow_active()
+                        .map_err(|_| BasicPrintError::PageAlloc)?;
+                    if mark_wrap {
+                        self.pages
+                            .set_row_wrap_at_pin(old_row, true)
+                            .map_err(BasicPrintError::Cell)?;
+                    }
                 }
                 self.cursor.y = rows - 1;
             } else {
@@ -278,11 +288,21 @@ impl Screen {
         char::from_u32(table[codepoint as usize].into()).unwrap_or(' ')
     }
 
-    pub(super) fn line_feed_basic(&mut self, rows: CellCountInt) -> Result<(), BasicPrintError> {
+    pub(super) fn line_feed_basic(
+        &mut self,
+        rows: CellCountInt,
+        cols: CellCountInt,
+    ) -> Result<(), BasicPrintError> {
         if self.cursor.y == rows - 1 {
-            self.pages
-                .grow_active()
-                .map_err(|_| BasicPrintError::PageAlloc)?;
+            if self.pages.scrollback_disabled() {
+                self.pages
+                    .delete_active_lines(0, rows - 1, 0, cols - 1, 1, true)
+                    .map_err(BasicPrintError::Cell)?;
+            } else {
+                self.pages
+                    .grow_active()
+                    .map_err(|_| BasicPrintError::PageAlloc)?;
+            }
             self.cursor.pending_wrap = false;
             for y in 0..rows {
                 self.pages
@@ -975,6 +995,26 @@ impl Screen {
 
     pub(super) fn clear_cursor_hyperlink(&mut self) {
         self.cursor.hyperlink = None;
+    }
+
+    pub(super) fn charset_state(&self) -> ScreenCharsetState {
+        self.charset
+    }
+
+    pub(super) fn set_charset_state(&mut self, charset: ScreenCharsetState) {
+        self.charset = charset;
+    }
+
+    pub(super) fn copy_cursor_from_without_hyperlink(&mut self, other: &Screen) {
+        self.cursor.x = other.cursor.x;
+        self.cursor.y = other.cursor.y;
+        self.cursor.pending_wrap = other.cursor.pending_wrap;
+        self.cursor.style = other.cursor.style;
+        self.cursor.visual_style = other.cursor.visual_style;
+        self.cursor.protected = other.cursor.protected;
+        self.cursor.hyperlink = None;
+        self.cursor.semantic_content = other.cursor.semantic_content;
+        self.cursor.semantic_content_clear_eol = other.cursor.semantic_content_clear_eol;
     }
 
     pub(super) fn cursor_text_style(&self) -> style::Style {

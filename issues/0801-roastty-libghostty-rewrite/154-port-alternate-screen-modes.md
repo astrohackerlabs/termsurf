@@ -210,3 +210,61 @@ test for re-setting `?1049` while already on alternate, and clarify that `?1047`
 / `?1049` clears use complete erase-display semantics.
 
 Follow-up Codex review approved the design with no findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented real primary/alternate screen storage for Roastty's terminal runtime
+and wired DEC private modes `?47`, `?1047`, `?1048`, and `?1049` to
+Ghostty-style screen behavior instead of only toggling mode bits.
+
+The implementation now:
+
+- stores primary and lazily initialized alternate screens in `TerminalScreens`;
+- initializes the alternate screen with scrollback disabled;
+- routes runtime operations, formatters, and test helpers through the active
+  screen;
+- clears cursor hyperlink state on the old screen when switching;
+- carries charset state to the newly active screen;
+- copies cursor state across `?47` / `?1047` switches without copying hyperlink
+  state;
+- preserves `?47` alternate contents across leave/re-enter;
+- clears alternate contents for `?1047` on leave using complete erase-display
+  semantics;
+- saves/restores cursor state for `?1048` on the active screen without
+  switching;
+- saves the active cursor before `?1049` entry, clears alternate on entry, and
+  restores the saved primary cursor on reset;
+- makes RIS return to primary, reset primary, and drop stale alternate storage.
+
+The work also corrected zero-scrollback behavior for explicit linefeed and
+pending-wrap scrolling paths so the alternate screen can remain history-free.
+
+Verification run:
+
+```bash
+cargo fmt
+cargo test -p roastty alt_screen
+cargo test -p roastty save_cursor
+cargo test -p roastty ris
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo test -p roastty alt_screen`: 8 passed.
+- `cargo test -p roastty save_cursor`: 4 passed.
+- `cargo test -p roastty ris`: 5 passed.
+- `cargo test -p roastty`: 1694 unit tests passed, ABI harness passed, 0 doc
+  tests.
+
+## Conclusion
+
+Experiment 154 completes the first real two-screen terminal model in Roastty.
+Alternate-screen modes now mutate terminal storage, cursor state, and
+erase-display behavior in the same layer as other stream actions, while keeping
+public ABI, renderer, PTY, browser overlay, and app integration untouched.
+
+The next experiment can move on to another terminal subsystem; alternate-screen
+mode behavior no longer needs to remain deferred.
