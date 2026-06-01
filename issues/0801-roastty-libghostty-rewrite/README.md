@@ -306,6 +306,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 98: Port Terminal Modes and Formatter Extra](98-port-terminal-modes-extra.md)
   — **Pass**
+- [Experiment 99: Port Terminal Scrolling Region Formatter Extra](99-port-terminal-scrolling-region-extra.md)
+  — **Designed**
 
 ## Non-Goals
 
