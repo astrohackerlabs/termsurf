@@ -18,6 +18,20 @@ pub(super) enum Order {
     MirroredReverse,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Adjustment {
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    BeginningOfLine,
+    EndOfLine,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Bounds {
     Untracked {

@@ -255,7 +255,7 @@ No experiment may proceed to the next stage until the required review passes.
 - [Experiment 69: Port Selection Contained Row](69-port-selection-contained-row.md)
   — **Pass**
 - [Experiment 70: Port Selection Adjustment](70-port-selection-adjustment.md) —
-  **Designed**
+  **Pass**
 
 ## Non-Goals
 

@@ -1325,6 +1325,123 @@ impl PageList {
         Some(selection::Selection::new(start, end, false))
     }
 
+    fn selection_set_end(selection: &mut selection::Selection, end: Pin) {
+        *selection.end_mut() = end;
+    }
+
+    fn pin_row_has_text(&self, pin: Pin) -> Option<bool> {
+        let node = self.node_for_pin(&pin)?;
+        let row = node.page.get_row(pin.y as usize);
+        Some(Cell::has_text_any(node.page.get_cells(row)))
+    }
+
+    fn pin_last_column(&self, pin: Pin) -> Option<CellCountInt> {
+        let node = self.node_for_pin(&pin)?;
+        Some(node.page.size_cols() - 1)
+    }
+
+    fn selection_adjust(
+        &self,
+        selection: &mut selection::Selection,
+        adjustment: selection::Adjustment,
+    ) -> Option<()> {
+        let end = selection.end();
+        self.selection_pin_screen_point(end)?;
+
+        match adjustment {
+            selection::Adjustment::Up => {
+                if let Some(new_end) = self.pin_up(end, 1) {
+                    Self::selection_set_end(selection, new_end);
+                    Some(())
+                } else {
+                    self.selection_adjust(selection, selection::Adjustment::BeginningOfLine)
+                }
+            }
+            selection::Adjustment::Down => {
+                let mut current = end;
+                while let Some(next) = self.pin_down(current, 1) {
+                    if self.pin_row_has_text(next)? {
+                        Self::selection_set_end(selection, next);
+                        return Some(());
+                    }
+                    current = next;
+                }
+
+                self.selection_adjust(selection, selection::Adjustment::EndOfLine)
+            }
+            selection::Adjustment::Left => {
+                let mut it = self.cell_iterator_from_pin(Direction::LeftUp, end, None);
+                it.next()?;
+                for next in it {
+                    if self.pin_cell(next)?.has_text() {
+                        Self::selection_set_end(selection, next);
+                        break;
+                    }
+                }
+                Some(())
+            }
+            selection::Adjustment::Right => {
+                let mut it = self.cell_iterator_from_pin(Direction::RightDown, end, None);
+                it.next()?;
+                for next in it {
+                    if self.pin_cell(next)?.has_text() {
+                        Self::selection_set_end(selection, next);
+                        break;
+                    }
+                }
+                Some(())
+            }
+            selection::Adjustment::PageUp => {
+                if let Some(new_end) = self.pin_up(end, self.rows as usize) {
+                    Self::selection_set_end(selection, new_end);
+                    Some(())
+                } else {
+                    self.selection_adjust(selection, selection::Adjustment::Home)
+                }
+            }
+            selection::Adjustment::PageDown => {
+                if let Some(new_end) = self.pin_down(end, self.rows as usize) {
+                    Self::selection_set_end(selection, new_end);
+                    Some(())
+                } else {
+                    self.selection_adjust(selection, selection::Adjustment::End)
+                }
+            }
+            selection::Adjustment::Home => {
+                let new_end = self.pin(point::Point::screen(Coordinate::new(0, 0)))?;
+                Self::selection_set_end(selection, new_end);
+                Some(())
+            }
+            selection::Adjustment::End => {
+                let mut it = self.row_iterator(
+                    Direction::LeftUp,
+                    point::Point::screen(Coordinate::new(0, 0)),
+                    None,
+                );
+                for mut next in &mut it {
+                    if self.pin_row_has_text(next)? {
+                        next.x = self.pin_last_column(next)?;
+                        Self::selection_set_end(selection, next);
+                        break;
+                    }
+                }
+                Some(())
+            }
+            selection::Adjustment::BeginningOfLine => {
+                let mut new_end = end;
+                new_end.x = 0;
+                Self::selection_set_end(selection, new_end);
+                Some(())
+            }
+            selection::Adjustment::EndOfLine => {
+                let mut new_end = end;
+                new_end.x = self.pin_last_column(end)?;
+                Self::selection_set_end(selection, new_end);
+                Some(())
+            }
+        }
+    }
+
     fn page_iterator(
         &self,
         direction: Direction,
@@ -3151,6 +3268,44 @@ mod tests {
             screen_pin(list, end.0, end.1),
             rectangle,
         )
+    }
+
+    fn set_screen_cell(list: &mut PageList, x: CellCountInt, y: u32, codepoint: char) {
+        let pin = screen_pin(list, x, y);
+        let index = list.node_index(pin.node).expect("screen node must exist");
+        *list.pages[index]
+            .page
+            .get_row_and_cell_mut(pin.x as usize, pin.y as usize)
+            .cell = Cell::init(codepoint as u32);
+    }
+
+    fn set_screen_text_lines(list: &mut PageList, lines: &[&str]) {
+        for (y, line) in lines.iter().enumerate() {
+            for (x, ch) in line.chars().enumerate() {
+                set_screen_cell(
+                    list,
+                    x.try_into().expect("test x must fit CellCountInt"),
+                    y.try_into().expect("test y must fit u32"),
+                    ch,
+                );
+            }
+        }
+    }
+
+    fn assert_selection_screen_points(
+        list: &PageList,
+        selection: selection::Selection,
+        start: (CellCountInt, u32),
+        end: (CellCountInt, u32),
+    ) {
+        assert_eq!(
+            screen_coord(list, selection.start()),
+            Coordinate::new(start.0, start.1)
+        );
+        assert_eq!(
+            screen_coord(list, selection.end()),
+            Coordinate::new(end.0, end.1)
+        );
     }
 
     fn row_tuples(
@@ -7543,6 +7698,189 @@ mod tests {
             .is_none());
         assert!(list.selection_contained_row(selection, invalid).is_none());
         assert!(list.selection_contained_row(selection, garbage).is_none());
+    }
+
+    #[test]
+    fn selection_adjust_right_matches_upstream_cases() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A1234", "B5678", "C1234", "D5678"]);
+
+        let mut selection = screen_selection(&list, (5, 1), (3, 3), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Right)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (4, 3));
+
+        let mut selection = screen_selection(&list, (4, 1), (4, 2), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Right)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (0, 3));
+
+        let mut selection = screen_selection(&list, (5, 1), (4, 3), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Right)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (4, 3));
+    }
+
+    #[test]
+    fn selection_adjust_left_matches_upstream_cases_and_skips_blanks() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A1234", "B5678", "C12", "D56"]);
+
+        let mut selection = screen_selection(&list, (5, 1), (3, 3), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Left)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (2, 3));
+
+        let mut selection = screen_selection(&list, (5, 1), (0, 3), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Left)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (2, 2));
+    }
+
+    #[test]
+    fn selection_adjust_vertical_and_line_boundary_matches_upstream() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A", "B", "C", "D", "E"]);
+
+        let mut selection = screen_selection(&list, (5, 1), (3, 3), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Up)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (3, 2));
+
+        let mut selection = screen_selection(&list, (5, 1), (3, 0), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Up)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (0, 0));
+
+        let mut selection = screen_selection(&list, (5, 1), (3, 3), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Down)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (3, 4));
+
+        let mut selection = screen_selection(&list, (4, 1), (3, 4), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Down)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (9, 4));
+    }
+
+    #[test]
+    fn selection_adjust_down_preserves_x_and_handles_not_full_screen() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A", "B", "C"]);
+
+        let mut selection = screen_selection(&list, (4, 1), (3, 1), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Down)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (3, 2));
+
+        let mut selection = screen_selection(&list, (4, 1), (3, 2), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Down)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (9, 2));
+    }
+
+    #[test]
+    fn selection_adjust_page_up_and_page_down_move_or_fallback() {
+        let mut list = PageList::init(10, 5, None).unwrap();
+        simulate_history(&mut list, 12);
+        set_screen_text_lines(&mut list, &["A", "B", "C", "D", "E", "F", "G", "H"]);
+
+        let mut selection = screen_selection(&list, (4, 1), (3, 6), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::PageUp)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (3, 1));
+
+        let mut selection = screen_selection(&list, (4, 1), (3, 2), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::PageUp)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (0, 0));
+
+        let mut selection = screen_selection(&list, (4, 1), (3, 1), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::PageDown)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (3, 6));
+
+        let mut selection = screen_selection(&list, (4, 1), (1, 8), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::PageDown)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (9, 7));
+    }
+
+    #[test]
+    fn selection_adjust_home_end_and_line_edges_match_upstream() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A12 B34", "C12 D34", "E"]);
+
+        let mut selection = screen_selection(&list, (4, 1), (1, 2), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Home)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 1), (0, 0));
+
+        let mut selection = screen_selection(&list, (4, 0), (1, 1), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::End)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (4, 0), (9, 2));
+
+        let mut selection = screen_selection(&list, (5, 1), (5, 1), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::BeginningOfLine)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (5, 1), (0, 1));
+
+        let mut selection = screen_selection(&list, (1, 0), (1, 0), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::EndOfLine)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (1, 0), (9, 0));
+    }
+
+    #[test]
+    fn selection_adjust_mutates_tracked_end_and_preserves_start() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A1234", "B5678", "C1234", "D5678"]);
+        let start = screen_pin(&list, 5, 1);
+        let end = screen_pin(&list, 3, 3);
+        let start_ptr = list.track_pin(start).unwrap();
+        let end_ptr = list.track_pin(end).unwrap();
+        let mut selection = selection::Selection::tracked(start_ptr, end_ptr, false);
+
+        list.selection_adjust(&mut selection, selection::Adjustment::Right)
+            .unwrap();
+
+        assert_eq!(selection.start(), start);
+        assert_eq!(selection.end(), screen_pin(&list, 4, 3));
+        assert_eq!(tracked_pin_value(start_ptr), start);
+        assert_eq!(tracked_pin_value(end_ptr), screen_pin(&list, 4, 3));
+
+        list.untrack_pin(start_ptr);
+        list.untrack_pin(end_ptr);
+    }
+
+    #[test]
+    fn selection_adjust_invalid_or_noop_edges() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        set_screen_text_lines(&mut list, &["A"]);
+        let other = PageList::init(10, 10, None).unwrap();
+        let start = screen_pin(&list, 0, 0);
+        let invalid = Pin::new(other.first_node_ptr(), 0, 0);
+        let mut selection = selection::Selection::new(start, invalid, false);
+
+        assert!(list
+            .selection_adjust(&mut selection, selection::Adjustment::Right)
+            .is_none());
+        assert_eq!(selection.start(), start);
+        assert_eq!(selection.end(), invalid);
+
+        let mut garbage = start;
+        garbage.garbage = true;
+        let mut selection = selection::Selection::new(start, garbage, false);
+        assert!(list
+            .selection_adjust(&mut selection, selection::Adjustment::Left)
+            .is_none());
+        assert_eq!(selection.start(), start);
+
+        let mut selection = screen_selection(&list, (0, 0), (0, 0), false);
+        list.selection_adjust(&mut selection, selection::Adjustment::Right)
+            .unwrap();
+        assert_selection_screen_points(&list, selection, (0, 0), (0, 0));
     }
 
     #[test]

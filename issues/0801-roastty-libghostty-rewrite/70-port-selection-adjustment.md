@@ -214,3 +214,87 @@ The experiment fails if:
   parser, app, tracking ownership changes, or unrelated behavior is added
   prematurely;
 - tests or formatting fail.
+
+## Result
+
+**Result:** Pass
+
+Implemented selection adjustment in `roastty/src/terminal/selection.rs` and
+`roastty/src/terminal/page_list.rs`.
+
+The change adds the terminal-internal `selection::Adjustment` enum with the
+upstream variants:
+
+- `Left`;
+- `Right`;
+- `Up`;
+- `Down`;
+- `Home`;
+- `End`;
+- `PageUp`;
+- `PageDown`;
+- `BeginningOfLine`;
+- `EndOfLine`.
+
+`PageList` now owns a private
+`selection_adjust(&mut selection::Selection, selection::Adjustment) -> Option<()>`
+helper. The helper validates the current end pin, mutates only
+`selection.end_mut()`, and preserves `selection.start()` for every adjustment.
+
+The implementation ports upstream behavior:
+
+- `Up` moves one row or falls back to `BeginningOfLine`;
+- `Down` scans to the next nonblank row while preserving x, or falls back to
+  `EndOfLine`;
+- `Left` and `Right` scan through cells, skip the current cell, skip blanks, and
+  wrap rows;
+- `PageUp` and `PageDown` move by `self.rows` or fall back to `Home` / `End`;
+- `Home` moves to screen `(0, 0)`;
+- `End` scans upward from the screen bottom to the last row containing text and
+  moves to that row's last column;
+- `BeginningOfLine` and `EndOfLine` update only the end pin's x coordinate.
+
+Invalid or garbage end pins return `None` instead of panicking. Valid no-op edge
+cases return `Some(())` and leave the end pin unchanged.
+
+Added tests for:
+
+- upstream right adjustment cases;
+- upstream left adjustment and blank-skipping cases;
+- upstream up/down behavior and fallback behavior;
+- down preserving x on normal movement and handling not-full screens;
+- page-up and page-down successful moves and fallbacks;
+- home, end, beginning-of-line, and end-of-line;
+- tracked selection end mutation;
+- start preservation;
+- invalid and garbage end-pin behavior;
+- valid no-op edge behavior.
+
+Verification:
+
+```bash
+cargo fmt
+cargo test -p roastty terminal::page_list::tests::selection
+cargo test -p roastty terminal::selection
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo fmt` completed successfully.
+- `cargo test -p roastty terminal::page_list::tests::selection`: 32 passed.
+- `cargo test -p roastty terminal::selection`: 12 passed.
+- `cargo test -p roastty`: 609 unit tests passed, ABI harness passed, doctests
+  passed.
+
+Independent result review approved the implementation as a Pass. The reviewer
+found no blocking issues, confirmed the upstream adjustment shape, confirmed the
+test coverage, and found no scope drift.
+
+## Conclusion
+
+Roastty now has the upstream selection adjustment behavior represented as a
+PageList-owned private helper. This completes the core `Selection.zig` selection
+value, ordering, containment, row extraction, and adjustment behavior ported so
+far while keeping higher-level word/line selection, formatting, gestures, ABI,
+and Screen integration for later experiments.
