@@ -258,6 +258,8 @@ No experiment may proceed to the next stage until the required review passes.
   **Pass**
 - [Experiment 71: Port Selection Tracking Ownership](71-port-selection-tracking-ownership.md)
   — **Pass**
+- [Experiment 72: Port Selection Pin Navigation](72-port-selection-pin-navigation.md)
+  — **Designed**
 
 ## Non-Goals
 
