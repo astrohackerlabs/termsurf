@@ -444,6 +444,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 158: Port Mouse Encoder C ABI](158-port-mouse-encoder-c-abi.md) —
   **Pass**
+- [Experiment 159: Port Key Event Value Types](159-port-key-event-value-types.md)
+  — **Designed**
 
 ## Non-Goals
 
