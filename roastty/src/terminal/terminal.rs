@@ -395,6 +395,14 @@ impl Handler for TerminalStreamHandler<'_> {
                 .screen
                 .erase_line_basic(mode, self.size.rows, self.size.cols, protected)
                 .map_err(TerminalStreamError::from),
+            Action::InsertChars { count } => self
+                .screen
+                .insert_chars_basic(
+                    count,
+                    self.scrolling_region.left,
+                    self.scrolling_region.right,
+                )
+                .map_err(TerminalStreamError::from),
             Action::DeleteChars { count } => self
                 .screen
                 .delete_chars_basic(
@@ -403,6 +411,10 @@ impl Handler for TerminalStreamHandler<'_> {
                     self.scrolling_region.left,
                     self.scrolling_region.right,
                 )
+                .map_err(TerminalStreamError::from),
+            Action::EraseChars { count } => self
+                .screen
+                .erase_chars_basic(count, self.size.rows, self.size.cols)
                 .map_err(TerminalStreamError::from),
             Action::InsertLines { count } => self
                 .screen
@@ -2480,6 +2492,256 @@ mod tests {
         terminal.next_slice(b"2K").unwrap();
 
         assert_eq!(plain_with_unwrap(&terminal, false), "");
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_count_one_shifts_suffix_right() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+        terminal.clear_dirty_for_tests();
+
+        terminal.next_slice(b"\x1b[@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A BCD");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+        assert!(terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_zero_count_behaves_as_one() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+
+        terminal.next_slice(b"\x1b[0@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A BCD");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_clamps_to_remaining_margin() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(2, 0);
+
+        terminal.next_slice(b"\x1b[99@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "AB");
+        assert_eq!(terminal.cursor_position_for_tests(), (2, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_clears_pending_wrap() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        assert!(terminal.cursor_pending_wrap_for_tests());
+
+        terminal.next_slice(b"\x1b[@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "ABCD");
+        assert!(!terminal.cursor_pending_wrap_for_tests());
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_preserves_wrap_metadata() {
+        let mut terminal = Terminal::init(5, 3, None).unwrap();
+        terminal
+            .screens
+            .active
+            .set_text_lines_for_tests(&["ABCDE", "FGHIJ", "KLMNO"]);
+        terminal.set_row_wrap_for_tests(0, true);
+        terminal.set_row_wrap_continuation_for_tests(1, true);
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+        terminal.clear_dirty_for_tests();
+
+        terminal.next_slice(b"\x1b[@").unwrap();
+
+        assert!(terminal.row_wrap_for_tests(0));
+        assert!(terminal.row_wrap_continuation_for_tests(1));
+        assert!(terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_outside_horizontal_margin_clears_pending_wrap_only() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        assert!(terminal.cursor_pending_wrap_for_tests());
+        terminal.set_scrolling_region_for_tests(0, 1, 0, 3);
+        terminal.clear_dirty_for_tests();
+
+        terminal.next_slice(b"\x1b[@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "ABCDE");
+        assert!(!terminal.cursor_pending_wrap_for_tests());
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_honors_horizontal_margins() {
+        let mut terminal = Terminal::init(6, 2, None).unwrap();
+
+        terminal.next_slice(b"ABC123").unwrap();
+        terminal.set_scrolling_region_for_tests(0, 1, 2, 4);
+        terminal.screens.active.set_cursor_position_for_tests(3, 0);
+
+        terminal.next_slice(b"\x1b[@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "ABC 13");
+    }
+
+    #[test]
+    fn terminal_stream_csi_insert_chars_moves_protected_bit_with_shifted_cell() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.set_cell_protected_for_tests(2, 0, true);
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+
+        terminal.next_slice(b"\x1b[@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A BCD");
+        assert!(terminal.cell_protected_for_tests(3, 0));
+        assert!(!terminal.cell_protected_for_tests(2, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_count_one_clears_without_shifting() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+        terminal.clear_dirty_for_tests();
+
+        terminal.next_slice(b"\x1b[X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A CDE");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+        assert!(terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_clears_pending_wrap() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        assert!(terminal.cursor_pending_wrap_for_tests());
+
+        terminal.next_slice(b"\x1b[X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "ABCD");
+        assert!(!terminal.cursor_pending_wrap_for_tests());
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_zero_count_behaves_as_one() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+
+        terminal.next_slice(b"\x1b[0X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A CDE");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_clamps_to_screen_edge() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(2, 0);
+
+        terminal.next_slice(b"\x1b[99X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "AB");
+        assert_eq!(terminal.cursor_position_for_tests(), (2, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_ignores_horizontal_margins() {
+        let mut terminal = Terminal::init(6, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDEF").unwrap();
+        terminal.set_scrolling_region_for_tests(0, 1, 2, 4);
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+
+        terminal.next_slice(b"\x1b[2X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A  DEF");
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_resets_wrap_metadata() {
+        let mut terminal = Terminal::init(5, 3, None).unwrap();
+        terminal
+            .screens
+            .active
+            .set_text_lines_for_tests(&["ABCDE", "FGHIJ", "KLMNO"]);
+        terminal.set_row_wrap_for_tests(0, true);
+        terminal.set_row_wrap_continuation_for_tests(1, true);
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+        terminal.clear_dirty_for_tests();
+
+        terminal.next_slice(b"\x1b[X").unwrap();
+
+        assert!(!terminal.row_wrap_for_tests(0));
+        assert!(!terminal.row_wrap_continuation_for_tests(1));
+        assert!(terminal.is_dirty_for_tests(0, 0));
+        assert!(terminal.is_dirty_for_tests(0, 1));
+        assert!(!terminal.is_dirty_for_tests(0, 2));
+    }
+
+    #[test]
+    fn terminal_stream_csi_erase_chars_clears_stored_protected_cells() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.set_cell_protected_for_tests(2, 0, true);
+        terminal.screens.active.set_cursor_position_for_tests(2, 0);
+
+        terminal.next_slice(b"\x1b[X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "AB DE");
+        assert!(!terminal.cell_protected_for_tests(2, 0));
+    }
+
+    #[test]
+    fn terminal_stream_unsupported_csi_insert_and_erase_chars_do_not_mutate_state() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"AB\x1b[?@CD\x1b[?X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "ABCD");
+    }
+
+    #[test]
+    fn terminal_stream_split_feed_csi_insert_and_erase_chars_mutates_row() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal.next_slice(b"ABCDE").unwrap();
+        terminal.screens.active.set_cursor_position_for_tests(1, 0);
+        terminal.next_slice(b"\x1b[").unwrap();
+        terminal.next_slice(b"@").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A BCD");
+
+        terminal.screens.active.set_cursor_position_for_tests(2, 0);
+        terminal.next_slice(b"\x1b[2").unwrap();
+        terminal.next_slice(b"X").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "A   D");
     }
 
     #[test]

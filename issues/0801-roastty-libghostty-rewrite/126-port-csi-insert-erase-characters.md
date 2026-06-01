@@ -346,3 +346,137 @@ The experiment fails if:
   delete-character, insert-line, delete-line, scroll, formatter, or ABI
   behavior;
 - it adds unrelated CSI, SGR, OSC, DCS, public API, ABI, or non-macOS behavior.
+
+## Result
+
+**Result:** Pass
+
+Experiment 126 ports Ghostty's `CSI @` / ICH and `CSI X` / ECH commands across
+the current private Roastty terminal stack.
+
+The stream parser now dispatches:
+
+- `Action::InsertChars { count }` for final `@`;
+- `Action::EraseChars { count }` for final `X`;
+- default count `1` for `CSI @` and `CSI X`;
+- count `1` for `CSI 0 @` and `CSI ; @`, matching Ghostty's parser-level minimum
+  for insert blanks;
+- count `0` for `CSI 0 X` and `CSI ; X`, with execution treating that as one
+  erased cell;
+- count `1` for `CSI 1 @`, `CSI 1 ; @`, `CSI 1 X`, and `CSI 1 ; X`;
+- larger single numeric params using the existing `u16::MAX` parser clamp.
+
+The parser rejects the invalid forms required by the design:
+
+- private forms such as `CSI ? @`, `CSI > @`, `CSI ? X`, and `CSI > X`;
+- real multi-param forms such as `CSI 1 ; 2 @` and `CSI 1 ; 2 X`;
+- colon and mixed-separator forms;
+- direct raw C1 CSI byte `0x9b`, which remains out of scope and follows the
+  current UTF-8 replacement behavior;
+- handler errors leave the parser in ground state before returning the error;
+- pending invalid UTF-8 dispatches `U+FFFD` before same-slice and split-feed
+  insert/erase character actions.
+
+The execution path now implements both commands:
+
+- `CSI @` clears pending wrap before margin checks;
+- `CSI @` preserves cursor position, shifts cells right inside the current
+  left/right scrolling margins, inserts default blank cells, and clamps to the
+  remaining bounded row width;
+- `CSI @` outside the horizontal margins mutates no cells but still clears
+  pending wrap;
+- `CSI @` preserves row soft-wrap metadata, matching Ghostty's `insertBlanks()`
+  behavior;
+- `CSI X` treats count `0` as count `1`;
+- `CSI X` preserves cursor position, clears pending wrap, clears cells without
+  shifting suffix content, and clamps to the screen edge;
+- `CSI X` ignores active left/right margins, including when the cursor starts
+  outside those margins;
+- `CSI X` resets row soft-wrap metadata;
+- plain `CSI X` is implemented as an unprotected clear under Roastty's current
+  model, so it clears stored per-cell protection bits. Ghostty's ISO
+  protected-mode behavior for `eraseChars()` remains deferred until Roastty has
+  the corresponding protected-mode stream state.
+
+The implementation adds:
+
+- `Page::insert_chars_in_row()`, mirroring the existing `delete_chars_in_row()`
+  shape but shifting bounded same-row cells right;
+- `PageList::insert_active_chars()`;
+- `Screen::insert_chars_basic()`;
+- `Screen::erase_chars_basic()`;
+- `Action::InsertChars` and `Action::EraseChars` routing in
+  `TerminalStreamHandler`.
+
+Managed metadata coverage now includes:
+
+- a Page test proving insert-character shifts style, grapheme, hyperlink, and
+  protected metadata with the moved cell while releasing the inserted blank
+  range exactly once;
+- a PageList page-boundary test proving the active-row insert helper keeps
+  PageList integrity when the active row lives on a non-first backing page;
+- a PageList erase-path test proving the clear primitive used by `CSI X`
+  releases style, grapheme, and hyperlink metadata and leaves no managed-memory
+  row flags behind;
+- terminal tests proving `CSI @` shifts stored protected-cell metadata and
+  `CSI X` clears stored protected cells under the current unprotected model;
+- a terminal test proving `CSI X` clears pending wrap directly.
+
+Current-SGR blank-cell coloring, Unicode-width boundary repair, wide-character
+rendering, ISO protected-mode stream state for `eraseChars()`, alternate-screen
+semantics, Kitty graphics, and broader public ABI work remain deferred. None of
+those were added or required for this slice.
+
+Verification commands:
+
+```bash
+cargo fmt
+cargo test -p roastty stream
+cargo test -p roastty terminal::terminal
+cargo test -p roastty terminal::page
+cargo test -p roastty terminal::page_list
+cargo test -p roastty terminal_formatter
+cargo test -p roastty screen_formatter
+cargo test -p roastty page_string
+cargo test -p roastty
+```
+
+All commands passed. The full `cargo test -p roastty` run reported `1339`
+library tests passing, the ABI harness test passing, and doc-tests passing.
+
+Codex design review found three real issues in the initial design: `CSI @` row
+wrap metadata semantics were wrong, `CSI X` horizontal-margin behavior needed
+explicit coverage, and protected-cell behavior needed a concrete current-scope
+expectation. The design was updated with those requirements and re-reviewed
+successfully before implementation:
+
+- initial design review:
+  `logs/codex-review/20260601-055259-376287-last-message.md`;
+- approved design re-review:
+  `logs/codex-review/20260601-055539-822019-last-message.md`.
+
+Codex result review found two real coverage gaps in the first completed result:
+`logs/codex-review/20260601-060313-567267-last-message.md`.
+
+- `CSI X` managed-metadata release was only implied through
+  `clear_active_cells()` and needed a targeted test.
+- `CSI X` pending-wrap clearing was implemented indirectly through
+  `cursor_reset_wrap_basic()` but lacked an explicit terminal test.
+
+Both findings were fixed by adding the PageList erase-path metadata test and the
+direct `CSI X` pending-wrap terminal test, then rerunning the full verification
+chain above. Codex re-reviewed the updated result and found no remaining
+blocking issues: `logs/codex-review/20260601-060707-399009-last-message.md`. The
+re-review explicitly confirmed both prior blockers were resolved and that this
+experiment is good enough to commit as `Pass`.
+
+## Conclusion
+
+`CSI @` and `CSI X` are now implemented for Roastty's current terminal model.
+Together with `CSI P`, insert/delete/erase character mutation now has a coherent
+single-row foundation with parser coverage, Page/PageList integrity checks, and
+terminal behavior tests.
+
+The next experiment can continue to a neighboring CSI command such as horizontal
+tabulation back (`CSI Z`) or move into a larger coherent slice of remaining CSI
+settings/reports if that surface is now ready to group safely.

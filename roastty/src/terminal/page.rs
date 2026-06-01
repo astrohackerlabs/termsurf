@@ -1341,6 +1341,28 @@ impl Page {
         self.clear_cells(row_index, left + shift, right + 1);
     }
 
+    pub(super) fn insert_chars_in_row(
+        &mut self,
+        row_index: usize,
+        left: usize,
+        right: usize,
+        count: usize,
+    ) {
+        assert!(row_index < self.size.rows as usize);
+        assert!(left <= right);
+        assert!(right < self.size.cols as usize);
+        assert!(count > 0);
+
+        let width = right - left + 1;
+        let count = count.min(width);
+        let shift = width - count;
+        for offset in (0..shift).rev() {
+            self.swap_cells(row_index, left + offset, row_index, left + count + offset);
+        }
+
+        self.clear_cells(row_index, left, left + count);
+    }
+
     fn swap_grapheme_entries(
         &mut self,
         src_offset: Offset<Cell>,
@@ -5572,6 +5594,58 @@ mod tests {
         assert_eq!(page.cell_copy_at(3, 0).codepoint(), 'F' as u32);
         assert_eq!(page.cell_copy_at(4, 0), Cell::default());
         assert_eq!(page.cell_copy_at(5, 0), Cell::default());
+        assert_eq!(page.style_ref_count(style_id), 1);
+        assert_eq!(page.grapheme_count(), 1);
+        assert_eq!(page.hyperlink_ref_count(link_id), 1);
+        assert_eq!(page.verify_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn page_insert_chars_in_row_shifts_cells_and_managed_metadata_right() {
+        let mut page = Page::init(Capacity {
+            cols: 6,
+            rows: 1,
+            styles: 8,
+            ..Capacity::new(6, 1)
+        })
+        .unwrap();
+        for x in 0..page.size.cols as usize {
+            *page.get_row_and_cell_mut(x, 0).cell = Cell::init((b'A' + x as u8) as u32);
+        }
+        let style_id = page
+            .add_style(style::Style {
+                flags: style::Flags {
+                    bold: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            })
+            .unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"id"),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+
+        let source = page.get_row_and_cell_mut(2, 0);
+        source.row.set_styled(true);
+        source.cell.set_style_id(style_id);
+        source.cell.set_protected(true);
+        page.append_grapheme_at(2, 0, 0x0301).unwrap();
+        page.set_hyperlink(2, 0, link_id).unwrap();
+
+        page.insert_chars_in_row(0, 1, 5, 2);
+
+        assert_eq!(page.cell_copy_at(1, 0), Cell::default());
+        assert_eq!(page.cell_copy_at(2, 0), Cell::default());
+        assert_eq!(page.cell_copy_at(3, 0).codepoint(), 'B' as u32);
+        assert_eq!(page.cell_copy_at(4, 0).codepoint(), 'C' as u32);
+        assert_eq!(page.cell_copy_at(4, 0).style_id(), style_id);
+        assert!(page.cell_copy_at(4, 0).protected());
+        assert_eq!(page.lookup_grapheme_at(4, 0), Some(vec![0x0301]));
+        assert_eq!(page.lookup_hyperlink_at(4, 0), Some(link_id));
+        assert_eq!(page.cell_copy_at(5, 0).codepoint(), 'D' as u32);
         assert_eq!(page.style_ref_count(style_id), 1);
         assert_eq!(page.grapheme_count(), 1);
         assert_eq!(page.hyperlink_ref_count(link_id), 1);

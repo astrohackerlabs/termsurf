@@ -3506,6 +3506,34 @@ impl PageList {
         Ok(())
     }
 
+    pub(super) fn insert_active_chars(
+        &mut self,
+        y: u32,
+        left: CellCountInt,
+        right: CellCountInt,
+        count: CellCountInt,
+    ) -> Result<(), BasicCellWriteError> {
+        assert!(left <= right);
+        assert!(right < self.cols);
+        assert!(count > 0);
+
+        let pin = self
+            .pin(point::Point::active(point::Coordinate::new(left, y)))
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let index = self
+            .node_index(pin.node)
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let page = &mut self.pages[index].page;
+        page.insert_chars_in_row(
+            pin.y as usize,
+            left as usize,
+            right as usize,
+            count as usize,
+        );
+        page.get_row_mut(pin.y as usize).set_dirty(true);
+        Ok(())
+    }
+
     pub(super) fn insert_active_lines(
         &mut self,
         cursor_y: u32,
@@ -12692,6 +12720,82 @@ mod tests {
             [history_cell_at(&list, 0, 0), history_cell_at(&list, 0, 1)],
             cells_before
         );
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_insert_active_chars_preserves_integrity_across_page_boundary() {
+        let (mut list, page_rows) = multi_page_list(6);
+        let y = u32::from(page_rows);
+        assert!(y < u32::from(list.rows));
+
+        for (x, ch) in "ABCDEF".chars().enumerate() {
+            set_screen_cell(&mut list, x as CellCountInt, y, ch);
+        }
+
+        list.insert_active_chars(y, 1, 5, 2).unwrap();
+
+        let text: String = (0..6)
+            .map(|x| {
+                let pin = screen_pin(&list, x, y);
+                let index = list.node_index(pin.node).expect("screen node must exist");
+                match page_cell(&list.pages[index].page, pin.x as usize, pin.y as usize).codepoint()
+                {
+                    0 => ' ',
+                    codepoint => char::from_u32(codepoint).unwrap_or(' '),
+                }
+            })
+            .collect();
+
+        assert_eq!(text, "A  BCD");
+        list.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn page_list_clear_active_cells_releases_managed_metadata_for_erase_chars_path() {
+        let mut list = PageList::init(6, 2, None).unwrap();
+        let pin = list
+            .pin(point::Point::active(Coordinate::new(1, 0)))
+            .unwrap();
+        let index = list.node_index(pin.node).unwrap();
+        let page = &mut list.pages[index].page;
+        let style_id = page
+            .add_style(style::Style {
+                flags: style::Flags {
+                    italic: true,
+                    ..style::Flags::default()
+                },
+                ..style::Style::default()
+            })
+            .unwrap();
+        let link_id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"erase-chars"),
+                uri: b"https://example.com/erase-chars",
+            })
+            .unwrap();
+        {
+            let rac = page.get_row_and_cell_mut(1, 0);
+            rac.row.set_styled(true);
+            *rac.cell = Cell::init('s' as u32);
+            rac.cell.set_style_id(style_id);
+        }
+        *page.get_row_and_cell_mut(2, 0).cell = Cell::init('g' as u32);
+        page.append_grapheme_at(2, 0, 0x0301).unwrap();
+        *page.get_row_and_cell_mut(3, 0).cell = Cell::init('h' as u32);
+        page.set_hyperlink(3, 0, link_id).unwrap();
+
+        list.clear_active_cells(0, 1, 4, false).unwrap();
+
+        let page = &list.pages[index].page;
+        assert_eq!(page_cell(page, 1, 0), Cell::default());
+        assert_eq!(page_cell(page, 2, 0), Cell::default());
+        assert_eq!(page_cell(page, 3, 0), Cell::default());
+        assert_eq!(page.style_ref_count(style_id), 0);
+        assert_eq!(page.grapheme_count(), 0);
+        assert_eq!(page.hyperlink_ref_count(link_id), 0);
+        assert_eq!(page.hyperlink_count(), 0);
+        assert!(!page.get_row(0).managed_memory());
         list.verify_integrity().unwrap();
     }
 

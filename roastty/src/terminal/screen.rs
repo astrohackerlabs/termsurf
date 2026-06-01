@@ -368,6 +368,53 @@ impl Screen {
         Ok(())
     }
 
+    pub(super) fn insert_chars_basic(
+        &mut self,
+        count: CellCountInt,
+        left_margin: CellCountInt,
+        right_margin: CellCountInt,
+    ) -> Result<(), EraseDisplayError> {
+        self.cursor.pending_wrap = false;
+
+        if count == 0 {
+            return Ok(());
+        }
+        if self.cursor.x < left_margin || self.cursor.x > right_margin {
+            return Ok(());
+        }
+
+        let remaining = right_margin - self.cursor.x + 1;
+        let count = count.min(remaining);
+        self.pages
+            .insert_active_chars(self.cursor.y.into(), self.cursor.x, right_margin, count)?;
+        Ok(())
+    }
+
+    pub(super) fn erase_chars_basic(
+        &mut self,
+        count: CellCountInt,
+        rows: CellCountInt,
+        cols: CellCountInt,
+    ) -> Result<(), EraseDisplayError> {
+        let count = count.max(1);
+        let right = cols.saturating_sub(1);
+        if self.cursor.x > right {
+            self.cursor.pending_wrap = false;
+            return Ok(());
+        }
+
+        let remaining = right - self.cursor.x + 1;
+        let count = count.min(remaining);
+        self.clear_active_cells(
+            self.cursor.y.into(),
+            self.cursor.x,
+            self.cursor.x + count,
+            false,
+        )?;
+        self.cursor_reset_wrap_basic(rows)?;
+        Ok(())
+    }
+
     pub(super) fn insert_lines_basic(
         &mut self,
         count: CellCountInt,
