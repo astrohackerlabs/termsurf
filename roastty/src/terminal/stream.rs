@@ -1128,6 +1128,15 @@ mod tests {
             requests: Vec<kitty::ColorRequest>,
             terminator: osc::Terminator,
         },
+        KittyTextSizing {
+            scale: u8,
+            width: u8,
+            numerator: u8,
+            denominator: u8,
+            valign: osc::KittyTextVerticalAlign,
+            halign: osc::KittyTextHorizontalAlign,
+            text: String,
+        },
     }
 
     impl From<OscAction<'_>> for OwnedOscAction {
@@ -1154,6 +1163,15 @@ mod tests {
                 } => Self::KittyColor {
                     requests: requests.iter().collect(),
                     terminator,
+                },
+                OscAction::KittyTextSizing { value } => Self::KittyTextSizing {
+                    scale: value.scale,
+                    width: value.width,
+                    numerator: value.numerator,
+                    denominator: value.denominator,
+                    valign: value.valign,
+                    halign: value.halign,
+                    text: value.text.to_string(),
                 },
             }
         }
@@ -5610,6 +5628,32 @@ mod tests {
                     shape: mouse::MouseShape::Default,
                 },
             ]
+        );
+        assert_eq!(actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_dispatches_kitty_text_sizing() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(
+            &mut stream,
+            &mut handler,
+            b"\x1b]66;s=2:w=7;wide\x07\x1b]66;;\n\x07",
+        );
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[OwnedOscAction::KittyTextSizing {
+                scale: 2,
+                width: 7,
+                numerator: 0,
+                denominator: 0,
+                valign: osc::KittyTextVerticalAlign::Top,
+                halign: osc::KittyTextHorizontalAlign::Left,
+                text: "wide".to_string(),
+            }]
         );
         assert_eq!(actions(&handler), &[]);
     }

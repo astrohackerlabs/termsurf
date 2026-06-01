@@ -177,3 +177,63 @@ Codex reviewed the initial design and found two real Ghostty parity issues:
 The design now pins both details and adds verification coverage for them. Codex
 re-reviewed the revised design and approved it for implementation with no
 remaining blocking findings.
+
+## Result
+
+**Result:** Pass
+
+Roastty now parses Kitty OSC 66 text sizing commands into typed OSC actions and
+intentionally ignores them at terminal runtime, matching Ghostty's current
+unimplemented-callback boundary for this protocol.
+
+The implementation added `KittyTextSizing` with Ghostty-compatible defaults for
+scale, width, numerator, denominator, vertical alignment, horizontal alignment,
+and text payload. The parser validates safe UTF-8 payloads by rejecting C0
+controls, DEL, and C1 controls. It preserves Ghostty's parameter behavior:
+invalid parameter values are ignored field-locally, leading `+` numeric values
+are accepted, negative values reject, and extra `=` segments after the first
+value are ignored.
+
+OSC 66 is wired through the stream dispatcher so valid commands can reach an OSC
+handler. The terminal runtime has an explicit no-op arm for the command and does
+not mutate display contents, title, PWD, hyperlink state, colors, cursor
+position, dirty rows, or PTY response.
+
+Verification passed:
+
+```text
+cargo fmt
+completed successfully
+
+cargo test -p roastty kitty_text_sizing
+5 passed; 0 failed
+
+cargo test -p roastty osc
+68 passed; 0 failed
+
+cargo test -p roastty terminal_stream_osc
+25 passed; 0 failed
+
+cargo test -p roastty
+1531 unit tests passed; 0 failed
+1 ABI harness test passed; 0 failed
+```
+
+## Result Review
+
+Codex reviewed the completed implementation and result record and found no real
+issues. The review confirmed Ghostty-compatible OSC 66 defaults and validation,
+safe UTF-8 rejection for C0/DEL/C1 controls, accepted leading `+` numeric
+values, rejected negative values, ignored extra `=` segments, stream dispatch
+for valid commands, and intentional terminal-runtime no-op behavior.
+
+## Conclusion
+
+Experiment 140 completes the current Ghostty-compatible parser/dispatch slice
+for Kitty OSC 66 text sizing. Roastty can now recognize and carry the command
+without pretending to implement visible text scaling, font behavior, renderer
+behavior, app/surface messages, public ABI, or config.
+
+The next experiment can continue with another remaining OSC/parser subsystem or
+move to the next terminal feature slice informed by the current Ghostty parity
+gap.

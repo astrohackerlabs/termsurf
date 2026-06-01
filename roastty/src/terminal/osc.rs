@@ -1,5 +1,6 @@
 pub(super) const MAX_BUF: usize = 2048;
 const OSC_COLOR_REQUEST_CAPACITY: usize = MAX_BUF / 2 + 1;
+const KITTY_TEXT_SIZING_MAX_PAYLOAD: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Command<'a> {
@@ -23,6 +24,9 @@ pub(super) enum Command<'a> {
     KittyColor {
         requests: super::kitty::ColorRequests,
         terminator: Terminator,
+    },
+    KittyTextSizing {
+        value: KittyTextSizing<'a>,
     },
 }
 
@@ -81,6 +85,31 @@ pub(super) enum DynamicColor {
     Cursor,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct KittyTextSizing<'a> {
+    pub(super) scale: u8,
+    pub(super) width: u8,
+    pub(super) numerator: u8,
+    pub(super) denominator: u8,
+    pub(super) valign: KittyTextVerticalAlign,
+    pub(super) halign: KittyTextHorizontalAlign,
+    pub(super) text: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KittyTextVerticalAlign {
+    Top,
+    Bottom,
+    Center,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KittyTextHorizontalAlign {
+    Left,
+    Right,
+    Center,
+}
+
 impl DynamicColor {
     pub(super) const fn number(self) -> u8 {
         match self {
@@ -95,6 +124,66 @@ impl DynamicColor {
             Self::Foreground => Some(Self::Background),
             Self::Background => Some(Self::Cursor),
             Self::Cursor => None,
+        }
+    }
+}
+
+impl<'a> KittyTextSizing<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            scale: 1,
+            width: 0,
+            numerator: 0,
+            denominator: 0,
+            valign: KittyTextVerticalAlign::Top,
+            halign: KittyTextHorizontalAlign::Left,
+            text,
+        }
+    }
+
+    fn update(&mut self, key: u8, value: &[u8]) {
+        let Some(number) = parse_kitty_text_sizing_value(value) else {
+            return;
+        };
+
+        match key {
+            b's' if (1..=7).contains(&number) => self.scale = number,
+            b'w' if number <= 7 => self.width = number,
+            b'n' => self.numerator = number,
+            b'd' => self.denominator = number,
+            b'v' => {
+                if let Some(align) = KittyTextVerticalAlign::from_number(number) {
+                    self.valign = align;
+                }
+            }
+            b'h' => {
+                if let Some(align) = KittyTextHorizontalAlign::from_number(number) {
+                    self.halign = align;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl KittyTextVerticalAlign {
+    const fn from_number(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Top),
+            1 => Some(Self::Bottom),
+            2 => Some(Self::Center),
+            _ => None,
+        }
+    }
+}
+
+impl KittyTextHorizontalAlign {
+    const fn from_number(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Left),
+            1 => Some(Self::Right),
+            2 => Some(Self::Center),
+            _ => None,
         }
     }
 }
@@ -203,6 +292,7 @@ impl Parser {
             b"22" => {
                 super::mouse::MouseShape::parse(rest).map(|shape| Command::MouseShape { shape })
             }
+            b"66" => parse_kitty_text_sizing(rest).map(|value| Command::KittyTextSizing { value }),
             b"104" => parse_osc104(rest).map(|requests| Command::ColorOperation { requests }),
             b"110" => parse_dynamic_reset(rest, DynamicColor::Foreground)
                 .map(|requests| Command::ColorOperation { requests }),
@@ -370,6 +460,50 @@ fn parse_kitty_color(bytes: &[u8]) -> Option<super::kitty::ColorRequests> {
     Some(result)
 }
 
+fn parse_kitty_text_sizing(bytes: &[u8]) -> Option<KittyTextSizing<'_>> {
+    let (params, payload) = SplitOnce::split_once(bytes, |byte| *byte == b';')?;
+    if payload.len() > KITTY_TEXT_SIZING_MAX_PAYLOAD {
+        return None;
+    }
+    let text = valid_safe_utf8(payload)?;
+    let mut result = KittyTextSizing::new(text);
+
+    if !params.is_empty() {
+        for param in params.split(|byte| *byte == b':') {
+            let mut parts = param.split(|byte| *byte == b'=');
+            let Some(key) = parts.next() else {
+                continue;
+            };
+            if key.len() != 1 {
+                continue;
+            }
+            let Some(value) = parts.next() else {
+                continue;
+            };
+            result.update(key[0], value);
+        }
+    }
+
+    Some(result)
+}
+
+fn parse_kitty_text_sizing_value(bytes: &[u8]) -> Option<u8> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let value = text.parse::<u8>().ok()?;
+    (value <= 15).then_some(value)
+}
+
+fn valid_safe_utf8(bytes: &[u8]) -> Option<&str> {
+    let text = valid_utf8(bytes)?;
+    if text
+        .chars()
+        .any(|cp| matches!(cp as u32, 0x00..=0x1f | 0x7f | 0x80..=0x9f))
+    {
+        return None;
+    }
+    Some(text)
+}
+
 fn parse_palette_index(bytes: &[u8]) -> Result<u8, ()> {
     let text = std::str::from_utf8(bytes).map_err(|_| ())?;
     text.parse::<u8>().map_err(|_| ())
@@ -430,6 +564,15 @@ mod tests {
             requests: Vec<super::super::kitty::ColorRequest>,
             terminator: Terminator,
         },
+        KittyTextSizing {
+            scale: u8,
+            width: u8,
+            numerator: u8,
+            denominator: u8,
+            valign: KittyTextVerticalAlign,
+            halign: KittyTextHorizontalAlign,
+            text: String,
+        },
     }
 
     impl From<Command<'_>> for OwnedCommand {
@@ -456,6 +599,15 @@ mod tests {
                 } => Self::KittyColor {
                     requests: requests.iter().collect(),
                     terminator,
+                },
+                Command::KittyTextSizing { value } => Self::KittyTextSizing {
+                    scale: value.scale,
+                    width: value.width,
+                    numerator: value.numerator,
+                    denominator: value.denominator,
+                    valign: value.valign,
+                    halign: value.halign,
+                    text: value.text.to_string(),
                 },
             }
         }
@@ -531,6 +683,106 @@ mod tests {
         );
         assert_eq!(parse(b"22;Pointer"), None);
         assert_eq!(parse(b"22;unknown"), None);
+    }
+
+    #[test]
+    fn osc_parser_kitty_text_sizing_defaults_and_parameters() {
+        assert_eq!(
+            parse(b"66;;bobr"),
+            Some(OwnedCommand::KittyTextSizing {
+                scale: 1,
+                width: 0,
+                numerator: 0,
+                denominator: 0,
+                valign: KittyTextVerticalAlign::Top,
+                halign: KittyTextHorizontalAlign::Left,
+                text: "bobr".to_string(),
+            })
+        );
+        assert_eq!(
+            parse(b"66;s=2;kurwa"),
+            Some(OwnedCommand::KittyTextSizing {
+                scale: 2,
+                width: 0,
+                numerator: 0,
+                denominator: 0,
+                valign: KittyTextVerticalAlign::Top,
+                halign: KittyTextHorizontalAlign::Left,
+                text: "kurwa".to_string(),
+            })
+        );
+        assert_eq!(
+            parse(b"66;s=2:w=7:n=13:d=15:v=1:h=2;long"),
+            Some(OwnedCommand::KittyTextSizing {
+                scale: 2,
+                width: 7,
+                numerator: 13,
+                denominator: 15,
+                valign: KittyTextVerticalAlign::Bottom,
+                halign: KittyTextHorizontalAlign::Center,
+                text: "long".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn osc_parser_kitty_text_sizing_invalid_parameters_are_field_local() {
+        assert_eq!(
+            parse(b"66;s=0:w=8:v=3:n=16;ok"),
+            Some(OwnedCommand::KittyTextSizing {
+                scale: 1,
+                width: 0,
+                numerator: 0,
+                denominator: 0,
+                valign: KittyTextVerticalAlign::Top,
+                halign: KittyTextHorizontalAlign::Left,
+                text: "ok".to_string(),
+            })
+        );
+        assert_eq!(
+            parse(b"66;s=+2:s=-3:s=4=ignored:xx=1:h=1;ok"),
+            Some(OwnedCommand::KittyTextSizing {
+                scale: 4,
+                width: 0,
+                numerator: 0,
+                denominator: 0,
+                valign: KittyTextVerticalAlign::Top,
+                halign: KittyTextHorizontalAlign::Right,
+                text: "ok".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn osc_parser_kitty_text_sizing_safe_utf8_payload() {
+        assert_eq!(
+            parse("66;;👻魑魅魍魉ゴースッティ".as_bytes()),
+            Some(OwnedCommand::KittyTextSizing {
+                scale: 1,
+                width: 0,
+                numerator: 0,
+                denominator: 0,
+                valign: KittyTextVerticalAlign::Top,
+                halign: KittyTextHorizontalAlign::Left,
+                text: "👻魑魅魍魉ゴースッティ".to_string(),
+            })
+        );
+
+        assert_eq!(parse(b"66;;\n"), None);
+        assert_eq!(parse(b"66;;\x07bell"), None);
+        assert_eq!(parse(b"66;;\x1b]9;bad\x1b\\"), None);
+        assert_eq!(parse(b"66;;\x7f"), None);
+        assert_eq!(parse("66;;\u{80}".as_bytes()), None);
+        assert_eq!(parse(b"66"), None);
+        assert_eq!(parse(b"66;params-without-payload"), None);
+    }
+
+    #[test]
+    fn osc_parser_kitty_text_sizing_overlong_payload_rejects() {
+        let mut input = b";".to_vec();
+        input.resize(KITTY_TEXT_SIZING_MAX_PAYLOAD + 2, b'a');
+
+        assert_eq!(parse_kitty_text_sizing(&input), None);
     }
 
     #[test]
