@@ -268,3 +268,82 @@ Codex also recommended a non-blocking implementation naming constraint: use a
 helper name such as `position_value()` rather than a movement/count name, so the
 future `CSI H` / `CSI f` work can reuse the same explicit-zero semantics without
 confusing it with relative cursor movement.
+
+## Result
+
+**Result:** Pass
+
+Experiment 117 ports the basic full-screen forms of `CSI d` / VPA and `CSI e` /
+VPR into Roastty.
+
+Accepted forms:
+
+- `CSI d` dispatches `Action::CursorRow { row: 1 }`.
+- `CSI e` dispatches `Action::CursorRowRelative { rows: 1 }`.
+- `CSI n d` dispatches the explicit row value.
+- `CSI n e` dispatches the explicit relative row value.
+- `CSI 0 d` preserves explicit zero at the parser boundary and resolves to the
+  top row in terminal positioning.
+- `CSI 0 e` preserves explicit zero at the parser boundary, leaves the row
+  unchanged, and still clears pending wrap.
+- Oversized numeric params saturate to `u16::MAX` in the parser and clamp to the
+  bottom row in the terminal.
+
+Rejected forms:
+
+- private variants such as `CSI ? 3 d` / `CSI ? 3 e`;
+- non-standard private variants such as `CSI > 3 d` / `CSI > 3 e`;
+- semicolon and colon parameter forms;
+- intermediate-bearing forms;
+- multi-parameter forms;
+- raw C1 `0x9b` followed by `d` or `e`, which remains out of scope and keeps the
+  current replacement-character behavior.
+
+The implementation keeps the parser/terminal split from the design. The parser
+uses the explicit-zero-preserving `position_value()` helper for column and row
+positioning. The terminal resolves row semantics with private full-screen screen
+helpers, preserving the current column, clearing pending wrap, clamping to the
+vertical screen bounds, and avoiding cell writes, dirty rows, or scrolling.
+
+Parser error behavior was preserved: if a handler fails on `CursorRow` or
+`CursorRowRelative`, the stream is already back in ground state and the next
+printable byte is parsed normally. Pending invalid UTF-8 still emits `U+FFFD`
+before same-slice and split-feed `CSI d` / `CSI e` actions.
+
+Existing behavior for `CSI A/B/C/D/E/F/G/k/a/j/backtick` and `CSI W` continued
+to pass. This experiment did not add `CSI H` / `CSI f`, two-parameter cursor
+positioning, origin mode, scrolling-region-aware positioning, direct C1 CSI,
+public API, or ABI behavior.
+
+Verification passed:
+
+```text
+cargo fmt
+cargo test -p roastty stream
+cargo test -p roastty terminal::terminal
+cargo test -p roastty terminal_formatter
+cargo test -p roastty screen_formatter
+cargo test -p roastty page_string
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+The full package test run passed with 1143 unit tests and the ABI harness.
+
+Codex reviewed the completed implementation with no findings.
+
+Result review artifacts:
+
+- Prompt: `logs/codex-review/20260601-032809-434700-prompt.md`
+- Result: `logs/codex-review/20260601-032809-434700-last-message.md`
+
+## Conclusion
+
+Roastty now has the next single-axis cursor-positioning slice from Ghostty:
+absolute vertical positioning and relative vertical positioning. The important
+semantic detail is locked in for later cursor-positioning work: row and column
+positioning preserve explicit zero through the parser and let terminal
+positioning resolve it, rather than treating zero as a movement count.
+
+The next likely stream/action slice is two-parameter cursor positioning (`CSI H`
+/ `CSI f`) using the same explicit-zero-preserving parameter semantics.

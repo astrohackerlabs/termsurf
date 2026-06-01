@@ -221,6 +221,18 @@ impl Screen {
         self.cursor.x = col.saturating_sub(1).min(right);
     }
 
+    pub(super) fn cursor_row_basic(&mut self, rows: CellCountInt, row: CellCountInt) {
+        let bottom = rows.saturating_sub(1);
+        self.cursor.pending_wrap = false;
+        self.cursor.y = row.saturating_sub(1).min(bottom);
+    }
+
+    pub(super) fn cursor_row_relative_basic(&mut self, rows: CellCountInt, count: CellCountInt) {
+        let bottom = rows.saturating_sub(1);
+        self.cursor.pending_wrap = false;
+        self.cursor.y = self.cursor.y.saturating_add(count).min(bottom);
+    }
+
     pub(super) fn backspace_basic(&mut self) {
         self.cursor.pending_wrap = false;
         self.cursor.x = self.cursor.x.saturating_sub(1);

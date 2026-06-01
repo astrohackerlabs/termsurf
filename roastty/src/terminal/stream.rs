@@ -18,6 +18,8 @@ pub(super) enum Action {
     CursorRight { count: u16 },
     CursorLeft { count: u16 },
     CursorColumn { col: u16 },
+    CursorRow { row: u16 },
+    CursorRowRelative { rows: u16 },
 }
 
 pub(super) trait Handler {
@@ -225,6 +227,10 @@ impl CsiState {
             return CsiDispatch::One(action);
         }
 
+        if let Some(action) = self.row_action(final_byte) {
+            return CsiDispatch::One(action);
+        }
+
         if let Some(action) = self.cursor_action(final_byte) {
             return CsiDispatch::One(action);
         }
@@ -258,7 +264,7 @@ impl CsiState {
         }
     }
 
-    fn absolute_column(&self) -> Option<u16> {
+    fn position_value(&self) -> Option<u16> {
         if self.invalid || self.private.is_some() {
             return None;
         }
@@ -267,9 +273,18 @@ impl CsiState {
     }
 
     fn column_action(&self, final_byte: u8) -> Option<Action> {
-        let col = self.absolute_column()?;
+        let col = self.position_value()?;
         match final_byte {
             b'G' | b'`' => Some(Action::CursorColumn { col }),
+            _ => None,
+        }
+    }
+
+    fn row_action(&self, final_byte: u8) -> Option<Action> {
+        let value = self.position_value()?;
+        match final_byte {
+            b'd' => Some(Action::CursorRow { row: value }),
+            b'e' => Some(Action::CursorRowRelative { rows: value }),
             _ => None,
         }
     }
@@ -445,7 +460,9 @@ mod tests {
                 | Action::CursorDown { .. }
                 | Action::CursorRight { .. }
                 | Action::CursorLeft { .. }
-                | Action::CursorColumn { .. } => None,
+                | Action::CursorColumn { .. }
+                | Action::CursorRow { .. }
+                | Action::CursorRowRelative { .. } => None,
             })
             .collect()
     }
@@ -1344,6 +1361,62 @@ mod tests {
     }
 
     #[test]
+    fn stream_csi_vertical_positioning_dispatches_default_values() {
+        for (input, expected) in [
+            (b"A\x1b[dB".as_slice(), Action::CursorRow { row: 1 }),
+            (
+                b"A\x1b[eB".as_slice(),
+                Action::CursorRowRelative { rows: 1 },
+            ),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(
+                actions(&handler),
+                &[
+                    Action::Print { cp: 'A' },
+                    expected,
+                    Action::Print { cp: 'B' },
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn stream_csi_vertical_positioning_dispatches_explicit_zero_and_overflowing_values() {
+        for (input, expected) in [
+            (b"\x1b[5dA".as_slice(), Action::CursorRow { row: 5 }),
+            (
+                b"\x1b[6eA".as_slice(),
+                Action::CursorRowRelative { rows: 6 },
+            ),
+            (b"\x1b[0dA".as_slice(), Action::CursorRow { row: 0 }),
+            (
+                b"\x1b[0eA".as_slice(),
+                Action::CursorRowRelative { rows: 0 },
+            ),
+            (
+                b"\x1b[999999999999999999999999dA".as_slice(),
+                Action::CursorRow { row: u16::MAX },
+            ),
+            (
+                b"\x1b[999999999999999999999999eA".as_slice(),
+                Action::CursorRowRelative { rows: u16::MAX },
+            ),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(actions(&handler), &[expected, Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
     fn stream_csi_cursor_movement_saturates_overflowing_count() {
         let mut stream = Stream::init();
         let mut handler = RecordingHandler::default();
@@ -1458,6 +1531,41 @@ mod tests {
                 b"\x1b[0".as_slice(),
                 b"`A".as_slice(),
                 Action::CursorColumn { col: 0 },
+            ),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, first);
+            assert!(actions(&handler).is_empty());
+            next_slice(&mut stream, &mut handler, second);
+
+            assert_eq!(actions(&handler), &[expected, Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
+    fn stream_split_csi_vertical_positioning_dispatches_actions() {
+        for (first, second, expected) in [
+            (
+                b"\x1b[".as_slice(),
+                b"dA".as_slice(),
+                Action::CursorRow { row: 1 },
+            ),
+            (
+                b"\x1b[5".as_slice(),
+                b"dA".as_slice(),
+                Action::CursorRow { row: 5 },
+            ),
+            (
+                b"\x1b[".as_slice(),
+                b"eA".as_slice(),
+                Action::CursorRowRelative { rows: 1 },
+            ),
+            (
+                b"\x1b[0".as_slice(),
+                b"eA".as_slice(),
+                Action::CursorRowRelative { rows: 0 },
             ),
         ] {
             let mut stream = Stream::init();
@@ -1620,6 +1728,33 @@ mod tests {
     }
 
     #[test]
+    fn stream_pending_utf8_replacement_dispatches_before_csi_vertical_positioning() {
+        for (input, expected) in [
+            (b"\xf0\x9f\x1b[dA".as_slice(), Action::CursorRow { row: 1 }),
+            (
+                b"\xf0\x9f\x1b[eA".as_slice(),
+                Action::CursorRowRelative { rows: 1 },
+            ),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(
+                actions(&handler),
+                &[
+                    Action::Print {
+                        cp: char::REPLACEMENT_CHARACTER,
+                    },
+                    expected,
+                    Action::Print { cp: 'A' },
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn stream_pending_utf8_replacement_dispatches_before_split_csi_horizontal_absolute() {
         let mut stream = Stream::init();
         let mut handler = RecordingHandler::default();
@@ -1641,6 +1776,33 @@ mod tests {
                     cp: char::REPLACEMENT_CHARACTER,
                 },
                 Action::CursorColumn { col: 1 },
+                Action::Print { cp: 'A' },
+            ]
+        );
+    }
+
+    #[test]
+    fn stream_pending_utf8_replacement_dispatches_before_split_csi_vertical_positioning() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"\xf0\x9f\x1b[");
+        assert_eq!(
+            actions(&handler),
+            &[Action::Print {
+                cp: char::REPLACEMENT_CHARACTER,
+            }]
+        );
+
+        next_slice(&mut stream, &mut handler, b"dA");
+
+        assert_eq!(
+            actions(&handler),
+            &[
+                Action::Print {
+                    cp: char::REPLACEMENT_CHARACTER,
+                },
+                Action::CursorRow { row: 1 },
                 Action::Print { cp: 'A' },
             ]
         );
@@ -1711,6 +1873,29 @@ mod tests {
     }
 
     #[test]
+    fn stream_unsupported_csi_vertical_positioning_variants_do_not_dispatch_actions() {
+        for input in [
+            b"\x1b[?3dA".as_slice(),
+            b"\x1b[?3eA".as_slice(),
+            b"\x1b[>3dA".as_slice(),
+            b"\x1b[>3eA".as_slice(),
+            b"\x1b[5;4dA".as_slice(),
+            b"\x1b[5;4eA".as_slice(),
+            b"\x1b[1:2dA".as_slice(),
+            b"\x1b[1:2eA".as_slice(),
+            b"\x1b[ dA".as_slice(),
+            b"\x1b[ eA".as_slice(),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
     fn stream_raw_c1_csi_byte_does_not_dispatch_cursor_actions() {
         let mut stream = Stream::init();
         let mut handler = RecordingHandler::default();
@@ -1753,6 +1938,28 @@ mod tests {
     #[test]
     fn stream_raw_c1_csi_byte_does_not_dispatch_horizontal_absolute_actions() {
         for final_byte in [b'G', b'`'] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, &[0x9b, final_byte]);
+
+            assert_eq!(
+                actions(&handler),
+                &[
+                    Action::Print {
+                        cp: char::REPLACEMENT_CHARACTER,
+                    },
+                    Action::Print {
+                        cp: final_byte as char,
+                    },
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn stream_raw_c1_csi_byte_does_not_dispatch_vertical_positioning_actions() {
+        for final_byte in [b'd', b'e'] {
             let mut stream = Stream::init();
             let mut handler = RecordingHandler::default();
 
@@ -1966,7 +2173,9 @@ mod tests {
                 | Action::CursorDown { .. }
                 | Action::CursorRight { .. }
                 | Action::CursorLeft { .. }
-                | Action::CursorColumn { .. } => unreachable!("loop only uses D/E actions"),
+                | Action::CursorColumn { .. }
+                | Action::CursorRow { .. }
+                | Action::CursorRowRelative { .. } => unreachable!("loop only uses D/E actions"),
             };
 
             assert_eq!(stream.next_slice(input, &mut handler), Err(()));
@@ -2000,6 +2209,24 @@ mod tests {
             (b"\x1b[G".as_slice(), Action::CursorColumn { col: 1 }),
             (b"\x1b[`".as_slice(), Action::CursorColumn { col: 1 }),
             (b"\x1b[0G".as_slice(), Action::CursorColumn { col: 0 }),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = ErrorOnActionHandler::new(fail);
+
+            assert_eq!(stream.next_slice(input, &mut handler), Err(()));
+            stream.next_slice(b"A", &mut handler).unwrap();
+
+            assert_eq!(handler.actions, &[Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
+    fn stream_csi_vertical_positioning_restore_ground_before_handler_error() {
+        for (input, fail) in [
+            (b"\x1b[d".as_slice(), Action::CursorRow { row: 1 }),
+            (b"\x1b[e".as_slice(), Action::CursorRowRelative { rows: 1 }),
+            (b"\x1b[0d".as_slice(), Action::CursorRow { row: 0 }),
+            (b"\x1b[0e".as_slice(), Action::CursorRowRelative { rows: 0 }),
         ] {
             let mut stream = Stream::init();
             let mut handler = ErrorOnActionHandler::new(fail);
