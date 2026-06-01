@@ -321,7 +321,7 @@ impl Stream {
 
     fn next_osc<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
         match byte {
-            0x07 => self.finish_osc(handler),
+            0x07 => self.finish_osc(handler, osc::Terminator::Bel),
             0x1b => {
                 self.escape = EscapeState::OscEscape;
                 Ok(())
@@ -335,8 +335,8 @@ impl Stream {
 
     fn next_osc_escape<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
         match byte {
-            0x07 => self.finish_osc(handler),
-            b'\\' => self.finish_osc(handler),
+            0x07 => self.finish_osc(handler, osc::Terminator::Bel),
+            b'\\' => self.finish_osc(handler, osc::Terminator::St),
             b']' => {
                 self.osc.invalidate();
                 self.escape = EscapeState::OscInvalid;
@@ -375,9 +375,13 @@ impl Stream {
         }
     }
 
-    fn finish_osc<H: Handler>(&mut self, handler: &mut H) -> Result<(), H::Error> {
+    fn finish_osc<H: Handler>(
+        &mut self,
+        handler: &mut H,
+        terminator: osc::Terminator,
+    ) -> Result<(), H::Error> {
         self.escape = EscapeState::Ground;
-        let result = if let Some(action) = self.osc.command() {
+        let result = if let Some(action) = self.osc.command(terminator) {
             handler.osc(action)
         } else {
             Ok(())
@@ -1107,6 +1111,7 @@ mod tests {
         ReportPwd { url: String },
         StartHyperlink { id: Option<String>, uri: String },
         EndHyperlink,
+        ColorOperation { requests: Vec<osc::ColorRequest> },
     }
 
     impl From<OscAction<'_>> for OwnedOscAction {
@@ -1123,6 +1128,9 @@ mod tests {
                     uri: uri.to_string(),
                 },
                 OscAction::EndHyperlink => Self::EndHyperlink,
+                OscAction::ColorOperation { requests } => Self::ColorOperation {
+                    requests: requests.iter().collect(),
+                },
             }
         }
     }

@@ -2,6 +2,7 @@
 
 use super::color;
 use super::modes;
+use super::osc;
 use super::page_list::{
     CodepointMapEntry, PageListAllocError, PageOutputFormat, PageStringWithPinMap,
 };
@@ -83,6 +84,7 @@ pub(super) enum TerminalStreamError {
 struct TerminalStreamHandler<'a> {
     screen: &'a mut Screen,
     size: TerminalSize,
+    colors: &'a mut TerminalColors,
     modes: &'a mut modes::ModeState,
     scrolling_region: &'a mut ScrollingRegion,
     tabstops: &'a mut tabstops::Tabstops,
@@ -148,6 +150,7 @@ impl Terminal {
         let Terminal {
             size,
             screens,
+            colors,
             modes,
             scrolling_region,
             tabstops,
@@ -161,6 +164,7 @@ impl Terminal {
         let mut handler = TerminalStreamHandler {
             screen: &mut screens.active,
             size: *size,
+            colors,
             modes,
             scrolling_region,
             tabstops,
@@ -639,6 +643,9 @@ impl Handler for TerminalStreamHandler<'_> {
             stream::OscAction::EndHyperlink => {
                 self.screen.clear_cursor_hyperlink();
             }
+            stream::OscAction::ColorOperation { requests } => {
+                self.color_operation(requests);
+            }
         }
         Ok(())
     }
@@ -694,6 +701,42 @@ impl TerminalStreamHandler<'_> {
 
     fn write_pty_response(&mut self, bytes: &str) {
         self.pty_response.extend_from_slice(bytes.as_bytes());
+    }
+
+    fn write_pty_response_bytes(&mut self, bytes: &[u8]) {
+        self.pty_response.extend_from_slice(bytes);
+    }
+
+    fn color_operation(&mut self, requests: osc::ColorRequests) {
+        for request in requests.iter() {
+            match request {
+                osc::ColorRequest::SetPalette { index, rgb } => {
+                    self.colors.palette[index as usize] = rgb;
+                }
+                osc::ColorRequest::QueryPalette { index, terminator } => {
+                    self.write_palette_query_response(index, terminator);
+                }
+                osc::ColorRequest::ResetPalette { index } => {
+                    self.colors.palette[index as usize] = color::DEFAULT_PALETTE[index as usize];
+                }
+                osc::ColorRequest::ResetAllPalette => {
+                    self.colors.palette = color::DEFAULT_PALETTE;
+                }
+            }
+        }
+    }
+
+    fn write_palette_query_response(&mut self, index: u8, terminator: osc::Terminator) {
+        let rgb = self.colors.palette[index as usize];
+        let response = format!(
+            "\x1b]4;{};rgb:{:04x}/{:04x}/{:04x}",
+            index,
+            u16::from(rgb.r) * 257,
+            u16::from(rgb.g) * 257,
+            u16::from(rgb.b) * 257
+        );
+        self.write_pty_response(&response);
+        self.write_pty_response_bytes(terminator.bytes());
     }
 
     fn move_cursor_to_origin_home(&mut self) {
@@ -2094,6 +2137,112 @@ mod tests {
         );
         assert!(terminal.active_row_hyperlink_for_tests(0));
         terminal.verify_integrity_for_tests();
+    }
+
+    #[test]
+    fn terminal_stream_osc4_mutates_palette_entries() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]4;1;rgb:ff/00/80;2;#00ff00\x1b\\")
+            .unwrap();
+
+        assert_eq!(terminal.colors.palette[1], color::Rgb::new(255, 0, 128));
+        assert_eq!(terminal.colors.palette[2], color::Rgb::new(0, 255, 0));
+        assert_eq!(terminal.pty_response_for_tests(), b"");
+        terminal.verify_integrity_for_tests();
+    }
+
+    #[test]
+    fn terminal_stream_osc4_applies_repeated_palette_index_in_order() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]4;1;#ff0000;1;#0000ff\x1b\\")
+            .unwrap();
+
+        assert_eq!(terminal.colors.palette[1], color::Rgb::new(0, 0, 255));
+    }
+
+    #[test]
+    fn terminal_stream_osc4_query_reports_palette_with_bel_terminator() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        terminal.colors.palette[3] = color::Rgb::new(1, 0x80, 0xff);
+
+        terminal.next_slice(b"\x1b]4;3;?\x07").unwrap();
+
+        assert_eq!(
+            terminal.pty_response_for_tests(),
+            b"\x1b]4;3;rgb:0101/8080/ffff\x07"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_osc4_query_reports_palette_with_st_terminator() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        terminal.colors.palette[4] = color::Rgb::new(0x12, 0x34, 0x56);
+
+        terminal.next_slice(b"\x1b]4;4;?\x1b\\").unwrap();
+
+        assert_eq!(
+            terminal.pty_response_for_tests(),
+            b"\x1b]4;4;rgb:1212/3434/5656\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_osc104_resets_indexed_palette_entry() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        terminal.colors.palette[1] = color::Rgb::new(255, 0, 0);
+        terminal.colors.palette[2] = color::Rgb::new(0, 255, 0);
+
+        terminal.next_slice(b"\x1b]104;1\x1b\\").unwrap();
+
+        assert_eq!(terminal.colors.palette[1], color::DEFAULT_PALETTE[1]);
+        assert_eq!(terminal.colors.palette[2], color::Rgb::new(0, 255, 0));
+    }
+
+    #[test]
+    fn terminal_stream_osc104_resets_all_palette_entries() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        terminal.colors.palette[1] = color::Rgb::new(255, 0, 0);
+        terminal.colors.palette[2] = color::Rgb::new(0, 255, 0);
+
+        terminal.next_slice(b"\x1b]104\x1b\\").unwrap();
+
+        assert_eq!(terminal.colors.palette, color::DEFAULT_PALETTE);
+    }
+
+    #[test]
+    fn terminal_stream_unsupported_color_osc_does_not_mutate_palette() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        let original = terminal.colors.palette;
+
+        for input in [
+            b"\x1b]5;0;#ff0000\x1b\\".as_slice(),
+            b"\x1b]10;#ff0000\x1b\\".as_slice(),
+            b"\x1b]11;#ff0000\x1b\\".as_slice(),
+            b"\x1b]12;#ff0000\x1b\\".as_slice(),
+            b"\x1b]110\x1b\\".as_slice(),
+            b"\x1b]111\x1b\\".as_slice(),
+            b"\x1b]112\x1b\\".as_slice(),
+        ] {
+            terminal.next_slice(input).unwrap();
+        }
+
+        assert_eq!(terminal.colors.palette, original);
+    }
+
+    #[test]
+    fn terminal_stream_osc4_palette_change_affects_formatter_palette_output() {
+        let mut terminal = terminal_with_lines(&["X"]);
+
+        terminal.next_slice(b"\x1b]4;1;#123456\x1b\\").unwrap();
+        let output = formatter(&terminal, PageOutputFormat::Html)
+            .with_extra(TerminalFormatterExtra::none().palette(true))
+            .format();
+
+        assert!(output.contains("--vt-palette-1: #123456;"));
     }
 
     #[test]

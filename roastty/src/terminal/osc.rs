@@ -1,4 +1,5 @@
 pub(super) const MAX_BUF: usize = 2048;
+const OSC_COLOR_REQUEST_CAPACITY: usize = MAX_BUF / 2 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Command<'a> {
@@ -6,6 +7,65 @@ pub(super) enum Command<'a> {
     ReportPwd { url: &'a str },
     StartHyperlink { id: Option<&'a str>, uri: &'a str },
     EndHyperlink,
+    ColorOperation { requests: ColorRequests },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Terminator {
+    Bel,
+    St,
+}
+
+impl Terminator {
+    pub(super) const fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::Bel => b"\x07",
+            Self::St => b"\x1b\\",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ColorRequests {
+    items: [Option<ColorRequest>; OSC_COLOR_REQUEST_CAPACITY],
+    len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ColorRequest {
+    SetPalette { index: u8, rgb: super::color::Rgb },
+    QueryPalette { index: u8, terminator: Terminator },
+    ResetPalette { index: u8 },
+    ResetAllPalette,
+}
+
+impl ColorRequests {
+    const fn new() -> Self {
+        Self {
+            items: [None; OSC_COLOR_REQUEST_CAPACITY],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, request: ColorRequest) -> Result<(), ()> {
+        let Some(slot) = self.items.get_mut(self.len) else {
+            return Err(());
+        };
+        *slot = Some(request);
+        self.len += 1;
+        Ok(())
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = ColorRequest> + '_ {
+        self.items[..self.len]
+            .iter()
+            .map(|request| request.expect("color request slots below len must be initialized"))
+    }
+
+    #[cfg(test)]
+    fn as_slice(&self) -> &[Option<ColorRequest>] {
+        &self.items[..self.len]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +110,7 @@ impl Parser {
         self.push(byte);
     }
 
-    pub(super) fn command(&self) -> Option<Command<'_>> {
+    pub(super) fn command(&self, terminator: Terminator) -> Option<Command<'_>> {
         if self.invalid {
             return None;
         }
@@ -65,8 +125,12 @@ impl Parser {
                 valid_utf8(rest)?;
                 None
             }
+            b"4" => {
+                parse_osc4(rest, terminator).map(|requests| Command::ColorOperation { requests })
+            }
             b"7" => valid_utf8(rest).map(|url| Command::ReportPwd { url }),
             b"8" => parse_hyperlink(rest),
+            b"104" => parse_osc104(rest).map(|requests| Command::ColorOperation { requests }),
             _ => None,
         }
     }
@@ -96,6 +160,111 @@ fn parse_hyperlink(bytes: &[u8]) -> Option<Command<'_>> {
     Some(Command::StartHyperlink { id, uri })
 }
 
+fn parse_osc4(bytes: &[u8], terminator: Terminator) -> Option<ColorRequests> {
+    let mut result = ColorRequests::new();
+    let mut parts = bytes.split(|byte| *byte == b';');
+
+    while let Some(index_bytes) = parts.next() {
+        let Some(spec) = parts.next() else {
+            break;
+        };
+        let Ok(index) = parse_palette_index(index_bytes) else {
+            break;
+        };
+
+        let request = if spec == b"?" {
+            ColorRequest::QueryPalette { index, terminator }
+        } else {
+            let Some(rgb) = parse_rgb(spec) else {
+                break;
+            };
+            ColorRequest::SetPalette { index, rgb }
+        };
+
+        if result.push(request).is_err() {
+            return None;
+        }
+    }
+
+    (result.len > 0).then_some(result)
+}
+
+fn parse_osc104(bytes: &[u8]) -> Option<ColorRequests> {
+    let mut result = ColorRequests::new();
+    let mut saw_field = false;
+
+    for index_bytes in bytes.split(|byte| *byte == b';') {
+        if index_bytes.is_empty() {
+            continue;
+        }
+        saw_field = true;
+        let Ok(index) = parse_palette_index(index_bytes) else {
+            continue;
+        };
+        if result.push(ColorRequest::ResetPalette { index }).is_err() {
+            return None;
+        }
+    }
+
+    if !saw_field {
+        result.push(ColorRequest::ResetAllPalette).ok()?;
+    }
+
+    (result.len > 0).then_some(result)
+}
+
+fn parse_palette_index(bytes: &[u8]) -> Result<u8, ()> {
+    let text = std::str::from_utf8(bytes).map_err(|_| ())?;
+    text.parse::<u8>().map_err(|_| ())
+}
+
+fn parse_rgb(bytes: &[u8]) -> Option<super::color::Rgb> {
+    if let Some(hex) = bytes.strip_prefix(b"#") {
+        return parse_hash_rgb(hex);
+    }
+
+    let hex = bytes.strip_prefix(b"rgb:")?;
+    let mut parts = hex.split(|byte| *byte == b'/');
+    let r = parse_hex_channel(parts.next()?)?;
+    let g = parse_hex_channel(parts.next()?)?;
+    let b = parse_hex_channel(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(super::color::Rgb::new(r, g, b))
+}
+
+fn parse_hash_rgb(hex: &[u8]) -> Option<super::color::Rgb> {
+    let width = match hex.len() {
+        3 => 1,
+        6 => 2,
+        9 => 3,
+        12 => 4,
+        _ => return None,
+    };
+    Some(super::color::Rgb::new(
+        parse_hex_channel(&hex[..width])?,
+        parse_hex_channel(&hex[width..width * 2])?,
+        parse_hex_channel(&hex[width * 2..])?,
+    ))
+}
+
+fn parse_hex_channel(bytes: &[u8]) -> Option<u8> {
+    if !(1..=4).contains(&bytes.len()) {
+        return None;
+    }
+    let text = std::str::from_utf8(bytes).ok()?;
+    let value = u16::from_str_radix(text, 16).ok()? as u32;
+    let max = match bytes.len() {
+        1 => 0x0f,
+        2 => 0xff,
+        3 => 0x0fff,
+        4 => 0xffff,
+        _ => return None,
+    };
+    Some(((value * 0xff) / max) as u8)
+}
+
 trait SplitOnce {
     fn split_once<P>(&self, predicate: P) -> Option<(&Self, &Self)>
     where
@@ -122,6 +291,7 @@ mod tests {
         ReportPwd { url: String },
         StartHyperlink { id: Option<String>, uri: String },
         EndHyperlink,
+        ColorOperation { requests: Vec<ColorRequest> },
     }
 
     impl From<Command<'_>> for OwnedCommand {
@@ -138,16 +308,23 @@ mod tests {
                     uri: uri.to_string(),
                 },
                 Command::EndHyperlink => Self::EndHyperlink,
+                Command::ColorOperation { requests } => Self::ColorOperation {
+                    requests: requests.iter().collect(),
+                },
             }
         }
     }
 
     fn parse(input: &[u8]) -> Option<OwnedCommand> {
+        parse_with_terminator(input, Terminator::St)
+    }
+
+    fn parse_with_terminator(input: &[u8], terminator: Terminator) -> Option<OwnedCommand> {
         let mut parser = Parser::new();
         for &byte in input {
             parser.push(byte);
         }
-        parser.command().map(OwnedCommand::from)
+        parser.command(terminator).map(OwnedCommand::from)
     }
 
     #[test]
@@ -202,11 +379,148 @@ mod tests {
     }
 
     #[test]
+    fn osc_parser_palette_color_operations() {
+        assert_eq!(
+            parse(b"4;1;rgb:ff/00/80"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(255, 0, 128),
+                }],
+            })
+        );
+        assert_eq!(
+            parse_with_terminator(b"4;2;?", Terminator::Bel),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::QueryPalette {
+                    index: 2,
+                    terminator: Terminator::Bel,
+                }],
+            })
+        );
+        assert_eq!(
+            parse(b"4;1;#f00;2;#0000ffff0000"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![
+                    ColorRequest::SetPalette {
+                        index: 1,
+                        rgb: super::super::color::Rgb::new(255, 0, 0),
+                    },
+                    ColorRequest::SetPalette {
+                        index: 2,
+                        rgb: super::super::color::Rgb::new(0, 255, 0),
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn osc_parser_palette_color_scaling() {
+        assert_eq!(
+            parse(b"4;1;rgb:f/8/0"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(255, 136, 0),
+                }],
+            })
+        );
+        assert_eq!(
+            parse(b"4;1;#800800800"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(127, 127, 127),
+                }],
+            })
+        );
+        assert_eq!(
+            parse(b"4;1;rgb:800/800/800"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(127, 127, 127),
+                }],
+            })
+        );
+        assert_eq!(
+            parse(b"4;1;rgb:8000/8000/8000"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(127, 127, 127),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn osc_parser_palette_invalid_data_preserves_prior_requests() {
+        assert_eq!(
+            parse(b"4;1;#ff0000;2;red;3;#00ff00"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetPalette {
+                    index: 1,
+                    rgb: super::super::color::Rgb::new(255, 0, 0),
+                }],
+            })
+        );
+        assert_eq!(parse(b"4;300;#ff0000"), None);
+    }
+
+    #[test]
+    fn osc_parser_palette_reset_operations() {
+        assert_eq!(
+            parse(b"104"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::ResetAllPalette],
+            })
+        );
+        assert_eq!(
+            parse(b"104;1;;bad;2;300"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![
+                    ColorRequest::ResetPalette { index: 1 },
+                    ColorRequest::ResetPalette { index: 2 },
+                ],
+            })
+        );
+        assert_eq!(parse(b"104;bad;300"), None);
+        assert_eq!(
+            parse(b"104;;"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::ResetAllPalette],
+            })
+        );
+    }
+
+    #[test]
     fn osc_parser_over_capacity_invalidates() {
         let mut parser = Parser::new();
         for _ in 0..MAX_BUF + 1 {
             parser.push(b'a');
         }
-        assert_eq!(parser.command(), None);
+        assert_eq!(parser.command(Terminator::St), None);
+    }
+
+    #[test]
+    fn osc_parser_color_request_capacity_covers_max_buffer() {
+        let mut parser = Parser::new();
+        for byte in b"104;" {
+            parser.push(*byte);
+        }
+        let expected = (MAX_BUF - 4) / 2;
+        for i in 0..expected {
+            parser.push(b'1');
+            if i + 1 < expected {
+                parser.push(b';');
+            }
+        }
+
+        let Some(Command::ColorOperation { requests }) = parser.command(Terminator::St) else {
+            panic!("max-buffer dense reset command should parse");
+        };
+        assert_eq!(requests.as_slice().len(), expected);
     }
 }

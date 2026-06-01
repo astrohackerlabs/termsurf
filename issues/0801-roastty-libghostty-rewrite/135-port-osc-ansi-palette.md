@@ -277,3 +277,95 @@ Codex re-reviewed the final design and found no remaining blocking issues:
 `logs/codex-review/20260601-083819-824093-last-message.md`.
 
 The design is approved for implementation.
+
+## Result
+
+**Result:** Pass
+
+Experiment 135 adds private OSC 4/104 ANSI palette color support to Roastty.
+`osc.rs` now parses palette color operations into a fixed-size request list
+derived from `MAX_BUF`, so every valid color request that can fit in the
+existing OSC parser buffer can be represented without heap allocation or silent
+truncation.
+
+The implemented OSC 4 surface is:
+
+- set palette entries with `OSC 4 ; index ; spec`;
+- query palette entries with `OSC 4 ; index ; ?`;
+- parse multiple set/query pairs in one OSC sequence, applying them in order;
+- preserve valid requests before trailing invalid data;
+- support palette indexes `0..=255`;
+- support `rgb:r/g/b`, `rgb:rr/gg/bb`, `rgb:rrr/ggg/bbb`, `rgb:rrrr/gggg/bbbb`,
+  `#rgb`, `#rrggbb`, `#rrrgggbbb`, and `#rrrrggggbbbb`;
+- scale 1-, 2-, 3-, and 4-digit hex channels with Ghostty's
+  `parsed_value * 255 / max_for_width` rule.
+
+The implemented OSC 104 surface is:
+
+- reset individual palette entries with `OSC 104 ; index`;
+- reset multiple palette entries in one sequence;
+- ignore empty reset fields;
+- skip invalid reset fields;
+- reset the entire palette to `color::DEFAULT_PALETTE` when OSC 104 has no
+  non-empty parameters.
+
+OSC 4 query responses use Ghostty's default 16-bit report format:
+
+```text
+ESC ] 4 ; {index} ; rgb:{rrrr}/{gggg}/{bbbb} terminator
+```
+
+Roastty expands each 8-bit channel by multiplying by `257`, appends the response
+to `pty_response`, and preserves the request terminator: BEL requests receive
+BEL responses, and ST requests receive `ESC \` responses.
+
+The terminal stream handler now receives mutable access to `TerminalColors` and
+applies palette operations there. Formatter palette output observes the changed
+palette through the existing `TerminalFormatterExtra::palette` path.
+
+Unsupported color surfaces intentionally remain ignored in this experiment:
+
+- OSC 5 special colors;
+- OSC 10-19 dynamic colors;
+- OSC 110-119 dynamic resets;
+- OSC 21 Kitty color protocol;
+- X11 named color parsing;
+- configurable 8-bit or disabled OSC color report formats;
+- renderer/app color-change callbacks.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty osc
+cargo test -p roastty terminal_stream_osc
+cargo test -p roastty terminal_formatter
+cargo test -p roastty terminal_stream_sgr
+cargo test -p roastty terminal::terminal
+cargo test -p roastty
+```
+
+The final full `cargo test -p roastty` run reported `1487 passed, 0 failed`; the
+ABI harness also passed.
+
+Codex reviewed the completed implementation and found one real coverage gap:
+`logs/codex-review/20260601-084434-812849-last-message.md`. The implementation
+supported `rgb:rrr/ggg/bbb` and `rgb:rrrr/gggg/bbbb`, but the parser tests did
+not assert those forms directly.
+
+The missing parser assertions were added, `cargo fmt`,
+`cargo test -p roastty osc`, and full `cargo test -p roastty` were rerun
+successfully, and Codex re-reviewed the result with no remaining blockers:
+`logs/codex-review/20260601-084711-877995-last-message.md`.
+
+## Conclusion
+
+Roastty now supports the ANSI palette subset of Ghostty's OSC color operations:
+OSC 4 set/query and OSC 104 indexed/all resets. This builds on the existing
+palette storage and formatter path without adding dynamic/special color state,
+renderer callbacks, app callbacks, config surface, public API, or ABI.
+
+The remaining OSC color work should be handled in later experiments once the
+needed state exists: dynamic colors, special colors, Kitty color protocol,
+named-color parsing, report-format configuration, and frontend color-change
+notifications.

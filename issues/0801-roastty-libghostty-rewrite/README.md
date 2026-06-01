@@ -399,7 +399,7 @@ tests, choose the larger subsystem.
 - [Experiment 134: Port OSC 8 Printed Cell Hyperlinks](134-port-osc8-cell-hyperlinks.md)
   — **Pass**
 - [Experiment 135: Port OSC ANSI Palette Operations](135-port-osc-ansi-palette.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 
