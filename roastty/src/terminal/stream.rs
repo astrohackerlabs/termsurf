@@ -1113,6 +1113,10 @@ mod tests {
         ReportPwd {
             url: String,
         },
+        ClipboardContents {
+            kind: u8,
+            data: Vec<u8>,
+        },
         DesktopNotification {
             title: Vec<u8>,
             body: Vec<u8>,
@@ -1141,6 +1145,11 @@ mod tests {
             halign: osc::KittyTextHorizontalAlign,
             text: String,
         },
+        KittyClipboard {
+            metadata: Vec<u8>,
+            payload: Option<Vec<u8>>,
+            terminator: osc::Terminator,
+        },
     }
 
     impl From<OscAction<'_>> for OwnedOscAction {
@@ -1151,6 +1160,10 @@ mod tests {
                 },
                 OscAction::ReportPwd { url } => Self::ReportPwd {
                     url: url.to_string(),
+                },
+                OscAction::ClipboardContents { value } => Self::ClipboardContents {
+                    kind: value.kind,
+                    data: value.data.to_vec(),
                 },
                 OscAction::DesktopNotification { title, body } => Self::DesktopNotification {
                     title: title.to_vec(),
@@ -1180,6 +1193,11 @@ mod tests {
                     valign: value.valign,
                     halign: value.halign,
                     text: value.text.to_string(),
+                },
+                OscAction::KittyClipboard { value } => Self::KittyClipboard {
+                    metadata: value.metadata.to_vec(),
+                    payload: value.payload.map(<[u8]>::to_vec),
+                    terminator: value.terminator,
                 },
             }
         }
@@ -5665,6 +5683,104 @@ mod tests {
             ]
         );
         assert_eq!(actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_dispatches_clipboard_protocols() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(
+            &mut stream,
+            &mut handler,
+            b"\x1b]52;s;?\x07\x1b]52;;\xff\x1b\\\x1b]5522;type=read\x07\x1b]5522;type=write;payload\x1b\\",
+        );
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[
+                OwnedOscAction::ClipboardContents {
+                    kind: b's',
+                    data: b"?".to_vec(),
+                },
+                OwnedOscAction::ClipboardContents {
+                    kind: b'c',
+                    data: b"\xff".to_vec(),
+                },
+                OwnedOscAction::KittyClipboard {
+                    metadata: b"type=read".to_vec(),
+                    payload: None,
+                    terminator: osc::Terminator::Bel,
+                },
+                OwnedOscAction::KittyClipboard {
+                    metadata: b"type=write".to_vec(),
+                    payload: Some(b"payload".to_vec()),
+                    terminator: osc::Terminator::St,
+                },
+            ]
+        );
+        assert_eq!(actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_dispatches_oversized_allocating_clipboard_protocols() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+        let mut input = b"\x1b]52;s;".to_vec();
+        input.extend(std::iter::repeat_n(b'a', osc::MAX_BUF + 32));
+        input.extend_from_slice(b"\x07\x1b]5522;type=read;");
+        input.extend(std::iter::repeat_n(b'b', osc::MAX_BUF + 32));
+        input.extend_from_slice(b"\x1b\\");
+
+        next_slice(&mut stream, &mut handler, &input);
+
+        let actions = osc_actions(&handler);
+        assert_eq!(actions.len(), 2);
+        let OwnedOscAction::ClipboardContents { data, .. } = &actions[0] else {
+            panic!("expected OSC 52 action");
+        };
+        assert_eq!(data.len(), osc::MAX_BUF + 32);
+        assert_eq!(&data[..4], b"aaaa");
+        assert_eq!(&data[osc::MAX_BUF - 4..osc::MAX_BUF + 4], b"aaaaaaaa");
+        assert_eq!(&data[data.len() - 4..], b"aaaa");
+
+        let OwnedOscAction::KittyClipboard {
+            payload: Some(payload),
+            ..
+        } = &actions[1]
+        else {
+            panic!("expected OSC 5522 action");
+        };
+        assert_eq!(payload.len(), osc::MAX_BUF + 32);
+        assert_eq!(&payload[..4], b"bbbb");
+        assert_eq!(&payload[osc::MAX_BUF - 4..osc::MAX_BUF + 4], b"bbbbbbbb");
+        assert_eq!(&payload[payload.len() - 4..], b"bbbb");
+        assert_eq!(print_chars(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_invalid_oversized_unrelated_still_does_not_leak() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+        let mut input = b"A\x1b]0;".to_vec();
+        input.extend(std::iter::repeat_n(b'x', osc::MAX_BUF + 32));
+        input.extend_from_slice(b"\x07B");
+
+        next_slice(&mut stream, &mut handler, &input);
+
+        assert_eq!(print_chars(&handler), &['A', 'B']);
+        assert_eq!(osc_actions(&handler), &[]);
+    }
+
+    #[test]
+    fn stream_osc_5522_without_separator_does_not_dispatch_or_leak() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"A\x1b]5522\x07B");
+
+        assert_eq!(print_chars(&handler), &['A', 'B']);
+        assert_eq!(osc_actions(&handler), &[]);
     }
 
     #[test]

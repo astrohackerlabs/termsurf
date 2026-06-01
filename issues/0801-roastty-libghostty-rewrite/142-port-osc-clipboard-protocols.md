@@ -275,3 +275,62 @@ capture for OSC 52 and OSC 5522, continued OSC 66 protocol-cap enforcement, and
 fallible growth that invalidates on allocation failure instead of panicking.
 Codex re-reviewed the revised design and approved it for implementation with no
 blocking findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented terminal-internal clipboard parsing for the scoped OSC forms:
+
+- `OSC 52` clipboard operations now parse explicit clipboard kind, default
+  clipboard kind `c`, empty data, and raw byte data.
+- Kitty `OSC 5522` now parses raw metadata, optional raw payload, and preserves
+  the OSC terminator.
+- Kitty clipboard metadata option readers now cover `id`, `loc`, `mime`, `name`,
+  `password`, `pw`, `status`, and operation `type`, with Ghostty-compatible
+  case-sensitive enum handling, identifier validation, and whitespace trimming.
+- OSC capture now grows beyond the normal 2048-byte buffer only for Ghostty's
+  allocating OSC families: `52;`, `5522;`, and `66;`.
+- Growable capture preserves bytes from both sides of the fixed-buffer boundary,
+  uses fallible `try_reserve` growth, and keeps unrelated oversized OSCs
+  invalidated without print leakage.
+- Terminal runtime explicitly ignores OSC 52 and OSC 5522 actions. It does not
+  touch the system clipboard, emit PTY replies, add public ABI, or mutate
+  unrelated terminal state.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/terminal/clipboard.rs roastty/src/terminal/mod.rs roastty/src/terminal/osc.rs roastty/src/terminal/stream.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty clipboard
+cargo test -p roastty osc
+cargo test -p roastty terminal_stream_osc
+cargo test -p roastty
+```
+
+The full `roastty` suite passed with 1546 unit tests plus the ABI harness.
+
+## Result Review
+
+Codex reviewed the completed implementation and found three real issues:
+
+- malformed `OSC 5522` without the required semicolon could dispatch as an empty
+  Kitty clipboard command;
+- OSC 66 growable capture was capped by total captured bytes instead of the OSC
+  66 text payload length;
+- terminal no-op coverage did not prove color state stayed unchanged.
+
+The implementation was updated so `OSC 5522` dispatch requires the initial
+separator, OSC 66 relies on its parser-level 4096-byte payload cap, exact-cap
+OSC 66 cases are tested, malformed `5522` no-leak stream behavior is tested, and
+terminal no-op coverage snapshots foreground color around clipboard OSCs.
+
+Codex re-reviewed the revised implementation and found no remaining blockers.
+
+## Conclusion
+
+Roastty now has Ghostty-compatible parser and stream recognition for OSC 52 and
+Kitty OSC 5522, plus the growable OSC capture needed for realistic clipboard
+payloads. Clipboard side effects remain intentionally deferred until Roastty has
+an app/surface boundary and explicit clipboard policy. The OSC parser foundation
+is now better aligned with Ghostty for subsequent app-boundary OSC work.

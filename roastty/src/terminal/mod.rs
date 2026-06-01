@@ -5,6 +5,9 @@ mod bitmap_allocator;
 mod charsets;
 
 #[allow(dead_code)]
+mod clipboard;
+
+#[allow(dead_code)]
 mod color;
 
 #[allow(dead_code)]

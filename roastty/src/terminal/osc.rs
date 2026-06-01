@@ -10,6 +10,9 @@ pub(super) enum Command<'a> {
     ReportPwd {
         url: &'a str,
     },
+    ClipboardContents {
+        value: super::clipboard::ClipboardContents<'a>,
+    },
     DesktopNotification {
         title: &'a [u8],
         body: &'a [u8],
@@ -31,6 +34,9 @@ pub(super) enum Command<'a> {
     },
     KittyTextSizing {
         value: KittyTextSizing<'a>,
+    },
+    KittyClipboard {
+        value: super::clipboard::KittyClipboard<'a>,
     },
 }
 
@@ -225,6 +231,7 @@ impl ColorRequests {
 pub(super) struct Parser {
     buffer: [u8; MAX_BUF],
     len: usize,
+    overflow: Option<Vec<u8>>,
     invalid: bool,
 }
 
@@ -233,12 +240,14 @@ impl Parser {
         Self {
             buffer: [0; MAX_BUF],
             len: 0,
+            overflow: None,
             invalid: false,
         }
     }
 
     pub(super) fn reset(&mut self) {
         self.len = 0;
+        self.overflow = None;
         self.invalid = false;
     }
 
@@ -250,8 +259,28 @@ impl Parser {
         if self.invalid {
             return;
         }
+        if let Some(overflow) = self.overflow.as_mut() {
+            if !can_grow_osc(overflow) || overflow.try_reserve(1).is_err() {
+                self.invalid = true;
+                return;
+            }
+            overflow.push(byte);
+            return;
+        }
         if self.len >= self.buffer.len() {
-            self.invalid = true;
+            let bytes = &self.buffer[..self.len];
+            if !can_grow_osc(bytes) {
+                self.invalid = true;
+                return;
+            }
+            let mut overflow = Vec::new();
+            if overflow.try_reserve(self.len + 1).is_err() {
+                self.invalid = true;
+                return;
+            }
+            overflow.extend_from_slice(bytes);
+            overflow.push(byte);
+            self.overflow = Some(overflow);
             return;
         }
         self.buffer[self.len] = byte;
@@ -268,9 +297,9 @@ impl Parser {
             return None;
         }
 
-        let bytes = &self.buffer[..self.len];
-        let (number, rest) =
-            SplitOnce::split_once(bytes, |byte| *byte == b';').unwrap_or((bytes, &[]));
+        let bytes = self.overflow.as_deref().unwrap_or(&self.buffer[..self.len]);
+        let split = SplitOnce::split_once(bytes, |byte| *byte == b';');
+        let (number, rest) = split.unwrap_or((bytes, &[]));
 
         match number {
             b"0" | b"2" => valid_utf8(rest).map(|title| Command::WindowTitle { title }),
@@ -297,8 +326,12 @@ impl Parser {
             b"22" => {
                 super::mouse::MouseShape::parse(rest).map(|shape| Command::MouseShape { shape })
             }
+            b"52" => parse_osc52_clipboard(rest).map(|value| Command::ClipboardContents { value }),
             b"66" => parse_kitty_text_sizing(rest).map(|value| Command::KittyTextSizing { value }),
             b"777" => parse_osc777_notification(rest),
+            b"5522" if split.is_some() => Some(Command::KittyClipboard {
+                value: parse_kitty_clipboard(rest, terminator),
+            }),
             b"104" => parse_osc104(rest).map(|requests| Command::ColorOperation { requests }),
             b"110" => parse_dynamic_reset(rest, DynamicColor::Foreground)
                 .map(|requests| Command::ColorOperation { requests }),
@@ -308,6 +341,24 @@ impl Parser {
                 .map(|requests| Command::ColorOperation { requests }),
             _ => None,
         }
+    }
+}
+
+fn can_grow_osc(bytes: &[u8]) -> bool {
+    match growable_osc_limit(bytes) {
+        Some(Some(max)) => bytes.len() < max,
+        Some(None) => true,
+        None => false,
+    }
+}
+
+fn growable_osc_limit(bytes: &[u8]) -> Option<Option<usize>> {
+    if bytes.starts_with(b"52;") || bytes.starts_with(b"5522;") {
+        Some(None)
+    } else if bytes.starts_with(b"66;") {
+        Some(None)
+    } else {
+        None
     }
 }
 
@@ -371,6 +422,32 @@ fn parse_osc777_notification(bytes: &[u8]) -> Option<Command<'_>> {
     }
     let (title, body) = SplitOnce::split_once(rest, |byte| *byte == b';')?;
     Some(Command::DesktopNotification { title, body })
+}
+
+fn parse_osc52_clipboard(bytes: &[u8]) -> Option<super::clipboard::ClipboardContents<'_>> {
+    match bytes {
+        [b';', data @ ..] => Some(super::clipboard::ClipboardContents { kind: b'c', data }),
+        [kind, b';', data @ ..] => Some(super::clipboard::ClipboardContents { kind: *kind, data }),
+        [] | [_] => None,
+        _ => None,
+    }
+}
+
+fn parse_kitty_clipboard(
+    bytes: &[u8],
+    terminator: Terminator,
+) -> super::clipboard::KittyClipboard<'_> {
+    let (metadata, payload) =
+        if let Some((metadata, payload)) = SplitOnce::split_once(bytes, |byte| *byte == b';') {
+            (metadata, Some(payload))
+        } else {
+            (bytes, None)
+        };
+    super::clipboard::KittyClipboard {
+        metadata,
+        payload,
+        terminator,
+    }
 }
 
 fn parse_osc4(bytes: &[u8], terminator: Terminator) -> Option<ColorRequests> {
@@ -593,6 +670,10 @@ mod tests {
         ReportPwd {
             url: String,
         },
+        ClipboardContents {
+            kind: u8,
+            data: Vec<u8>,
+        },
         DesktopNotification {
             title: Vec<u8>,
             body: Vec<u8>,
@@ -621,6 +702,11 @@ mod tests {
             halign: KittyTextHorizontalAlign,
             text: String,
         },
+        KittyClipboard {
+            metadata: Vec<u8>,
+            payload: Option<Vec<u8>>,
+            terminator: Terminator,
+        },
     }
 
     impl From<Command<'_>> for OwnedCommand {
@@ -631,6 +717,10 @@ mod tests {
                 },
                 Command::ReportPwd { url } => Self::ReportPwd {
                     url: url.to_string(),
+                },
+                Command::ClipboardContents { value } => Self::ClipboardContents {
+                    kind: value.kind,
+                    data: value.data.to_vec(),
                 },
                 Command::DesktopNotification { title, body } => Self::DesktopNotification {
                     title: title.to_vec(),
@@ -660,6 +750,11 @@ mod tests {
                     valign: value.valign,
                     halign: value.halign,
                     text: value.text.to_string(),
+                },
+                Command::KittyClipboard { value } => Self::KittyClipboard {
+                    metadata: value.metadata.to_vec(),
+                    payload: value.payload.map(<[u8]>::to_vec),
+                    terminator: value.terminator,
                 },
             }
         }
@@ -807,6 +902,134 @@ mod tests {
         assert_eq!(parse(b"777;unknown;Title;Body"), None);
         assert_eq!(parse(b"777;notify;Title"), None);
         assert_eq!(parse(b"777;notify"), None);
+    }
+
+    #[test]
+    fn osc_parser_clipboard_contents() {
+        assert_eq!(
+            parse(b"52;s;?"),
+            Some(OwnedCommand::ClipboardContents {
+                kind: b's',
+                data: b"?".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse(b"52;;?"),
+            Some(OwnedCommand::ClipboardContents {
+                kind: b'c',
+                data: b"?".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse(b"52;;"),
+            Some(OwnedCommand::ClipboardContents {
+                kind: b'c',
+                data: b"".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse(b"52;s;\xff"),
+            Some(OwnedCommand::ClipboardContents {
+                kind: b's',
+                data: b"\xff".to_vec(),
+            })
+        );
+        assert_eq!(parse(b"52;"), None);
+        assert_eq!(parse(b"52;s"), None);
+        assert_eq!(parse(b"52;sx?"), None);
+    }
+
+    #[test]
+    fn osc_parser_kitty_clipboard_protocol() {
+        assert_eq!(
+            parse(b"5522;"),
+            Some(OwnedCommand::KittyClipboard {
+                metadata: b"".to_vec(),
+                payload: None,
+                terminator: Terminator::St,
+            })
+        );
+        assert_eq!(
+            parse(b"5522;;"),
+            Some(OwnedCommand::KittyClipboard {
+                metadata: b"".to_vec(),
+                payload: Some(b"".to_vec()),
+                terminator: Terminator::St,
+            })
+        );
+        assert_eq!(
+            parse_with_terminator(b"5522;type=read;dGV4dC9wbGFpbg==", Terminator::Bel),
+            Some(OwnedCommand::KittyClipboard {
+                metadata: b"type=read".to_vec(),
+                payload: Some(b"dGV4dC9wbGFpbg==".to_vec()),
+                terminator: Terminator::Bel,
+            })
+        );
+        assert_eq!(
+            parse(b"5522;mime=\xff;\xfe"),
+            Some(OwnedCommand::KittyClipboard {
+                metadata: b"mime=\xff".to_vec(),
+                payload: Some(b"\xfe".to_vec()),
+                terminator: Terminator::St,
+            })
+        );
+        assert_eq!(parse(b"5522"), None);
+    }
+
+    #[test]
+    fn osc_parser_growable_capture_for_allocating_families() {
+        let mut osc52 = b"52;s;".to_vec();
+        osc52.extend(std::iter::repeat_n(b'a', MAX_BUF + 32));
+        let Some(OwnedCommand::ClipboardContents { data, .. }) = parse(&osc52) else {
+            panic!("expected oversized OSC 52 clipboard command");
+        };
+        assert_eq!(data.len(), MAX_BUF + 32);
+        assert_eq!(&data[..4], b"aaaa");
+        assert_eq!(&data[MAX_BUF - 4..MAX_BUF + 4], b"aaaaaaaa");
+        assert_eq!(&data[data.len() - 4..], b"aaaa");
+
+        let mut osc5522 = b"5522;type=read;".to_vec();
+        osc5522.extend(std::iter::repeat_n(b'b', MAX_BUF + 32));
+        let Some(OwnedCommand::KittyClipboard { payload, .. }) = parse(&osc5522) else {
+            panic!("expected oversized OSC 5522 clipboard command");
+        };
+        let payload = payload.expect("oversized OSC 5522 should have payload");
+        assert_eq!(payload.len(), MAX_BUF + 32);
+        assert_eq!(&payload[..4], b"bbbb");
+        assert_eq!(&payload[MAX_BUF - 4..MAX_BUF + 4], b"bbbbbbbb");
+        assert_eq!(&payload[payload.len() - 4..], b"bbbb");
+
+        let mut osc66 = b"66;;".to_vec();
+        osc66.extend(std::iter::repeat_n(b'c', MAX_BUF + 32));
+        let Some(OwnedCommand::KittyTextSizing { text, .. }) = parse(&osc66) else {
+            panic!("expected oversized OSC 66 text-sizing command");
+        };
+        assert_eq!(text.len(), MAX_BUF + 32);
+
+        let mut exact_cap_osc66 = b"66;;".to_vec();
+        exact_cap_osc66.extend(std::iter::repeat_n(b'c', KITTY_TEXT_SIZING_MAX_PAYLOAD));
+        let Some(OwnedCommand::KittyTextSizing { text, .. }) = parse(&exact_cap_osc66) else {
+            panic!("expected exact-cap OSC 66 text-sizing command");
+        };
+        assert_eq!(text.len(), KITTY_TEXT_SIZING_MAX_PAYLOAD);
+
+        let mut params_exact_cap_osc66 = b"66;s=2;".to_vec();
+        params_exact_cap_osc66.extend(std::iter::repeat_n(b'c', KITTY_TEXT_SIZING_MAX_PAYLOAD));
+        let Some(OwnedCommand::KittyTextSizing { scale, text, .. }) =
+            parse(&params_exact_cap_osc66)
+        else {
+            panic!("expected params plus exact-cap OSC 66 text-sizing command");
+        };
+        assert_eq!(scale, 2);
+        assert_eq!(text.len(), KITTY_TEXT_SIZING_MAX_PAYLOAD);
+
+        let mut too_large_osc66 = b"66;;".to_vec();
+        too_large_osc66.extend(std::iter::repeat_n(b'c', KITTY_TEXT_SIZING_MAX_PAYLOAD + 1));
+        assert_eq!(parse(&too_large_osc66), None);
+
+        let mut unrelated = b"0;".to_vec();
+        unrelated.extend(std::iter::repeat_n(b'x', MAX_BUF + 1));
+        assert_eq!(parse(&unrelated), None);
     }
 
     #[test]
