@@ -320,6 +320,7 @@ No experiment may proceed to the next stage until the required review passes.
   **Pass**
 - [Experiment 105: Port Basic Wrap Scroll](105-port-basic-wrap-scroll.md) —
   **Pass**
+- [Experiment 106: Port Basic LF and CR](106-port-basic-lf-cr.md) — **Designed**
 
 ## Non-Goals
 
