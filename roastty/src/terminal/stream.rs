@@ -1113,6 +1113,10 @@ mod tests {
         ReportPwd {
             url: String,
         },
+        DesktopNotification {
+            title: Vec<u8>,
+            body: Vec<u8>,
+        },
         MouseShape {
             shape: mouse::MouseShape,
         },
@@ -1147,6 +1151,10 @@ mod tests {
                 },
                 OscAction::ReportPwd { url } => Self::ReportPwd {
                     url: url.to_string(),
+                },
+                OscAction::DesktopNotification { title, body } => Self::DesktopNotification {
+                    title: title.to_vec(),
+                    body: body.to_vec(),
                 },
                 OscAction::MouseShape { shape } => Self::MouseShape { shape },
                 OscAction::StartHyperlink { id, uri } => Self::StartHyperlink {
@@ -5633,6 +5641,33 @@ mod tests {
     }
 
     #[test]
+    fn stream_osc_dispatches_notifications() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(
+            &mut stream,
+            &mut handler,
+            b"\x1b]9;Hello\x07\x1b]777;notify;Title;Body\x1b\\\x1b]777;unknown;T;B\x07",
+        );
+
+        assert_eq!(
+            osc_actions(&handler),
+            &[
+                OwnedOscAction::DesktopNotification {
+                    title: b"".to_vec(),
+                    body: b"Hello".to_vec(),
+                },
+                OwnedOscAction::DesktopNotification {
+                    title: b"Title".to_vec(),
+                    body: b"Body".to_vec(),
+                },
+            ]
+        );
+        assert_eq!(actions(&handler), &[]);
+    }
+
+    #[test]
     fn stream_osc_dispatches_kitty_text_sizing() {
         let mut stream = Stream::init();
         let mut handler = RecordingHandler::default();
@@ -5697,7 +5732,13 @@ mod tests {
                 Action::Print { cp: 'E' },
             ]
         );
-        assert_eq!(osc_actions(&handler), &[]);
+        assert_eq!(
+            osc_actions(&handler),
+            &[OwnedOscAction::DesktopNotification {
+                title: b"".to_vec(),
+                body: b"notify".to_vec(),
+            }]
+        );
     }
 
     #[test]

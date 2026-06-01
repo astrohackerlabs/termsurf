@@ -172,3 +172,61 @@ The design now carries notification title/body as raw bytes and explicitly
 suppresses representative recognized ConEmu forms until a later experiment owns
 them. Codex re-reviewed the revised design and approved it for implementation
 with no remaining blocking findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented terminal-internal desktop notification parsing for the scoped OSC
+forms:
+
+- `OSC 9;body` now dispatches a `DesktopNotification` action with an empty raw
+  byte title and raw byte body.
+- `OSC 777;notify;title;body` now dispatches a `DesktopNotification` action with
+  raw byte title/body payloads.
+- Representative recognized ConEmu OSC 9 forms are explicitly suppressed until a
+  later experiment owns ConEmu command handling.
+- Terminal runtime explicitly ignores notification actions, so notifications do
+  not mutate display text, title, PWD, hyperlink state, cursor position, modes,
+  dirty rows, or PTY response.
+
+The implementation intentionally does not add app/surface notification delivery,
+macOS notification APIs, public ABI, ConEmu progress, clipboard, or semantic
+prompt behavior.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/terminal/osc.rs roastty/src/terminal/stream.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty notification
+cargo test -p roastty osc
+cargo test -p roastty terminal_stream_osc
+cargo test -p roastty
+```
+
+The full `roastty` suite passed with 1536 unit tests plus the ABI harness.
+
+## Result Review
+
+Codex reviewed the completed implementation against the experiment design and
+the relevant Ghostty OSC parsers. It found no blocking issues and approved the
+result for commit.
+
+Codex specifically confirmed:
+
+- OSC 9 fallback carries the full body as raw bytes and preserves the required
+  incomplete ConEmu-like fallback cases.
+- Recognized ConEmu forms are explicitly suppressed for the deferred scope.
+- OSC 777 accepts exact lowercase `notify`, carries raw byte title/body
+  payloads, and rejects unknown or malformed forms.
+- Stream dispatch covers valid OSC 9/777 notification actions and invalid OSC
+  777 no-leak behavior.
+- Terminal runtime has the required no-op arm and mutation coverage.
+
+## Conclusion
+
+Roastty now has Ghostty-compatible terminal-layer parsing for the notification
+subset of OSC 9 and OSC 777. Notification delivery to an app/surface boundary
+remains intentionally deferred until Roastty has that boundary. The next
+experiment can continue through the remaining OSC surface, with ConEmu OSC 9
+subcommands and semantic prompt handling still explicitly unimplemented.

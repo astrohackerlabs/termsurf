@@ -10,6 +10,10 @@ pub(super) enum Command<'a> {
     ReportPwd {
         url: &'a str,
     },
+    DesktopNotification {
+        title: &'a [u8],
+        body: &'a [u8],
+    },
     MouseShape {
         shape: super::mouse::MouseShape,
     },
@@ -279,6 +283,7 @@ impl Parser {
             }
             b"7" => valid_utf8(rest).map(|url| Command::ReportPwd { url }),
             b"8" => parse_hyperlink(rest),
+            b"9" => parse_osc9_notification(rest),
             b"10" => parse_dynamic_set_query(rest, DynamicColor::Foreground, terminator)
                 .map(|requests| Command::ColorOperation { requests }),
             b"11" => parse_dynamic_set_query(rest, DynamicColor::Background, terminator)
@@ -293,6 +298,7 @@ impl Parser {
                 super::mouse::MouseShape::parse(rest).map(|shape| Command::MouseShape { shape })
             }
             b"66" => parse_kitty_text_sizing(rest).map(|value| Command::KittyTextSizing { value }),
+            b"777" => parse_osc777_notification(rest),
             b"104" => parse_osc104(rest).map(|requests| Command::ColorOperation { requests }),
             b"110" => parse_dynamic_reset(rest, DynamicColor::Foreground)
                 .map(|requests| Command::ColorOperation { requests }),
@@ -327,6 +333,44 @@ fn parse_hyperlink(bytes: &[u8]) -> Option<Command<'_>> {
     };
 
     Some(Command::StartHyperlink { id, uri })
+}
+
+fn parse_osc9_notification(bytes: &[u8]) -> Option<Command<'_>> {
+    if is_deferred_conemu_osc9(bytes) {
+        return None;
+    }
+    Some(Command::DesktopNotification {
+        title: b"",
+        body: bytes,
+    })
+}
+
+fn is_deferred_conemu_osc9(bytes: &[u8]) -> bool {
+    match bytes {
+        [b'1', b';', ..] => true,
+        [b'1', b'0'] => true,
+        [b'1', b'0', b';', b'0'..=b'3', ..] => true,
+        [b'1', b'1', b';', ..] => true,
+        [b'1', b'2', ..] => true,
+        [b'2', b';', ..] => true,
+        [b'3', b';', ..] => true,
+        [b'4', b';', b'0'..=b'4', ..] => true,
+        [b'5', ..] => true,
+        [b'6', b';', ..] => true,
+        [b'7', b';', ..] => true,
+        [b'8', b';', ..] => true,
+        [b'9', b';', ..] => true,
+        _ => false,
+    }
+}
+
+fn parse_osc777_notification(bytes: &[u8]) -> Option<Command<'_>> {
+    let (extension, rest) = SplitOnce::split_once(bytes, |byte| *byte == b';')?;
+    if extension != b"notify" {
+        return None;
+    }
+    let (title, body) = SplitOnce::split_once(rest, |byte| *byte == b';')?;
+    Some(Command::DesktopNotification { title, body })
 }
 
 fn parse_osc4(bytes: &[u8], terminator: Terminator) -> Option<ColorRequests> {
@@ -549,6 +593,10 @@ mod tests {
         ReportPwd {
             url: String,
         },
+        DesktopNotification {
+            title: Vec<u8>,
+            body: Vec<u8>,
+        },
         MouseShape {
             shape: super::super::mouse::MouseShape,
         },
@@ -583,6 +631,10 @@ mod tests {
                 },
                 Command::ReportPwd { url } => Self::ReportPwd {
                     url: url.to_string(),
+                },
+                Command::DesktopNotification { title, body } => Self::DesktopNotification {
+                    title: title.to_vec(),
+                    body: body.to_vec(),
                 },
                 Command::MouseShape { shape } => Self::MouseShape { shape },
                 Command::StartHyperlink { id, uri } => Self::StartHyperlink {
@@ -683,6 +735,78 @@ mod tests {
         );
         assert_eq!(parse(b"22;Pointer"), None);
         assert_eq!(parse(b"22;unknown"), None);
+    }
+
+    #[test]
+    fn osc_parser_notifications_from_osc9_fallback() {
+        assert_eq!(
+            parse(b"9;Hello world"),
+            Some(OwnedCommand::DesktopNotification {
+                title: b"".to_vec(),
+                body: b"Hello world".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse(b"9;H"),
+            Some(OwnedCommand::DesktopNotification {
+                title: b"".to_vec(),
+                body: b"H".to_vec(),
+            })
+        );
+
+        for (input, expected) in [
+            (b"9;1".as_slice(), b"1".as_slice()),
+            (b"9;1a".as_slice(), b"1a".as_slice()),
+            (b"9;2".as_slice(), b"2".as_slice()),
+            (b"9;2a".as_slice(), b"2a".as_slice()),
+            (b"9;3".as_slice(), b"3".as_slice()),
+            (b"9;3a".as_slice(), b"3a".as_slice()),
+            (b"9;4".as_slice(), b"4".as_slice()),
+            (b"9;4;".as_slice(), b"4;".as_slice()),
+        ] {
+            assert_eq!(
+                parse(input),
+                Some(OwnedCommand::DesktopNotification {
+                    title: b"".to_vec(),
+                    body: expected.to_vec(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn osc_parser_notifications_suppresses_deferred_conemu_forms() {
+        assert_eq!(parse(b"9;1;420"), None);
+        assert_eq!(parse(b"9;4;1;100"), None);
+    }
+
+    #[test]
+    fn osc_parser_notifications_from_osc777_notify() {
+        assert_eq!(
+            parse(b"777;notify;Title;Body"),
+            Some(OwnedCommand::DesktopNotification {
+                title: b"Title".to_vec(),
+                body: b"Body".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse(b"777;notify;\xff;B\xff"),
+            Some(OwnedCommand::DesktopNotification {
+                title: b"\xff".to_vec(),
+                body: b"B\xff".to_vec(),
+            })
+        );
+        assert_eq!(
+            parse(b"9;\xff"),
+            Some(OwnedCommand::DesktopNotification {
+                title: b"".to_vec(),
+                body: b"\xff".to_vec(),
+            })
+        );
+        assert_eq!(parse(b"777;Notify;Title;Body"), None);
+        assert_eq!(parse(b"777;unknown;Title;Body"), None);
+        assert_eq!(parse(b"777;notify;Title"), None);
+        assert_eq!(parse(b"777;notify"), None);
     }
 
     #[test]
@@ -787,7 +911,6 @@ mod tests {
 
     #[test]
     fn osc_parser_rejects_invalid_or_unsupported() {
-        assert_eq!(parse(b"9;notification"), None);
         assert_eq!(parse(b"8;bad=value;https://example.com"), None);
         assert_eq!(parse(b"8;id=;https://example.com"), None);
         assert_eq!(parse(b"8"), None);

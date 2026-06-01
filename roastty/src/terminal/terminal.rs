@@ -646,6 +646,7 @@ impl Handler for TerminalStreamHandler<'_> {
             stream::OscAction::ReportPwd { url } => {
                 self.pwd.set(url);
             }
+            stream::OscAction::DesktopNotification { .. } => {}
             stream::OscAction::MouseShape { shape } => {
                 *self.mouse_shape = shape;
             }
@@ -2125,6 +2126,39 @@ mod tests {
 
         terminal
             .next_slice(b"\x1b]66;s=2:w=7:n=13:d=15:v=1:h=2;wide\x1b\\")
+            .unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert_eq!(terminal.title_for_tests(), "title");
+        assert_eq!(terminal.pwd_for_tests(), Some("file://host/home"));
+        assert_eq!(
+            terminal.cursor_hyperlink_for_tests(),
+            Some((
+                ScreenCursorHyperlinkId::Explicit("x".to_string()),
+                "https://e"
+            ))
+        );
+        assert_eq!(terminal.cursor_position_for_tests(), (5, 1));
+        assert!(terminal.get_mode_for_tests(Mode::Insert));
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+        assert!(!terminal.is_dirty_for_tests(9, 0));
+    }
+
+    #[test]
+    fn terminal_stream_notifications_are_ignored() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal
+            .next_slice(b"\x1b]0;title\x07\x1b]7;file://host/home\x07\x1b]8;id=x;https://e\x07")
+            .unwrap();
+        terminal.set_mode_for_tests(Mode::Insert, true);
+        terminal.screens.active.set_cursor_position_for_tests(5, 1);
+        terminal.clear_dirty_for_tests();
+
+        terminal
+            .next_slice(b"\x1b]9;Hello\x07\x1b]777;notify;Title;Body\x1b\\")
             .unwrap();
 
         assert_eq!(plain_with_unwrap(&terminal, false), "abc");
