@@ -332,6 +332,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 113: Port Escape Index and Next Line](113-port-escape-index-next-line.md)
   — **Pass**
+- [Experiment 114: Port Basic CSI Cursor Movement](114-port-basic-csi-cursor-movement.md)
+  — **Designed**
 
 ## Non-Goals
 
