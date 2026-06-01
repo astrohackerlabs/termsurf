@@ -183,3 +183,66 @@ upstream-equivalent tests, and separates non-wrapped second-row behavior from a
 soft-wrap-continuation start test.
 
 Follow-up Codex review approved the updated design with no remaining blockers.
+
+## Result
+
+**Result:** Pass
+
+Implemented private PageList line iteration in
+`roastty/src/terminal/page_list.rs`:
+
+- `LineIterator<'a>` stores a `&PageList` and the next `Pin`.
+- `impl Iterator for LineIterator<'_>` calls `PageList::select_line()` with
+  `whitespace = None` and `semantic_prompt_boundary = false`, matching upstream
+  `Screen.LineIterator`.
+- `PageList::line_iterator()` creates the private iterator and makes invalid or
+  garbage start pins yield no selections.
+- Iteration advances with `pin_down(result.end(), 1)` and stops at the bottom of
+  the screen domain.
+
+The implementation stays private to PageList. It does not add `Screen`,
+`Terminal`, `ScreenFormatter`, `selectionString`, string-map support, gesture
+state, public ABI, renderer, parser, app, platform input, mouse behavior,
+clipboard behavior, or UI wiring.
+
+The tests cover:
+
+- upstream-equivalent basic line iteration over a `5x5` screen, including empty
+  physical rows through the bottom;
+- upstream-equivalent soft-wrap iteration, including the full wrapped first line
+  and empty physical rows through the bottom;
+- non-wrapped second-row starts;
+- soft-wrap continuation starts returning the full soft-wrapped line;
+- invalid and garbage starts returning no selections;
+- screen-domain behavior across scrollback/history rows;
+- untracked non-rectangular selection shape.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty line_iterator
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Observed results:
+
+- `cargo test -p roastty line_iterator`: 6 passed.
+- `cargo test -p roastty terminal::page_list`: 383 passed.
+- `cargo test -p roastty`: 676 unit tests passed, ABI harness passed, and
+  doctests passed.
+
+Codex reviewed the implementation and found no implementation blockers. It also
+ran `cargo test -p roastty line_iterator`, which passed. Its only findings were
+to record this result and update the README status.
+
+## Conclusion
+
+Experiment 78 successfully ports upstream `LineIterator` into Roastty's
+PageList-centered terminal layer. Roastty can now iterate selections over full
+soft-wrapped lines, including empty rows, with whitespace trimming and semantic
+boundaries disabled exactly as upstream does.
+
+The next experiment can continue upward into selection text extraction or the
+formatter layer that will make these selection spans copyable as strings.

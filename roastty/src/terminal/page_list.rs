@@ -151,6 +151,12 @@ struct PromptIterator<'a> {
     direction: Direction,
 }
 
+#[derive(Debug)]
+struct LineIterator<'a> {
+    list: &'a PageList,
+    current: Option<Pin>,
+}
+
 #[derive(Debug, Default)]
 struct TrackedPinsRemap {
     entries: Vec<(NonNull<Pin>, NonNull<Pin>)>,
@@ -571,6 +577,22 @@ impl Iterator for PromptIterator<'_> {
             Direction::RightDown => self.next_down(),
             Direction::LeftUp => self.next_up(),
         }
+    }
+}
+
+impl Iterator for LineIterator<'_> {
+    type Item = selection::Selection;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current?;
+        let result = self.list.select_line(SelectLineOptions {
+            pin: current,
+            whitespace: None,
+            semantic_prompt_boundary: false,
+        })?;
+
+        self.current = self.list.pin_down(result.end(), 1);
+        Some(result)
     }
 }
 
@@ -1684,6 +1706,13 @@ impl PageList {
                 self.prompt_iterator_from_pin(direction, bottom_pin, Some(top_pin))
             }
             _ => self.empty_prompt_iterator(direction),
+        }
+    }
+
+    fn line_iterator(&self, start: Pin) -> LineIterator<'_> {
+        LineIterator {
+            list: self,
+            current: (!start.garbage && self.pin_is_valid(&start)).then_some(start),
         }
     }
 
@@ -4143,6 +4172,21 @@ mod tests {
         assert!(!selection.is_tracked());
         assert!(!selection.rectangle());
         assert_selection_screen_points(list, selection, start, end);
+    }
+
+    fn assert_line_iterator(
+        list: &PageList,
+        start: Pin,
+        expected: &[(CellCountInt, u32, CellCountInt, u32)],
+    ) {
+        let mut iter = list.line_iterator(start);
+        for &(start_x, start_y, end_x, end_y) in expected {
+            let selection = iter.next().expect("line iterator selection must exist");
+            assert!(!selection.is_tracked());
+            assert!(!selection.rectangle());
+            assert_selection_screen_points(list, selection, (start_x, start_y), (end_x, end_y));
+        }
+        assert!(iter.next().is_none());
     }
 
     fn page_cell(page: &Page, x: usize, y: usize) -> Cell {
@@ -12317,6 +12361,94 @@ mod tests {
 
         assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
         assert_select_output(&list, (1, 1), (0, 1), (2, 1));
+    }
+
+    #[test]
+    fn line_iterator_matches_upstream_basic_case() {
+        let mut list = PageList::init(5, 5, None).unwrap();
+        set_screen_text_lines(&mut list, &["1ABCD", "2EFGH"]);
+
+        assert_line_iterator(
+            &list,
+            screen_pin(&list, 0, 0),
+            &[
+                (0, 0, 4, 0),
+                (0, 1, 4, 1),
+                (0, 2, 4, 2),
+                (0, 3, 4, 3),
+                (0, 4, 4, 4),
+            ],
+        );
+    }
+
+    #[test]
+    fn line_iterator_matches_upstream_soft_wrap_case() {
+        let mut list = PageList::init(5, 5, None).unwrap();
+        set_screen_text_lines(&mut list, &["1ABCD", "2EFGH", "3ABCD"]);
+        set_screen_row_wrap(&mut list, 0, true);
+
+        assert_line_iterator(
+            &list,
+            screen_pin(&list, 0, 0),
+            &[(0, 0, 4, 1), (0, 2, 4, 2), (0, 3, 4, 3), (0, 4, 4, 4)],
+        );
+    }
+
+    #[test]
+    fn line_iterator_non_wrapped_second_row_starts_there() {
+        let mut list = PageList::init(5, 5, None).unwrap();
+        set_screen_text_lines(&mut list, &["1ABCD", "2EFGH"]);
+
+        assert_line_iterator(
+            &list,
+            screen_pin(&list, 0, 1),
+            &[(0, 1, 4, 1), (0, 2, 4, 2), (0, 3, 4, 3), (0, 4, 4, 4)],
+        );
+    }
+
+    #[test]
+    fn line_iterator_continuation_row_returns_full_soft_wrap() {
+        let mut list = PageList::init(5, 5, None).unwrap();
+        set_screen_text_lines(&mut list, &["1ABCD", "2EFGH", "3ABCD"]);
+        set_screen_row_wrap(&mut list, 0, true);
+
+        assert_line_iterator(
+            &list,
+            screen_pin(&list, 0, 1),
+            &[(0, 0, 4, 1), (0, 2, 4, 2), (0, 3, 4, 3), (0, 4, 4, 4)],
+        );
+    }
+
+    #[test]
+    fn line_iterator_rejects_invalid_or_garbage_start() {
+        let list = PageList::init(5, 5, None).unwrap();
+        let other = PageList::init(5, 5, None).unwrap();
+        let invalid = Pin::new(other.first_node_ptr(), 0, 0);
+        let mut garbage = screen_pin(&list, 0, 0);
+        garbage.garbage = true;
+
+        assert!(list.line_iterator(invalid).next().is_none());
+        assert!(list.line_iterator(garbage).next().is_none());
+    }
+
+    #[test]
+    fn line_iterator_uses_supplied_screen_start_in_scrollback() {
+        let mut list = PageList::init(3, 3, None).unwrap();
+        list.grow_rows(2).unwrap();
+        set_screen_text_lines(&mut list, &["1AB", "2CD", "3EF", "4GH", "5IJ"]);
+
+        assert_eq!(active_top_left_screen_coord(&list), Coordinate::new(0, 2));
+        assert_line_iterator(
+            &list,
+            screen_pin(&list, 0, 0),
+            &[
+                (0, 0, 2, 0),
+                (0, 1, 2, 1),
+                (0, 2, 2, 2),
+                (0, 3, 2, 3),
+                (0, 4, 2, 4),
+            ],
+        );
     }
 
     #[test]
