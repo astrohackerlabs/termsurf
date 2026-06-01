@@ -390,6 +390,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 130: Port CSI Mode Save and Restore](130-port-csi-mode-save-restore.md)
   — **Pass**
+- [Experiment 131: Port DECRQM Mode Reports](131-port-decrqm-mode-reports.md) —
+  **Designed**
 
 ## Non-Goals
 
