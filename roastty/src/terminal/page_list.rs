@@ -1,14 +1,15 @@
+use std::fmt::Write as _;
 use std::ptr::NonNull;
 
 use super::page::{
-    page_layout, Capacity, CapacityAdjustment, Cell, CloneFromError, Page, PageAllocError, Row,
-    SemanticContent, SemanticPrompt, Wide, STD_CAPACITY,
+    page_layout, Capacity, CapacityAdjustment, Cell, CloneFromError, ContentTag, Page,
+    PageAllocError, Row, SemanticContent, SemanticPrompt, Wide, STD_CAPACITY,
 };
 use super::point::{self, Coordinate};
 use super::size::{
     CellCountInt, GraphemeBytesInt, HyperlinkCountInt, StringBytesInt, StyleCountInt, MAX_PAGE_SIZE,
 };
-use super::{highlight, selection, selection_codepoints};
+use super::{color, highlight, selection, selection_codepoints, style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Viewport {
@@ -170,6 +171,22 @@ struct PlainStringOptions {
     unwrap: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageOutputFormat {
+    Plain,
+    Vt,
+    Html,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PageStringOptions<'a> {
+    selection: Option<selection::Selection>,
+    trim: bool,
+    unwrap: bool,
+    emit: PageOutputFormat,
+    palette: Option<&'a color::Palette>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PlainTrailingState {
     rows: usize,
@@ -186,6 +203,21 @@ struct PlainPageFormat<'a> {
     rectangle: bool,
     trim: bool,
     unwrap: bool,
+    trailing_state: Option<PlainTrailingState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StyledPageFormat<'a> {
+    node: &'a Node,
+    start_x: CellCountInt,
+    start_y: CellCountInt,
+    end_x: CellCountInt,
+    end_y: CellCountInt,
+    rectangle: bool,
+    trim: bool,
+    unwrap: bool,
+    emit: PageOutputFormat,
+    palette: Option<&'a color::Palette>,
     trailing_state: Option<PlainTrailingState>,
 }
 
@@ -770,6 +802,284 @@ impl PlainPageFormat<'_> {
         PlainTrailingState {
             rows: blank_rows,
             cells: blank_cells,
+        }
+    }
+}
+
+impl StyledPageFormat<'_> {
+    fn format(&self, output: &mut String) -> PlainTrailingState {
+        let page = &self.node.page;
+        let mut blank_rows = 0usize;
+        let mut blank_cells = 0usize;
+        let mut current_style = style::Style::default();
+
+        if self.emit == PageOutputFormat::Html {
+            output.push_str("<div style=\"font-family: monospace; white-space: pre;\">");
+        }
+
+        if let Some(state) = self.trailing_state {
+            if self.start_y == 0 && self.start_x == 0 {
+                blank_rows = state.rows;
+                blank_cells = state.cells;
+            }
+        }
+
+        if self.start_x >= page.size_cols() || self.start_y >= page.size_rows() {
+            self.close_format(output, current_style);
+            return PlainTrailingState {
+                rows: blank_rows,
+                cells: blank_cells,
+            };
+        }
+
+        let mut end_x = self.end_x.min(page.size_cols() - 1);
+        let mut end_y = self.end_y.min(page.size_rows() - 1);
+        if self.start_y > end_y {
+            self.close_format(output, current_style);
+            return PlainTrailingState {
+                rows: blank_rows,
+                cells: blank_cells,
+            };
+        }
+
+        if self.unwrap && !self.rectangle {
+            let final_row = page.get_row(end_y as usize);
+            let cells = page.get_cells(final_row);
+            if cells[end_x as usize].wide() == Wide::SpacerHead && end_y < page.size_rows() - 1 {
+                end_y += 1;
+                end_x = 0;
+            }
+        }
+
+        if self.start_y == end_y && self.start_x > end_x {
+            self.close_format(output, current_style);
+            return PlainTrailingState {
+                rows: blank_rows,
+                cells: blank_cells,
+            };
+        }
+
+        for y_usize in self.start_y as usize..=end_y as usize {
+            let y: CellCountInt = y_usize
+                .try_into()
+                .expect("page row index must fit CellCountInt");
+            let row = page.get_row(y_usize);
+            let cells = page.get_cells(row);
+
+            let row_end_x = if self.rectangle || y == end_y {
+                end_x.saturating_add(1).min(page.size_cols())
+            } else {
+                page.size_cols()
+            };
+
+            let row_start_x = if self.start_x > 0 && (self.rectangle || y == self.start_y) {
+                match cells[self.start_x as usize].wide() {
+                    Wide::SpacerTail => self.start_x - 1,
+                    Wide::SpacerHead => continue,
+                    Wide::Narrow | Wide::Wide => self.start_x,
+                }
+            } else {
+                0
+            };
+
+            if row_start_x >= row_end_x {
+                blank_rows += 1;
+                continue;
+            }
+
+            let subset = &cells[row_start_x as usize..row_end_x as usize];
+            if !Cell::has_text_any(subset) {
+                blank_rows += 1;
+                continue;
+            }
+
+            if blank_rows > 0 {
+                if !current_style.is_default() {
+                    self.push_style_close(output);
+                    current_style = style::Style::default();
+                }
+                for _ in 0..blank_rows {
+                    self.push_newline(output);
+                }
+                blank_rows = 0;
+            }
+
+            if !self.unwrap || !row.wrap() {
+                blank_rows += 1;
+            }
+
+            if !self.unwrap || !row.wrap_continuation() {
+                blank_cells = 0;
+            }
+
+            for (cell, x_usize) in subset.iter().zip(row_start_x as usize..) {
+                match cell.wide() {
+                    Wide::Narrow | Wide::Wide => {}
+                    Wide::SpacerHead | Wide::SpacerTail => continue,
+                }
+
+                if cell.is_empty() && !cell.has_styling() {
+                    blank_cells += 1;
+                    continue;
+                }
+
+                if cell.content_tag() == ContentTag::Codepoint
+                    && cell.codepoint() == ' ' as u32
+                    && self.trim
+                {
+                    blank_cells += 1;
+                    continue;
+                }
+
+                if blank_cells > 0 {
+                    output.extend(std::iter::repeat_n(' ', blank_cells));
+                    blank_cells = 0;
+                }
+
+                let cell_style = self.cell_style(page, cell);
+                if cell_style != current_style {
+                    if !current_style.is_default() {
+                        match self.emit {
+                            PageOutputFormat::Vt => {
+                                if cell_style.is_default() {
+                                    self.push_style_close(output);
+                                }
+                            }
+                            PageOutputFormat::Html => self.push_style_close(output),
+                            PageOutputFormat::Plain => unreachable!(),
+                        }
+                    }
+
+                    current_style = cell_style;
+                    if !current_style.is_default() {
+                        self.push_style_open(output, current_style);
+                    }
+                }
+
+                self.push_cell(page, x_usize, y_usize, cell, output);
+            }
+        }
+
+        self.close_format(output, current_style);
+        PlainTrailingState {
+            rows: blank_rows,
+            cells: blank_cells,
+        }
+    }
+
+    fn close_format(&self, output: &mut String, current_style: style::Style) {
+        if !current_style.is_default() {
+            self.push_style_close(output);
+        }
+        if self.emit == PageOutputFormat::Html {
+            output.push_str("</div>");
+        }
+    }
+
+    fn push_newline(&self, output: &mut String) {
+        match self.emit {
+            PageOutputFormat::Vt => output.push_str("\r\n"),
+            PageOutputFormat::Html => output.push('\n'),
+            PageOutputFormat::Plain => unreachable!(),
+        }
+    }
+
+    fn push_style_open(&self, output: &mut String, value: style::Style) {
+        match self.emit {
+            PageOutputFormat::Vt => {
+                let formatter = if let Some(palette) = self.palette {
+                    value.formatter_vt().with_palette(palette).to_string()
+                } else {
+                    value.formatter_vt().to_string()
+                };
+                output.push_str(&formatter);
+            }
+            PageOutputFormat::Html => {
+                let formatter = if let Some(palette) = self.palette {
+                    value.formatter_html().with_palette(palette).to_string()
+                } else {
+                    value.formatter_html().to_string()
+                };
+                output.push_str("<div style=\"display: inline;");
+                output.push_str(&formatter);
+                output.push_str("\">");
+            }
+            PageOutputFormat::Plain => unreachable!(),
+        }
+    }
+
+    fn push_style_close(&self, output: &mut String) {
+        match self.emit {
+            PageOutputFormat::Vt => output.push_str("\x1b[0m"),
+            PageOutputFormat::Html => output.push_str("</div>"),
+            PageOutputFormat::Plain => unreachable!(),
+        }
+    }
+
+    fn cell_style(&self, page: &Page, cell: &Cell) -> style::Style {
+        match cell.content_tag() {
+            ContentTag::Codepoint | ContentTag::CodepointGrapheme => {
+                if !cell.has_styling() {
+                    style::Style::default()
+                } else {
+                    page.get_style(cell.style_id())
+                }
+            }
+            ContentTag::BgColorPalette => style::Style {
+                bg_color: style::Color::Palette(cell.color_palette()),
+                ..style::Style::default()
+            },
+            ContentTag::BgColorRgb => style::Style {
+                bg_color: style::Color::Rgb(cell.color_rgb()),
+                ..style::Style::default()
+            },
+        }
+    }
+
+    fn push_cell(&self, page: &Page, x: usize, y: usize, cell: &Cell, output: &mut String) {
+        match cell.content_tag() {
+            ContentTag::Codepoint | ContentTag::CodepointGrapheme => {
+                if !cell.has_text() {
+                    output.push(' ');
+                    return;
+                }
+
+                self.push_codepoint(cell.codepoint(), output);
+                if cell.has_grapheme() {
+                    if let Some(graphemes) = page.lookup_grapheme_at(x, y) {
+                        for cp in graphemes {
+                            self.push_codepoint(cp, output);
+                        }
+                    }
+                }
+            }
+            ContentTag::BgColorPalette | ContentTag::BgColorRgb => output.push(' '),
+        }
+    }
+
+    fn push_codepoint(&self, codepoint: u32, output: &mut String) {
+        match self.emit {
+            PageOutputFormat::Vt => {
+                if let Some(ch) = char::from_u32(codepoint) {
+                    output.push(ch);
+                }
+            }
+            PageOutputFormat::Html => match codepoint {
+                0x3c => output.push_str("&lt;"),
+                0x3e => output.push_str("&gt;"),
+                0x26 => output.push_str("&amp;"),
+                0x22 => output.push_str("&quot;"),
+                0x27 => output.push_str("&#39;"),
+                0x00..=0x7f => {
+                    if let Some(ch) = char::from_u32(codepoint) {
+                        output.push(ch);
+                    }
+                }
+                _ => {
+                    let _ = write!(output, "&#{codepoint};");
+                }
+            },
+            PageOutputFormat::Plain => unreachable!(),
         }
     }
 }
@@ -1949,6 +2259,16 @@ impl PageList {
     }
 
     fn plain_string(&self, options: PlainStringOptions) -> String {
+        self.page_string(PageStringOptions {
+            selection: options.selection,
+            trim: options.trim,
+            unwrap: options.unwrap,
+            emit: PageOutputFormat::Plain,
+            palette: None,
+        })
+    }
+
+    fn page_string(&self, options: PageStringOptions<'_>) -> String {
         let (top_left, bottom_right, rectangle) = match options.selection {
             Some(selection) => {
                 let Some(top_left) = self.selection_top_left(selection) else {
@@ -1968,6 +2288,16 @@ impl PageList {
             }
         };
 
+        self.page_string_between(top_left, bottom_right, rectangle, options)
+    }
+
+    fn page_string_between(
+        &self,
+        top_left: Pin,
+        bottom_right: Pin,
+        rectangle: bool,
+        options: PageStringOptions<'_>,
+    ) -> String {
         if top_left.garbage
             || bottom_right.garbage
             || !self.pin_is_valid(&top_left)
@@ -2009,7 +2339,33 @@ impl PageList {
                 unwrap: options.unwrap,
                 trailing_state,
             };
-            trailing_state = Some(formatter.format(&mut output));
+            trailing_state = Some(match options.emit {
+                PageOutputFormat::Plain => formatter.format(&mut output),
+                PageOutputFormat::Vt | PageOutputFormat::Html => {
+                    let formatter = StyledPageFormat {
+                        node,
+                        start_x: if chunk.node == top_left.node {
+                            top_left.x
+                        } else {
+                            0
+                        },
+                        start_y: chunk.start,
+                        end_x: if chunk.node == bottom_right.node {
+                            bottom_right.x
+                        } else {
+                            node.page.size_cols() - 1
+                        },
+                        end_y: chunk.end - 1,
+                        rectangle,
+                        trim: options.trim,
+                        unwrap: options.unwrap,
+                        emit: options.emit,
+                        palette: options.palette,
+                        trailing_state,
+                    };
+                    formatter.format(&mut output)
+                }
+            });
         }
 
         output
@@ -4330,7 +4686,7 @@ fn init_pages(
 mod tests {
     use super::*;
     use crate::terminal::page::{page_layout, Cell, HyperlinkSnapshot, HyperlinkSnapshotId, Wide};
-    use crate::terminal::{hyperlink, selection, selection_codepoints, style};
+    use crate::terminal::{color, hyperlink, selection, selection_codepoints, style};
 
     fn simulate_history(list: &mut PageList, total_rows: CellCountInt) {
         list.pages[0].page.set_size_rows(total_rows);
@@ -4718,6 +5074,44 @@ mod tests {
             unwrap,
         );
         assert_eq!(actual, expected);
+    }
+
+    fn assert_page_string(
+        list: &PageList,
+        start: (CellCountInt, u32),
+        end: (CellCountInt, u32),
+        emit: PageOutputFormat,
+        palette: Option<&color::Palette>,
+        expected: &str,
+    ) {
+        let actual = list.page_string(PageStringOptions {
+            selection: Some(screen_selection(list, start, end, false)),
+            trim: true,
+            unwrap: true,
+            emit,
+            palette,
+        });
+        assert_eq!(actual, expected);
+    }
+
+    fn set_screen_styled_cell(
+        list: &mut PageList,
+        x: CellCountInt,
+        y: u32,
+        ch: char,
+        cell_style: style::Style,
+    ) {
+        let pin = screen_pin(list, x, y);
+        let index = list.node_index(pin.node).expect("screen node must exist");
+        let page = &mut list.pages[index].page;
+        let style_id = page.add_style(cell_style).unwrap();
+        {
+            let rac = page.get_row_and_cell_mut(pin.x as usize, pin.y as usize);
+            rac.row.set_styled(true);
+            *rac.cell = Cell::init(ch as u32);
+            rac.cell.set_style_id(style_id);
+        }
+        page.use_style(style_id);
     }
 
     fn page_cell(page: &Page, x: usize, y: usize) -> Cell {
@@ -13521,6 +13915,288 @@ mod tests {
         set_screen_text_lines_at(&mut list, 2, &["AB"]);
 
         assert_dump_string(&list, (0, 0), None, true, "\n\nAB");
+    }
+
+    #[test]
+    fn page_string_vt_unstyled_single_line() {
+        let mut list = PageList::init(10, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello"]);
+
+        assert_page_string(&list, (0, 0), (4, 0), PageOutputFormat::Vt, None, "hello");
+    }
+
+    #[test]
+    fn page_string_vt_bold_style() {
+        let mut list = PageList::init(10, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello"]);
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        for x in 0..5 {
+            let ch = char::from_u32(page_cell(&list.pages[0].page, x, 0).codepoint()).unwrap();
+            set_screen_styled_cell(&mut list, x.try_into().unwrap(), 0, ch, bold);
+        }
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (4, 0),
+            PageOutputFormat::Vt,
+            None,
+            "\x1b[0m\x1b[1mhello\x1b[0m",
+        );
+    }
+
+    #[test]
+    fn page_string_vt_multiple_style_transitions() {
+        let mut list = PageList::init(12, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello world"]);
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        let italic = style::Style {
+            flags: style::Flags {
+                bold: true,
+                italic: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        for x in 0..6 {
+            let ch =
+                char::from_u32(page_cell(&list.pages[0].page, x as usize, 0).codepoint()).unwrap();
+            set_screen_styled_cell(&mut list, x, 0, ch, bold);
+        }
+        for x in 6..11 {
+            let ch =
+                char::from_u32(page_cell(&list.pages[0].page, x as usize, 0).codepoint()).unwrap();
+            set_screen_styled_cell(&mut list, x, 0, ch, italic);
+        }
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (10, 0),
+            PageOutputFormat::Vt,
+            None,
+            "\x1b[0m\x1b[1mhello \x1b[0m\x1b[1m\x1b[3mworld\x1b[0m",
+        );
+    }
+
+    #[test]
+    fn page_string_vt_palette_modes_and_background_only_cells() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        let styled = style::Style {
+            fg_color: style::Color::Palette(1),
+            bg_color: style::Color::Palette(4),
+            ..style::Style::default()
+        };
+        set_screen_styled_cell(&mut list, 0, 0, 'R', styled);
+        set_screen_cell_raw(&mut list, 1, 0, Cell::bg_palette(4));
+        set_screen_cell(&mut list, 2, 0, 'X');
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (2, 0),
+            PageOutputFormat::Vt,
+            None,
+            "\x1b[0m\x1b[38;5;1m\x1b[48;5;4mR\x1b[0m\x1b[48;5;4m \x1b[0mX",
+        );
+        assert_page_string(
+            &list,
+            (0, 0),
+            (2, 0),
+            PageOutputFormat::Vt,
+            Some(&color::DEFAULT_PALETTE),
+            "\x1b[0m\x1b[38;2;204;102;102m\x1b[48;2;129;162;190mR\x1b[0m\x1b[48;2;129;162;190m \x1b[0mX",
+        );
+    }
+
+    #[test]
+    fn page_string_vt_background_only_row_matches_upstream_skip() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        set_screen_cell_raw(&mut list, 0, 0, Cell::bg_palette(4));
+        set_screen_cell_raw(&mut list, 1, 0, Cell::bg_rgb(color::Rgb::new(1, 2, 3)));
+
+        assert_page_string(&list, (0, 0), (1, 0), PageOutputFormat::Vt, None, "");
+    }
+
+    #[test]
+    fn page_string_vt_grapheme_and_newline() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        set_screen_cell(&mut list, 0, 0, 'e');
+        append_screen_grapheme(&mut list, 0, 0, 0x0301);
+        set_screen_cell(&mut list, 0, 1, 'x');
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (0, 1),
+            PageOutputFormat::Vt,
+            None,
+            "e\u{301}\r\nx",
+        );
+    }
+
+    #[test]
+    fn page_string_vt_closes_style_before_pending_newlines() {
+        let (mut list, page_rows) = multi_page_list(100);
+        let first_y = page_rows as u32 - 1;
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        set_screen_styled_cell(&mut list, 0, first_y, 'A', bold);
+        set_screen_cell(&mut list, 0, first_y + 2, 'B');
+
+        assert_page_string(
+            &list,
+            (0, first_y),
+            (0, first_y + 2),
+            PageOutputFormat::Vt,
+            None,
+            "\x1b[0m\x1b[1mA\x1b[0m\r\n\r\nB",
+        );
+    }
+
+    #[test]
+    fn page_string_invalid_or_garbage_endpoints_are_empty() {
+        let mut list = PageList::init(5, 3, None).unwrap();
+        set_screen_text_lines(&mut list, &["1ABCD"]);
+        let other = PageList::init(5, 3, None).unwrap();
+        let invalid = Pin::new(other.first_node_ptr(), 0, 0);
+        let valid = screen_pin(&list, 0, 0);
+        let mut garbage = valid;
+        garbage.garbage = true;
+
+        for selection in [
+            selection::Selection::new(invalid, valid, false),
+            selection::Selection::new(valid, invalid, false),
+            selection::Selection::new(garbage, valid, false),
+            selection::Selection::new(valid, garbage, false),
+        ] {
+            assert_eq!(
+                list.page_string(PageStringOptions {
+                    selection: Some(selection),
+                    trim: true,
+                    unwrap: true,
+                    emit: PageOutputFormat::Vt,
+                    palette: None,
+                }),
+                ""
+            );
+            assert_eq!(
+                list.page_string(PageStringOptions {
+                    selection: Some(selection),
+                    trim: true,
+                    unwrap: true,
+                    emit: PageOutputFormat::Html,
+                    palette: None,
+                }),
+                ""
+            );
+        }
+    }
+
+    #[test]
+    fn page_string_html_plain_text_wrapper() {
+        let mut list = PageList::init(20, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello, world"]);
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (11, 0),
+            PageOutputFormat::Html,
+            None,
+            "<div style=\"font-family: monospace; white-space: pre;\">hello, world</div>",
+        );
+    }
+
+    #[test]
+    fn page_string_html_styles_and_palette_modes() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        let styled = style::Style {
+            fg_color: style::Color::Palette(1),
+            bg_color: style::Color::Palette(4),
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        set_screen_styled_cell(&mut list, 0, 0, 'R', styled);
+        set_screen_cell_raw(&mut list, 1, 0, Cell::bg_palette(4));
+        set_screen_cell(&mut list, 2, 0, 'X');
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (2, 0),
+            PageOutputFormat::Html,
+            None,
+            "<div style=\"font-family: monospace; white-space: pre;\"><div style=\"display: inline;color: var(--vt-palette-1);background-color: var(--vt-palette-4);font-weight: bold;\">R</div><div style=\"display: inline;background-color: var(--vt-palette-4);\"> </div>X</div>",
+        );
+        assert_page_string(
+            &list,
+            (0, 0),
+            (2, 0),
+            PageOutputFormat::Html,
+            Some(&color::DEFAULT_PALETTE),
+            "<div style=\"font-family: monospace; white-space: pre;\"><div style=\"display: inline;color: rgb(204, 102, 102);background-color: rgb(129, 162, 190);font-weight: bold;\">R</div><div style=\"display: inline;background-color: rgb(129, 162, 190);\"> </div>X</div>",
+        );
+    }
+
+    #[test]
+    fn page_string_html_escapes_and_numeric_entities() {
+        let mut list = PageList::init(12, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["<>&\"'é"]);
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (5, 0),
+            PageOutputFormat::Html,
+            None,
+            "<div style=\"font-family: monospace; white-space: pre;\">&lt;&gt;&amp;&quot;&#39;&#233;</div>",
+        );
+    }
+
+    #[test]
+    fn page_string_html_grapheme_and_hyperlink_guard() {
+        let mut list = PageList::init(8, 2, None).unwrap();
+        set_screen_cell(&mut list, 0, 0, 'e');
+        append_screen_grapheme(&mut list, 0, 0, 0x0301);
+        set_screen_cell(&mut list, 1, 0, 'L');
+        let link_id = list.pages[0]
+            .page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(b"guard"),
+                uri: b"https://example.com",
+            })
+            .unwrap();
+        list.pages[0].page.set_hyperlink(1, 0, link_id).unwrap();
+
+        assert_page_string(
+            &list,
+            (0, 0),
+            (1, 0),
+            PageOutputFormat::Html,
+            None,
+            "<div style=\"font-family: monospace; white-space: pre;\">e&#769;L</div>",
+        );
     }
 
     fn assert_prompt_click(

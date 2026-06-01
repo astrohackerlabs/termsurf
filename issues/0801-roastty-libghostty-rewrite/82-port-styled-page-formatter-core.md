@@ -252,3 +252,100 @@ Codex identified three high-value improvements before implementation:
 
 The design now requires those tests and keeps hyperlink wrappers explicitly out
 of this experiment's scope.
+
+## Result
+
+**Result:** Pass
+
+Implemented private styled PageList/Page formatting in
+`roastty/src/terminal/page_list.rs`:
+
+- added private `PageOutputFormat` for `Plain`, `Vt`, and `Html`;
+- added private `PageStringOptions` with selection, trim, unwrap, output format,
+  and optional palette inputs;
+- added private `StyledPageFormat` for VT/HTML cell emission;
+- routed the existing plain formatter through `page_string()` while preserving
+  Experiment 81 plain `selection_string()` and `dump_string()` behavior;
+- implemented VT style transitions with existing `Style::formatter_vt()`;
+- implemented HTML monospace wrapper, inline style wrappers, escaping, and
+  non-ASCII numeric entities using existing `Style::formatter_html()`;
+- implemented styled grapheme output, background-only cells in rows that contain
+  text, optional concrete-palette color output, invalid/garbage endpoint guards,
+  and style reset before pending blank-row newlines.
+
+The implementation remains private to the terminal module. It does not add
+`Screen`, `Terminal`, parser state, cursor state, terminal extras, pin maps,
+`codepoint_map`, HTML hyperlink wrappers, writer abstraction, public ABI, app,
+renderer, clipboard, PTY, or UI behavior.
+
+Added 12 styled formatter tests covering:
+
+- VT unstyled single-line output;
+- VT bold style output and final reset;
+- VT multiple style transitions;
+- VT palette-index output and concrete-palette RGB output;
+- VT background-only cells inside a row that also contains text;
+- upstream-compatible all-background-row skipping;
+- VT grapheme output and `\r\n` line endings;
+- VT style close before pending blank-row newlines across a page boundary;
+- invalid/garbage styled endpoints returning an empty string for VT and HTML;
+- HTML plain text wrapper;
+- HTML style wrappers, palette-index CSS variables, and concrete-palette RGB
+  CSS;
+- HTML escaping, non-ASCII numeric entities, grapheme output, and hyperlinked
+  cells formatting text without `<a>` while hyperlink wrappers remain deferred.
+
+Verification passed:
+
+```bash
+cargo fmt
+cargo test -p roastty page_string
+cargo test -p roastty dump_string
+cargo test -p roastty selection_string
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Observed results after the final fixes:
+
+- `cargo test -p roastty page_string`: 12 passed.
+- `cargo test -p roastty dump_string`: 13 passed.
+- `cargo test -p roastty selection_string`: 22 passed.
+- `cargo test -p roastty terminal::page_list`: 451 passed.
+- `cargo test -p roastty`: 744 unit tests passed, ABI harness passed, and
+  doctests passed.
+
+Codex reviewed the completed implementation and found three real issues:
+
+- active style was not closed before pending blank-row newlines, which could let
+  VT/HTML style state bleed into leading cells on later rows;
+- styled invalid/garbage endpoint coverage was missing;
+- styled cross-page trailing-state coverage was missing.
+
+The implementation now closes active style before emitting pending blank-row
+newlines, and the missing guard/cross-page tests were added.
+
+Codex also initially flagged all-background rows. Re-checking upstream showed
+that `PageFormatter` calls `Cell.hasTextAny(...)` before cell emission, and
+`BgColorPalette` / `BgColorRgb` cells do not count as text. The implemented
+behavior now has explicit tests for both cases:
+
+- a background-only cell in a row with text emits a styled space;
+- a row containing only background-only cells is skipped, matching upstream's
+  precheck.
+
+Follow-up Codex review approved the corrected implementation with no remaining
+blockers.
+
+## Conclusion
+
+Experiment 82 successfully ports the scoped styled PageFormatter core into
+Roastty's private PageList layer. Roastty can now produce upstream-style VT and
+HTML strings for text, styles, palette color modes, graphemes, HTML escaping,
+and scoped background-only cells without adding `Screen`, `Terminal`, public
+API, pin maps, codepoint maps, hyperlink wrappers, or terminal extras.
+
+The next experiment can continue with the deferred formatter pieces. The most
+natural next slices are pin-map support, codepoint replacement maps, HTML
+hyperlink emission, or the higher-level ScreenFormatter extras once their
+dependencies are ready.
