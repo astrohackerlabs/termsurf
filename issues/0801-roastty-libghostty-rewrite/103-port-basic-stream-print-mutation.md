@@ -234,3 +234,96 @@ Clean design re-review artifacts:
 - Result: `logs/codex-review/20260601-005802-890041-last-message.md`
 
 Codex found no remaining real design findings and approved implementation.
+
+## Result
+
+**Result:** Pass.
+
+Implemented the first terminal mutation path for stream print actions:
+
+- `stream::Stream` now owns parser state only. It no longer owns the handler, so
+  parser state can live in `Terminal` across multiple feed calls while each call
+  borrows a fresh private handler.
+- `stream::Handler::vt()` now returns a private `Result`, and
+  `Stream::next_slice()` propagates handler errors.
+- `Terminal` now owns a private `stream::Stream` field and exposes a private
+  `next_slice(&mut self, input: &[u8]) -> Result<(), TerminalStreamError>`
+  entrypoint inside the terminal subsystem.
+- A private `TerminalStreamHandler` maps `Action::Print { cp }` to the basic
+  print mutation helper.
+- `Screen::print_basic_cell()` writes one supported codepoint at the active
+  cursor and advances `cursor.x` before the right edge.
+- `PageList::write_basic_screen_cell()` performs the scoped cell mutation and
+  marks the row dirty.
+
+The supported print set is intentionally narrow:
+
+- printable ASCII;
+- `U+FFFD`, so invalid UTF-8 can visibly round-trip through the terminal;
+- no other non-ASCII Unicode yet.
+
+Unsupported paths return explicit private errors:
+
+- right-edge input returns `TerminalStreamError::RightEdgeUnsupported` and does
+  not write;
+- non-ASCII codepoints other than `U+FFFD` return
+  `TerminalStreamError::UnsupportedCodepoint`;
+- attempts to overwrite cells with managed state return
+  `TerminalStreamError::ManagedCellUnsupported`.
+
+This experiment did not implement full upstream `Terminal.print()` behavior:
+pending-wrap execution, wrapping, scrolling, insert mode, margins, origin mode,
+Unicode width tables, wide characters, zero-width characters, grapheme
+clustering, charset mapping, styles, hyperlinks, semantic prompt state, CSI,
+OSC, DCS, APC, PTY IO, public API, and public ABI remain deferred.
+
+Verification run:
+
+```text
+cargo fmt
+cargo test -p roastty stream
+cargo test -p roastty terminal_formatter
+cargo test -p roastty terminal::terminal
+cargo test -p roastty screen_formatter
+cargo test -p roastty page_string
+cargo test -p roastty terminal::page_list
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo fmt` passed.
+- `cargo test -p roastty stream` passed 82 tests.
+- `cargo test -p roastty terminal_formatter` passed 67 tests.
+- `cargo test -p roastty terminal::terminal` passed 77 tests.
+- `cargo test -p roastty screen_formatter` passed 55 tests.
+- `cargo test -p roastty page_string` passed 12 tests.
+- `cargo test -p roastty terminal::page_list` passed 524 tests.
+- Full `cargo test -p roastty` passed 983 unit tests, the ABI harness, and
+  doc-tests.
+
+Codex design review passed after the three design findings above were fixed.
+
+Result-review artifacts:
+
+- Prompt: `logs/codex-review/20260601-010452-112971-prompt.md`
+- Result: `logs/codex-review/20260601-010452-112971-last-message.md`
+
+Codex found no blocking findings. It confirmed that parser state is persistent,
+error propagation is concrete, mutation scope is narrow, right-edge rejection is
+explicit and non-mutating, managed-cell protection is in place, dirty state is
+marked and tested, and the result language does not overclaim full
+`Terminal.print()` behavior.
+
+## Conclusion
+
+Roastty now has the first end-to-end runtime path from bytes to terminal state:
+VT bytes enter the private stream parser, `Action::Print` crosses the private
+handler boundary, supported printable bytes write cells into the active screen,
+and cursor/dirty state updates are observable in tests.
+
+The next print experiment should extend this foundation toward upstream
+`Terminal.print()` rather than broadening parser syntax. The most direct next
+slice is pending-wrap/right-edge behavior and basic wrapping, because this
+experiment deliberately rejects the right edge instead of implementing Ghostty's
+pending-wrap semantics.

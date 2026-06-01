@@ -407,6 +407,12 @@ enum EraseRowsMode {
     Active,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BasicCellWriteError {
+    InvalidPoint,
+    ManagedCell,
+}
+
 impl From<PageAllocError> for CloneRegionError {
     fn from(_: PageAllocError) -> Self {
         Self::PageAlloc
@@ -504,6 +510,16 @@ impl PageListCell<'_> {
 
         None
     }
+}
+
+fn cell_has_managed_print_state(cell: Cell) -> bool {
+    !matches!(cell.content_tag(), ContentTag::Codepoint)
+        || cell.has_grapheme()
+        || cell.has_styling()
+        || cell.hyperlink()
+        || !matches!(cell.wide(), Wide::Narrow)
+        || cell.protected()
+        || !matches!(cell.semantic_content(), SemanticContent::Output)
 }
 
 impl Iterator for PageIterator<'_> {
@@ -3349,10 +3365,37 @@ impl PageList {
             .unwrap_or(false)
     }
 
+    #[cfg(test)]
+    pub(super) fn is_dirty_for_tests(&self, point: point::Point) -> bool {
+        self.is_dirty(point)
+    }
+
     fn mark_dirty(&mut self, point: point::Point) {
         if let Some(pin) = self.pin(point) {
             pin.mark_dirty(self);
         }
+    }
+
+    pub(super) fn write_basic_screen_cell(
+        &mut self,
+        x: CellCountInt,
+        y: u32,
+        codepoint: char,
+    ) -> Result<(), BasicCellWriteError> {
+        let point = point::Point::screen(point::Coordinate::new(x, y));
+        let pin = self.pin(point).ok_or(BasicCellWriteError::InvalidPoint)?;
+        let index = self
+            .node_index(pin.node)
+            .ok_or(BasicCellWriteError::InvalidPoint)?;
+        let page = &mut self.pages[index].page;
+        let rac = page.get_row_and_cell_mut(pin.x as usize, pin.y as usize);
+        if cell_has_managed_print_state(*rac.cell) {
+            return Err(BasicCellWriteError::ManagedCell);
+        }
+
+        *rac.cell = Cell::init(codepoint as u32);
+        rac.row.set_dirty(true);
+        Ok(())
     }
 
     fn pin_is_dirty(&self, pin: Pin) -> bool {

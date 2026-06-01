@@ -6,9 +6,11 @@ use super::page_list::{
     CodepointMapEntry, PageListAllocError, PageOutputFormat, PageStringWithPinMap,
 };
 use super::screen::{
-    Screen, ScreenFormatter, ScreenFormatterContent, ScreenFormatterExtra, ScreenFormatterOptions,
+    BasicPrintError, Screen, ScreenFormatter, ScreenFormatterContent, ScreenFormatterExtra,
+    ScreenFormatterOptions,
 };
 use super::size::CellCountInt;
+use super::stream::{self, Action, Handler};
 use super::tabstops;
 
 #[derive(Debug)]
@@ -19,6 +21,7 @@ pub(super) struct Terminal {
     modes: modes::ModeState,
     scrolling_region: ScrollingRegion,
     tabstops: tabstops::Tabstops,
+    stream: stream::Stream,
     flags: TerminalFlags,
     pwd: TerminalPwd,
 }
@@ -55,6 +58,19 @@ struct TerminalFlags {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TerminalPwd {
     text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TerminalStreamError {
+    RightEdgeUnsupported,
+    ManagedCellUnsupported,
+    InvalidPoint,
+    UnsupportedCodepoint(char),
+}
+
+struct TerminalStreamHandler<'a> {
+    screen: &'a mut Screen,
+    size: TerminalSize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,9 +116,24 @@ impl Terminal {
             scrolling_region: ScrollingRegion::full(size),
             tabstops: tabstops::Tabstops::new(cols as usize, 8)
                 .map_err(|_| PageListAllocError::PageAlloc)?,
+            stream: stream::Stream::init(),
             flags: TerminalFlags::default(),
             pwd: TerminalPwd::default(),
         })
+    }
+
+    pub(super) fn next_slice(&mut self, input: &[u8]) -> Result<(), TerminalStreamError> {
+        let Terminal {
+            size,
+            screens,
+            stream,
+            ..
+        } = self;
+        let mut handler = TerminalStreamHandler {
+            screen: &mut screens.active,
+            size: *size,
+        };
+        stream.next_slice(input, &mut handler)
     }
 
     #[cfg(test)]
@@ -201,6 +232,50 @@ impl Terminal {
     #[cfg(test)]
     pub(super) fn pwd_for_tests(&self) -> Option<&str> {
         self.pwd.logical_str()
+    }
+
+    #[cfg(test)]
+    pub(super) fn cursor_position_for_tests(&self) -> (CellCountInt, CellCountInt) {
+        self.screens.active.cursor_position_for_tests()
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_dirty_for_tests(&self, x: CellCountInt, y: u32) -> bool {
+        self.screens.active.is_dirty_for_tests(x, y)
+    }
+}
+
+impl Handler for TerminalStreamHandler<'_> {
+    type Error = TerminalStreamError;
+
+    fn vt(&mut self, action: Action) -> Result<(), Self::Error> {
+        match action {
+            Action::Print { cp } => self.print(cp),
+        }
+    }
+}
+
+impl TerminalStreamHandler<'_> {
+    fn print(&mut self, cp: char) -> Result<(), TerminalStreamError> {
+        if !(cp.is_ascii() && !cp.is_ascii_control()) && cp != char::REPLACEMENT_CHARACTER {
+            return Err(TerminalStreamError::UnsupportedCodepoint(cp));
+        }
+
+        self.screen
+            .print_basic_cell(self.size.cols, cp)
+            .map_err(TerminalStreamError::from)
+    }
+}
+
+impl From<BasicPrintError> for TerminalStreamError {
+    fn from(err: BasicPrintError) -> Self {
+        match err {
+            BasicPrintError::RightEdge => Self::RightEdgeUnsupported,
+            BasicPrintError::Cell(err) => match err {
+                super::page_list::BasicCellWriteError::InvalidPoint => Self::InvalidPoint,
+                super::page_list::BasicCellWriteError::ManagedCell => Self::ManagedCellUnsupported,
+            },
+        }
     }
 }
 
@@ -712,6 +787,143 @@ mod tests {
 
     fn keyboard_pwd_suffix_len(terminal: &Terminal) -> usize {
         keyboard_vt_string(terminal.flags).len() + pwd_vt_string(&terminal.pwd).len()
+    }
+
+    #[test]
+    fn terminal_stream_ascii_prints_to_active_screen_and_advances_cursor() {
+        let mut terminal = Terminal::init(40, 3, None).unwrap();
+
+        terminal.next_slice(b"hello").unwrap();
+
+        assert_eq!(
+            formatter(&terminal, PageOutputFormat::Plain).format(),
+            "hello"
+        );
+        assert_eq!(terminal.cursor_position_for_tests(), (5, 0));
+    }
+
+    #[test]
+    fn terminal_stream_print_marks_written_row_dirty() {
+        let mut terminal = Terminal::init(40, 3, None).unwrap();
+
+        terminal.next_slice(b"hello").unwrap();
+
+        assert!(terminal.is_dirty_for_tests(0, 0));
+        assert!(terminal.is_dirty_for_tests(39, 0));
+        assert!(!terminal.is_dirty_for_tests(0, 1));
+    }
+
+    #[test]
+    fn terminal_stream_invalid_utf8_writes_replacement_character() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(&[0xff]).unwrap();
+
+        assert_eq!(
+            formatter(&terminal, PageOutputFormat::Plain).format(),
+            char::REPLACEMENT_CHARACTER.to_string()
+        );
+        assert_eq!(terminal.cursor_position_for_tests(), (1, 0));
+    }
+
+    #[test]
+    fn terminal_stream_controls_and_unsupported_escapes_do_not_write_cells() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"A\t\nB\x1bcC\x1b[DD").unwrap();
+
+        assert_eq!(
+            formatter(&terminal, PageOutputFormat::Plain).format(),
+            "ABCD"
+        );
+        assert_eq!(terminal.cursor_position_for_tests(), (4, 0));
+    }
+
+    #[test]
+    fn terminal_stream_split_utf8_state_survives_feed_calls() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\xf0\x9f").unwrap();
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "");
+        terminal.next_slice(b"A").unwrap();
+
+        assert_eq!(
+            formatter(&terminal, PageOutputFormat::Plain).format(),
+            format!("{}A", char::REPLACEMENT_CHARACTER)
+        );
+        assert_eq!(terminal.cursor_position_for_tests(), (2, 0));
+    }
+
+    #[test]
+    fn terminal_stream_valid_split_utf8_errors_only_after_completion() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+        let bytes = "é".as_bytes();
+
+        terminal.next_slice(&bytes[..1]).unwrap();
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "");
+        assert_eq!(
+            terminal.next_slice(&bytes[1..]),
+            Err(TerminalStreamError::UnsupportedCodepoint('é'))
+        );
+
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "");
+        assert_eq!(terminal.cursor_position_for_tests(), (0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_split_csi_state_survives_feed_calls() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"A\x1b[").unwrap();
+        terminal.next_slice(b"CB").unwrap();
+
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "AB");
+        assert_eq!(terminal.cursor_position_for_tests(), (2, 0));
+    }
+
+    #[test]
+    fn terminal_stream_right_edge_returns_private_error_without_writing() {
+        let mut terminal = Terminal::init(1, 2, None).unwrap();
+
+        assert_eq!(
+            terminal.next_slice(b"A"),
+            Err(TerminalStreamError::RightEdgeUnsupported)
+        );
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "");
+        assert_eq!(terminal.cursor_position_for_tests(), (0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_non_ascii_print_returns_private_error() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        assert_eq!(
+            terminal.next_slice("é".as_bytes()),
+            Err(TerminalStreamError::UnsupportedCodepoint('é'))
+        );
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "");
+        assert_eq!(terminal.cursor_position_for_tests(), (0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_managed_cell_overwrite_returns_private_error() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+        terminal.screens.active.set_styled_cell_for_tests(
+            0,
+            0,
+            'x',
+            style::Style {
+                fg_color: style::Color::Palette(1),
+                ..style::Style::default()
+            },
+        );
+
+        assert_eq!(
+            terminal.next_slice(b"A"),
+            Err(TerminalStreamError::ManagedCellUnsupported)
+        );
+        assert_eq!(formatter(&terminal, PageOutputFormat::Plain).format(), "x");
+        assert_eq!(terminal.cursor_position_for_tests(), (0, 0));
     }
 
     #[test]

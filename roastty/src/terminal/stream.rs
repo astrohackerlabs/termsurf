@@ -6,7 +6,9 @@ pub(super) enum Action {
 }
 
 pub(super) trait Handler {
-    fn vt(&mut self, action: Action);
+    type Error;
+
+    fn vt(&mut self, action: Action) -> Result<(), Self::Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,8 +19,7 @@ enum EscapeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Stream<H> {
-    handler: H,
+pub(super) struct Stream {
     utf8: Utf8Decoder,
     escape: EscapeState,
 }
@@ -36,46 +37,49 @@ struct DecodeResult {
     consumed: bool,
 }
 
-impl<H> Stream<H> {
-    pub(super) const fn init(handler: H) -> Self {
+impl Stream {
+    pub(super) const fn init() -> Self {
         Self {
-            handler,
             utf8: Utf8Decoder::new(),
             escape: EscapeState::Ground,
         }
     }
 
-    #[cfg(test)]
-    fn handler(&self) -> &H {
-        &self.handler
-    }
-}
-
-impl<H: Handler> Stream<H> {
-    pub(super) fn next_slice(&mut self, input: &[u8]) {
+    pub(super) fn next_slice<H: Handler>(
+        &mut self,
+        input: &[u8],
+        handler: &mut H,
+    ) -> Result<(), H::Error> {
         for &byte in input {
-            self.next(byte);
+            self.next(byte, handler)?;
         }
+        Ok(())
     }
 
-    fn next(&mut self, byte: u8) {
+    fn next<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
         match self.escape {
-            EscapeState::Ground => self.next_ground(byte),
-            EscapeState::Escape => self.next_escape(byte),
-            EscapeState::Csi => self.next_csi(byte),
+            EscapeState::Ground => self.next_ground(byte, handler),
+            EscapeState::Escape => {
+                self.next_escape(byte);
+                Ok(())
+            }
+            EscapeState::Csi => {
+                self.next_csi(byte);
+                Ok(())
+            }
         }
     }
 
-    fn next_ground(&mut self, byte: u8) {
+    fn next_ground<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
         if self.utf8.is_pending() {
             let result = self.utf8.next(byte);
             if let Some(cp) = result.cp {
-                self.handler.vt(Action::Print { cp });
+                handler.vt(Action::Print { cp })?;
             }
             if !result.consumed {
-                self.next_ground(byte);
+                self.next_ground(byte, handler)?;
             }
-            return;
+            return Ok(());
         }
 
         match byte {
@@ -83,8 +87,9 @@ impl<H: Handler> Stream<H> {
                 self.escape = EscapeState::Escape;
             }
             0x00..=0x1a | 0x1c..=0x1f | 0x7f => {}
-            _ => self.next_utf8(byte),
+            _ => self.next_utf8(byte, handler)?,
         }
+        Ok(())
     }
 
     fn next_escape(&mut self, byte: u8) {
@@ -101,12 +106,13 @@ impl<H: Handler> Stream<H> {
         }
     }
 
-    fn next_utf8(&mut self, byte: u8) {
+    fn next_utf8<H: Handler>(&mut self, byte: u8, handler: &mut H) -> Result<(), H::Error> {
         let result = self.utf8.next(byte);
         if let Some(cp) = result.cp {
-            self.handler.vt(Action::Print { cp });
+            handler.vt(Action::Print { cp })?;
         }
         debug_assert!(result.consumed);
+        Ok(())
     }
 }
 
@@ -210,8 +216,11 @@ mod tests {
     }
 
     impl Handler for RecordingHandler {
-        fn vt(&mut self, action: Action) {
+        type Error = ();
+
+        fn vt(&mut self, action: Action) -> Result<(), Self::Error> {
             self.actions.push(action);
+            Ok(())
         }
     }
 
@@ -225,56 +234,66 @@ mod tests {
             .collect()
     }
 
+    fn next_slice(stream: &mut Stream, handler: &mut RecordingHandler, input: &[u8]) {
+        stream.next_slice(input, handler).unwrap();
+    }
+
     #[test]
     fn stream_ascii_dispatches_one_print_action_per_character() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"Hello");
+        next_slice(&mut stream, &mut handler, b"Hello");
 
-        assert_eq!(print_chars(stream.handler()), vec!['H', 'e', 'l', 'l', 'o']);
+        assert_eq!(print_chars(&handler), vec!['H', 'e', 'l', 'l', 'o']);
     }
 
     #[test]
     fn stream_unicode_scalars_dispatch_correctly() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice("😄✤ÁA".as_bytes());
+        next_slice(&mut stream, &mut handler, "😄✤ÁA".as_bytes());
 
-        assert_eq!(print_chars(stream.handler()), vec!['😄', '✤', 'Á', 'A']);
+        assert_eq!(print_chars(&handler), vec!['😄', '✤', 'Á', 'A']);
     }
 
     #[test]
     fn stream_split_multibyte_scalar_dispatches_after_final_byte() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
         let bytes = "😄".as_bytes();
 
-        stream.next_slice(&bytes[..2]);
-        assert!(stream.handler().actions.is_empty());
+        next_slice(&mut stream, &mut handler, &bytes[..2]);
+        assert!(handler.actions.is_empty());
 
-        stream.next_slice(&bytes[2..]);
-        assert_eq!(print_chars(stream.handler()), vec!['😄']);
+        next_slice(&mut stream, &mut handler, &bytes[2..]);
+        assert_eq!(print_chars(&handler), vec!['😄']);
     }
 
     #[test]
     fn stream_invalid_utf8_dispatches_replacement_character() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(&[0xff]);
+        next_slice(&mut stream, &mut handler, &[0xff]);
 
-        assert_eq!(
-            print_chars(stream.handler()),
-            vec![char::REPLACEMENT_CHARACTER]
-        );
+        assert_eq!(print_chars(&handler), vec![char::REPLACEMENT_CHARACTER]);
     }
 
     #[test]
     fn stream_partial_invalid_utf8_retries_rejecting_starter_byte() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"\xf0\x9f\xf0\x9f\x98\x84\xed\xa0\x80");
+        next_slice(
+            &mut stream,
+            &mut handler,
+            b"\xf0\x9f\xf0\x9f\x98\x84\xed\xa0\x80",
+        );
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![
                 char::REPLACEMENT_CHARACTER,
                 '😄',
@@ -287,124 +306,135 @@ mod tests {
 
     #[test]
     fn stream_invalid_utf8_retries_rejecting_ascii_byte() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"\xf0\x9fA");
+        next_slice(&mut stream, &mut handler, b"\xf0\x9fA");
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A']
         );
     }
 
     #[test]
     fn stream_incomplete_utf8_held_at_slice_boundary_completes_on_next_slice() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
         let bytes = "✤".as_bytes();
 
-        stream.next_slice(&bytes[..1]);
-        stream.next_slice(&bytes[1..2]);
-        assert!(stream.handler().actions.is_empty());
+        next_slice(&mut stream, &mut handler, &bytes[..1]);
+        next_slice(&mut stream, &mut handler, &bytes[1..2]);
+        assert!(handler.actions.is_empty());
 
-        stream.next_slice(&bytes[2..]);
-        assert_eq!(print_chars(stream.handler()), vec!['✤']);
+        next_slice(&mut stream, &mut handler, &bytes[2..]);
+        assert_eq!(print_chars(&handler), vec!['✤']);
     }
 
     #[test]
     fn stream_c0_controls_do_not_dispatch_print_actions() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"A\t\nB");
+        next_slice(&mut stream, &mut handler, b"A\t\nB");
 
-        assert_eq!(print_chars(stream.handler()), vec!['A', 'B']);
+        assert_eq!(print_chars(&handler), vec!['A', 'B']);
     }
 
     #[test]
     fn stream_raw_c1_bytes_are_handled_by_utf8_decoder() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(&[0x80, b'A']);
+        next_slice(&mut stream, &mut handler, &[0x80, b'A']);
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A']
         );
     }
 
     #[test]
     fn stream_pending_utf8_replacement_dispatches_before_ignoring_c0_control() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"\xf0\x9f\nA");
+        next_slice(&mut stream, &mut handler, b"\xf0\x9f\nA");
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A']
         );
     }
 
     #[test]
     fn stream_pending_utf8_replacement_dispatches_before_ignoring_del() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(&[0xf0, 0x9f, 0x7f, b'A']);
+        next_slice(&mut stream, &mut handler, &[0xf0, 0x9f, 0x7f, b'A']);
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A']
         );
     }
 
     #[test]
     fn stream_pending_utf8_replacement_dispatches_before_direct_escape() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"\xf0\x9f\x1bcA");
+        next_slice(&mut stream, &mut handler, b"\xf0\x9f\x1bcA");
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A']
         );
     }
 
     #[test]
     fn stream_pending_utf8_replacement_dispatches_before_csi_escape() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"\xf0\x9f\x1b[CA");
+        next_slice(&mut stream, &mut handler, b"\xf0\x9f\x1b[CA");
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A']
         );
     }
 
     #[test]
     fn stream_direct_unsupported_escape_final_does_not_leak_as_printable_text() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"A\x1bcB");
+        next_slice(&mut stream, &mut handler, b"A\x1bcB");
 
-        assert_eq!(print_chars(stream.handler()), vec!['A', 'B']);
+        assert_eq!(print_chars(&handler), vec!['A', 'B']);
     }
 
     #[test]
     fn stream_unsupported_csi_sequence_does_not_leak_bytes_as_printable_text() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"A\x1b[CB");
+        next_slice(&mut stream, &mut handler, b"A\x1b[CB");
 
-        assert_eq!(print_chars(stream.handler()), vec!['A', 'B']);
+        assert_eq!(print_chars(&handler), vec!['A', 'B']);
     }
 
     #[test]
     fn stream_state_remains_usable_after_invalid_utf8_and_unsupported_escape() {
-        let mut stream = Stream::init(RecordingHandler::default());
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
 
-        stream.next_slice(b"\xffA\x1b[CB");
+        next_slice(&mut stream, &mut handler, b"\xffA\x1b[CB");
 
         assert_eq!(
-            print_chars(stream.handler()),
+            print_chars(&handler),
             vec![char::REPLACEMENT_CHARACTER, 'A', 'B']
         );
     }

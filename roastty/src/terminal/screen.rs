@@ -4,7 +4,8 @@ use super::charsets;
 use super::color;
 use super::kitty;
 use super::page_list::{
-    CodepointMapEntry, PageList, PageListAllocError, PageOutputFormat, PageStringWithPinMap,
+    BasicCellWriteError, CodepointMapEntry, PageList, PageListAllocError, PageOutputFormat,
+    PageStringWithPinMap,
 };
 use super::point;
 use super::selection;
@@ -17,6 +18,12 @@ pub(super) struct Screen {
     charset: ScreenCharsetState,
     kitty_keyboard: kitty::KeyFlagStack,
     pages: PageList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BasicPrintError {
+    RightEdge,
+    Cell(BasicCellWriteError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +108,22 @@ impl Screen {
         self.pages
             .pin(point::Point::screen(point::Coordinate::new(0, 0)))
             .expect("screen top-left pin must resolve")
+    }
+
+    pub(super) fn print_basic_cell(
+        &mut self,
+        cols: CellCountInt,
+        codepoint: char,
+    ) -> Result<(), BasicPrintError> {
+        if self.cursor.x >= cols - 1 {
+            return Err(BasicPrintError::RightEdge);
+        }
+
+        self.pages
+            .write_basic_screen_cell(self.cursor.x, self.cursor.y.into(), codepoint)
+            .map_err(BasicPrintError::Cell)?;
+        self.cursor.x += 1;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -198,6 +221,17 @@ impl Screen {
                 x, y,
             )))
             .expect("screen pin must resolve")
+    }
+
+    #[cfg(test)]
+    pub(super) fn cursor_position_for_tests(&self) -> (CellCountInt, CellCountInt) {
+        (self.cursor.x, self.cursor.y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_dirty_for_tests(&self, x: CellCountInt, y: u32) -> bool {
+        self.pages
+            .is_dirty_for_tests(point::Point::screen(point::Coordinate::new(x, y)))
     }
 }
 
