@@ -203,3 +203,67 @@ style-close reset bytes mapping to the last styled cell.
 
 The design now requires both fixes. Follow-up Codex review found no blockers and
 approved the experiment for implementation.
+
+## Result
+
+**Result:** Pass
+
+Implemented private VT point-map support in `roastty/src/terminal/page_list.rs`.
+
+`PageList::page_string_with_point_map(...)` is no longer plain-only. Plain
+formatting keeps the Experiment 84 map behavior, VT formatting now fills the
+provided byte-indexed point map, and HTML formatting remains explicitly
+deferred: the private helper still returns HTML output, but leaves the map empty
+until the HTML-map slice is designed.
+
+`StyledPageFormat` now receives the PageList screen-domain row base and an
+optional point-map sink for VT output. It maps:
+
+- normal VT text bytes to the source cell coordinate;
+- grapheme bytes to the base cell coordinate;
+- codepoint-map replacement bytes to the original source cell;
+- generated blank-cell spaces using the same reverse-walk mapping as plain point
+  maps;
+- background-only styled spaces to the background cell;
+- VT style-open bytes to the cell that caused the style transition;
+- VT style-close bytes, including the final formatter-end reset, to the previous
+  emitted coordinate;
+- VT pending blank-row `\r\n` bytes byte-for-byte, with the first pending
+  newline inheriting the previous coordinate and later blank rows mapping to the
+  start of each blank row;
+- multi-page PageList chunks using screen-domain coordinates.
+
+The implementation did not add HTML point maps, VT/HTML pin maps,
+`ScreenFormatter`, `TerminalFormatter`, `Screen`, `Terminal`, parser state,
+cursor state, terminal extras, writer abstraction, public ABI, app, renderer,
+clipboard, PTY, or UI behavior.
+
+Verification passed:
+
+```text
+cargo fmt: passed
+cargo test -p roastty vt_point_map: passed, 12 tests
+cargo test -p roastty point_map: passed, 44 tests
+cargo test -p roastty pin_map: passed, 12 tests
+cargo test -p roastty page_string: passed, 12 tests
+cargo test -p roastty terminal::page_list: passed, 506 tests
+cargo test -p roastty: passed, 799 unit tests, ABI harness, and doctests
+```
+
+Codex design review found one blocker in the initial plan: the existing
+plain-only debug assertion in `page_string_with_point_map(...)` had to be
+removed or replaced before VT tests could run. It also requested final
+formatter-end style-close coverage. The design was updated, and follow-up review
+approved it.
+
+Codex result review found no blockers. It first suggested an optional guard for
+the deferred HTML point-map path; that test was added. Follow-up review found no
+remaining issues and approved the result.
+
+## Conclusion
+
+Experiment 86 completes the VT point-map layer for PageList formatter output.
+Roastty now has byte-indexed point maps for plain and VT output plus plain pin
+maps. HTML point maps, VT/HTML pin maps, and the higher-level upstream
+`ScreenFormatter` and `TerminalFormatter` wrappers remain deferred to later
+experiments.

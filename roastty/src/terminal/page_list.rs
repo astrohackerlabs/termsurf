@@ -259,9 +259,9 @@ struct PlainPageFormat<'a> {
     codepoint_map: Option<&'a [CodepointMapEntry]>,
 }
 
-#[derive(Debug, Clone, Copy)]
 struct StyledPageFormat<'a> {
     node: &'a Node,
+    screen_y_base: u32,
     start_x: CellCountInt,
     start_y: CellCountInt,
     end_x: CellCountInt,
@@ -273,6 +273,7 @@ struct StyledPageFormat<'a> {
     palette: Option<&'a color::Palette>,
     trailing_state: Option<PlainTrailingState>,
     codepoint_map: Option<&'a [CodepointMapEntry]>,
+    point_map: Option<&'a mut Vec<point::Coordinate>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -885,7 +886,7 @@ impl PlainPageFormat<'_> {
 }
 
 impl StyledPageFormat<'_> {
-    fn format(&self, output: &mut String) -> PlainTrailingState {
+    fn format(&mut self, output: &mut String) -> PlainTrailingState {
         let page = &self.node.page;
         let mut blank_rows = 0usize;
         let mut blank_cells = 0usize;
@@ -976,9 +977,7 @@ impl StyledPageFormat<'_> {
                     self.push_style_close(output);
                     current_style = style::Style::default();
                 }
-                for _ in 0..blank_rows {
-                    self.push_newline(output);
-                }
+                self.push_pending_newlines(output, blank_rows);
                 blank_rows = 0;
             }
 
@@ -1010,10 +1009,19 @@ impl StyledPageFormat<'_> {
                 }
 
                 if blank_cells > 0 {
-                    output.extend(std::iter::repeat_n(' ', blank_cells));
+                    push_blank_cells_plain(
+                        output,
+                        self.point_map.as_deref_mut(),
+                        blank_cells,
+                        x_usize,
+                        y_usize,
+                        page.size_cols() as usize,
+                        self.screen_y_base,
+                    );
                     blank_cells = 0;
                 }
 
+                let source = self.source_coord(x_usize, y_usize);
                 let cell_style = self.cell_style(page, cell);
                 if cell_style != current_style {
                     if !current_style.is_default() {
@@ -1030,11 +1038,11 @@ impl StyledPageFormat<'_> {
 
                     current_style = cell_style;
                     if !current_style.is_default() {
-                        self.push_style_open(output, current_style);
+                        self.push_style_open(output, current_style, source);
                     }
                 }
 
-                self.push_cell(page, x_usize, y_usize, cell, output);
+                self.push_cell(page, x_usize, y_usize, cell, output, source);
             }
         }
 
@@ -1045,7 +1053,7 @@ impl StyledPageFormat<'_> {
         }
     }
 
-    fn close_format(&self, output: &mut String, current_style: style::Style) {
+    fn close_format(&mut self, output: &mut String, current_style: style::Style) {
         if !current_style.is_default() {
             self.push_style_close(output);
         }
@@ -1054,7 +1062,7 @@ impl StyledPageFormat<'_> {
         }
     }
 
-    fn push_newline(&self, output: &mut String) {
+    fn push_newline_text(&self, output: &mut String) {
         match self.emit {
             PageOutputFormat::Vt => output.push_str("\r\n"),
             PageOutputFormat::Html => output.push('\n'),
@@ -1062,7 +1070,37 @@ impl StyledPageFormat<'_> {
         }
     }
 
-    fn push_style_open(&self, output: &mut String, value: style::Style) {
+    fn push_pending_newlines(&mut self, output: &mut String, count: usize) {
+        if self.emit != PageOutputFormat::Vt {
+            for _ in 0..count {
+                self.push_newline_text(output);
+            }
+            return;
+        }
+
+        let source = self
+            .point_map
+            .as_ref()
+            .and_then(|map| map.last().copied())
+            .unwrap_or_else(|| point::Coordinate::new(0, self.screen_y_base));
+        for row_offset in 0..count {
+            let coord = if row_offset == 0 {
+                source
+            } else {
+                point::Coordinate::new(0, source.y + row_offset as u32)
+            };
+            self.push_newline_text(output);
+            self.push_map_entries(coord, 2);
+        }
+    }
+
+    fn push_style_open(
+        &mut self,
+        output: &mut String,
+        value: style::Style,
+        source: point::Coordinate,
+    ) {
+        let start_len = output.len();
         match self.emit {
             PageOutputFormat::Vt => {
                 let formatter = if let Some(palette) = self.palette {
@@ -1084,13 +1122,20 @@ impl StyledPageFormat<'_> {
             }
             PageOutputFormat::Plain => unreachable!(),
         }
+        if self.emit == PageOutputFormat::Vt {
+            self.push_map_entries(source, output.len() - start_len);
+        }
     }
 
-    fn push_style_close(&self, output: &mut String) {
+    fn push_style_close(&mut self, output: &mut String) {
+        let start_len = output.len();
         match self.emit {
             PageOutputFormat::Vt => output.push_str("\x1b[0m"),
             PageOutputFormat::Html => output.push_str("</div>"),
             PageOutputFormat::Plain => unreachable!(),
+        }
+        if self.emit == PageOutputFormat::Vt {
+            self.push_previous_map_entries(output.len() - start_len);
         }
     }
 
@@ -1114,7 +1159,16 @@ impl StyledPageFormat<'_> {
         }
     }
 
-    fn push_cell(&self, page: &Page, x: usize, y: usize, cell: &Cell, output: &mut String) {
+    fn push_cell(
+        &mut self,
+        page: &Page,
+        x: usize,
+        y: usize,
+        cell: &Cell,
+        output: &mut String,
+        source: point::Coordinate,
+    ) {
+        let start_len = output.len();
         match cell.content_tag() {
             ContentTag::Codepoint | ContentTag::CodepointGrapheme => {
                 if !cell.has_text() {
@@ -1132,6 +1186,9 @@ impl StyledPageFormat<'_> {
                 }
             }
             ContentTag::BgColorPalette | ContentTag::BgColorRgb => output.push(' '),
+        }
+        if self.emit == PageOutputFormat::Vt {
+            self.push_map_entries(source, output.len() - start_len);
         }
     }
 
@@ -1173,6 +1230,29 @@ impl StyledPageFormat<'_> {
             }
             None => self.push_codepoint(codepoint, output),
         }
+    }
+
+    fn source_coord(&self, x: usize, y: usize) -> point::Coordinate {
+        point::Coordinate::new(
+            x.try_into().expect("page cell x must fit CellCountInt"),
+            self.screen_y_base + y as u32,
+        )
+    }
+
+    fn push_map_entries(&mut self, source: point::Coordinate, count: usize) {
+        if let Some(point_map) = self.point_map.as_deref_mut() {
+            point_map.extend(std::iter::repeat_n(source, count));
+        }
+    }
+
+    fn push_previous_map_entries(&mut self, count: usize) {
+        let Some(point_map) = self.point_map.as_deref_mut() else {
+            return;
+        };
+        let Some(source) = point_map.last().copied() else {
+            return;
+        };
+        point_map.extend(std::iter::repeat_n(source, count));
     }
 }
 
@@ -2553,7 +2633,6 @@ impl PageList {
         options: PageStringOptions<'_>,
         point_map: &mut Vec<point::Coordinate>,
     ) -> String {
-        debug_assert_eq!(options.emit, PageOutputFormat::Plain);
         self.page_string_inner(options, Some(point_map))
     }
 
@@ -2646,8 +2725,9 @@ impl PageList {
                     formatter.format(&mut output, point_map.as_mut().map(|map| &mut **map))
                 }
                 PageOutputFormat::Vt | PageOutputFormat::Html => {
-                    let formatter = StyledPageFormat {
+                    let mut formatter = StyledPageFormat {
                         node,
+                        screen_y_base,
                         start_x: if chunk.node == top_left.node {
                             top_left.x
                         } else {
@@ -2667,6 +2747,11 @@ impl PageList {
                         palette: options.palette,
                         trailing_state,
                         codepoint_map: options.codepoint_map,
+                        point_map: if options.emit == PageOutputFormat::Vt {
+                            point_map.as_mut().map(|map| &mut **map)
+                        } else {
+                            None
+                        },
                     };
                     formatter.format(&mut output)
                 }
@@ -5460,6 +5545,58 @@ mod tests {
         assert_eq!(actual.text.len(), actual.point_map.len());
     }
 
+    fn assert_vt_point_map(
+        list: &PageList,
+        start: (CellCountInt, u32),
+        end: (CellCountInt, u32),
+        trim: bool,
+        unwrap: bool,
+        codepoint_map: Option<&[CodepointMapEntry]>,
+        expected_text: &str,
+        expected_points: &[point::Coordinate],
+    ) {
+        let mut point_map = Vec::new();
+        let actual = list.page_string_with_point_map(
+            PageStringOptions {
+                selection: Some(screen_selection(list, start, end, false)),
+                trim,
+                unwrap,
+                emit: PageOutputFormat::Vt,
+                palette: None,
+                codepoint_map,
+            },
+            &mut point_map,
+        );
+        assert_eq!(actual, expected_text);
+        assert_eq!(point_map, expected_points);
+        assert_eq!(actual.len(), point_map.len());
+    }
+
+    fn assert_vt_point_map_for_selection(
+        list: &PageList,
+        selection: Option<selection::Selection>,
+        trim: bool,
+        unwrap: bool,
+        expected_text: &str,
+        expected_points: &[point::Coordinate],
+    ) {
+        let mut point_map = Vec::new();
+        let actual = list.page_string_with_point_map(
+            PageStringOptions {
+                selection,
+                trim,
+                unwrap,
+                emit: PageOutputFormat::Vt,
+                palette: None,
+                codepoint_map: None,
+            },
+            &mut point_map,
+        );
+        assert_eq!(actual, expected_text);
+        assert_eq!(point_map, expected_points);
+        assert_eq!(actual.len(), point_map.len());
+    }
+
     fn assert_plain_pin_map(
         list: &PageList,
         start: (CellCountInt, u32),
@@ -5505,6 +5642,17 @@ mod tests {
             .iter()
             .map(|&(x, y)| point::Coordinate::new(x, y))
             .collect()
+    }
+
+    fn repeat_coords(
+        target: &mut Vec<point::Coordinate>,
+        point: (CellCountInt, u32),
+        count: usize,
+    ) {
+        target.extend(std::iter::repeat_n(
+            point::Coordinate::new(point.0, point.1),
+            count,
+        ));
     }
 
     fn pins(list: &PageList, points: &[(CellCountInt, u32)]) -> Vec<Pin> {
@@ -15280,6 +15428,318 @@ mod tests {
             None,
             "A B",
             &coords(&[(0, 0), (1, 0), (2, 0)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_unstyled_single_line() {
+        let mut list = PageList::init(8, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello"]);
+
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (4, 0),
+            true,
+            true,
+            None,
+            "hello",
+            &coords(&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_style_open_and_final_close() {
+        let mut list = PageList::init(8, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello"]);
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        for x in 0..5 {
+            let ch = char::from_u32(page_cell(&list.pages[0].page, x, 0).codepoint()).unwrap();
+            set_screen_styled_cell(&mut list, x.try_into().unwrap(), 0, ch, bold);
+        }
+
+        let expected = "\x1b[0m\x1b[1mhello\x1b[0m";
+        let mut expected_points = Vec::new();
+        repeat_coords(&mut expected_points, (0, 0), "\x1b[0m\x1b[1m".len());
+        expected_points.extend(coords(&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]));
+        repeat_coords(&mut expected_points, (4, 0), "\x1b[0m".len());
+
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (4, 0),
+            true,
+            true,
+            None,
+            expected,
+            &expected_points,
+        );
+    }
+
+    #[test]
+    fn vt_point_map_multiple_style_transitions_and_background_space() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        let styled = style::Style {
+            fg_color: style::Color::Palette(1),
+            bg_color: style::Color::Palette(4),
+            ..style::Style::default()
+        };
+        set_screen_styled_cell(&mut list, 0, 0, 'R', styled);
+        set_screen_cell_raw(&mut list, 1, 0, Cell::bg_palette(4));
+        set_screen_cell(&mut list, 2, 0, 'X');
+
+        let expected = "\x1b[0m\x1b[38;5;1m\x1b[48;5;4mR\x1b[0m\x1b[48;5;4m \x1b[0mX";
+        let mut expected_points = Vec::new();
+        repeat_coords(
+            &mut expected_points,
+            (0, 0),
+            "\x1b[0m\x1b[38;5;1m\x1b[48;5;4m".len(),
+        );
+        repeat_coords(&mut expected_points, (0, 0), 1);
+        repeat_coords(&mut expected_points, (1, 0), "\x1b[0m\x1b[48;5;4m".len());
+        repeat_coords(&mut expected_points, (1, 0), 1);
+        repeat_coords(&mut expected_points, (1, 0), "\x1b[0m".len());
+        repeat_coords(&mut expected_points, (2, 0), 1);
+
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (2, 0),
+            true,
+            true,
+            None,
+            expected,
+            &expected_points,
+        );
+    }
+
+    #[test]
+    fn vt_point_map_grapheme_and_newline() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        set_screen_cell(&mut list, 0, 0, 'e');
+        append_screen_grapheme(&mut list, 0, 0, 0x0301);
+        set_screen_cell(&mut list, 0, 1, 'x');
+
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (0, 1),
+            true,
+            true,
+            None,
+            "e\u{301}\r\nx",
+            &coords(&[(0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_wide_character_spacer_tail_start() {
+        let mut list = PageList::init(6, 2, None).unwrap();
+        let mut wide = Cell::init('⚡' as u32);
+        wide.set_wide(Wide::Wide);
+        set_screen_cell_raw(&mut list, 2, 0, wide);
+        let mut tail = Cell::init(0);
+        tail.set_wide(Wide::SpacerTail);
+        set_screen_cell_raw(&mut list, 3, 0, tail);
+
+        assert_vt_point_map(
+            &list,
+            (3, 0),
+            (3, 0),
+            true,
+            true,
+            None,
+            "⚡",
+            &coords(&[(2, 0), (2, 0), (2, 0)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_generated_blanks_use_reverse_order() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        set_screen_cell(&mut list, 0, 0, 'A');
+        set_screen_cell(&mut list, 3, 0, 'C');
+
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (3, 0),
+            false,
+            true,
+            None,
+            "A  C",
+            &coords(&[(0, 0), (2, 0), (1, 0), (3, 0)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_codepoint_replacements_map_original_cell() {
+        let mut list = PageList::init(4, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["ao"]);
+
+        let string_map = [codepoint_map_entry(
+            'o',
+            'o',
+            CodepointReplacement::String("XYZ".to_string()),
+        )];
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (1, 0),
+            true,
+            true,
+            Some(&string_map),
+            "aXYZ",
+            &coords(&[(0, 0), (1, 0), (1, 0), (1, 0)]),
+        );
+
+        let char_map = [codepoint_map_entry(
+            'o',
+            'o',
+            CodepointReplacement::Codepoint('é'),
+        )];
+        assert_vt_point_map(
+            &list,
+            (0, 0),
+            (1, 0),
+            true,
+            true,
+            Some(&char_map),
+            "aé",
+            &coords(&[(0, 0), (1, 0), (1, 0)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_pending_blank_rows_and_style_reset() {
+        let (mut list, page_rows) = multi_page_list(100);
+        let first_y = page_rows as u32 - 1;
+        let bold = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..style::Flags::default()
+            },
+            ..style::Style::default()
+        };
+        set_screen_styled_cell(&mut list, 0, first_y, 'A', bold);
+        set_screen_cell(&mut list, 0, first_y + 2, 'B');
+
+        let expected = "\x1b[0m\x1b[1mA\x1b[0m\r\n\r\nB";
+        let mut expected_points = Vec::new();
+        repeat_coords(&mut expected_points, (0, first_y), "\x1b[0m\x1b[1m".len());
+        repeat_coords(&mut expected_points, (0, first_y), 1);
+        repeat_coords(&mut expected_points, (0, first_y), "\x1b[0m".len());
+        repeat_coords(&mut expected_points, (0, first_y), "\r\n".len());
+        repeat_coords(&mut expected_points, (0, first_y + 1), "\r\n".len());
+        repeat_coords(&mut expected_points, (0, first_y + 2), 1);
+
+        assert_vt_point_map(
+            &list,
+            (0, first_y),
+            (0, first_y + 2),
+            true,
+            true,
+            None,
+            expected,
+            &expected_points,
+        );
+    }
+
+    #[test]
+    fn vt_point_map_multi_page_screen_domain_coordinates() {
+        let (mut list, page_rows) = multi_page_list(80);
+        let first_y = page_rows as u32 - 1;
+        set_screen_cell(&mut list, 0, first_y, 'A');
+        set_screen_cell(&mut list, 0, first_y + 1, 'B');
+
+        assert_vt_point_map(
+            &list,
+            (0, first_y),
+            (0, first_y + 1),
+            true,
+            true,
+            None,
+            "A\r\nB",
+            &coords(&[(0, first_y), (0, first_y), (0, first_y), (0, first_y + 1)]),
+        );
+    }
+
+    #[test]
+    fn vt_point_map_invalid_or_garbage_endpoints_are_empty() {
+        let mut list = PageList::init(5, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hello"]);
+        let other = PageList::init(5, 2, None).unwrap();
+        let invalid = Pin::new(other.first_node_ptr(), 0, 0);
+        let valid = screen_pin(&list, 0, 0);
+        let mut garbage = valid;
+        garbage.garbage = true;
+
+        for selection in [
+            selection::Selection::new(invalid, valid, false),
+            selection::Selection::new(valid, invalid, false),
+            selection::Selection::new(garbage, valid, false),
+            selection::Selection::new(valid, garbage, false),
+        ] {
+            assert_vt_point_map_for_selection(&list, Some(selection), true, true, "", &[]);
+        }
+    }
+
+    #[test]
+    fn vt_point_map_html_helper_path_is_deferred() {
+        let mut list = PageList::init(8, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["hi"]);
+
+        let mut point_map = Vec::new();
+        let actual = list.page_string_with_point_map(
+            PageStringOptions {
+                selection: Some(screen_selection(&list, (0, 0), (1, 0), false)),
+                trim: true,
+                unwrap: true,
+                emit: PageOutputFormat::Html,
+                palette: None,
+                codepoint_map: None,
+            },
+            &mut point_map,
+        );
+
+        assert_eq!(
+            actual,
+            "<div style=\"font-family: monospace; white-space: pre;\">hi</div>"
+        );
+        assert!(point_map.is_empty());
+    }
+
+    #[test]
+    fn vt_point_map_no_map_and_plain_maps_are_unchanged() {
+        let mut list = PageList::init(6, 2, None).unwrap();
+        set_screen_text_lines(&mut list, &["A B"]);
+
+        assert_page_string(&list, (0, 0), (2, 0), PageOutputFormat::Vt, None, "A B");
+        assert_plain_point_map(
+            &list,
+            (0, 0),
+            (2, 0),
+            false,
+            true,
+            None,
+            "A B",
+            &coords(&[(0, 0), (1, 0), (2, 0)]),
+        );
+        assert_plain_pin_map(
+            &list,
+            (0, 0),
+            (2, 0),
+            false,
+            true,
+            None,
+            "A B",
+            &pins(&list, &[(0, 0), (1, 0), (2, 0)]),
         );
     }
 
