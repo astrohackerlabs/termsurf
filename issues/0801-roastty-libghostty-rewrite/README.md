@@ -310,6 +310,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 100: Port Terminal Tabstops Formatter Extra](100-port-terminal-tabstops-extra.md)
   — **Pass**
+- [Experiment 101: Port Terminal Keyboard and Pwd Formatter Extra](101-port-terminal-keyboard-pwd-extra.md)
+  — **Designed**
 
 ## Non-Goals
 
