@@ -233,3 +233,70 @@ Clean design re-review artifacts:
 
 Codex found no remaining blockers and approved the experiment for
 implementation.
+
+## Result
+
+**Result:** Pass
+
+Implemented Ghostty-style runtime mouse mode state in Roastty without wiring
+live mouse input or calling the mouse encoder from runtime paths.
+
+Code changes:
+
+- `roastty/src/terminal/terminal.rs`
+  - extended `TerminalFlags` with `mouse_event`, `mouse_format`, and
+    `mouse_shift_capture`;
+  - updates the runtime event cache from `?9`, `?1000`, `?1002`, and `?1003`
+    set/reset commands using Ghostty's last-command behavior;
+  - updates the runtime format cache from `?1005`, `?1006`, `?1015`, and `?1016`
+    set/reset commands using Ghostty's last-command behavior;
+  - applies XTSHIFTESCAPE to the runtime shift-capture flag;
+  - preserves `ModeState` as the mode table source and keeps runtime mouse
+    caches beside it;
+  - RIS/full reset restores all new flags to defaults;
+  - added internal test helpers for the new runtime state only.
+- `roastty/src/terminal/stream.rs`
+  - added `Action::MouseShiftCapture`;
+  - parses `CSI > s` / `CSI > 0 s` as explicit false and `CSI > 1 s` as explicit
+    true;
+  - rejects invalid XTSHIFTESCAPE forms without leaking final bytes;
+  - preserves existing `CSI ? Ps s` mouse-mode save behavior.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/terminal/terminal.rs roastty/src/terminal/stream.rs
+cargo test -p roastty mouse
+cargo test -p roastty modes
+cargo test -p roastty
+```
+
+Results:
+
+- `cargo test -p roastty mouse`: 43 passed, 0 failed.
+- `cargo test -p roastty modes`: 34 passed, 0 failed.
+- `cargo test -p roastty`: 1744 unit tests passed, ABI harness passed, 0
+  doctests.
+
+## Codex Result Review
+
+Codex reviewed the completed implementation and result before commit.
+
+Result review artifacts:
+
+- Prompt: `logs/codex-review/20260601-133920-212006-prompt.md`
+- Result: `logs/codex-review/20260601-133920-212006-last-message.md`
+
+Codex found no implementation, test, scope, or result-recording findings and
+approved the result for commit.
+
+## Conclusion
+
+Roastty now carries the Ghostty-style mouse runtime state required by the pure
+encoder from Experiment 156. The key upstream parity point is preserved: the
+runtime mouse event and format values are not derived from currently enabled
+mode bits; they follow the last set/reset command, including mode restore.
+
+The encoder is still intentionally unwired. A later experiment can connect
+terminal/app input to the encoder once the surrounding input geometry and PTY
+write path are ready.

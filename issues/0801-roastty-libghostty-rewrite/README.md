@@ -441,7 +441,7 @@ tests, choose the larger subsystem.
 - [Experiment 156: Port Mouse Event Encoding](156-port-mouse-event-encoding.md)
   — **Pass**
 - [Experiment 157: Port Mouse Mode Runtime State](157-port-mouse-mode-runtime-state.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

@@ -94,6 +94,9 @@ pub(super) enum Action {
     RestoreMode {
         mode: modes::Mode,
     },
+    MouseShiftCapture {
+        enabled: bool,
+    },
     KittyKeyboardQuery,
     KittyKeyboardPush {
         flags: kitty::KeyFlags,
@@ -827,6 +830,10 @@ impl CsiState {
             return dispatch;
         }
 
+        if let Some(action) = self.mouse_shift_capture_action(final_byte) {
+            return CsiDispatch::One(action);
+        }
+
         if let Some(action) = self.kitty_keyboard_action(final_byte) {
             return CsiDispatch::One(action);
         }
@@ -1194,6 +1201,25 @@ impl CsiState {
         } else {
             CsiDispatch::Many(actions)
         })
+    }
+
+    fn mouse_shift_capture_action(&self, final_byte: u8) -> Option<Action> {
+        if final_byte != b's' || self.private != Some(b'>') || self.intermediate.is_some() {
+            return None;
+        }
+
+        let params = self.finalized_params()?;
+        if params.colon_seen() || params.len > 1 {
+            return None;
+        }
+
+        let enabled = match (params.len == 1).then_some(params.values[0]) {
+            None | Some(0) => false,
+            Some(1) => true,
+            Some(_) => return None,
+        };
+
+        Some(Action::MouseShiftCapture { enabled })
     }
 
     fn mode_request_dispatch(&self, final_byte: u8) -> Option<CsiDispatch> {
@@ -1845,6 +1871,7 @@ mod tests {
                 | Action::ResetMode { .. }
                 | Action::SaveMode { .. }
                 | Action::RestoreMode { .. }
+                | Action::MouseShiftCapture { .. }
                 | Action::KittyKeyboardQuery
                 | Action::KittyKeyboardPush { .. }
                 | Action::KittyKeyboardPop { .. }
@@ -2421,6 +2448,66 @@ mod tests {
 
             assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
         }
+    }
+
+    #[test]
+    fn stream_csi_mouse_shift_capture_dispatches_valid_forms() {
+        for (input, expected) in [
+            (b"\x1b[>sA".as_slice(), false),
+            (b"\x1b[>0sA".as_slice(), false),
+            (b"\x1b[>1sA".as_slice(), true),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(
+                actions(&handler),
+                &[
+                    Action::MouseShiftCapture { enabled: expected },
+                    Action::Print { cp: 'A' }
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn stream_csi_mouse_shift_capture_invalid_forms_do_not_dispatch_or_leak_final_byte() {
+        for input in [
+            b"\x1b[>2sA".as_slice(),
+            b"\x1b[>0;1sA".as_slice(),
+            b"\x1b[>0:1sA".as_slice(),
+            b"\x1b[sA".as_slice(),
+            b"\x1b[1sA".as_slice(),
+            b"\x1b[<1sA".as_slice(),
+            b"\x1b[=1sA".as_slice(),
+        ] {
+            let mut stream = Stream::init();
+            let mut handler = RecordingHandler::default();
+
+            next_slice(&mut stream, &mut handler, input);
+
+            assert_eq!(actions(&handler), &[Action::Print { cp: 'A' }]);
+        }
+    }
+
+    #[test]
+    fn stream_csi_mouse_shift_capture_does_not_steal_mode_save() {
+        let mut stream = Stream::init();
+        let mut handler = RecordingHandler::default();
+
+        next_slice(&mut stream, &mut handler, b"\x1b[?1000sA");
+
+        assert_eq!(
+            actions(&handler),
+            &[
+                Action::SaveMode {
+                    mode: modes::Mode::MouseEventNormal,
+                },
+                Action::Print { cp: 'A' }
+            ]
+        );
     }
 
     #[test]
@@ -7995,6 +8082,7 @@ mod tests {
                 | Action::ResetMode { .. }
                 | Action::SaveMode { .. }
                 | Action::RestoreMode { .. }
+                | Action::MouseShiftCapture { .. }
                 | Action::KittyKeyboardQuery
                 | Action::KittyKeyboardPush { .. }
                 | Action::KittyKeyboardPop { .. }

@@ -197,6 +197,9 @@ struct ScrollingRegion {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct TerminalFlags {
     modify_other_keys_2: bool,
+    mouse_event: mouse::MouseEventMode,
+    mouse_format: mouse::MouseFormat,
+    mouse_shift_capture: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -419,6 +422,21 @@ impl Terminal {
     #[cfg(test)]
     pub(super) fn modify_other_keys_2_for_tests(&self) -> bool {
         self.flags.modify_other_keys_2
+    }
+
+    #[cfg(test)]
+    pub(super) fn mouse_event_for_tests(&self) -> mouse::MouseEventMode {
+        self.flags.mouse_event
+    }
+
+    #[cfg(test)]
+    pub(super) fn mouse_format_for_tests(&self) -> mouse::MouseFormat {
+        self.flags.mouse_format
+    }
+
+    #[cfg(test)]
+    pub(super) fn mouse_shift_capture_for_tests(&self) -> Option<bool> {
+        self.flags.mouse_shift_capture
     }
 
     #[cfg(test)]
@@ -825,6 +843,10 @@ impl Handler for TerminalStreamHandler<'_> {
                 let enabled = self.modes.restore(mode);
                 self.set_mode_basic(mode, enabled)
             }
+            Action::MouseShiftCapture { enabled } => {
+                self.flags.mouse_shift_capture = Some(enabled);
+                Ok(())
+            }
             Action::KittyKeyboardQuery => {
                 let flags = self.screens.active().kitty_keyboard_flags().int();
                 self.write_pty_response(&format!("\x1b[?{flags}u"));
@@ -1064,6 +1086,7 @@ impl TerminalStreamHandler<'_> {
         }
 
         self.modes.set(mode, enabled);
+        self.set_mouse_runtime_mode_flag(mode, enabled);
 
         match mode {
             modes::Mode::Origin => self.move_cursor_to_origin_home(),
@@ -1083,6 +1106,68 @@ impl TerminalStreamHandler<'_> {
             _ => {}
         }
         Ok(())
+    }
+
+    fn set_mouse_runtime_mode_flag(&mut self, mode: modes::Mode, enabled: bool) {
+        match mode {
+            modes::Mode::MouseEventX10 => {
+                self.flags.mouse_event = if enabled {
+                    mouse::MouseEventMode::X10
+                } else {
+                    mouse::MouseEventMode::None
+                };
+            }
+            modes::Mode::MouseEventNormal => {
+                self.flags.mouse_event = if enabled {
+                    mouse::MouseEventMode::Normal
+                } else {
+                    mouse::MouseEventMode::None
+                };
+            }
+            modes::Mode::MouseEventButton => {
+                self.flags.mouse_event = if enabled {
+                    mouse::MouseEventMode::Button
+                } else {
+                    mouse::MouseEventMode::None
+                };
+            }
+            modes::Mode::MouseEventAny => {
+                self.flags.mouse_event = if enabled {
+                    mouse::MouseEventMode::Any
+                } else {
+                    mouse::MouseEventMode::None
+                };
+            }
+            modes::Mode::MouseFormatUtf8 => {
+                self.flags.mouse_format = if enabled {
+                    mouse::MouseFormat::Utf8
+                } else {
+                    mouse::MouseFormat::X10
+                };
+            }
+            modes::Mode::MouseFormatSgr => {
+                self.flags.mouse_format = if enabled {
+                    mouse::MouseFormat::Sgr
+                } else {
+                    mouse::MouseFormat::X10
+                };
+            }
+            modes::Mode::MouseFormatUrxvt => {
+                self.flags.mouse_format = if enabled {
+                    mouse::MouseFormat::Urxvt
+                } else {
+                    mouse::MouseFormat::X10
+                };
+            }
+            modes::Mode::MouseFormatSgrPixels => {
+                self.flags.mouse_format = if enabled {
+                    mouse::MouseFormat::SgrPixels
+                } else {
+                    mouse::MouseFormat::X10
+                };
+            }
+            _ => {}
+        }
     }
 
     fn write_pty_response(&mut self, bytes: &str) {
@@ -2569,6 +2654,9 @@ mod tests {
         terminal.set_mode_for_tests(Mode::Insert, true);
         terminal.save_mode_for_tests(Mode::Insert);
         terminal.set_modify_other_keys_2_for_tests(true);
+        terminal
+            .next_slice(b"\x1b[?1003h\x1b[?1016h\x1b[>1s")
+            .unwrap();
         terminal.clear_tabstops_for_tests();
         terminal.set_tabstop_for_tests(1);
         terminal.set_scrolling_region_for_tests(1, 2, 3, 10);
@@ -2579,6 +2667,12 @@ mod tests {
         assert!(!terminal.get_mode_for_tests(Mode::Insert));
         assert!(!terminal.restore_mode_for_tests(Mode::Insert));
         assert!(!terminal.modify_other_keys_2_for_tests());
+        assert_eq!(
+            terminal.mouse_event_for_tests(),
+            mouse::MouseEventMode::None
+        );
+        assert_eq!(terminal.mouse_format_for_tests(), mouse::MouseFormat::X10);
+        assert_eq!(terminal.mouse_shift_capture_for_tests(), None);
         assert!(!terminal.get_tabstop_for_tests(1));
         assert!(terminal.get_tabstop_for_tests(8));
         assert!(terminal.get_tabstop_for_tests(16));
@@ -2905,6 +2999,180 @@ mod tests {
         assert!(!terminal.get_mode_for_tests(Mode::Insert));
         assert!(terminal.get_mode_for_tests(Mode::Linefeed));
         assert!(!terminal.get_mode_for_tests(Mode::Wraparound));
+    }
+
+    #[test]
+    fn terminal_stream_mouse_event_modes_update_runtime_cache() {
+        let cases = [
+            (
+                b"\x1b[?9h".as_slice(),
+                b"\x1b[?9l".as_slice(),
+                mouse::MouseEventMode::X10,
+            ),
+            (
+                b"\x1b[?1000h".as_slice(),
+                b"\x1b[?1000l".as_slice(),
+                mouse::MouseEventMode::Normal,
+            ),
+            (
+                b"\x1b[?1002h".as_slice(),
+                b"\x1b[?1002l".as_slice(),
+                mouse::MouseEventMode::Button,
+            ),
+            (
+                b"\x1b[?1003h".as_slice(),
+                b"\x1b[?1003l".as_slice(),
+                mouse::MouseEventMode::Any,
+            ),
+        ];
+
+        for (set, reset, expected) in cases {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+            assert_eq!(
+                terminal.mouse_event_for_tests(),
+                mouse::MouseEventMode::None
+            );
+
+            terminal.next_slice(set).unwrap();
+            assert_eq!(terminal.mouse_event_for_tests(), expected);
+
+            terminal.next_slice(reset).unwrap();
+            assert_eq!(
+                terminal.mouse_event_for_tests(),
+                mouse::MouseEventMode::None
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_stream_mouse_event_runtime_cache_uses_last_command() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1b[?1000h\x1b[?1003h").unwrap();
+
+        assert!(terminal.get_mode_for_tests(Mode::MouseEventNormal));
+        assert!(terminal.get_mode_for_tests(Mode::MouseEventAny));
+        assert_eq!(terminal.mouse_event_for_tests(), mouse::MouseEventMode::Any);
+
+        terminal.next_slice(b"\x1b[?1003l").unwrap();
+
+        assert!(terminal.get_mode_for_tests(Mode::MouseEventNormal));
+        assert!(!terminal.get_mode_for_tests(Mode::MouseEventAny));
+        assert_eq!(
+            terminal.mouse_event_for_tests(),
+            mouse::MouseEventMode::None
+        );
+    }
+
+    #[test]
+    fn terminal_stream_mouse_format_modes_update_runtime_cache() {
+        let cases = [
+            (
+                b"\x1b[?1005h".as_slice(),
+                b"\x1b[?1005l".as_slice(),
+                mouse::MouseFormat::Utf8,
+            ),
+            (
+                b"\x1b[?1006h".as_slice(),
+                b"\x1b[?1006l".as_slice(),
+                mouse::MouseFormat::Sgr,
+            ),
+            (
+                b"\x1b[?1015h".as_slice(),
+                b"\x1b[?1015l".as_slice(),
+                mouse::MouseFormat::Urxvt,
+            ),
+            (
+                b"\x1b[?1016h".as_slice(),
+                b"\x1b[?1016l".as_slice(),
+                mouse::MouseFormat::SgrPixels,
+            ),
+        ];
+
+        for (set, reset, expected) in cases {
+            let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+            assert_eq!(terminal.mouse_format_for_tests(), mouse::MouseFormat::X10);
+
+            terminal.next_slice(set).unwrap();
+            assert_eq!(terminal.mouse_format_for_tests(), expected);
+
+            terminal.next_slice(reset).unwrap();
+            assert_eq!(terminal.mouse_format_for_tests(), mouse::MouseFormat::X10);
+        }
+    }
+
+    #[test]
+    fn terminal_stream_mouse_format_runtime_cache_uses_last_command() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x1b[?1006h\x1b[?1016h").unwrap();
+
+        assert!(terminal.get_mode_for_tests(Mode::MouseFormatSgr));
+        assert!(terminal.get_mode_for_tests(Mode::MouseFormatSgrPixels));
+        assert_eq!(
+            terminal.mouse_format_for_tests(),
+            mouse::MouseFormat::SgrPixels
+        );
+
+        terminal.next_slice(b"\x1b[?1016l").unwrap();
+
+        assert!(terminal.get_mode_for_tests(Mode::MouseFormatSgr));
+        assert!(!terminal.get_mode_for_tests(Mode::MouseFormatSgrPixels));
+        assert_eq!(terminal.mouse_format_for_tests(), mouse::MouseFormat::X10);
+    }
+
+    #[test]
+    fn terminal_stream_mouse_runtime_cache_follows_mode_save_restore() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b[?1003h\x1b[?1003s\x1b[?1003l\x1b[?1003r")
+            .unwrap();
+
+        assert!(terminal.get_mode_for_tests(Mode::MouseEventAny));
+        assert_eq!(terminal.mouse_event_for_tests(), mouse::MouseEventMode::Any);
+
+        terminal
+            .next_slice(b"\x1b[?1003l\x1b[?1003s\x1b[?1003h\x1b[?1003r")
+            .unwrap();
+
+        assert!(!terminal.get_mode_for_tests(Mode::MouseEventAny));
+        assert_eq!(
+            terminal.mouse_event_for_tests(),
+            mouse::MouseEventMode::None
+        );
+
+        terminal
+            .next_slice(b"\x1b[?1006h\x1b[?1006s\x1b[?1006l\x1b[?1006r")
+            .unwrap();
+
+        assert!(terminal.get_mode_for_tests(Mode::MouseFormatSgr));
+        assert_eq!(terminal.mouse_format_for_tests(), mouse::MouseFormat::Sgr);
+
+        terminal
+            .next_slice(b"\x1b[?1006l\x1b[?1006s\x1b[?1006h\x1b[?1006r")
+            .unwrap();
+
+        assert!(!terminal.get_mode_for_tests(Mode::MouseFormatSgr));
+        assert_eq!(terminal.mouse_format_for_tests(), mouse::MouseFormat::X10);
+    }
+
+    #[test]
+    fn terminal_stream_mouse_shift_capture_updates_runtime_flag() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        assert_eq!(terminal.mouse_shift_capture_for_tests(), None);
+
+        terminal.next_slice(b"\x1b[>1s").unwrap();
+        assert_eq!(terminal.mouse_shift_capture_for_tests(), Some(true));
+
+        terminal.next_slice(b"\x1b[>s").unwrap();
+        assert_eq!(terminal.mouse_shift_capture_for_tests(), Some(false));
+
+        terminal.next_slice(b"\x1b[>1s\x1b[>2s").unwrap();
+        assert_eq!(terminal.mouse_shift_capture_for_tests(), Some(true));
     }
 
     #[test]
