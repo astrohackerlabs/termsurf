@@ -456,6 +456,8 @@ tests, choose the larger subsystem.
   **Pass**
 - [Experiment 164: Port OSC Parser C ABI](164-port-osc-parser-c-abi.md) —
   **Pass**
+- [Experiment 165: Port Terminal Stream C ABI](165-port-terminal-stream-c-abi.md)
+  — **Designed**
 
 ## Non-Goals
 
