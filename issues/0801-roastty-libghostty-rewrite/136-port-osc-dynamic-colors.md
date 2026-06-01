@@ -182,3 +182,56 @@ Codex reviewed the initial design and found two real issues:
 The design now pins both behaviors and requires parser coverage for them. Codex
 re-reviewed the revised design and approved it for implementation with no
 remaining blocking findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented the approved OSC dynamic color slice:
+
+- added `DynamicRgb` state with Ghostty-style `override`/`default` behavior;
+- added terminal foreground, background, and cursor dynamic color state;
+- parsed OSC 10/11/12 set/query requests with Ghostty's sequential target
+  advancement;
+- skipped empty dynamic color fields without advancing targets;
+- parsed OSC 110/111/112 reset requests when they have no non-empty parameters;
+- rejected parameterized dynamic resets with non-empty fields;
+- executed dynamic set/reset/query requests in the terminal stream handler;
+- wrote 16-bit OSC query responses with the incoming BEL/ST terminator;
+- preserved cursor-query fallback to foreground when cursor color is unset; and
+- kept renderer, ABI, config, surface-message, OSC 13-19, OSC 113-119, OSC
+  5/105, and Kitty OSC 21 behavior out of scope.
+
+Verification:
+
+```bash
+cargo fmt -- roastty/src/terminal/color.rs roastty/src/terminal/osc.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty osc
+cargo test -p roastty terminal_stream_osc
+cargo test -p roastty terminal_formatter
+cargo test -p roastty
+```
+
+Observed results:
+
+- `cargo test -p roastty osc`: 47 passed.
+- `cargo test -p roastty terminal_stream_osc`: 22 passed.
+- `cargo test -p roastty terminal_formatter`: 67 passed.
+- `cargo test -p roastty`: 1499 unit tests passed; ABI harness passed.
+
+## Result Review
+
+Codex reviewed the completed diff and recorded result. It found no blocking
+issues and approved the experiment output as a Pass. The review specifically
+confirmed the dynamic RGB state shape, OSC 10/11/12 empty-field behavior, OSC
+110/111/112 trailing-empty reset behavior, 16-bit query responses, BEL/ST
+terminator preservation, cursor-query fallback to foreground, and clean scope.
+
+## Conclusion
+
+Roastty now has Ghostty-style dynamic foreground/background/cursor color state
+and OSC 10/11/12 plus OSC 110/111/112 behavior for the implemented targets. The
+next OSC color parity work can build on this state to add the remaining color
+families deliberately: special colors, extended dynamic colors, Kitty OSC 21,
+named color parsing, config-driven defaults, report-format configuration, and
+event/renderer integration.

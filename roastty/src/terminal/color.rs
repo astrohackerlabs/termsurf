@@ -15,6 +15,12 @@ pub(super) struct CRgb {
 
 pub(super) type Palette = [Rgb; 256];
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct DynamicRgb {
+    override_rgb: Option<Rgb>,
+    default_rgb: Option<Rgb>,
+}
+
 impl Rgb {
     pub(super) const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
@@ -34,6 +40,37 @@ impl Rgb {
             g: self.g,
             b: self.b,
         }
+    }
+}
+
+impl DynamicRgb {
+    pub(super) const fn unset() -> Self {
+        Self {
+            override_rgb: None,
+            default_rgb: None,
+        }
+    }
+
+    pub(super) const fn init(default: Rgb) -> Self {
+        Self {
+            override_rgb: None,
+            default_rgb: Some(default),
+        }
+    }
+
+    pub(super) const fn get(self) -> Option<Rgb> {
+        match self.override_rgb {
+            Some(rgb) => Some(rgb),
+            None => self.default_rgb,
+        }
+    }
+
+    pub(super) fn set(&mut self, rgb: Rgb) {
+        self.override_rgb = Some(rgb);
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.override_rgb = self.default_rgb;
     }
 }
 
@@ -119,6 +156,30 @@ mod tests {
     fn rgb_c_layout() {
         assert_eq!(size_of::<CRgb>(), 3);
         assert_eq!(align_of::<CRgb>(), 1);
+    }
+
+    #[test]
+    fn dynamic_rgb_set_reset_and_unset() {
+        let mut rgb = DynamicRgb::unset();
+        assert_eq!(rgb.get(), None);
+
+        rgb.set(Rgb::new(1, 2, 3));
+        assert_eq!(rgb.get(), Some(Rgb::new(1, 2, 3)));
+
+        rgb.reset();
+        assert_eq!(rgb.get(), None);
+    }
+
+    #[test]
+    fn dynamic_rgb_reset_restores_default() {
+        let mut rgb = DynamicRgb::init(Rgb::new(4, 5, 6));
+        assert_eq!(rgb.get(), Some(Rgb::new(4, 5, 6)));
+
+        rgb.set(Rgb::new(7, 8, 9));
+        assert_eq!(rgb.get(), Some(Rgb::new(7, 8, 9)));
+
+        rgb.reset();
+        assert_eq!(rgb.get(), Some(Rgb::new(4, 5, 6)));
     }
 
     #[test]

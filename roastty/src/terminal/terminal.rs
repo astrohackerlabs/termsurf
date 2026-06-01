@@ -48,6 +48,9 @@ struct TerminalSize {
 #[derive(Debug, Clone, Copy)]
 struct TerminalColors {
     palette: color::Palette,
+    foreground: color::DynamicRgb,
+    background: color::DynamicRgb,
+    cursor: color::DynamicRgb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +135,9 @@ impl Terminal {
             },
             colors: TerminalColors {
                 palette: color::DEFAULT_PALETTE,
+                foreground: color::DynamicRgb::init(color::DEFAULT_PALETTE[7]),
+                background: color::DynamicRgb::init(color::DEFAULT_PALETTE[0]),
+                cursor: color::DynamicRgb::unset(),
             },
             modes: modes::ModeState::default(),
             scrolling_region: ScrollingRegion::full(size),
@@ -722,7 +728,36 @@ impl TerminalStreamHandler<'_> {
                 osc::ColorRequest::ResetAllPalette => {
                     self.colors.palette = color::DEFAULT_PALETTE;
                 }
+                osc::ColorRequest::SetDynamic { target, rgb } => {
+                    self.dynamic_color_mut(target).set(rgb);
+                }
+                osc::ColorRequest::QueryDynamic { target, terminator } => {
+                    self.write_dynamic_query_response(target, terminator);
+                }
+                osc::ColorRequest::ResetDynamic { target } => {
+                    self.dynamic_color_mut(target).reset();
+                }
             }
+        }
+    }
+
+    fn dynamic_color_mut(&mut self, target: osc::DynamicColor) -> &mut color::DynamicRgb {
+        match target {
+            osc::DynamicColor::Foreground => &mut self.colors.foreground,
+            osc::DynamicColor::Background => &mut self.colors.background,
+            osc::DynamicColor::Cursor => &mut self.colors.cursor,
+        }
+    }
+
+    fn dynamic_color(&self, target: osc::DynamicColor) -> Option<color::Rgb> {
+        match target {
+            osc::DynamicColor::Foreground => self.colors.foreground.get(),
+            osc::DynamicColor::Background => self.colors.background.get(),
+            osc::DynamicColor::Cursor => self
+                .colors
+                .cursor
+                .get()
+                .or_else(|| self.colors.foreground.get()),
         }
     }
 
@@ -731,6 +766,25 @@ impl TerminalStreamHandler<'_> {
         let response = format!(
             "\x1b]4;{};rgb:{:04x}/{:04x}/{:04x}",
             index,
+            u16::from(rgb.r) * 257,
+            u16::from(rgb.g) * 257,
+            u16::from(rgb.b) * 257
+        );
+        self.write_pty_response(&response);
+        self.write_pty_response_bytes(terminator.bytes());
+    }
+
+    fn write_dynamic_query_response(
+        &mut self,
+        target: osc::DynamicColor,
+        terminator: osc::Terminator,
+    ) {
+        let Some(rgb) = self.dynamic_color(target) else {
+            return;
+        };
+        let response = format!(
+            "\x1b]{};rgb:{:04x}/{:04x}/{:04x}",
+            target.number(),
             u16::from(rgb.r) * 257,
             u16::from(rgb.g) * 257,
             u16::from(rgb.b) * 257
@@ -2214,18 +2268,112 @@ mod tests {
     }
 
     #[test]
+    fn terminal_stream_osc_dynamic_colors_set_without_changing_palette() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        let original_palette = terminal.colors.palette;
+
+        terminal
+            .next_slice(b"\x1b]10;#112233\x1b\\\x1b]11;#445566\x1b\\\x1b]12;#778899\x1b\\")
+            .unwrap();
+
+        assert_eq!(
+            terminal.colors.foreground.get(),
+            Some(color::Rgb::new(0x11, 0x22, 0x33))
+        );
+        assert_eq!(
+            terminal.colors.background.get(),
+            Some(color::Rgb::new(0x44, 0x55, 0x66))
+        );
+        assert_eq!(
+            terminal.colors.cursor.get(),
+            Some(color::Rgb::new(0x77, 0x88, 0x99))
+        );
+        assert_eq!(terminal.colors.palette, original_palette);
+    }
+
+    #[test]
+    fn terminal_stream_osc_dynamic_sequence_executes_in_order() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]10;#010203;#040506;?\x1b\\")
+            .unwrap();
+
+        assert_eq!(
+            terminal.colors.foreground.get(),
+            Some(color::Rgb::new(1, 2, 3))
+        );
+        assert_eq!(
+            terminal.colors.background.get(),
+            Some(color::Rgb::new(4, 5, 6))
+        );
+        assert_eq!(
+            terminal.pty_response_for_tests(),
+            b"\x1b]12;rgb:0101/0202/0303\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_osc_dynamic_resets_restore_defaults() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]10;#010203\x1b\\\x1b]11;#040506\x1b\\\x1b]12;#070809\x1b\\")
+            .unwrap();
+        terminal
+            .next_slice(b"\x1b]110\x1b\\\x1b]111;\x1b\\\x1b]112\x1b\\")
+            .unwrap();
+
+        assert_eq!(
+            terminal.colors.foreground.get(),
+            Some(color::DEFAULT_PALETTE[7])
+        );
+        assert_eq!(
+            terminal.colors.background.get(),
+            Some(color::DEFAULT_PALETTE[0])
+        );
+        assert_eq!(terminal.colors.cursor.get(), None);
+    }
+
+    #[test]
+    fn terminal_stream_osc12_query_falls_back_to_foreground_when_cursor_unset() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]10;#123456\x1b\\\x1b]12;?\x07")
+            .unwrap();
+
+        assert_eq!(
+            terminal.pty_response_for_tests(),
+            b"\x1b]12;rgb:1212/3434/5656\x07"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_osc12_query_reports_cursor_override() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]12;#abcdef\x1b\\\x1b]12;?\x1b\\")
+            .unwrap();
+
+        assert_eq!(
+            terminal.pty_response_for_tests(),
+            b"\x1b]12;rgb:abab/cdcd/efef\x1b\\"
+        );
+    }
+
+    #[test]
     fn terminal_stream_unsupported_color_osc_does_not_mutate_palette() {
         let mut terminal = Terminal::init(5, 2, None).unwrap();
         let original = terminal.colors.palette;
 
         for input in [
             b"\x1b]5;0;#ff0000\x1b\\".as_slice(),
-            b"\x1b]10;#ff0000\x1b\\".as_slice(),
-            b"\x1b]11;#ff0000\x1b\\".as_slice(),
-            b"\x1b]12;#ff0000\x1b\\".as_slice(),
-            b"\x1b]110\x1b\\".as_slice(),
-            b"\x1b]111\x1b\\".as_slice(),
-            b"\x1b]112\x1b\\".as_slice(),
+            b"\x1b]13;#ff0000\x1b\\".as_slice(),
+            b"\x1b]19;?\x1b\\".as_slice(),
+            b"\x1b]113\x1b\\".as_slice(),
+            b"\x1b]119\x1b\\".as_slice(),
         ] {
             terminal.next_slice(input).unwrap();
         }

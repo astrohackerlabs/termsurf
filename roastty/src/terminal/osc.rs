@@ -33,10 +33,54 @@ pub(super) struct ColorRequests {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ColorRequest {
-    SetPalette { index: u8, rgb: super::color::Rgb },
-    QueryPalette { index: u8, terminator: Terminator },
-    ResetPalette { index: u8 },
+    SetPalette {
+        index: u8,
+        rgb: super::color::Rgb,
+    },
+    QueryPalette {
+        index: u8,
+        terminator: Terminator,
+    },
+    ResetPalette {
+        index: u8,
+    },
     ResetAllPalette,
+    SetDynamic {
+        target: DynamicColor,
+        rgb: super::color::Rgb,
+    },
+    QueryDynamic {
+        target: DynamicColor,
+        terminator: Terminator,
+    },
+    ResetDynamic {
+        target: DynamicColor,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DynamicColor {
+    Foreground,
+    Background,
+    Cursor,
+}
+
+impl DynamicColor {
+    pub(super) const fn number(self) -> u8 {
+        match self {
+            Self::Foreground => 10,
+            Self::Background => 11,
+            Self::Cursor => 12,
+        }
+    }
+
+    const fn next(self) -> Option<Self> {
+        match self {
+            Self::Foreground => Some(Self::Background),
+            Self::Background => Some(Self::Cursor),
+            Self::Cursor => None,
+        }
+    }
 }
 
 impl ColorRequests {
@@ -130,7 +174,19 @@ impl Parser {
             }
             b"7" => valid_utf8(rest).map(|url| Command::ReportPwd { url }),
             b"8" => parse_hyperlink(rest),
+            b"10" => parse_dynamic_set_query(rest, DynamicColor::Foreground, terminator)
+                .map(|requests| Command::ColorOperation { requests }),
+            b"11" => parse_dynamic_set_query(rest, DynamicColor::Background, terminator)
+                .map(|requests| Command::ColorOperation { requests }),
+            b"12" => parse_dynamic_set_query(rest, DynamicColor::Cursor, terminator)
+                .map(|requests| Command::ColorOperation { requests }),
             b"104" => parse_osc104(rest).map(|requests| Command::ColorOperation { requests }),
+            b"110" => parse_dynamic_reset(rest, DynamicColor::Foreground)
+                .map(|requests| Command::ColorOperation { requests }),
+            b"111" => parse_dynamic_reset(rest, DynamicColor::Background)
+                .map(|requests| Command::ColorOperation { requests }),
+            b"112" => parse_dynamic_reset(rest, DynamicColor::Cursor)
+                .map(|requests| Command::ColorOperation { requests }),
             _ => None,
         }
     }
@@ -211,6 +267,50 @@ fn parse_osc104(bytes: &[u8]) -> Option<ColorRequests> {
     }
 
     (result.len > 0).then_some(result)
+}
+
+fn parse_dynamic_set_query(
+    bytes: &[u8],
+    start: DynamicColor,
+    terminator: Terminator,
+) -> Option<ColorRequests> {
+    let mut result = ColorRequests::new();
+    let mut target = start;
+
+    for spec in bytes.split(|byte| *byte == b';') {
+        if spec.is_empty() {
+            continue;
+        }
+        let request = if spec == b"?" {
+            ColorRequest::QueryDynamic { target, terminator }
+        } else {
+            let Some(rgb) = parse_rgb(spec) else {
+                break;
+            };
+            ColorRequest::SetDynamic { target, rgb }
+        };
+        if result.push(request).is_err() {
+            return None;
+        }
+        let Some(next) = target.next() else {
+            break;
+        };
+        target = next;
+    }
+
+    (result.len > 0).then_some(result)
+}
+
+fn parse_dynamic_reset(bytes: &[u8], target: DynamicColor) -> Option<ColorRequests> {
+    if bytes
+        .split(|byte| *byte == b';')
+        .any(|field| !field.is_empty())
+    {
+        return None;
+    }
+    let mut result = ColorRequests::new();
+    result.push(ColorRequest::ResetDynamic { target }).ok()?;
+    Some(result)
 }
 
 fn parse_palette_index(bytes: &[u8]) -> Result<u8, ()> {
@@ -493,6 +593,129 @@ mod tests {
                 requests: vec![ColorRequest::ResetAllPalette],
             })
         );
+    }
+
+    #[test]
+    fn osc_parser_dynamic_color_set_query_operations() {
+        assert_eq!(
+            parse(b"10;#112233"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetDynamic {
+                    target: DynamicColor::Foreground,
+                    rgb: super::super::color::Rgb::new(0x11, 0x22, 0x33),
+                }],
+            })
+        );
+        assert_eq!(
+            parse(b"11;#445566;#778899"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![
+                    ColorRequest::SetDynamic {
+                        target: DynamicColor::Background,
+                        rgb: super::super::color::Rgb::new(0x44, 0x55, 0x66),
+                    },
+                    ColorRequest::SetDynamic {
+                        target: DynamicColor::Cursor,
+                        rgb: super::super::color::Rgb::new(0x77, 0x88, 0x99),
+                    },
+                ],
+            })
+        );
+        assert_eq!(
+            parse_with_terminator(b"12;?", Terminator::Bel),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::QueryDynamic {
+                    target: DynamicColor::Cursor,
+                    terminator: Terminator::Bel,
+                }],
+            })
+        );
+        assert_eq!(
+            parse_with_terminator(b"12;?", Terminator::St),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::QueryDynamic {
+                    target: DynamicColor::Cursor,
+                    terminator: Terminator::St,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn osc_parser_dynamic_color_sequences_advance_and_skip_empty_fields() {
+        assert_eq!(
+            parse(b"10;?;#010203;?"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![
+                    ColorRequest::QueryDynamic {
+                        target: DynamicColor::Foreground,
+                        terminator: Terminator::St,
+                    },
+                    ColorRequest::SetDynamic {
+                        target: DynamicColor::Background,
+                        rgb: super::super::color::Rgb::new(1, 2, 3),
+                    },
+                    ColorRequest::QueryDynamic {
+                        target: DynamicColor::Cursor,
+                        terminator: Terminator::St,
+                    },
+                ],
+            })
+        );
+        assert_eq!(
+            parse(b"10;;#0a0b0c"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetDynamic {
+                    target: DynamicColor::Foreground,
+                    rgb: super::super::color::Rgb::new(0x0a, 0x0b, 0x0c),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn osc_parser_dynamic_color_invalid_data_preserves_prior_requests() {
+        assert_eq!(
+            parse(b"10;#010203;red;#040506"),
+            Some(OwnedCommand::ColorOperation {
+                requests: vec![ColorRequest::SetDynamic {
+                    target: DynamicColor::Foreground,
+                    rgb: super::super::color::Rgb::new(1, 2, 3),
+                }],
+            })
+        );
+        assert_eq!(parse(b"10;red"), None);
+    }
+
+    #[test]
+    fn osc_parser_dynamic_reset_operations() {
+        for (input, target) in [
+            (b"110".as_slice(), DynamicColor::Foreground),
+            (b"111".as_slice(), DynamicColor::Background),
+            (b"112".as_slice(), DynamicColor::Cursor),
+            (b"110;".as_slice(), DynamicColor::Foreground),
+            (b"111;".as_slice(), DynamicColor::Background),
+            (b"112;".as_slice(), DynamicColor::Cursor),
+        ] {
+            assert_eq!(
+                parse(input),
+                Some(OwnedCommand::ColorOperation {
+                    requests: vec![ColorRequest::ResetDynamic { target }],
+                })
+            );
+        }
+
+        assert_eq!(parse(b"110;0"), None);
+        assert_eq!(parse(b"111;?"), None);
+        assert_eq!(parse(b"112;#ffffff"), None);
+    }
+
+    #[test]
+    fn osc_parser_unsupported_dynamic_color_families_are_ignored() {
+        assert_eq!(parse(b"13;#ffffff"), None);
+        assert_eq!(parse(b"19;?"), None);
+        assert_eq!(parse(b"113"), None);
+        assert_eq!(parse(b"119"), None);
     }
 
     #[test]
