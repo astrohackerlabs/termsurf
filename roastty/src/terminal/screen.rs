@@ -8,10 +8,12 @@ use super::kitty;
 use super::page::{SemanticContent, SemanticPrompt};
 use super::page_list::{
     BasicCellWriteError, CodepointMapEntry, GridRef, GridRefPointError, PageList,
-    PageListAllocError, PageOutputFormat, PageStringWithPinMap, StyledCellWriteError,
+    PageListAllocError, PageOutputFormat, PageStringWithPinMap, SelectLineOptions,
+    StyledCellWriteError,
 };
 use super::point;
 use super::selection;
+use super::selection_codepoints;
 use super::sgr;
 use super::size::CellCountInt;
 use super::style;
@@ -24,6 +26,7 @@ pub(super) struct Screen {
     charset: ScreenCharsetState,
     kitty_keyboard: kitty::KeyFlagStack,
     pages: PageList,
+    selection: Option<selection::Selection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,10 +163,12 @@ impl Screen {
             charset: ScreenCharsetState::default(),
             kitty_keyboard: kitty::KeyFlagStack::default(),
             pages: PageList::init(cols, rows, max_scrollback_rows)?,
+            selection: None,
         })
     }
 
     pub(super) fn reset(&mut self) {
+        self.clear_selection();
         self.pages.reset();
         self.pages.mark_active_rows_dirty();
         self.cursor = ScreenCursor::default();
@@ -1033,6 +1038,216 @@ impl Screen {
         tag: point::Tag,
     ) -> Result<point::Coordinate, GridRefPointError> {
         self.pages.point_from_grid_ref(node, x, y, tag)
+    }
+
+    pub(super) fn selection_from_grid_refs(
+        &self,
+        start: GridRef,
+        end: GridRef,
+        rectangle: bool,
+    ) -> Result<selection::Selection, GridRefPointError> {
+        let start = self.pages.pin_from_grid_ref(start.node, start.x, start.y)?;
+        let end = self.pages.pin_from_grid_ref(end.node, end.x, end.y)?;
+        Ok(selection::Selection::new(start, end, rectangle))
+    }
+
+    pub(super) fn active_selection(&self) -> Option<selection::Selection> {
+        self.selection
+    }
+
+    pub(super) fn active_selection_grid_refs(&self) -> Option<(GridRef, GridRef, bool)> {
+        let selection = self.selection?;
+        Some((
+            GridRef::from(selection.start()),
+            GridRef::from(selection.end()),
+            selection.rectangle(),
+        ))
+    }
+
+    pub(super) fn set_selection(
+        &mut self,
+        start: GridRef,
+        end: GridRef,
+        rectangle: bool,
+    ) -> Result<(), GridRefPointError> {
+        let selection = self.selection_from_grid_refs(start, end, rectangle)?;
+        let Some(tracked) = self.pages.track_selection(selection) else {
+            return Err(GridRefPointError::InvalidValue);
+        };
+        if let Some(old) = self.selection.replace(tracked) {
+            self.pages.untrack_selection(old);
+        }
+        Ok(())
+    }
+
+    pub(super) fn clear_selection(&mut self) {
+        if let Some(selection) = self.selection.take() {
+            self.pages.untrack_selection(selection);
+        }
+    }
+
+    pub(super) fn select_word(
+        &self,
+        ref_: GridRef,
+        boundary_codepoints: &[u32],
+    ) -> Result<Option<(GridRef, GridRef, bool)>, GridRefPointError> {
+        let pin = self.pages.pin_from_grid_ref(ref_.node, ref_.x, ref_.y)?;
+        Ok(self
+            .pages
+            .select_word(pin, boundary_codepoints)
+            .map(|selection| {
+                (
+                    GridRef::from(selection.start()),
+                    GridRef::from(selection.end()),
+                    selection.rectangle(),
+                )
+            }))
+    }
+
+    pub(super) fn select_word_between(
+        &self,
+        start: GridRef,
+        end: GridRef,
+        boundary_codepoints: &[u32],
+    ) -> Result<Option<(GridRef, GridRef, bool)>, GridRefPointError> {
+        let start = self.pages.pin_from_grid_ref(start.node, start.x, start.y)?;
+        let end = self.pages.pin_from_grid_ref(end.node, end.x, end.y)?;
+        Ok(self
+            .pages
+            .select_word_between(start, end, boundary_codepoints)
+            .map(|selection| {
+                (
+                    GridRef::from(selection.start()),
+                    GridRef::from(selection.end()),
+                    selection.rectangle(),
+                )
+            }))
+    }
+
+    pub(super) fn select_line(
+        &self,
+        ref_: GridRef,
+        whitespace: Option<&[u32]>,
+        semantic_prompt_boundary: bool,
+    ) -> Result<Option<(GridRef, GridRef, bool)>, GridRefPointError> {
+        let pin = self.pages.pin_from_grid_ref(ref_.node, ref_.x, ref_.y)?;
+        Ok(self
+            .pages
+            .select_line(SelectLineOptions {
+                pin,
+                whitespace: whitespace.or(Some(selection_codepoints::DEFAULT_LINE_WHITESPACE)),
+                semantic_prompt_boundary,
+            })
+            .map(|selection| {
+                (
+                    GridRef::from(selection.start()),
+                    GridRef::from(selection.end()),
+                    selection.rectangle(),
+                )
+            }))
+    }
+
+    pub(super) fn select_all(&self) -> Option<(GridRef, GridRef, bool)> {
+        self.pages.select_all().map(|selection| {
+            (
+                GridRef::from(selection.start()),
+                GridRef::from(selection.end()),
+                selection.rectangle(),
+            )
+        })
+    }
+
+    pub(super) fn select_output(
+        &self,
+        ref_: GridRef,
+    ) -> Result<Option<(GridRef, GridRef, bool)>, GridRefPointError> {
+        let pin = self.pages.pin_from_grid_ref(ref_.node, ref_.x, ref_.y)?;
+        Ok(self.pages.select_output(pin).map(|selection| {
+            (
+                GridRef::from(selection.start()),
+                GridRef::from(selection.end()),
+                selection.rectangle(),
+            )
+        }))
+    }
+
+    pub(super) fn selection_order(
+        &self,
+        start: GridRef,
+        end: GridRef,
+        rectangle: bool,
+    ) -> Result<Option<selection::Order>, GridRefPointError> {
+        let selection = self.selection_from_grid_refs(start, end, rectangle)?;
+        Ok(self.pages.selection_order(selection))
+    }
+
+    pub(super) fn selection_ordered(
+        &self,
+        start: GridRef,
+        end: GridRef,
+        rectangle: bool,
+        desired: selection::Order,
+    ) -> Result<Option<(GridRef, GridRef, bool)>, GridRefPointError> {
+        let selection = self.selection_from_grid_refs(start, end, rectangle)?;
+        Ok(self
+            .pages
+            .selection_ordered(selection, desired)
+            .map(|selection| {
+                (
+                    GridRef::from(selection.start()),
+                    GridRef::from(selection.end()),
+                    selection.rectangle(),
+                )
+            }))
+    }
+
+    pub(super) fn selection_contains(
+        &self,
+        start: GridRef,
+        end: GridRef,
+        rectangle: bool,
+        point: point::Point,
+    ) -> Result<Option<bool>, GridRefPointError> {
+        let selection = self.selection_from_grid_refs(start, end, rectangle)?;
+        let pin = self
+            .pages
+            .pin(point)
+            .ok_or(GridRefPointError::InvalidValue)?;
+        Ok(self.pages.selection_contains(selection, pin))
+    }
+
+    pub(super) fn selection_equal(
+        &self,
+        a_start: GridRef,
+        a_end: GridRef,
+        a_rectangle: bool,
+        b_start: GridRef,
+        b_end: GridRef,
+        b_rectangle: bool,
+    ) -> Result<bool, GridRefPointError> {
+        let a = self.selection_from_grid_refs(a_start, a_end, a_rectangle)?;
+        let b = self.selection_from_grid_refs(b_start, b_end, b_rectangle)?;
+        Ok(a == b)
+    }
+
+    pub(super) fn selection_adjust(
+        &self,
+        start: GridRef,
+        end: GridRef,
+        rectangle: bool,
+        adjustment: selection::Adjustment,
+    ) -> Result<Option<(GridRef, GridRef, bool)>, GridRefPointError> {
+        let mut selection = self.selection_from_grid_refs(start, end, rectangle)?;
+        Ok(self
+            .pages
+            .selection_adjust(&mut selection, adjustment)
+            .map(|_| {
+                (
+                    GridRef::from(selection.start()),
+                    GridRef::from(selection.end()),
+                    selection.rectangle(),
+                )
+            }))
     }
 
     pub(super) fn set_kitty_keyboard(&mut self, mode: kitty::KeySetMode, flags: kitty::KeyFlags) {

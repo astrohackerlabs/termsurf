@@ -102,6 +102,7 @@ typedef enum {
   ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND = 12,
   ROASTTY_TERMINAL_OPTION_COLOR_CURSOR = 13,
   ROASTTY_TERMINAL_OPTION_COLOR_PALETTE = 14,
+  ROASTTY_TERMINAL_OPTION_SELECTION = 21,
 } roastty_terminal_option_e;
 
 typedef enum {
@@ -192,6 +193,70 @@ typedef struct {
   uint16_t x;
   uint16_t y;
 } roastty_grid_ref_s;
+
+typedef enum {
+  ROASTTY_SELECTION_FORMAT_PLAIN = 0,
+  ROASTTY_SELECTION_FORMAT_VT = 1,
+  ROASTTY_SELECTION_FORMAT_HTML = 2,
+} roastty_selection_format_e;
+
+typedef enum {
+  ROASTTY_SELECTION_ORDER_FORWARD = 0,
+  ROASTTY_SELECTION_ORDER_REVERSE = 1,
+  ROASTTY_SELECTION_ORDER_MIRRORED_FORWARD = 2,
+  ROASTTY_SELECTION_ORDER_MIRRORED_REVERSE = 3,
+} roastty_selection_order_e;
+
+typedef enum {
+  ROASTTY_SELECTION_ADJUST_LEFT = 0,
+  ROASTTY_SELECTION_ADJUST_RIGHT = 1,
+  ROASTTY_SELECTION_ADJUST_UP = 2,
+  ROASTTY_SELECTION_ADJUST_DOWN = 3,
+  ROASTTY_SELECTION_ADJUST_HOME = 4,
+  ROASTTY_SELECTION_ADJUST_END = 5,
+  ROASTTY_SELECTION_ADJUST_PAGE_UP = 6,
+  ROASTTY_SELECTION_ADJUST_PAGE_DOWN = 7,
+  ROASTTY_SELECTION_ADJUST_BEGINNING_OF_LINE = 8,
+  ROASTTY_SELECTION_ADJUST_END_OF_LINE = 9,
+} roastty_selection_adjustment_e;
+
+typedef struct {
+  size_t size;
+  roastty_grid_ref_s start;
+  roastty_grid_ref_s end;
+  bool rectangle;
+} roastty_selection_s;
+
+typedef struct {
+  size_t size;
+  roastty_grid_ref_s ref;
+  const uint32_t* boundary_codepoints;
+  size_t boundary_codepoints_len;
+} roastty_terminal_select_word_options_s;
+
+typedef struct {
+  size_t size;
+  roastty_grid_ref_s start;
+  roastty_grid_ref_s end;
+  const uint32_t* boundary_codepoints;
+  size_t boundary_codepoints_len;
+} roastty_terminal_select_word_between_options_s;
+
+typedef struct {
+  size_t size;
+  roastty_grid_ref_s ref;
+  const uint32_t* whitespace;
+  size_t whitespace_len;
+  bool semantic_prompt_boundary;
+} roastty_terminal_select_line_options_s;
+
+typedef struct {
+  size_t size;
+  roastty_selection_format_e emit;
+  bool unwrap;
+  bool trim;
+  const roastty_selection_s* selection;
+} roastty_terminal_selection_format_options_s;
 
 typedef struct {
   uint16_t conformance_level;
@@ -779,6 +844,57 @@ roastty_terminal_point_from_grid_ref(roastty_terminal_t,
                                      const roastty_grid_ref_s*,
                                      roastty_point_tag_e,
                                      roastty_point_coordinate_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_select_word(roastty_terminal_t,
+                             const roastty_terminal_select_word_options_s*,
+                             roastty_selection_s*);
+ROASTTY_API roastty_result_e roastty_terminal_select_word_between(
+    roastty_terminal_t,
+    const roastty_terminal_select_word_between_options_s*,
+    roastty_selection_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_select_line(roastty_terminal_t,
+                             const roastty_terminal_select_line_options_s*,
+                             roastty_selection_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_select_all(roastty_terminal_t, roastty_selection_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_select_output(roastty_terminal_t,
+                               const roastty_grid_ref_s*,
+                               roastty_selection_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_selection_adjust(roastty_terminal_t,
+                                  roastty_selection_s*,
+                                  roastty_selection_adjustment_e);
+ROASTTY_API roastty_result_e
+roastty_terminal_selection_order(roastty_terminal_t,
+                                 const roastty_selection_s*,
+                                 roastty_selection_order_e*);
+ROASTTY_API roastty_result_e
+roastty_terminal_selection_ordered(roastty_terminal_t,
+                                   const roastty_selection_s*,
+                                   roastty_selection_order_e,
+                                   roastty_selection_s*);
+ROASTTY_API roastty_result_e
+roastty_terminal_selection_contains(roastty_terminal_t,
+                                    const roastty_selection_s*,
+                                    roastty_point_s,
+                                    bool*);
+ROASTTY_API roastty_result_e
+roastty_terminal_selection_equal(roastty_terminal_t,
+                                 const roastty_selection_s*,
+                                 const roastty_selection_s*,
+                                 bool*);
+ROASTTY_API roastty_result_e roastty_terminal_selection_format_buf(
+    roastty_terminal_t,
+    const roastty_terminal_selection_format_options_s*,
+    uint8_t*,
+    size_t,
+    size_t*);
+ROASTTY_API roastty_result_e
+roastty_terminal_selection_format(roastty_terminal_t,
+                                  const roastty_terminal_selection_format_options_s*,
+                                  roastty_string_s*);
 
 ROASTTY_API roastty_result_e roastty_key_event_new(roastty_key_event_t*);
 ROASTTY_API void roastty_key_event_free(roastty_key_event_t);

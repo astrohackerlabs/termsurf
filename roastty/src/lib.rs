@@ -9,8 +9,9 @@ use terminal::terminal::{
     Terminal as InnerTerminal, TerminalBellCallback, TerminalColorKind,
     TerminalColorSchemeCallback, TerminalDeviceAttributesCallback, TerminalEnquiryCallback,
     TerminalGridRef, TerminalGridRefPointError, TerminalPointTag, TerminalScreen,
-    TerminalSizeCallback, TerminalStreamError, TerminalTitleChangedCallback,
-    TerminalWritePtyCallback, TerminalXtversionCallback,
+    TerminalSelection, TerminalSelectionAdjustment, TerminalSelectionFormat,
+    TerminalSelectionOrder, TerminalSizeCallback, TerminalStreamError,
+    TerminalTitleChangedCallback, TerminalWritePtyCallback, TerminalXtversionCallback,
 };
 use terminal::{mouse, mouse_encode, osc, point, size_report};
 
@@ -99,6 +100,44 @@ const ROASTTY_TERMINAL_OPTION_COLOR_FOREGROUND: c_int = 11;
 const ROASTTY_TERMINAL_OPTION_COLOR_BACKGROUND: c_int = 12;
 const ROASTTY_TERMINAL_OPTION_COLOR_CURSOR: c_int = 13;
 const ROASTTY_TERMINAL_OPTION_COLOR_PALETTE: c_int = 14;
+const ROASTTY_TERMINAL_OPTION_SELECTION: c_int = 21;
+
+#[allow(dead_code)]
+const ROASTTY_SELECTION_FORMAT_PLAIN: c_int = 0;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_FORMAT_VT: c_int = 1;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_FORMAT_HTML: c_int = 2;
+
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ORDER_FORWARD: c_int = 0;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ORDER_REVERSE: c_int = 1;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ORDER_MIRRORED_FORWARD: c_int = 2;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ORDER_MIRRORED_REVERSE: c_int = 3;
+
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_LEFT: c_int = 0;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_RIGHT: c_int = 1;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_UP: c_int = 2;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_DOWN: c_int = 3;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_HOME: c_int = 4;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_END: c_int = 5;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_PAGE_UP: c_int = 6;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_PAGE_DOWN: c_int = 7;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_BEGINNING_OF_LINE: c_int = 8;
+#[allow(dead_code)]
+const ROASTTY_SELECTION_ADJUST_END_OF_LINE: c_int = 9;
 
 #[allow(dead_code)]
 const ROASTTY_COLOR_SCHEME_LIGHT: c_int = 0;
@@ -279,6 +318,54 @@ pub struct RoasttyGridRef {
     node: *mut c_void,
     x: u16,
     y: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttySelection {
+    size: usize,
+    start: RoasttyGridRef,
+    end: RoasttyGridRef,
+    rectangle: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyTerminalSelectWordOptions {
+    size: usize,
+    ref_: RoasttyGridRef,
+    boundary_codepoints: *const u32,
+    boundary_codepoints_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyTerminalSelectWordBetweenOptions {
+    size: usize,
+    start: RoasttyGridRef,
+    end: RoasttyGridRef,
+    boundary_codepoints: *const u32,
+    boundary_codepoints_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyTerminalSelectLineOptions {
+    size: usize,
+    ref_: RoasttyGridRef,
+    whitespace: *const u32,
+    whitespace_len: usize,
+    semantic_prompt_boundary: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyTerminalSelectionFormatOptions {
+    size: usize,
+    emit: c_int,
+    unwrap: bool,
+    trim: bool,
+    selection: *const RoasttySelection,
 }
 
 #[repr(C)]
@@ -991,6 +1078,12 @@ unsafe fn terminal_get_write(terminal: &InnerTerminal, data: c_int, out: *mut c_
         ROASTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT => {
             write_palette(out, terminal.palette_default())
         }
+        ROASTTY_TERMINAL_DATA_SELECTION => {
+            let Some(selection) = terminal.active_selection() else {
+                return ROASTTY_NO_VALUE;
+            };
+            write_selection(out.cast::<RoasttySelection>(), selection);
+        }
         ROASTTY_TERMINAL_DATA_SCROLLBAR
         | ROASTTY_TERMINAL_DATA_CURSOR_STYLE
         | ROASTTY_TERMINAL_DATA_TITLE
@@ -1002,7 +1095,6 @@ unsafe fn terminal_get_write(terminal: &InnerTerminal, data: c_int, out: *mut c_
         | ROASTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE
         | ROASTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_SHARED_MEM
         | ROASTTY_TERMINAL_DATA_KITTY_GRAPHICS
-        | ROASTTY_TERMINAL_DATA_SELECTION
         | ROASTTY_TERMINAL_DATA_VIEWPORT_ACTIVE => return ROASTTY_NO_VALUE,
         _ => return ROASTTY_INVALID_VALUE,
     }
@@ -1053,6 +1145,181 @@ fn write_grid_ref(out: *mut RoasttyGridRef, grid_ref: TerminalGridRef) {
             x: grid_ref.x,
             y: grid_ref.y,
         });
+    }
+}
+
+fn read_grid_ref_value(value: RoasttyGridRef) -> Result<TerminalGridRef, c_int> {
+    if value.size < std::mem::size_of::<RoasttyGridRef>() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+    Ok(TerminalGridRef {
+        node: value.node.cast_const().cast(),
+        x: value.x,
+        y: value.y,
+    })
+}
+
+fn read_grid_ref_ptr(grid_ref: *const RoasttyGridRef) -> Result<TerminalGridRef, c_int> {
+    if grid_ref.is_null() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    let grid_ref_size = unsafe { (*grid_ref).size };
+    if grid_ref_size < std::mem::size_of::<RoasttyGridRef>() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    read_grid_ref_value(unsafe { grid_ref.read() })
+}
+
+fn write_selection(out: *mut RoasttySelection, selection: TerminalSelection) {
+    unsafe {
+        out.write(RoasttySelection {
+            size: std::mem::size_of::<RoasttySelection>(),
+            start: RoasttyGridRef {
+                size: std::mem::size_of::<RoasttyGridRef>(),
+                node: selection.start.node.cast_mut().cast(),
+                x: selection.start.x,
+                y: selection.start.y,
+            },
+            end: RoasttyGridRef {
+                size: std::mem::size_of::<RoasttyGridRef>(),
+                node: selection.end.node.cast_mut().cast(),
+                x: selection.end.x,
+                y: selection.end.y,
+            },
+            rectangle: selection.rectangle,
+        });
+    }
+}
+
+fn read_selection(selection: *const RoasttySelection) -> Result<TerminalSelection, c_int> {
+    if selection.is_null() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    let selection_size = unsafe { (*selection).size };
+    if selection_size < std::mem::size_of::<RoasttySelection>() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    Ok(TerminalSelection {
+        start: read_grid_ref_ptr(unsafe { ptr::addr_of!((*selection).start) })?,
+        end: read_grid_ref_ptr(unsafe { ptr::addr_of!((*selection).end) })?,
+        rectangle: unsafe { ptr::addr_of!((*selection).rectangle).read() },
+    })
+}
+
+fn read_sized_abi<T: Copy>(value: *const T) -> Result<T, c_int> {
+    if value.is_null() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    let size = unsafe { value.cast::<usize>().read() };
+    if size < std::mem::size_of::<T>() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    Ok(unsafe { value.read() })
+}
+
+fn validate_sized_abi<T>(value: *const T) -> Result<(), c_int> {
+    if value.is_null() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    let size = unsafe { value.cast::<usize>().read() };
+    if size < std::mem::size_of::<T>() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    Ok(())
+}
+
+fn read_select_word_options(
+    options: *const RoasttyTerminalSelectWordOptions,
+) -> Result<(TerminalGridRef, Option<Vec<u32>>), c_int> {
+    validate_sized_abi(options)?;
+    let ref_ = read_grid_ref_ptr(unsafe { ptr::addr_of!((*options).ref_) })?;
+    let boundary_codepoints = unsafe { ptr::addr_of!((*options).boundary_codepoints).read() };
+    let boundary_codepoints_len =
+        unsafe { ptr::addr_of!((*options).boundary_codepoints_len).read() };
+    Ok((
+        ref_,
+        read_codepoints(boundary_codepoints, boundary_codepoints_len)?,
+    ))
+}
+
+fn read_select_word_between_options(
+    options: *const RoasttyTerminalSelectWordBetweenOptions,
+) -> Result<(TerminalGridRef, TerminalGridRef, Option<Vec<u32>>), c_int> {
+    validate_sized_abi(options)?;
+    let start = read_grid_ref_ptr(unsafe { ptr::addr_of!((*options).start) })?;
+    let end = read_grid_ref_ptr(unsafe { ptr::addr_of!((*options).end) })?;
+    let boundary_codepoints = unsafe { ptr::addr_of!((*options).boundary_codepoints).read() };
+    let boundary_codepoints_len =
+        unsafe { ptr::addr_of!((*options).boundary_codepoints_len).read() };
+    Ok((
+        start,
+        end,
+        read_codepoints(boundary_codepoints, boundary_codepoints_len)?,
+    ))
+}
+
+fn read_select_line_options(
+    options: *const RoasttyTerminalSelectLineOptions,
+) -> Result<(TerminalGridRef, Option<Vec<u32>>, bool), c_int> {
+    validate_sized_abi(options)?;
+    let ref_ = read_grid_ref_ptr(unsafe { ptr::addr_of!((*options).ref_) })?;
+    let whitespace = unsafe { ptr::addr_of!((*options).whitespace).read() };
+    let whitespace_len = unsafe { ptr::addr_of!((*options).whitespace_len).read() };
+    let semantic_prompt_boundary =
+        unsafe { ptr::addr_of!((*options).semantic_prompt_boundary).read() };
+    Ok((
+        ref_,
+        read_codepoints(whitespace, whitespace_len)?,
+        semantic_prompt_boundary,
+    ))
+}
+
+fn read_codepoints(ptr: *const u32, len: usize) -> Result<Option<Vec<u32>>, c_int> {
+    if len == 0 {
+        return if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(Vec::new()))
+        };
+    }
+    if ptr.is_null() {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+
+    let values = unsafe { slice::from_raw_parts(ptr, len) };
+    if values
+        .iter()
+        .any(|codepoint| char::from_u32(*codepoint).is_none())
+    {
+        return Err(ROASTTY_INVALID_VALUE);
+    }
+    Ok(Some(values.to_vec()))
+}
+
+fn selection_format_from_raw(value: c_int) -> Result<TerminalSelectionFormat, c_int> {
+    TerminalSelectionFormat::from_raw(value).ok_or(ROASTTY_INVALID_VALUE)
+}
+
+fn selection_order_from_raw(value: c_int) -> Result<TerminalSelectionOrder, c_int> {
+    TerminalSelectionOrder::from_raw(value).ok_or(ROASTTY_INVALID_VALUE)
+}
+
+fn selection_adjustment_from_raw(value: c_int) -> Result<TerminalSelectionAdjustment, c_int> {
+    TerminalSelectionAdjustment::from_raw(value).ok_or(ROASTTY_INVALID_VALUE)
+}
+
+fn grid_ref_error_result(error: TerminalGridRefPointError) -> c_int {
+    match error {
+        TerminalGridRefPointError::InvalidValue => ROASTTY_INVALID_VALUE,
+        TerminalGridRefPointError::NoValue => ROASTTY_NO_VALUE,
     }
 }
 
@@ -1527,6 +1794,20 @@ pub extern "C" fn roastty_terminal_set(
             terminal.terminal.set_palette_default(read_palette(value));
             ROASTTY_SUCCESS
         }
+        ROASTTY_TERMINAL_OPTION_SELECTION => {
+            let selection = if value.is_null() {
+                None
+            } else {
+                match read_selection(value.cast::<RoasttySelection>()) {
+                    Ok(selection) => Some(selection),
+                    Err(error) => return error,
+                }
+            };
+            match terminal.terminal.set_selection(selection) {
+                Ok(()) => ROASTTY_SUCCESS,
+                Err(error) => grid_ref_error_result(error),
+            }
+        }
         _ => ROASTTY_INVALID_VALUE,
     }
 }
@@ -1755,16 +2036,8 @@ pub extern "C" fn roastty_terminal_point_from_grid_ref(
         return ROASTTY_INVALID_VALUE;
     };
 
-    let grid_ref_size = unsafe { (*grid_ref).size };
-    if grid_ref_size < std::mem::size_of::<RoasttyGridRef>() {
+    let Ok(grid_ref) = read_grid_ref_ptr(grid_ref) else {
         return ROASTTY_INVALID_VALUE;
-    }
-
-    let grid_ref = unsafe { grid_ref.read() };
-    let grid_ref = TerminalGridRef {
-        node: grid_ref.node.cast_const().cast(),
-        x: grid_ref.x,
-        y: grid_ref.y,
     };
     match terminal.terminal.point_from_grid_ref(grid_ref, tag) {
         Ok(coord) => {
@@ -1776,9 +2049,370 @@ pub extern "C" fn roastty_terminal_point_from_grid_ref(
             }
             ROASTTY_SUCCESS
         }
-        Err(TerminalGridRefPointError::InvalidValue) => ROASTTY_INVALID_VALUE,
-        Err(TerminalGridRefPointError::NoValue) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_select_word(
+    terminal: RoasttyTerminal,
+    options: *const RoasttyTerminalSelectWordOptions,
+    out_selection: *mut RoasttySelection,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_selection.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let (ref_, boundary_codepoints) = match read_select_word_options(options) {
+        Ok(options) => options,
+        Err(error) => return error,
+    };
+
+    match terminal
+        .terminal
+        .select_word(ref_, boundary_codepoints.as_deref())
+    {
+        Ok(Some(selection)) => {
+            write_selection(out_selection, selection);
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_select_word_between(
+    terminal: RoasttyTerminal,
+    options: *const RoasttyTerminalSelectWordBetweenOptions,
+    out_selection: *mut RoasttySelection,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_selection.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let (start, end, boundary_codepoints) = match read_select_word_between_options(options) {
+        Ok(options) => options,
+        Err(error) => return error,
+    };
+
+    match terminal
+        .terminal
+        .select_word_between(start, end, boundary_codepoints.as_deref())
+    {
+        Ok(Some(selection)) => {
+            write_selection(out_selection, selection);
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_select_line(
+    terminal: RoasttyTerminal,
+    options: *const RoasttyTerminalSelectLineOptions,
+    out_selection: *mut RoasttySelection,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_selection.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let (ref_, whitespace, semantic_prompt_boundary) = match read_select_line_options(options) {
+        Ok(options) => options,
+        Err(error) => return error,
+    };
+
+    match terminal
+        .terminal
+        .select_line(ref_, whitespace.as_deref(), semantic_prompt_boundary)
+    {
+        Ok(Some(selection)) => {
+            write_selection(out_selection, selection);
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_select_all(
+    terminal: RoasttyTerminal,
+    out_selection: *mut RoasttySelection,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_selection.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let Some(selection) = terminal.terminal.select_all() else {
+        return ROASTTY_NO_VALUE;
+    };
+    write_selection(out_selection, selection);
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_select_output(
+    terminal: RoasttyTerminal,
+    ref_: *const RoasttyGridRef,
+    out_selection: *mut RoasttySelection,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_selection.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let ref_ = match read_grid_ref_ptr(ref_) {
+        Ok(ref_) => ref_,
+        Err(error) => return error,
+    };
+    match terminal.terminal.select_output(ref_) {
+        Ok(Some(selection)) => {
+            write_selection(out_selection, selection);
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_adjust(
+    terminal: RoasttyTerminal,
+    selection: *mut RoasttySelection,
+    adjustment: c_int,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let adjustment = match selection_adjustment_from_raw(adjustment) {
+        Ok(adjustment) => adjustment,
+        Err(error) => return error,
+    };
+    let input = match read_selection(selection.cast_const()) {
+        Ok(selection) => selection,
+        Err(error) => return error,
+    };
+    match terminal.terminal.selection_adjust(input, adjustment) {
+        Ok(Some(output)) => {
+            write_selection(selection, output);
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_order(
+    terminal: RoasttyTerminal,
+    selection: *const RoasttySelection,
+    out_order: *mut c_int,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_order.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let selection = match read_selection(selection) {
+        Ok(selection) => selection,
+        Err(error) => return error,
+    };
+    match terminal.terminal.selection_order(selection) {
+        Ok(Some(order)) => {
+            unsafe {
+                out_order.write(order.raw());
+            }
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_ordered(
+    terminal: RoasttyTerminal,
+    selection: *const RoasttySelection,
+    desired_order: c_int,
+    out_selection: *mut RoasttySelection,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_selection.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let desired_order = match selection_order_from_raw(desired_order) {
+        Ok(desired_order) => desired_order,
+        Err(error) => return error,
+    };
+    let selection = match read_selection(selection) {
+        Ok(selection) => selection,
+        Err(error) => return error,
+    };
+    match terminal
+        .terminal
+        .selection_ordered(selection, desired_order)
+    {
+        Ok(Some(selection)) => {
+            write_selection(out_selection, selection);
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_contains(
+    terminal: RoasttyTerminal,
+    selection: *const RoasttySelection,
+    point: RoasttyPoint,
+    out_contains: *mut bool,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_contains.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let selection = match read_selection(selection) {
+        Ok(selection) => selection,
+        Err(error) => return error,
+    };
+    let Some(tag) = point_tag_from_raw(point.tag) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let coord = point_coordinate(point, tag);
+    match terminal.terminal.selection_contains(
+        selection,
+        tag,
+        point::Coordinate::new(coord.x, coord.y),
+    ) {
+        Ok(Some(contains)) => {
+            unsafe {
+                out_contains.write(contains);
+            }
+            ROASTTY_SUCCESS
+        }
+        Ok(None) => ROASTTY_NO_VALUE,
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_equal(
+    terminal: RoasttyTerminal,
+    a: *const RoasttySelection,
+    b: *const RoasttySelection,
+    out_equal: *mut bool,
+) -> c_int {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_equal.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let a = match read_selection(a) {
+        Ok(selection) => selection,
+        Err(error) => return error,
+    };
+    let b = match read_selection(b) {
+        Ok(selection) => selection,
+        Err(error) => return error,
+    };
+    match terminal.terminal.selection_equal(a, b) {
+        Ok(equal) => {
+            unsafe {
+                out_equal.write(equal);
+            }
+            ROASTTY_SUCCESS
+        }
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+fn terminal_selection_format_text(
+    terminal: RoasttyTerminal,
+    options: *const RoasttyTerminalSelectionFormatOptions,
+) -> Result<String, c_int> {
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return Err(ROASTTY_INVALID_VALUE);
+    };
+    let options: RoasttyTerminalSelectionFormatOptions = read_sized_abi(options)?;
+    let format = selection_format_from_raw(options.emit)?;
+    let selection = if options.selection.is_null() {
+        None
+    } else {
+        Some(read_selection(options.selection)?)
+    };
+    terminal
+        .terminal
+        .selection_format(format, options.unwrap, options.trim, selection)
+        .map_err(grid_ref_error_result)
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_format_buf(
+    terminal: RoasttyTerminal,
+    options: *const RoasttyTerminalSelectionFormatOptions,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    if out_written.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    if out.is_null() && out_len > 0 {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let text = match terminal_selection_format_text(terminal, options) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    let bytes = text.as_bytes();
+    unsafe {
+        out_written.write(bytes.len());
+    }
+    if out.is_null() || out_len < bytes.len() {
+        return ROASTTY_OUT_OF_SPACE;
+    }
+    if !bytes.is_empty() {
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+        }
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_terminal_selection_format(
+    terminal: RoasttyTerminal,
+    options: *const RoasttyTerminalSelectionFormatOptions,
+    out: *mut RoasttyString,
+) -> c_int {
+    write_empty_string(out);
+    if out.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let text = match terminal_selection_format_text(terminal, options) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    write_copied_string(out, text.as_bytes())
 }
 
 #[no_mangle]
@@ -2834,6 +3468,29 @@ mod tests {
             _ => RoasttyPointValue { active: coordinate },
         };
         RoasttyPoint { tag, value }
+    }
+
+    fn terminal_grid_ref_at(terminal: RoasttyTerminal, x: u16, y: u32) -> RoasttyGridRef {
+        let mut grid_ref = RoasttyGridRef::default();
+        assert_eq!(
+            roastty_terminal_grid_ref(terminal, c_point(ROASTTY_POINT_ACTIVE, x, y), &mut grid_ref),
+            ROASTTY_SUCCESS
+        );
+        grid_ref
+    }
+
+    fn terminal_selection(
+        terminal: RoasttyTerminal,
+        start: (u16, u32),
+        end: (u16, u32),
+        rectangle: bool,
+    ) -> RoasttySelection {
+        RoasttySelection {
+            size: std::mem::size_of::<RoasttySelection>(),
+            start: terminal_grid_ref_at(terminal, start.0, start.1),
+            end: terminal_grid_ref_at(terminal, end.0, end.1),
+            rectangle,
+        }
     }
 
     fn take_roastty_string(value: RoasttyString) -> Vec<u8> {
@@ -4681,6 +5338,489 @@ mod tests {
         assert!(foreign_result == ROASTTY_NO_VALUE || foreign_result == ROASTTY_INVALID_VALUE);
 
         roastty_terminal_free(other);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_selection_c_abi_layout_and_values_are_stable() {
+        assert_eq!(ROASTTY_TERMINAL_OPTION_SELECTION, 21);
+        assert_eq!(ROASTTY_SELECTION_FORMAT_PLAIN, 0);
+        assert_eq!(ROASTTY_SELECTION_FORMAT_VT, 1);
+        assert_eq!(ROASTTY_SELECTION_FORMAT_HTML, 2);
+        assert_eq!(ROASTTY_SELECTION_ORDER_FORWARD, 0);
+        assert_eq!(ROASTTY_SELECTION_ORDER_REVERSE, 1);
+        assert_eq!(ROASTTY_SELECTION_ORDER_MIRRORED_FORWARD, 2);
+        assert_eq!(ROASTTY_SELECTION_ORDER_MIRRORED_REVERSE, 3);
+        assert_eq!(ROASTTY_SELECTION_ADJUST_LEFT, 0);
+        assert_eq!(ROASTTY_SELECTION_ADJUST_END_OF_LINE, 9);
+
+        assert_eq!(std::mem::size_of::<RoasttySelection>(), 64);
+        assert_eq!(std::mem::align_of::<RoasttySelection>(), 8);
+        assert_eq!(std::mem::offset_of!(RoasttySelection, size), 0);
+        assert_eq!(std::mem::offset_of!(RoasttySelection, start), 8);
+        assert_eq!(std::mem::offset_of!(RoasttySelection, end), 32);
+        assert_eq!(std::mem::offset_of!(RoasttySelection, rectangle), 56);
+
+        assert_eq!(std::mem::size_of::<RoasttyTerminalSelectWordOptions>(), 48);
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectWordOptions, ref_),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectWordOptions, boundary_codepoints),
+            32
+        );
+        assert_eq!(
+            std::mem::size_of::<RoasttyTerminalSelectWordBetweenOptions>(),
+            72
+        );
+        assert_eq!(
+            std::mem::align_of::<RoasttyTerminalSelectWordBetweenOptions>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectWordBetweenOptions, size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectWordBetweenOptions, start),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectWordBetweenOptions, end),
+            32
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectWordBetweenOptions, boundary_codepoints),
+            56
+        );
+        assert_eq!(std::mem::size_of::<RoasttyTerminalSelectLineOptions>(), 56);
+        assert_eq!(std::mem::align_of::<RoasttyTerminalSelectLineOptions>(), 8);
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectLineOptions, size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectLineOptions, ref_),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectLineOptions, whitespace),
+            32
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectLineOptions, semantic_prompt_boundary),
+            48
+        );
+        assert_eq!(
+            std::mem::size_of::<RoasttyTerminalSelectionFormatOptions>(),
+            24
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectionFormatOptions, emit),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyTerminalSelectionFormatOptions, selection),
+            16
+        );
+    }
+
+    #[test]
+    fn terminal_selection_c_abi_set_get_clear_and_format_active_selection() {
+        let terminal = new_terminal(20, 2);
+        write_terminal(terminal, b"Hello World");
+        let selection = terminal_selection(terminal, (6, 0), (10, 0), false);
+
+        let mut out = RoasttySelection::default();
+        assert_eq!(
+            roastty_terminal_get(
+                terminal,
+                ROASTTY_TERMINAL_DATA_SELECTION,
+                &mut out as *mut _ as *mut c_void
+            ),
+            ROASTTY_NO_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_set(
+                terminal,
+                ROASTTY_TERMINAL_OPTION_SELECTION,
+                &selection as *const _ as *const c_void
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_terminal_get(
+                terminal,
+                ROASTTY_TERMINAL_DATA_SELECTION,
+                &mut out as *mut _ as *mut c_void
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(out.size, std::mem::size_of::<RoasttySelection>());
+        assert_eq!(out.start.size, std::mem::size_of::<RoasttyGridRef>());
+        assert_eq!(out.end.size, std::mem::size_of::<RoasttyGridRef>());
+        assert_eq!((out.start.x, out.start.y), (6, 0));
+        assert_eq!((out.end.x, out.end.y), (10, 0));
+
+        let options = RoasttyTerminalSelectionFormatOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectionFormatOptions>(),
+            emit: ROASTTY_SELECTION_FORMAT_PLAIN,
+            unwrap: true,
+            trim: true,
+            selection: ptr::null(),
+        };
+        let mut written = 0usize;
+        assert_eq!(
+            roastty_terminal_selection_format_buf(
+                terminal,
+                &options,
+                ptr::null_mut(),
+                0,
+                &mut written
+            ),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(written, 5);
+
+        let mut small = [0u8; 2];
+        assert_eq!(
+            roastty_terminal_selection_format_buf(
+                terminal,
+                &options,
+                small.as_mut_ptr(),
+                small.len(),
+                &mut written
+            ),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(written, 5);
+
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            roastty_terminal_selection_format_buf(
+                terminal,
+                &options,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(&buf[..written], b"World");
+
+        let explicit = terminal_selection(terminal, (0, 0), (4, 0), false);
+        let explicit_options = RoasttyTerminalSelectionFormatOptions {
+            selection: &explicit,
+            ..options
+        };
+        let mut formatted = empty_string();
+        assert_eq!(
+            roastty_terminal_selection_format(terminal, &explicit_options, &mut formatted),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(take_roastty_string(formatted), b"Hello");
+
+        formatted = empty_string();
+        assert_eq!(
+            roastty_terminal_set(terminal, ROASTTY_TERMINAL_OPTION_SELECTION, ptr::null()),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_terminal_get(
+                terminal,
+                ROASTTY_TERMINAL_DATA_SELECTION,
+                &mut out as *mut _ as *mut c_void
+            ),
+            ROASTTY_NO_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_selection_format(terminal, &options, &mut formatted),
+            ROASTTY_NO_VALUE
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_selection_c_abi_select_helpers_and_relations() {
+        let terminal = new_terminal(20, 3);
+        write_terminal(terminal, b"Hello World\r\nsecond line");
+        let ref_ = terminal_grid_ref_at(terminal, 7, 0);
+        let options = RoasttyTerminalSelectWordOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectWordOptions>(),
+            ref_,
+            boundary_codepoints: ptr::null(),
+            boundary_codepoints_len: 0,
+        };
+        let mut selection = RoasttySelection::default();
+        assert_eq!(
+            roastty_terminal_select_word(terminal, &options, &mut selection),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((selection.start.x, selection.start.y), (6, 0));
+        assert_eq!((selection.end.x, selection.end.y), (10, 0));
+
+        let mut order = -1;
+        assert_eq!(
+            roastty_terminal_selection_order(terminal, &selection, &mut order),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(order, ROASTTY_SELECTION_ORDER_FORWARD);
+
+        let mut contains = false;
+        assert_eq!(
+            roastty_terminal_selection_contains(
+                terminal,
+                &selection,
+                c_point(ROASTTY_POINT_SCREEN, 8, 0),
+                &mut contains
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert!(contains);
+
+        let mut equal = false;
+        assert_eq!(
+            roastty_terminal_selection_equal(terminal, &selection, &selection, &mut equal),
+            ROASTTY_SUCCESS
+        );
+        assert!(equal);
+
+        let mut adjusted = selection;
+        assert_eq!(
+            roastty_terminal_selection_adjust(
+                terminal,
+                &mut adjusted,
+                ROASTTY_SELECTION_ADJUST_END_OF_LINE
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(adjusted.end.x, 19);
+
+        let mut reversed = RoasttySelection::default();
+        assert_eq!(
+            roastty_terminal_selection_ordered(
+                terminal,
+                &selection,
+                ROASTTY_SELECTION_ORDER_REVERSE,
+                &mut reversed
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((reversed.start.x, reversed.end.x), (10, 6));
+
+        let line_options = RoasttyTerminalSelectLineOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectLineOptions>(),
+            ref_: terminal_grid_ref_at(terminal, 2, 1),
+            whitespace: ptr::null(),
+            whitespace_len: 0,
+            semantic_prompt_boundary: false,
+        };
+        assert_eq!(
+            roastty_terminal_select_line(terminal, &line_options, &mut selection),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((selection.start.x, selection.start.y), (0, 1));
+
+        assert_eq!(
+            roastty_terminal_select_all(terminal, &mut selection),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((selection.start.x, selection.start.y), (0, 0));
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn terminal_selection_c_abi_validates_inputs_atomically() {
+        let terminal = new_terminal(20, 2);
+        write_terminal(terminal, b"Hello World");
+        let selection = terminal_selection(terminal, (6, 0), (10, 0), false);
+        assert_eq!(
+            roastty_terminal_set(
+                terminal,
+                ROASTTY_TERMINAL_OPTION_SELECTION,
+                &selection as *const _ as *const c_void
+            ),
+            ROASTTY_SUCCESS
+        );
+
+        let mut invalid_replacement = selection;
+        invalid_replacement.end.x = 99;
+        assert_eq!(
+            roastty_terminal_set(
+                terminal,
+                ROASTTY_TERMINAL_OPTION_SELECTION,
+                &invalid_replacement as *const _ as *const c_void
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        let mut out = RoasttySelection::default();
+        assert_eq!(
+            roastty_terminal_get(
+                terminal,
+                ROASTTY_TERMINAL_DATA_SELECTION,
+                &mut out as *mut _ as *mut c_void
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((out.start.x, out.end.x), (6, 10));
+
+        let mut undersized = selection;
+        undersized.size = std::mem::size_of::<RoasttySelection>() - 1;
+        let mut result = RoasttySelection::default();
+        let mut equal = false;
+        assert_eq!(
+            roastty_terminal_selection_equal(terminal, &undersized, &selection, &mut equal),
+            ROASTTY_INVALID_VALUE
+        );
+        let mut undersized_nested = selection;
+        undersized_nested.start.size = std::mem::size_of::<RoasttyGridRef>() - 1;
+        assert_eq!(
+            roastty_terminal_selection_equal(terminal, &undersized_nested, &selection, &mut equal),
+            ROASTTY_INVALID_VALUE
+        );
+        let mut forged_y = selection;
+        forged_y.end.y = 99;
+        let mut order = 0;
+        assert_eq!(
+            roastty_terminal_selection_order(terminal, &forged_y, &mut order),
+            ROASTTY_INVALID_VALUE
+        );
+        let other = new_terminal(20, 2);
+        assert_eq!(
+            roastty_terminal_selection_order(other, &selection, &mut order),
+            ROASTTY_NO_VALUE
+        );
+        roastty_terminal_free(other);
+
+        assert_eq!(
+            roastty_terminal_select_word(terminal, ptr::null(), &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        let mut word_options = RoasttyTerminalSelectWordOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectWordOptions>(),
+            ref_: terminal_grid_ref_at(terminal, 7, 0),
+            boundary_codepoints: ptr::null(),
+            boundary_codepoints_len: 1,
+        };
+        let original_word_options = word_options;
+        word_options.size = std::mem::size_of::<RoasttyTerminalSelectWordOptions>() - 1;
+        assert_eq!(
+            roastty_terminal_select_word(terminal, &word_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        word_options = original_word_options;
+        word_options.ref_.size = std::mem::size_of::<RoasttyGridRef>() - 1;
+        assert_eq!(
+            roastty_terminal_select_word(terminal, &word_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        word_options = original_word_options;
+        assert_eq!(
+            roastty_terminal_select_word(terminal, &word_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        let invalid_scalar = [0xD800u32];
+        word_options.boundary_codepoints = invalid_scalar.as_ptr();
+        assert_eq!(
+            roastty_terminal_select_word(terminal, &word_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        word_options.boundary_codepoints_len = 0;
+        assert_eq!(
+            roastty_terminal_select_word(terminal, &word_options, &mut result),
+            ROASTTY_SUCCESS
+        );
+
+        let mut between_options = RoasttyTerminalSelectWordBetweenOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectWordBetweenOptions>(),
+            start: terminal_grid_ref_at(terminal, 0, 0),
+            end: terminal_grid_ref_at(terminal, 10, 0),
+            boundary_codepoints: ptr::null(),
+            boundary_codepoints_len: 0,
+        };
+        between_options.size = std::mem::size_of::<RoasttyTerminalSelectWordBetweenOptions>() - 1;
+        assert_eq!(
+            roastty_terminal_select_word_between(terminal, &between_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        between_options.size = std::mem::size_of::<RoasttyTerminalSelectWordBetweenOptions>();
+        between_options.end.size = std::mem::size_of::<RoasttyGridRef>() - 1;
+        assert_eq!(
+            roastty_terminal_select_word_between(terminal, &between_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let mut line_options = RoasttyTerminalSelectLineOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectLineOptions>(),
+            ref_: terminal_grid_ref_at(terminal, 0, 0),
+            whitespace: ptr::null(),
+            whitespace_len: 0,
+            semantic_prompt_boundary: false,
+        };
+        line_options.size = std::mem::size_of::<RoasttyTerminalSelectLineOptions>() - 1;
+        assert_eq!(
+            roastty_terminal_select_line(terminal, &line_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        line_options.size = std::mem::size_of::<RoasttyTerminalSelectLineOptions>();
+        line_options.ref_.size = std::mem::size_of::<RoasttyGridRef>() - 1;
+        assert_eq!(
+            roastty_terminal_select_line(terminal, &line_options, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let mut options = RoasttyTerminalSelectionFormatOptions {
+            size: std::mem::size_of::<RoasttyTerminalSelectionFormatOptions>(),
+            emit: 99,
+            unwrap: true,
+            trim: true,
+            selection: ptr::null(),
+        };
+        options.size = std::mem::size_of::<RoasttyTerminalSelectionFormatOptions>() - 1;
+        let mut formatted = empty_string();
+        assert_eq!(
+            roastty_terminal_selection_format(terminal, &options, &mut formatted),
+            ROASTTY_INVALID_VALUE
+        );
+        assert!(formatted.ptr.is_null());
+        options.size = std::mem::size_of::<RoasttyTerminalSelectionFormatOptions>();
+        let mut formatted = empty_string();
+        assert_eq!(
+            roastty_terminal_selection_format(terminal, &options, &mut formatted),
+            ROASTTY_INVALID_VALUE
+        );
+        assert!(formatted.ptr.is_null());
+        assert_eq!(
+            roastty_terminal_selection_ordered(terminal, &selection, 99, &mut result),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_selection_adjust(terminal, &mut result, 99),
+            ROASTTY_INVALID_VALUE
+        );
+        let mut contains = false;
+        assert_eq!(
+            roastty_terminal_selection_contains(
+                terminal,
+                &selection,
+                c_point(99, 0, 0),
+                &mut contains
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_terminal_selection_contains(
+                terminal,
+                &selection,
+                c_point(ROASTTY_POINT_SCREEN, 99, 0),
+                &mut contains
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+
         roastty_terminal_free(terminal);
     }
 

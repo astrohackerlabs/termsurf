@@ -303,3 +303,59 @@ approves it.
 
 After implementation and result recording, the completed result must also be
 reviewed with Codex and approved before the result commit.
+
+## Result
+
+**Result:** Pass
+
+Implemented the terminal selection C ABI foundation with Roastty naming:
+
+- added `roastty_selection_s`, selection option structs, format/order/adjustment
+  enums, and exported selection functions to `roastty/include/roastty.h`;
+- added active-selection storage on `Screen` using tracked pins;
+- wired `ROASTTY_TERMINAL_OPTION_SELECTION = 21` and
+  `ROASTTY_TERMINAL_DATA_SELECTION = 31`;
+- added size-first C ABI readers for selection, nested grid refs, option
+  structs, and codepoint arrays;
+- exposed word, word-between, line, all, output, adjust, order, ordered,
+  contains, equal, buffer formatting, and Roastty-owned string formatting;
+- preserved the existing string ownership model with `roastty_string_free`
+  instead of introducing a new allocator ABI;
+- added Rust ABI tests and C harness coverage for layout, active set/get,
+  formatting, relation helpers, adjustment, invalid enum values, undersized
+  structs, invalid codepoint arrays, foreign/forged refs, and atomic
+  replacement;
+- added C harness link/smoke coverage for every new exported selection symbol.
+  The C harness checks the `select_output` no-value path because the successful
+  output-selection fixture depends on lower-level semantic prompt state that is
+  already covered by Rust tests.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/page_list.rs roastty/src/terminal/screen.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty terminal_selection_c_abi
+cargo test -p roastty terminal_grid_ref
+cargo test -p roastty terminal_get_abi
+cargo test -p roastty terminal_stream
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+All verification passed.
+
+## Conclusion
+
+Roastty now has a public selection ABI layer over the internal selection
+machinery. This closes the main dependency opened by Experiment 172: C callers
+can construct, store, query, adjust, compare, and format selections using
+grid-ref-backed values while preserving size-first ABI safety and Roastty
+ownership conventions.
+
+The next experiment can continue outward from terminal interaction state rather
+than selection foundations. Candidate next slices include terminal drag
+selection C ABI, selection/clipboard integration, or another remaining
+libroastty API surface that depends on selection now being externally
+representable.

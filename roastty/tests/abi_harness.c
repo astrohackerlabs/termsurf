@@ -240,6 +240,18 @@ static void terminal_write(roastty_terminal_t terminal, const char *bytes) {
                                    strlen(bytes)) == ROASTTY_SUCCESS);
 }
 
+static roastty_grid_ref_s terminal_grid_ref_at(roastty_terminal_t terminal,
+                                               uint16_t x,
+                                               uint32_t y) {
+  roastty_grid_ref_s ref = {0};
+  roastty_point_s point = {
+      .tag = ROASTTY_POINT_ACTIVE,
+      .value = {.active = {.x = x, .y = y}},
+  };
+  assert(roastty_terminal_grid_ref(terminal, point, &ref) == ROASTTY_SUCCESS);
+  return ref;
+}
+
 static roastty_key_mods_s empty_key_mods(void) {
   roastty_key_mods_s mods = {
       .shift = false,
@@ -802,6 +814,47 @@ static void assert_terminal_abi(void) {
   assert(offsetof(roastty_grid_ref_s, node) == 8);
   assert(offsetof(roastty_grid_ref_s, x) == 16);
   assert(offsetof(roastty_grid_ref_s, y) == 18);
+  assert(sizeof(roastty_selection_s) == 64);
+  assert(_Alignof(roastty_selection_s) == 8);
+  assert(offsetof(roastty_selection_s, size) == 0);
+  assert(offsetof(roastty_selection_s, start) == 8);
+  assert(offsetof(roastty_selection_s, end) == 32);
+  assert(offsetof(roastty_selection_s, rectangle) == 56);
+  assert(sizeof(roastty_terminal_select_word_options_s) == 48);
+  assert(offsetof(roastty_terminal_select_word_options_s, ref) == 8);
+  assert(offsetof(roastty_terminal_select_word_options_s,
+                  boundary_codepoints) == 32);
+  assert(sizeof(roastty_terminal_select_word_between_options_s) == 72);
+  assert(_Alignof(roastty_terminal_select_word_between_options_s) == 8);
+  assert(offsetof(roastty_terminal_select_word_between_options_s, size) == 0);
+  assert(offsetof(roastty_terminal_select_word_between_options_s, start) == 8);
+  assert(offsetof(roastty_terminal_select_word_between_options_s, end) == 32);
+  assert(offsetof(roastty_terminal_select_word_between_options_s,
+                  boundary_codepoints) == 56);
+  assert(offsetof(roastty_terminal_select_word_between_options_s,
+                  boundary_codepoints_len) == 64);
+  assert(sizeof(roastty_terminal_select_line_options_s) == 56);
+  assert(_Alignof(roastty_terminal_select_line_options_s) == 8);
+  assert(offsetof(roastty_terminal_select_line_options_s, size) == 0);
+  assert(offsetof(roastty_terminal_select_line_options_s, ref) == 8);
+  assert(offsetof(roastty_terminal_select_line_options_s, whitespace) == 32);
+  assert(offsetof(roastty_terminal_select_line_options_s, whitespace_len) ==
+         40);
+  assert(offsetof(roastty_terminal_select_line_options_s,
+                  semantic_prompt_boundary) == 48);
+  assert(sizeof(roastty_terminal_selection_format_options_s) == 24);
+  assert(offsetof(roastty_terminal_selection_format_options_s, emit) == 8);
+  assert(offsetof(roastty_terminal_selection_format_options_s, selection) == 16);
+  assert(ROASTTY_TERMINAL_OPTION_SELECTION == 21);
+  assert(ROASTTY_SELECTION_FORMAT_PLAIN == 0);
+  assert(ROASTTY_SELECTION_FORMAT_VT == 1);
+  assert(ROASTTY_SELECTION_FORMAT_HTML == 2);
+  assert(ROASTTY_SELECTION_ORDER_FORWARD == 0);
+  assert(ROASTTY_SELECTION_ORDER_REVERSE == 1);
+  assert(ROASTTY_SELECTION_ORDER_MIRRORED_FORWARD == 2);
+  assert(ROASTTY_SELECTION_ORDER_MIRRORED_REVERSE == 3);
+  assert(ROASTTY_SELECTION_ADJUST_LEFT == 0);
+  assert(ROASTTY_SELECTION_ADJUST_END_OF_LINE == 9);
 
   roastty_size_report_size_s report_size = {
       .rows = 24,
@@ -933,6 +986,155 @@ static void assert_terminal_abi(void) {
                                               &coord) == ROASTTY_SUCCESS);
   assert(coord.x == 2);
   assert(coord.y == 0);
+
+  roastty_terminal_t selection_terminal = NULL;
+  assert(roastty_terminal_new(20, 3, SIZE_MAX, &selection_terminal) ==
+         ROASTTY_SUCCESS);
+  terminal_write(selection_terminal, "Hello World\r\nsecond line");
+  roastty_terminal_select_word_options_s word_options = {
+      .size = sizeof(roastty_terminal_select_word_options_s),
+      .ref = terminal_grid_ref_at(selection_terminal, 7, 0),
+      .boundary_codepoints = NULL,
+      .boundary_codepoints_len = 0,
+  };
+  roastty_selection_s selection = {0};
+  assert(roastty_terminal_select_word(selection_terminal,
+                                      &word_options,
+                                      &selection) == ROASTTY_SUCCESS);
+  assert(selection.size == sizeof(roastty_selection_s));
+  assert(selection.start.size == sizeof(roastty_grid_ref_s));
+  assert(selection.end.size == sizeof(roastty_grid_ref_s));
+  assert(selection.start.x == 6);
+  assert(selection.end.x == 10);
+
+  roastty_terminal_select_word_between_options_s between_options = {
+      .size = sizeof(roastty_terminal_select_word_between_options_s),
+      .start = terminal_grid_ref_at(selection_terminal, 1, 0),
+      .end = terminal_grid_ref_at(selection_terminal, 7, 0),
+      .boundary_codepoints = NULL,
+      .boundary_codepoints_len = 0,
+  };
+  roastty_selection_s between_selection = {0};
+  assert(roastty_terminal_select_word_between(selection_terminal,
+                                              &between_options,
+                                              &between_selection) ==
+         ROASTTY_SUCCESS);
+  assert(between_selection.start.x == 0);
+  assert(between_selection.end.x == 4);
+
+  assert(roastty_terminal_set(selection_terminal,
+                              ROASTTY_TERMINAL_OPTION_SELECTION,
+                              &selection) == ROASTTY_SUCCESS);
+  roastty_selection_s active_selection = {0};
+  assert(roastty_terminal_get(selection_terminal,
+                              ROASTTY_TERMINAL_DATA_SELECTION,
+                              &active_selection) == ROASTTY_SUCCESS);
+  assert(active_selection.start.x == 6);
+  assert(active_selection.end.x == 10);
+
+  roastty_terminal_selection_format_options_s format_options = {
+      .size = sizeof(roastty_terminal_selection_format_options_s),
+      .emit = ROASTTY_SELECTION_FORMAT_PLAIN,
+      .unwrap = true,
+      .trim = true,
+      .selection = NULL,
+  };
+  size_t required = 0;
+  assert(roastty_terminal_selection_format_buf(selection_terminal,
+                                              &format_options,
+                                              NULL,
+                                              1,
+                                              &required) ==
+         ROASTTY_INVALID_VALUE);
+  assert(roastty_terminal_selection_format_buf(selection_terminal,
+                                              &format_options,
+                                              NULL,
+                                              0,
+                                              &required) ==
+         ROASTTY_OUT_OF_SPACE);
+  assert(required == 5);
+  uint8_t tiny_selection_buf[2] = {0};
+  assert(roastty_terminal_selection_format_buf(selection_terminal,
+                                              &format_options,
+                                              tiny_selection_buf,
+                                              sizeof(tiny_selection_buf),
+                                              &required) ==
+         ROASTTY_OUT_OF_SPACE);
+  assert(required == 5);
+  uint8_t selection_buf[16] = {0};
+  assert(roastty_terminal_selection_format_buf(selection_terminal,
+                                              &format_options,
+                                              selection_buf,
+                                              sizeof(selection_buf),
+                                              &required) == ROASTTY_SUCCESS);
+  assert(required == 5);
+  assert(memcmp(selection_buf, "World", required) == 0);
+
+  roastty_string_s formatted_selection = {0};
+  assert(roastty_terminal_selection_format(selection_terminal,
+                                           &format_options,
+                                           &formatted_selection) ==
+         ROASTTY_SUCCESS);
+  assert_roastty_string_eq(formatted_selection, "World");
+
+  roastty_selection_order_e order = (roastty_selection_order_e)-1;
+  assert(roastty_terminal_selection_order(selection_terminal,
+                                          &selection,
+                                          &order) == ROASTTY_SUCCESS);
+  assert(order == ROASTTY_SELECTION_ORDER_FORWARD);
+  bool contains = false;
+  assert(roastty_terminal_selection_contains(
+             selection_terminal,
+             &selection,
+             (roastty_point_s){
+                 .tag = ROASTTY_POINT_SCREEN,
+                 .value = {.screen = {.x = 8, .y = 0}},
+             },
+             &contains) == ROASTTY_SUCCESS);
+  assert(contains);
+  bool equal = false;
+  assert(roastty_terminal_selection_equal(selection_terminal,
+                                          &selection,
+                                          &active_selection,
+                                          &equal) == ROASTTY_SUCCESS);
+  assert(equal);
+  assert(roastty_terminal_selection_adjust(
+             selection_terminal,
+             &active_selection,
+             ROASTTY_SELECTION_ADJUST_END_OF_LINE) == ROASTTY_SUCCESS);
+  assert(active_selection.end.x == 19);
+
+  roastty_selection_s reversed = {0};
+  assert(roastty_terminal_selection_ordered(selection_terminal,
+                                           &selection,
+                                           ROASTTY_SELECTION_ORDER_REVERSE,
+                                           &reversed) == ROASTTY_SUCCESS);
+  assert(reversed.start.x == 10);
+  assert(reversed.end.x == 6);
+
+  roastty_terminal_select_line_options_s line_options = {
+      .size = sizeof(roastty_terminal_select_line_options_s),
+      .ref = terminal_grid_ref_at(selection_terminal, 2, 1),
+      .whitespace = NULL,
+      .whitespace_len = 0,
+      .semantic_prompt_boundary = false,
+  };
+  assert(roastty_terminal_select_line(selection_terminal,
+                                      &line_options,
+                                      &selection) == ROASTTY_SUCCESS);
+  assert(selection.start.x == 0);
+  assert(selection.start.y == 1);
+  assert(roastty_terminal_select_all(selection_terminal, &selection) ==
+         ROASTTY_SUCCESS);
+  assert(selection.start.x == 0);
+  assert(selection.start.y == 0);
+
+  roastty_selection_s output_selection = {0};
+  assert(roastty_terminal_select_output(selection_terminal,
+                                        &selection.start,
+                                        &output_selection) == ROASTTY_NO_VALUE);
+
+  roastty_terminal_free(selection_terminal);
 
   char title_buf[] = "c title";
   roastty_string_s title_input = {

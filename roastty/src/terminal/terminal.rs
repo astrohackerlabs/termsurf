@@ -21,6 +21,8 @@ use super::screen::{
     BasicPrintError, EraseDisplayError, Screen, ScreenCursorHyperlinkId, ScreenFormatter,
     ScreenFormatterContent, ScreenFormatterExtra, ScreenFormatterOptions,
 };
+use super::selection;
+use super::selection_codepoints;
 use super::sgr;
 use super::size::CellCountInt;
 use super::size_report;
@@ -108,6 +110,141 @@ pub(crate) struct TerminalGridRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TerminalSelection {
+    pub(crate) start: TerminalGridRef,
+    pub(crate) end: TerminalGridRef,
+    pub(crate) rectangle: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalSelectionFormat {
+    Plain,
+    Vt,
+    Html,
+}
+
+impl TerminalSelectionFormat {
+    pub(crate) fn from_raw(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Plain),
+            1 => Some(Self::Vt),
+            2 => Some(Self::Html),
+            _ => None,
+        }
+    }
+}
+
+impl From<TerminalSelectionFormat> for PageOutputFormat {
+    fn from(value: TerminalSelectionFormat) -> Self {
+        match value {
+            TerminalSelectionFormat::Plain => Self::Plain,
+            TerminalSelectionFormat::Vt => Self::Vt,
+            TerminalSelectionFormat::Html => Self::Html,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalSelectionOrder {
+    Forward,
+    Reverse,
+    MirroredForward,
+    MirroredReverse,
+}
+
+impl TerminalSelectionOrder {
+    pub(crate) fn from_raw(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Forward),
+            1 => Some(Self::Reverse),
+            2 => Some(Self::MirroredForward),
+            3 => Some(Self::MirroredReverse),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn raw(self) -> i32 {
+        match self {
+            Self::Forward => 0,
+            Self::Reverse => 1,
+            Self::MirroredForward => 2,
+            Self::MirroredReverse => 3,
+        }
+    }
+}
+
+impl From<selection::Order> for TerminalSelectionOrder {
+    fn from(value: selection::Order) -> Self {
+        match value {
+            selection::Order::Forward => Self::Forward,
+            selection::Order::Reverse => Self::Reverse,
+            selection::Order::MirroredForward => Self::MirroredForward,
+            selection::Order::MirroredReverse => Self::MirroredReverse,
+        }
+    }
+}
+
+impl From<TerminalSelectionOrder> for selection::Order {
+    fn from(value: TerminalSelectionOrder) -> Self {
+        match value {
+            TerminalSelectionOrder::Forward => Self::Forward,
+            TerminalSelectionOrder::Reverse => Self::Reverse,
+            TerminalSelectionOrder::MirroredForward => Self::MirroredForward,
+            TerminalSelectionOrder::MirroredReverse => Self::MirroredReverse,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalSelectionAdjustment {
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    BeginningOfLine,
+    EndOfLine,
+}
+
+impl TerminalSelectionAdjustment {
+    pub(crate) fn from_raw(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Left),
+            1 => Some(Self::Right),
+            2 => Some(Self::Up),
+            3 => Some(Self::Down),
+            4 => Some(Self::Home),
+            5 => Some(Self::End),
+            6 => Some(Self::PageUp),
+            7 => Some(Self::PageDown),
+            8 => Some(Self::BeginningOfLine),
+            9 => Some(Self::EndOfLine),
+            _ => None,
+        }
+    }
+}
+
+impl From<TerminalSelectionAdjustment> for selection::Adjustment {
+    fn from(value: TerminalSelectionAdjustment) -> Self {
+        match value {
+            TerminalSelectionAdjustment::Left => Self::Left,
+            TerminalSelectionAdjustment::Right => Self::Right,
+            TerminalSelectionAdjustment::Up => Self::Up,
+            TerminalSelectionAdjustment::Down => Self::Down,
+            TerminalSelectionAdjustment::Home => Self::Home,
+            TerminalSelectionAdjustment::End => Self::End,
+            TerminalSelectionAdjustment::PageUp => Self::PageUp,
+            TerminalSelectionAdjustment::PageDown => Self::PageDown,
+            TerminalSelectionAdjustment::BeginningOfLine => Self::BeginningOfLine,
+            TerminalSelectionAdjustment::EndOfLine => Self::EndOfLine,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalGridRefPointError {
     InvalidValue,
     NoValue,
@@ -115,6 +252,16 @@ pub(crate) enum TerminalGridRefPointError {
 
 impl From<GridRef> for TerminalGridRef {
     fn from(value: GridRef) -> Self {
+        Self {
+            node: value.node,
+            x: value.x,
+            y: value.y,
+        }
+    }
+}
+
+impl From<TerminalGridRef> for GridRef {
+    fn from(value: TerminalGridRef) -> Self {
         Self {
             node: value.node,
             x: value.x,
@@ -735,6 +882,217 @@ impl Terminal {
             .active()
             .point_from_grid_ref(grid_ref.node, grid_ref.x, grid_ref.y, tag.into())
             .map_err(Into::into)
+    }
+
+    fn selection_from_tuple(
+        selection: Option<(GridRef, GridRef, bool)>,
+    ) -> Option<TerminalSelection> {
+        let (start, end, rectangle) = selection?;
+        Some(TerminalSelection {
+            start: start.into(),
+            end: end.into(),
+            rectangle,
+        })
+    }
+
+    pub(crate) fn active_selection(&self) -> Option<TerminalSelection> {
+        Self::selection_from_tuple(self.screens.active().active_selection_grid_refs())
+    }
+
+    pub(crate) fn set_selection(
+        &mut self,
+        selection: Option<TerminalSelection>,
+    ) -> Result<(), TerminalGridRefPointError> {
+        let Some(selection) = selection else {
+            self.screens.active_mut().clear_selection();
+            return Ok(());
+        };
+        self.screens
+            .active_mut()
+            .set_selection(
+                selection.start.into(),
+                selection.end.into(),
+                selection.rectangle,
+            )
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn select_word(
+        &self,
+        ref_: TerminalGridRef,
+        boundary_codepoints: Option<&[u32]>,
+    ) -> Result<Option<TerminalSelection>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .select_word(
+                ref_.into(),
+                boundary_codepoints.unwrap_or(selection_codepoints::DEFAULT_WORD_BOUNDARIES),
+            )
+            .map(Self::selection_from_tuple)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn select_word_between(
+        &self,
+        start: TerminalGridRef,
+        end: TerminalGridRef,
+        boundary_codepoints: Option<&[u32]>,
+    ) -> Result<Option<TerminalSelection>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .select_word_between(
+                start.into(),
+                end.into(),
+                boundary_codepoints.unwrap_or(selection_codepoints::DEFAULT_WORD_BOUNDARIES),
+            )
+            .map(Self::selection_from_tuple)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn select_line(
+        &self,
+        ref_: TerminalGridRef,
+        whitespace: Option<&[u32]>,
+        semantic_prompt_boundary: bool,
+    ) -> Result<Option<TerminalSelection>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .select_line(ref_.into(), whitespace, semantic_prompt_boundary)
+            .map(Self::selection_from_tuple)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn select_all(&self) -> Option<TerminalSelection> {
+        Self::selection_from_tuple(self.screens.active().select_all())
+    }
+
+    pub(crate) fn select_output(
+        &self,
+        ref_: TerminalGridRef,
+    ) -> Result<Option<TerminalSelection>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .select_output(ref_.into())
+            .map(Self::selection_from_tuple)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn selection_adjust(
+        &self,
+        selection: TerminalSelection,
+        adjustment: TerminalSelectionAdjustment,
+    ) -> Result<Option<TerminalSelection>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .selection_adjust(
+                selection.start.into(),
+                selection.end.into(),
+                selection.rectangle,
+                adjustment.into(),
+            )
+            .map(Self::selection_from_tuple)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn selection_order(
+        &self,
+        selection: TerminalSelection,
+    ) -> Result<Option<TerminalSelectionOrder>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .selection_order(
+                selection.start.into(),
+                selection.end.into(),
+                selection.rectangle,
+            )
+            .map(|order| order.map(Into::into))
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn selection_ordered(
+        &self,
+        selection: TerminalSelection,
+        desired: TerminalSelectionOrder,
+    ) -> Result<Option<TerminalSelection>, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .selection_ordered(
+                selection.start.into(),
+                selection.end.into(),
+                selection.rectangle,
+                desired.into(),
+            )
+            .map(Self::selection_from_tuple)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn selection_contains(
+        &self,
+        selection: TerminalSelection,
+        tag: TerminalPointTag,
+        coord: super::point::Coordinate,
+    ) -> Result<Option<bool>, TerminalGridRefPointError> {
+        let point = match tag {
+            TerminalPointTag::Active => super::point::Point::active(coord),
+            TerminalPointTag::Viewport => super::point::Point::viewport(coord),
+            TerminalPointTag::Screen => super::point::Point::screen(coord),
+            TerminalPointTag::History => super::point::Point::history(coord),
+        };
+        self.screens
+            .active()
+            .selection_contains(
+                selection.start.into(),
+                selection.end.into(),
+                selection.rectangle,
+                point,
+            )
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn selection_equal(
+        &self,
+        a: TerminalSelection,
+        b: TerminalSelection,
+    ) -> Result<bool, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .selection_equal(
+                a.start.into(),
+                a.end.into(),
+                a.rectangle,
+                b.start.into(),
+                b.end.into(),
+                b.rectangle,
+            )
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn selection_format(
+        &self,
+        format: TerminalSelectionFormat,
+        unwrap: bool,
+        trim: bool,
+        selection: Option<TerminalSelection>,
+    ) -> Result<String, TerminalGridRefPointError> {
+        let selection = match selection {
+            Some(selection) => selection,
+            None => self
+                .active_selection()
+                .ok_or(TerminalGridRefPointError::NoValue)?,
+        };
+        let selection = self.screens.active().selection_from_grid_refs(
+            selection.start.into(),
+            selection.end.into(),
+            selection.rectangle,
+        )?;
+        Ok(TerminalFormatter::init(
+            self,
+            TerminalFormatterOptions::new(format.into())
+                .unwrap(unwrap)
+                .trim(trim),
+        )
+        .with_content(ScreenFormatterContent::Selection(Some(selection)))
+        .format())
     }
 
     pub(crate) fn mode_get(&self, value: u16, ansi: bool) -> Option<bool> {

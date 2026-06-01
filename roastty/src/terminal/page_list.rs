@@ -357,14 +357,14 @@ struct DragGeometry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SelectLineOptions<'a> {
-    pin: Pin,
-    whitespace: Option<&'a [u32]>,
-    semantic_prompt_boundary: bool,
+pub(super) struct SelectLineOptions<'a> {
+    pub(super) pin: Pin,
+    pub(super) whitespace: Option<&'a [u32]>,
+    pub(super) semantic_prompt_boundary: bool,
 }
 
 impl<'a> SelectLineOptions<'a> {
-    fn new(pin: Pin) -> Self {
+    pub(super) fn new(pin: Pin) -> Self {
         Self {
             pin,
             whitespace: Some(selection_codepoints::DEFAULT_LINE_WHITESPACE),
@@ -2019,6 +2019,19 @@ impl PageList {
         y: CellCountInt,
         tag: point::Tag,
     ) -> Result<point::Coordinate, GridRefPointError> {
+        let pin = self.pin_from_grid_ref(node_ptr, x, y)?;
+        let point = self
+            .point_from_pin(tag, pin)
+            .ok_or(GridRefPointError::NoValue)?;
+        Ok(point.coord())
+    }
+
+    pub(super) fn pin_from_grid_ref(
+        &self,
+        node_ptr: *const (),
+        x: CellCountInt,
+        y: CellCountInt,
+    ) -> Result<Pin, GridRefPointError> {
         if node_ptr.is_null() {
             return Err(GridRefPointError::InvalidValue);
         }
@@ -2041,11 +2054,7 @@ impl PageList {
             return Err(GridRefPointError::InvalidValue);
         }
 
-        let pin = Pin::new(node, y, x);
-        let point = self
-            .point_from_pin(tag, pin)
-            .ok_or(GridRefPointError::NoValue)?;
-        Ok(point.coord())
+        Ok(Pin::new(node, y, x))
     }
 
     fn point_from_pin(&self, tag: point::Tag, pin: Pin) -> Option<point::Point> {
@@ -2097,7 +2106,10 @@ impl PageList {
         ))
     }
 
-    fn selection_order(&self, selection: selection::Selection) -> Option<selection::Order> {
+    pub(super) fn selection_order(
+        &self,
+        selection: selection::Selection,
+    ) -> Option<selection::Order> {
         let (start, end) = self.selection_screen_points(selection)?;
         let start = start.coord();
         let end = end.coord();
@@ -2166,7 +2178,7 @@ impl PageList {
         })
     }
 
-    fn selection_ordered(
+    pub(super) fn selection_ordered(
         &self,
         selection: selection::Selection,
         desired: selection::Order,
@@ -2193,7 +2205,11 @@ impl PageList {
         })
     }
 
-    fn selection_contains(&self, selection: selection::Selection, pin: Pin) -> Option<bool> {
+    pub(super) fn selection_contains(
+        &self,
+        selection: selection::Selection,
+        pin: Pin,
+    ) -> Option<bool> {
         let top_left = self.selection_top_left(selection)?;
         let bottom_right = self.selection_bottom_right(selection)?;
         let top_left = self.selection_pin_screen_point(top_left)?.coord();
@@ -2312,7 +2328,7 @@ impl PageList {
         Some(node.page.size_cols() - 1)
     }
 
-    fn selection_adjust(
+    pub(super) fn selection_adjust(
         &self,
         selection: &mut selection::Selection,
         adjustment: selection::Adjustment,
@@ -2414,7 +2430,10 @@ impl PageList {
         }
     }
 
-    fn track_selection(&mut self, selection: selection::Selection) -> Option<selection::Selection> {
+    pub(super) fn track_selection(
+        &mut self,
+        selection: selection::Selection,
+    ) -> Option<selection::Selection> {
         if selection.is_tracked() {
             return None;
         }
@@ -2438,7 +2457,7 @@ impl PageList {
         ))
     }
 
-    fn untrack_selection(&mut self, selection: selection::Selection) {
+    pub(super) fn untrack_selection(&mut self, selection: selection::Selection) {
         let Some((start, end)) = selection.tracked_pins() else {
             return;
         };
@@ -5484,7 +5503,7 @@ impl PageList {
         self.pin_at_absolute_row(target_row, target_x, pin.garbage)
     }
 
-    fn select_all(&self) -> Option<selection::Selection> {
+    pub(super) fn select_all(&self) -> Option<selection::Selection> {
         let start = {
             let mut result = None;
             for pin in self.cell_iterator(
@@ -5524,7 +5543,7 @@ impl PageList {
         Some(selection::Selection::new(start, end, false))
     }
 
-    fn select_output(&self, pin: Pin) -> Option<selection::Selection> {
+    pub(super) fn select_output(&self, pin: Pin) -> Option<selection::Selection> {
         if pin.garbage || !self.pin_is_valid(&pin) {
             return None;
         }
@@ -5564,7 +5583,10 @@ impl PageList {
         Some(selection::Selection::new(start, trimmed_end?, false))
     }
 
-    fn select_line(&self, options: SelectLineOptions<'_>) -> Option<selection::Selection> {
+    pub(super) fn select_line(
+        &self,
+        options: SelectLineOptions<'_>,
+    ) -> Option<selection::Selection> {
         let pin = options.pin;
         if pin.garbage || !self.pin_is_valid(&pin) {
             return None;
@@ -5734,7 +5756,11 @@ impl PageList {
         Some(selection::Selection::new(start, end, false))
     }
 
-    fn select_word(&self, pin: Pin, boundary_codepoints: &[u32]) -> Option<selection::Selection> {
+    pub(super) fn select_word(
+        &self,
+        pin: Pin,
+        boundary_codepoints: &[u32],
+    ) -> Option<selection::Selection> {
         if pin.garbage || !self.pin_is_valid(&pin) {
             return None;
         }
@@ -5811,7 +5837,7 @@ impl PageList {
         Some(selection::Selection::new(start, end, false))
     }
 
-    fn select_word_between(
+    pub(super) fn select_word_between(
         &self,
         start: Pin,
         end: Pin,
