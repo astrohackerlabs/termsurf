@@ -284,6 +284,8 @@ No experiment may proceed to the next stage until the required review passes.
   — **Pass**
 - [Experiment 87: Port HTML Formatter Point Map](87-port-html-formatter-point-map.md)
   — **Pass**
+- [Experiment 88: Port Styled Formatter Pin Maps](88-port-styled-formatter-pin-maps.md)
+  — **Designed**
 
 ## Non-Goals
 
