@@ -5,6 +5,7 @@ use super::color;
 use super::cursor;
 use super::hyperlink;
 use super::kitty;
+use super::kitty::graphics_storage::ImageStorage;
 use super::page::{SemanticContent, SemanticPrompt};
 use super::page_list::{
     BasicCellWriteError, CodepointMapEntry, DragGeometry, GridRef, GridRefPointError, PageList,
@@ -25,6 +26,7 @@ pub(super) struct Screen {
     saved_cursor: Option<ScreenSavedCursor>,
     charset: ScreenCharsetState,
     kitty_keyboard: kitty::KeyFlagStack,
+    kitty_images: ImageStorage,
     pages: PageList,
     selection: Option<selection::Selection>,
 }
@@ -162,6 +164,7 @@ impl Screen {
             saved_cursor: None,
             charset: ScreenCharsetState::default(),
             kitty_keyboard: kitty::KeyFlagStack::default(),
+            kitty_images: ImageStorage::new(),
             pages: PageList::init(cols, rows, max_scrollback_rows)?,
             selection: None,
         })
@@ -175,10 +178,19 @@ impl Screen {
         self.saved_cursor = None;
         self.charset = ScreenCharsetState::default();
         self.kitty_keyboard = kitty::KeyFlagStack::default();
+        self.kitty_images = ImageStorage::new();
     }
 
     pub(super) fn mark_active_rows_dirty(&mut self) {
         self.pages.mark_active_rows_dirty();
+    }
+
+    pub(super) fn kitty_images(&self) -> &ImageStorage {
+        &self.kitty_images
+    }
+
+    pub(super) fn kitty_images_mut(&mut self) -> &mut ImageStorage {
+        &mut self.kitty_images
     }
 
     pub(super) fn top_left_pin(&self) -> super::page_list::Pin {

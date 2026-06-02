@@ -165,3 +165,73 @@ semantics deferred.
 - Do not skip Codex design review. If the design review finds a real issue, fix
   it and re-review before committing this experiment design.
 - Do not skip Codex result review after implementation.
+
+## Result
+
+**Result:** Pass
+
+Implemented terminal dispatch for Kitty graphics APC sequences.
+
+The implementation adds screen-local Kitty image storage and resets it with the
+screen. Terminal stream handling now accumulates APC payloads, selects Kitty
+graphics only when the first APC byte is `G`, drains non-Kitty APCs, ignores
+malformed/over-limit Kitty payloads without mutating text state, and executes
+completed Kitty graphics commands against the active screen.
+
+Query, transmit, unsupported combined transmit/display, delete, and animation
+commands route through the existing `graphics_exec::execute(...)` path. Display
+commands use the active cursor cell and the storage-side
+`display_with_location(...)` helper, with a narrow terminal wrapper preserving
+storage-disabled behavior and quiet filtering. `CursorMovement::After` remains
+deferred and does not move the cursor.
+
+Added focused terminal-stream tests for:
+
+- non-Kitty APC drain behavior;
+- malformed and over-limit Kitty APC handling;
+- query responses;
+- direct transmit storage;
+- quiet transmit response suppression;
+- display placement at the current cursor cell;
+- display quiet filtering, including successful `q=2` suppression;
+- disabled image storage;
+- display by newest image number;
+- virtual display placement;
+- deferred cursor-after behavior;
+- separate primary/alternate screen storage;
+- reset behavior for image storage and partial APC parser state.
+
+Codex result review initially found a real quiet-filtering bug: display `q=2`
+was suppressing failures only, while query/transmit suppress all responses for
+`Quiet::Failures`. The implementation was fixed to mirror `graphics_exec`, a
+successful `q=2` display test was added, and Codex re-review found no remaining
+issues.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/terminal/terminal.rs roastty/src/terminal/screen.rs roastty/src/terminal/kitty/mod.rs roastty/src/terminal/kitty/graphics_command.rs roastty/src/terminal/kitty/graphics_exec.rs roastty/src/terminal/kitty/graphics_storage.rs
+cargo test -p roastty kitty_graphics_command
+cargo test -p roastty kitty_graphics_exec
+cargo test -p roastty kitty_graphics_storage
+cargo test -p roastty terminal_stream_kitty_graphics
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+The focused Kitty terminal dispatch suite passed with 14 tests. The full Roastty
+suite passed with 1,994 Rust tests plus the C ABI harness.
+
+## Conclusion
+
+Roastty terminal input now reaches Kitty graphics storage. A terminal stream can
+receive Kitty APC sequences, store/query/transmit images, create display
+placements at the active cursor cell, and emit Kitty protocol responses through
+the existing PTY response path.
+
+The next experiment should move from terminal dispatch toward renderer-facing
+state access and/or tracked placement ownership. Rendering, public C ABI,
+tracked page pins, cursor-after movement, deletion execution, animation
+execution, Unicode virtual placement rendering, and atomic transmit-and-display
+semantics are still deferred.

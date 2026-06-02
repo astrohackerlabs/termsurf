@@ -9,6 +9,10 @@ use super::cursor;
 use super::dcs;
 use super::device_attributes;
 use super::device_status;
+use super::kitty::graphics_command::{Command, CommandControl, Display, Parser, Quiet, Response};
+use super::kitty::graphics_exec;
+use super::kitty::graphics_image::MAX_IMAGE_SIZE;
+use super::kitty::graphics_storage::PlacementLocation;
 use super::modes;
 use super::mouse;
 use super::osc;
@@ -45,6 +49,7 @@ pub(crate) struct Terminal {
     effects: TerminalEffects,
     stream: stream::Stream,
     dcs: dcs::Handler,
+    kitty_graphics: KittyGraphicsApc,
     flags: TerminalFlags,
     title: TerminalTitle,
     pwd: TerminalPwd,
@@ -679,7 +684,89 @@ struct TerminalStreamHandler<'a> {
     next_implicit_hyperlink_id: &'a mut u32,
     previous_char: &'a mut Option<char>,
     dcs: &'a mut dcs::Handler,
+    kitty_graphics: &'a mut KittyGraphicsApc,
     flags: &'a mut TerminalFlags,
+}
+
+#[derive(Debug)]
+struct KittyGraphicsApc {
+    state: KittyGraphicsApcState,
+    max_bytes: usize,
+}
+
+#[derive(Debug)]
+enum KittyGraphicsApcState {
+    Idle,
+    PendingFirstByte,
+    Draining,
+    Parsing(Parser),
+    Failed,
+}
+
+impl Default for KittyGraphicsApc {
+    fn default() -> Self {
+        Self {
+            state: KittyGraphicsApcState::Idle,
+            max_bytes: MAX_IMAGE_SIZE,
+        }
+    }
+}
+
+impl KittyGraphicsApc {
+    fn reset(&mut self) {
+        self.state = KittyGraphicsApcState::Idle;
+    }
+
+    fn start(&mut self) {
+        self.state = KittyGraphicsApcState::PendingFirstByte;
+    }
+
+    fn put(&mut self, byte: u8) {
+        match &mut self.state {
+            KittyGraphicsApcState::Idle => {}
+            KittyGraphicsApcState::PendingFirstByte => {
+                if byte == b'G' {
+                    self.state = KittyGraphicsApcState::Parsing(Parser::new(self.max_bytes));
+                } else {
+                    self.state = KittyGraphicsApcState::Draining;
+                }
+            }
+            KittyGraphicsApcState::Parsing(parser) => {
+                if parser.feed(byte).is_err() {
+                    self.state = KittyGraphicsApcState::Failed;
+                }
+            }
+            KittyGraphicsApcState::Draining | KittyGraphicsApcState::Failed => {}
+        }
+    }
+
+    fn end(&mut self) -> Option<Command> {
+        let state = std::mem::replace(&mut self.state, KittyGraphicsApcState::Idle);
+        match state {
+            KittyGraphicsApcState::Parsing(mut parser) => parser.complete().ok(),
+            KittyGraphicsApcState::Idle
+            | KittyGraphicsApcState::PendingFirstByte
+            | KittyGraphicsApcState::Draining
+            | KittyGraphicsApcState::Failed => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn set_max_bytes_for_tests(&mut self, max_bytes: usize) {
+        self.max_bytes = max_bytes;
+    }
+}
+
+fn filter_kitty_graphics_response(
+    response: Response<'static>,
+    quiet: Quiet,
+) -> Option<Response<'static>> {
+    match quiet {
+        Quiet::No => Some(response),
+        Quiet::Ok if response.ok() => None,
+        Quiet::Ok => Some(response),
+        Quiet::Failures => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -731,6 +818,7 @@ impl Terminal {
             effects: TerminalEffects::default(),
             stream: stream::Stream::init(),
             dcs: dcs::Handler::new(),
+            kitty_graphics: KittyGraphicsApc::default(),
             flags: TerminalFlags::default(),
             title: TerminalTitle::default(),
             pwd: TerminalPwd::default(),
@@ -752,6 +840,7 @@ impl Terminal {
             effects,
             stream,
             dcs,
+            kitty_graphics,
             title,
             pwd,
             mouse_shape,
@@ -775,6 +864,7 @@ impl Terminal {
             next_implicit_hyperlink_id,
             previous_char,
             dcs,
+            kitty_graphics,
             flags,
         };
         stream.next_slice(input, &mut handler)
@@ -788,6 +878,7 @@ impl Terminal {
         self.title.clear();
         self.pwd.clear();
         self.dcs = dcs::Handler::new();
+        self.kitty_graphics.reset();
         self.flags = TerminalFlags::default();
         self.previous_char = None;
     }
@@ -2096,7 +2187,20 @@ impl Handler for TerminalStreamHandler<'_> {
                 }
                 Ok(())
             }
-            Action::ApcStart | Action::ApcPut { .. } | Action::ApcEnd => Ok(()),
+            Action::ApcStart => {
+                self.kitty_graphics.start();
+                Ok(())
+            }
+            Action::ApcPut { byte } => {
+                self.kitty_graphics.put(byte);
+                Ok(())
+            }
+            Action::ApcEnd => {
+                if let Some(command) = self.kitty_graphics.end() {
+                    self.kitty_graphics_command(command);
+                }
+                Ok(())
+            }
             Action::RequestMode { mode } => {
                 let report = self.modes.get_report(modes::ModeTag::from_mode(mode));
                 self.write_pty_response(&report.encode_vt());
@@ -2380,6 +2484,58 @@ impl TerminalStreamHandler<'_> {
         }
     }
 
+    fn kitty_graphics_command(&mut self, command: Command) {
+        let response = match &command.control {
+            CommandControl::Display(display) => self.kitty_graphics_display(&command, *display),
+            CommandControl::Query(_)
+            | CommandControl::Transmit(_)
+            | CommandControl::TransmitAndDisplay { .. }
+            | CommandControl::Delete(_)
+            | CommandControl::TransmitAnimationFrame(_)
+            | CommandControl::ControlAnimation(_)
+            | CommandControl::ComposeAnimation(_) => {
+                graphics_exec::execute(self.screens.active_mut().kitty_images_mut(), &command)
+            }
+        };
+
+        self.write_kitty_graphics_response(response);
+    }
+
+    fn kitty_graphics_display(
+        &mut self,
+        command: &Command,
+        display: Display,
+    ) -> Option<Response<'static>> {
+        let (x, y) = self.screens.active().cursor_position();
+        let response = {
+            let storage = self.screens.active_mut().kitty_images_mut();
+            if !storage.enabled() {
+                return None;
+            }
+            graphics_exec::display_with_location(
+                storage,
+                display,
+                PlacementLocation::Cell {
+                    x: u32::from(x),
+                    y: u32::from(y),
+                },
+            )
+        };
+
+        filter_kitty_graphics_response(response, command.quiet)
+    }
+
+    fn write_kitty_graphics_response(&mut self, response: Option<Response<'static>>) {
+        let Some(response) = response else {
+            return;
+        };
+        let mut bytes = Vec::new();
+        response.encode(&mut bytes);
+        if !bytes.is_empty() {
+            self.write_pty_response_bytes(&bytes);
+        }
+    }
+
     fn bell(&mut self) {
         if let Some(callback) = self.effects.bell {
             unsafe {
@@ -2510,6 +2666,7 @@ impl TerminalStreamHandler<'_> {
         self.title.clear();
         self.pwd.clear();
         *self.dcs = dcs::Handler::new();
+        self.kitty_graphics.reset();
         *self.flags = TerminalFlags::default();
         *self.previous_char = None;
         Ok(())
@@ -3447,6 +3604,7 @@ mod tests {
     use crate::terminal::charsets;
     use crate::terminal::color;
     use crate::terminal::cursor;
+    use crate::terminal::kitty::graphics_storage::{PlacementId, PlacementKey, PlacementLocation};
     use crate::terminal::kitty::{KeyFlags, KeySetMode};
     use crate::terminal::modes::Mode;
     use crate::terminal::page::{HyperlinkSnapshotId, SemanticContent, SemanticPrompt};
@@ -3505,6 +3663,38 @@ mod tests {
             terminal.screens.active(),
             ScreenFormatterOptions::new(emit).unwrap(true),
         )
+    }
+
+    fn kitty_transmit_apc(image_id: u32) -> Vec<u8> {
+        format!("\x1b_Ga=t,f=32,s=1,v=1,i={image_id};AQIDBA==\x1b\\").into_bytes()
+    }
+
+    fn kitty_numbered_transmit_apc(image_number: u32) -> Vec<u8> {
+        format!("\x1b_Ga=t,f=32,s=1,v=1,I={image_number};AQIDBA==\x1b\\").into_bytes()
+    }
+
+    fn kitty_query_apc(image_id: u32) -> Vec<u8> {
+        format!("\x1b_Ga=q,f=32,s=1,v=1,i={image_id};AQIDBA==\x1b\\").into_bytes()
+    }
+
+    fn kitty_display_apc(image_id: u32, placement_id: u32) -> Vec<u8> {
+        format!("\x1b_Ga=p,i={image_id},p={placement_id}\x1b\\").into_bytes()
+    }
+
+    fn kitty_display_number_apc(image_number: u32, placement_id: u32) -> Vec<u8> {
+        format!("\x1b_Ga=p,I={image_number},p={placement_id}\x1b\\").into_bytes()
+    }
+
+    fn kitty_quiet_display_apc(image_id: u32, placement_id: u32, quiet: u32) -> Vec<u8> {
+        format!("\x1b_Ga=p,i={image_id},p={placement_id},q={quiet}\x1b\\").into_bytes()
+    }
+
+    fn kitty_virtual_display_apc(image_id: u32, placement_id: u32) -> Vec<u8> {
+        format!("\x1b_Ga=p,i={image_id},p={placement_id},U=1\x1b\\").into_bytes()
+    }
+
+    fn kitty_cursor_after_display_apc(image_id: u32, placement_id: u32) -> Vec<u8> {
+        format!("\x1b_Ga=p,i={image_id},p={placement_id},C=0\x1b\\").into_bytes()
     }
 
     fn pins(terminal: &Terminal, points: &[(CellCountInt, u32)]) -> Vec<Pin> {
@@ -5523,6 +5713,325 @@ mod tests {
         assert!(!terminal.is_dirty_for_tests(0, 0));
         assert!(!terminal.is_dirty_for_tests(9, 0));
         assert!(!terminal.is_dirty_for_tests(0, 1));
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_non_kitty_apc_is_ignored() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal.clear_dirty_for_tests();
+        terminal.next_slice(b"\x1b_Ha=q,i=7\x1b\\").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert_eq!(terminal.screens.active().kitty_images().len(), 0);
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_malformed_apc_is_ignored() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"abc").unwrap();
+        terminal.clear_dirty_for_tests();
+        terminal.next_slice(b"\x1b_Ga=t;%%%%\x1b\\").unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert_eq!(terminal.screens.active().kitty_images().len(), 0);
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_over_limit_apc_is_ignored() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.kitty_graphics.set_max_bytes_for_tests(2);
+        terminal.next_slice(b"abc").unwrap();
+        terminal.clear_dirty_for_tests();
+        terminal
+            .next_slice(b"\x1b_Ga=t,f=32,s=1,v=1,i=7;AQIDBA==\x1b\\")
+            .unwrap();
+
+        assert_eq!(plain_with_unwrap(&terminal, false), "abc");
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert_eq!(terminal.screens.active().kitty_images().len(), 0);
+        assert!(!terminal.is_dirty_for_tests(0, 0));
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_query_writes_response() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_query_apc(7)).unwrap();
+
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1b_Gi=7;OK\x1b\\"
+        );
+        assert_eq!(terminal.screens.active().kitty_images().len(), 0);
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_transmit_stores_image() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1b_Gi=7;OK\x1b\\"
+        );
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(7)
+            .is_some());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_quiet_transmit_stores_without_response() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b_Ga=t,f=32,s=1,v=1,i=7,q=1;AQIDBA==\x1b\\")
+            .unwrap();
+
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(7)
+            .is_some());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_display_stores_cursor_cell_placement() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.clear_pty_response();
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(5, 1);
+        terminal.next_slice(&kitty_display_apc(7, 4)).unwrap();
+
+        let key = PlacementKey {
+            image_id: 7,
+            placement_id: PlacementId::External(4),
+        };
+        let placement = terminal
+            .screens
+            .active()
+            .kitty_images()
+            .placement_by_key(key)
+            .unwrap();
+        let location = placement.location;
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1b_Gi=7,p=4;OK\x1b\\"
+        );
+        assert_eq!(location, PlacementLocation::Cell { x: 5, y: 1 });
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_display_quiet_filtering() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.clear_pty_response();
+        terminal
+            .next_slice(&kitty_quiet_display_apc(7, 4, 1))
+            .unwrap();
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .placement_by_key(PlacementKey {
+                image_id: 7,
+                placement_id: PlacementId::External(4),
+            })
+            .is_some());
+
+        terminal
+            .next_slice(&kitty_quiet_display_apc(99, 1, 2))
+            .unwrap();
+        assert!(terminal.pty_response_for_tests().is_empty());
+
+        terminal
+            .next_slice(&kitty_quiet_display_apc(7, 5, 2))
+            .unwrap();
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .placement_by_key(PlacementKey {
+                image_id: 7,
+                placement_id: PlacementId::External(5),
+            })
+            .is_some());
+
+        terminal
+            .next_slice(&kitty_quiet_display_apc(99, 1, 1))
+            .unwrap();
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1b_Gi=99,p=1;ENOENT: image not found\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_disabled_storage_suppresses_display() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.clear_pty_response();
+        terminal
+            .screens
+            .active_mut()
+            .kitty_images_mut()
+            .set_limit(0);
+        terminal.next_slice(&kitty_display_apc(7, 4)).unwrap();
+
+        assert!(terminal.pty_response_for_tests().is_empty());
+        assert_eq!(terminal.screens.active().kitty_images().placement_len(), 0);
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_display_by_number_resolves_newest_image() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal
+            .next_slice(&kitty_numbered_transmit_apc(5))
+            .unwrap();
+        let first_id = terminal.screens.active().kitty_images().next_image_id - 1;
+        terminal
+            .next_slice(&kitty_numbered_transmit_apc(5))
+            .unwrap();
+        let second_id = terminal.screens.active().kitty_images().next_image_id - 1;
+        terminal.clear_pty_response();
+        terminal
+            .next_slice(&kitty_display_number_apc(5, 8))
+            .unwrap();
+
+        assert_ne!(first_id, second_id);
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            format!("\x1b_Gi={second_id},I=5,p=8;OK\x1b\\").as_bytes()
+        );
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .placement_by_key(PlacementKey {
+                image_id: second_id,
+                placement_id: PlacementId::External(8),
+            })
+            .is_some());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_virtual_display_stores_virtual_location() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.clear_pty_response();
+        terminal
+            .next_slice(&kitty_virtual_display_apc(7, 4))
+            .unwrap();
+
+        let placement = terminal
+            .screens
+            .active()
+            .kitty_images()
+            .placement_by_key(PlacementKey {
+                image_id: 7,
+                placement_id: PlacementId::External(4),
+            })
+            .unwrap();
+        assert_eq!(placement.location, PlacementLocation::Virtual);
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_cursor_after_does_not_move_cursor_yet() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.clear_pty_response();
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(5, 1);
+        terminal
+            .next_slice(&kitty_cursor_after_display_apc(7, 4))
+            .unwrap();
+
+        assert_eq!(terminal.cursor_position_for_tests(), (5, 1));
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .placement_by_key(PlacementKey {
+                image_id: 7,
+                placement_id: PlacementId::External(4),
+            })
+            .is_some());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_alternate_screen_has_separate_storage() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.next_slice(b"\x1b[?1049h").unwrap();
+        terminal.next_slice(&kitty_transmit_apc(8)).unwrap();
+
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(8)
+            .is_some());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(7)
+            .is_none());
+        assert!(terminal
+            .screens
+            .screen(TerminalScreenKey::Primary)
+            .unwrap()
+            .kitty_images()
+            .image_by_id(7)
+            .is_some());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_reset_clears_storage_and_partial_apc() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(&kitty_transmit_apc(7)).unwrap();
+        terminal.clear_pty_response();
+        terminal.next_slice(b"\x1b_Ga=q,i=9").unwrap();
+        terminal.reset();
+        terminal.next_slice(b";AQIDBA==\x1b\\").unwrap();
+
+        assert_eq!(terminal.screens.active().kitty_images().len(), 0);
+        assert!(terminal.pty_response_for_tests().is_empty());
+
+        terminal.next_slice(&kitty_transmit_apc(8)).unwrap();
+        terminal.clear_pty_response();
+        terminal.next_slice(b"\x1bc").unwrap();
+
+        assert_eq!(terminal.screens.active().kitty_images().len(), 0);
+        assert!(terminal.pty_response_for_tests().is_empty());
     }
 
     #[test]
