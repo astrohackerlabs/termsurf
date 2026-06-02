@@ -488,7 +488,7 @@ tests, choose the larger subsystem.
 - [Experiment 180: Port Render State Row Cells Basic C ABI](180-port-render-state-row-cells-basic-c-abi.md)
   — **Pass**
 - [Experiment 181: Complete Render State Row Cells Selectors](181-complete-render-state-row-cells-selectors.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

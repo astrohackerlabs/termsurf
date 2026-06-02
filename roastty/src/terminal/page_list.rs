@@ -71,9 +71,11 @@ pub(crate) struct RenderRowSelectionSnapshot {
     pub(crate) end_x: CellCountInt,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RenderCellSnapshot {
     pub(crate) raw: u64,
+    pub(crate) style: Option<style::Style>,
+    pub(crate) graphemes: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2057,7 +2059,19 @@ impl PageList {
                     .page
                     .get_cells(row)
                     .iter()
-                    .map(|cell| RenderCellSnapshot { raw: cell.cval() })
+                    .enumerate()
+                    .map(|(x, cell)| RenderCellSnapshot {
+                        raw: cell.cval(),
+                        style: (cell.style_id() != style::DEFAULT_ID)
+                            .then(|| node.page.get_style(cell.style_id())),
+                        graphemes: if cell.has_grapheme() {
+                            node.page
+                                .lookup_grapheme_at(x, pin.y as usize)
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        },
+                    })
                     .collect(),
             });
         }

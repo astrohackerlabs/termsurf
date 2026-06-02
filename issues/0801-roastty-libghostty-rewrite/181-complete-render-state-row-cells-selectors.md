@@ -304,3 +304,57 @@ approves it.
 
 After implementation and result recording, the completed result must also be
 reviewed with Codex and approved before the result commit.
+
+## Result
+
+**Result:** Pass
+
+Experiment 181 completed the row-cells selector surface:
+
+- added public `roastty_buffer_s` for caller-owned UTF-8 output buffers;
+- extended render-state cell snapshots with copied style and owned grapheme
+  continuation data;
+- copied the render-state palette into the row iterator and then into the
+  row-cells handle during row `CELLS` binding;
+- implemented `STYLE`, `GRAPHEMES_LEN`, `GRAPHEMES_BUF`, `BG_COLOR`, `FG_COLOR`,
+  and `GRAPHEMES_UTF8`;
+- preserved the Experiment 180 validation order for every row-cells selector;
+- added Rust ABI tests for style, grapheme, UTF-8, resolved color, validation,
+  and snapshot-stability behavior;
+- extended the C harness for `roastty_buffer_s`, `STYLE`, UTF-8, `BG_COLOR`, and
+  `FG_COLOR`.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/page_list.rs roastty/src/terminal/screen.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty render_state_row_cells_c_abi
+cargo test -p roastty render_state_row_c_abi
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Observed results:
+
+- focused row-cells ABI tests: 6 passed;
+- row iterator ABI tests: 4 passed;
+- C harness link test: passed;
+- full `roastty` suite: 1869 Rust tests passed, 1 C harness test passed, 0
+  doctests;
+- strict no-`ghostty` check on public ABI/code files: passed;
+- `git diff --check`: passed.
+- Codex completed-result review: approved with no blocking findings.
+
+## Conclusion
+
+The render-state row-cells C ABI no longer has deferred selectors. Row-cells
+handles own the raw cell snapshots, copied styles, grapheme continuation
+codepoints, and palette snapshot needed by every getter, so style, text, UTF-8,
+and resolved color access remain stable after terminal mutation, render-state
+update, render-state free, and row iterator free.
+
+The next render-state slice can move beyond row-cell selector completion into
+the remaining render-state row metadata surface, such as highlights, if that is
+still missing from the upstream C ABI inventory.

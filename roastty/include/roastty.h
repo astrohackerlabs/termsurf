@@ -139,6 +139,12 @@ typedef struct {
   bool sentinel;
 } roastty_string_s;
 
+typedef struct {
+  uint8_t* ptr;
+  size_t cap;
+  size_t len;
+} roastty_buffer_s;
+
 typedef enum {
   ROASTTY_COLOR_SCHEME_LIGHT = 0,
   ROASTTY_COLOR_SCHEME_DARK = 1,

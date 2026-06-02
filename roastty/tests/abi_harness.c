@@ -634,6 +634,11 @@ static void assert_render_state_abi(void) {
   assert(offsetof(roastty_render_state_row_selection_s, size) == 0);
   assert(offsetof(roastty_render_state_row_selection_s, start_x) == 8);
   assert(offsetof(roastty_render_state_row_selection_s, end_x) == 10);
+  assert(sizeof(roastty_buffer_s) == 24);
+  assert(_Alignof(roastty_buffer_s) == 8);
+  assert(offsetof(roastty_buffer_s, ptr) == 0);
+  assert(offsetof(roastty_buffer_s, cap) == 8);
+  assert(offsetof(roastty_buffer_s, len) == 16);
 
   roastty_render_state_t state = NULL;
   assert(roastty_render_state_new(NULL) == ROASTTY_INVALID_VALUE);
@@ -812,6 +817,10 @@ static void assert_render_state_abi(void) {
   roastty_terminal_t terminal = NULL;
   assert(roastty_terminal_new(80, 24, 10, &terminal) == ROASTTY_SUCCESS);
   assert(terminal != NULL);
+  const char *styled = "\x1b[38;2;1;2;3m\x1b[48;2;4;5;6m\x1b[1mA";
+  assert(roastty_terminal_vt_write(terminal,
+                                   (const uint8_t *)styled,
+                                   strlen(styled)) == ROASTTY_SUCCESS);
   assert(roastty_render_state_update(NULL, terminal) == ROASTTY_INVALID_VALUE);
   assert(roastty_render_state_update(state, NULL) == ROASTTY_INVALID_VALUE);
   assert(roastty_render_state_update(state, terminal) == ROASTTY_SUCCESS);
@@ -828,7 +837,7 @@ static void assert_render_state_abi(void) {
   assert(roastty_render_state_get(state,
                                   ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
                                   &viewport_x) == ROASTTY_SUCCESS);
-  assert(viewport_x == 0);
+  assert(viewport_x == 1);
   uint16_t viewport_y = 7;
   assert(roastty_render_state_get(state,
                                   ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y,
@@ -891,10 +900,53 @@ static void assert_render_state_abi(void) {
                cells,
                ROASTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING,
                &has_styling) == ROASTTY_SUCCESS);
-    assert(!has_styling);
+    assert(has_styling == (row_count == 0));
+
+    roastty_style_s style = {0};
+    style.size = sizeof(style);
     assert(roastty_render_state_row_cells_get(cells,
                                               ROASTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
-                                              &cell) == ROASTTY_NO_VALUE);
+                                              &style) == ROASTTY_SUCCESS);
+    assert(style.size == sizeof(style));
+    if (row_count == 0) {
+      assert(style.fg_color.tag == ROASTTY_STYLE_COLOR_RGB);
+      assert(style.bg_color.tag == ROASTTY_STYLE_COLOR_RGB);
+      assert(style.bold);
+      roastty_rgb_s fg = {0};
+      assert(roastty_render_state_row_cells_get(
+                 cells,
+                 ROASTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
+                 &fg) == ROASTTY_SUCCESS);
+      assert_rgb_eq(fg, 1, 2, 3);
+      roastty_rgb_s bg = {0};
+      assert(roastty_render_state_row_cells_get(
+                 cells,
+                 ROASTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
+                 &bg) == ROASTTY_SUCCESS);
+      assert_rgb_eq(bg, 4, 5, 6);
+
+      uint32_t graphemes_len = 0;
+      assert(roastty_render_state_row_cells_get(
+                 cells,
+                 ROASTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN,
+                 &graphemes_len) == ROASTTY_SUCCESS);
+      assert(graphemes_len == 1);
+      uint8_t utf8_bytes[1] = {0};
+      roastty_buffer_s utf8 = {
+          .ptr = utf8_bytes,
+          .cap = sizeof(utf8_bytes),
+          .len = 0,
+      };
+      assert(roastty_render_state_row_cells_get(
+                 cells,
+                 ROASTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
+                 &utf8) == ROASTTY_SUCCESS);
+      assert(utf8.len == 1);
+      assert(utf8_bytes[0] == 'A');
+    } else {
+      assert(style.fg_color.tag == ROASTTY_STYLE_COLOR_NONE);
+      assert(style.bg_color.tag == ROASTTY_STYLE_COLOR_NONE);
+    }
     row_count++;
   }
   assert(row_count == 24);
