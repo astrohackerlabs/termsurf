@@ -526,6 +526,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 200: Port Kitty Graphics Shared Memory](200-port-kitty-graphics-shared-memory.md)
   — **Pass**
+- [Experiment 201: Port Kitty Graphics PNG Decode Hook](201-port-kitty-graphics-png-decode-hook.md)
+  — **Designed**
 
 ## Non-Goals
 
