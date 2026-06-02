@@ -214,8 +214,56 @@ All public names must use Roastty naming.
 
 ## Result
 
-Not run yet.
+**Result:** Pass
+
+Implemented focused offscreen read-back tests for the production Metal
+`cell_text` grayscale path in `roastty/src/renderer/metal/render_pass.rs`.
+
+The experiment added test-only helpers for:
+
+- cursor-safe `cell_text` uniforms;
+- `CellTextVertex` upload through the existing Metal buffer wrapper;
+- synthetic R8 grayscale atlas textures;
+- the required dummy RGBA color atlas texture.
+
+The new tests prove:
+
+- a 2x2 grayscale atlas mask renders exact red/transparent BGRA pixels through
+  `pipelines.cell_text`;
+- `bearings` and `glyph_size` place a one-pixel glyph at the expected target
+  pixel;
+- `instance_count = 0` remains a no-draw path and preserves the clear color.
+
+The render-pass step binds the text vertex buffer through `buffers[0]`, uniforms
+through Metal buffer `1`, the `CellBg` grid through `buffers[1]` so the existing
+mapping sends it to Metal buffer `2`, the grayscale atlas at texture `0`, and a
+dummy color atlas at texture `1`. The dummy color atlas binding is structural
+coverage only; this experiment does not prove color-atlas sampling.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/renderer/metal/render_pass.rs
+cargo test -p roastty renderer::metal::render_pass
+cargo test -p roastty renderer::metal::shaders
+cargo test -p roastty renderer::metal::pipeline
+cargo test -p roastty renderer::shader
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/renderer/metal; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Codex reviewed the implementation and found no blocking issues. It confirmed the
+resource binding shape, the cursor-position guard, and the read-back tests'
+coverage of the grayscale path.
 
 ## Conclusion
 
-Pending.
+Roastty can now execute the production Metal `cell_text` shader's grayscale
+atlas branch in an offscreen render pass and verify exact pixels. The current
+renderer proof covers grayscale masks, placement via bearings/glyph size, and
+zero-instance behavior. It intentionally leaves color glyph sampling, font
+loading, glyph rasterization, atlas allocation, min-contrast behavior, cursor
+glyph behavior, presentation, and public C ABI integration for later
+experiments.
