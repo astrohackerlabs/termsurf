@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 use super::bitmap_allocator::{BitmapAllocator, Layout as BitmapAllocatorLayout};
 use super::color::Rgb;
 use super::hyperlink;
+use super::kitty::graphics_unicode;
 use super::offset_hash_map;
 use super::ref_counted_set;
 use super::size::{
@@ -399,6 +400,8 @@ enum IntegrityError {
     MissingGraphemeData,
     InvalidGraphemeCount,
     UnmarkedGraphemeCell,
+    StaleKittyVirtualPlaceholderRow,
+    UnmarkedKittyVirtualPlaceholderRow,
     MissingStyle,
     UnmarkedStyleRow,
     MismatchedStyleRef,
@@ -498,8 +501,11 @@ impl Page {
             let row = self.get_row(y);
             self.assert_row_cells_range(row);
             let graphemes_start = graphemes_seen;
+            let mut row_has_kitty_virtual_placeholder = false;
             for (x, cell) in self.get_cells(row).iter().copied().enumerate() {
                 let offset = self.row_cell_offset(row, x);
+                row_has_kitty_virtual_placeholder |=
+                    cell.codepoint() == graphics_unicode::PLACEHOLDER;
 
                 if cell.has_grapheme() {
                     if self.lookup_grapheme_at_offset(offset).is_none() {
@@ -563,6 +569,12 @@ impl Page {
 
             if graphemes_seen > graphemes_start && !row.grapheme() {
                 return Err(IntegrityError::UnmarkedGraphemeRow);
+            }
+            if row_has_kitty_virtual_placeholder && !row.kitty_virtual_placeholder() {
+                return Err(IntegrityError::UnmarkedKittyVirtualPlaceholderRow);
+            }
+            if !row_has_kitty_virtual_placeholder && row.kitty_virtual_placeholder() {
+                return Err(IntegrityError::StaleKittyVirtualPlaceholderRow);
             }
         }
 
@@ -944,6 +956,7 @@ impl Page {
             row_copy.set_grapheme(dst_row.grapheme());
             row_copy.set_hyperlink(dst_row.hyperlink());
             row_copy.set_styled(dst_row.styled());
+            row_copy.set_kitty_virtual_placeholder(dst_row.kitty_virtual_placeholder());
             row_copy.set_dirty(src_row.dirty() || dst_row.dirty());
         }
 
@@ -985,6 +998,7 @@ impl Page {
                         self.update_row_grapheme_flag(dst_y);
                         self.update_row_hyperlink_flag(dst_y);
                         self.update_row_styled_flag(dst_y);
+                        self.update_row_kitty_virtual_placeholder_flag(dst_y);
                         return Err(err.into());
                     }
                 }
@@ -1000,6 +1014,7 @@ impl Page {
                             self.update_row_grapheme_flag(dst_y);
                             self.update_row_hyperlink_flag(dst_y);
                             self.update_row_styled_flag(dst_y);
+                            self.update_row_kitty_virtual_placeholder_flag(dst_y);
                             return Err(err);
                         }
                     },
@@ -1015,6 +1030,7 @@ impl Page {
                     self.update_row_grapheme_flag(dst_y);
                     self.update_row_hyperlink_flag(dst_y);
                     self.update_row_styled_flag(dst_y);
+                    self.update_row_kitty_virtual_placeholder_flag(dst_y);
                     return Err(CloneFromError::HyperlinkMapOutOfMemory);
                 }
             }
@@ -1030,6 +1046,7 @@ impl Page {
                                 self.update_row_grapheme_flag(dst_y);
                                 self.update_row_hyperlink_flag(dst_y);
                                 self.update_row_styled_flag(dst_y);
+                                self.update_row_kitty_virtual_placeholder_flag(dst_y);
                                 return Err(err.into());
                             }
                         }
@@ -1049,6 +1066,7 @@ impl Page {
         self.update_row_grapheme_flag(dst_y);
         self.update_row_hyperlink_flag(dst_y);
         self.update_row_styled_flag(dst_y);
+        self.update_row_kitty_virtual_placeholder_flag(dst_y);
         Ok(())
     }
 
@@ -1179,10 +1197,12 @@ impl Page {
         self.update_row_grapheme_flag(src_y);
         self.update_row_hyperlink_flag(src_y);
         self.update_row_styled_flag(src_y);
+        self.update_row_kitty_virtual_placeholder_flag(src_y);
         if dst_y != src_y {
             self.update_row_grapheme_flag(dst_y);
             self.update_row_hyperlink_flag(dst_y);
             self.update_row_styled_flag(dst_y);
+            self.update_row_kitty_virtual_placeholder_flag(dst_y);
         }
     }
 
@@ -1211,6 +1231,7 @@ impl Page {
         self.update_row_grapheme_flag(row_index);
         self.update_row_hyperlink_flag(row_index);
         self.update_row_styled_flag(row_index);
+        self.update_row_kitty_virtual_placeholder_flag(row_index);
     }
 
     pub(super) fn clear_unprotected_cells(&mut self, row_index: usize, left: usize, end: usize) {
@@ -1241,6 +1262,7 @@ impl Page {
         self.update_row_grapheme_flag(row_index);
         self.update_row_hyperlink_flag(row_index);
         self.update_row_styled_flag(row_index);
+        self.update_row_kitty_virtual_placeholder_flag(row_index);
     }
 
     pub(super) fn reset_cleared_row_metadata(&mut self, row_index: usize) {
@@ -1319,10 +1341,12 @@ impl Page {
         self.update_row_grapheme_flag(src_y);
         self.update_row_hyperlink_flag(src_y);
         self.update_row_styled_flag(src_y);
+        self.update_row_kitty_virtual_placeholder_flag(src_y);
         if dst_y != src_y {
             self.update_row_grapheme_flag(dst_y);
             self.update_row_hyperlink_flag(dst_y);
             self.update_row_styled_flag(dst_y);
+            self.update_row_kitty_virtual_placeholder_flag(dst_y);
         }
     }
 
@@ -1664,6 +1688,15 @@ impl Page {
         self.get_row_mut(row_index).set_styled(has_styling);
     }
 
+    pub(super) fn update_row_kitty_virtual_placeholder_flag(&mut self, row_index: usize) {
+        let has_placeholder = self
+            .get_cells(self.get_row(row_index))
+            .iter()
+            .any(|cell| cell.codepoint() == graphics_unicode::PLACEHOLDER);
+        self.get_row_mut(row_index)
+            .set_kitty_virtual_placeholder(has_placeholder);
+    }
+
     pub(super) fn write_print_cell(
         &mut self,
         x: usize,
@@ -1719,6 +1752,8 @@ impl Page {
             rac.cell.set_style_id(new_style_id);
             rac.cell.set_hyperlink(new_hyperlink_id.is_some());
             rac.cell.set_semantic_content(semantic_content);
+            rac.row
+                .set_kitty_virtual_placeholder(codepoint as u32 == graphics_unicode::PLACEHOLDER);
             rac.row.set_dirty(true);
         }
 
@@ -1731,6 +1766,7 @@ impl Page {
 
         self.update_row_styled_flag(y);
         self.update_row_hyperlink_flag(y);
+        self.update_row_kitty_virtual_placeholder_flag(y);
         Ok(())
     }
 
@@ -2970,7 +3006,7 @@ impl Row {
     }
 
     pub(super) const fn managed_memory(self) -> bool {
-        self.styled() || self.hyperlink() || self.grapheme()
+        self.styled() || self.hyperlink() || self.grapheme() || self.kitty_virtual_placeholder()
     }
 
     const fn bit(self, shift: u32) -> bool {

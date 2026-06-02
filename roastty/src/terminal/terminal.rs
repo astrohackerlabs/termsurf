@@ -13,6 +13,7 @@ use super::kitty::graphics_command::{Command, Parser, Response};
 use super::kitty::graphics_exec;
 use super::kitty::graphics_image::{Image, LoadingImageLimits, MAX_IMAGE_SIZE};
 use super::kitty::graphics_storage::{CellMetrics, Placement, PlacementKey, DEFAULT_TOTAL_LIMIT};
+use super::kitty::graphics_unicode;
 use super::modes;
 use super::mouse;
 use super::osc;
@@ -1505,6 +1506,12 @@ impl Terminal {
         self.screens.active().render_rows_snapshot()
     }
 
+    pub(in crate::terminal) fn kitty_virtual_placements_visible(
+        &self,
+    ) -> Vec<graphics_unicode::VirtualPlacement> {
+        self.screens.active().kitty_virtual_placements_visible()
+    }
+
     pub(crate) fn set_selection(
         &mut self,
         selection: Option<TerminalSelection>,
@@ -2046,6 +2053,13 @@ impl Terminal {
     #[cfg(test)]
     pub(super) fn active_row_styled_for_tests(&self, y: u32) -> bool {
         self.screens.active().active_row_styled_for_tests(y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_row_kitty_virtual_placeholder_for_tests(&self, y: u32) -> bool {
+        self.screens
+            .active()
+            .active_row_kitty_virtual_placeholder_for_tests(y)
     }
 
     #[cfg(test)]
@@ -7324,6 +7338,161 @@ mod tests {
         assert_eq!(terminal.screens.active().kitty_images().len(), 0);
         assert_eq!(active_tracked_pin_count(&terminal), 1);
         assert!(terminal.pty_response_for_tests().is_empty());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_virtual_placeholder_print_sets_row_flag() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        terminal.modes.set(Mode::GraphemeCluster, true);
+
+        terminal
+            .next_slice("\u{10eeee}\u{0305}\u{0305}".as_bytes())
+            .unwrap();
+
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+        let placements = terminal.kitty_virtual_placements_visible();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].row, 0);
+        assert_eq!(placements[0].col, 0);
+        assert_eq!(placements[0].width, 1);
+    }
+
+    #[test]
+    fn terminal_stream_kitty_virtual_placeholder_overwrite_keeps_flag_until_last() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        terminal
+            .next_slice("\u{10eeee}\u{10eeee}".as_bytes())
+            .unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(0, 0);
+        terminal.next_slice(b"A").unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(1, 0);
+        terminal.next_slice(b"B").unwrap();
+        assert!(!terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+        assert!(terminal.kitty_virtual_placements_visible().is_empty());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_virtual_placeholder_partial_mutations_keep_row_flag_truthful() {
+        let mut terminal = Terminal::init(6, 2, None).unwrap();
+        terminal
+            .next_slice("A\u{10eeee}B\u{10eeee}C".as_bytes())
+            .unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(1, 0);
+        terminal.next_slice(b"\x1b[X").unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(3, 0);
+        terminal.next_slice(b"\x1b[X").unwrap();
+        assert!(!terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+
+        terminal.next_slice("\rA\u{10eeee}BC".as_bytes()).unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(0, 0);
+        terminal.next_slice(b"\x1b[@").unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+        terminal
+            .screens
+            .active_mut()
+            .set_cursor_position_for_tests(0, 0);
+        terminal.next_slice(b"\x1b[P").unwrap();
+        assert!(terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+    }
+
+    #[test]
+    fn terminal_stream_kitty_virtual_placeholder_scroll_moves_row_flag() {
+        let mut terminal = Terminal::init(5, 2, Some(10)).unwrap();
+
+        terminal.next_slice("\u{10eeee}\nB\nC".as_bytes()).unwrap();
+
+        assert_eq!(terminal.scrollback_rows_for_tests(), 1);
+        assert!(!terminal.active_row_kitty_virtual_placeholder_for_tests(0));
+        assert!(!terminal.active_row_kitty_virtual_placeholder_for_tests(1));
+        assert!(terminal.kitty_virtual_placements_visible().is_empty());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_virtual_placeholder_visible_iterator_order_and_values() {
+        let mut terminal = Terminal::init(8, 3, None).unwrap();
+        let placeholder = char::from_u32(graphics_unicode::PLACEHOLDER).unwrap();
+        terminal.screens.active_mut().set_cell_for_tests(0, 0, 'A');
+        terminal
+            .screens
+            .active_mut()
+            .set_cell_for_tests(1, 0, placeholder);
+        terminal.append_grapheme_for_tests(1, 0, 0x0305);
+        terminal.append_grapheme_for_tests(1, 0, 0x0305);
+        terminal.screens.active_mut().set_cell_for_tests(0, 1, 'B');
+        terminal
+            .screens
+            .active_mut()
+            .set_cell_for_tests(1, 1, placeholder);
+        terminal.append_grapheme_for_tests(1, 1, 0x030d);
+        terminal.append_grapheme_for_tests(1, 1, 0x030e);
+        terminal.append_grapheme_for_tests(1, 1, 0x030e);
+        terminal
+            .screens
+            .active_mut()
+            .set_cell_for_tests(2, 1, placeholder);
+        terminal.append_grapheme_for_tests(2, 1, 0x030d);
+        terminal.append_grapheme_for_tests(2, 1, 0x0310);
+        terminal.append_grapheme_for_tests(2, 1, 0x030e);
+
+        let placements = terminal.kitty_virtual_placements_visible();
+        assert_eq!(placements.len(), 2);
+        assert_eq!(placements[0].pin, active_pin(&terminal, 1, 0));
+        assert_eq!(placements[0].row, 0);
+        assert_eq!(placements[0].col, 0);
+        assert_eq!(placements[0].width, 1);
+        assert_eq!(placements[1].pin, active_pin(&terminal, 1, 1));
+        assert_eq!(placements[1].row, 1);
+        assert_eq!(placements[1].col, 2);
+        assert_eq!(placements[1].image_id, 0x0200_0000);
+        assert_eq!(placements[1].width, 2);
+    }
+
+    #[test]
+    fn terminal_stream_kitty_virtual_placeholder_decodes_style_ids() {
+        let mut terminal = Terminal::init(5, 2, None).unwrap();
+        let placeholder = char::from_u32(graphics_unicode::PLACEHOLDER).unwrap();
+        terminal.screens.active_mut().set_styled_cell_for_tests(
+            0,
+            0,
+            placeholder,
+            style::Style {
+                fg_color: style::Color::Rgb(color::Rgb::new(1, 2, 3)),
+                underline_color: style::Color::Palette(21),
+                ..style::Style::default()
+            },
+        );
+        terminal.append_grapheme_for_tests(0, 0, 0x0305);
+        terminal.append_grapheme_for_tests(0, 0, 0x0305);
+        terminal.append_grapheme_for_tests(0, 0, 0x030e);
+
+        let placements = terminal.kitty_virtual_placements_visible();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].image_id, 0x0201_0203);
+        assert_eq!(placements[0].placement_id, 21);
     }
 
     #[test]

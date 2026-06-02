@@ -186,3 +186,53 @@ The experiment passes when:
 - Do not weaken Kitty graphics storage behavior from Experiments 188-201.
 - Do not expose any `ghostty_*` ABI names.
 - Do not skip Codex design review or Codex result review.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has an internal Kitty Unicode virtual placeholder foundation:
+
+- `graphics_unicode` contains the terminal-internal placeholder constant,
+  complete 297-entry Kitty diacritic table, index lookup, color-to-id decoding,
+  incomplete placement parsing, run continuation, and completed virtual
+  placement records.
+- Printing `U+10EEEE` marks the row's `kitty_virtual_placeholder` bit through
+  both the normal styled path and the fast basic-cell path.
+- Page row metadata recomputes the placeholder flag after overwrites, clears,
+  inserts, deletes, swaps, partial clones, and other row/cell mutation paths.
+- Page integrity now rejects both missing and stale Kitty placeholder row flags.
+- `PageList` can scan the visible viewport and return decoded terminal-internal
+  virtual placement records in top-to-bottom, left-to-right order.
+- The public C ABI was not changed; `roastty/include/roastty.h` remained
+  unchanged.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/terminal/kitty/graphics_unicode.rs roastty/src/terminal/kitty/mod.rs roastty/src/terminal/page.rs roastty/src/terminal/page_list.rs roastty/src/terminal/screen.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty kitty_graphics_unicode
+cargo test -p roastty terminal_stream_kitty_virtual_placeholder
+cargo test -p roastty --test abi_harness
+cargo test -p roastty kitty_graphics_render_info_c_abi
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+All commands passed.
+
+Codex reviewed the implementation twice. The first review found a real blocker:
+the initial diacritic table was truncated. The implementation was corrected to
+match the full upstream 297-entry table, with tests for the full length and
+representative spot checks. The second Codex review found no remaining blocking
+correctness, regression, missing-test, or scope issues and approved recording
+the experiment as Pass.
+
+## Conclusion
+
+Experiment 202 establishes the terminal-side decoder and row metadata foundation
+needed for true Kitty Unicode virtual placement rendering. The next experiment
+should use this internal visible-placement list to design the terminal-scoped
+render/app ABI that combines decoded virtual placements with image storage and
+existing render-info geometry.

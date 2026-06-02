@@ -10,7 +10,9 @@ use super::point::{self, Coordinate};
 use super::size::{
     CellCountInt, GraphemeBytesInt, HyperlinkCountInt, StringBytesInt, StyleCountInt, MAX_PAGE_SIZE,
 };
-use super::{color, highlight, hyperlink, selection, selection_codepoints, style};
+use super::{
+    color, highlight, hyperlink, kitty::graphics_unicode, selection, selection_codepoints, style,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Viewport {
@@ -119,6 +121,16 @@ impl Pin {
 
     pub(in crate::terminal) const fn x(self) -> CellCountInt {
         self.x
+    }
+
+    #[cfg(test)]
+    pub(in crate::terminal) fn test_invalid_for_tests() -> Self {
+        Self {
+            node: NonNull::dangling(),
+            y: 0,
+            x: 0,
+            garbage: true,
+        }
     }
 
     pub(in crate::terminal) const fn with_x(mut self, x: CellCountInt) -> Self {
@@ -2162,6 +2174,73 @@ impl PageList {
         rows
     }
 
+    pub(super) fn kitty_virtual_placements_visible(
+        &self,
+    ) -> Vec<graphics_unicode::VirtualPlacement> {
+        let bottom = self.rows.saturating_sub(1).into();
+        let mut placements = Vec::new();
+
+        for row_pin in self.row_iterator(
+            Direction::RightDown,
+            point::Point::viewport(Coordinate::new(0, 0)),
+            Some(point::Point::viewport(Coordinate::new(0, bottom))),
+        ) {
+            let Some(node) = self.node_for_pin(&row_pin) else {
+                continue;
+            };
+            let row = node.page.get_row(row_pin.y as usize);
+            if !row.kitty_virtual_placeholder() {
+                continue;
+            }
+
+            let mut run: Option<graphics_unicode::IncompletePlacement> = None;
+            for (x, cell) in node.page.get_cells(row).iter().copied().enumerate() {
+                let mut pin = row_pin;
+                pin.x = x
+                    .try_into()
+                    .expect("cell index must fit terminal cell count");
+
+                if cell.codepoint() != graphics_unicode::PLACEHOLDER {
+                    if let Some(prev) = run.take() {
+                        placements.push(prev.complete());
+                    }
+                    continue;
+                }
+
+                let style = if cell.style_id() == style::DEFAULT_ID {
+                    style::Style::default()
+                } else {
+                    node.page.get_style(cell.style_id())
+                };
+                let graphemes = if cell.has_grapheme() {
+                    node.page
+                        .lookup_grapheme_at(x, row_pin.y as usize)
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let curr =
+                    graphics_unicode::IncompletePlacement::init(pin, cell, style, &graphemes);
+
+                if let Some(prev) = run.as_mut() {
+                    if !prev.append(&curr) {
+                        let complete = run.take().expect("run must exist");
+                        placements.push(complete.complete());
+                        run = Some(curr.prepare_first());
+                    }
+                } else {
+                    run = Some(curr.prepare_first());
+                }
+            }
+
+            if let Some(prev) = run.take() {
+                placements.push(prev.complete());
+            }
+        }
+
+        placements
+    }
+
     pub(super) fn grid_ref(&self, point: point::Point) -> Option<GridRef> {
         self.pin(point).map(GridRef::from)
     }
@@ -2959,10 +3038,11 @@ impl PageList {
             .pin(point::Point::screen(point::Coordinate::new(x, y)))
             .expect("test screen point must resolve to a pin");
         let index = self.node_index(pin.node).expect("screen node must exist");
-        *self.pages[index]
-            .page
+        let page = &mut self.pages[index].page;
+        *page
             .get_row_and_cell_mut(pin.x as usize, pin.y as usize)
             .cell = Cell::init(codepoint as u32);
+        page.update_row_kitty_virtual_placeholder_flag(pin.y as usize);
     }
 
     #[cfg(test)]
@@ -2985,6 +3065,7 @@ impl PageList {
             *rac.cell = Cell::init(codepoint as u32);
             rac.cell.set_style_id(style_id);
         }
+        page.update_row_kitty_virtual_placeholder_flag(pin.y as usize);
         page.use_style(style_id);
     }
 
@@ -4107,6 +4188,7 @@ impl PageList {
         *rac.cell = Cell::init(codepoint as u32);
         rac.cell.set_semantic_content(semantic_content);
         rac.row.set_dirty(true);
+        page.update_row_kitty_virtual_placeholder_flag(pin.y as usize);
         Ok(())
     }
 
@@ -4334,6 +4416,17 @@ impl PageList {
             .expect("test active point must resolve to a pin");
         let node = self.node_for_pin(&pin).expect("test node must exist");
         node.page.get_row(pin.y as usize).styled()
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_row_kitty_virtual_placeholder_for_tests(&self, y: u32) -> bool {
+        let pin = self
+            .pin(point::Point::active(point::Coordinate::new(0, y)))
+            .expect("test active point must resolve to a pin");
+        let node = self.node_for_pin(&pin).expect("test node must exist");
+        node.page
+            .get_row(pin.y as usize)
+            .kitty_virtual_placeholder()
     }
 
     #[cfg(test)]

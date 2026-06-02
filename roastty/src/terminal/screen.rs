@@ -1554,6 +1554,12 @@ impl Screen {
         self.pages.render_rows_snapshot(self.selection)
     }
 
+    pub(super) fn kitty_virtual_placements_visible(
+        &self,
+    ) -> Vec<kitty::graphics_unicode::VirtualPlacement> {
+        self.pages.kitty_virtual_placements_visible()
+    }
+
     pub(super) fn set_selection(
         &mut self,
         start: GridRef,
@@ -1903,6 +1909,11 @@ impl Screen {
     }
 
     #[cfg(test)]
+    pub(super) fn set_cell_for_tests(&mut self, x: CellCountInt, y: u32, codepoint: char) {
+        self.pages.set_screen_cell_for_tests(x, y, codepoint);
+    }
+
+    #[cfg(test)]
     pub(super) fn set_styled_cell_for_tests(
         &mut self,
         x: CellCountInt,
@@ -2040,6 +2051,11 @@ impl Screen {
     #[cfg(test)]
     pub(super) fn active_row_styled_for_tests(&self, y: u32) -> bool {
         self.pages.active_row_styled_for_tests(y)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_row_kitty_virtual_placeholder_for_tests(&self, y: u32) -> bool {
+        self.pages.active_row_kitty_virtual_placeholder_for_tests(y)
     }
 
     #[cfg(test)]

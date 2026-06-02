@@ -4,6 +4,7 @@ pub(crate) mod graphics_command;
 pub(crate) mod graphics_exec;
 pub(crate) mod graphics_image;
 pub(crate) mod graphics_storage;
+pub(crate) mod graphics_unicode;
 
 use super::color;
 
