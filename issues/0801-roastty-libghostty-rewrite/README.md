@@ -498,6 +498,8 @@ tests, choose the larger subsystem.
 - [Experiment 185: Port Support C ABI](185-port-support-c-abi.md) — **Pass**
 - [Experiment 186: Port Kitty Graphics Command Parser](186-port-kitty-graphics-command-parser.md)
   — **Pass**
+- [Experiment 187: Port Direct Kitty Image Loading](187-port-direct-kitty-image-loading.md)
+  — **Designed**
 
 ## Non-Goals
 
