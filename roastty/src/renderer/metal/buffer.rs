@@ -139,6 +139,10 @@ impl<T: MetalBufferElement> MetalBuffer<T> {
         self.capacity_bytes
     }
 
+    pub(crate) fn buffer(&self) -> &ProtocolObject<dyn MTLBuffer> {
+        &self.buffer
+    }
+
     #[cfg(test)]
     fn read_bytes(&self, len: usize) -> Vec<u8> {
         let byte_count = byte_len::<T>(len).expect("test byte count fits");

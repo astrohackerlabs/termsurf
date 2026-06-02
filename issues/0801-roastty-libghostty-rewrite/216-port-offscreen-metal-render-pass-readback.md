@@ -306,8 +306,76 @@ All public names must use Roastty naming.
 
 ## Result
 
-Not run yet.
+**Result:** Pass
+
+Experiment 216 added Roastty's first automated offscreen Metal draw/read-back
+path.
+
+The implementation added:
+
+- the narrow `objc2-metal` feature flags needed for command queues, command
+  buffers, render-pass descriptors, and render command encoders;
+- Metal API values for command-buffer status, load/store actions, primitive
+  type, and clear color;
+- explicit `MetalUniforms` / `MetalUniformBools` layouts matching the production
+  shader's uniform block;
+- initialized padding fields and tests proving padding bytes are zero before raw
+  upload;
+- crate-visible accessors for the Metal pipeline state, buffer object, and
+  texture object;
+- render-target texture options for shared-storage offscreen read-back;
+- `MetalCommandFrame`;
+- `MetalRenderPass`;
+- live tests for command queue creation, command-buffer status mapping,
+  clear-only read-back, production `bg_color` shader read-back, and
+  zero-instance no-draw behavior.
+
+The key read-back test creates `MetalStandardPipelines`, uploads a real
+`MetalUniforms` buffer with RGBA background color `[32, 64, 128, 255]`, draws
+the production `bg_color` pipeline into a 4x4 BGRA8 shared render target, waits
+for the command buffer to complete, and verifies every pixel is BGRA
+`[128, 64, 32, 255]`.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/renderer/metal/api.rs roastty/src/renderer/metal/buffer.rs roastty/src/renderer/metal/mod.rs roastty/src/renderer/metal/pipeline.rs roastty/src/renderer/metal/render_pass.rs roastty/src/renderer/metal/shaders.rs roastty/src/renderer/metal/texture.rs
+cargo test -p roastty renderer::metal::api
+cargo test -p roastty renderer::metal::buffer
+cargo test -p roastty renderer::metal::texture
+cargo test -p roastty renderer::metal::shaders
+cargo test -p roastty renderer::metal::render_pass
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/renderer/metal; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Observed test results:
+
+- `cargo test -p roastty renderer::metal::api`: 20 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::buffer`: 10 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::texture`: 10 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::shaders`: 8 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::render_pass`: 5 passed, 0 failed;
+- `cargo test -p roastty`: 2189 library tests passed, 1 ABI harness test passed,
+  0 doc tests.
+
+Codex reviewed the implementation result and reported no blocking findings. The
+review explicitly approved recording Experiment 216 as Pass.
 
 ## Conclusion
 
-Pending.
+Roastty can now execute a real production Metal shader in an offscreen render
+pass and verify the result by CPU read-back. This is the first renderer
+experiment that proves more than object construction: it proves command
+encoding, uniform binding at buffer index `1`, render-target storage,
+command-buffer completion, and pixel output.
+
+The renderer still lacks the broader upstream render-pass resource bindings for
+generic vertex buffers, textures, and samplers. It also does not yet draw
+cell-background, text, image, or background-image content. The next renderer
+slice should expand the render pass from the `bg_color` path to the first real
+terminal content draw path, most likely cell-background rendering, because it
+adds one bound buffer without requiring glyph atlases, texture sampling, or
+image placement.

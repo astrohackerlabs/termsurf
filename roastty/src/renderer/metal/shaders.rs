@@ -4,6 +4,7 @@ use objc2_foundation::NSString;
 use objc2_metal::{MTLDevice, MTLLibrary};
 
 use crate::renderer::metal::api::MetalPixelFormat;
+use crate::renderer::metal::buffer::MetalBufferElement;
 use crate::renderer::metal::pipeline::{
     standard_pipeline_build_values, MetalPipeline, MetalPipelineError, MetalPipelineOptions,
     MetalStandardPipelineDescription, STANDARD_PIPELINE_DESCRIPTIONS,
@@ -114,6 +115,68 @@ fn standard_pipeline_description(name: &'static str) -> Option<MetalStandardPipe
         .find(|description| description.name == name)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C, align(16))]
+pub(crate) struct MetalUniforms {
+    pub(crate) projection_matrix: [[f32; 4]; 4],
+    pub(crate) screen_size: [f32; 2],
+    pub(crate) cell_size: [f32; 2],
+    pub(crate) grid_size: [u16; 2],
+    pub(crate) _padding0: [u8; 12],
+    pub(crate) grid_padding: [f32; 4],
+    pub(crate) padding_extend: u8,
+    pub(crate) _padding1: [u8; 3],
+    pub(crate) min_contrast: f32,
+    pub(crate) cursor_pos: [u16; 2],
+    pub(crate) cursor_color: [u8; 4],
+    pub(crate) bg_color: [u8; 4],
+    pub(crate) bools: MetalUniformBools,
+    pub(crate) _padding2: [u8; 8],
+}
+
+impl MetalUniforms {
+    #[cfg(test)]
+    pub(crate) fn test_bg_color(width: u16, height: u16, bg_color: [u8; 4]) -> Self {
+        Self {
+            projection_matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            screen_size: [width as f32, height as f32],
+            cell_size: [1.0, 1.0],
+            grid_size: [width, height],
+            _padding0: [0; 12],
+            grid_padding: [0.0; 4],
+            padding_extend: 0,
+            _padding1: [0; 3],
+            min_contrast: 0.0,
+            cursor_pos: [0, 0],
+            cursor_color: [0, 0, 0, 0],
+            bg_color,
+            bools: MetalUniformBools {
+                cursor_wide: false,
+                use_display_p3: true,
+                use_linear_blending: false,
+                use_linear_correction: false,
+            },
+            _padding2: [0; 8],
+        }
+    }
+}
+
+unsafe impl MetalBufferElement for MetalUniforms {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub(crate) struct MetalUniformBools {
+    pub(crate) cursor_wide: bool,
+    pub(crate) use_display_p3: bool,
+    pub(crate) use_linear_blending: bool,
+    pub(crate) use_linear_correction: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use objc2::rc::Retained;
@@ -123,7 +186,8 @@ mod tests {
 
     use super::{
         build_from_library, compile_source, MetalShaderLibrary, MetalShaderLibraryError,
-        MetalStandardPipelines, MetalStandardPipelinesError, STANDARD_METAL_SHADER_SOURCE,
+        MetalStandardPipelines, MetalStandardPipelinesError, MetalUniformBools, MetalUniforms,
+        STANDARD_METAL_SHADER_SOURCE,
     };
     use crate::renderer::metal::api::MetalPixelFormat;
     use crate::renderer::metal::pipeline::{MetalPipelineError, STANDARD_PIPELINE_DESCRIPTIONS};
@@ -298,6 +362,58 @@ fragment float4 bg_image_fragment() {
 
         let MetalShaderLibraryError::CompileFailed(message) = error;
         assert!(!message.trim().is_empty());
+    }
+
+    #[test]
+    fn metal_uniform_layout_matches_standard_shader_struct() {
+        assert_eq!(std::mem::size_of::<MetalUniforms>(), 144);
+        assert_eq!(std::mem::align_of::<MetalUniforms>(), 16);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, projection_matrix), 0);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, screen_size), 64);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, cell_size), 72);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, grid_size), 80);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, _padding0), 84);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, grid_padding), 96);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, padding_extend), 112);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, _padding1), 113);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, min_contrast), 116);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, cursor_pos), 120);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, cursor_color), 124);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, bg_color), 128);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, bools), 132);
+        assert_eq!(std::mem::offset_of!(MetalUniforms, _padding2), 136);
+
+        assert_eq!(std::mem::size_of::<MetalUniformBools>(), 4);
+        assert_eq!(std::mem::align_of::<MetalUniformBools>(), 1);
+        assert_eq!(std::mem::offset_of!(MetalUniformBools, cursor_wide), 0);
+        assert_eq!(std::mem::offset_of!(MetalUniformBools, use_display_p3), 1);
+        assert_eq!(
+            std::mem::offset_of!(MetalUniformBools, use_linear_blending),
+            2
+        );
+        assert_eq!(
+            std::mem::offset_of!(MetalUniformBools, use_linear_correction),
+            3
+        );
+    }
+
+    #[test]
+    fn metal_uniform_constructor_initializes_padding_bytes() {
+        let uniforms = MetalUniforms::test_bg_color(4, 4, [32, 64, 128, 255]);
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                (&uniforms as *const MetalUniforms).cast::<u8>(),
+                std::mem::size_of::<MetalUniforms>(),
+            )
+        };
+
+        assert_eq!(&bytes[84..96], &[0; 12]);
+        assert_eq!(&bytes[113..116], &[0; 3]);
+        assert_eq!(&bytes[136..144], &[0; 8]);
+        assert_eq!(uniforms.bools.cursor_wide as u8, 0);
+        assert_eq!(uniforms.bools.use_display_p3 as u8, 1);
+        assert_eq!(uniforms.bools.use_linear_blending as u8, 0);
+        assert_eq!(uniforms.bools.use_linear_correction as u8, 0);
     }
 
     #[test]

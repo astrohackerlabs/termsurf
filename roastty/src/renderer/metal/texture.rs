@@ -48,6 +48,20 @@ pub(crate) fn image_texture_options(
     }
 }
 
+pub(crate) fn render_target_texture_options(
+    pixel_format: MetalPixelFormat,
+    storage_mode: MetalStorageMode,
+) -> ImageTextureOptions {
+    ImageTextureOptions {
+        pixel_format,
+        resource_options: MetalResourceOptions::image(storage_mode),
+        usage: MetalTextureUsage {
+            shader_read: false,
+            render_target: true,
+        },
+    }
+}
+
 pub(crate) fn image_texture_format_for_upload_pixel_format(
     format: PixelFormat,
 ) -> Option<ImageTextureFormat> {
@@ -143,8 +157,11 @@ impl MetalTexture {
         self.bytes_per_pixel
     }
 
-    #[cfg(test)]
-    fn read_bytes(&self) -> Vec<u8> {
+    pub(crate) fn texture(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.texture
+    }
+
+    pub(crate) fn read_bytes(&self) -> Vec<u8> {
         let len = texture_byte_len(self.width, self.height, self.bytes_per_pixel)
             .expect("test texture dimensions fit in usize");
         let mut bytes = vec![0; len];
@@ -291,6 +308,25 @@ mod tests {
         assert_eq!(options.resource_options.raw(), 0x11);
         assert_eq!(options.usage, MetalTextureUsage::shader_read());
         assert_eq!(options.usage.raw(), 0x1);
+    }
+
+    #[test]
+    fn render_target_texture_options_match_offscreen_readback_intent() {
+        let options =
+            render_target_texture_options(MetalPixelFormat::Bgra8Unorm, MetalStorageMode::Shared);
+
+        assert_eq!(options.pixel_format, MetalPixelFormat::Bgra8Unorm);
+        assert_eq!(
+            options.resource_options,
+            MetalResourceOptions::image(MetalStorageMode::Shared)
+        );
+        assert_eq!(
+            options.usage,
+            MetalTextureUsage {
+                shader_read: false,
+                render_target: true,
+            }
+        );
     }
 
     #[test]

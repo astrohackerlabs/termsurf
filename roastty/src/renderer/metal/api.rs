@@ -43,6 +43,102 @@ impl MetalPixelFormat {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub(crate) enum MetalCommandBufferStatus {
+    Completed = 4,
+    Error = 5,
+}
+
+impl MetalCommandBufferStatus {
+    pub(crate) fn raw(self) -> u64 {
+        self as u64
+    }
+
+    pub(crate) fn from_objc(status: objc2_metal::MTLCommandBufferStatus) -> Option<Self> {
+        match status.0 as u64 {
+            4 => Some(Self::Completed),
+            5 => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub(crate) enum MetalLoadAction {
+    Load = 1,
+    Clear = 2,
+}
+
+impl MetalLoadAction {
+    pub(crate) fn raw(self) -> u64 {
+        self as u64
+    }
+
+    pub(crate) fn to_objc(self) -> objc2_metal::MTLLoadAction {
+        match self {
+            MetalLoadAction::Load => objc2_metal::MTLLoadAction::Load,
+            MetalLoadAction::Clear => objc2_metal::MTLLoadAction::Clear,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub(crate) enum MetalStoreAction {
+    Store = 1,
+}
+
+impl MetalStoreAction {
+    pub(crate) fn raw(self) -> u64 {
+        self as u64
+    }
+
+    pub(crate) fn to_objc(self) -> objc2_metal::MTLStoreAction {
+        match self {
+            MetalStoreAction::Store => objc2_metal::MTLStoreAction::Store,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub(crate) enum MetalPrimitiveType {
+    Triangle = 3,
+}
+
+impl MetalPrimitiveType {
+    pub(crate) fn raw(self) -> u64 {
+        self as u64
+    }
+
+    pub(crate) fn to_objc(self) -> objc2_metal::MTLPrimitiveType {
+        match self {
+            MetalPrimitiveType::Triangle => objc2_metal::MTLPrimitiveType::Triangle,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MetalClearColor {
+    pub(crate) red: f64,
+    pub(crate) green: f64,
+    pub(crate) blue: f64,
+    pub(crate) alpha: f64,
+}
+
+impl MetalClearColor {
+    pub(crate) fn to_objc(self) -> objc2_metal::MTLClearColor {
+        objc2_metal::MTLClearColor {
+            red: self.red,
+            green: self.green,
+            blue: self.blue,
+            alpha: self.alpha,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum MetalCpuCacheMode {
     Default = 0,
@@ -357,6 +453,72 @@ mod tests {
         assert_eq!(MetalPixelFormat::Rgba8UnormSrgb.bytes_per_pixel(), Some(4));
         assert_eq!(MetalPixelFormat::Bgra8Unorm.bytes_per_pixel(), Some(4));
         assert_eq!(MetalPixelFormat::Bgra8UnormSrgb.bytes_per_pixel(), Some(4));
+    }
+
+    #[test]
+    fn metal_command_buffer_status_values_match_upstream_subset() {
+        assert_eq!(MetalCommandBufferStatus::Completed.raw(), 4);
+        assert_eq!(MetalCommandBufferStatus::Error.raw(), 5);
+        assert_eq!(
+            MetalCommandBufferStatus::from_objc(objc2_metal::MTLCommandBufferStatus::Completed),
+            Some(MetalCommandBufferStatus::Completed)
+        );
+        assert_eq!(
+            MetalCommandBufferStatus::from_objc(objc2_metal::MTLCommandBufferStatus::Error),
+            Some(MetalCommandBufferStatus::Error)
+        );
+        assert_eq!(
+            MetalCommandBufferStatus::from_objc(objc2_metal::MTLCommandBufferStatus::Scheduled),
+            None
+        );
+    }
+
+    #[test]
+    fn metal_load_action_values_match_upstream_subset() {
+        assert_eq!(MetalLoadAction::Load.raw(), 1);
+        assert_eq!(MetalLoadAction::Clear.raw(), 2);
+        assert_eq!(
+            MetalLoadAction::Load.to_objc().0 as u64,
+            MetalLoadAction::Load.raw()
+        );
+        assert_eq!(
+            MetalLoadAction::Clear.to_objc().0 as u64,
+            MetalLoadAction::Clear.raw()
+        );
+    }
+
+    #[test]
+    fn metal_store_action_values_match_upstream_subset() {
+        assert_eq!(MetalStoreAction::Store.raw(), 1);
+        assert_eq!(
+            MetalStoreAction::Store.to_objc().0 as u64,
+            MetalStoreAction::Store.raw()
+        );
+    }
+
+    #[test]
+    fn metal_primitive_type_values_match_upstream_subset() {
+        assert_eq!(MetalPrimitiveType::Triangle.raw(), 3);
+        assert_eq!(
+            MetalPrimitiveType::Triangle.to_objc().0 as u64,
+            MetalPrimitiveType::Triangle.raw()
+        );
+    }
+
+    #[test]
+    fn metal_clear_color_converts_to_objc_values() {
+        let color = MetalClearColor {
+            red: 0.25,
+            green: 0.5,
+            blue: 0.75,
+            alpha: 1.0,
+        };
+        let objc = color.to_objc();
+
+        assert_eq!(objc.red, 0.25);
+        assert_eq!(objc.green, 0.5);
+        assert_eq!(objc.blue, 0.75);
+        assert_eq!(objc.alpha, 1.0);
     }
 
     #[test]

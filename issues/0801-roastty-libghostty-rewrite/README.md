@@ -557,7 +557,7 @@ tests, choose the larger subsystem.
 - [Experiment 215: Port Standard Metal Shader Library](215-port-standard-metal-shader-library.md)
   — **Pass**
 - [Experiment 216: Port Offscreen Metal Render Pass Readback](216-port-offscreen-metal-render-pass-readback.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

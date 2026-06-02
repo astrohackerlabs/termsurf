@@ -223,8 +223,7 @@ impl MetalPipeline {
         Ok(Self { state })
     }
 
-    #[cfg(test)]
-    fn state(&self) -> &ProtocolObject<dyn MTLRenderPipelineState> {
+    pub(crate) fn state(&self) -> &ProtocolObject<dyn MTLRenderPipelineState> {
         &self.state
     }
 }
