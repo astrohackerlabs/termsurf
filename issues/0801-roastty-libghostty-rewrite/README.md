@@ -134,8 +134,9 @@ Every experiment records, in TOML frontmatter at the top of its file, which AI
 agent performed each role: the **implementer** (designs, writes, and records the
 experiment) and the two review gates (**design review** and **result review**).
 Each role logs `agent`, `model`, and `reasoning` (effort level), so the record
-is machine-parseable for later comparison. The implementer and reviewer are
-always different agents, keeping the review gate independent.
+is machine-parseable for later comparison. Design review and result review are
+independent passes from implementation; from Experiment 223 the reviewer is also
+a different agent than the implementer.
 
 - **Experiments 1–222:** designed, reviewed, implemented, and re-reviewed
   entirely by **Codex (GPT-5.5, medium)** — all three roles.

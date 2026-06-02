@@ -18,9 +18,11 @@ for dir in "$ISSUES_DIR"/*/; do
 
   # Parse frontmatter — extract values between +++ delimiters
   frontmatter=$(awk '/^[+][+][+]$/{n++; next} n==1{print} n==2{exit}' "$readme")
-  status=$(echo "$frontmatter" | grep '^status' | sed 's/.*"\(.*\)"/\1/' || true)
-  opened=$(echo "$frontmatter" | grep '^opened' | sed 's/.*"\(.*\)"/\1/' || true)
-  closed=$(echo "$frontmatter" | grep '^closed' | sed 's/.*"\(.*\)"/\1/' || true)
+  # Anchor on the reserved key plus '=' so additive keys (e.g. status_note)
+  # cannot be misread as the reserved status/opened/closed values.
+  status=$(echo "$frontmatter" | grep -E '^status[[:space:]]*=' | sed 's/.*"\(.*\)"/\1/' || true)
+  opened=$(echo "$frontmatter" | grep -E '^opened[[:space:]]*=' | sed 's/.*"\(.*\)"/\1/' || true)
+  closed=$(echo "$frontmatter" | grep -E '^closed[[:space:]]*=' | sed 's/.*"\(.*\)"/\1/' || true)
 
   # Extract H1 title (first "# " line after frontmatter)
   title=$(awk '/^[+][+][+]$/{n++; next} n>=2 && /^# /{sub(/^# /,""); print; exit}' "$readme")
