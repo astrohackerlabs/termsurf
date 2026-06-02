@@ -715,7 +715,7 @@ are past the correctness-critical foundation.
 - [Experiment 245: Port the sprite canvas geometric primitives and `Color`](245-port-sprite-primitives.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 246: Port the Canvas exact-pixel operations (draw + export to atlas)](246-port-canvas-pixel-ops.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

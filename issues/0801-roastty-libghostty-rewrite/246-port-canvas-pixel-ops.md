@@ -246,3 +246,91 @@ Three findings, all fixed in the design above before this commit:
 3. **Low — `flip_vertical` prose typo.** The formula read
    `clone[(h - y - 1)*w - x]`; upstream uses `+ x`. Corrected (the
    implementation ports the `+ x` form).
+
+## Result
+
+**Result:** Pass
+
+Added the `Atlas::format()` accessor (and, additionally, a one-line
+`Atlas::data(&self) -> &[u8]` read accessor — needed by the designed
+`write_atlas` test, which checks the exported byte in the atlas buffer; both are
+internal `pub(crate)` and the renderer will read `data` to upload to the GPU) to
+`roastty/src/font/atlas.rs`, and the `Canvas` to
+`roastty/src/font/sprite/canvas.rs`: the padded alpha8 `Vec<u8>` surface with
+the clip fields, and `new`, `pixel` (padding + the z2d-`putPixel` out-of-bounds
+no-op), `rect`, `r#box` (`box` is a Rust keyword, so the method is `r#box`,
+normalizing reversed corners via `Box::rect`), `trim` (the four clip-advance
+loops), `write_atlas` (the up-front grayscale `assert!`, `trim`, saturating
+region size, `reserve`, `set_from_larger`), `clear_clipping_regions`, `invert`,
+`flip_horizontal`, and `flip_vertical` (clone + mirror + clip-pair swap). The
+z2d-backed path methods are left deferred. The module doc was updated.
+
+Tests added (6): `pixel_padding_and_bounds`, `rect_and_box_fill`,
+`trim_clips_transparent_margins` (`clip_top 1`, `clip_bottom 2`, `clip_left 1`,
+`clip_right 2` for the single lit pixel), `write_atlas_exports_trimmed` (`1×1`
+region, `255` byte in the atlas), `clear_clipping_regions_zeros_margins`, and
+`invert_and_flips`.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty canvas
+cargo test -p roastty
+```
+
+Observed:
+
+- `canvas`: 11 passed (5 prior + 6 new).
+- Full `roastty`: 2339 unit tests passed (2333 prior + 6 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/font` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes (the `Atlas` accessors are internal
+`pub(crate)`); the z2d-backed path-rendering methods cleanly deferred.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+needs to change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-094504-937905-prompt.md`
+- Result: `logs/codex-review/20260602-094504-937905-last-message.md`
+
+Codex confirmed the buffer shape, padding/clip fields, `pixel` bounds behavior,
+`rect`/`r#box`, `write_atlas`, `clear_clipping_regions`, `invert`, and both
+flips match the intended z2d-free behavior; that the three design-gate fixes are
+present (`pixel` is `pub(crate)`, `write_atlas` uses the up-front always-on
+`assert!`, `flip_vertical` uses `+ x`); that the `trim` loop bounds/termination
+match upstream (single-lit-pixel → `top 1`/`bottom 2`/`left 1`/`right 2`) with
+no added underflow hazard for the internally-maintained clip state; and that
+`Atlas::format()` is the designed accessor and the extra read-only
+`Atlas::data()` is narrowly justified (cross-module export test + the renderer
+upload path), not a scope problem.
+
+## Conclusion
+
+Experiment 246 succeeds. The `Canvas`'s entire exact-pixel surface — drawing
+(`pixel`/`rect`/`r#box`), the trim-and-export path into the `Atlas`
+(`trim`/`write_atlas`), and the buffer transforms
+(`clear_clipping_regions`/`invert`/`flip_horizontal`/`flip_vertical`) — is
+ported with a plain `Vec<u8>` alpha surface, no 2D-graphics dependency. Both
+Codex gates passed (three design findings fixed; zero result findings).
+
+What remains of `canvas.zig` is exactly the `z2d`-backed path rendering
+(`transformation`/`get_context`/`line`/`quad`/`triangle`/`stroke_path`/
+`inner_stroke_path`/`fill_path`) — the anti-aliased vector layer. That is the
+isolated architectural decision: choose a Rust path rasterizer (a hand-rolled
+alpha scanline/coverage filler, or a crate such as `tiny-skia`) that fills into
+the same alpha8 buffer and reproduces z2d's anti-aliasing closely enough that
+the `draw/` glyph fixtures match. The next experiment will scope that backend
+choice (likely starting with the affine `transformation` value type and a single
+straight-line/`fill_path` primitive against a small fixture) before the `draw/`
+glyph tables are ported on top.

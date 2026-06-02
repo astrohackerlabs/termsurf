@@ -119,6 +119,16 @@ impl Atlas {
         self.resized.load(Ordering::Relaxed)
     }
 
+    /// The pixel format of this atlas.
+    pub(crate) fn format(&self) -> Format {
+        self.format
+    }
+
+    /// The raw texture data (read-only).
+    pub(crate) fn data(&self) -> &[u8] {
+        &self.data
+    }
+
     /// Reserve a region of `width` × `height` within the atlas.
     ///
     /// May grow the internal node list. This does not enlarge the texture if it
