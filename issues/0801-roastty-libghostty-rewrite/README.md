@@ -686,6 +686,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 231: Port `Contents::set_cursor` and `get_cursor_glyph`](231-port-contents-set-cursor.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 232: Port `Contents::add` / `clear` and `Key`](232-port-contents-add-clear.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
