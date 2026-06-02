@@ -676,6 +676,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 226: Port Renderer Preedit](226-port-renderer-preedit.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 227: Port Renderer Cell Codepoint Classification](227-port-renderer-cell-codepoint-classification.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
