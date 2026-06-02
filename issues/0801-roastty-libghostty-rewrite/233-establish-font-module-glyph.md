@@ -131,3 +131,69 @@ slice — though thin — is acceptable as a foundation slice (module namespace 
 leaf value type, no rasterization/atlas/face/shaping), that the raw-pixel
 atlas-coordinate note matches upstream, and that the two tests are adequate for
 a pure value type. No changes required.
+
+## Result
+
+**Result:** Pass
+
+Created `roastty/src/font/mod.rs` (`#![allow(dead_code)]`, "upstream `font/`"
+attribution, `pub(crate) mod glyph;`) and `roastty/src/font/glyph.rs` with
+`pub(crate) struct Glyph { width: u32, height: u32, offset_x: i32, offset_y: i32, atlas_x: u32, atlas_y: u32 }`
+(the upstream field names, order, types, and doc comments, signed `i32`
+bearings). Wired `mod font;` into `roastty/src/lib.rs` alongside
+`input`/`renderer`/`terminal`.
+
+Tests added (2): `glyph_holds_fields` and `glyph_offsets_are_signed` (negative
+bearings round-trip).
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty font
+cargo test -p roastty
+```
+
+Observed:
+
+- `font`: 2 passed.
+- Full `roastty`: 2278 unit tests passed (2276 prior + 2 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/font` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes; no rasterization/atlas/face/metrics
+scope pulled in.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+needs to change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-081327-582639-prompt.md`
+- Result: `logs/codex-review/20260602-081327-582639-last-message.md`
+
+Codex confirmed `Glyph` preserves the exact upstream field order and types
+(signed `i32` bearings, `u32` size/atlas fields), that the module wiring is
+internal and appropriate (`mod font;` in `lib.rs`, `pub(crate) mod glyph;`),
+that the derives and `#![allow(dead_code)]` fit a foundation slice, and that the
+two tests are correct.
+
+## Conclusion
+
+Experiment 233 succeeds and **stands up the `font` subsystem** with its first
+type, `Glyph` (the rasterized-glyph atlas metadata). Both Codex gates passed
+with zero findings.
+
+The font stack now has a home. Natural next slices build outward from `Glyph`:
+the `font/Metrics` value type and its cell-size/constraint calculations (a
+larger file that will split), then the glyph `Atlas` (which produces the
+`atlas_x`/ `atlas_y` coordinates `Glyph` records), and the CoreText
+face/rasterization that fills glyphs — the latter being the macOS
+framework-integration core of the font subsystem.

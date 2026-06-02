@@ -36,6 +36,7 @@ use terminal::terminal::{
 };
 use terminal::{mouse, mouse_encode, osc, point, sgr, size_report, style};
 
+mod font;
 mod input;
 mod renderer;
 mod terminal;
