@@ -8,8 +8,8 @@ use super::kitty;
 use super::page::{SemanticContent, SemanticPrompt};
 use super::page_list::{
     BasicCellWriteError, CodepointMapEntry, DragGeometry, GridRef, GridRefPointError, PageList,
-    PageListAllocError, PageOutputFormat, PageStringWithPinMap, Pin, SelectLineOptions,
-    StyledCellWriteError,
+    PageListAllocError, PageOutputFormat, PageStringWithPinMap, Pin, RenderRowSnapshot,
+    SelectLineOptions, StyledCellWriteError,
 };
 use super::point;
 use super::selection;
@@ -1106,6 +1106,10 @@ impl Screen {
             GridRef::from(selection.end()),
             selection.rectangle(),
         ))
+    }
+
+    pub(super) fn render_rows_snapshot(&self) -> Vec<RenderRowSnapshot> {
+        self.pages.render_rows_snapshot(self.selection)
     }
 
     pub(super) fn set_selection(

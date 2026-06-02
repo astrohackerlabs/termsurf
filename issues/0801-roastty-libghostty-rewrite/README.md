@@ -484,7 +484,7 @@ tests, choose the larger subsystem.
 - [Experiment 178: Port Render State Scalar C ABI](178-port-render-state-scalar-c-abi.md)
   — **Pass**
 - [Experiment 179: Port Render State Row Iterator C ABI](179-port-render-state-row-iterator-c-abi.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

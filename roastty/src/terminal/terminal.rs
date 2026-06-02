@@ -15,7 +15,7 @@ use super::osc;
 use super::page::SemanticPrompt;
 use super::page_list::{
     CodepointMapEntry, DragGeometry, GridRef, GridRefPointError, PageListAllocError,
-    PageOutputFormat, PageStringWithPinMap, Pin,
+    PageOutputFormat, PageStringWithPinMap, Pin, RenderRowSnapshot,
 };
 use super::screen::{
     BasicPrintError, EraseDisplayError, Screen, ScreenCursorHyperlinkId, ScreenFormatter,
@@ -1221,6 +1221,10 @@ impl Terminal {
 
     pub(crate) fn active_selection(&self) -> Option<TerminalSelection> {
         Self::selection_from_tuple(self.screens.active().active_selection_grid_refs())
+    }
+
+    pub(crate) fn render_rows_snapshot(&self) -> Vec<RenderRowSnapshot> {
+        self.screens.active().render_rows_snapshot()
     }
 
     pub(crate) fn set_selection(

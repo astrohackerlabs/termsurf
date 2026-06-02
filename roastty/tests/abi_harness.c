@@ -604,6 +604,12 @@ static void assert_render_state_abi(void) {
   assert(ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y == 16);
   assert(ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL == 17);
   assert(ROASTTY_RENDER_STATE_OPTION_DIRTY == 0);
+  assert(ROASTTY_RENDER_STATE_ROW_DATA_INVALID == 0);
+  assert(ROASTTY_RENDER_STATE_ROW_DATA_DIRTY == 1);
+  assert(ROASTTY_RENDER_STATE_ROW_DATA_RAW == 2);
+  assert(ROASTTY_RENDER_STATE_ROW_DATA_CELLS == 3);
+  assert(ROASTTY_RENDER_STATE_ROW_DATA_SELECTION == 4);
+  assert(ROASTTY_RENDER_STATE_ROW_OPTION_DIRTY == 0);
 
   assert(sizeof(roastty_render_state_colors_s) == 792);
   assert(_Alignof(roastty_render_state_colors_s) == 8);
@@ -613,11 +619,23 @@ static void assert_render_state_abi(void) {
   assert(offsetof(roastty_render_state_colors_s, cursor) == 14);
   assert(offsetof(roastty_render_state_colors_s, cursor_has_value) == 17);
   assert(offsetof(roastty_render_state_colors_s, palette) == 18);
+  assert(sizeof(roastty_render_state_row_selection_s) == 16);
+  assert(_Alignof(roastty_render_state_row_selection_s) == 8);
+  assert(offsetof(roastty_render_state_row_selection_s, size) == 0);
+  assert(offsetof(roastty_render_state_row_selection_s, start_x) == 8);
+  assert(offsetof(roastty_render_state_row_selection_s, end_x) == 10);
 
   roastty_render_state_t state = NULL;
   assert(roastty_render_state_new(NULL) == ROASTTY_INVALID_VALUE);
   assert(roastty_render_state_new(&state) == ROASTTY_SUCCESS);
   assert(state != NULL);
+
+  roastty_render_state_row_iterator_t iterator = NULL;
+  assert(roastty_render_state_row_iterator_new(NULL) == ROASTTY_INVALID_VALUE);
+  assert(roastty_render_state_row_iterator_new(&iterator) == ROASTTY_SUCCESS);
+  assert(iterator != NULL);
+  assert(!roastty_render_state_row_iterator_next(NULL));
+  assert(!roastty_render_state_row_iterator_next(iterator));
 
   uint16_t dim = 999;
   assert(roastty_render_state_get(state, ROASTTY_RENDER_STATE_DATA_COLS, &dim) ==
@@ -673,9 +691,14 @@ static void assert_render_state_abi(void) {
   assert(roastty_render_state_get(state,
                                   ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
                                   &dim) == ROASTTY_NO_VALUE);
+  roastty_render_state_row_iterator_t null_iterator = NULL;
   assert(roastty_render_state_get(state,
                                   ROASTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                                  &state) == ROASTTY_NO_VALUE);
+                                  &null_iterator) == ROASTTY_INVALID_VALUE);
+  assert(roastty_render_state_get(state,
+                                  ROASTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+                                  &iterator) == ROASTTY_SUCCESS);
+  assert(!roastty_render_state_row_iterator_next(iterator));
   assert(roastty_render_state_get(state,
                                   ROASTTY_RENDER_STATE_DATA_INVALID,
                                   &dim) == ROASTTY_INVALID_VALUE);
@@ -813,7 +836,54 @@ static void assert_render_state_abi(void) {
                                   &flag) == ROASTTY_SUCCESS);
   assert(!flag);
 
+  assert(roastty_render_state_get(state,
+                                  ROASTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+                                  &iterator) == ROASTTY_SUCCESS);
+  size_t row_count = 0;
+  while (roastty_render_state_row_iterator_next(iterator)) {
+    bool row_dirty = false;
+    roastty_row_t raw = 0;
+    assert(roastty_render_state_row_get(iterator,
+                                        ROASTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                                        &row_dirty) == ROASTTY_SUCCESS);
+    assert(roastty_render_state_row_get(iterator,
+                                        ROASTTY_RENDER_STATE_ROW_DATA_RAW,
+                                        &raw) == ROASTTY_SUCCESS);
+    bool raw_dirty = false;
+    assert(roastty_row_get(raw, ROASTTY_ROW_DATA_DIRTY, &raw_dirty) ==
+           ROASTTY_SUCCESS);
+    assert(row_dirty == raw_dirty);
+    roastty_render_state_row_cells_t cells = NULL;
+    assert(roastty_render_state_row_get(iterator,
+                                        ROASTTY_RENDER_STATE_ROW_DATA_CELLS,
+                                        &cells) == ROASTTY_NO_VALUE);
+    row_count++;
+  }
+  assert(row_count == 24);
+  size_t row_written = 999;
+  assert(roastty_render_state_row_get_multi(iterator,
+                                            0,
+                                            NULL,
+                                            NULL,
+                                            &row_written) == ROASTTY_SUCCESS);
+  assert(row_written == 0);
+  bool row_dirty = false;
+  assert(roastty_render_state_row_get(iterator,
+                                      ROASTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                                      &row_dirty) == ROASTTY_SUCCESS);
+  row_dirty = false;
+  assert(roastty_render_state_row_set(iterator,
+                                      ROASTTY_RENDER_STATE_ROW_OPTION_DIRTY,
+                                      &row_dirty) == ROASTTY_SUCCESS);
+  row_dirty = true;
+  assert(roastty_render_state_row_get(iterator,
+                                      ROASTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                                      &row_dirty) == ROASTTY_SUCCESS);
+  assert(!row_dirty);
+
   roastty_terminal_free(terminal);
+  roastty_render_state_row_iterator_free(iterator);
+  roastty_render_state_row_iterator_free(NULL);
   roastty_render_state_free(state);
   roastty_render_state_free(NULL);
 }

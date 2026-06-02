@@ -66,6 +66,19 @@ pub(super) struct Node {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RenderRowSelectionSnapshot {
+    pub(crate) start_x: CellCountInt,
+    pub(crate) end_x: CellCountInt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RenderRowSnapshot {
+    pub(crate) raw: u64,
+    pub(crate) dirty: bool,
+    pub(crate) selection: Option<RenderRowSelectionSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct GridRef {
     pub(super) node: *const (),
     pub(super) x: CellCountInt,
@@ -2006,6 +2019,38 @@ impl PageList {
         let mut pin = self.pin_down(self.get_top_left(point.tag()), coord.y as usize)?;
         pin.x = coord.x;
         Some(pin)
+    }
+
+    pub(super) fn render_rows_snapshot(
+        &self,
+        selection: Option<selection::Selection>,
+    ) -> Vec<RenderRowSnapshot> {
+        let mut rows = Vec::with_capacity(self.rows as usize);
+        let last_col = self.cols.saturating_sub(1);
+
+        for y in 0..self.rows {
+            let Some(pin) = self.pin(point::Point::active(Coordinate::new(0, y.into()))) else {
+                continue;
+            };
+            let Some(node) = self.node_for_pin(&pin) else {
+                continue;
+            };
+            let row = node.page.get_row(pin.y as usize);
+            let selection = selection.and_then(|selection| {
+                let selection = self.selection_contained_row(selection, pin)?;
+                let start_x = selection.start().x.min(selection.end().x).min(last_col);
+                let end_x = selection.start().x.max(selection.end().x).min(last_col);
+                Some(RenderRowSelectionSnapshot { start_x, end_x })
+            });
+
+            rows.push(RenderRowSnapshot {
+                raw: row.cval(),
+                dirty: node.page.is_dirty() || row.dirty(),
+                selection,
+            });
+        }
+
+        rows
     }
 
     pub(super) fn grid_ref(&self, point: point::Point) -> Option<GridRef> {

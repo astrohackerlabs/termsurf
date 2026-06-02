@@ -34,6 +34,7 @@ typedef void* roastty_terminal_t;
 typedef void* roastty_tracked_grid_ref_t;
 typedef void* roastty_render_state_t;
 typedef void* roastty_render_state_row_iterator_t;
+typedef void* roastty_render_state_row_cells_t;
 
 typedef uint16_t roastty_mode_tag_t;
 
@@ -431,6 +432,24 @@ typedef struct {
   bool cursor_has_value;
   roastty_palette_t palette;
 } roastty_render_state_colors_s;
+
+typedef struct {
+  size_t size;
+  uint16_t start_x;
+  uint16_t end_x;
+} roastty_render_state_row_selection_s;
+
+typedef enum {
+  ROASTTY_RENDER_STATE_ROW_DATA_INVALID = 0,
+  ROASTTY_RENDER_STATE_ROW_DATA_DIRTY = 1,
+  ROASTTY_RENDER_STATE_ROW_DATA_RAW = 2,
+  ROASTTY_RENDER_STATE_ROW_DATA_CELLS = 3,
+  ROASTTY_RENDER_STATE_ROW_DATA_SELECTION = 4,
+} roastty_render_state_row_data_e;
+
+typedef enum {
+  ROASTTY_RENDER_STATE_ROW_OPTION_DIRTY = 0,
+} roastty_render_state_row_option_e;
 
 typedef enum {
   ROASTTY_STYLE_COLOR_NONE = 0,
@@ -987,6 +1006,12 @@ ROASTTY_API roastty_result_e
 roastty_render_state_new(roastty_render_state_t*);
 ROASTTY_API void roastty_render_state_free(roastty_render_state_t);
 ROASTTY_API roastty_result_e
+roastty_render_state_row_iterator_new(roastty_render_state_row_iterator_t*);
+ROASTTY_API void
+roastty_render_state_row_iterator_free(roastty_render_state_row_iterator_t);
+ROASTTY_API bool
+roastty_render_state_row_iterator_next(roastty_render_state_row_iterator_t);
+ROASTTY_API roastty_result_e
 roastty_render_state_update(roastty_render_state_t, roastty_terminal_t);
 ROASTTY_API roastty_result_e
 roastty_render_state_get(roastty_render_state_t,
@@ -1002,6 +1027,21 @@ ROASTTY_API roastty_result_e
 roastty_render_state_set(roastty_render_state_t,
                          roastty_render_state_option_e,
                          const void*);
+ROASTTY_API roastty_result_e
+roastty_render_state_row_get(roastty_render_state_row_iterator_t,
+                             roastty_render_state_row_data_e,
+                             void*);
+ROASTTY_API roastty_result_e
+roastty_render_state_row_get_multi(
+    roastty_render_state_row_iterator_t,
+    size_t,
+    const roastty_render_state_row_data_e*,
+    void**,
+    size_t*);
+ROASTTY_API roastty_result_e
+roastty_render_state_row_set(roastty_render_state_row_iterator_t,
+                             roastty_render_state_row_option_e,
+                             const void*);
 ROASTTY_API roastty_result_e
 roastty_render_state_colors_get(roastty_render_state_t,
                                 roastty_render_state_colors_s*);

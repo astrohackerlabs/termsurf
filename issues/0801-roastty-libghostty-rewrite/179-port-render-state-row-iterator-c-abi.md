@@ -325,3 +325,77 @@ approves it.
 
 After implementation and result recording, the completed result must also be
 reviewed with Codex and approved before the result commit.
+
+## Result
+
+**Result:** Pass
+
+Implemented the render-state row iterator C ABI.
+
+Code changes:
+
+- Added `roastty_render_state_row_cells_t`,
+  `roastty_render_state_row_selection_s`, `roastty_render_state_row_data_e`, and
+  `roastty_render_state_row_option_e` to `roastty/include/roastty.h`.
+- Added exported row iterator lifecycle functions:
+  `roastty_render_state_row_iterator_new`,
+  `roastty_render_state_row_iterator_free`, and
+  `roastty_render_state_row_iterator_next`.
+- Changed `ROASTTY_RENDER_STATE_DATA_ROW_ITERATOR` from the Experiment 178
+  deferred `ROASTTY_NO_VALUE` result to real binding of an existing iterator.
+- Added `roastty_render_state_row_get`, `roastty_render_state_row_get_multi`,
+  and `roastty_render_state_row_set`.
+- Added an internal active-viewport row snapshot path through
+  `PageList::render_rows_snapshot`, `Screen::render_rows_snapshot`, and
+  `Terminal::render_rows_snapshot`.
+- Stored row snapshots inside the render-state backing struct and cloned them
+  into iterators on bind, so bound iterators remain valid after terminal
+  mutation, render-state update, and render-state free.
+- Implemented row `DIRTY`, `RAW`, and `SELECTION` getters.
+- Kept row `CELLS` as a clear `ROASTTY_NO_VALUE` deferred result.
+- Added Rust ABI tests and C harness coverage for layout, lifecycle, binding,
+  iteration, raw/dirty consistency, selection ranges, snapshot lifetime,
+  validation, zero-count `row_get_multi`, partial progress, deferred cells, and
+  dirty set.
+
+One implementation-time test bug was found and fixed: row raw outputs in Rust
+tests must be typed as `RoasttyRow`/`u64`, because the C ABI writes
+`roastty_row_t`. Leaving them as inferred integer locals caused stack corruption
+during early testing.
+
+Verification run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/page_list.rs roastty/src/terminal/screen.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty render_state_row_c_abi
+cargo test -p roastty render_state_c_abi
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty
+git diff | rg -n "ghostty|Ghostty|GHOSTTY" || true
+git diff --check
+```
+
+Verification results:
+
+- `cargo test -p roastty render_state_row_c_abi`: 4 passed.
+- `cargo test -p roastty render_state_c_abi`: 3 passed.
+- `cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib`:
+  passed.
+- `cargo test -p roastty`: 1863 Rust tests passed, C harness passed, doc tests
+  passed.
+- Diff no-Ghostty check: no new `ghostty`/`Ghostty`/`GHOSTTY` references in the
+  experiment diff.
+- `git diff --check`: passed.
+
+## Conclusion
+
+Experiment 179 completes the render-state row iterator slice. The render-state
+ABI can now snapshot viewport rows, bind iterators to stable owned row
+snapshots, iterate rows in top-to-bottom order, expose raw row and dirty state,
+expose row-local selection ranges, and mutate iterator snapshot dirty state
+without mutating the terminal.
+
+The next coherent slice is row-cell iteration: implement
+`roastty_render_state_row_cells_t` lifecycle and cell iteration/getters against
+the same snapshot model, including grapheme/style/hyperlink-aware cell data only
+to the extent needed for the next reviewed experiment.
