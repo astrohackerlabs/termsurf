@@ -8,6 +8,7 @@
 //! The `Contents` cursor lists (`set_cursor`/`get_cursor_glyph`) and row
 //! mutation (`add`/`clear`) are ported in later slices.
 
+use super::cursor::Style as CursorStyle;
 use super::shader::{CellBg, CellTextVertex};
 use super::size::GridSize;
 
@@ -205,6 +206,54 @@ impl Contents {
     /// Mutably access a background cell.
     pub(crate) fn bg_cell_mut(&mut self, row: usize, col: usize) -> &mut CellBg {
         &mut self.bg_cells[row * self.size.columns as usize + col]
+    }
+
+    /// Set the cursor value. A `None` value hides the cursor. Block cursors are
+    /// stored in the first reserved list (drawn first); other styles go in the
+    /// last reserved list (drawn last).
+    pub(crate) fn set_cursor(
+        &mut self,
+        v: Option<CellTextVertex>,
+        cursor_style: Option<CursorStyle>,
+    ) {
+        if self.size.rows == 0 {
+            return;
+        }
+        let last = self.size.rows as usize + 1;
+        self.fg_rows[0].clear();
+        self.fg_rows[last].clear();
+
+        let Some(cell) = v else {
+            return;
+        };
+        let Some(style) = cursor_style else {
+            return;
+        };
+
+        match style {
+            // Block cursors are drawn first.
+            CursorStyle::Block => self.fg_rows[0].push(cell),
+            // Other cursor styles are drawn last.
+            CursorStyle::BlockHollow
+            | CursorStyle::Bar
+            | CursorStyle::Underline
+            | CursorStyle::Lock => self.fg_rows[last].push(cell),
+        }
+    }
+
+    /// Returns the current cursor glyph if present, checking both cursor lists.
+    pub(crate) fn get_cursor_glyph(&self) -> Option<CellTextVertex> {
+        if self.size.rows == 0 {
+            return None;
+        }
+        let last = self.size.rows as usize + 1;
+        if !self.fg_rows[0].is_empty() {
+            return Some(self.fg_rows[0][0]);
+        }
+        if !self.fg_rows[last].is_empty() {
+            return Some(self.fg_rows[last][0]);
+        }
+        None
     }
 }
 
@@ -514,5 +563,81 @@ mod tests {
         *c.bg_cell_mut(0, 0) = CellBg([1, 1, 1, 1]);
         c.resize(grid(3, 2));
         assert_eq!(*c.bg_cell(0, 0), CellBg([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn set_cursor_block_uses_first_list() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.set_cursor(Some(dummy_vertex()), Some(CursorStyle::Block));
+        assert_eq!(c.fg_rows[0].len(), 1);
+        assert!(c.fg_rows[3].is_empty()); // rows + 1 = 3
+        assert_eq!(c.get_cursor_glyph(), Some(dummy_vertex()));
+    }
+
+    #[test]
+    fn set_cursor_other_styles_use_last_list() {
+        for style in [
+            CursorStyle::BlockHollow,
+            CursorStyle::Bar,
+            CursorStyle::Underline,
+            CursorStyle::Lock,
+        ] {
+            let mut c = Contents::default();
+            c.resize(grid(3, 2));
+            c.set_cursor(Some(dummy_vertex()), Some(style));
+            assert!(c.fg_rows[0].is_empty());
+            assert_eq!(c.fg_rows[3].len(), 1);
+            assert_eq!(c.get_cursor_glyph(), Some(dummy_vertex()));
+        }
+    }
+
+    #[test]
+    fn set_cursor_none_value_clears() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.set_cursor(Some(dummy_vertex()), Some(CursorStyle::Block));
+        c.set_cursor(None, Some(CursorStyle::Block));
+        assert!(c.fg_rows[0].is_empty());
+        assert!(c.fg_rows[3].is_empty());
+        assert_eq!(c.get_cursor_glyph(), None);
+    }
+
+    #[test]
+    fn set_cursor_none_style_clears() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.set_cursor(Some(dummy_vertex()), Some(CursorStyle::Bar));
+        c.set_cursor(Some(dummy_vertex()), None);
+        assert!(c.fg_rows[0].is_empty());
+        assert!(c.fg_rows[3].is_empty());
+        assert_eq!(c.get_cursor_glyph(), None);
+    }
+
+    #[test]
+    fn set_cursor_replaces_previous() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.set_cursor(Some(dummy_vertex()), Some(CursorStyle::Block));
+        c.set_cursor(Some(dummy_vertex()), Some(CursorStyle::Bar));
+        // The block list was cleared; only the bar cursor remains — one glyph.
+        assert_eq!(c.fg_rows[0].len() + c.fg_rows[3].len(), 1);
+        assert!(c.fg_rows[0].is_empty());
+        assert_eq!(c.fg_rows[3].len(), 1);
+    }
+
+    #[test]
+    fn set_cursor_zero_rows_is_noop() {
+        let mut c = Contents::default();
+        c.resize(grid(0, 0));
+        c.set_cursor(Some(dummy_vertex()), Some(CursorStyle::Block));
+        assert_eq!(c.get_cursor_glyph(), None);
+    }
+
+    #[test]
+    fn get_cursor_glyph_empty_is_none() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        assert_eq!(c.get_cursor_glyph(), None);
     }
 }

@@ -159,3 +159,72 @@ touching the lists; both reserved lists are cleared before unwrapping
 is faithful, `Vec::push` is fine for `appendAssumeCapacity`, the exhaustive
 `match` on `cursor::Style` is correct, and the seven tests are sufficient. No
 changes required.
+
+## Result
+
+**Result:** Pass
+
+Added `use super::cursor::Style as CursorStyle;` and implemented
+`Contents::set_cursor` and `Contents::get_cursor_glyph` in
+`roastty/src/renderer/cell.rs`. `set_cursor` returns early on `rows == 0`,
+clears both reserved cursor lists (`fg_rows[0]` and `fg_rows[rows + 1]`), then
+returns on a `None` value/style or routes `Block` → `fg_rows[0]` and
+`BlockHollow | Bar | Underline | Lock` → `fg_rows[rows + 1]` via an exhaustive
+`match`. `get_cursor_glyph` returns `None` on `rows == 0`, then the first
+element of `fg_rows[0]`, else of `fg_rows[rows + 1]`, else `None`.
+
+Tests added (7): `set_cursor_block_uses_first_list`,
+`set_cursor_other_styles_use_last_list` (all four non-block styles),
+`set_cursor_none_value_clears`, `set_cursor_none_style_clears`,
+`set_cursor_replaces_previous` (no duplication across lists),
+`set_cursor_zero_rows_is_noop`, `get_cursor_glyph_empty_is_none`.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty renderer::cell
+cargo test -p roastty renderer
+cargo test -p roastty
+```
+
+Observed:
+
+- `renderer::cell`: 34 passed (27 prior + 7 new).
+- Full `roastty`: 2270 unit tests passed (2263 prior + 7 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/renderer/cell.rs` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes; `add`/`clear`/`Key` not pulled in.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+should change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-080210-604591-prompt.md`
+- Result: `logs/codex-review/20260602-080210-604591-last-message.md`
+
+Codex confirmed `set_cursor` and `get_cursor_glyph` are faithful to upstream
+(rows-0 guard, clear-both-lists-before-unwrap, `Block`→first / others→last
+exhaustive routing, and the cursor-glyph lookup order), that indexing is safe
+under the `resize` invariant (`rows + 2` lists), and that the seven tests cover
+each route plus the clear/replace/empty cases.
+
+## Conclusion
+
+Experiment 231 succeeds. `Contents` now manages the cursor glyph in its reserved
+lists. Both Codex gates passed with zero findings.
+
+The last `Contents` slice (Experiment 232) is `add` / `clear` plus the `Key` /
+`CellType` mapping: `add` routes a foreground cell to `fg_rows[y + 1]` (the
+`+ 1` skipping the reserved cursor list, with `y` from the cell's `grid_pos`),
+and `clear` zeroes one row's background span and clears its `fg_rows[y + 1]`
+list. That completes `renderer/cell.zig`.

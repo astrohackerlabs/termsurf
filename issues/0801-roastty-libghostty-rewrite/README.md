@@ -685,7 +685,7 @@ are past the correctness-critical foundation.
 - [Experiment 230: Port Renderer `Contents` Storage and Lifecycle](230-port-renderer-contents-storage.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 231: Port `Contents::set_cursor` and `get_cursor_glyph`](231-port-contents-set-cursor.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
