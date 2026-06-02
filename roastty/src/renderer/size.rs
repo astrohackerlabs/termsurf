@@ -154,6 +154,158 @@ impl Padding {
     }
 }
 
+/// How to balance padding around the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaddingBalance {
+    /// No balancing; padding is applied as specified explicitly.
+    False,
+    /// Balances padding but caps the top padding so the first row doesn't drift
+    /// too far from the top of the window. Excess vertical space is shifted to
+    /// the bottom.
+    True,
+    /// Distributes leftover space equally on all sides so the grid is centered
+    /// within the screen.
+    Equal,
+}
+
+/// All relevant sizes for a rendered terminal — enough to convert between any of
+/// the coordinate systems. Pixel values are assumed already scaled to the
+/// current DPI; the caller recalculates on DPI change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Size {
+    pub screen: ScreenSize,
+    pub cell: CellSize,
+    pub padding: Padding,
+}
+
+impl Size {
+    /// The grid size: the screen minus padding, divided by the cell size.
+    pub(crate) fn grid(self) -> GridSize {
+        GridSize::init(self.screen.sub_padding(self.padding), self.cell)
+    }
+
+    /// The size of the terminal: the screen without padding.
+    pub(crate) fn terminal(self) -> ScreenSize {
+        self.screen.sub_padding(self.padding)
+    }
+
+    /// Set the padding to be balanced around the grid. Balanced padding is
+    /// calculated AFTER the explicit padding is taken into account.
+    pub(crate) fn balance_padding(&mut self, explicit: Padding, mode: PaddingBalance) {
+        // Ensure grid() accounts for the explicit padding.
+        self.padding = explicit;
+
+        // Now calculate the balanced padding.
+        self.padding = Padding::balanced(self.screen, self.grid(), self.cell);
+
+        match mode {
+            PaddingBalance::False => unreachable!(),
+            PaddingBalance::Equal => {}
+            PaddingBalance::True => {
+                // Cap the top padding to avoid excessive space above the first
+                // row. The maximum is the balanced explicit horizontal padding
+                // plus half a cell width; any excess shifts to the bottom.
+                let max_top = (explicit.left + explicit.right + self.cell.width) / 2;
+                let vshift = self.padding.top.saturating_sub(max_top);
+                self.padding.top -= vshift;
+                self.padding.bottom += vshift;
+            }
+        }
+    }
+}
+
+/// The coordinate system a [`Coordinate`] is expressed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoordinateTag {
+    Surface,
+    Terminal,
+    Grid,
+}
+
+/// A coordinate in one of the renderer coordinate systems. Only valid within the
+/// context of a stable [`Size`]; if any size changes, the coordinate must be
+/// recalculated.
+///
+///   * `Surface`: (0, 0) is the top-left of the surface (with padding); pixels,
+///     may be negative or past the surface.
+///   * `Terminal`: the surface with padding removed; pixels.
+///   * `Grid`: (0, 0) is the top-left of the grid; cells, non-negative.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Coordinate {
+    Surface { x: f64, y: f64 },
+    Terminal { x: f64, y: f64 },
+    Grid { x: Unit, y: Unit },
+}
+
+impl Coordinate {
+    fn tag(self) -> CoordinateTag {
+        match self {
+            Coordinate::Surface { .. } => CoordinateTag::Surface,
+            Coordinate::Terminal { .. } => CoordinateTag::Terminal,
+            Coordinate::Grid { .. } => CoordinateTag::Grid,
+        }
+    }
+
+    /// Convert this coordinate to a different system within the same [`Size`].
+    pub(crate) fn convert(self, to: CoordinateTag, size: Size) -> Coordinate {
+        // Unlikely fast-path but avoids work.
+        if self.tag() == to {
+            return self;
+        }
+
+        // Normalize to the surface system, then reconvert from there, to avoid a
+        // combinatorial explosion of conversion functions.
+        let (sx, sy) = self.convert_to_surface(size);
+
+        match to {
+            CoordinateTag::Surface => Coordinate::Surface { x: sx, y: sy },
+            CoordinateTag::Terminal => Coordinate::Terminal {
+                x: sx - size.padding.left as f64,
+                y: sy - size.padding.top as f64,
+            },
+            CoordinateTag::Grid => {
+                // Get rid of the padding (surface -> terminal).
+                let term_x = sx - size.padding.left as f64;
+                let term_y = sy - size.padding.top as f64;
+
+                let grid = size.grid();
+                let cell_width = size.cell.width as f64;
+                let cell_height = size.cell.height as f64;
+                let clamped_x = term_x.max(0.0);
+                let clamped_y = term_y.max(0.0);
+                let col = (clamped_x / cell_width) as Unit;
+                let row = (clamped_y / cell_height) as Unit;
+                let clamped_col = col.min(grid.columns - 1);
+                let clamped_row = row.min(grid.rows - 1);
+                Coordinate::Grid {
+                    x: clamped_col,
+                    y: clamped_row,
+                }
+            }
+        }
+    }
+
+    /// Convert this coordinate to the surface system.
+    fn convert_to_surface(self, size: Size) -> (f64, f64) {
+        match self {
+            Coordinate::Surface { x, y } => (x, y),
+            Coordinate::Terminal { x, y } => {
+                (x + size.padding.left as f64, y + size.padding.top as f64)
+            }
+            Coordinate::Grid { x, y } => {
+                let col = x as f64;
+                let row = y as f64;
+                let cell_width = size.cell.width as f64;
+                let cell_height = size.cell.height as f64;
+                (
+                    col * cell_width + size.padding.left as f64,
+                    row * cell_height + size.padding.top as f64,
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +546,143 @@ mod tests {
         };
         assert!(g.equals(g));
         assert!(!g.equals(GridSize::default()));
+    }
+
+    // Upstream "Size.balancePadding equal distributes whitespace equally".
+    #[test]
+    fn size_balance_padding_equal_distributes_whitespace_equally() {
+        let mut size = Size {
+            screen: ScreenSize {
+                width: 1050,
+                height: 850,
+            },
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: Padding::default(),
+        };
+        size.balance_padding(
+            Padding {
+                top: 4,
+                bottom: 4,
+                left: 4,
+                right: 4,
+            },
+            PaddingBalance::Equal,
+        );
+        assert_eq!(size.padding.left, size.padding.right);
+        assert_eq!(size.padding.top, size.padding.bottom);
+        assert!(size.padding.top > 0);
+    }
+
+    // Upstream "Size.balancePadding true shifts excess top to bottom".
+    #[test]
+    fn size_balance_padding_true_shifts_excess_top_to_bottom() {
+        let mut size = Size {
+            screen: ScreenSize {
+                width: 1090,
+                height: 1070,
+            },
+            cell: CellSize {
+                width: 20,
+                height: 40,
+            },
+            padding: Padding::default(),
+        };
+        size.balance_padding(Padding::default(), PaddingBalance::True);
+        assert_eq!(size.padding.left, size.padding.right);
+        assert!(size.padding.top < size.padding.bottom);
+        assert_eq!(size.padding.top, 10);
+        assert_eq!(size.padding.bottom, 20);
+    }
+
+    #[test]
+    fn size_grid_and_terminal() {
+        let size = Size {
+            screen: ScreenSize {
+                width: 100,
+                height: 100,
+            },
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: Padding {
+                top: 5,
+                bottom: 5,
+                left: 10,
+                right: 10,
+            },
+        };
+        // terminal = screen - padding = 80 x 90.
+        assert_eq!(
+            size.terminal(),
+            ScreenSize {
+                width: 80,
+                height: 90
+            }
+        );
+        // grid = 80/10 = 8 columns, 90/20 = 4 rows.
+        assert_eq!(
+            size.grid(),
+            GridSize {
+                columns: 8,
+                rows: 4
+            }
+        );
+    }
+
+    // Upstream "coordinate conversion": surface -> grid with clamping.
+    #[test]
+    fn coordinate_conversion() {
+        let size = Size {
+            screen: ScreenSize {
+                width: 100,
+                height: 100,
+            },
+            cell: CellSize {
+                width: 5,
+                height: 10,
+            },
+            padding: Padding::default(),
+        };
+        let cols = size.grid().columns;
+        let rows = size.grid().rows;
+        let cases = [
+            ((0.0, 0.0), (0u16, 0u16)),
+            ((6.0, 0.0), (1, 0)),
+            ((6.0, 10.0), (1, 1)),
+            ((-10.0, -10.0), (0, 0)),
+            ((100_000.0, 100_000.0), (cols - 1, rows - 1)),
+        ];
+        for ((sx, sy), (gx, gy)) in cases {
+            let actual = (Coordinate::Surface { x: sx, y: sy }).convert(CoordinateTag::Grid, size);
+            assert_eq!(actual, Coordinate::Grid { x: gx, y: gy });
+        }
+    }
+
+    #[test]
+    fn coordinate_surface_terminal_round_trip() {
+        let size = Size {
+            screen: ScreenSize {
+                width: 100,
+                height: 100,
+            },
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: Padding {
+                top: 5,
+                bottom: 0,
+                left: 7,
+                right: 0,
+            },
+        };
+        let surface = Coordinate::Surface { x: 42.0, y: 24.0 };
+        let term = surface.convert(CoordinateTag::Terminal, size);
+        assert_eq!(term, Coordinate::Terminal { x: 35.0, y: 19.0 });
+        assert_eq!(term.convert(CoordinateTag::Surface, size), surface);
     }
 }

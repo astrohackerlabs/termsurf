@@ -673,7 +673,7 @@ are past the correctness-critical foundation.
 - [Experiment 224: Port Renderer Sizing Value Types](224-port-renderer-sizing-value-types.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 225: Port Renderer Size, PaddingBalance, and Coordinate](225-port-renderer-size-coordinate.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

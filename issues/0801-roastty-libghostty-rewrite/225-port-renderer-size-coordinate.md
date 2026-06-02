@@ -176,3 +176,90 @@ One real finding, fixed in the design above before this commit:
    renderer modules must be able to construct and read it, so `Size`'s fields
    are now `pub` (crate-visible through the `pub(crate)` struct), matching the
    Experiment 224 value types.
+
+## Result
+
+**Result:** Pass
+
+Extended `roastty/src/renderer/size.rs` with the remaining `renderer/size.zig`
+surface, completing the port of that file:
+
+- `PaddingBalance { False, True, Equal }`;
+- `Size { pub screen, pub cell, pub padding }` with `grid()`, `terminal()`, and
+  `balance_padding(explicit, mode)` — sets explicit padding, recomputes balanced
+  padding from `grid()`, then for `True` caps top padding to
+  `(explicit.left + explicit.right + cell.width) / 2` and shifts the excess
+  (saturating `vshift`) from top to bottom; `False` is `unreachable!()`;
+- `CoordinateTag { Surface, Terminal, Grid }` and
+  `Coordinate { Surface{x,y:f64}, Terminal{x,y:f64}, Grid{x,y:Unit} }` with
+  `convert(to, size)` (identity fast-path, then surface-normalized reconvert
+  with the surface→grid clamp) and the private `convert_to_surface`.
+
+`Size` derives `Eq`; `Coordinate` derives `PartialEq` only (it carries `f64`).
+The surface→terminal step is computed directly as
+`surface − (padding.left, padding.top)`, equivalent to upstream's recursive
+`convert(.terminal)`.
+
+Tests added (5): `size_balance_padding_equal_distributes_whitespace_equally`,
+`size_balance_padding_true_shifts_excess_top_to_bottom`,
+`size_grid_and_terminal`, `coordinate_conversion` (the upstream surface→grid
+table including the negative-clamp and large-value-clamp cases), and
+`coordinate_surface_terminal_round_trip`.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty renderer::size
+cargo test -p roastty renderer
+cargo test -p roastty
+```
+
+Observed:
+
+- `renderer::size`: 17 passed (12 from Exp 224 + 5 new).
+- Full `roastty`: 2232 unit tests passed (2227 prior + 5 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/renderer/size.rs` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+should change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-071944-183805-prompt.md`
+- Result: `logs/codex-review/20260602-071944-183805-last-message.md`
+
+Codex confirmed `Size::balance_padding` is faithful (explicit → balanced from
+`grid()` → `True` cap with saturating `vshift` shifted top→bottom; `False`
+`unreachable!()`; `Equal` no-op), that
+`Coordinate::convert`/`convert_to_surface` match upstream (surface↔terminal
+padding offset, grid↔surface cell scaling, and the surface→grid clamp), that the
+direct surface−padding terminal computation is equivalent to upstream's
+recursive path, and that the 5 tests are correct (including the upstream
+coordinate table and the `top=10`/`bottom=20` `True` case). The `f64`→`u16`
+caveat is the same accepted one as Experiment 224.
+
+## Conclusion
+
+Experiment 225 succeeds and **completes the port of `renderer/size.zig`**.
+Together with Experiment 224, Roastty's `renderer::size` module now holds the
+full sizing/coordinate model — `CellSize`, `ScreenSize`, `GridSize`, `Padding`,
+`Size`, `PaddingBalance`, and `Coordinate` with surface/terminal/grid conversion
+— with all six upstream tests ported and passing (17 tests total). Both Codex
+gates passed (one design finding fixed; zero result findings).
+
+This is the coordinate foundation later renderer geometry slices need. The next
+renderer slice is likely `renderer/cell.zig` (building per-cell render data:
+backgrounds, glyph quads, and cursor cells) or `renderer/State.zig` (the
+renderer state struct), both of which consume this `Size`/`Coordinate` model and
+the Experiment 223 cursor-style decision.
