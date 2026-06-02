@@ -136,3 +136,69 @@ deriving `PartialEq` but not `Eq` is correct because of the `f64` fields, and
 that keeping `cursor_thickness` as a plain `u32` field (deferring the upstream
 `= 1` default to the `calc`/config path) is the faithful Rust shape for this
 slice. The three tests are adequate. No changes required.
+
+## Result
+
+**Result:** Pass
+
+Created `roastty/src/font/metrics.rs` with `pub(crate) struct Metrics` (the 17
+fields with upstream names, order, types, and doc comments — signed `i32`
+`overline_position`, the five `f64` fields, the rest `u32`), deriving
+`Debug, Clone, Copy, PartialEq` (not `Eq`). `cursor_thickness` is a plain `u32`
+field documented as config-driven (default applied by the deferred `calc`).
+Wired `pub(crate) mod metrics;` into `font/mod.rs`.
+
+Tests added (3): `metrics_holds_fields` (all 17 fields round-trip),
+`metrics_overline_position_is_signed` (negative value), and
+`metrics_face_fields_are_f64` (fractional `face_width`/`icon_height`).
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty font
+cargo test -p roastty
+```
+
+Observed:
+
+- `font`: 7 passed (4 prior + 3 new).
+- Full `roastty`: 2283 unit tests passed (2280 prior + 3 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/font` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes; no `FaceMetrics`/`Minimums`/`calc`/
+constraint scope pulled in.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+needs to change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-082059-392885-prompt.md`
+- Result: `logs/codex-review/20260602-082059-392885-last-message.md`
+
+Codex confirmed all 17 fields match upstream in order and type
+(`overline_position` `i32`, the five `f64` fields, the rest `u32`), that
+`PartialEq` without `Eq` is correct, that `cursor_thickness` as a plain `u32`
+with the deferred default is the right scope, that the three tests are correct,
+and that the module wiring is internal with no ABI exposure.
+
+## Conclusion
+
+Experiment 235 succeeds. The font module now has the `Metrics` value type — the
+computed cell dimensions and decoration positions a font produces. Both Codex
+gates passed with zero findings.
+
+The remaining `font/Metrics.zig` slices build on this struct: the `FaceMetrics`
+input type and `Minimums` table, then `calc` (deriving `Metrics` from a face's
+raw metrics with rounding/clamping — the substantive behavior, with the upstream
+tests), and constraint application. Those are the next font experiments, leading
+toward the glyph `Atlas` and the CoreText face/rasterization core.

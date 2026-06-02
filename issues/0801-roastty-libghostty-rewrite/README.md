@@ -693,7 +693,7 @@ are past the correctness-critical foundation.
 - [Experiment 234: Port Font `Style` and `Presentation` Enums](234-port-font-style-presentation.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 235: Port the Font `Metrics` Struct](235-port-font-metrics-struct.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

@@ -8,6 +8,7 @@
 //! later experiments.
 
 pub(crate) mod glyph;
+pub(crate) mod metrics;
 
 /// The style (weight/slant) of a font face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
