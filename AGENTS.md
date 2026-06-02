@@ -377,6 +377,17 @@ closed = "2026-03-16"
 +++
 ```
 
+Issues may add their own TOML frontmatter keys — to `README.md`, experiment
+files, or other issue docs — for issue-specific metadata such as per-experiment
+agent provenance, as long as:
+
+- the reserved workflow keys are preserved: `README.md` always carries `status`
+  and `opened` (plus `closed` when closed), unchanged in name and meaning;
+- additive keys are valid TOML between the `+++` delimiters and do not contradict
+  the reserved keys or the index tooling — `scripts/build-issues-index.sh` reads
+  only the reserved README keys and ignores the rest;
+- the issue documents its own added schema in its `README.md`.
+
 #### README.md structure
 
 After the frontmatter, a new issue's `README.md` has these sections:
@@ -415,6 +426,11 @@ the README (see "Closing an Issue").
 Each experiment lives in its **own file** `NN-{slug}.md` in the issue folder,
 where `NN` is a zero-padded two-digit number in creation order (`01`, `02`, …,
 up to `99`). The slug is lowercase-hyphenated and describes the experiment.
+
+An experiment file may begin with an optional TOML frontmatter block
+(`+++ … +++`) before its H1 title — for issue-specific metadata such as agent
+provenance. Experiment frontmatter is optional and must not replace the required
+H1 title and H2 sections below it.
 
 Each experiment file contains:
 
