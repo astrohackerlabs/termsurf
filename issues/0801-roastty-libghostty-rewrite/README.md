@@ -534,6 +534,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 204: Attach Kitty Render Placements to Render State](204-attach-kitty-render-placements-to-render-state.md)
   — **Pass**
+- [Experiment 205: Port Renderer Image State Foundation](205-port-renderer-image-state-foundation.md)
+  — **Designed**
 
 ## Non-Goals
 
