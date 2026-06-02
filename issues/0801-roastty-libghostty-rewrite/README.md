@@ -688,6 +688,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 232: Port `Contents::add` / `clear` and `Key`](232-port-contents-add-clear.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 233: Establish the `font` Module and Port `Glyph`](233-establish-font-module-glyph.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
