@@ -552,6 +552,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 213: Port Standard Metal Pipeline Descriptions](213-port-standard-metal-pipeline-descriptions.md)
   — **Pass**
+- [Experiment 214: Port Metal Pipeline State Builder](214-port-metal-pipeline-state-builder.md)
+  — **Designed**
 
 ## Non-Goals
 
