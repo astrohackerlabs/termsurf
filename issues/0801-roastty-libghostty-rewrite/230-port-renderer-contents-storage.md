@@ -185,3 +185,84 @@ Findings fixed in the design above before this commit:
 3. **(Low)** specified that `fg_rows` sizing casts to `usize` first (`rows + 2`,
    `rows + 1`, `columns * 3`), and that `self.size` is assigned with the buffers
    after local construction.
+
+## Result
+
+**Result:** Pass
+
+Extended `roastty/src/renderer/cell.rs` with the `Contents` struct
+(`size: GridSize`, `bg_cells: Vec<CellBg>`, `fg_rows: Vec<Vec<CellTextVertex>>`,
+`#[derive(Default)]`) and `resize`, `reset`, `bg_cell`, `bg_cell_mut`. Added
+`use super::shader::{CellBg, CellTextVertex};` and `use super::size::GridSize;`,
+and updated the module doc comment to cover the cell-data builder.
+
+`resize` casts `columns`/`rows` to `usize`, allocates `bg_cells` of
+`columns * rows` zeroed entries, builds `rows + 2` `fg_rows` lists (cursor lists
+`0` and `rows + 1` with capacity 1, real rows with capacity `columns * 3`), and
+assigns `size`/`bg_cells`/`fg_rows` together after local construction. `reset`
+zeroes the backgrounds and `clear()`s each foreground list. `bg_cell`/
+`bg_cell_mut` index `row * columns + col`.
+
+Tests added (7): `contents_resize_allocates`, `contents_resize_capacity_layout`
+(real rows `>= columns * 3`, cursor lists smaller), `contents_bg_cell_indexing`,
+`contents_reset_zeroes_bg`, `contents_reset_clears_fg_rows` (pushes dummy
+vertices into a real and a cursor row, asserts all empty after reset),
+`contents_resize_zero_sized`, and `contents_resize_reinvalidates`.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty renderer::cell
+cargo test -p roastty renderer
+cargo test -p roastty
+```
+
+Observed:
+
+- `renderer::cell`: 27 passed (20 prior + 7 new).
+- Full `roastty`: 2263 unit tests passed (2256 prior + 7 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/renderer/cell.rs` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes; `set_cursor`/`get_cursor_glyph`/
+`add`/`clear`/`Key` not pulled in.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+should change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-075742-705921-prompt.md`
+- Result: `logs/codex-review/20260602-075742-705921-last-message.md`
+
+Codex confirmed `resize` matches upstream storage behavior (zeroed `bg_cells`,
+`rows + 2` `fg_rows` with cursor lists at `0`/`rows + 1` capacity 1 and real
+rows `columns * 3`, `usize` casts with no overflow path), that `reset` zeroes
+backgrounds and clears each foreground list retaining capacity, that
+`bg_cell`/`bg_cell_mut` use the upstream index formula, that the 7 tests are
+sufficient, and that deriving `Default` (0×0, empty vecs) is the right
+pre-resize analog.
+
+## Conclusion
+
+Experiment 230 succeeds. The `Contents` storage skeleton — `size`, `bg_cells`,
+`fg_rows` with the `rows + 2` cursor-reserved layout, plus `resize`, `reset`,
+and the `bg_cell` accessors — is now in `renderer::cell`. Both Codex gates
+passed (three design findings fixed; zero result findings).
+
+The remaining `Contents` slices build on this:
+
+- **Experiment 231:** `set_cursor` / `get_cursor_glyph`, which use the reserved
+  cursor lists (`fg_rows[0]` for block cursors drawn first, `fg_rows[rows + 1]`
+  for the others drawn last) and depend on the cursor `Style` (Experiment 223).
+- **Experiment 232:** `add` / `clear` and the `Key` / `CellType` mapping (which
+  routes a cell to the `fg_rows[y + 1]` real-row list, the `+ 1` skipping the
+  reserved cursor list).

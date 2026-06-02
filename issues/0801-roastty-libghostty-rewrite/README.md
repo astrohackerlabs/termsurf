@@ -683,7 +683,7 @@ are past the correctness-critical foundation.
 - [Experiment 229: Port Renderer `constraint_width`](229-port-renderer-constraint-width.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 230: Port Renderer `Contents` Storage and Lifecycle](230-port-renderer-contents-storage.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

@@ -1,12 +1,15 @@
 #![allow(dead_code)]
 // Cell codepoint classification is consumed by later renderer slices.
 
-//! Renderer cell codepoint classification.
+//! Renderer cell data and codepoint classification.
 //!
-//! Faithful port of the pure codepoint-classification predicates in upstream
-//! `renderer/cell.zig`. The `Contents` cell-render-data builder,
-//! `constraintWidth`, and `isSymbol` depend on shader/font/terminal types and a
-//! generated Unicode table, and are ported separately.
+//! Faithful port of upstream `renderer/cell.zig`: the codepoint-classification
+//! predicates, `constraint_width`, and the `Contents` cell-render-data builder.
+//! The `Contents` cursor lists (`set_cursor`/`get_cursor_glyph`) and row
+//! mutation (`add`/`clear`) are ported in later slices.
+
+use super::shader::{CellBg, CellTextVertex};
+use super::size::GridSize;
 
 /// True only for U+2588 FULL BLOCK.
 pub(crate) fn is_covering(cp: u32) -> bool {
@@ -131,6 +134,78 @@ pub(crate) fn constraint_width(raw_slice: &[CellInfo], x: usize, cols: usize) ->
 
     // Otherwise, this has to be 1 cell wide.
     1
+}
+
+/// The contents of all the cells in the terminal.
+///
+/// Holds per-cell GPU data and supports row-wise clearing/dirty tracking so the
+/// GPU buffers need not be rebuilt each frame. Must be initialized by calling
+/// `resize` before any other operation.
+#[derive(Default)]
+pub(crate) struct Contents {
+    size: GridSize,
+
+    /// Flat array of cell background colors, indexed
+    /// `bg_cells[row * columns + col]`. Prefer `bg_cell`/`bg_cell_mut` over
+    /// direct indexing to centralize the index arithmetic.
+    bg_cells: Vec<CellBg>,
+
+    /// Foreground cells per row. `fg_rows[0]` and `fg_rows[rows + 1]` are
+    /// reserved for the cursor (it must be first and last in the GPU buffer);
+    /// real rows are `fg_rows[1..=rows]`. Upstream uses an `ArrayListCollection`;
+    /// a `Vec<Vec<_>>` with `Vec::clear` (which retains capacity) is the analog.
+    fg_rows: Vec<Vec<CellTextVertex>>,
+}
+
+impl Contents {
+    /// Resize the cell contents for the given grid size. This always invalidates
+    /// the entire cell contents.
+    pub(crate) fn resize(&mut self, size: GridSize) {
+        let columns = size.columns as usize;
+        let rows = size.rows as usize;
+
+        let bg_cells = vec![CellBg([0, 0, 0, 0]); columns * rows];
+
+        // `rows + 2` lists: indices 0 and `rows + 1` are the cursor-reserved
+        // lists (small), and `1..=rows` are the real rows. Real rows get
+        // capacity `columns * 3` (a glyph + underline + strikethrough per
+        // column) to avoid reallocation in the common case.
+        let mut fg_rows: Vec<Vec<CellTextVertex>> = Vec::with_capacity(rows + 2);
+        for i in 0..rows + 2 {
+            let capacity = if i == 0 || i == rows + 1 {
+                1
+            } else {
+                columns * 3
+            };
+            fg_rows.push(Vec::with_capacity(capacity));
+        }
+
+        // Commit the new buffers and size together: no window of half-updated
+        // state.
+        self.size = size;
+        self.bg_cells = bg_cells;
+        self.fg_rows = fg_rows;
+    }
+
+    /// Reset the cell contents to an empty state without resizing.
+    pub(crate) fn reset(&mut self) {
+        for cell in &mut self.bg_cells {
+            *cell = CellBg([0, 0, 0, 0]);
+        }
+        for list in &mut self.fg_rows {
+            list.clear();
+        }
+    }
+
+    /// Access a background cell. Prefer this over direct indexing of `bg_cells`.
+    pub(crate) fn bg_cell(&self, row: usize, col: usize) -> &CellBg {
+        &self.bg_cells[row * self.size.columns as usize + col]
+    }
+
+    /// Mutably access a background cell.
+    pub(crate) fn bg_cell_mut(&mut self, row: usize, col: usize) -> &mut CellBg {
+        &mut self.bg_cells[row * self.size.columns as usize + col]
+    }
 }
 
 #[cfg(test)]
@@ -352,5 +427,92 @@ mod tests {
         // glyph — guards that `is_space` stays the narrow predicate.
         let row = [ci('a' as u32, 1), ci(SYMBOL, 1), ci(0x00A0, 1)];
         assert_eq!(constraint_width(&row, 1, 3), 1);
+    }
+
+    fn grid(columns: u16, rows: u16) -> GridSize {
+        GridSize { columns, rows }
+    }
+
+    fn dummy_vertex() -> CellTextVertex {
+        use crate::renderer::shader::{CellTextAtlas, CellTextFlags};
+        CellTextVertex {
+            glyph_pos: [0, 0],
+            glyph_size: [0, 0],
+            bearings: [0, 0],
+            grid_pos: [0, 0],
+            color: [0, 0, 0, 0],
+            atlas: CellTextAtlas::Grayscale,
+            flags: CellTextFlags::default(),
+            _padding: [0, 0],
+        }
+    }
+
+    #[test]
+    fn contents_resize_allocates() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        assert_eq!(c.bg_cells.len(), 6);
+        assert!(c.bg_cells.iter().all(|b| *b == CellBg([0, 0, 0, 0])));
+        assert_eq!(c.fg_rows.len(), 4); // rows + 2
+    }
+
+    #[test]
+    fn contents_resize_capacity_layout() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        // Real rows (indices 1..=rows) hold a glyph + underline + strikethrough
+        // per column.
+        assert!(c.fg_rows[1].capacity() >= 3 * 3);
+        assert!(c.fg_rows[2].capacity() >= 3 * 3);
+        // The cursor-reserved lists (0 and rows + 1) are smaller.
+        assert!(c.fg_rows[0].capacity() < c.fg_rows[1].capacity());
+        assert!(c.fg_rows[3].capacity() < c.fg_rows[1].capacity());
+    }
+
+    #[test]
+    fn contents_bg_cell_indexing() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        *c.bg_cell_mut(1, 2) = CellBg([9, 9, 9, 9]);
+        // row * columns + col = 1 * 3 + 2 = 5.
+        assert_eq!(c.bg_cells[5], CellBg([9, 9, 9, 9]));
+        assert_eq!(*c.bg_cell(1, 2), CellBg([9, 9, 9, 9]));
+    }
+
+    #[test]
+    fn contents_reset_zeroes_bg() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        *c.bg_cell_mut(0, 0) = CellBg([1, 2, 3, 4]);
+        c.reset();
+        assert!(c.bg_cells.iter().all(|b| *b == CellBg([0, 0, 0, 0])));
+        assert_eq!(c.fg_rows.len(), 4);
+    }
+
+    #[test]
+    fn contents_reset_clears_fg_rows() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.fg_rows[1].push(dummy_vertex()); // a real row
+        c.fg_rows[0].push(dummy_vertex()); // a cursor-reserved row
+        c.reset();
+        assert!(c.fg_rows.iter().all(|list| list.is_empty()));
+    }
+
+    #[test]
+    fn contents_resize_zero_sized() {
+        let mut c = Contents::default();
+        c.resize(grid(0, 0));
+        assert!(c.bg_cells.is_empty());
+        assert_eq!(c.fg_rows.len(), 2); // the two cursor lists
+    }
+
+    #[test]
+    fn contents_resize_reinvalidates() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        *c.bg_cell_mut(0, 0) = CellBg([1, 1, 1, 1]);
+        c.resize(grid(3, 2));
+        assert_eq!(*c.bg_cell(0, 0), CellBg([0, 0, 0, 0]));
     }
 }
