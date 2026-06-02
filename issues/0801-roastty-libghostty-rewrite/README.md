@@ -559,7 +559,7 @@ tests, choose the larger subsystem.
 - [Experiment 216: Port Offscreen Metal Render Pass Readback](216-port-offscreen-metal-render-pass-readback.md)
   — **Pass**
 - [Experiment 217: Port Offscreen Metal Cell Background Readback](217-port-offscreen-metal-cell-background-readback.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

@@ -168,8 +168,59 @@ All public names must use Roastty naming.
 
 ## Result
 
-Not run yet.
+**Result:** Pass
+
+Experiment 217 extended `MetalRenderPassStep` with the supported non-uniform
+buffer slice and implemented the upstream-compatible index mapping:
+
+- `buffers[0]` binds to vertex and fragment buffer index `0`;
+- `uniforms` still bind to vertex and fragment buffer index `1`;
+- `buffers[1..]` bind to vertex and fragment buffer indices starting at `2`;
+- zero-instance steps still return before pipeline or buffer binding.
+
+The production `cell_bg` shader now has automated offscreen read-back coverage.
+The new tests draw per-cell `CellBg` colors through `pipelines.cell_bg`, bind
+the cell buffer through the generic render-pass mapping path as
+`buffers: &[None, Some(cells.buffer())]`, and verify exact BGRA pixels after
+`commit_and_wait(...)`.
+
+The padding test uses asymmetric `grid_padding = [top, right, bottom, left]`
+with top `1.0` and left `2.0`, proving the shader's existing
+`uniforms.grid_padding.wx` interpretation (`w = left`, `x = top`). Pixels
+outside the padded grid remain transparent when `padding_extend = 0`.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/renderer/metal/render_pass.rs roastty/src/renderer/metal/shaders.rs
+cargo test -p roastty renderer::metal::render_pass
+cargo test -p roastty renderer::metal::shaders
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/renderer/metal; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Observed results:
+
+- `renderer::metal::render_pass`: 8 passed.
+- `renderer::metal::shaders`: 8 passed.
+- Full `roastty`: 2192 library tests passed, plus the C ABI harness passed.
+- Both no-`ghostty` gates passed.
+- `git diff --check` passed.
+
+Codex reviewed the completed implementation and found no blocking issues. It
+confirmed that the buffer mapping, production `cell_bg` read-back coverage,
+asymmetric padding semantics, zero-instance behavior, and scope boundaries
+satisfy the experiment.
 
 ## Conclusion
 
-Pending.
+Roastty now has a tested Metal render-pass path for the first real terminal
+content buffer. The renderer can bind `CellBg` data through the production
+buffer-index layout and prove the shader output by reading exact pixels back
+from a shared offscreen target.
+
+The next renderer experiment can build on this by adding the next production
+resource class needed for terminal rendering, without revisiting the basic
+uniform-plus-content-buffer binding path.

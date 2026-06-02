@@ -137,6 +137,25 @@ pub(crate) struct MetalUniforms {
 impl MetalUniforms {
     #[cfg(test)]
     pub(crate) fn test_bg_color(width: u16, height: u16, bg_color: [u8; 4]) -> Self {
+        Self::test_with_grid(
+            [width, height],
+            [width, height],
+            [1.0, 1.0],
+            [0.0; 4],
+            0,
+            bg_color,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_with_grid(
+        screen_size: [u16; 2],
+        grid_size: [u16; 2],
+        cell_size: [f32; 2],
+        grid_padding: [f32; 4],
+        padding_extend: u8,
+        bg_color: [u8; 4],
+    ) -> Self {
         Self {
             projection_matrix: [
                 [1.0, 0.0, 0.0, 0.0],
@@ -144,12 +163,12 @@ impl MetalUniforms {
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-            screen_size: [width as f32, height as f32],
-            cell_size: [1.0, 1.0],
-            grid_size: [width, height],
+            screen_size: [screen_size[0] as f32, screen_size[1] as f32],
+            cell_size,
+            grid_size,
             _padding0: [0; 12],
-            grid_padding: [0.0; 4],
-            padding_extend: 0,
+            grid_padding,
+            padding_extend,
             _padding1: [0; 3],
             min_contrast: 0.0,
             cursor_pos: [0, 0],
