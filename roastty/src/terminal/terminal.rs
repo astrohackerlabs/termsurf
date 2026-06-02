@@ -3826,6 +3826,10 @@ mod tests {
     use crate::terminal::screen::ScreenCursorHyperlinkId;
     use crate::terminal::selection;
     use crate::terminal::style;
+    use std::fs;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn terminal_with_lines(lines: &[&str]) -> Terminal {
         let rows = lines.len().max(1);
@@ -3881,6 +3885,69 @@ mod tests {
 
     fn kitty_transmit_apc(image_id: u32) -> Vec<u8> {
         format!("\x1b_Ga=t,f=32,s=1,v=1,i={image_id};AQIDBA==\x1b\\").into_bytes()
+    }
+
+    struct KittyFileTestDir {
+        path: PathBuf,
+    }
+
+    impl KittyFileTestDir {
+        fn new() -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "roastty-terminal-kitty-file-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn write(&self, name: &str, data: &[u8]) -> PathBuf {
+            let path = self.path.join(name);
+            fs::write(&path, data).unwrap();
+            fs::canonicalize(path).unwrap()
+        }
+    }
+
+    impl Drop for KittyFileTestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn base64(data: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut output = String::new();
+        for chunk in data.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            output.push(TABLE[(b0 >> 2) as usize] as char);
+            output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+            if chunk.len() > 1 {
+                output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+            } else {
+                output.push('=');
+            }
+            if chunk.len() > 2 {
+                output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
+            } else {
+                output.push('=');
+            }
+        }
+        output
+    }
+
+    fn kitty_file_transmit_apc(image_id: u32, medium: char, path: &Path) -> Vec<u8> {
+        format!(
+            "\x1b_Ga=t,t={medium},f=32,s=1,v=1,i={image_id};{}\x1b\\",
+            base64(path.as_os_str().as_bytes())
+        )
+        .into_bytes()
     }
 
     fn kitty_numbered_transmit_apc(image_number: u32) -> Vec<u8> {
@@ -6154,6 +6221,98 @@ mod tests {
                 .image_limits
                 .temporary_file
         );
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_file_media_obeys_terminal_options() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+        let dir = KittyFileTestDir::new();
+        let file_path = dir.write("image.data", &[1, 2, 3, 4]);
+
+        terminal
+            .next_slice(&kitty_file_transmit_apc(70, 'f', &file_path))
+            .unwrap();
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(70)
+            .is_none());
+
+        terminal.set_kitty_image_medium(KittyImageMedium::File, true);
+        terminal
+            .next_slice(&kitty_file_transmit_apc(71, 'f', &file_path))
+            .unwrap();
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(71)
+            .is_some());
+        assert!(file_path.exists());
+
+        terminal.set_kitty_image_medium(KittyImageMedium::File, false);
+        terminal
+            .next_slice(&kitty_file_transmit_apc(72, 'f', &file_path))
+            .unwrap();
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(72)
+            .is_none());
+
+        terminal.next_slice(&kitty_transmit_apc(73)).unwrap();
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(73)
+            .is_some());
+    }
+
+    #[test]
+    fn terminal_stream_kitty_graphics_temporary_file_media_deletes_source() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+        let dir = KittyFileTestDir::new();
+        let blocked_path = dir.write("tty-graphics-protocol-blocked.data", &[1, 2, 3, 4]);
+
+        terminal
+            .next_slice(&kitty_file_transmit_apc(80, 't', &blocked_path))
+            .unwrap();
+        assert!(blocked_path.exists());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(80)
+            .is_none());
+
+        terminal.set_kitty_image_medium(KittyImageMedium::TemporaryFile, true);
+        let allowed_path = dir.write("tty-graphics-protocol-allowed.data", &[1, 2, 3, 4]);
+        terminal
+            .next_slice(&kitty_file_transmit_apc(81, 't', &allowed_path))
+            .unwrap();
+        assert!(!allowed_path.exists());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(81)
+            .is_some());
+
+        terminal.set_kitty_image_medium(KittyImageMedium::TemporaryFile, false);
+        let disabled_path = dir.write("tty-graphics-protocol-disabled.data", &[1, 2, 3, 4]);
+        terminal
+            .next_slice(&kitty_file_transmit_apc(82, 't', &disabled_path))
+            .unwrap();
+        assert!(disabled_path.exists());
+        assert!(terminal
+            .screens
+            .active()
+            .kitty_images()
+            .image_by_id(82)
+            .is_none());
     }
 
     #[test]

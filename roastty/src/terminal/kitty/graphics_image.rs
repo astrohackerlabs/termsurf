@@ -1,6 +1,10 @@
 //! Kitty graphics image loading.
 
-use std::io::Read;
+use std::ffi::OsString;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use flate2::read::ZlibDecoder;
@@ -18,6 +22,8 @@ pub(crate) enum ImageLoadError {
     DecompressionFailed,
     DimensionsRequired,
     DimensionsTooLarge,
+    TemporaryFileNotInTempDir,
+    TemporaryFileNotNamedCorrectly,
     UnsupportedFormat,
     UnsupportedMedium,
     OutOfMemory,
@@ -126,12 +132,18 @@ impl LoadingImage {
                 Ok(result)
             }
             TransmissionMedium::File => {
-                let _ = limits.file;
-                Err(ImageLoadError::UnsupportedMedium)
+                if !limits.file || transmission.format == TransmissionFormat::Png {
+                    return Err(ImageLoadError::UnsupportedMedium);
+                }
+                result.read_file(transmission, &command.data, false)?;
+                Ok(result)
             }
             TransmissionMedium::TemporaryFile => {
-                let _ = limits.temporary_file;
-                Err(ImageLoadError::UnsupportedMedium)
+                if !limits.temporary_file || transmission.format == TransmissionFormat::Png {
+                    return Err(ImageLoadError::UnsupportedMedium);
+                }
+                result.read_file(transmission, &command.data, true)?;
+                Ok(result)
             }
             TransmissionMedium::SharedMemory => {
                 let _ = limits.shared_memory;
@@ -231,6 +243,102 @@ impl LoadingImage {
         self.image.compression = TransmissionCompression::None;
         Ok(())
     }
+
+    fn read_file(
+        &mut self,
+        transmission: super::graphics_command::Transmission,
+        path_data: &[u8],
+        temporary: bool,
+    ) -> Result<(), ImageLoadError> {
+        if path_data.contains(&0) {
+            return Err(ImageLoadError::InvalidData);
+        }
+
+        let path = PathBuf::from(OsString::from_vec(path_data.to_vec()));
+        let path = fs::canonicalize(path).map_err(|_| ImageLoadError::InvalidData)?;
+        if is_unsafe_path(&path) {
+            return Err(ImageLoadError::InvalidData);
+        }
+
+        let _cleanup = if temporary {
+            if !is_path_in_temp_dir(&path) {
+                return Err(ImageLoadError::TemporaryFileNotInTempDir);
+            }
+            if !path
+                .as_os_str()
+                .as_bytes()
+                .windows(b"tty-graphics-protocol".len())
+                .any(|part| part == b"tty-graphics-protocol")
+            {
+                return Err(ImageLoadError::TemporaryFileNotNamedCorrectly);
+            }
+            Some(TemporaryFileCleanup { path: path.clone() })
+        } else {
+            None
+        };
+
+        let mut file = File::open(&path).map_err(|_| ImageLoadError::InvalidData)?;
+        let metadata = file.metadata().map_err(|_| ImageLoadError::InvalidData)?;
+        if !metadata.file_type().is_file() {
+            return Err(ImageLoadError::InvalidData);
+        }
+
+        if transmission.offset > 0 {
+            file.seek(SeekFrom::Start(u64::from(transmission.offset)))
+                .map_err(|_| ImageLoadError::InvalidData)?;
+        }
+
+        let limit = if transmission.size > 0 {
+            usize::try_from(transmission.size)
+                .unwrap_or(MAX_IMAGE_SIZE)
+                .min(MAX_IMAGE_SIZE)
+        } else {
+            MAX_IMAGE_SIZE
+        };
+        let mut data = Vec::new();
+        file.take(limit as u64)
+            .read_to_end(&mut data)
+            .map_err(|_| ImageLoadError::InvalidData)?;
+        self.data = data;
+        Ok(())
+    }
+}
+
+struct TemporaryFileCleanup {
+    path: PathBuf,
+}
+
+impl Drop for TemporaryFileCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn is_unsafe_path(path: &Path) -> bool {
+    let bytes = path.as_os_str().as_bytes();
+    bytes.starts_with(b"/proc/")
+        || bytes.starts_with(b"/sys/")
+        || (bytes.starts_with(b"/dev/") && !bytes.starts_with(b"/dev/shm/"))
+}
+
+fn is_path_in_temp_dir(path: &Path) -> bool {
+    let path_bytes = path.as_os_str().as_bytes();
+    if path_bytes.starts_with(b"/tmp") || path_bytes.starts_with(b"/dev/shm") {
+        return true;
+    }
+
+    let temp = std::env::temp_dir();
+    if path.starts_with(&temp) {
+        return true;
+    }
+
+    if let Ok(temp) = fs::canonicalize(temp) {
+        if path.starts_with(temp) {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -240,6 +348,9 @@ mod tests {
         TransmissionMedium,
     };
     use super::*;
+    use std::fs;
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     const RGB_NONE_20X15: &[u8] = include_bytes!(
         "../../../../vendor/ghostty/src/terminal/kitty/testdata/image-rgb-none-20x15-2147483647-raw.data"
@@ -254,6 +365,55 @@ mod tests {
             quiet: Quiet::No,
             data: data.to_vec(),
         }
+    }
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn temp() -> Self {
+            Self::in_base(std::env::temp_dir())
+        }
+
+        fn target() -> Self {
+            Self::in_base(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target"))
+        }
+
+        fn in_base(base: PathBuf) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = base.join(format!(
+                "roastty-kitty-graphics-image-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn write(&self, name: &str, data: &[u8]) -> PathBuf {
+            let path = self.path.join(name);
+            fs::write(&path, data).unwrap();
+            fs::canonicalize(path).unwrap()
+        }
+
+        fn mkdir(&self, name: &str) -> PathBuf {
+            let path = self.path.join(name);
+            fs::create_dir(&path).unwrap();
+            fs::canonicalize(path).unwrap()
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn path_bytes(path: &Path) -> Vec<u8> {
+        path.as_os_str().as_bytes().to_vec()
     }
 
     #[test]
@@ -492,29 +652,255 @@ mod tests {
     }
 
     #[test]
-    fn kitty_graphics_image_non_direct_media_deferred() {
-        for medium in [
-            TransmissionMedium::File,
-            TransmissionMedium::TemporaryFile,
-            TransmissionMedium::SharedMemory,
-        ] {
+    fn kitty_graphics_image_file_medium_blocked_and_allowed_by_limits() {
+        let dir = TestDir::temp();
+        let path = dir.write("image.data", RGB_NONE_20X15);
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::File,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                ..Transmission::default()
+            },
+            &path_bytes(&path),
+        );
+
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::DIRECT),
+            Err(ImageLoadError::UnsupportedMedium)
+        );
+
+        let loading = LoadingImage::init(
+            &command,
+            LoadingImageLimits {
+                file: true,
+                temporary_file: false,
+                shared_memory: false,
+            },
+        )
+        .unwrap();
+        let image = loading.complete().unwrap();
+        assert_eq!(image.data, RGB_NONE_20X15);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn kitty_graphics_image_temporary_file_medium_blocked_and_allowed_by_limits() {
+        let dir = TestDir::temp();
+        let path = dir.write("tty-graphics-protocol-image.data", RGB_NONE_20X15);
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::TemporaryFile,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                ..Transmission::default()
+            },
+            &path_bytes(&path),
+        );
+
+        assert_eq!(
+            LoadingImage::init(
+                &command,
+                LoadingImageLimits {
+                    file: true,
+                    temporary_file: false,
+                    shared_memory: true,
+                },
+            ),
+            Err(ImageLoadError::UnsupportedMedium)
+        );
+        assert!(path.exists());
+
+        let loading = LoadingImage::init(
+            &command,
+            LoadingImageLimits {
+                file: false,
+                temporary_file: true,
+                shared_memory: false,
+            },
+        )
+        .unwrap();
+        let image = loading.complete().unwrap();
+        assert_eq!(image.data, RGB_NONE_20X15);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn kitty_graphics_image_temporary_file_validation_controls_cleanup() {
+        let dir = TestDir::temp();
+        let wrong_name = dir.write("image.data", RGB_NONE_20X15);
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::TemporaryFile,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                ..Transmission::default()
+            },
+            &path_bytes(&wrong_name),
+        );
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::ALL),
+            Err(ImageLoadError::TemporaryFileNotNamedCorrectly)
+        );
+        assert!(wrong_name.exists());
+
+        let outside = TestDir::target();
+        let outside_path = outside.write("tty-graphics-protocol-image.data", RGB_NONE_20X15);
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::TemporaryFile,
+                width: 20,
+                height: 15,
+                image_id: 32,
+                ..Transmission::default()
+            },
+            &path_bytes(&outside_path),
+        );
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::ALL),
+            Err(ImageLoadError::TemporaryFileNotInTempDir)
+        );
+        assert!(outside_path.exists());
+
+        let invalid = dir.write("tty-graphics-protocol-invalid.data", b"AAAA");
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::TemporaryFile,
+                width: 20,
+                height: 15,
+                image_id: 33,
+                ..Transmission::default()
+            },
+            &path_bytes(&invalid),
+        );
+        let loading = LoadingImage::init(&command, LoadingImageLimits::ALL).unwrap();
+        assert_eq!(loading.complete(), Err(ImageLoadError::InvalidData));
+        assert!(!invalid.exists());
+    }
+
+    #[test]
+    fn kitty_graphics_image_file_media_offset_size_and_invalid_paths() {
+        let dir = TestDir::temp();
+        let mut padded = b"XX".to_vec();
+        padded.extend_from_slice(RGB_NONE_20X15);
+        padded.extend_from_slice(b"YY");
+        let path = dir.write("image.data", &padded);
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::File,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                offset: 2,
+                size: u32::try_from(RGB_NONE_20X15.len()).unwrap(),
+                ..Transmission::default()
+            },
+            &path_bytes(&path),
+        );
+        let image = LoadingImage::init(&command, LoadingImageLimits::ALL)
+            .unwrap()
+            .complete()
+            .unwrap();
+        assert_eq!(image.data, RGB_NONE_20X15);
+
+        let directory = dir.mkdir("directory.data");
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::File,
+                width: 1,
+                height: 1,
+                image_id: 32,
+                ..Transmission::default()
+            },
+            &path_bytes(&directory),
+        );
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::ALL),
+            Err(ImageLoadError::InvalidData)
+        );
+
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::File,
+                width: 1,
+                height: 1,
+                image_id: 33,
+                ..Transmission::default()
+            },
+            b"/tmp/roastty\0image",
+        );
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::ALL),
+            Err(ImageLoadError::InvalidData)
+        );
+
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::File,
+                width: 1,
+                height: 1,
+                image_id: 34,
+                ..Transmission::default()
+            },
+            b"/dev/null",
+        );
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::ALL),
+            Err(ImageLoadError::InvalidData)
+        );
+    }
+
+    #[test]
+    fn kitty_graphics_image_non_direct_png_and_shared_memory_remain_deferred() {
+        let dir = TestDir::temp();
+        let png_temp = dir.write("tty-graphics-protocol-image.png", b"not a png");
+
+        for medium in [TransmissionMedium::File, TransmissionMedium::TemporaryFile] {
             let command = transmit_command(
                 Transmission {
-                    format: TransmissionFormat::Rgb,
+                    format: TransmissionFormat::Png,
                     medium,
-                    width: 1,
-                    height: 1,
+                    width: 0,
+                    height: 0,
                     image_id: 31,
                     ..Transmission::default()
                 },
-                b"/tmp/image",
+                &path_bytes(&png_temp),
             );
-
             assert_eq!(
                 LoadingImage::init(&command, LoadingImageLimits::ALL),
                 Err(ImageLoadError::UnsupportedMedium)
             );
         }
+        assert!(png_temp.exists());
+
+        let command = transmit_command(
+            Transmission {
+                format: TransmissionFormat::Rgb,
+                medium: TransmissionMedium::SharedMemory,
+                width: 1,
+                height: 1,
+                image_id: 31,
+                ..Transmission::default()
+            },
+            b"/shared",
+        );
+        assert_eq!(
+            LoadingImage::init(&command, LoadingImageLimits::ALL),
+            Err(ImageLoadError::UnsupportedMedium)
+        );
     }
 
     #[test]

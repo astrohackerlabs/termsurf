@@ -184,3 +184,51 @@ The experiment passes when:
 - Do not delete temporary files that were rejected before the cleanup point.
 - Do not expose any `ghostty_*` ABI names.
 - Do not skip Codex design review or Codex result review.
+
+## Result
+
+**Result:** Pass
+
+Implemented Kitty graphics regular-file and temporary-file media loading:
+
+- `TransmissionMedium::File` now loads canonicalized regular files when
+  `limits.file` is enabled;
+- `TransmissionMedium::TemporaryFile` now loads canonicalized regular files when
+  `limits.temporary_file` is enabled and deletes files after they pass
+  temp-dir/name validation;
+- path handling rejects interior NUL bytes, unsafe `/proc`/`/sys`/`/dev` paths,
+  non-regular files, and path/open/stat/seek/read errors;
+- offset and size fields control file reads;
+- non-direct PNG short-circuits with `UnsupportedMedium` before path handling or
+  temp-file deletion;
+- shared-memory loading remains unsupported;
+- direct PNG still follows the previous deferred behavior and fails at
+  completion with `UnsupportedFormat`;
+- terminal-stream tests prove the Experiment 198 media options gate actual file
+  and temp-file transmissions.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/terminal.rs roastty/src/terminal/kitty/graphics_image.rs roastty/src/terminal/kitty/graphics_exec.rs
+cargo test -p roastty kitty_graphics_image
+cargo test -p roastty terminal_stream_kitty_graphics
+cargo test -p roastty kitty_graphics_terminal_options_c_abi
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Codex reviewed the completed implementation and found no blocking issues. The
+review confirmed the media gates, non-direct PNG short-circuit, path validation,
+temporary-file cleanup point, error mapping, and test coverage satisfy the
+experiment.
+
+## Conclusion
+
+Roastty now supports Kitty graphics images loaded from regular files and
+temporary files, gated by the terminal options ported in Experiment 198. This
+closes the file/temp-file half of non-direct Kitty image media. The remaining
+non-direct medium is shared memory, which should be handled in a separate
+experiment because it requires distinct `shm_open`/`mmap` behavior rather than
+filesystem reads.

@@ -610,6 +610,8 @@ fn encode_error(response: &mut Response<'static>, error: ImageLoadError) {
         ImageLoadError::DecompressionFailed => b"EINVAL: decompression failed",
         ImageLoadError::DimensionsRequired => b"EINVAL: dimensions required",
         ImageLoadError::DimensionsTooLarge => b"EINVAL: dimensions too large",
+        ImageLoadError::TemporaryFileNotInTempDir
+        | ImageLoadError::TemporaryFileNotNamedCorrectly => b"EINVAL: invalid data",
         ImageLoadError::UnsupportedFormat => b"EINVAL: unsupported format",
         ImageLoadError::UnsupportedMedium => b"EINVAL: unsupported medium",
         ImageLoadError::OutOfMemory => b"ENOMEM: out of memory",
@@ -981,7 +983,7 @@ mod tests {
                 image_id: 1,
                 width: 1,
                 height: 2,
-                medium: TransmissionMedium::File,
+                medium: TransmissionMedium::SharedMemory,
                 ..Transmission::default()
             },
             b"/tmp/image",
@@ -1173,7 +1175,7 @@ mod tests {
         let command = query(
             Transmission {
                 image_id: 1,
-                medium: TransmissionMedium::File,
+                medium: TransmissionMedium::SharedMemory,
                 ..Transmission::default()
             },
             b"/tmp/image",

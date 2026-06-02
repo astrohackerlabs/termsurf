@@ -523,7 +523,7 @@ tests, choose the larger subsystem.
 - [Experiment 198: Port Kitty Graphics Terminal Options](198-port-kitty-graphics-terminal-options.md)
   — **Pass**
 - [Experiment 199: Port Kitty Graphics File Media](199-port-kitty-graphics-file-media.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 
