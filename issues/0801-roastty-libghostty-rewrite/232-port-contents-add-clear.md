@@ -193,3 +193,79 @@ Findings fixed in the design above before this commit:
    clear-everything bug cannot pass.
 3. **(Low)** added an `add_bg_key_panics` `#[should_panic]` test for the
    `Key::Bg` invariant.
+
+## Result
+
+**Result:** Pass
+
+Added `pub(crate) enum Key { Bg, Text, Underline, Strikethrough, Overline }` and
+implemented `Contents::add` and `Contents::clear` in
+`roastty/src/renderer/cell.rs`, and updated the module doc comment to note
+`cell.zig` is fully ported. `add` reads `y = cell.grid_pos[1]`, asserts
+`y < rows` (always-on `assert!`), routes `Key::Bg` to `unreachable!()`, and
+pushes the foreground keys to `fg_rows[y + 1]`. `clear` asserts `y < rows`,
+zeroes the background span `bg_cells[y * columns .. y * columns + columns]`, and
+clears `fg_rows[y + 1]`.
+
+Tests added (6): `add_routes_each_fg_key_to_row` (all four foreground keys),
+`add_appends_multiple`, `add_different_rows_route_separately`,
+`clear_clears_row`, `clear_only_affects_its_row` (background and foreground row
+isolation), and `add_bg_key_panics` (`#[should_panic]`).
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty renderer::cell
+cargo test -p roastty renderer
+cargo test -p roastty
+```
+
+Observed:
+
+- `renderer::cell`: 40 passed (34 prior + 6 new).
+- Full `roastty`: 2276 unit tests passed (2270 prior + 6 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/renderer/cell.rs` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes. This completes the
+`renderer/cell.zig` port; no `Contents` methods remain unported.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+should change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-080823-205085-prompt.md`
+- Result: `logs/codex-review/20260602-080823-205085-last-message.md`
+
+Codex confirmed `add`/`clear` match upstream (the always-on `assert!(y < rows)`
+closes the release-mode cursor-list corruption risk, `Key::Bg` panics,
+foreground keys route to `fg_rows[y + 1]`, `clear` zeroes the row span and
+clears the row list), that the 6 tests cover the routing/isolation/panic cases,
+and — explicitly — that this **completes the `renderer/cell.zig` port**:
+predicates, `is_symbol`, `constraint_width`, `Key`, and all `Contents`
+storage/cursor/add/clear behavior are now represented.
+
+## Conclusion
+
+Experiment 232 succeeds and **completes the port of `renderer/cell.zig`** across
+Experiments 227–232: the codepoint-classification predicates, `is_symbol`,
+`constraint_width`, and the full `Contents` cell-render-data builder (storage,
+cursor lists, and row mutation), with 40 `renderer::cell` tests. Both Codex
+gates passed (the High `assert!` finding and two others fixed at design time;
+zero result findings).
+
+The renderer foundation now landed across Experiments 223–232 — cursor style,
+the sizing/coordinate model, preedit, and the cell builder — feeds the live
+renderer. The natural next directions are the renderer's frame/draw path
+(`renderer/generic.zig` / `Metal.zig`, which consume `Contents`) and the font
+stack (`font/` + CoreText) that produces the glyphs `Contents` holds — both
+large subsystems that will span many experiments.

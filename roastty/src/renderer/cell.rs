@@ -4,9 +4,8 @@
 //! Renderer cell data and codepoint classification.
 //!
 //! Faithful port of upstream `renderer/cell.zig`: the codepoint-classification
-//! predicates, `constraint_width`, and the `Contents` cell-render-data builder.
-//! The `Contents` cursor lists (`set_cursor`/`get_cursor_glyph`) and row
-//! mutation (`add`/`clear`) are ported in later slices.
+//! predicates, `constraint_width`, and the `Contents` cell-render-data builder
+//! (storage, cursor lists, and row mutation). `cell.zig` is fully ported.
 
 use super::cursor::Style as CursorStyle;
 use super::shader::{CellBg, CellTextVertex};
@@ -137,6 +136,18 @@ pub(crate) fn constraint_width(raw_slice: &[CellInfo], x: usize, cols: usize) ->
     1
 }
 
+/// Identifies which GPU buffer a cell belongs to. Conceptually maps to a cell
+/// type (upstream `Key.CellType`): `Bg` → `CellBg`; the foreground kinds
+/// (`Text`/`Underline`/`Strikethrough`/`Overline`) → `CellTextVertex`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Key {
+    Bg,
+    Text,
+    Underline,
+    Strikethrough,
+    Overline,
+}
+
 /// The contents of all the cells in the terminal.
 ///
 /// Holds per-cell GPU data and supports row-wise clearing/dirty tracking so the
@@ -254,6 +265,33 @@ impl Contents {
             return Some(self.fg_rows[last][0]);
         }
         None
+    }
+
+    /// Add a foreground cell to the appropriate row list. Adding the same cell
+    /// twice duplicates it in the vertex buffer; clear the row first with
+    /// `clear`. Background cells use `bg_cell_mut`, never `add`.
+    pub(crate) fn add(&mut self, key: Key, cell: CellTextVertex) {
+        let y = cell.grid_pos[1];
+        assert!(y < self.size.rows);
+        match key {
+            Key::Bg => unreachable!("background cells use bg_cell_mut, not add"),
+            // The `+ 1` skips the reserved cursor list at index 0.
+            Key::Text | Key::Underline | Key::Strikethrough | Key::Overline => {
+                self.fg_rows[y as usize + 1].push(cell);
+            }
+        }
+    }
+
+    /// Clear all cell contents for a given row.
+    pub(crate) fn clear(&mut self, y: u16) {
+        assert!(y < self.size.rows);
+        let columns = self.size.columns as usize;
+        let start = y as usize * columns;
+        for cell in &mut self.bg_cells[start..start + columns] {
+            *cell = CellBg([0, 0, 0, 0]);
+        }
+        // The `+ 1` skips the reserved cursor list at index 0.
+        self.fg_rows[y as usize + 1].clear();
     }
 }
 
@@ -639,5 +677,81 @@ mod tests {
         let mut c = Contents::default();
         c.resize(grid(3, 2));
         assert_eq!(c.get_cursor_glyph(), None);
+    }
+
+    fn vertex_at(y: u16) -> CellTextVertex {
+        let mut v = dummy_vertex();
+        v.grid_pos = [0, y];
+        v
+    }
+
+    #[test]
+    fn add_routes_each_fg_key_to_row() {
+        for key in [Key::Text, Key::Underline, Key::Strikethrough, Key::Overline] {
+            let mut c = Contents::default();
+            c.resize(grid(3, 2));
+            c.add(key, vertex_at(1));
+            // y = 1 -> fg_rows[y + 1] = fg_rows[2].
+            assert_eq!(c.fg_rows[2].len(), 1);
+            assert!(c.fg_rows[1].is_empty());
+        }
+    }
+
+    #[test]
+    fn add_appends_multiple() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.add(Key::Text, vertex_at(1));
+        c.add(Key::Text, vertex_at(1));
+        assert_eq!(c.fg_rows[2].len(), 2);
+    }
+
+    #[test]
+    fn add_different_rows_route_separately() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.add(Key::Text, vertex_at(0));
+        c.add(Key::Text, vertex_at(1));
+        assert_eq!(c.fg_rows[1].len(), 1);
+        assert_eq!(c.fg_rows[2].len(), 1);
+    }
+
+    #[test]
+    fn clear_clears_row() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        *c.bg_cell_mut(1, 0) = CellBg([1, 1, 1, 1]);
+        c.add(Key::Text, vertex_at(1));
+        c.clear(1);
+        // Row 1's background span is zeroed.
+        for col in 0..3 {
+            assert_eq!(*c.bg_cell(1, col), CellBg([0, 0, 0, 0]));
+        }
+        assert!(c.fg_rows[2].is_empty());
+    }
+
+    #[test]
+    fn clear_only_affects_its_row() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.add(Key::Text, vertex_at(0));
+        c.add(Key::Text, vertex_at(1));
+        *c.bg_cell_mut(0, 0) = CellBg([5, 5, 5, 5]);
+        *c.bg_cell_mut(1, 0) = CellBg([6, 6, 6, 6]);
+        c.clear(1);
+        // Row 0 background and foreground are untouched.
+        assert_eq!(*c.bg_cell(0, 0), CellBg([5, 5, 5, 5]));
+        assert_eq!(c.fg_rows[1].len(), 1);
+        // Row 1 is cleared.
+        assert_eq!(*c.bg_cell(1, 0), CellBg([0, 0, 0, 0]));
+        assert!(c.fg_rows[2].is_empty());
+    }
+
+    #[test]
+    #[should_panic]
+    fn add_bg_key_panics() {
+        let mut c = Contents::default();
+        c.resize(grid(3, 2));
+        c.add(Key::Bg, vertex_at(0));
     }
 }
