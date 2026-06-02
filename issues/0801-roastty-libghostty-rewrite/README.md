@@ -478,6 +478,8 @@ tests, choose the larger subsystem.
   — **Pass**
 - [Experiment 175: Port Tracked Grid Reference C ABI](175-port-tracked-grid-reference-c-abi.md)
   — **Pass**
+- [Experiment 176: Port Row and Cell C ABI](176-port-row-cell-c-abi.md) —
+  **Designed**
 
 ## Non-Goals
 
