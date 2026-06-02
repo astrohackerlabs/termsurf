@@ -696,6 +696,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 236: Port Font `FaceMetrics` and Its Convenience Methods](236-port-font-facemetrics.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 237: Port the Remaining `FaceMetrics` Accessors](237-port-facemetrics-accessors.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
