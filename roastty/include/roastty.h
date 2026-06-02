@@ -1165,6 +1165,22 @@ roastty_terminal_grid_ref(roastty_terminal_t,
                           roastty_point_s,
                           roastty_grid_ref_s*);
 ROASTTY_API roastty_result_e
+roastty_grid_ref_cell(const roastty_grid_ref_s*, roastty_cell_t*);
+ROASTTY_API roastty_result_e
+roastty_grid_ref_row(const roastty_grid_ref_s*, roastty_row_t*);
+ROASTTY_API roastty_result_e
+roastty_grid_ref_graphemes(const roastty_grid_ref_s*,
+                           uint32_t*,
+                           size_t,
+                           size_t*);
+ROASTTY_API roastty_result_e
+roastty_grid_ref_hyperlink_uri(const roastty_grid_ref_s*,
+                               uint8_t*,
+                               size_t,
+                               size_t*);
+ROASTTY_API roastty_result_e
+roastty_grid_ref_style(const roastty_grid_ref_s*, roastty_style_s*);
+ROASTTY_API roastty_result_e
 roastty_terminal_point_from_grid_ref(roastty_terminal_t,
                                      const roastty_grid_ref_s*,
                                      roastty_point_tag_e,

@@ -133,6 +133,80 @@ impl From<Pin> for GridRef {
     }
 }
 
+impl GridRef {
+    fn node_ref(self) -> Result<&'static Node, GridRefPointError> {
+        if self.node.is_null() {
+            return Err(GridRefPointError::InvalidValue);
+        }
+        let node = unsafe {
+            // Safety: C grid refs are borrowed pointers into live page-list
+            // storage. Callers must use them immediately before terminal
+            // mutation; stale references are caller-invalid.
+            &*self.node.cast::<Node>()
+        };
+        if self.x >= node.page.size_cols() || self.y >= node.page.size_rows() {
+            return Err(GridRefPointError::InvalidValue);
+        }
+        Ok(node)
+    }
+
+    pub(super) fn cell_raw(self) -> Result<u64, GridRefPointError> {
+        let node = self.node_ref()?;
+        Ok(node
+            .page
+            .cell_copy_at(self.x as usize, self.y as usize)
+            .cval())
+    }
+
+    pub(super) fn row_raw(self) -> Result<u64, GridRefPointError> {
+        let node = self.node_ref()?;
+        Ok(node.page.get_row(self.y as usize).cval())
+    }
+
+    pub(super) fn graphemes(self) -> Result<Vec<u32>, GridRefPointError> {
+        let node = self.node_ref()?;
+        let cell = node.page.cell_copy_at(self.x as usize, self.y as usize);
+        if !cell.has_text() {
+            return Ok(Vec::new());
+        }
+
+        let mut graphemes = Vec::with_capacity(1);
+        graphemes.push(cell.codepoint());
+        if let Some(extra) = node
+            .page
+            .lookup_grapheme_at(self.x as usize, self.y as usize)
+        {
+            graphemes.extend(extra);
+        }
+        Ok(graphemes)
+    }
+
+    pub(super) fn hyperlink_uri(self) -> Result<Vec<u8>, GridRefPointError> {
+        let node = self.node_ref()?;
+        let cell = node.page.cell_copy_at(self.x as usize, self.y as usize);
+        if !cell.hyperlink() {
+            return Ok(Vec::new());
+        }
+        let Some(id) = node
+            .page
+            .lookup_hyperlink_at(self.x as usize, self.y as usize)
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(node.page.get_hyperlink(id).uri)
+    }
+
+    pub(super) fn style(self) -> Result<style::Style, GridRefPointError> {
+        let node = self.node_ref()?;
+        let cell = node.page.cell_copy_at(self.x as usize, self.y as usize);
+        if cell.style_id() == style::DEFAULT_ID {
+            Ok(style::Style::default())
+        } else {
+            Ok(node.page.get_style(cell.style_id()))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PageListCell<'a> {
     node: &'a Node,
@@ -2903,6 +2977,23 @@ impl PageList {
             rac.cell.set_style_id(style_id);
         }
         page.use_style(style_id);
+    }
+
+    #[cfg(test)]
+    pub(super) fn append_screen_grapheme_for_tests(
+        &mut self,
+        x: CellCountInt,
+        y: u32,
+        codepoint: u32,
+    ) {
+        let pin = self
+            .pin(point::Point::screen(point::Coordinate::new(x, y)))
+            .expect("test screen point must resolve to a pin");
+        let index = self.node_index(pin.node).expect("screen node must exist");
+        self.pages[index]
+            .page
+            .append_grapheme_at(pin.x as usize, pin.y as usize, codepoint)
+            .expect("test grapheme should append");
     }
 
     #[cfg(test)]

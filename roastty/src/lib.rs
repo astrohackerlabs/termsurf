@@ -3778,6 +3778,132 @@ pub extern "C" fn roastty_terminal_grid_ref(
 }
 
 #[no_mangle]
+pub extern "C" fn roastty_grid_ref_cell(
+    ref_: *const RoasttyGridRef,
+    out: *mut RoasttyCell,
+) -> c_int {
+    let Ok(ref_) = read_grid_ref_ptr(ref_) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    match ref_.cell_raw() {
+        Ok(cell) => {
+            if !out.is_null() {
+                unsafe {
+                    out.write(cell);
+                }
+            }
+            ROASTTY_SUCCESS
+        }
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_grid_ref_row(ref_: *const RoasttyGridRef, out: *mut RoasttyRow) -> c_int {
+    let Ok(ref_) = read_grid_ref_ptr(ref_) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    match ref_.row_raw() {
+        Ok(row) => {
+            if !out.is_null() {
+                unsafe {
+                    out.write(row);
+                }
+            }
+            ROASTTY_SUCCESS
+        }
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_grid_ref_graphemes(
+    ref_: *const RoasttyGridRef,
+    out_buf: *mut u32,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> c_int {
+    if out_len.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let Ok(ref_) = read_grid_ref_ptr(ref_) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    match ref_.graphemes() {
+        Ok(graphemes) => unsafe {
+            out_len.write(graphemes.len());
+            if graphemes.is_empty() {
+                return ROASTTY_SUCCESS;
+            }
+            if out_buf.is_null() || buf_len < graphemes.len() {
+                return ROASTTY_OUT_OF_SPACE;
+            }
+            ptr::copy_nonoverlapping(graphemes.as_ptr(), out_buf, graphemes.len());
+            ROASTTY_SUCCESS
+        },
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_grid_ref_hyperlink_uri(
+    ref_: *const RoasttyGridRef,
+    out_buf: *mut u8,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> c_int {
+    if out_len.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let Ok(ref_) = read_grid_ref_ptr(ref_) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    match ref_.hyperlink_uri() {
+        Ok(uri) => unsafe {
+            out_len.write(uri.len());
+            if uri.is_empty() {
+                return ROASTTY_SUCCESS;
+            }
+            if out_buf.is_null() || buf_len < uri.len() {
+                return ROASTTY_OUT_OF_SPACE;
+            }
+            ptr::copy_nonoverlapping(uri.as_ptr(), out_buf, uri.len());
+            ROASTTY_SUCCESS
+        },
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_grid_ref_style(
+    ref_: *const RoasttyGridRef,
+    out: *mut RoasttyStyle,
+) -> c_int {
+    let Ok(ref_) = read_grid_ref_ptr(ref_) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+
+    match ref_.style() {
+        Ok(style) => {
+            if !out.is_null() {
+                unsafe {
+                    if ptr::addr_of!((*out).size).read() < std::mem::size_of::<RoasttyStyle>() {
+                        return ROASTTY_INVALID_VALUE;
+                    }
+                    out.write(style_to_c(style));
+                }
+            }
+            ROASTTY_SUCCESS
+        }
+        Err(error) => grid_ref_error_result(error),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn roastty_terminal_point_from_grid_ref(
     terminal: RoasttyTerminal,
     grid_ref: *const RoasttyGridRef,
@@ -6139,6 +6265,35 @@ mod tests {
 
     fn style_color_rgb(color: RoasttyStyleColor) -> RoasttyRgb {
         unsafe { color.value.rgb }
+    }
+
+    fn default_c_style() -> RoasttyStyle {
+        let mut style = RoasttyStyle {
+            size: 0,
+            fg_color: RoasttyStyleColor {
+                tag: ROASTTY_STYLE_COLOR_RGB,
+                value: RoasttyStyleColorValue { _padding: u64::MAX },
+            },
+            bg_color: RoasttyStyleColor {
+                tag: ROASTTY_STYLE_COLOR_RGB,
+                value: RoasttyStyleColorValue { _padding: u64::MAX },
+            },
+            underline_color: RoasttyStyleColor {
+                tag: ROASTTY_STYLE_COLOR_RGB,
+                value: RoasttyStyleColorValue { _padding: u64::MAX },
+            },
+            bold: true,
+            italic: true,
+            faint: true,
+            blink: true,
+            inverse: true,
+            invisible: true,
+            strikethrough: true,
+            overline: true,
+            underline: 5,
+        };
+        roastty_style_default(&mut style);
+        style
     }
 
     fn assert_rgb_override_survives_default_path(
@@ -10132,6 +10287,215 @@ mod tests {
         assert!(foreign_result == ROASTTY_NO_VALUE || foreign_result == ROASTTY_INVALID_VALUE);
 
         roastty_terminal_free(other);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn grid_ref_accessor_c_abi_reads_cell_row_and_style() {
+        let terminal = new_terminal(10, 3);
+        write_terminal(terminal, b"A\x1b[1;31mB");
+
+        let default_ref = terminal_grid_ref_at(terminal, 0, 0);
+        let styled_ref = terminal_grid_ref_at(terminal, 1, 0);
+
+        let mut cell = 0;
+        assert_eq!(
+            roastty_grid_ref_cell(&default_ref, &mut cell),
+            ROASTTY_SUCCESS
+        );
+        let mut codepoint = 0;
+        assert_eq!(
+            roastty_cell_get(
+                cell,
+                ROASTTY_CELL_DATA_CODEPOINT,
+                &mut codepoint as *mut _ as *mut c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(codepoint, 'A' as u32);
+        assert_eq!(
+            roastty_grid_ref_cell(&default_ref, ptr::null_mut()),
+            ROASTTY_SUCCESS
+        );
+
+        let mut row = 0;
+        assert_eq!(
+            roastty_grid_ref_row(&default_ref, &mut row),
+            ROASTTY_SUCCESS
+        );
+        let mut styled = false;
+        assert_eq!(
+            roastty_row_get(
+                row,
+                ROASTTY_ROW_DATA_STYLED,
+                &mut styled as *mut _ as *mut c_void,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert!(styled);
+        assert_eq!(
+            roastty_grid_ref_row(&default_ref, ptr::null_mut()),
+            ROASTTY_SUCCESS
+        );
+
+        let mut style = default_c_style();
+        assert_eq!(
+            roastty_grid_ref_style(&default_ref, &mut style),
+            ROASTTY_SUCCESS
+        );
+        assert!(style_is_default(style));
+        assert_eq!(
+            roastty_grid_ref_style(&default_ref, ptr::null_mut()),
+            ROASTTY_SUCCESS
+        );
+
+        let mut style = default_c_style();
+        assert_eq!(
+            roastty_grid_ref_style(&styled_ref, &mut style),
+            ROASTTY_SUCCESS
+        );
+        assert!(style.bold);
+        assert_eq!(style.fg_color.tag, ROASTTY_STYLE_COLOR_PALETTE);
+        assert_eq!(style_color_palette(style.fg_color), 1);
+
+        let mut undersized = default_c_style();
+        undersized.size = std::mem::size_of::<RoasttyStyle>() - 1;
+        assert_eq!(
+            roastty_grid_ref_style(&styled_ref, &mut undersized),
+            ROASTTY_INVALID_VALUE
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn grid_ref_accessor_c_abi_reads_graphemes_and_hyperlinks() {
+        let terminal = new_terminal(10, 3);
+        write_terminal(
+            terminal,
+            b"e \x1b]8;id=id;https://example.test\x1b\\L\x1b]8;;\x1b\\",
+        );
+        terminal_from_handle(terminal)
+            .expect("test terminal handle must be valid")
+            .terminal
+            .append_grapheme_for_tests(0, 0, 0x0301);
+
+        let grapheme_ref = terminal_grid_ref_at(terminal, 0, 0);
+        let empty_ref = terminal_grid_ref_at(terminal, 9, 0);
+        let link_ref = terminal_grid_ref_at(terminal, 2, 0);
+
+        let mut len = 99;
+        assert_eq!(
+            roastty_grid_ref_graphemes(&empty_ref, ptr::null_mut(), 0, &mut len),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(len, 0);
+        assert_eq!(
+            roastty_grid_ref_graphemes(&grapheme_ref, ptr::null_mut(), 0, &mut len),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(len, 2);
+
+        let mut codepoints = [0; 2];
+        assert_eq!(
+            roastty_grid_ref_graphemes(
+                &grapheme_ref,
+                codepoints.as_mut_ptr(),
+                codepoints.len(),
+                &mut len,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(len, 2);
+        assert_eq!(codepoints, ['e' as u32, 0x0301]);
+        assert_eq!(
+            roastty_grid_ref_graphemes(&grapheme_ref, codepoints.as_mut_ptr(), 1, &mut len),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(
+            roastty_grid_ref_graphemes(&link_ref, ptr::null_mut(), 0, &mut len),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(len, 1);
+        let mut one_codepoint = [0; 1];
+        assert_eq!(
+            roastty_grid_ref_graphemes(
+                &link_ref,
+                one_codepoint.as_mut_ptr(),
+                one_codepoint.len(),
+                &mut len,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(len, 1);
+        assert_eq!(one_codepoint, ['L' as u32]);
+        assert_eq!(
+            roastty_grid_ref_graphemes(&grapheme_ref, codepoints.as_mut_ptr(), 2, ptr::null_mut()),
+            ROASTTY_INVALID_VALUE
+        );
+
+        assert_eq!(
+            roastty_grid_ref_hyperlink_uri(&empty_ref, ptr::null_mut(), 0, &mut len),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(len, 0);
+        assert_eq!(
+            roastty_grid_ref_hyperlink_uri(&link_ref, ptr::null_mut(), 0, &mut len),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(len, "https://example.test".len());
+
+        let mut uri = [0_u8; 32];
+        assert_eq!(
+            roastty_grid_ref_hyperlink_uri(&link_ref, uri.as_mut_ptr(), 5, &mut len),
+            ROASTTY_OUT_OF_SPACE
+        );
+        assert_eq!(
+            roastty_grid_ref_hyperlink_uri(&link_ref, uri.as_mut_ptr(), uri.len(), &mut len),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(&uri[..len], b"https://example.test");
+        assert_eq!(
+            roastty_grid_ref_hyperlink_uri(&link_ref, uri.as_mut_ptr(), uri.len(), ptr::null_mut()),
+            ROASTTY_INVALID_VALUE
+        );
+
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn grid_ref_accessor_c_abi_validates_refs() {
+        let terminal = new_terminal(10, 3);
+        write_terminal(terminal, b"A");
+
+        let valid_ref = terminal_grid_ref_at(terminal, 0, 0);
+        let mut cell = 0;
+        assert_eq!(
+            roastty_grid_ref_cell(ptr::null(), &mut cell),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let mut undersized = valid_ref;
+        undersized.size = std::mem::size_of::<RoasttyGridRef>() - 1;
+        assert_eq!(
+            roastty_grid_ref_cell(&undersized, &mut cell),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let mut null_node = valid_ref;
+        null_node.node = ptr::null_mut();
+        assert_eq!(
+            roastty_grid_ref_cell(&null_node, &mut cell),
+            ROASTTY_INVALID_VALUE
+        );
+
+        let mut out_of_range = valid_ref;
+        out_of_range.x = 99;
+        assert_eq!(
+            roastty_grid_ref_cell(&out_of_range, &mut cell),
+            ROASTTY_INVALID_VALUE
+        );
+
         roastty_terminal_free(terminal);
     }
 

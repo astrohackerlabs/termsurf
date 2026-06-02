@@ -285,6 +285,28 @@ impl From<TerminalGridRef> for GridRef {
     }
 }
 
+impl TerminalGridRef {
+    pub(crate) fn cell_raw(self) -> Result<u64, TerminalGridRefPointError> {
+        GridRef::from(self).cell_raw().map_err(Into::into)
+    }
+
+    pub(crate) fn row_raw(self) -> Result<u64, TerminalGridRefPointError> {
+        GridRef::from(self).row_raw().map_err(Into::into)
+    }
+
+    pub(crate) fn graphemes(self) -> Result<Vec<u32>, TerminalGridRefPointError> {
+        GridRef::from(self).graphemes().map_err(Into::into)
+    }
+
+    pub(crate) fn hyperlink_uri(self) -> Result<Vec<u8>, TerminalGridRefPointError> {
+        GridRef::from(self).hyperlink_uri().map_err(Into::into)
+    }
+
+    pub(crate) fn style(self) -> Result<super::style::Style, TerminalGridRefPointError> {
+        GridRef::from(self).style().map_err(Into::into)
+    }
+}
+
 impl From<GridRefPointError> for TerminalGridRefPointError {
     fn from(value: GridRefPointError) -> Self {
         match value {
@@ -1697,6 +1719,13 @@ impl Terminal {
         self.screens
             .active()
             .active_cell_style_ref_count_for_tests(x, y)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn append_grapheme_for_tests(&mut self, x: CellCountInt, y: u32, codepoint: u32) {
+        self.screens
+            .active_mut()
+            .append_grapheme_for_tests(x, y, codepoint);
     }
 
     #[cfg(test)]

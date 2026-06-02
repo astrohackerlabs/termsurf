@@ -125,3 +125,51 @@ tests remain responsible for mutation-safe references.
 The experiment passes when all five public grid-ref accessors are available
 through `roastty/include/roastty.h`, behave like the upstream C helpers under
 the validation rules above, and the full `cargo test -p roastty` suite passes.
+
+## Result
+
+**Result:** Pass
+
+Implemented the standalone grid-reference accessor C ABI:
+
+- `roastty_grid_ref_cell`
+- `roastty_grid_ref_row`
+- `roastty_grid_ref_graphemes`
+- `roastty_grid_ref_hyperlink_uri`
+- `roastty_grid_ref_style`
+
+The implementation keeps the upstream standalone helper shape and uses the
+existing borrowed `roastty_grid_ref_s` lifetime contract. The internal
+borrowed-node read helper validates null nodes and out-of-range coordinates, but
+does not attempt terminal-backed stale-ref detection because these functions do
+not receive a terminal handle.
+
+The result also added focused Rust coverage for cell, row, default style,
+non-default style, empty graphemes, one-codepoint graphemes, multi-codepoint
+graphemes, hyperlink URI reads, out-of-space behavior, null `out_len`, null
+outputs where upstream allows them, undersized refs, null nodes, and
+out-of-range refs. The C harness now compiles and calls the new prototypes from
+`roastty.h`.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/page.rs roastty/src/terminal/page_list.rs roastty/src/terminal/screen.rs roastty/src/terminal/terminal.rs
+cargo test -p roastty grid_ref_accessor_c_abi
+cargo test -p roastty c_harness_links_against_roastty_header_and_roastty_dylib
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Codex reviewed the result and initially found one real gap: the focused tests
+covered empty and multi-codepoint grapheme cells, but not the required
+one-codepoint text cell. That test case was added. Codex re-reviewed the
+corrected result and approved it with no blocking findings.
+
+## Conclusion
+
+The upstream `terminal/c/grid_ref.zig` standalone accessor surface is now ported
+to Roastty. This completes the direct grid-ref read helpers needed by C callers
+without changing tracked-grid-ref semantics or terminal-bound coordinate
+conversion.

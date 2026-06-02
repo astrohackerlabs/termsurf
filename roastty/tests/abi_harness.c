@@ -1800,6 +1800,46 @@ static void assert_terminal_abi(void) {
   assert(grid_ref.x == 1);
   assert(grid_ref.y == 0);
 
+  roastty_cell_t grid_cell = 0;
+  assert(roastty_grid_ref_cell(&grid_ref, &grid_cell) == ROASTTY_SUCCESS);
+  uint32_t grid_codepoint = 0;
+  assert(roastty_cell_get(grid_cell,
+                          ROASTTY_CELL_DATA_CODEPOINT,
+                          &grid_codepoint) == ROASTTY_SUCCESS);
+  assert(roastty_grid_ref_cell(&grid_ref, NULL) == ROASTTY_SUCCESS);
+
+  roastty_row_t grid_row = 0;
+  assert(roastty_grid_ref_row(&grid_ref, &grid_row) == ROASTTY_SUCCESS);
+  bool grid_row_dirty = true;
+  assert(roastty_row_get(grid_row,
+                         ROASTTY_ROW_DATA_DIRTY,
+                         &grid_row_dirty) == ROASTTY_SUCCESS);
+  assert(roastty_grid_ref_row(&grid_ref, NULL) == ROASTTY_SUCCESS);
+
+  roastty_style_s grid_style = {.size = sizeof(roastty_style_s)};
+  assert(roastty_grid_ref_style(&grid_ref, &grid_style) == ROASTTY_SUCCESS);
+  assert(roastty_grid_ref_style(&grid_ref, NULL) == ROASTTY_SUCCESS);
+
+  size_t grid_len = 999;
+  uint32_t grid_graphemes[4] = {0};
+  assert(roastty_grid_ref_graphemes(&grid_ref,
+                                    grid_graphemes,
+                                    4,
+                                    &grid_len) == ROASTTY_SUCCESS);
+  assert(grid_len <= 4);
+  assert(roastty_grid_ref_graphemes(&grid_ref, NULL, 0, NULL) ==
+         ROASTTY_INVALID_VALUE);
+
+  uint8_t grid_uri[32] = {0};
+  grid_len = 999;
+  assert(roastty_grid_ref_hyperlink_uri(&grid_ref,
+                                        grid_uri,
+                                        sizeof(grid_uri),
+                                        &grid_len) == ROASTTY_SUCCESS);
+  assert(grid_len == 0);
+  assert(roastty_grid_ref_hyperlink_uri(&grid_ref, grid_uri, 1, NULL) ==
+         ROASTTY_INVALID_VALUE);
+
   roastty_point_coordinate_s coord = {0};
   assert(roastty_terminal_point_from_grid_ref(NULL,
                                               &grid_ref,

@@ -1473,6 +1473,11 @@ impl Screen {
     }
 
     #[cfg(test)]
+    pub(super) fn append_grapheme_for_tests(&mut self, x: CellCountInt, y: u32, codepoint: u32) {
+        self.pages.append_screen_grapheme_for_tests(x, y, codepoint);
+    }
+
+    #[cfg(test)]
     pub(super) fn set_cell_protected_for_tests(
         &mut self,
         x: CellCountInt,

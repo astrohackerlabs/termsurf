@@ -2278,7 +2278,7 @@ impl Page {
         )
     }
 
-    fn cell_copy_at(&self, x: usize, y: usize) -> Cell {
+    pub(super) fn cell_copy_at(&self, x: usize, y: usize) -> Cell {
         self.cell_copy_at_offset(self.cell_offset_at(x, y))
     }
 
