@@ -197,3 +197,77 @@ One finding, fixed in the design above before this commit:
    listed `pub(crate) const ON: Color = …` which reads as module-level
    constants, but the tests (and upstream's `Color.on`/`Color.off`) need
    `Color::ON`. Fixed to specify them inside `impl Color`.
+
+## Result
+
+**Result:** Pass
+
+Added the new `roastty/src/font/sprite/` module (`pub(crate) mod sprite;` in
+`font/mod.rs`, `sprite/mod.rs` declaring `pub(crate) mod canvas;`) and
+`sprite/canvas.rs` with the generic value structs `Point`, `Line`, `Box`,
+`Rect`, `Triangle`, `Quad` (all `Debug, Clone, Copy, PartialEq, Eq`),
+`Box::rect` (the `PartialOrd`-based min/max normalization, one impl covering
+integer and float `T`), and `Color` (a `Color(pub u8)` newtype with associated
+`ON`/`OFF` constants), with a doc comment recording the `enum(u8)`-with-`_` →
+newtype rationale.
+
+Tests added (5): `box_rect_normalizes` (`i32`, swapped corners →
+`Rect { 1, 5, 2, 4 }`), `box_rect_already_ordered` (`u32`), `box_rect_float`
+(`f64`, exercising the `PartialOrd` min/max), `color_alpha`
+(`ON`/`OFF`/arbitrary byte), and `primitive_construction`.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty canvas
+cargo test -p roastty
+```
+
+Observed:
+
+- `canvas`: 5 passed.
+- Full `roastty`: 2333 unit tests passed (2328 prior + 5 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/font` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes; `Canvas`/`z2d` and the `draw/`
+tables cleanly deferred.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+needs to change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-093312-491226-prompt.md`
+- Result: `logs/codex-review/20260602-093312-491226-last-message.md`
+
+Codex confirmed the primitive field names/order match upstream, that `Box::rect`
+uses the intended `PartialOrd + Sub<Output = T> + Copy` impl and normalizes
+correctly, that `Color` is `Color(pub u8)` with associated `ON`/`OFF` (the
+design-gate fix implemented), that the module wiring is correct with
+`Canvas`/`draw` deferred, and that the five tests assert the expected values.
+
+## Conclusion
+
+Experiment 245 succeeds, opening the `font/sprite/` subsystem with its
+geometric-primitive vocabulary (`Point`/`Line`/`Box`/`Rect`/`Triangle`/`Quad`)
+and the `Color` alpha newtype. Both Codex gates passed (one design finding fixed
+— the associated `Color::ON`/`OFF` constants; zero result findings).
+
+The next sprite slice is the `Canvas` itself, which requires choosing and wiring
+a Rust 2D rasterization backend to replace upstream's `z2d` (the candidate is a
+small alpha-only software rasterizer, since the sprite canvas only ever writes
+the alpha channel — `tiny-skia` or a hand-rolled scanline filler over the
+already-ported primitives). That backend decision deserves its own foundation
+experiment before the `draw/` glyph tables (box-drawing, block, Braille,
+Powerline, legacy-computing) can be ported on top. Alternatively, the font layer
+can advance the CoreText face/rasterization path in parallel; the next
+experiment will pick whichever is the smaller, better-tested next step.
