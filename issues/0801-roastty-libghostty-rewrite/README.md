@@ -519,7 +519,7 @@ tests, choose the larger subsystem.
 - [Experiment 196: Port Kitty Graphics C ABI Handles](196-port-kitty-graphics-c-abi-handles.md)
   — **Pass**
 - [Experiment 197: Port Kitty Placement Render Info ABI](197-port-kitty-placement-render-info-abi.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

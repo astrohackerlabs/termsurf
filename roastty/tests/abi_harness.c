@@ -3324,6 +3324,123 @@ static void assert_terminal_abi(void) {
   assert(placement_columns == 3);
   assert(placement_rows == 2);
   assert(placement_z == 1);
+
+  assert(sizeof(roastty_kitty_graphics_placement_render_info_s) == 56);
+  assert(_Alignof(roastty_kitty_graphics_placement_render_info_s) == 8);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s, size) == 0);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  pixel_width) == 8);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  pixel_height) == 12);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  grid_cols) == 16);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  grid_rows) == 20);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  viewport_col) == 24);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  viewport_row) == 28);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  viewport_visible) == 32);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  source_x) == 36);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  source_y) == 40);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  source_width) == 44);
+  assert(offsetof(roastty_kitty_graphics_placement_render_info_s,
+                  source_height) == 48);
+
+  roastty_selection_s placement_rect = {.size = sizeof(placement_rect)};
+  assert(roastty_kitty_graphics_placement_rect(placement_iterator,
+                                               image,
+                                               terminal,
+                                               &placement_rect) ==
+         ROASTTY_SUCCESS);
+  assert(placement_rect.rectangle);
+  assert(placement_rect.start.x == 3);
+  assert(placement_rect.start.y == 0);
+  assert(placement_rect.end.x == 5);
+  assert(placement_rect.end.y == 1);
+
+  uint32_t placement_pixel_width = 0;
+  uint32_t placement_pixel_height = 0;
+  assert(roastty_kitty_graphics_placement_pixel_size(
+             placement_iterator,
+             image,
+             terminal,
+             &placement_pixel_width,
+             &placement_pixel_height) == ROASTTY_SUCCESS);
+  assert(placement_pixel_width == 3);
+  assert(placement_pixel_height == 2);
+
+  uint32_t placement_grid_cols = 0;
+  uint32_t placement_grid_rows = 0;
+  assert(roastty_kitty_graphics_placement_grid_size(placement_iterator,
+                                                    image,
+                                                    terminal,
+                                                    &placement_grid_cols,
+                                                    &placement_grid_rows) ==
+         ROASTTY_SUCCESS);
+  assert(placement_grid_cols == 3);
+  assert(placement_grid_rows == 2);
+
+  uint32_t placement_source_x = 99;
+  uint32_t placement_source_y = 99;
+  uint32_t placement_source_width = 99;
+  uint32_t placement_source_height = 99;
+  assert(roastty_kitty_graphics_placement_source_rect(
+             placement_iterator,
+             image,
+             &placement_source_x,
+             &placement_source_y,
+             &placement_source_width,
+             &placement_source_height) == ROASTTY_SUCCESS);
+  assert(placement_source_x == 0);
+  assert(placement_source_y == 0);
+  assert(placement_source_width == 1);
+  assert(placement_source_height == 1);
+
+  int32_t placement_viewport_col = -99;
+  int32_t placement_viewport_row = -99;
+  assert(roastty_kitty_graphics_placement_viewport_pos(placement_iterator,
+                                                       image,
+                                                       terminal,
+                                                       &placement_viewport_col,
+                                                       &placement_viewport_row) ==
+         ROASTTY_SUCCESS);
+  assert(placement_viewport_col == 3);
+  assert(placement_viewport_row == 0);
+
+  roastty_kitty_graphics_placement_render_info_s placement_info = {
+      .size = sizeof(placement_info)};
+  assert(roastty_kitty_graphics_placement_render_info(placement_iterator,
+                                                      image,
+                                                      terminal,
+                                                      &placement_info) ==
+         ROASTTY_SUCCESS);
+  assert(placement_info.size == sizeof(placement_info));
+  assert(placement_info.pixel_width == placement_pixel_width);
+  assert(placement_info.pixel_height == placement_pixel_height);
+  assert(placement_info.grid_cols == placement_grid_cols);
+  assert(placement_info.grid_rows == placement_grid_rows);
+  assert(placement_info.viewport_col == placement_viewport_col);
+  assert(placement_info.viewport_row == placement_viewport_row);
+  assert(placement_info.viewport_visible);
+  assert(placement_info.source_x == placement_source_x);
+  assert(placement_info.source_y == placement_source_y);
+  assert(placement_info.source_width == placement_source_width);
+  assert(placement_info.source_height == placement_source_height);
+
+  roastty_kitty_graphics_placement_render_info_s undersized_info = {
+      .size = sizeof(undersized_info) - 1, .pixel_width = 123};
+  assert(roastty_kitty_graphics_placement_render_info(placement_iterator,
+                                                      image,
+                                                      terminal,
+                                                      &undersized_info) ==
+         ROASTTY_INVALID_VALUE);
+  assert(undersized_info.pixel_width == 123);
+
   assert(!roastty_kitty_graphics_placement_next(placement_iterator));
   roastty_kitty_graphics_placement_iterator_free(placement_iterator);
   roastty_kitty_graphics_image_free(image);

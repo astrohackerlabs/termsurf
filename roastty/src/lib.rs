@@ -816,6 +816,23 @@ pub struct RoasttySelection {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoasttyKittyGraphicsPlacementRenderInfo {
+    size: usize,
+    pixel_width: u32,
+    pixel_height: u32,
+    grid_cols: u32,
+    grid_rows: u32,
+    viewport_col: i32,
+    viewport_row: i32,
+    viewport_visible: bool,
+    source_x: u32,
+    source_y: u32,
+    source_width: u32,
+    source_height: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RoasttySurfacePosition {
     x: f64,
@@ -1855,6 +1872,25 @@ fn kitty_image_compression_value(compression: TransmissionCompression) -> c_int 
     }
 }
 
+fn kitty_image_format_from_value(format: c_int) -> Option<TransmissionFormat> {
+    match format {
+        ROASTTY_KITTY_IMAGE_FORMAT_RGB => Some(TransmissionFormat::Rgb),
+        ROASTTY_KITTY_IMAGE_FORMAT_RGBA => Some(TransmissionFormat::Rgba),
+        ROASTTY_KITTY_IMAGE_FORMAT_PNG => Some(TransmissionFormat::Png),
+        ROASTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA => Some(TransmissionFormat::GrayAlpha),
+        ROASTTY_KITTY_IMAGE_FORMAT_GRAY => Some(TransmissionFormat::Gray),
+        _ => None,
+    }
+}
+
+fn kitty_image_compression_from_value(compression: c_int) -> Option<TransmissionCompression> {
+    match compression {
+        ROASTTY_KITTY_IMAGE_COMPRESSION_NONE => Some(TransmissionCompression::None),
+        ROASTTY_KITTY_IMAGE_COMPRESSION_ZLIB_DEFLATE => Some(TransmissionCompression::ZlibDeflate),
+        _ => None,
+    }
+}
+
 fn kitty_image_snapshot(image: &KittyImage) -> Result<KittyGraphicsImageSnapshot, c_int> {
     let mut data = Vec::new();
     data.try_reserve_exact(image.data.len())
@@ -1868,6 +1904,21 @@ fn kitty_image_snapshot(image: &KittyImage) -> Result<KittyGraphicsImageSnapshot
         format: kitty_image_format_value(image.format),
         compression: kitty_image_compression_value(image.compression),
         data,
+    })
+}
+
+fn kitty_image_from_snapshot(image: &KittyGraphicsImageSnapshot) -> Result<KittyImage, c_int> {
+    Ok(KittyImage {
+        id: image.id,
+        number: image.number,
+        width: image.width,
+        height: image.height,
+        format: kitty_image_format_from_value(image.format).ok_or(ROASTTY_INVALID_VALUE)?,
+        compression: kitty_image_compression_from_value(image.compression)
+            .ok_or(ROASTTY_INVALID_VALUE)?,
+        data: Vec::new(),
+        transmit_time: None,
+        implicit_id: false,
     })
 }
 
@@ -1886,6 +1937,46 @@ fn kitty_placement_layer_matches(layer: c_int, z: i32) -> bool {
         ROASTTY_KITTY_PLACEMENT_LAYER_ABOVE_TEXT => z >= 0,
         _ => false,
     }
+}
+
+fn kitty_selected_placement_key(
+    iterator: &KittyGraphicsPlacementIterator,
+) -> Result<KittyPlacementKey, c_int> {
+    let selected = iterator.selected.ok_or(ROASTTY_NO_VALUE)?;
+    let item = iterator.entries.get(selected).ok_or(ROASTTY_NO_VALUE)?;
+    Ok(item.key)
+}
+
+fn kitty_source_rect(
+    placement: KittyPlacement,
+    image: &KittyGraphicsImageSnapshot,
+) -> (u32, u32, u32, u32) {
+    let x = placement.source_x.min(image.width);
+    let y = placement.source_y.min(image.height);
+    let width = if placement.source_width > 0 {
+        placement.source_width
+    } else {
+        image.width
+    };
+    let height = if placement.source_height > 0 {
+        placement.source_height
+    } else {
+        image.height
+    };
+    (
+        x,
+        y,
+        width.min(image.width.saturating_sub(x)),
+        height.min(image.height.saturating_sub(y)),
+    )
+}
+
+fn kitty_live_placement_for_geometry(
+    iterator: &KittyGraphicsPlacementIterator,
+    terminal: &InnerTerminal,
+) -> Result<KittyPlacement, c_int> {
+    let key = kitty_selected_placement_key(iterator)?;
+    terminal.kitty_placement(key).ok_or(ROASTTY_NO_VALUE)
 }
 
 fn render_dirty_from_raw(value: c_int) -> Option<c_int> {
@@ -4976,6 +5067,265 @@ pub extern "C" fn roastty_kitty_graphics_placement_get_multi(
 }
 
 #[no_mangle]
+pub extern "C" fn roastty_kitty_graphics_placement_rect(
+    iterator: RoasttyKittyGraphicsPlacementIterator,
+    image: RoasttyKittyGraphicsImage,
+    terminal: RoasttyTerminal,
+    out: *mut RoasttySelection,
+) -> c_int {
+    let Some(iterator) = kitty_graphics_placement_iterator_mut_from_handle(iterator) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(image) = kitty_graphics_image_from_handle(image) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let selection_size = unsafe { (*out).size };
+    if selection_size < std::mem::size_of::<RoasttySelection>() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let key = match kitty_selected_placement_key(iterator) {
+        Ok(key) => key,
+        Err(error) => return error,
+    };
+    if terminal.terminal.kitty_placement(key).is_none() {
+        return ROASTTY_NO_VALUE;
+    }
+    let image = match kitty_image_from_snapshot(image) {
+        Ok(image) => image,
+        Err(error) => return error,
+    };
+    let Some(selection) = terminal.terminal.kitty_placement_selection(key, &image) else {
+        return ROASTTY_NO_VALUE;
+    };
+    write_selection(out, selection);
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_kitty_graphics_placement_pixel_size(
+    iterator: RoasttyKittyGraphicsPlacementIterator,
+    image: RoasttyKittyGraphicsImage,
+    terminal: RoasttyTerminal,
+    out_width: *mut u32,
+    out_height: *mut u32,
+) -> c_int {
+    let Some(iterator) = kitty_graphics_placement_iterator_mut_from_handle(iterator) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(image) = kitty_graphics_image_from_handle(image) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_width.is_null() || out_height.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let placement = match kitty_live_placement_for_geometry(iterator, &terminal.terminal) {
+        Ok(placement) => placement,
+        Err(error) => return error,
+    };
+    let image = match kitty_image_from_snapshot(image) {
+        Ok(image) => image,
+        Err(error) => return error,
+    };
+    let pixel_size = placement.pixel_size(&image, terminal.terminal.kitty_cell_metrics());
+    unsafe {
+        out_width.write(pixel_size.width);
+        out_height.write(pixel_size.height);
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_kitty_graphics_placement_grid_size(
+    iterator: RoasttyKittyGraphicsPlacementIterator,
+    image: RoasttyKittyGraphicsImage,
+    terminal: RoasttyTerminal,
+    out_cols: *mut u32,
+    out_rows: *mut u32,
+) -> c_int {
+    let Some(iterator) = kitty_graphics_placement_iterator_mut_from_handle(iterator) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(image) = kitty_graphics_image_from_handle(image) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_cols.is_null() || out_rows.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let placement = match kitty_live_placement_for_geometry(iterator, &terminal.terminal) {
+        Ok(placement) => placement,
+        Err(error) => return error,
+    };
+    let image = match kitty_image_from_snapshot(image) {
+        Ok(image) => image,
+        Err(error) => return error,
+    };
+    let grid_size = placement.grid_size(&image, terminal.terminal.kitty_cell_metrics());
+    unsafe {
+        out_cols.write(grid_size.columns);
+        out_rows.write(grid_size.rows);
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_kitty_graphics_placement_viewport_pos(
+    iterator: RoasttyKittyGraphicsPlacementIterator,
+    image: RoasttyKittyGraphicsImage,
+    terminal: RoasttyTerminal,
+    out_col: *mut i32,
+    out_row: *mut i32,
+) -> c_int {
+    let Some(iterator) = kitty_graphics_placement_iterator_mut_from_handle(iterator) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(image) = kitty_graphics_image_from_handle(image) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_col.is_null() || out_row.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let key = match kitty_selected_placement_key(iterator) {
+        Ok(key) => key,
+        Err(error) => return error,
+    };
+    if terminal.terminal.kitty_placement(key).is_none() {
+        return ROASTTY_NO_VALUE;
+    }
+    let image = match kitty_image_from_snapshot(image) {
+        Ok(image) => image,
+        Err(error) => return error,
+    };
+    let Some((col, row, visible)) = terminal.terminal.kitty_placement_viewport_pos(key, &image)
+    else {
+        return ROASTTY_NO_VALUE;
+    };
+    if !visible {
+        return ROASTTY_NO_VALUE;
+    }
+    unsafe {
+        out_col.write(col);
+        out_row.write(row);
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_kitty_graphics_placement_source_rect(
+    iterator: RoasttyKittyGraphicsPlacementIterator,
+    image: RoasttyKittyGraphicsImage,
+    out_x: *mut u32,
+    out_y: *mut u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+) -> c_int {
+    let Some(iterator) = kitty_graphics_placement_iterator_mut_from_handle(iterator) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(image) = kitty_graphics_image_from_handle(image) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out_x.is_null() || out_y.is_null() || out_width.is_null() || out_height.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let selected = match iterator.selected {
+        Some(selected) => selected,
+        None => return ROASTTY_NO_VALUE,
+    };
+    let Some(item) = iterator.entries.get(selected) else {
+        return ROASTTY_NO_VALUE;
+    };
+    let (x, y, width, height) = kitty_source_rect(item.placement, image);
+    unsafe {
+        out_x.write(x);
+        out_y.write(y);
+        out_width.write(width);
+        out_height.write(height);
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_kitty_graphics_placement_render_info(
+    iterator: RoasttyKittyGraphicsPlacementIterator,
+    image: RoasttyKittyGraphicsImage,
+    terminal: RoasttyTerminal,
+    out: *mut RoasttyKittyGraphicsPlacementRenderInfo,
+) -> c_int {
+    let Some(iterator) = kitty_graphics_placement_iterator_mut_from_handle(iterator) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(image) = kitty_graphics_image_from_handle(image) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    let Some(terminal) = terminal_from_handle(terminal) else {
+        return ROASTTY_INVALID_VALUE;
+    };
+    if out.is_null() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let out_size = unsafe { (*out).size };
+    if out_size < std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>() {
+        return ROASTTY_INVALID_VALUE;
+    }
+    let selected = match iterator.selected {
+        Some(selected) => selected,
+        None => return ROASTTY_NO_VALUE,
+    };
+    let Some(item) = iterator.entries.get(selected) else {
+        return ROASTTY_NO_VALUE;
+    };
+    let placement = match terminal.terminal.kitty_placement(item.key) {
+        Some(placement) => placement,
+        None => return ROASTTY_NO_VALUE,
+    };
+    let image_meta = match kitty_image_from_snapshot(image) {
+        Ok(image) => image,
+        Err(error) => return error,
+    };
+    let metrics = terminal.terminal.kitty_cell_metrics();
+    let pixel_size = placement.pixel_size(&image_meta, metrics);
+    let grid_size = placement.grid_size(&image_meta, metrics);
+    let (viewport_col, viewport_row, viewport_visible) = terminal
+        .terminal
+        .kitty_placement_viewport_pos(item.key, &image_meta)
+        .unwrap_or((0, 0, false));
+    let (source_x, source_y, source_width, source_height) =
+        kitty_source_rect(item.placement, image);
+    unsafe {
+        out.write(RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            pixel_width: pixel_size.width,
+            pixel_height: pixel_size.height,
+            grid_cols: grid_size.columns,
+            grid_rows: grid_size.rows,
+            viewport_col,
+            viewport_row,
+            viewport_visible,
+            source_x,
+            source_y,
+            source_width,
+            source_height,
+        });
+    }
+    ROASTTY_SUCCESS
+}
+
+#[no_mangle]
 pub extern "C" fn roastty_terminal_take_pty_response(
     terminal: RoasttyTerminal,
     out: *mut RoasttyString,
@@ -7311,6 +7661,111 @@ mod tests {
             .as_bytes(),
         );
         let _ = terminal_string(terminal, roastty_terminal_take_pty_response);
+    }
+
+    #[derive(Clone, Copy)]
+    struct KittyDisplayFixture {
+        image_id: u32,
+        placement_id: u32,
+        image_width: u32,
+        image_height: u32,
+        source_x: u32,
+        source_y: u32,
+        source_width: u32,
+        source_height: u32,
+        x_offset: u32,
+        y_offset: u32,
+        columns: u32,
+        rows: u32,
+        z: i32,
+    }
+
+    fn kitty_rgba_payload(width: u32, height: u32) -> &'static str {
+        match width.saturating_mul(height).saturating_mul(4) {
+            4 => "AQIDBA==",
+            32 => "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+            64 => {
+                "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QA=="
+            }
+            other => panic!("missing Kitty RGBA payload for {other} bytes"),
+        }
+    }
+
+    fn write_kitty_fixture(terminal: RoasttyTerminal, fixture: KittyDisplayFixture) {
+        write_terminal(
+            terminal,
+            format!(
+                "\x1b_Ga=T,f=32,s={},v={},i={},p={},x={},y={},w={},h={},X={},Y={},c={},r={},z={},C=1;{}\x1b\\",
+                fixture.image_width,
+                fixture.image_height,
+                fixture.image_id,
+                fixture.placement_id,
+                fixture.source_x,
+                fixture.source_y,
+                fixture.source_width,
+                fixture.source_height,
+                fixture.x_offset,
+                fixture.y_offset,
+                fixture.columns,
+                fixture.rows,
+                fixture.z,
+                kitty_rgba_payload(fixture.image_width, fixture.image_height)
+            )
+            .as_bytes(),
+        );
+        let _ = terminal_string(terminal, roastty_terminal_take_pty_response);
+    }
+
+    fn write_kitty_delete(terminal: RoasttyTerminal, args: &str) {
+        write_terminal(terminal, format!("\x1b_Ga=d,{args}\x1b\\").as_bytes());
+        let _ = terminal_string(terminal, roastty_terminal_take_pty_response);
+    }
+
+    fn set_kitty_metrics(terminal: RoasttyTerminal, width_px: u32, height_px: u32) {
+        terminal_from_handle(terminal)
+            .unwrap()
+            .terminal
+            .set_kitty_cell_metrics_for_tests(width_px, height_px);
+    }
+
+    fn selected_kitty_placement(
+        terminal: RoasttyTerminal,
+        image_id: u32,
+    ) -> (
+        RoasttyKittyGraphicsImage,
+        RoasttyKittyGraphicsPlacementIterator,
+    ) {
+        let image = roastty_kitty_graphics_image(kitty_graphics_handle(terminal), image_id);
+        assert!(!image.is_null());
+        let mut iterator = ptr::null_mut();
+        assert_eq!(
+            roastty_kitty_graphics_placement_iterator_new(&mut iterator),
+            ROASTTY_SUCCESS
+        );
+        assert!(!iterator.is_null());
+        assert_eq!(
+            roastty_kitty_graphics_get(
+                kitty_graphics_handle(terminal),
+                ROASTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
+                (&mut iterator as *mut RoasttyKittyGraphicsPlacementIterator).cast()
+            ),
+            ROASTTY_SUCCESS
+        );
+        let mut selected_image_id = 0u32;
+        while roastty_kitty_graphics_placement_next(iterator) {
+            assert_eq!(
+                roastty_kitty_graphics_placement_get(
+                    iterator,
+                    ROASTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID,
+                    (&mut selected_image_id as *mut u32).cast()
+                ),
+                ROASTTY_SUCCESS
+            );
+            if selected_image_id == image_id {
+                return (image, iterator);
+            }
+        }
+        panic!("missing Kitty graphics placement for image {image_id}");
     }
 
     fn c_point(tag: c_int, x: u16, y: u32) -> RoasttyPoint {
@@ -14051,6 +14506,784 @@ mod tests {
         );
         assert!(!roastty_kitty_graphics_placement_next(ptr::null_mut()));
         roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_layout_values_are_stable() {
+        assert_eq!(
+            std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            56
+        );
+        assert_eq!(
+            std::mem::align_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, pixel_width),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, pixel_height),
+            12
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, grid_cols),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, grid_rows),
+            20
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, viewport_col),
+            24
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, viewport_row),
+            28
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, viewport_visible),
+            32
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, source_x),
+            36
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, source_y),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, source_width),
+            44
+        );
+        assert_eq!(
+            std::mem::offset_of!(RoasttyKittyGraphicsPlacementRenderInfo, source_height),
+            48
+        );
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_reports_geometry_helpers() {
+        let terminal = new_terminal(10, 5);
+        set_kitty_metrics(terminal, 100, 50);
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 7,
+                placement_id: 4,
+                image_width: 4,
+                image_height: 4,
+                source_x: 1,
+                source_y: 2,
+                source_width: 2,
+                source_height: 1,
+                x_offset: 3,
+                y_offset: 4,
+                columns: 2,
+                rows: 3,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 7);
+
+        let mut width = 0u32;
+        let mut height = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((width, height), (20, 30));
+
+        let mut cols = 0u32;
+        let mut rows = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_grid_size(
+                iterator, image, terminal, &mut cols, &mut rows
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((cols, rows), (2, 3));
+
+        let mut source_x = 0u32;
+        let mut source_y = 0u32;
+        let mut source_width = 0u32;
+        let mut source_height = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_source_rect(
+                iterator,
+                image,
+                &mut source_x,
+                &mut source_y,
+                &mut source_width,
+                &mut source_height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            (source_x, source_y, source_width, source_height),
+            (1, 2, 2, 1)
+        );
+
+        let mut rect = RoasttySelection {
+            size: std::mem::size_of::<RoasttySelection>(),
+            ..RoasttySelection::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_rect(iterator, image, terminal, &mut rect),
+            ROASTTY_SUCCESS
+        );
+        assert!(rect.rectangle);
+        assert_eq!((rect.start.x, rect.start.y), (0, 0));
+        assert_eq!((rect.end.x, rect.end.y), (1, 2));
+
+        let mut viewport_col = 99i32;
+        let mut viewport_row = 99i32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_viewport_pos(
+                iterator,
+                image,
+                terminal,
+                &mut viewport_col,
+                &mut viewport_row
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((viewport_col, viewport_row), (0, 0));
+
+        let mut info = RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(iterator, image, terminal, &mut info),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            info.size,
+            std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>()
+        );
+        assert_eq!((info.pixel_width, info.pixel_height), (20, 30));
+        assert_eq!((info.grid_cols, info.grid_rows), (2, 3));
+        assert_eq!((info.viewport_col, info.viewport_row), (0, 0));
+        assert!(info.viewport_visible);
+        assert_eq!(
+            (
+                info.source_x,
+                info.source_y,
+                info.source_width,
+                info.source_height
+            ),
+            (1, 2, 2, 1)
+        );
+
+        let mut undersized_rect = RoasttySelection {
+            size: std::mem::size_of::<RoasttySelection>() - 1,
+            rectangle: true,
+            ..RoasttySelection::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_rect(iterator, image, terminal, &mut undersized_rect),
+            ROASTTY_INVALID_VALUE
+        );
+        assert!(undersized_rect.rectangle);
+
+        let mut undersized_info = RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>() - 1,
+            pixel_width: 123,
+            ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(
+                iterator,
+                image,
+                terminal,
+                &mut undersized_info
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(undersized_info.pixel_width, 123);
+
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_reports_aspect_ratio_and_source_clamps() {
+        let terminal = new_terminal(10, 5);
+        set_kitty_metrics(terminal, 100, 50);
+
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 8,
+                placement_id: 1,
+                image_width: 2,
+                image_height: 4,
+                source_x: 0,
+                source_y: 0,
+                source_width: 0,
+                source_height: 0,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 0,
+                rows: 0,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 8);
+        let mut width = 0u32;
+        let mut height = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((width, height), (2, 4));
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 9,
+                placement_id: 1,
+                image_width: 2,
+                image_height: 4,
+                source_x: 0,
+                source_y: 0,
+                source_width: 0,
+                source_height: 0,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 3,
+                rows: 0,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 9);
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((width, height), (30, 60));
+        let mut cols = 0u32;
+        let mut rows = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_grid_size(
+                iterator, image, terminal, &mut cols, &mut rows
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((cols, rows), (3, 6));
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 10,
+                placement_id: 1,
+                image_width: 2,
+                image_height: 4,
+                source_x: 0,
+                source_y: 0,
+                source_width: 0,
+                source_height: 0,
+                x_offset: 9,
+                y_offset: 9,
+                columns: 0,
+                rows: 2,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 10);
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((width, height), (10, 20));
+        assert_eq!(
+            roastty_kitty_graphics_placement_grid_size(
+                iterator, image, terminal, &mut cols, &mut rows
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((cols, rows), (2, 3));
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 12,
+                placement_id: 1,
+                image_width: 2,
+                image_height: 4,
+                source_x: 1,
+                source_y: 3,
+                source_width: 99,
+                source_height: 0,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 1,
+                rows: 1,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 12);
+        let mut source_x = 0u32;
+        let mut source_y = 0u32;
+        let mut source_width = 0u32;
+        let mut source_height = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_source_rect(
+                iterator,
+                image,
+                &mut source_x,
+                &mut source_y,
+                &mut source_width,
+                &mut source_height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            (source_x, source_y, source_width, source_height),
+            (1, 3, 1, 1)
+        );
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+
+        set_kitty_metrics(terminal, 0, 0);
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 11,
+                placement_id: 1,
+                image_width: 1,
+                image_height: 1,
+                source_x: 0,
+                source_y: 0,
+                source_width: 0,
+                source_height: 0,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 2,
+                rows: 3,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 11);
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((width, height), (0, 0));
+        assert_eq!(
+            roastty_kitty_graphics_placement_grid_size(
+                iterator, image, terminal, &mut cols, &mut rows
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((cols, rows), (2, 3));
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_revalidates_stale_iterator_selection() {
+        let terminal = new_terminal(10, 5);
+        set_kitty_metrics(terminal, 100, 50);
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 7,
+                placement_id: 4,
+                image_width: 4,
+                image_height: 4,
+                source_x: 1,
+                source_y: 0,
+                source_width: 1,
+                source_height: 1,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 2,
+                rows: 2,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 7);
+
+        write_kitty_delete(terminal, "d=i,i=7,p=4");
+        let mut width = 0u32;
+        let mut height = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_NO_VALUE
+        );
+        let mut info = RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(iterator, image, terminal, &mut info),
+            ROASTTY_NO_VALUE
+        );
+
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_uses_live_replacement_geometry() {
+        let terminal = new_terminal(10, 5);
+        set_kitty_metrics(terminal, 100, 50);
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 7,
+                placement_id: 4,
+                image_width: 4,
+                image_height: 4,
+                source_x: 1,
+                source_y: 0,
+                source_width: 1,
+                source_height: 1,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 2,
+                rows: 2,
+                z: 1,
+            },
+        );
+        let (image, iterator) = selected_kitty_placement(terminal, 7);
+
+        write_terminal(terminal, b"\x1b[4;5H");
+        write_kitty_fixture(
+            terminal,
+            KittyDisplayFixture {
+                image_id: 7,
+                placement_id: 4,
+                image_width: 4,
+                image_height: 4,
+                source_x: 2,
+                source_y: 0,
+                source_width: 1,
+                source_height: 1,
+                x_offset: 0,
+                y_offset: 0,
+                columns: 3,
+                rows: 1,
+                z: 1,
+            },
+        );
+
+        let mut rect = RoasttySelection {
+            size: std::mem::size_of::<RoasttySelection>(),
+            ..RoasttySelection::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_rect(iterator, image, terminal, &mut rect),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((rect.start.x, rect.start.y), (4, 3));
+        assert_eq!((rect.end.x, rect.end.y), (6, 3));
+
+        let mut info = RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(iterator, image, terminal, &mut info),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!((info.grid_cols, info.grid_rows), (3, 1));
+        assert_eq!((info.viewport_col, info.viewport_row), (4, 3));
+        assert_eq!(
+            (
+                info.source_x,
+                info.source_y,
+                info.source_width,
+                info.source_height
+            ),
+            (1, 0, 1, 1)
+        );
+        let mut source_x = 0u32;
+        let mut source_y = 0u32;
+        let mut source_width = 0u32;
+        let mut source_height = 0u32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_source_rect(
+                iterator,
+                image,
+                &mut source_x,
+                &mut source_y,
+                &mut source_width,
+                &mut source_height
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            (
+                info.source_x,
+                info.source_y,
+                info.source_width,
+                info.source_height
+            ),
+            (source_x, source_y, source_width, source_height)
+        );
+
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_reports_viewport_visibility() {
+        let viewport_case = |cursor_row: u32,
+                             image_id: u32,
+                             rows: u32,
+                             scroll_lines_before_place: u32,
+                             scroll_lines_after_place: u32,
+                             viewport_delta: isize|
+         -> (i32, bool, c_int) {
+            let terminal = new_terminal(10, 5);
+            set_kitty_metrics(terminal, 100, 50);
+            for _ in 0..scroll_lines_before_place {
+                write_terminal(terminal, b"\x1b[5;1H\n");
+            }
+            write_terminal(terminal, format!("\x1b[{};1H", cursor_row + 1).as_bytes());
+            write_kitty_fixture(
+                terminal,
+                KittyDisplayFixture {
+                    image_id,
+                    placement_id: 4,
+                    image_width: 1,
+                    image_height: 1,
+                    source_x: 0,
+                    source_y: 0,
+                    source_width: 0,
+                    source_height: 0,
+                    x_offset: 0,
+                    y_offset: 0,
+                    columns: 1,
+                    rows,
+                    z: 1,
+                },
+            );
+            for _ in 0..scroll_lines_after_place {
+                write_terminal(terminal, b"\x1b[5;1H\n");
+            }
+            if viewport_delta != 0 {
+                terminal_from_handle(terminal)
+                    .unwrap()
+                    .terminal
+                    .scroll_selection_gesture_viewport(viewport_delta);
+            }
+            let (image, iterator) = selected_kitty_placement(terminal, image_id);
+            let mut info = RoasttyKittyGraphicsPlacementRenderInfo {
+                size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+                ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+            };
+            assert_eq!(
+                roastty_kitty_graphics_placement_render_info(iterator, image, terminal, &mut info),
+                ROASTTY_SUCCESS
+            );
+            let mut col = 99i32;
+            let mut row = 99i32;
+            let pos_result = roastty_kitty_graphics_placement_viewport_pos(
+                iterator, image, terminal, &mut col, &mut row,
+            );
+            roastty_kitty_graphics_placement_iterator_free(iterator);
+            roastty_kitty_graphics_image_free(image);
+            roastty_terminal_free(terminal);
+            (info.viewport_row, info.viewport_visible, pos_result)
+        };
+
+        assert_eq!(viewport_case(0, 7, 1, 0, 0, 0), (0, true, ROASTTY_SUCCESS));
+        assert_eq!(viewport_case(0, 8, 3, 0, 1, 0), (-1, true, ROASTTY_SUCCESS));
+        assert_eq!(viewport_case(4, 9, 3, 0, 0, 0), (4, true, ROASTTY_SUCCESS));
+        assert_eq!(
+            viewport_case(0, 10, 10, 0, 3, 0),
+            (-3, true, ROASTTY_SUCCESS)
+        );
+        assert_eq!(
+            viewport_case(0, 11, 1, 0, 2, 0),
+            (-2, false, ROASTTY_NO_VALUE)
+        );
+        assert_eq!(
+            viewport_case(4, 12, 1, 8, 0, -8),
+            (12, false, ROASTTY_NO_VALUE)
+        );
+
+        let terminal = new_terminal(10, 5);
+        set_kitty_metrics(terminal, 100, 50);
+        write_terminal(
+            terminal,
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=13,p=4,U=1,C=1;AQIDBA==\x1b\\",
+        );
+        let _ = terminal_string(terminal, roastty_terminal_take_pty_response);
+        let (image, iterator) = selected_kitty_placement(terminal, 13);
+        let mut info = RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+        };
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(iterator, image, terminal, &mut info),
+            ROASTTY_SUCCESS
+        );
+        assert!(!info.viewport_visible);
+        let mut col = 99i32;
+        let mut row = 99i32;
+        assert_eq!(
+            roastty_kitty_graphics_placement_viewport_pos(
+                iterator, image, terminal, &mut col, &mut row
+            ),
+            ROASTTY_NO_VALUE
+        );
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
+        roastty_terminal_free(terminal);
+    }
+
+    #[test]
+    fn kitty_graphics_render_info_c_abi_validates_handles_and_outputs() {
+        let terminal = new_terminal(10, 5);
+        write_kitty_transmit_display(terminal, 7, 4, 1);
+        let (image, iterator) = selected_kitty_placement(terminal, 7);
+        let mut width = 0u32;
+        let mut height = 0u32;
+        let mut info = RoasttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<RoasttyKittyGraphicsPlacementRenderInfo>(),
+            ..RoasttyKittyGraphicsPlacementRenderInfo::default()
+        };
+
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                ptr::null_mut(),
+                image,
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                ptr::null_mut(),
+                terminal,
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                ptr::null_mut(),
+                &mut width,
+                &mut height
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_pixel_size(
+                iterator,
+                image,
+                terminal,
+                ptr::null_mut(),
+                &mut height
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_grid_size(
+                iterator,
+                image,
+                terminal,
+                &mut width,
+                ptr::null_mut()
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_source_rect(
+                iterator,
+                image,
+                &mut width,
+                &mut height,
+                ptr::null_mut(),
+                &mut height
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(
+                iterator,
+                image,
+                terminal,
+                ptr::null_mut()
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+        assert_eq!(
+            roastty_kitty_graphics_placement_render_info(
+                ptr::null_mut(),
+                image,
+                terminal,
+                &mut info
+            ),
+            ROASTTY_INVALID_VALUE
+        );
+
+        roastty_kitty_graphics_placement_iterator_free(iterator);
+        roastty_kitty_graphics_image_free(image);
         roastty_terminal_free(terminal);
     }
 

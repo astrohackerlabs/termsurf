@@ -11,8 +11,9 @@ use super::device_attributes;
 use super::device_status;
 use super::kitty::graphics_command::{Command, Parser, Response};
 use super::kitty::graphics_exec;
+use super::kitty::graphics_image::Image;
 use super::kitty::graphics_image::MAX_IMAGE_SIZE;
-use super::kitty::graphics_storage::CellMetrics;
+use super::kitty::graphics_storage::{CellMetrics, Placement, PlacementKey};
 use super::modes;
 use super::mouse;
 use super::osc;
@@ -1042,6 +1043,56 @@ impl Terminal {
 
     pub(crate) fn kitty_images(&self) -> &super::kitty::graphics_storage::ImageStorage {
         self.screens.active().kitty_images()
+    }
+
+    pub(crate) fn kitty_cell_metrics(&self) -> CellMetrics {
+        self.kitty_graphics.cell_metrics(self.size)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_kitty_cell_metrics_for_tests(&mut self, width_px: u32, height_px: u32) {
+        self.kitty_graphics
+            .set_cell_metrics_for_tests(width_px, height_px);
+    }
+
+    pub(crate) fn kitty_placement(&self, key: PlacementKey) -> Option<Placement> {
+        self.screens
+            .active()
+            .kitty_images()
+            .placement_by_key(key)
+            .copied()
+    }
+
+    pub(crate) fn kitty_placement_selection(
+        &self,
+        key: PlacementKey,
+        image: &Image,
+    ) -> Option<TerminalSelection> {
+        let placement = self.kitty_placement(key)?;
+        let metrics = self.kitty_cell_metrics();
+        let (start, end) = self
+            .screens
+            .active()
+            .kitty_placement_grid_refs(placement, image, metrics)?;
+        Some(TerminalSelection {
+            start: start.into(),
+            end: end.into(),
+            rectangle: true,
+        })
+    }
+
+    pub(crate) fn kitty_placement_viewport_pos(
+        &self,
+        key: PlacementKey,
+        image: &Image,
+    ) -> Option<(i32, i32, bool)> {
+        let placement = self.kitty_placement(key)?;
+        Some(self.screens.active().kitty_placement_viewport_pos(
+            placement,
+            image,
+            self.kitty_cell_metrics(),
+            u32::from(self.size.rows),
+        ))
     }
 
     pub(crate) fn mouse_tracking(&self) -> bool {

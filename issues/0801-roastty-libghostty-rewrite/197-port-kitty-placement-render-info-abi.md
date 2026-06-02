@@ -256,3 +256,83 @@ The experiment passes when:
   replaced. Geometry must use live placement state for that key or return
   `ROASTTY_NO_VALUE`; it must never compute from stale snapshot pin state.
 - Do not skip Codex design review or Codex result review.
+
+## Result
+
+**Result:** Pass
+
+Implemented the Kitty placement geometry/render-info C ABI slice with Roastty
+public names:
+
+- `roastty_kitty_graphics_placement_rect`
+- `roastty_kitty_graphics_placement_pixel_size`
+- `roastty_kitty_graphics_placement_grid_size`
+- `roastty_kitty_graphics_placement_viewport_pos`
+- `roastty_kitty_graphics_placement_source_rect`
+- `roastty_kitty_graphics_placement_render_info`
+
+The implementation adds the public render-info struct, C declarations, live
+terminal geometry helpers, and C ABI functions. Geometry that depends on live
+tracked placement state revalidates the selected iterator key against current
+terminal storage before computing. If the selected placement was deleted, the
+ABI returns `ROASTTY_NO_VALUE`. If the same key was replaced, geometry uses the
+live replacement placement rather than stale tracked-pin state.
+
+The standalone `placement_source_rect` helper remains snapshot-based because it
+does not dereference live tracked state. `placement_render_info` uses the same
+snapshot source fields so its aggregate source output matches the individual
+source helper, while live geometry fields still use the live placement.
+
+Rust tests cover:
+
+- struct layout stability;
+- pixel size, grid size, source rect, placement rect, viewport position, and
+  aggregate render-info output;
+- native source size, explicit grid size, columns-only aspect ratio, rows-only
+  aspect ratio, source clamping, and zero cell metrics;
+- undersized struct/selection validation without partial mutation;
+- stale iterator selection after deletion;
+- same-key replacement with changed geometry and changed source fields;
+- fully visible, top-clipped, bottom-clipped, spanning, fully-above invisible,
+  below-viewport invisible, and virtual invisible viewport cases;
+- invalid handles and null outputs.
+
+The C ABI harness now links and calls the new functions through
+`roastty/include/roastty.h`, including render-info layout checks and undersized
+struct validation.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/terminal/terminal.rs roastty/src/terminal/screen.rs
+cargo test -p roastty kitty_graphics_render_info_c_abi
+cargo test -p roastty kitty_graphics_c_abi
+cargo test -p roastty terminal_stream_kitty_graphics
+cargo test -p roastty --test abi_harness
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Codex result review initially found two real blockers:
+
+- `placement_render_info` source fields could disagree with
+  `placement_source_rect` after same-key replacement;
+- viewport tests did not yet cover all required clipped/invisible cases.
+
+Both were fixed. Codex re-reviewed the corrected diff and found no remaining
+correctness blockers.
+
+## Conclusion
+
+Experiment 197 successfully ports the renderer-facing Kitty placement geometry
+ABI slice. The renderer boundary can now query placement cell rectangles,
+pixel/grid dimensions, source sampling rectangles, viewport-relative position,
+visibility, and aggregate render info without exposing Rust map iterators or
+borrowing live placement references across the C ABI.
+
+The next experiment can move to the next coherent Kitty graphics subsystem
+slice. The likely next step is direct image-data/renderer handoff preparation,
+while still deferring actual image rendering, PNG decoding, Metal integration,
+non-direct media, animation, and Unicode virtual placement drawing until their
+own experiments.

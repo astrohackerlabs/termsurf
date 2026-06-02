@@ -522,6 +522,72 @@ impl Screen {
         })
     }
 
+    pub(super) fn kitty_placement_grid_refs(
+        &self,
+        placement: Placement,
+        image: &Image,
+        metrics: CellMetrics,
+    ) -> Option<(GridRef, GridRef)> {
+        let rect = self.kitty_placement_rect(placement, image, metrics)?;
+        Some((
+            GridRef::from(rect.top_left),
+            GridRef::from(rect.bottom_right),
+        ))
+    }
+
+    pub(super) fn kitty_placement_viewport_pos(
+        &self,
+        placement: Placement,
+        image: &Image,
+        metrics: CellMetrics,
+        terminal_rows: u32,
+    ) -> (i32, i32, bool) {
+        let Some(pin) = placement.tracked_pin() else {
+            return (0, 0, false);
+        };
+        let Some(top_left) = self.tracked_pin_value(pin) else {
+            return (0, 0, false);
+        };
+        let top_left_ref = GridRef::from(top_left);
+        let Ok(pin_screen) = self.point_from_grid_ref(
+            top_left_ref.node,
+            top_left_ref.x,
+            top_left_ref.y,
+            point::Tag::Screen,
+        ) else {
+            return (0, 0, false);
+        };
+        let Some(viewport_ref) =
+            self.grid_ref(point::Point::viewport(point::Coordinate::new(0, 0)))
+        else {
+            return (0, 0, false);
+        };
+        let Ok(viewport_screen) = self.point_from_grid_ref(
+            viewport_ref.node,
+            viewport_ref.x,
+            viewport_ref.y,
+            point::Tag::Screen,
+        ) else {
+            return (0, 0, false);
+        };
+        let Ok(pin_y) = i32::try_from(pin_screen.y) else {
+            return (0, 0, false);
+        };
+        let Ok(viewport_y) = i32::try_from(viewport_screen.y) else {
+            return (0, 0, false);
+        };
+        let viewport_col = i32::from(pin_screen.x);
+        let Ok(grid_rows) = i32::try_from(placement.grid_size(image, metrics).rows) else {
+            return (viewport_col, 0, false);
+        };
+        let Ok(term_rows) = i32::try_from(terminal_rows) else {
+            return (viewport_col, 0, false);
+        };
+        let viewport_row = pin_y - viewport_y;
+        let visible = viewport_row.saturating_add(grid_rows) > 0 && viewport_row < term_rows;
+        (viewport_col, viewport_row, visible)
+    }
+
     fn untrack_kitty_placements(&mut self, placements: Vec<Placement>) {
         for placement in placements {
             self.untrack_kitty_placement(placement);
