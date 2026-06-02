@@ -1,3 +1,4 @@
+pub(crate) mod cell;
 pub(crate) mod cursor;
 pub(crate) mod image;
 pub(crate) mod metal;

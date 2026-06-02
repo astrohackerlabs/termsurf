@@ -155,3 +155,79 @@ Two real (Low) findings, fixed in the design above before this commit:
 2. the `is_covering` test now also checks the just-above neighbor `0x2589`
    (still inside the block range) is false, better proving the `U+2588`-only
    behavior.
+
+## Result
+
+**Result:** Pass
+
+Added `roastty/src/renderer/cell.rs` (module-level `#![allow(dead_code)]`,
+"upstream `renderer/cell.zig`" attribution) and wired `pub(crate) mod cell;`
+into `roastty/src/renderer/mod.rs`.
+
+Implemented the eight predicates with `matches!` range checks mirroring
+upstream: `pub(crate)` `is_covering` (`0x2588`) and `no_min_contrast` (delegates
+to `is_graphics_element`), and private `is_graphics_element`, `is_box_drawing`
+(`0x2500..=0x257F`), `is_block_element` (`0x2580..=0x259F`),
+`is_legacy_computing` (`0x1FB00..=0x1FBFF | 0x1CC00..=0x1CEBF`), `is_powerline`
+(`0xE0B0..=0xE0D7`), and `is_space` (`0x0020 | 0x2002`). Codepoints are `u32`.
+
+Tests added (8): `is_box_drawing_bounds`, `is_block_element_bounds`,
+`is_legacy_computing_bounds` (both legacy ranges), `is_powerline_bounds`,
+`is_graphics_element_covers_each_block`, `is_covering_only_full_block` (both
+neighbors false), `no_min_contrast_matches_graphics`, `is_space_fixed_width`.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty renderer::cell
+cargo test -p roastty renderer
+cargo test -p roastty
+```
+
+Observed:
+
+- `renderer::cell`: 8 passed.
+- Full `roastty`: 2244 unit tests passed (2236 prior + 8 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/renderer/cell.rs` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean.
+
+No C ABI, header, or ABI inventory changes; `isSymbol`/`constraintWidth`/
+`Contents` not pulled in.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+should change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-073229-999974-prompt.md`
+- Result: `logs/codex-review/20260602-073229-999974-last-message.md`
+
+Codex confirmed every range matches upstream exactly, that the eight tests cover
+the edges and just-outside values (including both legacy ranges and both
+`is_covering` neighbors), that visibility matches upstream intent (`is_covering`
+and `no_min_contrast` `pub(crate)`, the rest private), and that the `matches!`
+range-or patterns are idiomatic with no clippy/convention concern.
+
+## Conclusion
+
+Experiment 227 succeeds and opens the `renderer::cell` module with the pure
+codepoint-classification predicates. Both Codex gates passed (two low design
+findings fixed; zero result findings).
+
+The next `renderer/cell.zig` slices build on these predicates:
+
+- `isSymbol` plus `constraintWidth` — `isSymbol` needs the generated Unicode
+  symbols table (a sizable lookup; likely its own experiment to port or generate
+  the table), and `constraintWidth` then needs `terminal::page` cell access plus
+  `is_symbol`/`is_graphics_element`/`is_space` (already landed here);
+- the `Contents` cell-render-data builder with `Key`/`CellType`, which depends
+  on the shader cell-vertex types (already in `renderer::shader`) and the font
+  API, and is the largest remaining piece of `cell.zig`.
