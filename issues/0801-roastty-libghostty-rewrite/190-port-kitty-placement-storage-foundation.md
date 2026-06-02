@@ -165,3 +165,55 @@ movement, Unicode virtual placement rendering, or public C ABI.
 - Do not skip Codex design review. If the design review finds a real issue, fix
   it and re-review before committing this experiment design.
 - Do not skip Codex result review after implementation.
+
+## Result
+
+**Result:** Pass
+
+Implemented the internal Kitty placement storage foundation in
+`roastty/src/terminal/kitty/graphics_storage.rs`.
+
+The implementation now includes:
+
+- tagged placement IDs with `Internal(u32)` and `External(u32)` variants;
+- `PlacementKey` values keyed by image ID and tagged placement ID;
+- storage-only `Placement` metadata matching upstream scalar fields;
+- storage-only placement locations without terminal pin ownership;
+- placement insertion that fails for missing images;
+- internal placement ID allocation for zero caller IDs;
+- external placement replacement for repeated non-zero placement IDs;
+- placement lookup and per-image enumeration helpers;
+- `CellMetrics`, `PixelSize`, and `GridSize` helpers;
+- upstream-style placement pixel sizing and grid sizing;
+- zero-metric geometry behavior that avoids division by zero;
+- `set_limit(0)` placement cleanup and internal placement ID reset;
+- placement-aware eviction that prefers unused images and removes placements for
+  evicted images;
+- same-ID replacement behavior that preserves placements and keeps Experiment
+  188's byte accounting correct.
+
+Codex result review found no blocking issues and approved the result as pass
+ready.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/terminal/kitty/mod.rs roastty/src/terminal/kitty/graphics_storage.rs roastty/src/terminal/kitty/graphics_image.rs roastty/src/terminal/kitty/graphics_exec.rs
+cargo test -p roastty kitty_graphics_storage
+cargo test -p roastty kitty_graphics_exec
+cargo test -p roastty kitty_graphics_image
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+The focused storage suite passed with 24 tests. The full Roastty suite passed
+with 1,970 Rust tests plus the C harness.
+
+## Conclusion
+
+Roastty now has the storage-side state needed for Kitty image placements without
+yet touching terminal cursor movement, tracked pins, renderer integration, or
+public ABI. The next experiment should connect display execution to this storage
+model for lookup, validation, placement insertion, and response behavior while
+still deferring renderer and C ABI exposure.
