@@ -180,8 +180,50 @@ All public names must use Roastty naming.
 
 ## Result
 
-Not run yet.
+**Result:** Pass
+
+Experiment 209 added the backend-agnostic image draw command contract. The
+implementation:
+
+- added an internal `renderer::shader` module with `ImageVertex`,
+  `PrimitiveType`, and `ImageDrawCall`;
+- made `ImageVertex` `#[repr(C)]` and tested its upstream-compatible layout
+  (`size_of == 40`, `align_of == 4`);
+- added `Placement::to_image_draw_call()`, which maps placement geometry to the
+  upstream image shader fields;
+- changed `ImageDrawBackend` so image drawing receives the ready texture, raw
+  placement, and prepared `ImageDrawCall`;
+- kept `ImageState::draw` responsible for constructing draw commands so future
+  backends do not each reconstruct the mapping;
+- preserved draw summary behavior for missing, not-ready, failed, and successful
+  placements.
+
+Verification passed:
+
+```bash
+cargo fmt -- roastty/src/renderer/image.rs roastty/src/renderer/mod.rs roastty/src/renderer/shader.rs
+cargo test -p roastty renderer::image
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Observed results:
+
+- `cargo test -p roastty renderer::image`: 30 passed.
+- `cargo test -p roastty`: 2127 library tests plus 1 ABI harness test passed.
+- The public no-`ghostty` gate and `git diff --check` both exited 0.
+
+Codex result review approved the experiment as Pass. Its only note was to ensure
+the new `roastty/src/renderer/shader.rs` file is included in the result commit.
 
 ## Conclusion
 
-Pending.
+Roastty's image renderer now has the draw-side command shape that upstream
+Ghostty feeds into GPU buffers: every ready placement becomes one stable-layout
+image vertex plus the fixed triangle-strip draw metadata. This creates a clean
+boundary for the next Metal rendering slice.
+
+The next experiment can port the Metal buffer wrapper or the minimal render-pass
+step data needed to bind these image draw commands to Metal, while still
+avoiding public ABI expansion until the internal renderer path is ready.

@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::renderer::shader::{ImageDrawCall, ImageVertex, PrimitiveType};
 use crate::KittyGraphicsRenderPlacementSnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -254,6 +255,27 @@ pub(crate) struct Placement {
     pub(crate) source_height: u32,
 }
 
+impl Placement {
+    pub(crate) fn to_image_draw_call(self) -> ImageDrawCall {
+        ImageDrawCall {
+            vertex: ImageVertex {
+                grid_pos: [self.x as f32, self.y as f32],
+                cell_offset: [self.cell_offset_x as f32, self.cell_offset_y as f32],
+                source_rect: [
+                    self.source_x as f32,
+                    self.source_y as f32,
+                    self.source_width as f32,
+                    self.source_height as f32,
+                ],
+                dest_size: [self.width as f32, self.height as f32],
+            },
+            primitive: PrimitiveType::TriangleStrip,
+            vertex_count: 4,
+            instance_count: 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageState<Texture = ()> {
     pub(crate) images: BTreeMap<ImageId, RendererImage<Texture>>,
@@ -439,7 +461,8 @@ impl<Texture> ImageState<Texture> {
             };
 
             summary.attempted += 1;
-            match backend.draw_image(texture, *placement) {
+            let call = placement.to_image_draw_call();
+            match backend.draw_image(texture, *placement, call) {
                 Ok(()) => summary.succeeded += 1,
                 Err(_) => summary.failed += 1,
             }
@@ -473,7 +496,12 @@ pub(crate) trait ImageUploadBackend {
 pub(crate) trait ImageDrawBackend<Texture> {
     type Error;
 
-    fn draw_image(&mut self, texture: &Texture, placement: Placement) -> Result<(), Self::Error>;
+    fn draw_image(
+        &mut self,
+        texture: &Texture,
+        placement: Placement,
+        call: ImageDrawCall,
+    ) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -616,7 +644,7 @@ mod tests {
     #[derive(Default)]
     struct FakeDrawBackend {
         fail_textures: BTreeSet<FakeTexture>,
-        calls: Vec<(FakeTexture, Placement)>,
+        calls: Vec<(FakeTexture, Placement, ImageDrawCall)>,
     }
 
     impl ImageDrawBackend<FakeTexture> for FakeDrawBackend {
@@ -626,8 +654,9 @@ mod tests {
             &mut self,
             texture: &FakeTexture,
             placement: Placement,
+            call: ImageDrawCall,
         ) -> Result<(), Self::Error> {
-            self.calls.push((*texture, placement));
+            self.calls.push((*texture, placement, call));
             if self.fail_textures.contains(texture) {
                 Err(())
             } else {
@@ -643,6 +672,39 @@ mod tests {
         assert!(ImageId::Kitty(1).z_less_than(ImageId::Overlay));
         assert!(!ImageId::Overlay.z_less_than(ImageId::Kitty(1)));
         assert!(!ImageId::Overlay.z_less_than(ImageId::Overlay));
+    }
+
+    #[test]
+    fn renderer_placement_converts_to_upstream_image_draw_call() {
+        let placement = Placement {
+            image_id: ImageId::Kitty(9),
+            x: -3,
+            y: 4,
+            z: 0,
+            width: 80,
+            height: 24,
+            cell_offset_x: 5,
+            cell_offset_y: 6,
+            source_x: 7,
+            source_y: 8,
+            source_width: 9,
+            source_height: 10,
+        };
+
+        assert_eq!(
+            placement.to_image_draw_call(),
+            ImageDrawCall {
+                vertex: ImageVertex {
+                    grid_pos: [-3.0, 4.0],
+                    cell_offset: [5.0, 6.0],
+                    source_rect: [7.0, 8.0, 9.0, 10.0],
+                    dest_size: [80.0, 24.0],
+                },
+                primitive: PrimitiveType::TriangleStrip,
+                vertex_count: 4,
+                instance_count: 1,
+            }
+        );
     }
 
     #[test]
@@ -1220,6 +1282,10 @@ mod tests {
             }
         );
         assert_eq!(backend.calls[0].0, FakeTexture(1));
+        assert_eq!(backend.calls[0].2.vertex.grid_pos, [1.0, 0.0]);
+        assert_eq!(backend.calls[0].2.primitive, PrimitiveType::TriangleStrip);
+        assert_eq!(backend.calls[0].2.vertex_count, 4);
+        assert_eq!(backend.calls[0].2.instance_count, 1);
 
         backend.calls.clear();
         assert_eq!(
@@ -1233,6 +1299,10 @@ mod tests {
             }
         );
         assert_eq!(backend.calls[0].0, FakeTexture(2));
+        assert_eq!(backend.calls[0].2.vertex.grid_pos, [2.0, 0.0]);
+        assert_eq!(backend.calls[0].2.primitive, PrimitiveType::TriangleStrip);
+        assert_eq!(backend.calls[0].2.vertex_count, 4);
+        assert_eq!(backend.calls[0].2.instance_count, 1);
 
         backend.calls.clear();
         assert_eq!(
@@ -1246,6 +1316,10 @@ mod tests {
             }
         );
         assert_eq!(backend.calls[0].0, FakeTexture(3));
+        assert_eq!(backend.calls[0].2.vertex.grid_pos, [3.0, 0.0]);
+        assert_eq!(backend.calls[0].2.primitive, PrimitiveType::TriangleStrip);
+        assert_eq!(backend.calls[0].2.vertex_count, 4);
+        assert_eq!(backend.calls[0].2.instance_count, 1);
     }
 
     #[test]

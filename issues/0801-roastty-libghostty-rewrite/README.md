@@ -543,7 +543,7 @@ tests, choose the larger subsystem.
 - [Experiment 208: Port Metal Texture Upload Backend](208-port-metal-texture-upload-backend.md)
   — **Pass**
 - [Experiment 209: Port Image Draw Command Contract](209-port-image-draw-command-contract.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 
