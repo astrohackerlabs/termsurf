@@ -551,7 +551,7 @@ tests, choose the larger subsystem.
 - [Experiment 212: Port Metal Pipeline Attachment Values](212-port-metal-pipeline-attachment-values.md)
   — **Pass**
 - [Experiment 213: Port Standard Metal Pipeline Descriptions](213-port-standard-metal-pipeline-descriptions.md)
-  — **Designed**
+  — **Pass**
 
 ## Non-Goals
 

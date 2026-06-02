@@ -247,8 +247,75 @@ All public names must use Roastty naming.
 
 ## Result
 
-Not run yet.
+**Result:** Pass
+
+Experiment 213 added the internal value layer for upstream's standard Metal
+pipeline table.
+
+The implementation added:
+
+- `CellTextVertex`, `CellTextAtlas`, `CellTextFlags`, and explicit padding for
+  the upstream `CellText` shader payload shape;
+- `CellBg` as a transparent four-byte color payload;
+- `BgImageVertex`, `BgImageInfo`, `BgImagePosition`, `BgImageFit`, and explicit
+  padding for the upstream `BgImage` shader payload shape;
+- `MetalBufferElement` impls for `CellTextVertex`, `CellBg`, and
+  `BgImageVertex`;
+- vertex descriptor mappings for `CellTextVertex` and `BgImageVertex`;
+- `STANDARD_PIPELINE_DESCRIPTIONS`, matching upstream's five standard Metal
+  pipeline descriptions in order;
+- `standard_pipeline_build_values(...)`, which composes a standard pipeline
+  description, vertex descriptor values, and attachment descriptor values
+  without creating real Metal objects.
+
+The first Codex result review found a real unsafe-contract issue:
+`CellTextVertex` and `BgImageVertex` had implicit trailing padding while also
+being marked as `MetalBufferElement`. Because the buffer upload path copies
+`size_of::<T>()` bytes into Metal buffers, uploadable payloads need stable,
+initialized representation bytes. The implementation was fixed by making the
+padding explicit:
+
+- `CellTextVertex::_padding: [u8; 2]`;
+- `BgImageVertex::_padding: [u8; 3]`.
+
+The layout tests now assert the explicit padding offsets.
+
+Verification passed after the fix:
+
+```bash
+cargo fmt -- roastty/src/renderer/shader.rs roastty/src/renderer/metal/api.rs roastty/src/renderer/metal/pipeline.rs roastty/src/renderer/metal/buffer.rs
+cargo test -p roastty renderer::shader
+cargo test -p roastty renderer::metal::pipeline
+cargo test -p roastty renderer::metal::api
+cargo test -p roastty renderer::metal::buffer
+cargo test -p roastty
+if rg -n 'ghostty|Ghostty|GHOSTTY' roastty/src/lib.rs roastty/include/roastty.h roastty/tests/abi_harness.c; then exit 1; else exit 0; fi
+git diff --check
+```
+
+Observed test results:
+
+- `cargo test -p roastty renderer::shader`: 9 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::pipeline`: 9 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::api`: 11 passed, 0 failed;
+- `cargo test -p roastty renderer::metal::buffer`: 10 passed, 0 failed;
+- `cargo test -p roastty`: 2158 library tests passed, 1 ABI harness test passed,
+  0 doc tests.
+
+Codex re-reviewed the corrected result and reported no blocking findings. The
+review explicitly approved recording Experiment 213 as Pass.
 
 ## Conclusion
 
-Pending.
+Roastty now has the standard Metal pipeline description table and the shader
+payload value types that table needs. The renderer value stack can now describe
+the five built-in upstream pipelines without Objective-C pipeline objects:
+
+- `bg_color`;
+- `cell_bg`;
+- `cell_text`;
+- `image`;
+- `bg_image`.
+
+This sets up the next renderer slice: creating real Metal shader libraries,
+functions, descriptors, and pipeline state from these already-tested values.

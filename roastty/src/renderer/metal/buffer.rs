@@ -10,11 +10,14 @@ use objc2_foundation::NSRange;
 use objc2_metal::{MTLBuffer, MTLDevice};
 
 use crate::renderer::metal::api::{MetalResourceOptions, MetalStorageMode};
-use crate::renderer::shader::ImageVertex;
+use crate::renderer::shader::{BgImageVertex, CellBg, CellTextVertex, ImageVertex};
 
 pub(crate) unsafe trait MetalBufferElement: Copy {}
 
 unsafe impl MetalBufferElement for ImageVertex {}
+unsafe impl MetalBufferElement for CellTextVertex {}
+unsafe impl MetalBufferElement for CellBg {}
+unsafe impl MetalBufferElement for BgImageVertex {}
 
 #[derive(Clone, Copy)]
 pub(crate) struct MetalBufferOptions<'a> {
@@ -205,6 +208,15 @@ mod tests {
 
     fn u32_bytes(values: &[u32]) -> Vec<u8> {
         data_as_bytes(values).to_vec()
+    }
+
+    fn assert_buffer_element<T: MetalBufferElement>() {}
+
+    #[test]
+    fn shader_payloads_satisfy_buffer_element_bound() {
+        assert_buffer_element::<CellTextVertex>();
+        assert_buffer_element::<CellBg>();
+        assert_buffer_element::<BgImageVertex>();
     }
 
     #[test]
