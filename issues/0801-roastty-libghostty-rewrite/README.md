@@ -1119,6 +1119,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 336: codepoint overrides](336-codepoint-overrides.md) — **Pass** ·
   Claude/Codex/Codex
+- [Experiment 337: the shaper's output cell](337-shaper-cell.md) — **Designed**
+  · Claude/Codex/Codex
 
 ## Non-Goals
 
