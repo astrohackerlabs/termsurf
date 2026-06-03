@@ -1129,6 +1129,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 341: the shaper's cluster→cell mapping](341-shaper-cluster-cell-map.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 342: the shaper's clustered input](342-shaper-clustered-input.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
