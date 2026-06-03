@@ -167,6 +167,20 @@ impl Canvas {
         self.buf[(self.width as i32 * py + px) as usize] = color.0;
     }
 
+    /// Read back the alpha at a cell coordinate, applying the padding offset
+    /// (the inverse of [`pixel`](Self::pixel)). Out-of-surface reads return `0`.
+    /// Test-only helper so sibling modules can inspect drawn ink without
+    /// touching the private buffer.
+    #[cfg(test)]
+    pub(crate) fn get(&self, x: i32, y: i32) -> u8 {
+        let px = x + self.padding_x as i32;
+        let py = y + self.padding_y as i32;
+        if px < 0 || py < 0 || px >= self.width as i32 || py >= self.height as i32 {
+            return 0;
+        }
+        self.buf[(self.width as i32 * py + px) as usize]
+    }
+
     /// Draw and fill a rectangle. This is also the main primitive for lines
     /// (which are just skinny rectangles).
     pub(crate) fn rect(&mut self, v: Rect<i32>, color: Color) {

@@ -169,3 +169,79 @@ Review artifacts:
 - Prompt: `logs/codex-review/20260602-232006-065664-prompt.md`
 - Result: `logs/codex-review/20260602-232006-065664-last-message.md`
 - Follow-up: `logs/codex-review/20260602-232137-381555-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/draw.rs` (new) ports `Thickness` (`height` via
+`super_light = (base/2).max(1)`, `light = base`, `heavy = base*2`), `LineStyle`
+(`None`/`Light`/`Heavy`/`Double`), `Lines`, `lines_char` (the faithful
+`linesChar` port — light/heavy/double stroke edges, the four meeting points, and
+the four direction arms incl. the `Double` two-stroke split, all with
+`saturating_sub`/`saturating_add` and `u32 → i32` casts to `Canvas::box`), and
+`draw_box_lines` (dispatch for the representative line chars + the three double
+chars). `sprite/mod.rs` declares `draw`; `Canvas` gained a `#[cfg(test)]`
+`get(x, y)` read-back helper.
+
+Tests (deterministic, fixture `Metrics` with `cell_width = 9`,
+`cell_height = 18`, `box_thickness = 2`):
+
+- `thickness_heights` — `Light(2)=2`, `Heavy(2)=4`, `SuperLight(2)=1`,
+  `SuperLight(1)=1`.
+- `box_light_horizontal` — `0x2500` → a 2px band at rows 8–9 across the full
+  width, nothing above/below or at the top/bottom edges.
+- `box_light_vertical` — `0x2502` → a 2px band at cols 3–4 down the full height,
+  empty either side.
+- `box_light_cross` — `0x253C` → both center bands present and overlapping at
+  the center.
+- `box_heavy_horizontal` — `0x2501` → a 4px band (twice the light height) at
+  rows 7–10.
+- `box_double_horizontal` — `0x2550` → two bands (rows 6–7 and 10–11) with a 2px
+  gap at rows 8–9.
+- `box_double_vertical` — `0x2551` → two bands (cols 1–2 and 5–6) with a gap at
+  cols 3–4.
+- `box_double_cross` — `0x256C` → the center light-stroke rectangle (cols 3–4 ×
+  rows 8–9) is the unfilled hole, with the double arms still inked at the edges.
+- `draw_box_lines_unknown` — `'M'` → `false`, canvas untouched.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty sprite` → 22 passed (9 new).
+- `cargo test -p roastty` → 2448 passed, 0 failed (no regressions; +9).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The sprite font's foundational drawing primitive, `lines_char`, is ported and
+verified against deterministic ink geometry — including the highest-risk
+`Double` two-stroke arms and the all-double center hole. The sprite subsystem
+can now draw box-drawing line glyphs into a `Canvas`. The next sprite work
+builds outward from here: the rest of the `draw2500_257F` dispatch (the
+remaining straight/junction line glyphs), the other box-drawing primitives
+(dashes, arcs, diagonals), and then the other sprite categories (block, braille,
+powerline, legacy) — which together enable the sprite `hasCodepoint` inventory
+and, in turn, the resolver's deferred sprite render arm (`SpriteUnavailable`)
+and sprite-presentation path. Alongside the sprite font remain the discovery
+consumer, the UCD emoji-presentation default, codepoint overrides, the shaper,
+the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It verified line-by-line that `Thickness::height`, every
+light/heavy/double stroke-edge calculation, the saturating `-|`/`+|`
+equivalents, the four nested meeting-point expressions, and every direction arm
+(including the `Double` two-stroke conditionals) match the Zig `linesChar`
+source; that the dispatched codepoints map to the same `Lines` as upstream; and
+that the tests meaningfully cover the geometry (centered light/heavy strokes,
+full-span behavior, the double horizontal/vertical splits, and the all-double
+center hole). With the full `cargo test`, build, fmt, name-gate, and diff-check
+results, Codex judged the completion sound.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-232517-158682-prompt.md`
+- Result: `logs/codex-review/20260602-232517-158682-last-message.md`

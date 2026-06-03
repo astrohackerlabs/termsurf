@@ -7,3 +7,4 @@
 //! tables land in later experiments.
 
 pub(crate) mod canvas;
+pub(crate) mod draw;
