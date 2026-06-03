@@ -943,6 +943,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 248: Port the OpenType `post` table parser (+ `Version16Dot16`)](248-port-opentype-post.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 249: Port the OpenType `os2` table parser (version-gated)](249-port-opentype-os2.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
