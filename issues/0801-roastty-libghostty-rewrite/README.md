@@ -979,6 +979,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 266: Collection completeStyles — alias missing styles](266-collection-complete-styles.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 267: Synthetic face methods — Face::synthetic_bold / synthetic_italic](267-synthetic-face-methods.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
