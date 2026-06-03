@@ -8,13 +8,15 @@
 //! dispatch), the dashes, the Block Elements (`U+2580`–`U+259F`), the Braille
 //! Patterns (`U+2800`–`U+28FF`), the legacy-computing Sextants
 //! (`U+1FB00`–`U+1FB3B`), the Separated Block Quadrants (`U+1CC21`–`U+1CC2F`),
-//! and the Octants (`U+1CD00`–`U+1CDE5`). The `z2d`-based primitives (arcs,
-//! diagonals), the sprite `hasCodepoint` inventory, and the other sprite
-//! categories (powerline, the circle pieces, the rest of legacy-computing,
-//! geometric) are later experiments.
+//! and the Octants (`U+1CD00`–`U+1CDE5`), plus the box-drawing **diagonals**
+//! (`U+2571`–`U+2573`, the first `z2d`-rendered glyphs). The remaining
+//! `z2d`-based primitives (arcs, the circle/ellipse pieces), the sprite
+//! `hasCodepoint` inventory, and the other sprite categories (powerline, the
+//! rest of legacy-computing, geometric) are later experiments.
 
 use crate::font::metrics::Metrics;
 use crate::font::sprite::canvas::{Canvas, Color, Rect};
+use crate::font::sprite::raster;
 
 /// Stroke thickness class. Faithful port of upstream `common.Thickness`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -615,6 +617,45 @@ pub(crate) fn draw_box_lines(cp: u32, metrics: &Metrics, canvas: &mut Canvas) ->
         }
         None => false,
     }
+}
+
+/// Draw the light diagonal box-drawing glyph for `cp` (`U+2571 ╱`, `U+2572 ╲`,
+/// `U+2573 ╳`) into `canvas`, returning `true` if `cp` is a diagonal. Faithful
+/// port of upstream `lightDiagonalUpperRightToLowerLeft`/`…UpperLeftToLowerRight`/
+/// `…Cross`: anti-aliased corner-to-corner lines (stroked via the `z2d` port),
+/// overshooting the corners by `0.5·slope` to keep the slope true.
+pub(crate) fn draw_box_diagonal(cp: u32, metrics: &Metrics, canvas: &mut Canvas) -> bool {
+    let float_width = metrics.cell_width as f64;
+    let float_height = metrics.cell_height as f64;
+    let slope_x = (float_width / float_height).min(1.0);
+    let slope_y = (float_height / float_width).min(1.0);
+    let thickness = Thickness::Light.height(metrics.box_thickness) as f64;
+
+    let upper_right_to_lower_left = |canvas: &mut Canvas| {
+        canvas.line(
+            raster::Point::new(float_width + 0.5 * slope_x, -0.5 * slope_y),
+            raster::Point::new(-0.5 * slope_x, float_height + 0.5 * slope_y),
+            thickness,
+        );
+    };
+    let upper_left_to_lower_right = |canvas: &mut Canvas| {
+        canvas.line(
+            raster::Point::new(-0.5 * slope_x, -0.5 * slope_y),
+            raster::Point::new(float_width + 0.5 * slope_x, float_height + 0.5 * slope_y),
+            thickness,
+        );
+    };
+
+    match cp {
+        0x2571 => upper_right_to_lower_left(canvas),
+        0x2572 => upper_left_to_lower_right(canvas),
+        0x2573 => {
+            upper_right_to_lower_left(canvas);
+            upper_left_to_lower_right(canvas);
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Horizontal line with the top edge at `y`, from `x1` to `x2`, `thick` pixels
@@ -2402,6 +2443,73 @@ mod tests {
             let mut c = Canvas::new(8, 16, 0, 0);
             assert!(!draw_octant(cp, &m, &mut c), "{cp:#07x} not an octant");
             assert!(all_alpha(&c, &m, 0), "{cp:#07x} drew ink");
+        }
+    }
+
+    // Box-drawing diagonals (Canvas::line + the z2d pipeline).
+
+    #[test]
+    fn diagonal_2572_orientation() {
+        // ╲ : top-left to bottom-right. Passes through the center, not the
+        // top-right corner.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_diagonal(0x2572, &m, &mut c));
+        assert!(inked(&c, 4, 9), "center on the backslash");
+        assert!(!inked(&c, 8, 1), "top-right corner off the backslash");
+    }
+
+    #[test]
+    fn diagonal_2571_orientation() {
+        // ╱ : bottom-left to top-right. Passes through the center, not the
+        // top-left corner.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_diagonal(0x2571, &m, &mut c));
+        assert!(inked(&c, 4, 9), "center on the slash");
+        assert!(!inked(&c, 0, 1), "top-left corner off the slash");
+    }
+
+    #[test]
+    fn diagonal_2573_cross() {
+        // ╳ : both diagonals cross at the center.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_diagonal(0x2573, &m, &mut c));
+        assert!(inked(&c, 4, 9), "center where the diagonals cross");
+    }
+
+    #[test]
+    fn canvas_line_horizontal() {
+        // A direct Canvas::line check: a 2px horizontal line centered at y=4
+        // across a 9-wide unpadded canvas.
+        let mut c = Canvas::new(9, 9, 0, 0);
+        c.line(
+            raster::Point::new(0.0, 4.0),
+            raster::Point::new(9.0, 4.0),
+            2.0,
+        );
+        // The band straddles y=4 (the line center): rows 3 and 4 inked across.
+        for x in 1..8 {
+            assert!(inked(&c, x, 3) || inked(&c, x, 4), "band at x={x}");
+        }
+        // Top and bottom rows are empty.
+        for x in 0..9 {
+            assert!(!inked(&c, x, 0), "top row empty at x={x}");
+            assert!(!inked(&c, x, 8), "bottom row empty at x={x}");
+        }
+    }
+
+    #[test]
+    fn draw_box_diagonal_excludes() {
+        let m = fixture_metrics();
+        for cp in [0x2500u32, 0x2570, 'M' as u32] {
+            let mut c = cell_canvas();
+            assert!(
+                !draw_box_diagonal(cp, &m, &mut c),
+                "{cp:#06x} not a diagonal"
+            );
+            assert!(all_alpha(&c, &m, 0), "{cp:#06x} drew ink");
         }
     }
 }

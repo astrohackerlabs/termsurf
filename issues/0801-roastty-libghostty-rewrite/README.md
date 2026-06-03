@@ -1038,7 +1038,7 @@ are past the correctness-critical foundation.
 - [Experiment 295: z2d port — the single-segment stroke](295-z2d-stroke-line.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 296: Canvas::line + the box-drawing diagonals](296-canvas-line-diagonals.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

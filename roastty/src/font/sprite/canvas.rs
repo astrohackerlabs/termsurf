@@ -12,6 +12,7 @@
 use std::ops::Sub;
 
 use crate::font::atlas::{Atlas, AtlasError, Format, Region};
+use crate::font::sprite::raster;
 
 /// A 2D point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +204,25 @@ impl Canvas {
         }
         .rect();
         self.rect(r, color);
+    }
+
+    /// Stroke an anti-aliased line from `p0` to `p1` (in unpadded cell
+    /// coordinates) with the given `thickness`, painting the opaque (`.on`)
+    /// source. Faithful port of upstream `Canvas.line`: it strokes a 2-node
+    /// butt-cap path. The padding translation (upstream's CTM) is applied here;
+    /// the stroke is rasterized with 4× multisample anti-aliasing into the
+    /// padded surface.
+    pub(crate) fn line(&mut self, p0: raster::Point, p1: raster::Point, thickness: f64) {
+        let p0t = raster::Point::new(p0.x + self.padding_x as f64, p0.y + self.padding_y as f64);
+        let p1t = raster::Point::new(p1.x + self.padding_x as f64, p1.y + self.padding_y as f64);
+        let poly = raster::stroke_line(p0t, p1t, thickness, raster::MSAA_SCALE as f64);
+        raster::fill_polygon(
+            &mut self.buf,
+            self.width as i32,
+            self.height as i32,
+            &poly,
+            raster::FillRule::NonZero,
+        );
     }
 
     /// Adjust the clip boundaries to trim off any fully transparent rows or

@@ -143,3 +143,64 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-070155-094666-prompt.md`
 - Result: `logs/codex-review/20260603-070155-094666-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/canvas.rs` gained `Canvas::line` (the padding
+translation → `raster::stroke_line` at `MSAA_SCALE` → `raster::fill_polygon`
+into the padded buffer with the `.on` source). `roastty/src/font/sprite/draw.rs`
+gained `draw_box_diagonal` (the `0x2571`/`0x2572`/`0x2573` dispatch with the
+upstream `lightDiagonal*` endpoints and light thickness); the module doc notes
+the diagonals are the first `z2d`-rendered glyphs.
+
+Tests (the fixture `9×18` cell + a direct `Canvas::line` check):
+
+- `diagonal_2572_orientation` (`╲`) — the center `(4,9)` is inked, the top-right
+  `(8,1)` is not.
+- `diagonal_2571_orientation` (`╱`) — the center inked, the top-left `(0,1)`
+  not.
+- `diagonal_2573_cross` (`╳`) — the center (the crossing) inked.
+- `canvas_line_horizontal` — a 2px `Canvas::line` inks a centered band,
+  top/bottom rows empty.
+- `draw_box_diagonal_excludes` — `0x2500`, `0x2570`, `'M'` return `false`, draw
+  nothing.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty sprite` → 150 passed (5 new).
+- `cargo test -p roastty` → 2576 passed, 0 failed (no regressions; +5).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The box-drawing **diagonals** (`U+2571`–`U+2573`) render end to end — the first
+anti-aliased, `z2d`-backed sprite glyphs — completing the
+`path → stroke_line → fill_polygon → AA alpha8 surface` pipeline for the sprite
+font. The remaining `z2d`-dependent sprite glyphs are the box-drawing **arcs**
+(`U+256D`–`U+2570`, cubic curves via `Canvas::line`'s curve path + the `arc`
+geometry) and the circle/ellipse pieces (which also need the `Pen` round joins);
+both reuse `Canvas::line`/`fill` now that the stroke pipeline exists. After the
+sprite font: the unifying sprite `has_codepoint`/draw entry point (which fills
+the resolver's deferred `SpriteUnavailable` arm), the discovery consumer, the
+UCD emoji-presentation default, codepoint overrides, the shaper, the Nerd Font
+attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `Canvas::line` matches the `Canvas.line` slice (padding
+translation, `stroke_line` at `MSAA_SCALE`, `fill_polygon` into the padded
+alpha8 surface with `NonZero`/`.on`), equivalent to z2d's padding CTM for the
+translation-only path, and that `draw_box_diagonal` is faithful (the same
+slopes/light thickness, exact endpoints for `0x2571`/`0x2572`, both strokes for
+`0x2573`, `false` otherwise) with sound orientation/horizontal/exclusion tests.
+It judged the gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-070545-177250-prompt.md`
+- Result: `logs/codex-review/20260603-070545-177250-last-message.md`
