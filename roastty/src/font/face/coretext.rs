@@ -18,6 +18,23 @@ use crate::font::glyph::Glyph;
 use crate::font::metrics::{FaceMetrics, Metrics};
 use crate::font::opentype::{head::Head, hhea::Hhea, os2::Os2, post::Post};
 
+/// Color-font state for a face. Faithful (sbix) port of upstream `ColorState`.
+/// SVG-table detection is deferred, so non-sbix color fonts are not yet flagged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColorState {
+    /// True if the font has a non-empty `sbix` table. Upstream assumes the mere
+    /// presence of `sbix` means the font's glyphs are colored.
+    sbix: bool,
+}
+
+impl ColorState {
+    /// Returns true if the given glyph id is colored. For sbix fonts every glyph
+    /// is treated as colored; the SVG `hasGlyph` check is deferred.
+    fn is_color_glyph(&self, _glyph: u16) -> bool {
+        self.sbix
+    }
+}
+
 /// A font face backed by a CoreText `CTFont`. `CFRetained` manages the
 /// underlying CoreFoundation retain/release.
 pub(crate) struct Face {
@@ -25,6 +42,8 @@ pub(crate) struct Face {
     /// When set, the synthetic-bold line width (faux bold for fonts without a
     /// real bold variant).
     synthetic_bold: Option<f64>,
+    /// Color-font state (`Some` for color fonts such as Apple Color Emoji).
+    color: Option<ColorState>,
 }
 
 /// A rasterized glyph: a grayscale coverage bitmap (`width * height` bytes, one
@@ -88,10 +107,34 @@ impl Face {
         // SAFETY: `cf_name` is a valid `CFString` that lives through the call,
         // and a null `matrix` pointer is documented as valid (no transform).
         let font = unsafe { CTFont::with_name(&cf_name, size, std::ptr::null()) };
-        Face {
+        let mut face = Face {
             font,
             synthetic_bold: None,
+            color: None,
+        };
+        face.color = face.detect_color();
+        face
+    }
+
+    /// Detect color-font state from the font's tables. A non-empty `sbix` table
+    /// marks the font as a color font (SVG detection deferred).
+    fn detect_color(&self) -> Option<ColorState> {
+        let sbix = self.copy_table(b"sbix").is_some_and(|d| !d.is_empty());
+        if sbix {
+            Some(ColorState { sbix: true })
+        } else {
+            None
         }
+    }
+
+    /// True if this is a color font (e.g. Apple Color Emoji).
+    pub(crate) fn has_color(&self) -> bool {
+        self.color.is_some()
+    }
+
+    /// True if the given glyph id is colored.
+    pub(crate) fn is_color_glyph(&self, glyph: u16) -> bool {
+        self.color.is_some_and(|c| c.is_color_glyph(glyph))
     }
 
     /// Create a face that applies a synthetic-bold effect — a faux bold for
@@ -1026,5 +1069,29 @@ mod tests {
             bold_ink > plain_ink,
             "bold ink {bold_ink} should exceed plain ink {plain_ink}"
         );
+    }
+
+    #[test]
+    fn text_font_has_no_color() {
+        let face = Face::new("Menlo", 32.0);
+        assert!(!face.has_color());
+        let glyph = face.glyphs_for_characters(&[b'M' as u16])[0];
+        assert!(!face.is_color_glyph(glyph));
+    }
+
+    #[test]
+    fn emoji_font_has_color() {
+        let face = Face::new("Apple Color Emoji", 32.0);
+        assert!(face.has_color(), "Apple Color Emoji should be a color font");
+
+        // 😀 U+1F600 is outside the BMP, so encode it as a UTF-16 surrogate pair
+        // and take the first resolved glyph.
+        let utf16: Vec<u16> = '\u{1F600}'.encode_utf16(&mut [0u16; 2]).to_vec();
+        let glyph = face.glyphs_for_characters(&utf16)[0];
+        assert_ne!(
+            glyph, 0,
+            "the emoji glyph should resolve (no font fallback)"
+        );
+        assert!(face.is_color_glyph(glyph));
     }
 }

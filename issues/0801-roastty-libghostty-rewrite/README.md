@@ -966,7 +966,7 @@ are past the correctness-critical foundation.
 - [Experiment 259: Synthetic bold — rect growth + fill-stroke draw](259-render-glyph-synthetic-bold.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 260: Color glyph detection — ColorState (sbix)](260-color-glyph-detection.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

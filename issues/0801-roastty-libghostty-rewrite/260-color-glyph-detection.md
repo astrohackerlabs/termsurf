@@ -148,3 +148,59 @@ shape matches the Rust CoreText path. It flagged one implementation note: the
 emoji glyph must be resolved from its **UTF-16 surrogate pair** (`U+1F600` is
 outside the BMP), so the test encodes the code point to two `u16` code units and
 takes the first resolved glyph (guarded non-zero).
+
+## Result
+
+**Result:** Pass
+
+`ColorState { sbix: bool }` (with `is_color_glyph` returning `self.sbix`) and
+`Face.color: Option<ColorState>` landed. `Face::new` detects color via
+`detect_color`, which marks the font as color when the `sbix` table is present
+and non-empty. `Face::has_color` and `Face::is_color_glyph` expose it.
+`new_synthetic_bold` inherits the detection through `new`.
+
+Tests (live CoreText):
+
+- `text_font_has_no_color` — Menlo reports `has_color() == false` and `'M'` is
+  not a color glyph.
+- `emoji_font_has_color` — Apple Color Emoji reports `has_color() == true`; the
+  `U+1F600` glyph (resolved from its UTF-16 surrogate pair, guarded non-zero) is
+  a color glyph.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty face` → 28 passed, 0 failed.
+- `cargo test -p roastty` → 2379 passed, 0 failed (no regressions; +2).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+Color detection works for sbix fonts. The next experiment writes the colored
+**render** path in `render_glyph`: when `is_color_glyph(glyph)`, use a depth-4
+P3 RGBA bitmap context (`CGColorSpace::new_with_name(displayP3)`,
+`byte_order_32_little | premultiplied_first`), an RGBA atlas (the `Atlas`
+already supports `Bgra`), the sbix whole-pixel position/size quantization, and
+the synthetic-bold/thicken suppression for sbix. That render is the larger half
+of the color path; SVG-table detection (for SVG-only color fonts) and the
+`opentype::SVG` parser remain deferred. Beyond `renderGlyph`: the
+Collection/CodepointResolver, the shaper, and the Nerd Font attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-212746-889079-prompt.md`
+- Result: `logs/codex-review/20260602-212746-889079-last-message.md`
+
+Codex confirmed `copy_table(b"sbix").is_some_and(|d| !d.is_empty())` matches
+upstream's `length > 0` check, that the two-step `Face` init is fine (the
+`CTFont` is retained before `detect_color` runs), that `has_color` /
+`is_color_glyph` match the scoped upstream behavior for sbix fonts, that
+`new_synthetic_bold` preserves color by starting from `Face::new`, and that the
+tests cover both the Menlo negative and the Apple Color Emoji positive (with
+proper surrogate-pair glyph resolution).
