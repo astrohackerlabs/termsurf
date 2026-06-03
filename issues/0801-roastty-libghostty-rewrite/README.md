@@ -970,7 +970,7 @@ are past the correctness-critical foundation.
 - [Experiment 261: Colored glyph render — depth-4 P3 RGBA (sbix)](261-color-glyph-render.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 262: Collection Index — the packed font-index type](262-collection-index.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

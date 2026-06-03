@@ -163,3 +163,65 @@ Review artifacts:
   `…-214554-185064-prompt.md`, `…-214626-259496-prompt.md`
 - Results: `logs/codex-review/20260602-214416-060779-last-message.md`,
   `…-214554-185064-last-message.md`, `…-214626-259496-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/collection.rs` (new) holds the `Index` type — private
+`style`/`idx` fields, the `IDX_BITS`/`STYLE_BITS`/`IDX_MASK` constants,
+`Special` (with `START = 8191`, `Sprite`), and `new` (hard
+`assert!(idx <= IDX_MASK)`), `special`, `default`, `style`/`idx` accessors,
+`int` (LSB-first, no masking), `from_int`, and `special_kind`. The bit layout
+matches upstream's packed struct (`style` low 3 bits, `idx` high 13 bits).
+
+Tests (7):
+
+- `index_bit_layout` — `Index::new(Bold, 5).int() == 41` (`1 | (5 << 3)`);
+  `from_int(41)` round-trips.
+- `index_round_trips` — every style × `{0, 1, 42, 8190}` round-trips through
+  `int`/`from_int`.
+- `index_default_is_zero` — the default index is `{ Regular, 0 }` → `0`.
+- `idx_bits_is_13` — the `IDX_BITS == 13` invariant and the max non-special idx
+  (`8190`) round-trips.
+- `special_index` — `Index::special(Sprite)` has `idx == 8191` and
+  `special_kind() == Some(Sprite)`; normal indices are `None`.
+- `from_int_idx_is_valid` — `from_int(u16::MAX).idx() == 8191` (always a valid
+  `u13`).
+- `new_rejects_out_of_range_idx` — `Index::new(_, 8192)` panics (the enforced
+  invariant).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty collection` → 7 passed, 0 failed.
+- `cargo test -p roastty` → 2389 passed, 0 failed (no regressions; +7).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The Collection's foundational `Index` handle is ported. The next experiments
+build the `Collection` itself on top: `Entry` (a loaded or deferred face),
+`EntryOrAlias`, the per-style face lists, and `add`/`getFace`/`getIndex`/
+`hasCodepoint`. The face-loading half (`DeferredFace`) brings in the `discovery`
+subsystem (CoreText font matching) — the heavier FFI sub-area — which can be
+introduced incrementally behind a `Collection` that initially holds
+eagerly-loaded faces. Above the Collection sit the `CodepointResolver`, the
+shaper, and the Nerd Font attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-214822-759836-prompt.md`
+- Result: `logs/codex-review/20260602-214822-759836-last-message.md`
+
+Codex confirmed the code matches the upstream packed layout (`style` in bits
+0–2, `idx` in bits 3–15, `Bold + idx 5` → `41`), that the `u13` invariant is
+enforced by the private fields plus the hard `assert!` in `new`, that `int()` no
+longer masks, that `from_int` always decodes a valid `idx`, and that the
+`Special::Sprite` / `START = 8191` behavior is faithful.
