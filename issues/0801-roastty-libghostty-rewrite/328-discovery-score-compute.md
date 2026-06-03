@@ -181,3 +181,67 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-114657-068605-prompt.md`
 - Result: `logs/codex-review/20260603-114657-068605-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+The score computation lands (the font-loaded + symbolic-trait fields).
+
+- `roastty/src/font/discovery.rs`:
+  `Descriptor::score(&self, ct_desc: &CTFontDescriptor) -> Score` loads the
+  candidate font (`CTFont::with_font_descriptor`, size 12), clamps `glyph_count`
+  to `u16`, computes `codepoint` coverage when sought (`font_has_codepoint` —
+  the `Face::glyph_index` UTF-16 surrogate-pair pattern via
+  `glyphs_for_characters`), reads the descriptor's symbolic traits
+  (`symbolic_traits` — `kCTFontTraitsAttribute` → `kCTFontSymbolicTrait`
+  `CFNumber` → `CTFontSymbolicTraits`, absent ⇒ empty), and sets `monospace`
+  plus `bold = self.bold == is_bold` / `italic = self.italic == is_italic`.
+  `fuzzy_style`/`exact_style` stay `0`/`false` (deferred).
+
+Tests (scoring a **resolved** Menlo candidate from `discover_descriptors`, not
+the query): `score_menlo_is_monospace` (`monospace`, `glyph_count > 0`),
+`score_codepoint_present_absent` (`'M'` true, `0x1F600` false, none-sought
+false), `score_bold_italic_match_flips` (flipping the bold/italic request flips
+the match field — deterministic).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2710 passed, 0 failed (+3, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+A candidate font now scores its glyph count, requested-codepoint coverage, and
+symbolic monospace/bold/italic match against the request — the core of upstream
+`Score.score`.
+
+The next discovery experiment is the **bold/italic refinement** — sharpening
+`is_bold`/`is_italic` beyond the symbolic traits using the `head` (`macStyle`),
+`OS/2` (`fsSelection`), and variation-axis (`wght`/`ital`/`slnt`) data (roastty
+already has the `Head`/`Os2` parsers) — then the **style** `exact_style`/
+`fuzzy_style` match, then `sortMatchingDescriptors` (wiring the ranking into
+`discover_descriptors`), the `DiscoverIterator`/`DeferredFace`,
+`discoverFallback`, and finally the resolver's discovery fallback and codepoint
+overrides.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It confirmed `score` matches the intended upstream
+slice (candidate load, `glyph_count` clamp, codepoint-only-when-requested via
+`glyphs_for_characters` with surrogate-pair handling, symbolic-trait reads from
+`kCTFontTraitsAttribute → kCTFontSymbolicTrait`, and the `self.bold == is_bold`
+/ `self.italic == is_italic` match semantics), that leaving `fuzzy_style`/
+`exact_style` at defaults is correct for the deferred style slice, that the
+prior Required finding is resolved (the tests score a resolved candidate, not
+the query), and that there are no pointer/lifetime hazards (`font_has_codepoint`
+uses live stack buffers for the CoreText call, and `symbolic_traits` reads the
+raw dictionary value while the retained dictionary is still alive). No Optional
+findings.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-115032-753141-last-message.md`

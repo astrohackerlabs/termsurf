@@ -10,14 +10,16 @@
 //! `discoverFallback` are later sub-areas.
 
 use std::ffi::c_void;
+use std::ptr::NonNull;
 
 use objc2_core_foundation::{
-    CFArray, CFCharacterSet, CFMutableDictionary, CFNumber, CFRange, CFRetained, CFString, CFType,
+    CFArray, CFCharacterSet, CFDictionary, CFMutableDictionary, CFNumber, CFRange, CFRetained,
+    CFString, CFType,
 };
 use objc2_core_text::{
     kCTFontCharacterSetAttribute, kCTFontFamilyNameAttribute, kCTFontSizeAttribute,
-    kCTFontStyleNameAttribute, kCTFontSymbolicTrait, kCTFontTraitsAttribute, CTFontCollection,
-    CTFontDescriptor, CTFontSymbolicTraits,
+    kCTFontStyleNameAttribute, kCTFontSymbolicTrait, kCTFontTraitsAttribute, CTFont,
+    CTFontCollection, CTFontDescriptor, CTFontSymbolicTraits,
 };
 
 /// A font-variation axis setting (e.g. weight `wght`, slant `slnt`).
@@ -252,6 +254,85 @@ impl PartialOrd for Score {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+impl Descriptor {
+    /// Compute the ranking [`Score`] for a candidate font descriptor against this
+    /// (request) descriptor. Faithful port of the font-loaded and symbolic-trait
+    /// fields of upstream `Score.score`: load the candidate font, count its
+    /// glyphs, check whether it has the requested codepoint, and compare its
+    /// monospace/bold/italic-ness (from the symbolic traits) to the request. The
+    /// `head`/`OS/2`/variation bold-italic refinement and the style exact/fuzzy
+    /// match are later experiments, so `bold`/`italic` here use the symbolic
+    /// traits only and `fuzzy_style`/`exact_style` stay zero.
+    pub(crate) fn score(&self, ct_desc: &CTFontDescriptor) -> Score {
+        let mut s = Score::default();
+
+        // Load the candidate font (size 12; the size is altered later when the
+        // face is actually used). The objc2 constructor is non-fallible, so the
+        // upstream "unloadable font scores 0" path is not modeled.
+        // SAFETY: `ct_desc` is a live descriptor; a null matrix is valid.
+        let font = unsafe { CTFont::with_font_descriptor(ct_desc, 12.0, std::ptr::null()) };
+
+        // Prefer fonts with more glyphs, all else equal (clamped to `u16::MAX`).
+        // SAFETY: `font` is live.
+        let glyph_count = unsafe { font.glyph_count() };
+        s.glyph_count = glyph_count.clamp(0, u16::MAX as isize) as u16;
+
+        // If we're seeking a codepoint, prefer fonts that have it.
+        if self.codepoint > 0 {
+            s.codepoint = font_has_codepoint(&font, self.codepoint);
+        }
+
+        // Symbolic traits drive monospace and the initial bold/italic guesses.
+        let traits = symbolic_traits(ct_desc);
+        s.monospace = traits.contains(CTFontSymbolicTraits::TraitMonoSpace);
+        let is_bold = traits.contains(CTFontSymbolicTraits::TraitBold);
+        let is_italic = traits.contains(CTFontSymbolicTraits::TraitItalic);
+
+        // The bold/italic fields are whether the font matches the request.
+        s.bold = self.bold == is_bold;
+        s.italic = self.italic == is_italic;
+
+        s
+    }
+}
+
+/// Whether `font` has a glyph for the Unicode scalar `cp` (handling the
+/// surrogate pair for a supplementary codepoint). Mirrors `Face::glyph_index`.
+fn font_has_codepoint(font: &CTFont, cp: u32) -> bool {
+    let Some(c) = char::from_u32(cp) else {
+        return false;
+    };
+    let mut units = [0u16; 2];
+    let units = c.encode_utf16(&mut units);
+    let mut glyphs = [0u16; 2];
+    let chars_ptr = NonNull::new(units.as_ptr() as *mut u16).unwrap();
+    let glyphs_ptr = NonNull::new(glyphs.as_mut_ptr()).unwrap();
+    // SAFETY: `units`/`glyphs` are length-`len` buffers; CoreText reads the
+    // UTF-16 units and writes one glyph per unit, returning `false` if any unit
+    // has no glyph.
+    unsafe { font.glyphs_for_characters(chars_ptr, glyphs_ptr, units.len() as isize) }
+}
+
+/// Read the symbolic traits from a font descriptor's `kCTFontTraitsAttribute` →
+/// `kCTFontSymbolicTrait` value, or empty traits if absent.
+fn symbolic_traits(ct_desc: &CTFontDescriptor) -> CTFontSymbolicTraits {
+    // SAFETY: a static CF string key; the descriptor is live.
+    let Some(attr) = (unsafe { ct_desc.attribute(kCTFontTraitsAttribute) }) else {
+        return CTFontSymbolicTraits(0);
+    };
+    let Ok(dict) = attr.downcast::<CFDictionary>() else {
+        return CTFontSymbolicTraits(0);
+    };
+    // SAFETY: a static CF string key; the value (if present) is a `CFNumber`.
+    let v = unsafe { dict.value((kCTFontSymbolicTrait as *const CFString).cast::<c_void>()) };
+    if v.is_null() {
+        return CTFontSymbolicTraits(0);
+    }
+    // SAFETY: the value stored under `kCTFontSymbolicTrait` is a `CFNumber`.
+    let n = unsafe { &*(v as *const CFNumber) };
+    CTFontSymbolicTraits(n.as_i32().unwrap_or(0) as u32)
 }
 
 #[cfg(test)]
@@ -556,5 +637,98 @@ mod tests {
         // The codepoint score is first, the bare glyph_count score is last.
         assert!(v[0].codepoint);
         assert_eq!(v[3].glyph_count, 10);
+    }
+
+    /// Resolve a Menlo candidate descriptor (a matched font from discovery, not
+    /// the query descriptor) for scoring.
+    fn menlo_candidate() -> CFRetained<CTFontDescriptor> {
+        let d = Descriptor {
+            family: Some("Menlo".into()),
+            ..Default::default()
+        };
+        d.discover_descriptors()
+            .into_iter()
+            .find(|desc| {
+                // SAFETY: a static CF string key; the descriptor is live.
+                unsafe { desc.attribute(kCTFontFamilyNameAttribute) }
+                    .and_then(|v| v.downcast::<CFString>().ok())
+                    .is_some_and(|s| s.to_string() == "Menlo")
+            })
+            .expect("a resolved Menlo candidate")
+    }
+
+    #[test]
+    fn score_menlo_is_monospace() {
+        let c = menlo_candidate();
+        let s = Descriptor::default().score(&c);
+        assert!(s.monospace, "Menlo is monospace");
+        assert!(s.glyph_count > 0, "Menlo has glyphs");
+    }
+
+    #[test]
+    fn score_codepoint_present_absent() {
+        let c = menlo_candidate();
+        assert!(
+            Descriptor {
+                codepoint: 'M' as u32,
+                ..Default::default()
+            }
+            .score(&c)
+            .codepoint,
+            "Menlo has 'M'"
+        );
+        assert!(
+            !Descriptor {
+                codepoint: 0x1F600,
+                ..Default::default()
+            }
+            .score(&c)
+            .codepoint,
+            "Menlo lacks the emoji"
+        );
+        assert!(
+            !Descriptor::default().score(&c).codepoint,
+            "no codepoint sought"
+        );
+    }
+
+    #[test]
+    fn score_bold_italic_match_flips() {
+        let c = menlo_candidate();
+        // self.bold == is_bold, so flipping the request flips the match field
+        // (deterministic regardless of the candidate's actual boldness).
+        let bold_when_false = Descriptor {
+            bold: false,
+            ..Default::default()
+        }
+        .score(&c)
+        .bold;
+        let bold_when_true = Descriptor {
+            bold: true,
+            ..Default::default()
+        }
+        .score(&c)
+        .bold;
+        assert_ne!(
+            bold_when_false, bold_when_true,
+            "flipping the bold request flips the match"
+        );
+
+        let italic_when_false = Descriptor {
+            italic: false,
+            ..Default::default()
+        }
+        .score(&c)
+        .italic;
+        let italic_when_true = Descriptor {
+            italic: true,
+            ..Default::default()
+        }
+        .score(&c)
+        .italic;
+        assert_ne!(
+            italic_when_false, italic_when_true,
+            "flipping the italic request flips the match"
+        );
     }
 }
