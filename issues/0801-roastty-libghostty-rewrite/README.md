@@ -999,6 +999,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 276: Complete the lines_char dispatch (all 109 line glyphs)](276-box-lines-full-dispatch.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 277: Box-drawing dash primitives](277-box-dashes.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
