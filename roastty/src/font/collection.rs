@@ -5,6 +5,7 @@
 //! within a collection. The `Collection` struct itself, `Entry`, deferred-face
 //! loading, and discovery land in later experiments.
 
+use crate::font::face::coretext::Face;
 use crate::font::Style;
 
 /// Bits used for the face index within an [`Index`]. `Style` is a 3-bit field,
@@ -117,6 +118,104 @@ impl Default for Index {
     }
 }
 
+/// A single face in a [`Collection`]. Faithful (eager) port of upstream `Entry`:
+/// it owns a loaded [`Face`] and a fallback flag. (The deferred-face arm and the
+/// per-entry scale factor are deferred to later experiments.)
+pub(crate) struct Entry {
+    face: Face,
+    fallback: bool,
+}
+
+impl Entry {
+    /// The loaded face.
+    pub(crate) fn face(&self) -> &Face {
+        &self.face
+    }
+
+    /// Whether this is a fallback face (searched after the primary faces).
+    pub(crate) fn fallback(&self) -> bool {
+        self.fallback
+    }
+}
+
+/// An error adding a face to a [`Collection`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AddError {
+    /// There's no more room in the collection for this style.
+    CollectionFull,
+}
+
+/// An error resolving an [`Index`] to an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryError {
+    /// The index is a special (built-in) font with no associated face.
+    SpecialHasNoFace,
+    /// The index is out of bounds for its style's face list.
+    IndexOutOfBounds,
+}
+
+/// A collection of font faces grouped by [`Style`].
+///
+/// Faithful port of upstream `Collection`, scoped to **eagerly loaded** faces:
+/// the per-style face lists with `add`/`get_entry`/`get_face`. Deferred-face
+/// loading + discovery, per-entry scale factors, style aliasing, and codepoint
+/// resolution land in later experiments.
+pub(crate) struct Collection {
+    /// The per-style face lists, indexed by `Style as usize` (`0..=3`).
+    faces: [Vec<Entry>; 4],
+}
+
+/// True if a style's face list (of length `len`) can't accept another face
+/// without producing a special index. Upstream guards `idx >= Special.start - 1`.
+fn list_is_full(len: usize) -> bool {
+    len >= (Special::START - 1) as usize
+}
+
+impl Collection {
+    /// Create an empty collection.
+    pub(crate) fn new() -> Collection {
+        Collection {
+            faces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        }
+    }
+
+    /// Add an eagerly-loaded `face` of `style`, returning its [`Index`]. The face
+    /// is added last in priority for its style. `fallback` marks a fallback face.
+    pub(crate) fn add(
+        &mut self,
+        face: Face,
+        style: Style,
+        fallback: bool,
+    ) -> Result<Index, AddError> {
+        let list = &mut self.faces[style as usize];
+        let idx = list.len();
+        if list_is_full(idx) {
+            return Err(AddError::CollectionFull);
+        }
+        list.push(Entry { face, fallback });
+        Ok(Index::new(style, idx as u16))
+    }
+
+    /// Get the entry for an index, or the faithful error for a special index or
+    /// an out-of-bounds index.
+    pub(crate) fn get_entry(&self, index: Index) -> Result<&Entry, EntryError> {
+        if index.special_kind().is_some() {
+            return Err(EntryError::SpecialHasNoFace);
+        }
+        let list = &self.faces[index.style() as usize];
+        let i = index.idx() as usize;
+        if i >= list.len() {
+            return Err(EntryError::IndexOutOfBounds);
+        }
+        Ok(&list[i])
+    }
+
+    /// Get the loaded face for an index. (Deferred-face loading is deferred.)
+    pub(crate) fn get_face(&self, index: Index) -> Result<&Face, EntryError> {
+        Ok(self.get_entry(index)?.face())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +281,65 @@ mod tests {
     #[should_panic]
     fn new_rejects_out_of_range_idx() {
         let _ = Index::new(Style::Regular, 8192);
+    }
+
+    #[test]
+    fn add_and_get_face() {
+        let mut c = Collection::new();
+        let menlo = c
+            .add(Face::new("Menlo", 32.0), Style::Regular, false)
+            .expect("add Menlo");
+        let emoji = c
+            .add(Face::new("Apple Color Emoji", 32.0), Style::Regular, true)
+            .expect("add emoji");
+
+        assert_eq!(menlo, Index::new(Style::Regular, 0));
+        assert_eq!(emoji, Index::new(Style::Regular, 1));
+
+        // The faces round-trip and are distinguishable by their color state.
+        assert!(!c.get_face(menlo).expect("menlo face").has_color());
+        assert!(c.get_face(emoji).expect("emoji face").has_color());
+
+        // The fallback flags are preserved.
+        assert!(!c.get_entry(menlo).unwrap().fallback());
+        assert!(c.get_entry(emoji).unwrap().fallback());
+    }
+
+    #[test]
+    fn add_to_distinct_styles() {
+        let mut c = Collection::new();
+        let _ = c
+            .add(Face::new("Menlo", 32.0), Style::Regular, false)
+            .unwrap();
+        let bold = c
+            .add(Face::new("Menlo", 32.0), Style::Bold, false)
+            .expect("add bold");
+        // The Bold list is independent of Regular, so the bold face is index 0.
+        assert_eq!(bold, Index::new(Style::Bold, 0));
+    }
+
+    #[test]
+    fn get_entry_special_has_no_face() {
+        let c = Collection::new();
+        assert_eq!(
+            c.get_entry(Index::special(Special::Sprite)).err(),
+            Some(EntryError::SpecialHasNoFace)
+        );
+    }
+
+    #[test]
+    fn get_entry_out_of_bounds() {
+        let c = Collection::new();
+        assert_eq!(
+            c.get_entry(Index::new(Style::Regular, 0)).err(),
+            Some(EntryError::IndexOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn collection_full_boundary() {
+        // Count 8189 can still add (produces idx 8189); 8190 is full.
+        assert!(!list_is_full(8189));
+        assert!(list_is_full(8190));
     }
 }

@@ -972,7 +972,7 @@ are past the correctness-critical foundation.
 - [Experiment 262: Collection Index — the packed font-index type](262-collection-index.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 263: Collection — eager faces, add / get_face](263-collection-add-getface.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

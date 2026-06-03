@@ -153,3 +153,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260602-215137-506515-prompt.md`
 - Result: `logs/codex-review/20260602-215137-506515-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`collection.rs` gained `Entry` (a loaded `Face` + `fallback`, with `face()` /
+`fallback()` accessors), `Collection { faces: [Vec<Entry>; 4] }`, `AddError`,
+`EntryError`, the `list_is_full` guard helper, and `new`/`add`/`get_entry`/
+`get_face`. `add` appends to the per-style list and returns
+`Index::new(style, idx)` with the `CollectionFull` guard; `get_entry` returns
+`SpecialHasNoFace` / `IndexOutOfBounds` faithfully.
+
+Tests (live CoreText):
+
+- `add_and_get_face` — Menlo (`Regular`, non-fallback) and Apple Color Emoji
+  (`Regular`, fallback) get indices `{Regular,0}`/`{Regular,1}`; `get_face`
+  returns the right faces (distinguished by `has_color()`); the `fallback` flags
+  round-trip.
+- `add_to_distinct_styles` — a `Bold` face is index `{Bold,0}`, independent of
+  the `Regular` list.
+- `get_entry_special_has_no_face` / `get_entry_out_of_bounds` — the special and
+  bounds errors.
+- `collection_full_boundary` — `list_is_full(8189) == false`,
+  `list_is_full(8190) == true` (the off-by-one guard).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty collection` → 12 passed, 0 failed.
+- `cargo test -p roastty` → 2394 passed, 0 failed (no regressions; +5).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The Collection's eager store-and-retrieve spine is in place. The next
+experiments build outward: `getIndex`/`hasCodepoint` (codepoint → face
+resolution, the heart of the resolver — needs a `Face::has_codepoint` with
+presentation handling), then `EntryOrAlias`/`completeStyles` (style aliasing),
+and the per-entry `scale_factor` + `load_options`/`setSize` size normalization.
+The deferred-face half (`DeferredFace` + `discovery`) introduces the CoreText
+font-matching FFI sub-area. Above the Collection sit the `CodepointResolver`,
+the shaper, and the Nerd Font attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-215428-787960-prompt.md`
+- Result: `logs/codex-review/20260602-215428-787960-last-message.md`
+
+Codex confirmed the implementation matches the scoped upstream behavior: `add`
+uses `idx = list.len()` and rejects at `idx >= 8190`, `get_entry` checks special
+indices before bounds, the per-style `[Vec<Entry>; 4]` indexing is valid for the
+current `Style` discriminants, owning `Face` by value with `&Face` access is
+sound, and the `collection_full_boundary` test covers the off-by-one guard.
