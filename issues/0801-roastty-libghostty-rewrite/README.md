@@ -1011,6 +1011,8 @@ are past the correctness-critical foundation.
   Claude/Codex/Codex
 - [Experiment 282: Separated Block Quadrants (U+1CC21–U+1CC2F)](282-separated-block-quadrants.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 283: Octants (U+1CD00–U+1CDE5)](283-octants.md) — **Designed** ·
+  Claude/Codex/Codex
 
 ## Non-Goals
 
