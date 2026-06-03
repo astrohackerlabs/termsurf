@@ -1107,6 +1107,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 330: font discovery — the style match](330-discovery-score-style.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 331: font discovery — sorting the candidates](331-discovery-sort.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
