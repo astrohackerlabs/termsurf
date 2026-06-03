@@ -20,6 +20,7 @@ pub(crate) mod metrics;
 pub(crate) mod opentype;
 pub(crate) mod run;
 pub(crate) mod shape;
+pub(crate) mod shared_grid;
 pub(crate) mod sprite;
 
 /// The style (weight/slant) of a font face.

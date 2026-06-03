@@ -280,3 +280,78 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-173414-725440-prompt.md` (design)
 - Result: `logs/codex-review/20260603-173414-725440-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The shared font grid's render path is in place — the central font object the
+renderer holds.
+
+- `roastty/src/font/shared_grid.rs` (new): `SharedGrid` owns the two glyph
+  atlases (grayscale for text, BGRA for color), the `CodepointResolver`, and the
+  grid `Metrics`. `new(resolver, metrics)` configures the sprite font on the
+  resolver (`set_sprite_metrics(Some(metrics))`) and allocates the two 512 px
+  atlases. `render_glyph(index, glyph_index, opts)` gets the glyph's
+  presentation (`resolver.get_presentation`), selects the atlas (text →
+  grayscale, emoji → color), applies upstream's `cover`/centered/`0.025`-pad
+  constraint for emoji (via `..*opts` struct-update), and renders through the
+  free helper `render_into` — which grows the atlas (`size * 2`) and retries
+  once on `AtlasFull` (matching both `Render(RenderGlyphError::AtlasFull)` and
+  `Atlas(AtlasError::AtlasFull)`).
+- `roastty/src/font/atlas.rs`: added `pub(crate) fn size(&self) -> u32` (for the
+  grow-and-retry doubling; the field is private).
+- `roastty/src/font/mod.rs`: declared `pub(crate) mod shared_grid;`.
+
+Tests (in `shared_grid.rs`):
+
+- `render_glyph_text_places_glyph_in_grayscale_atlas` — renders `'M'` at
+  `Index::default()`, asserts `width`/`height > 0`, the grayscale atlas is still
+  512 px (no grow), and the region fits; the success itself proves text →
+  grayscale (a monochrome glyph into the BGRA atlas would fail
+  `InvalidAtlasFormat`).
+- `render_glyph_sprite_uses_configured_sprite_font` — renders the box-drawing
+  `U+2500` at `Index::special(Special::Sprite)` and asserts
+  `width`/`height > 0`, proving `new` configured the sprite font (else
+  `SpriteUnavailable`).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2811 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The font subsystem now has its central object: `SharedGrid` ties the resolver
+and the two atlases together and rasterizes any shaped glyph index into the
+right atlas. Combined with the shaping path (Experiments 358–362), the renderer
+has everything it needs from `font/` — shape a viewport into `ShapedRun`s, then
+`render_glyph` each glyph index into an atlas region.
+
+The remaining `font/`-side work is the **glyph cache** (upstream's
+`glyphs: HashMap<GlyphKey, Render>` fast path — its key includes
+`RenderOptions`, which needs a hashable form, so it is its own experiment) and
+metrics reload on font change. Beyond `font/`, the **Metal draw path** consumes
+the atlases and the `ShapedRun`s to fill the GPU cell buffer.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the Required sprite fix is correctly applied
+(`new(mut resolver, metrics)` calls `set_sprite_metrics(Some(metrics))` before
+storing, matching upstream's "always configures the sprite font"); that
+`render_glyph` is faithful to the approved design (presentation selects
+grayscale vs BGRA, emoji gets the cover/center/`0.025`-pad constraint, and
+`render_into` grows once on either face-path or sprite-path atlas-full before
+retrying); that the disjoint-field borrow via the free helper is sound and
+`..*opts` is valid because the carried fields are copyable; and that the two
+tests cover the intended risks (text → grayscale routing, and `new` configuring
+sprite metrics). It noted the deferred cache is a performance/atlas-pressure
+concern, not a correctness blocker. Nothing needed to change before the result
+commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-173803-232783-last-message.md`

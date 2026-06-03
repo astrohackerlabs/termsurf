@@ -129,6 +129,11 @@ impl Atlas {
         &self.data
     }
 
+    /// The atlas edge length in pixels (the texture is always square).
+    pub(crate) fn size(&self) -> u32 {
+        self.size
+    }
+
     /// Reserve a region of `width` × `height` within the atlas.
     ///
     /// May grow the internal node list. This does not enlarge the texture if it
