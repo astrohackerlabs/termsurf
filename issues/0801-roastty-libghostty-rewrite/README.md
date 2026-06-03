@@ -1055,6 +1055,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 304: z2d port — the closed-path stroke (`plotClosedJoined`)](304-z2d-closed-stroke.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 305: Canvas::fill_path + the filled corner triangles (U+25E2–25E5)](305-corner-triangles.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
