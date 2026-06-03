@@ -166,3 +166,75 @@ Review artifacts:
 - Prompt: `logs/codex-review/20260602-232741-784124-prompt.md`
 - Result: `logs/codex-review/20260602-232741-784124-last-message.md`
 - Follow-up: `logs/codex-review/20260602-232939-616874-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/draw.rs` now carries the audited `BOX_LINES` table —
+all **109** `linesChar` codepoints paired with their exact `Lines`, written via
+a `const fn lines(up, right, down, left)` constructor and `N`/`L`/`H`/`D` style
+aliases for a compact, auditable layout (`#[rustfmt::skip]`). `box_lines_styles`
+does the table lookup; `draw_box_lines` dispatches through it. `lines_char`,
+`Lines`, `LineStyle`, and `Thickness` are unchanged from Experiment 275.
+
+Tests (deterministic, the Experiment 275 fixture `Metrics`):
+
+- `table_codepoint_set` — the table's codepoints (no duplicates, count 109)
+  sorted equal the independently-written `expected_cps()` (the four contiguous
+  ranges).
+- `table_exact_mappings` — exact `Lines` equality for an independently
+  transcribed representative from every block (`0x2501`, `0x250D`, `0x251C`,
+  `0x2540`, `0x254B`, `0x2552`, `0x256B`, `0x257C`, `0x257F`).
+- `dispatch_covers_all_line_chars` — every one of the 109 returns `true` and
+  draws ≥1 inked pixel.
+- `dispatch_excludes_non_line_chars` — the dashes (`0x2504`–`0x250B`,
+  `0x254C`–`0x254F`), arcs/diagonals (`0x256D`–`0x2573`), and `'M'` return
+  `false` and draw nothing.
+- `tee_right_light` / `tee_down_light` — the `├`/`┬` arms land on the correct
+  sides (full band + the third arm present, the opposite stub absent).
+- `stub_left_light` / `stub_up_light` — the `╴`/`╵` half-stubs ink only their
+  half of the center row/column.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty sprite` → 30 passed (8 new).
+- `cargo test -p roastty` → 2456 passed, 0 failed (no regressions; +8).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The full box-drawing line-glyph dispatch is complete and exactness-verified: all
+109 `linesChar` codepoints map to the upstream `Lines`, guarded by an exact
+codepoint-set check and independent representative mappings. The sprite
+subsystem can now draw every straight line, corner, T-junction, cross,
+double-line, and half-stub box glyph. The next sprite work is the remaining
+box-drawing primitives the dispatch defers to — dashes
+(`dashHorizontal`/`dashVertical`), rounded corners and diagonals
+(`arc`/`lightDiagonal*`) — and then the other sprite categories (block, braille,
+powerline, legacy). Together those complete the `draw2500_257F`+ inventory that
+the sprite `hasCodepoint` is derived from, which in turn unblocks the resolver's
+deferred sprite render arm (`SpriteUnavailable`). Alongside the sprite font
+remain the discovery consumer, the UCD emoji-presentation default, codepoint
+overrides, the shaper, the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It compared the full `BOX_LINES` table arm-by-arm against upstream
+for all four ranges (`0x2500..=0x2503`, `0x250C..=0x254B`, `0x2550..=0x256C`,
+`0x2574..=0x257F`) and confirmed every positional `lines(up, right, down, left)`
+entry matches the upstream `Lines` fields exactly — no wrong-direction,
+wrong-style, swapped-field, or missing-style mismatches. It verified the
+deferred codepoints (`0x2504`–`0x250B`, `0x254C`–`0x254F`, `0x256D`–`0x2573`)
+are absent, the count is 109 with no duplicates, and the codepoint-set,
+exact-mapping, sweep, exclusion, and tee/stub geometry tests are appropriate
+coverage. With the clean test/build/fmt/name/diff gates, Codex judged the result
+sound.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-233325-947354-prompt.md`
+- Result: `logs/codex-review/20260602-233325-947354-last-message.md`
