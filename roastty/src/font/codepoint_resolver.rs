@@ -7,8 +7,35 @@
 //! emoji-presentation default, and discovery-based fallback are deferred to
 //! later experiments.
 
-use crate::font::collection::{Collection, Index, PresentationMode};
+use crate::font::atlas::Atlas;
+use crate::font::collection::{Collection, EntryError, Index, PresentationMode};
+use crate::font::face::coretext::{RenderGlyphError, RenderOptions};
+use crate::font::glyph::Glyph;
 use crate::font::{Presentation, Style};
+
+/// An error rendering a resolved glyph through the [`CodepointResolver`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolverRenderError {
+    /// The index is a sprite glyph, whose JIT rendering is deferred to the
+    /// sprite-font sub-area.
+    SpriteUnavailable,
+    /// The index couldn't be resolved to a face.
+    Entry(EntryError),
+    /// The face failed to render the glyph.
+    Render(RenderGlyphError),
+}
+
+impl From<EntryError> for ResolverRenderError {
+    fn from(err: EntryError) -> Self {
+        ResolverRenderError::Entry(err)
+    }
+}
+
+impl From<RenderGlyphError> for ResolverRenderError {
+    fn from(err: RenderGlyphError) -> Self {
+        ResolverRenderError::Render(err)
+    }
+}
 
 /// Resolves codepoints to face indices over a [`Collection`].
 pub(crate) struct CodepointResolver {
@@ -95,6 +122,45 @@ impl CodepointResolver {
         self.collection
             .get_index(cp, Style::Regular, PresentationMode::Any)
     }
+
+    /// The presentation a glyph at `index` requires (which atlas to use).
+    /// Faithful port of upstream `getPresentation`: a sprite index is text; a
+    /// real face's glyph is emoji if it's a color glyph, else text.
+    pub(crate) fn get_presentation(
+        &self,
+        index: Index,
+        glyph: u16,
+    ) -> Result<Presentation, EntryError> {
+        // The only special kind is the sprite font, which is text presentation.
+        if index.special_kind().is_some() {
+            return Ok(Presentation::Text);
+        }
+        let face = self.collection.get_face(index)?;
+        Ok(if face.is_color_glyph(glyph) {
+            Presentation::Emoji
+        } else {
+            Presentation::Text
+        })
+    }
+
+    /// Render the glyph at `index` into `atlas`, returning its [`Glyph`].
+    /// Faithful port of upstream `renderGlyph`'s non-sprite path: a sprite index
+    /// would render via the (deferred) sprite font, so it returns
+    /// [`ResolverRenderError::SpriteUnavailable`].
+    pub(crate) fn render_glyph(
+        &self,
+        atlas: &mut Atlas,
+        index: Index,
+        glyph: u16,
+        opts: &RenderOptions,
+    ) -> Result<Glyph, ResolverRenderError> {
+        if index.special_kind().is_some() {
+            // Sprite glyph rendering is deferred to the sprite-font sub-area.
+            return Err(ResolverRenderError::SpriteUnavailable);
+        }
+        let face = self.collection.get_face(index)?;
+        Ok(face.render_glyph(atlas, glyph, opts)?)
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +234,95 @@ mod tests {
         assert_eq!(
             r.get_index('M' as u32, Style::Bold, Some(Presentation::Text)),
             Some(Index::new(Style::Regular, 0))
+        );
+    }
+
+    fn none_opts(face: &Face) -> RenderOptions {
+        RenderOptions {
+            grid_metrics: crate::font::metrics::Metrics::calc(face.get_metrics()),
+            constraint: crate::font::face::constraint::Constraint::default(),
+            constraint_width: 1,
+            thicken: false,
+            thicken_strength: 255,
+        }
+    }
+
+    #[test]
+    fn get_presentation_text() {
+        let r = menlo_resolver();
+        let glyph = r
+            .collection()
+            .get_face(Index::new(Style::Regular, 0))
+            .unwrap()
+            .glyph_index('M' as u32)
+            .unwrap();
+        assert_eq!(
+            r.get_presentation(Index::new(Style::Regular, 0), glyph),
+            Ok(Presentation::Text)
+        );
+    }
+
+    #[test]
+    fn get_presentation_emoji() {
+        let mut c = Collection::new();
+        c.add(Face::new("Apple Color Emoji", 32.0), Style::Regular, false)
+            .unwrap();
+        let r = CodepointResolver::new(c);
+        let glyph = r
+            .collection()
+            .get_face(Index::new(Style::Regular, 0))
+            .unwrap()
+            .glyph_index(0x1F600)
+            .unwrap();
+        assert_eq!(
+            r.get_presentation(Index::new(Style::Regular, 0), glyph),
+            Ok(Presentation::Emoji)
+        );
+    }
+
+    #[test]
+    fn get_presentation_sprite() {
+        let r = menlo_resolver();
+        // A sprite index is text presentation and never loads a face.
+        assert_eq!(
+            r.get_presentation(Index::special(crate::font::collection::Special::Sprite), 0),
+            Ok(Presentation::Text)
+        );
+    }
+
+    #[test]
+    fn render_glyph_via_resolver() {
+        use crate::font::atlas::Format;
+        let r = menlo_resolver();
+        let mut atlas = Atlas::new(512, Format::Grayscale);
+        let idx = Index::new(Style::Regular, 0);
+        let face_glyph = r.collection().get_face(idx).unwrap();
+        let glyph = face_glyph.glyph_index('M' as u32).unwrap();
+        let opts = none_opts(r.collection().get_face(idx).unwrap());
+        let g = r
+            .render_glyph(&mut atlas, idx, glyph, &opts)
+            .expect("render");
+        assert!(g.width > 0 && g.height > 0);
+    }
+
+    #[test]
+    fn render_glyph_sprite_unavailable() {
+        use crate::font::atlas::Format;
+        let r = menlo_resolver();
+        let mut atlas = Atlas::new(512, Format::Grayscale);
+        let opts = none_opts(
+            r.collection()
+                .get_face(Index::new(Style::Regular, 0))
+                .unwrap(),
+        );
+        assert_eq!(
+            r.render_glyph(
+                &mut atlas,
+                Index::special(crate::font::collection::Special::Sprite),
+                0,
+                &opts
+            ),
+            Err(ResolverRenderError::SpriteUnavailable)
         );
     }
 }

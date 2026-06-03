@@ -120,11 +120,58 @@ Review artifacts:
 - Prompt: `logs/codex-review/20260602-230721-531396-prompt.md`
 - Result: `logs/codex-review/20260602-230721-531396-last-message.md`
 
-Codex confirmed `get_presentation` is faithful for the scoped model (a special
-index is the sprite → `Text`; otherwise the face's `is_color_glyph(glyph)`
-chooses `Emoji`/`Text`), that `render_glyph` correctly delegates non-special
-indices through `collection.get_face(index)?.render_glyph(...)`, that returning
-`SpriteUnavailable` for the sprite arm is a sound scoped deviation while sprite
-rendering is deferred, that the `EntryError`/`RenderGlyphError` composition is
-appropriate, and that the tests cover the special fast path and the deferred
-sprite-render error.
+## Result
+
+**Result:** Pass
+
+`codepoint_resolver.rs` gained `get_presentation` (sprite → `Text`; else
+`is_color_glyph` → `Emoji`/`Text`), `ResolverRenderError`
+(`SpriteUnavailable`/`Entry`/`Render`, with `From` impls), and `render_glyph`
+(sprite → `SpriteUnavailable`; else delegate to `Face::render_glyph`).
+
+Tests (live CoreText):
+
+- `get_presentation_text` — Menlo's `'M'` → `Ok(Text)`.
+- `get_presentation_emoji` — Apple Color Emoji's `😀` → `Ok(Emoji)`.
+- `get_presentation_sprite` — a sprite index → `Ok(Text)` (no face load).
+- `render_glyph_via_resolver` — `'M'` at `{Regular, 0}` renders into a grayscale
+  atlas (`width > 0`, `height > 0`).
+- `render_glyph_sprite_unavailable` — a sprite index → `Err(SpriteUnavailable)`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty codepoint_resolver` → 9 passed, 0 failed.
+- `cargo test -p roastty` → 2439 passed, 0 failed (no regressions; +5).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The resolver's render surface is in place: it resolves a codepoint to a face,
+reports the glyph's presentation, and renders it (delegating to the now-complete
+`Face::render_glyph`). The font subsystem can now go codepoint → face → glyph
+for text and emoji end to end. The remaining resolver/font work is its deferred
+dependencies — the **sprite font** (box-drawing/braille, which would fill the
+`SpriteUnavailable` and sprite-presentation arms), the **discovery** consumer
+(CoreText font matching over the ported `Descriptor`), the **UCD
+emoji-presentation default** (`uucode`), and **codepoint overrides** — plus the
+**shaper**, the **Nerd Font attribute table**, and **SVG color detection**.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-230943-656354-prompt.md`
+- Result: `logs/codex-review/20260602-230943-656354-last-message.md`
+
+Codex confirmed `get_presentation` matches upstream (special sprite → `Text`;
+real faces use `is_color_glyph` to choose `Emoji`/`Text`), that `render_glyph`
+correctly delegates non-special indices through `get_face`/`Face::render_glyph`
+with the `From` impls composing the `?` paths, that the `SpriteUnavailable`
+return is the documented scoped deviation until the sprite font lands, and that
+the tests are meaningful (text/emoji/sprite presentation without face loading,
+the resolver render delegation, and the deferred sprite-render error).
