@@ -151,3 +151,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-055309-850347-prompt.md`
 - Result: `logs/codex-review/20260603-055309-850347-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` gained `FillRule` (`NonZero`/`EvenOdd`) and
+`WorkingEdgeSet` (an owned edge copy + active count + `x_values` scratch) with
+`new`/`breakpoints` (binary-search-insert sorted-unique)/`rescan` (line-middle
+partition)/`inc` (x-crossing at `y+0.5`)/`sort` (unstable, co-permuting edges
+and x_values)/`filter` (even-odd pass-through; non-zero winding compaction).
+
+Tests (deterministic, a `(2,2)-(10,10)` square → right `x=10,dir-1`, left
+`x=2,dir+1`):
+
+- `breakpoints_sorted_unique` → `[2, 10]`.
+- `rescan_active` → both edges active at `y=5`; none at `y=20`.
+- `inc_x_crossings` → the active crossings are `{2, 10}`.
+- `sort_orders_by_x` → `[2, 10]`.
+- `filter_non_zero_span` → `[2, 10]` (one interior span).
+- `filter_even_odd_passthru` → `[2, 10]`.
+- `nested_squares_fill_rules` — two same-wound nested squares at a 4-crossing
+  scanline: `EvenOdd` → `[2, 5, 11, 14]` (frame, inner carved), `NonZero` →
+  `[2, 14]` (solid, interior crossings filtered).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 17 passed (7 new).
+- `cargo test -p roastty` → 2518 passed, 0 failed (no regressions; +7).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The active-edge-table is in place: given a `Polygon`, the `WorkingEdgeSet`
+produces the sorted, fill-rule-filtered x-crossings per sub-scanline, with the
+non-zero winding span logic verified against a nested-square case. The remaining
+z2d slices, in order: the `SparseCoverageBuffer` (the RLE coverage accumulator);
+the multisample-4× rasterizer `run` (driving `WorkingEdgeSet` over the
+sub-scanlines into the coverage buffer, then a minimal alpha8 source-over
+composite); the `fill_plotter` (path → `Polygon`) and `stroke_plotter` (stroke
+outline → `Polygon`, butt caps); then wiring `Canvas::line`/`fill`/`stroke` —
+which unblocks the box-drawing diagonals (`0x2571`–`0x2573`), the arcs, the
+circle/ellipse pieces, and the geometric curves. Alongside the sprite font
+remain the discovery consumer, the UCD emoji-presentation default, codepoint
+overrides, the shaper, the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `breakpoints`, `rescan`, `inc`, `sort`, and `filter`
+match `WorkingEdgeSet` lines 197–348 (including the exact non-zero winding
+compaction), that the owned edge copy is behaviorally equivalent, and that the
+square/nested-square tests validate the expected span behavior. It judged the
+gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-055552-553222-prompt.md`
+- Result: `logs/codex-review/20260603-055552-553222-last-message.md`

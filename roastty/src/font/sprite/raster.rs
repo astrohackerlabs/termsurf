@@ -199,6 +199,148 @@ impl Polygon {
     }
 }
 
+/// The polygon fill rule. Faithful port of z2d's `options.FillRule`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FillRule {
+    NonZero,
+    EvenOdd,
+}
+
+/// The active-edge-table the scanline rasterizer drives. For any sub-scanline it
+/// yields the sorted, fill-rule-filtered x-crossings that bound the filled
+/// spans. Faithful port of z2d's `Polygon.WorkingEdgeSet`.
+///
+/// Upstream reorders the source polygon's edge array as scratch; this port owns
+/// a copy of the edges and permutes that — behaviorally identical, since
+/// [`rescan`](WorkingEdgeSet::rescan) re-partitions the full set each call and
+/// [`breakpoints`](WorkingEdgeSet::breakpoints) is computed once up front.
+pub(crate) struct WorkingEdgeSet {
+    /// Owned copy of the polygon's edges, permuted as scratch.
+    edges: Vec<Edge>,
+    /// The number of active edges (the working prefix length).
+    active: usize,
+    /// The x-crossing of each active edge at the current sub-scanline.
+    x_values: Vec<i32>,
+}
+
+impl WorkingEdgeSet {
+    /// Create a working edge set over a copy of `polygon`'s edges.
+    pub(crate) fn new(polygon: &Polygon) -> WorkingEdgeSet {
+        let n = polygon.edges.len();
+        WorkingEdgeSet {
+            edges: polygon.edges.clone(),
+            active: 0,
+            x_values: vec![0; n],
+        }
+    }
+
+    /// The sorted, de-duplicated set of `round(top())`/`round(bottom())` for
+    /// every edge — the scanlines at which the active set changes. Faithful port
+    /// of `breakpoints` (binary-search insertion).
+    pub(crate) fn breakpoints(&self) -> Vec<i32> {
+        fn insert(list: &mut Vec<i32>, value: i32) {
+            if list.is_empty() {
+                list.push(value);
+                return;
+            }
+            let mut low = 0usize;
+            let mut high = list.len();
+            while low < high {
+                let mid = low + (high - low) / 2;
+                if list[mid] < value {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            let idx = low;
+            if idx == list.len() {
+                list.push(value);
+            } else if list[idx] != value {
+                list.insert(idx, value);
+            }
+        }
+
+        let mut result = Vec::with_capacity(self.edges.len() * 2);
+        for e in &self.edges {
+            insert(&mut result, e.top().round() as i32);
+            insert(&mut result, e.bottom().round() as i32);
+        }
+        result
+    }
+
+    /// Partition the edges so the active ones — `top() < line_y + 0.5` and
+    /// `bottom() >= line_y + 0.5` (measured at the line middle to break ties on
+    /// point boundaries) — are at the front, setting [`active`]. Faithful port
+    /// of `rescan`.
+    pub(crate) fn rescan(&mut self, line_y: i32) {
+        if self.edges.is_empty() {
+            self.active = 0;
+            return;
+        }
+        let line_y_middle = line_y as f64 + 0.5;
+        let mut to = 0usize;
+        for from in 0..self.edges.len() {
+            if self.edges[from].top() < line_y_middle && self.edges[from].bottom() >= line_y_middle
+            {
+                if from != to {
+                    self.edges.swap(to, from);
+                }
+                to += 1;
+            }
+        }
+        self.active = to;
+    }
+
+    /// Compute each active edge's x-crossing at `y + 0.5`. Faithful port of
+    /// `inc`.
+    pub(crate) fn inc(&mut self, y: i32) {
+        let y_mid = y as f64 + 0.5;
+        for idx in 0..self.active {
+            let edge = self.edges[idx];
+            self.x_values[idx] = (edge.x_start + edge.x_inc * (y_mid - edge.top())).round() as i32;
+        }
+    }
+
+    /// Sort the active edges by their x-crossing (ascending), co-permuting the
+    /// edges. Faithful port of `sort` (unstable).
+    pub(crate) fn sort(&mut self) {
+        let mut order: Vec<usize> = (0..self.active).collect();
+        order.sort_unstable_by_key(|&i| self.x_values[i]);
+        let new_x: Vec<i32> = order.iter().map(|&i| self.x_values[i]).collect();
+        let new_edges: Vec<Edge> = order.iter().map(|&i| self.edges[i]).collect();
+        self.x_values[..self.active].copy_from_slice(&new_x);
+        self.edges[..self.active].copy_from_slice(&new_edges);
+    }
+
+    /// The fill-rule-filtered active x-crossings (consecutive pairs are span
+    /// `[start, end)` bounds). `EvenOdd` is pass-through; `NonZero` keeps only
+    /// the points where the winding number enters/leaves `0`. Faithful port of
+    /// `filter`.
+    pub(crate) fn filter(&mut self, fill_rule: FillRule) -> &[i32] {
+        match fill_rule {
+            FillRule::EvenOdd => &self.x_values[..self.active],
+            FillRule::NonZero => {
+                let mut winding_number: i32 = 0;
+                let mut to = 0usize;
+                for from in 0..self.active {
+                    self.x_values[to] = self.x_values[from];
+                    if winding_number == 0 {
+                        winding_number += self.edges[from].dir() as i32;
+                        to += 1;
+                    } else {
+                        winding_number += self.edges[from].dir() as i32;
+                        if winding_number == 0 {
+                            to += 1;
+                        }
+                    }
+                }
+                &self.x_values[..to]
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +437,105 @@ mod tests {
         let mut p = Polygon::new(1.0);
         p.add_edge(Point::new(30.0, 2.0), Point::new(36.0, 12.0));
         assert!(!p.in_box(1.0, 10, 20));
+    }
+
+    /// A closed axis-aligned square contour `(lo,lo)-(hi,hi)` added to `p`.
+    fn add_square(p: &mut Polygon, lo: f64, hi: f64) {
+        p.add_edge(Point::new(lo, lo), Point::new(hi, lo)); // top (horizontal, filtered)
+        p.add_edge(Point::new(hi, lo), Point::new(hi, hi)); // right (down, dir -1)
+        p.add_edge(Point::new(hi, hi), Point::new(lo, hi)); // bottom (horizontal, filtered)
+        p.add_edge(Point::new(lo, hi), Point::new(lo, lo)); // left (up, dir +1)
+    }
+
+    /// The square `(2,2)-(10,10)` → edges right(x=10,dir-1), left(x=2,dir+1).
+    fn square() -> Polygon {
+        let mut p = Polygon::new(1.0);
+        add_square(&mut p, 2.0, 10.0);
+        p
+    }
+
+    #[test]
+    fn breakpoints_sorted_unique() {
+        let p = square();
+        let w = WorkingEdgeSet::new(&p);
+        assert_eq!(w.breakpoints(), vec![2, 10]);
+    }
+
+    #[test]
+    fn rescan_active() {
+        let p = square();
+        let mut w = WorkingEdgeSet::new(&p);
+        w.rescan(5);
+        assert_eq!(w.active, 2);
+        // A scanline below the square -> nothing active.
+        w.rescan(20);
+        assert_eq!(w.active, 0);
+    }
+
+    #[test]
+    fn inc_x_crossings() {
+        let p = square();
+        let mut w = WorkingEdgeSet::new(&p);
+        w.rescan(5);
+        w.inc(5);
+        // Vertical edges -> constant x; in edge order (right=10, left=2).
+        let mut xs = w.x_values[..w.active].to_vec();
+        xs.sort_unstable();
+        assert_eq!(xs, vec![2, 10]);
+    }
+
+    #[test]
+    fn sort_orders_by_x() {
+        let p = square();
+        let mut w = WorkingEdgeSet::new(&p);
+        w.rescan(5);
+        w.inc(5);
+        w.sort();
+        assert_eq!(&w.x_values[..w.active], &[2, 10]);
+    }
+
+    #[test]
+    fn filter_non_zero_span() {
+        let p = square();
+        let mut w = WorkingEdgeSet::new(&p);
+        w.rescan(5);
+        w.inc(5);
+        w.sort();
+        // One span [2,10) -> the square interior at scanline 5.
+        assert_eq!(w.filter(FillRule::NonZero), &[2, 10]);
+    }
+
+    #[test]
+    fn filter_even_odd_passthru() {
+        let p = square();
+        let mut w = WorkingEdgeSet::new(&p);
+        w.rescan(5);
+        w.inc(5);
+        w.sort();
+        assert_eq!(w.filter(FillRule::EvenOdd), &[2, 10]);
+    }
+
+    #[test]
+    fn nested_squares_fill_rules() {
+        // Two same-wound nested squares. At a scanline crossing all four
+        // vertical edges, non-zero fills solid (inner not carved) while even-odd
+        // carves the inner (a frame).
+        let mut p = Polygon::new(1.0);
+        add_square(&mut p, 2.0, 14.0); // outer: left x=2(+1), right x=14(-1)
+        add_square(&mut p, 5.0, 11.0); // inner: left x=5(+1), right x=11(-1)
+
+        // even-odd: all four crossings -> two spans [2,5) and [11,14).
+        let mut w = WorkingEdgeSet::new(&p);
+        w.rescan(8);
+        w.inc(8);
+        w.sort();
+        assert_eq!(w.filter(FillRule::EvenOdd), &[2, 5, 11, 14]);
+
+        // non-zero: one span [2,14) (interior crossings filtered out).
+        let mut w2 = WorkingEdgeSet::new(&p);
+        w2.rescan(8);
+        w2.inc(8);
+        w2.sort();
+        assert_eq!(w2.filter(FillRule::NonZero), &[2, 14]);
     }
 }
