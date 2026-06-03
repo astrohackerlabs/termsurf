@@ -1019,6 +1019,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 286: z2d port — the SparseCoverageBuffer](286-z2d-sparse-coverage.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 287: z2d port — the MSAA supersampled-span distributor](287-z2d-supersample-span.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
