@@ -658,6 +658,109 @@ pub(crate) fn draw_box_diagonal(cp: u32, metrics: &Metrics, canvas: &mut Canvas)
     true
 }
 
+/// Which cell corner a box-drawing arc rounds. Faithful port of upstream
+/// `box.zig`'s `Corner`.
+#[derive(Clone, Copy)]
+enum Corner {
+    Tl,
+    Tr,
+    Bl,
+    Br,
+}
+
+/// Box-drawing **arcs** (`╭ U+256D`, `╮ U+256E`, `╯ U+256F`, `╰ U+2570`) — the
+/// first curved sprite glyphs. Each is a straight arm into the cell, a
+/// quarter-circle `curve_to` corner, and a straight arm out, stroked with butt
+/// caps. Faithful port of upstream `box.zig`'s `arc`. Returns `false` for any
+/// other codepoint.
+pub(crate) fn draw_box_arc(cp: u32, metrics: &Metrics, canvas: &mut Canvas) -> bool {
+    let corner = match cp {
+        0x256d => Corner::Br,
+        0x256e => Corner::Bl,
+        0x256f => Corner::Tl,
+        0x2570 => Corner::Tr,
+        _ => return false,
+    };
+
+    let thick_px = Thickness::Light.height(metrics.box_thickness);
+    let float_width = metrics.cell_width as f64;
+    let float_height = metrics.cell_height as f64;
+    let float_thick = thick_px as f64;
+    // Integer arithmetic for the center (upstream's saturating sub + integer
+    // div), then the float thickness offset.
+    let center_x = (metrics.cell_width.saturating_sub(thick_px) / 2) as f64 + float_thick / 2.0;
+    let center_y = (metrics.cell_height.saturating_sub(thick_px) / 2) as f64 + float_thick / 2.0;
+    let r = float_width.min(float_height) / 2.0;
+    // Fraction away from the center to place the middle control points.
+    let s: f64 = 0.25;
+
+    let mv = |x: f64, y: f64| raster::PathNode::MoveTo(raster::Point::new(x, y));
+    let ln = |x: f64, y: f64| raster::PathNode::LineTo(raster::Point::new(x, y));
+    let cv = |x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64| raster::PathNode::CurveTo {
+        p1: raster::Point::new(x1, y1),
+        p2: raster::Point::new(x2, y2),
+        p3: raster::Point::new(x3, y3),
+    };
+
+    let nodes = match corner {
+        Corner::Tl => vec![
+            mv(center_x, 0.0),
+            ln(center_x, center_y - r),
+            cv(
+                center_x,
+                center_y - s * r,
+                center_x - s * r,
+                center_y,
+                center_x - r,
+                center_y,
+            ),
+            ln(0.0, center_y),
+        ],
+        Corner::Tr => vec![
+            mv(center_x, 0.0),
+            ln(center_x, center_y - r),
+            cv(
+                center_x,
+                center_y - s * r,
+                center_x + s * r,
+                center_y,
+                center_x + r,
+                center_y,
+            ),
+            ln(float_width, center_y),
+        ],
+        Corner::Bl => vec![
+            mv(center_x, float_height),
+            ln(center_x, center_y + r),
+            cv(
+                center_x,
+                center_y + s * r,
+                center_x - s * r,
+                center_y,
+                center_x - r,
+                center_y,
+            ),
+            ln(0.0, center_y),
+        ],
+        Corner::Br => vec![
+            mv(center_x, float_height),
+            ln(center_x, center_y + r),
+            cv(
+                center_x,
+                center_y + s * r,
+                center_x + s * r,
+                center_y,
+                center_x + r,
+                center_y,
+            ),
+            ln(float_width, center_y),
+        ],
+    };
+
+    canvas.stroke_path(&nodes, float_thick);
+    true
+}
+
 /// Horizontal line with the top edge at `y`, from `x1` to `x2`, `thick` pixels
 /// tall. Faithful port of upstream `common.hline`.
 fn hline(canvas: &mut Canvas, x1: i32, x2: i32, y: i32, thick: u32) {
@@ -2509,6 +2612,69 @@ mod tests {
                 !draw_box_diagonal(cp, &m, &mut c),
                 "{cp:#06x} not a diagonal"
             );
+            assert!(all_alpha(&c, &m, 0), "{cp:#06x} drew ink");
+        }
+    }
+
+    // Box-drawing arcs (Canvas::stroke_path + the z2d curve pipeline). The
+    // fixture cell is 9×18, box_thickness 2, so center = (4, 9), r = 4.5. Each
+    // arc is pinned on both axes: the vertical arm (up vs down) and the
+    // horizontal side arm at y = center_y (left vs right).
+
+    #[test]
+    fn arc_2570_tr() {
+        // ╰ : up + right. Top-center arm and right-center arm.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_arc(0x2570, &m, &mut c));
+        assert!(inked(&c, 4, 2), "top-center arm");
+        assert!(inked(&c, 7, 9), "right-center arm");
+        assert!(!inked(&c, 1, 9), "left-center empty");
+        assert!(!inked(&c, 1, 16), "bottom-left corner empty");
+    }
+
+    #[test]
+    fn arc_256d_br() {
+        // ╭ : down + right. Bottom-center arm and right-center arm.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_arc(0x256d, &m, &mut c));
+        assert!(inked(&c, 4, 16), "bottom-center arm");
+        assert!(inked(&c, 7, 9), "right-center arm");
+        assert!(!inked(&c, 1, 9), "left-center empty");
+        assert!(!inked(&c, 1, 2), "top-left corner empty");
+    }
+
+    #[test]
+    fn arc_256e_bl() {
+        // ╮ : down + left. Bottom-center arm and left-center arm.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_arc(0x256e, &m, &mut c));
+        assert!(inked(&c, 4, 16), "bottom-center arm");
+        assert!(inked(&c, 1, 9), "left-center arm");
+        assert!(!inked(&c, 7, 9), "right-center empty");
+        assert!(!inked(&c, 7, 2), "top-right corner empty");
+    }
+
+    #[test]
+    fn arc_256f_tl() {
+        // ╯ : up + left. Top-center arm and left-center arm.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_box_arc(0x256f, &m, &mut c));
+        assert!(inked(&c, 4, 2), "top-center arm");
+        assert!(inked(&c, 1, 9), "left-center arm");
+        assert!(!inked(&c, 7, 9), "right-center empty");
+        assert!(!inked(&c, 7, 16), "bottom-right corner empty");
+    }
+
+    #[test]
+    fn draw_box_arc_excludes() {
+        let m = fixture_metrics();
+        for cp in [0x2500u32, 0x2571, 'M' as u32] {
+            let mut c = cell_canvas();
+            assert!(!draw_box_arc(cp, &m, &mut c), "{cp:#06x} not an arc");
             assert!(all_alpha(&c, &m, 0), "{cp:#06x} drew ink");
         }
     }

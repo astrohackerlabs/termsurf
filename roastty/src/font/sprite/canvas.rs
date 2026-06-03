@@ -225,6 +225,51 @@ impl Canvas {
         );
     }
 
+    /// Stroke an anti-aliased open path (in unpadded cell coordinates) with the
+    /// given `thickness`, painting the opaque (`.on`) source. Faithful port of
+    /// upstream `Canvas.strokePath` as used by the box arcs: butt caps, miter
+    /// joins (`miter_limit` 10, `tolerance` 0.1) — z2d's `StrokeOptions`
+    /// defaults. The padding translation (upstream's CTM) is applied to every
+    /// node here; the stroke is rasterized with 4× multisample anti-aliasing
+    /// into the padded surface.
+    pub(crate) fn stroke_path(&mut self, nodes: &[raster::PathNode], thickness: f64) {
+        let translated: Vec<raster::PathNode> =
+            nodes.iter().map(|n| self.translate_node(*n)).collect();
+        let poly = raster::stroke_path(
+            &translated,
+            thickness,
+            raster::MSAA_SCALE as f64,
+            10.0,
+            0.1,
+            raster::JoinMode::Miter,
+        );
+        raster::fill_polygon(
+            &mut self.buf,
+            self.width as i32,
+            self.height as i32,
+            &poly,
+            raster::FillRule::NonZero,
+        );
+    }
+
+    /// Offset a path node's point(s) by the surface padding (the upstream
+    /// translation-only CTM).
+    fn translate_node(&self, node: raster::PathNode) -> raster::PathNode {
+        let dx = self.padding_x as f64;
+        let dy = self.padding_y as f64;
+        let t = |p: raster::Point| raster::Point::new(p.x + dx, p.y + dy);
+        match node {
+            raster::PathNode::MoveTo(p) => raster::PathNode::MoveTo(t(p)),
+            raster::PathNode::LineTo(p) => raster::PathNode::LineTo(t(p)),
+            raster::PathNode::CurveTo { p1, p2, p3 } => raster::PathNode::CurveTo {
+                p1: t(p1),
+                p2: t(p2),
+                p3: t(p3),
+            },
+            raster::PathNode::ClosePath => raster::PathNode::ClosePath,
+        }
+    }
+
     /// Adjust the clip boundaries to trim off any fully transparent rows or
     /// columns. (Bypasses any drawing abstraction for performance.)
     fn trim(&mut self) {

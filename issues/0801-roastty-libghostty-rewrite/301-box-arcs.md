@@ -191,3 +191,76 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-074930-878076-prompt.md`
 - Result: `logs/codex-review/20260603-074930-878076-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/canvas.rs` gained `Canvas::stroke_path` (the
+`translate_node` padding offset for every `Move`/`Line`/`Curve`/`Close` node →
+`raster::stroke_path` at `MSAA_SCALE` with the z2d defaults `miter_limit 10`,
+`tolerance 0.1`, `JoinMode::Miter`, butt caps → `fill_polygon` `NonZero` into
+the padded surface with the `.on` source).
+
+`roastty/src/font/sprite/draw.rs` gained `Corner { Tl, Tr, Bl, Br }` and
+`draw_box_arc`: the integer-arithmetic center
+(`(cell_width.saturating_sub(thick_px) / 2) as f64 + float_thick / 2.0`, and
+likewise for `y`), `r = min(width, height) / 2`, `s = 0.25`, the four corner
+node sequences (arm-in `line`, the quarter-circle `curve_to` with correctly
+signed control points, arm-out `line`), and the dispatch `0x256D → Br`,
+`0x256E → Bl`, `0x256F → Tl`, `0x2570 → Tr` (`_ => false`). The module doc notes
+the arcs are the first curved sprite glyphs.
+
+Tests (the fixture `9×18` cell, center `(4, 9)`, `r = 4.5`), each pinned on both
+axes against the actual render:
+
+- `arc_2570_tr` (`╰`) — top-center `(4,2)` + right-center `(7,9)` inked;
+  left-center `(1,9)` + bottom-left `(1,16)` empty.
+- `arc_256d_br` (`╭`) — bottom-center `(4,16)` + right-center `(7,9)` inked;
+  left-center `(1,9)` + top-left `(1,2)` empty.
+- `arc_256e_bl` (`╮`) — bottom-center `(4,16)` + left-center `(1,9)` inked;
+  right-center `(7,9)` + top-right `(7,2)` empty.
+- `arc_256f_tl` (`╯`) — top-center `(4,2)` + left-center `(1,9)` inked;
+  right-center `(7,9)` + bottom-right `(7,16)` empty.
+- `draw_box_arc_excludes` — `0x2500`, `0x2571` (a diagonal), `'M'` return
+  `false` and draw nothing.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2601 passed, 0 failed (+5, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The box-drawing **arcs** (`U+256D`–`U+2570`) render end to end — the first
+curved, `z2d`-backed sprite glyphs — completing the
+`path → curve flatten → round-joined stroke → AA alpha8 surface` pipeline for
+the sprite font. `Canvas::stroke_path` now strokes arbitrary
+`move_to`/`line_to`/`curve_to` open paths, reusable by the remaining curved
+glyphs.
+
+The next `z2d`-dependent sprite glyphs are the **circle/ellipse pieces** (which
+add **round caps** — the pen-fan at the line ends — and likely the closed-path
+stroke). After the stroke families: the unifying sprite `has_codepoint`/draw
+entry point (which fills the resolver's deferred `SpriteUnavailable` arm), then
+the discovery consumer, the UCD emoji-presentation default, codepoint overrides,
+the shaper, the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no Required
+changes**. It confirmed `Canvas::stroke_path` applies the padding translation to
+every path point and strokes at `MSAA_SCALE` with `Miter`/limit `10`/tolerance
+`0.1` then fills `NonZero`; that `draw_box_arc` uses the corrected integer
+center calculation with `r = min(width, height) / 2` and `s = 0.25`; that all
+four corner path sequences match `box.zig` (including the signed control points
+and the final arm direction); that the dispatch matches upstream
+(`0x256D → Br`/`0x256E → Bl`/`0x256F → Tl`/`0x2570 → Tr`, else `false`); and
+that the strengthened tests pin both arms, catching left/right and up/down
+swaps. No Optional findings.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-075345-417567-last-message.md`
