@@ -158,3 +158,82 @@ allowed, `count` is the slice length), that `CTFontOrientation::Horizontal` is
 correct, and that adding `objc2-core-graphics` now for `CGGlyph` (and later
 `CGContext` rasterization) is in scope. The Menlo + empty-input tests cover the
 hazards.
+
+## Result
+
+**Result:** Pass
+
+Added `objc2-core-graphics` (`CGFont`) and the `CTFontDescriptor` +
+`objc2-core-graphics` features on `objc2-core-text` to `roastty/Cargo.toml` (the
+glyph methods are gated on `CTFontDescriptor` + `objc2-core-graphics`;
+`CTFontOrientation` lives in `CTFontDescriptor`). Added the three accessors to
+`impl Face` in `coretext.rs`: `glyphs_for_characters` (UTF-16 → glyph IDs),
+`advances_for_glyphs` (per-glyph `CGSize.width`), and `bounding_rect_for_glyphs`
+(overall `CGRect` → `(width, height)`), each guarding empty input **before** any
+`NonNull` construction and wrapping the FFI call in `unsafe` with a `SAFETY`
+note.
+
+Tests added (2): `glyph_measurement` — Menlo `M`/`i` map to non-zero glyphs,
+both advances `> 0.0` and **equal** (monospaced), bounding box width/height
+`> 0.0`; `empty_glyph_inputs` — all three return empty / `(0.0, 0.0)` with no
+FFI call.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty face
+cargo test -p roastty
+```
+
+Observed:
+
+- `face`: 5 passed (table spike, missing-table, scalar metrics, glyph
+  measurement, empty inputs).
+- Full `roastty`: 2360 unit tests passed (2358 prior + 2 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/font` (and
+  `lib.rs`/header/abi).
+- `git diff --check`: clean. (`Cargo.lock` gains `objc2-core-graphics`.)
+
+No C ABI, header, or ABI inventory changes; the `get_metrics` assembly and
+rasterization cleanly deferred.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+needs to change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-201737-231063-prompt.md`
+- Result: `logs/codex-review/20260602-201737-231063-last-message.md`
+
+Codex confirmed the `Cargo.toml` deps/features, that all three wrappers guard
+empty inputs **before** any `NonNull` construction, size their output buffers to
+`count`, use `CTFontOrientation::Horizontal`, and keep `unsafe` scoped to the
+CoreText calls with accurate safety notes; that the const→mut casts are sound
+(CoreText treats those inputs as read-only) while the glyph/advances output use
+real mutable storage; and that `bounding_rect_for_glyphs` correctly passes a
+null per-glyph buffer and returns the overall rect. Tests cover the live
+measurement and the empty-input safety path; scope is clean.
+
+## Conclusion
+
+Experiment 252 succeeds — the **entire CoreText FFI surface `get_metrics` needs
+is now proven**: table copy (250), the scalar accessors (251), and the
+glyph-measurement accessors (252), each verified by live `cargo test`. Both
+Codex gates passed with zero findings.
+
+The next slice is the full **`Face::get_metrics` assembly** — now pure logic
+over the proven FFI: copy the four tables (with the `head`/`bhed` fallback) via
+`copy_table`, parse them, run the vertical-metrics fallback chain (OS/2-typo
+when `use_typo_metrics`, else `hhea`, else OS/2-win, with the CTFont scalar
+fallbacks when a table is absent), derive underline/strikethrough (with the
+broken-zero guards) and cap/ex heights, measure `cell_width`/`ascii_height` over
+printable ASCII and `ic_width` over `水`, build a `FaceMetrics`, and feed the
+already-ported `Metrics::calc` — producing a full `Metrics` from a real macOS
+font end-to-end. Glyph rasterization (`CGContext` → alpha bitmap → atlas)
+follows.
