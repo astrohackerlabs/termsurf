@@ -941,6 +941,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 247: Port the OpenType metric-table parsers (sfnt scalars + `head` + `hhea`)](247-port-opentype-head-hhea.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 248: Port the OpenType `post` table parser (+ `Version16Dot16`)](248-port-opentype-post.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
