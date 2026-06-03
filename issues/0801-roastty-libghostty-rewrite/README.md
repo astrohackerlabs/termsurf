@@ -1024,7 +1024,7 @@ are past the correctness-critical foundation.
 - [Experiment 288: z2d port — the multisample rasterizer run](288-z2d-multisample-run.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 289: z2d port — the path-node representation](289-z2d-path-nodes.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

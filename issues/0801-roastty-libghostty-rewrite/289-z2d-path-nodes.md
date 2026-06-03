@@ -119,3 +119,54 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-061802-439097-prompt.md`
 - Result: `logs/codex-review/20260603-061802-439097-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` gained `PathNode`
+(`MoveTo`/`LineTo`/`CurveTo { p1, p2, p3 }`/`ClosePath`) and
+`is_closed_node_set` (the faithful empty-case + `closed`-flag scan with the
+interior-`move_to` early break).
+
+Tests — the upstream `isClosedNodeSet` suite transcribed directly:
+`closed_node_set_basic_closed` (`true`), `_multiple_closed` (`true`),
+`_basic_not_closed` (`false`), `_closed_in_middle` (`false`),
+`_closed_at_end_not_middle` (`false`), `_empty` (`false`).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 42 passed (6 new).
+- `cargo test -p roastty` → 2543 passed, 0 failed (no regressions; +6).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The path-node representation is in place — the language the `Canvas` path
+methods emit and the plotters consume. The next z2d slices, in order: the
+`Spline` cubic- Bézier flattener (subdivides `CurveTo` into line segments), the
+`fill_plotter` (path nodes → `Polygon` contours, closing open subpaths), and the
+`stroke_plotter` (a stroked path → outline `Polygon` with the `Pen`/join/cap
+machinery); then a `Canvas::fill_path`/`line`/`stroke` that builds the polygon
+and calls `fill_polygon` on the (padded) `Canvas` buffer. The simplest first
+consumer remains `Canvas::line` (a 2-node butt-cap path) → the three box-drawing
+diagonals (`0x2571`–`0x2573`). Alongside the sprite font remain the discovery
+consumer, the UCD emoji-presentation default, codepoint overrides, the shaper,
+the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `PathNode` and `is_closed_node_set` match
+`path_nodes.zig` exactly for this slice — including the subtle `MoveTo` behavior
+(the first `MoveTo` leaves `closed` unchanged, a later `MoveTo` breaks only on
+an unclosed subpath, and `ClosePath`/line/curve update the flag as upstream) —
+and that the six tests are faithful transcriptions with the correct
+expectations. It judged the gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-061951-785057-prompt.md`
+- Result: `logs/codex-review/20260603-061951-785057-last-message.md`

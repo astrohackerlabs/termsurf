@@ -647,6 +647,42 @@ pub(crate) fn fill_polygon(
     }
 }
 
+/// A single path node. Faithful port of z2d's `PathNode` tagged union: the
+/// drawing operations a path is built from. `CurveTo` is a cubic Bézier from the
+/// current point through `p1`/`p2` to `p3`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum PathNode {
+    MoveTo(Point),
+    LineTo(Point),
+    CurveTo { p1: Point, p2: Point, p3: Point },
+    ClosePath,
+}
+
+/// Whether every subpath in `nodes` is closed. Faithful port of z2d's
+/// `PathNode.isClosedNodeSet`: empty is not closed; a `ClosePath` marks the
+/// current subpath closed, any other drawing node reopens it, and a `MoveTo`
+/// that is not the first node following an unclosed subpath ends the scan early.
+pub(crate) fn is_closed_node_set(nodes: &[PathNode]) -> bool {
+    if nodes.is_empty() {
+        return false;
+    }
+
+    let mut closed = false;
+    for (i, node) in nodes.iter().enumerate() {
+        match node {
+            PathNode::MoveTo(_) => {
+                if !closed && i != 0 {
+                    break;
+                }
+            }
+            PathNode::ClosePath => closed = true,
+            _ => closed = false,
+        }
+    }
+
+    closed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1106,5 +1142,88 @@ mod tests {
         let mut buf = vec![0u8; 36];
         fill_polygon(&mut buf, 6, 6, &p, FillRule::NonZero);
         assert!(buf.iter().all(|&v| v == 0));
+    }
+
+    // PathNode — the upstream isClosedNodeSet suite, ported directly.
+
+    fn mv(x: f64, y: f64) -> PathNode {
+        PathNode::MoveTo(Point::new(x, y))
+    }
+    fn ln(x: f64, y: f64) -> PathNode {
+        PathNode::LineTo(Point::new(x, y))
+    }
+
+    #[test]
+    fn closed_node_set_basic_closed() {
+        let nodes = [
+            mv(1.0, 1.0),
+            ln(2.0, 2.0),
+            ln(3.0, 3.0),
+            PathNode::ClosePath,
+            mv(1.0, 1.0),
+        ];
+        assert!(is_closed_node_set(&nodes));
+    }
+
+    #[test]
+    fn closed_node_set_multiple_closed() {
+        let nodes = [
+            mv(1.0, 1.0),
+            ln(2.0, 2.0),
+            ln(3.0, 3.0),
+            PathNode::ClosePath,
+            mv(1.0, 1.0),
+            mv(4.0, 4.0),
+            ln(5.0, 5.0),
+            ln(6.0, 6.0),
+            PathNode::ClosePath,
+            mv(4.0, 4.0),
+        ];
+        assert!(is_closed_node_set(&nodes));
+    }
+
+    #[test]
+    fn closed_node_set_basic_not_closed() {
+        let nodes = [
+            mv(1.0, 1.0),
+            ln(2.0, 2.0),
+            mv(3.0, 3.0),
+            ln(4.0, 4.0),
+            ln(5.0, 5.0),
+        ];
+        assert!(!is_closed_node_set(&nodes));
+    }
+
+    #[test]
+    fn closed_node_set_closed_in_middle() {
+        let nodes = [
+            mv(1.0, 1.0),
+            ln(2.0, 2.0),
+            PathNode::ClosePath,
+            mv(1.0, 1.0),
+            mv(3.0, 3.0),
+            ln(4.0, 4.0),
+            ln(5.0, 5.0),
+        ];
+        assert!(!is_closed_node_set(&nodes));
+    }
+
+    #[test]
+    fn closed_node_set_closed_at_end_not_middle() {
+        let nodes = [
+            mv(1.0, 1.0),
+            ln(2.0, 2.0),
+            mv(3.0, 3.0),
+            ln(4.0, 4.0),
+            ln(5.0, 5.0),
+            PathNode::ClosePath,
+            mv(3.0, 3.0),
+        ];
+        assert!(!is_closed_node_set(&nodes));
+    }
+
+    #[test]
+    fn closed_node_set_empty() {
+        assert!(!is_closed_node_set(&[]));
     }
 }
