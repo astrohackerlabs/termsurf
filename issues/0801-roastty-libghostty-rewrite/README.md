@@ -1154,7 +1154,7 @@ are past the correctness-critical foundation.
 - [Experiment 353: the run iterator's TextRun and style break](353-runiter-textrun-style.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 354: the run iterator's content hash](354-runiter-run-hash.md) —
-  **Designed** · Claude/Codex/Codex
+  **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

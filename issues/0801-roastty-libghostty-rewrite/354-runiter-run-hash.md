@@ -158,3 +158,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-150801-863867-prompt.md` (design)
 - Result: `logs/codex-review/20260603-150801-863867-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The run iterator's content hash is ported.
+
+- `roastty/src/font/run.rs`: `run_hash(codepoints, cell_count, font_index)`
+  hashes each codepoint's `(codepoint, cluster)` (codepoint first, then the
+  run-relative cluster), then the cell count and the packed `font_index.int()`,
+  with a deterministic `DefaultHasher`. A faithful port of
+  `RunIterator.next()`'s hash construction (the in-spirit analog of upstream's
+  Wyhash + `autoHash`, as with `Descriptor::hashcode`).
+
+Tests: `run_hash_deterministic` (same inputs → same hash),
+`run_hash_distinguishes` (a different codepoint, cluster, cell count, or font
+index each changes the hash), `run_hash_position_independent` (identical
+run-relative content hashes the same; absolute-looking clusters differ). All
+pass.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2789 passed, 0 failed (+3, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The run iterator's content-hash computation is ported — the last pure piece of
+`RunIterator.next()`. Every value `next()` produces (`TextRun`, the hash) and
+every decision it makes (`comparable_style`, `font_style`,
+`is_bad_ligature_break`, `presentation_for_grapheme`, `index_for_grapheme`) is
+now in place in `font/run.rs`.
+
+The one remaining piece is the cell-walking `next()` loop body itself — the
+iteration that reads a terminal row's cells, extracts the codepoint / graphemes
+/ style / wide-kind, threads them through these ported helpers (with the
+selection/cursor/spacer breaks), accumulates the `(codepoint, cluster)` stream
+and calls `run_hash`, and emits a `TextRun`. Its remaining prerequisite is
+modeling the input — a `RunOptions`/cells view over a terminal/render-state row
+(roastty's `renderer`/`terminal/page.rs` cells), which roastty does not yet
+expose for shaping.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It verified `run_hash` matches upstream's hash inputs
+and order (each codepoint hashes `codepoint` then `cluster`, then `cell_count`,
+then the packed `font_index.int()`), with no missing inputs (`offset` and style
+are not part of the run hash); that `DefaultHasher` is a sound roastty analog
+(internal cache key, not a wire/ABI value); that `font_index.int()` is the right
+packed representation for `Collection.Index`; and that the position-independence
+framing is correct (the helper hashes the clusters it is given, so the future
+`next()` producer must pass run-relative clusters). It ran
+`cargo test -p roastty run_hash` — all 3 passed.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-150958-357278-last-message.md`
