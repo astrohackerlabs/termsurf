@@ -1117,8 +1117,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 335: the discoverFallback orchestration](335-discover-fallback-orchestration.md)
   — **Pass** · Claude/Codex/Codex
-- [Experiment 336: codepoint overrides](336-codepoint-overrides.md) —
-  **Designed** · Claude/Codex/Codex
+- [Experiment 336: codepoint overrides](336-codepoint-overrides.md) — **Pass** ·
+  Claude/Codex/Codex
 
 ## Non-Goals
 

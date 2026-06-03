@@ -186,3 +186,73 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-124144-442921-prompt.md`
 - Result: `logs/codex-review/20260603-124144-442921-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+Codepoint overrides land — `get_index` is now a complete port of upstream
+`getIndex`.
+
+- `roastty/src/font/discovery.rs`: `Descriptor::hashcode(&self) -> u64` (a
+  `DefaultHasher` over all fields, floats by bit pattern) — the descriptor-cache
+  key.
+- `roastty/src/font/codepoint_resolver.rs`: the resolver gained
+  `codepoint_map: Option<CodepointMap>` (`set_codepoint_map`) and
+  `descriptor_cache: HashMap<u64, Option<Index>>`;
+  `get_index_codepoint_override` runs **first** in `get_index` (after the
+  disabled-style normalization, before the sprite check): it looks up and clones
+  the mapped descriptor, consults the cache (`.get(&key) .copied()`
+  distinguishes a miss from a negative-cache hit), discovers + adds the font on
+  a miss (`Style::Regular`, non-fallback, `IcWidth`), caches the result
+  (positive or negative), and returns the index only if it
+  `has_codepoint(.., Any)`. The module/`get_index` docs note the override and
+  the now-complete port.
+
+Tests: `codepoint_override_forces_font` (an `'A'..='Z'` → `"Helvetica"` map
+makes `get_index('A')` return the override face, not the Menlo primary
+`(Regular, 0)`; without the map it is `(Regular, 0)`),
+`codepoint_override_caches` (`'B'` in the same range is a cache hit — the same
+index, no new face), `codepoint_override_unmapped` (`'0'` outside the map
+resolves to Menlo), `hashcode_consistent` (equal descriptors hash equal;
+family/size/bold differences hash differently).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2735 passed, 0 failed (+4, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The resolver's `get_index` is a **complete** port of upstream `getIndex`:
+codepoint overrides → sprite check → UCD presentation default → exact collection
+lookup → regular-style retry → discovery fallback (`discoverFallback`, CJK
+included) → last-resort `Any`. The codepoint resolution path — sprite rendering,
+color detection, discovery, and the resolver — is now functionally whole.
+
+The remaining font work is the deferred **variation-axis** score refinement and
+**variations** application (for variable fonts), and the **shaper** (shape
+calls, glyph placement) — the largest remaining subsystem.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It verified: the override placement matches upstream
+(after disabled-style normalization, before sprite handling); the cache
+semantics are correct (`HashMap<u64, Option<Index>>` + `.get(&key).copied()`
+cleanly distinguishes a miss from a negative-cache hit, positive hits reuse the
+existing index without re-adding, negative hits avoid rediscovery); the
+insertion matches upstream (`Style::Regular`, `fallback = false`,
+`SizeAdjustment::IcWidth`); the final
+`has_codepoint(idx, cp, PresentationMode::Any)` matches upstream's
+presentation-agnostic verification; the descriptor cloning is sound (it ends the
+map borrow before mutating the resolver); and `hashcode` is total/reflexive
+(floats hashed by bit pattern). The `u64` cache key has the same practical
+collision profile already accepted in the design review (upstream's
+descriptor-cache equality also reduces to hash equality). No Optional findings.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-124525-355071-last-message.md`

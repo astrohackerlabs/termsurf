@@ -5,13 +5,16 @@
 //! and adds style-disabled fallback, presentation defaults, and the
 //! regular-style fallback chain, resolves sprite codepoints to the
 //! procedurally-drawn sprite face when sprite drawing is enabled, and defaults a
-//! presentation-less codepoint via the UCD `Emoji_Presentation` property, and —
-//! when discovery is enabled — falls back to a system-discovered face for a
-//! regular-style codepoint no loaded face covers. Codepoint overrides and the
-//! dedicated `discoverFallback` codepoint search are deferred to later
-//! experiments.
+//! presentation-less codepoint via the UCD `Emoji_Presentation` property,
+//! applies config codepoint overrides, and — when discovery is enabled — falls
+//! back to a system-discovered face (including the CJK/`discoverFallback`
+//! codepoint search) for a codepoint no loaded face covers. `get_index` is now a
+//! complete port of upstream `getIndex`.
+
+use std::collections::HashMap;
 
 use crate::font::atlas::{Atlas, AtlasError};
+use crate::font::codepoint_map::CodepointMap;
 use crate::font::collection::{
     Collection, EntryError, Index, PresentationMode, SizeAdjustment, Special,
 };
@@ -78,6 +81,14 @@ pub(crate) struct CodepointResolver {
     /// Whether the discovery-based fallback is enabled (the analog of upstream's
     /// optional `discover`). Disabled by default — discovery is opt-in.
     discover_enabled: bool,
+    /// The codepoint → descriptor override map (the analog of upstream's optional
+    /// `codepoint_map`). `None` disables overrides.
+    codepoint_map: Option<CodepointMap>,
+    /// Caches a discovered override descriptor's resolved index (or `None` when
+    /// the descriptor found nothing) so repeat overrides don't re-discover or
+    /// re-add a face. Keyed by [`Descriptor::hashcode`]. Faithful analog of
+    /// upstream's `descriptor_cache`.
+    descriptor_cache: HashMap<u64, Option<Index>>,
 }
 
 impl CodepointResolver {
@@ -89,7 +100,15 @@ impl CodepointResolver {
             styles: [true; 4],
             sprite_metrics: None,
             discover_enabled: false,
+            codepoint_map: None,
+            descriptor_cache: HashMap::new(),
         }
+    }
+
+    /// Set (or clear with `None`) the codepoint override map. Faithful analog of
+    /// setting upstream's optional `codepoint_map`.
+    pub(crate) fn set_codepoint_map(&mut self, map: Option<CodepointMap>) {
+        self.codepoint_map = map;
     }
 
     /// Enable sprite drawing with the given grid `metrics`, or disable it with
@@ -120,13 +139,56 @@ impl CodepointResolver {
         self.styles[style as usize] = enabled;
     }
 
+    /// Resolve a codepoint override: if `cp` is in the override map, discover the
+    /// mapped font (caching the result), add it to the collection, and return its
+    /// index if it actually has the glyph. Faithful port of upstream
+    /// `getIndexCodepointOverride`. Requires discovery and a map.
+    fn get_index_codepoint_override(&mut self, cp: u32) -> Option<Index> {
+        if !self.discover_enabled {
+            return None;
+        }
+        // Look up and clone the mapped descriptor (drops the map borrow before we
+        // mutate the collection/cache).
+        let desc = self.codepoint_map.as_ref()?.get(cp)?.clone();
+        let key = desc.hashcode();
+
+        // Fast path: the descriptor was already discovered (or known-absent).
+        let cached = match self.descriptor_cache.get(&key).copied() {
+            Some(v) => v,
+            None => {
+                // Slow path: discover the descriptor's font.
+                let resolved = match desc.discover_faces().next() {
+                    Some(face) => self
+                        .collection
+                        .add_with_adjustment(face, Style::Regular, false, SizeAdjustment::IcWidth)
+                        .ok(),
+                    None => None,
+                };
+                self.descriptor_cache.insert(key, resolved);
+                resolved
+            }
+        };
+
+        // A negative cache entry means the descriptor found nothing.
+        let idx = cached?;
+
+        // Discovery ignores presentation, so verify the glyph is actually there.
+        if self
+            .collection
+            .has_codepoint(idx, cp, PresentationMode::Any)
+        {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
     /// Resolve `cp` (in `style`, with optional explicit presentation `p`) to a
     /// face [`Index`], or `None`. Faithful port of upstream `getIndex`'s core
-    /// chain (the sprite check, the UCD presentation default, the regular-style
-    /// retry, the discovery-based fallback when enabled, and the last-resort
-    /// `Any`). A discovery hit **mutates** the collection (adds the fallback
-    /// face), hence `&mut self`. (Codepoint overrides and the dedicated
-    /// `discoverFallback` are deferred.)
+    /// chain (codepoint overrides, the sprite check, the UCD presentation
+    /// default, the regular-style retry, the discovery-based fallback when
+    /// enabled, and the last-resort `Any`). Overrides and the discovery fallback
+    /// **mutate** the collection (adding faces), hence `&mut self`.
     pub(crate) fn get_index(
         &mut self,
         cp: u32,
@@ -138,7 +200,11 @@ impl CodepointResolver {
             return self.get_index(cp, Style::Regular, p);
         }
 
-        // (Codepoint overrides are deferred here.)
+        // Codepoint overrides: a config map can force a specific font for this
+        // codepoint. Runs first (after the disabled-style normalization).
+        if let Some(idx) = self.get_index_codepoint_override(cp) {
+            return Some(idx);
+        }
 
         // A sprite codepoint always resolves to the sprite face (when enabled).
         if let Some(m) = &self.sprite_metrics {
@@ -581,6 +647,71 @@ mod tests {
             r.collection().face_count(Style::Regular),
             before + 1,
             "no second fallback was added"
+        );
+    }
+
+    fn helvetica_a_to_z_map() -> CodepointMap {
+        let mut map = CodepointMap::default();
+        map.add(
+            ['A' as u32, 'Z' as u32],
+            Descriptor {
+                family: Some("Helvetica".into()),
+                ..Default::default()
+            },
+        );
+        map
+    }
+
+    #[test]
+    fn codepoint_override_forces_font() {
+        // 'A' is in Menlo, but the override map forces Helvetica — so `get_index`
+        // returns the override's added face, not the Menlo primary.
+        let mut r = menlo_resolver();
+        r.set_discover_enabled(true);
+        r.set_codepoint_map(Some(helvetica_a_to_z_map()));
+        let idx = r
+            .get_index('A' as u32, Style::Regular, Some(Presentation::Text))
+            .expect("the override resolves 'A'");
+        assert_ne!(
+            idx,
+            Index::new(Style::Regular, 0),
+            "the override is not the Menlo primary"
+        );
+
+        // Without the map, 'A' resolves to the Menlo primary.
+        let mut plain = menlo_resolver();
+        plain.set_discover_enabled(true);
+        assert_eq!(
+            plain.get_index('A' as u32, Style::Regular, Some(Presentation::Text)),
+            Some(Index::new(Style::Regular, 0))
+        );
+    }
+
+    #[test]
+    fn codepoint_override_caches() {
+        let mut r = menlo_resolver();
+        r.set_discover_enabled(true);
+        r.set_codepoint_map(Some(helvetica_a_to_z_map()));
+        let before = r.collection().face_count(Style::Regular);
+        let a = r.get_index('A' as u32, Style::Regular, Some(Presentation::Text));
+        let after_a = r.collection().face_count(Style::Regular);
+        // 'B' maps to the same descriptor → a cache hit, no new face.
+        let b = r.get_index('B' as u32, Style::Regular, Some(Presentation::Text));
+        let after_b = r.collection().face_count(Style::Regular);
+        assert_eq!(a, b, "the same override descriptor resolves the same index");
+        assert_eq!(after_a, before + 1, "the override added one face");
+        assert_eq!(after_b, after_a, "the cache hit added no face");
+    }
+
+    #[test]
+    fn codepoint_override_unmapped() {
+        // '0' is outside the mapped range → not overridden (resolves to Menlo).
+        let mut r = menlo_resolver();
+        r.set_discover_enabled(true);
+        r.set_codepoint_map(Some(helvetica_a_to_z_map()));
+        assert_eq!(
+            r.get_index('0' as u32, Style::Regular, Some(Presentation::Text)),
+            Some(Index::new(Style::Regular, 0))
         );
     }
 

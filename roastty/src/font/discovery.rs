@@ -67,6 +67,29 @@ pub(crate) struct Descriptor {
 }
 
 impl Descriptor {
+    /// A `u64` hash of every field — used to key a discovery descriptor cache.
+    /// The `f32`/`f64` fields are hashed by their bit pattern (so it is a total,
+    /// reflexive function). The exact value is internal (not serialized), so a
+    /// consistent Rust hash is a faithful analog of upstream's `hashcode`.
+    pub(crate) fn hashcode(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.family.hash(&mut h);
+        self.style.hash(&mut h);
+        self.codepoint.hash(&mut h);
+        self.size.to_bits().hash(&mut h);
+        self.bold.hash(&mut h);
+        self.italic.hash(&mut h);
+        self.monospace.hash(&mut h);
+        for v in &self.variations {
+            v.id.hash(&mut h);
+            v.value.to_bits().hash(&mut h);
+        }
+        h.finish()
+    }
+}
+
+impl Descriptor {
     /// Convert this descriptor to a CoreText `CTFontDescriptor` — the query
     /// object CoreText's font-matching APIs consume. Faithful port of upstream
     /// `Descriptor.toCoreTextDescriptor`: only the present fields are set, the
@@ -505,6 +528,44 @@ mod tests {
         assert!(!d.bold && !d.italic && !d.monospace);
         assert!(d.variations.is_empty());
         assert!(d.family.is_none() && d.style.is_none());
+    }
+
+    #[test]
+    fn hashcode_consistent() {
+        let a = Descriptor {
+            family: Some("Foo".into()),
+            size: 12.0,
+            bold: true,
+            ..Default::default()
+        };
+        assert_eq!(a.hashcode(), a.clone().hashcode(), "equal descriptors");
+        assert_ne!(
+            a.hashcode(),
+            Descriptor {
+                family: Some("Bar".into()),
+                ..a.clone()
+            }
+            .hashcode(),
+            "family differs"
+        );
+        assert_ne!(
+            a.hashcode(),
+            Descriptor {
+                size: 13.0,
+                ..a.clone()
+            }
+            .hashcode(),
+            "size differs"
+        );
+        assert_ne!(
+            a.hashcode(),
+            Descriptor {
+                bold: false,
+                ..a.clone()
+            }
+            .hashcode(),
+            "bold differs"
+        );
     }
 
     #[test]
