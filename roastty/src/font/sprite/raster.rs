@@ -341,6 +341,137 @@ impl WorkingEdgeSet {
     }
 }
 
+/// A run-length-encoded coverage accumulator for a single scanline. Faithful
+/// port of z2d's `SparseCoverageBuffer` (itself derived from tiny-skia's
+/// `alpha_runs`): only run-start indices hold meaningful `values[x]`/
+/// `lengths[x]`; callers walk runs by reading [`get`](SparseCoverageBuffer::get)
+/// and advancing by the returned length.
+///
+/// z2d picks a `u8`/`u16`/`u32` length-storage type by capacity purely to save
+/// memory; this port uses `u32` throughout, which is behaviorally identical.
+/// Per upstream's contract, the caller guarantees x-bounds and that coverage
+/// values do not overflow.
+pub(crate) struct SparseCoverageBuffer {
+    values: Vec<u8>,
+    lengths: Vec<u32>,
+    len: u32,
+    capacity: u32,
+}
+
+impl SparseCoverageBuffer {
+    /// A zeroed coverage buffer of the given pixel `capacity`.
+    pub(crate) fn new(capacity: u32) -> SparseCoverageBuffer {
+        SparseCoverageBuffer {
+            values: vec![0; capacity as usize],
+            lengths: vec![0; capacity as usize],
+            len: 0,
+            capacity,
+        }
+    }
+
+    /// Reset to empty (without reallocating).
+    pub(crate) fn reset(&mut self) {
+        self.len = 0;
+        self.lengths[0] = 0;
+    }
+
+    /// The total covered extent.
+    pub(crate) fn covered_len(&self) -> u32 {
+        self.len
+    }
+
+    /// The `(value, length)` run starting at `x`.
+    pub(crate) fn get(&self, x: u32) -> (u8, u32) {
+        (self.values[x as usize], self.lengths[x as usize])
+    }
+
+    /// Write a run start `(value, len)` at `x`.
+    fn put(&mut self, x: u32, value: u8, len: u32) {
+        assert!(x + len <= self.capacity);
+        self.values[x as usize] = value;
+        self.lengths[x as usize] = len;
+    }
+
+    /// Write just the coverage value at `x` (leaving the run length).
+    fn put_value(&mut self, x: u32, value: u8) {
+        self.values[x as usize] = value;
+    }
+
+    /// Ensure runs exist so `[x, x + len)` can be addressed, splitting existing
+    /// runs at `x` and `x + len` as needed. Faithful port of `extend`.
+    fn extend(&mut self, x: u32, len: u32) {
+        if len == 0 {
+            return;
+        }
+
+        // x is fully out of range (at or past the end).
+        if x == self.len {
+            self.put(x, 0, len);
+            self.len = x + len;
+            return;
+        }
+        if x > self.len {
+            self.put(self.len, 0, x - self.len);
+            self.put(x, 0, len);
+            self.len = x + len;
+            return;
+        }
+
+        // Split from the front so the run at `x` starts there.
+        self.split_inner(0, x);
+
+        // Extend past the existing length if needed, then split the remainder.
+        let span_len = x + len;
+        if span_len > self.len {
+            self.put(self.len, 0, span_len - self.len);
+            self.len = span_len;
+        }
+
+        self.split_inner(x, len);
+    }
+
+    /// Walk runs from `x`; when the remaining `len` falls inside a run, split it
+    /// into `(value, rem)` and `(value, current_len - rem)`. Faithful port of
+    /// `splitInner`.
+    fn split_inner(&mut self, x: u32, len: u32) {
+        let mut idx = x;
+        let mut rem = len;
+        loop {
+            let (current_value, current_len) = self.get(idx);
+            if rem < current_len {
+                self.put(idx, current_value, rem);
+                self.put(idx + rem, current_value, current_len - rem);
+                break;
+            } else if rem == current_len {
+                break;
+            }
+            rem -= current_len;
+            idx += current_len;
+        }
+    }
+
+    /// Add `value` coverage to every run across `[x, x + len)`. Faithful port of
+    /// `addSpan`.
+    pub(crate) fn add_span(&mut self, x: u32, value: u8, len: u32) {
+        self.extend(x, len);
+        let mut x_cur = x;
+        let x_end = x + len;
+        while x_cur < x_end {
+            let (coverage_value, coverage_len) = self.get(x_cur);
+            self.put_value(x_cur, coverage_value + value);
+            x_cur += coverage_len;
+        }
+    }
+
+    /// Add `value` coverage to the single pixel at `x`. Faithful port of
+    /// `addSingle`.
+    pub(crate) fn add_single(&mut self, x: u32, value: u8) {
+        self.extend(x, 1);
+        let (coverage_value, _) = self.get(x);
+        self.put_value(x, coverage_value + value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +668,140 @@ mod tests {
         w2.inc(8);
         w2.sort();
         assert_eq!(w2.filter(FillRule::NonZero), &[2, 14]);
+    }
+
+    // SparseCoverageBuffer — the upstream `extend` suite, ported directly.
+
+    #[test]
+    fn extend_basic() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.put(0, 0, 4);
+        c.put(4, 0, 4);
+        c.len = 8;
+        c.extend(2, 5);
+        assert_eq!(c.len, 8);
+        assert_eq!(c.get(0), (0, 2));
+        assert_eq!(c.get(2), (0, 2));
+        assert_eq!(c.get(4), (0, 3));
+        assert_eq!(c.get(7), (0, 1));
+    }
+
+    #[test]
+    fn extend_new_zero() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.extend(0, 5);
+        assert_eq!(c.len, 5);
+        assert_eq!(c.get(0), (0, 5));
+    }
+
+    #[test]
+    fn extend_new_nonzero() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.extend(2, 5);
+        assert_eq!(c.len, 7);
+        assert_eq!(c.get(0), (0, 2));
+        assert_eq!(c.get(2), (0, 5));
+    }
+
+    #[test]
+    fn extend_split_end_no_extend() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.put(0, 0, 4);
+        c.put(4, 0, 4);
+        c.len = 8;
+        c.extend(7, 1);
+        assert_eq!(c.len, 8);
+        assert_eq!(c.get(0), (0, 4));
+        assert_eq!(c.get(4), (0, 3));
+        assert_eq!(c.get(7), (0, 1));
+    }
+
+    #[test]
+    fn extend_split_end_with_extend() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.put(0, 0, 4);
+        c.put(4, 0, 4);
+        c.len = 8;
+        c.extend(7, 3);
+        assert_eq!(c.len, 10);
+        assert_eq!(c.get(0), (0, 4));
+        assert_eq!(c.get(4), (0, 3));
+        assert_eq!(c.get(7), (0, 1));
+        assert_eq!(c.get(8), (0, 2));
+    }
+
+    #[test]
+    fn extend_append_after_end() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.put(0, 0, 4);
+        c.put(4, 0, 4);
+        c.len = 8;
+        c.extend(8, 2);
+        assert_eq!(c.len, 10);
+        assert_eq!(c.get(0), (0, 4));
+        assert_eq!(c.get(4), (0, 4));
+        assert_eq!(c.get(8), (0, 2));
+    }
+
+    #[test]
+    fn extend_past_end() {
+        let mut c = SparseCoverageBuffer::new(11);
+        c.put(0, 0, 4);
+        c.put(4, 0, 4);
+        c.len = 8;
+        c.extend(9, 2);
+        assert_eq!(c.len, 11);
+        assert_eq!(c.get(0), (0, 4));
+        assert_eq!(c.get(4), (0, 4));
+        assert_eq!(c.get(8), (0, 1));
+        assert_eq!(c.get(9), (0, 2));
+    }
+
+    #[test]
+    fn extend_zero_len() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.extend(0, 0);
+        let (_, got_len) = c.get(0);
+        assert_eq!(got_len, 0);
+    }
+
+    #[test]
+    fn extend_split_to_capacity() {
+        let mut c = SparseCoverageBuffer::new(255);
+        c.extend(192, 63);
+        assert_eq!(c.get(0), (0, 192));
+        assert_eq!(c.get(192), (0, 63));
+        // Walking the runs yields exactly 2 spans.
+        let mut idx = 0u32;
+        let mut spans = 0usize;
+        while idx < c.len {
+            let (_, inc) = c.get(idx);
+            idx += inc;
+            spans += 1;
+        }
+        assert_eq!(spans, 2);
+    }
+
+    #[test]
+    fn add_span_accumulates() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.add_span(0, 1, 5);
+        c.add_span(2, 1, 5);
+        // Coverage 1 on [0,2), 2 on [2,5), 1 on [5,7).
+        assert_eq!(c.get(0), (1, 2));
+        assert_eq!(c.get(2), (2, 3));
+        assert_eq!(c.get(5), (1, 2));
+        assert_eq!(c.len, 7);
+    }
+
+    #[test]
+    fn add_single_accumulates() {
+        let mut c = SparseCoverageBuffer::new(10);
+        c.add_span(0, 1, 4);
+        c.add_single(2, 3);
+        // [0,2) -> 1, [2,3) -> 4, [3,4) -> 1.
+        assert_eq!(c.get(0), (1, 2));
+        assert_eq!(c.get(2), (4, 1));
+        assert_eq!(c.get(3), (1, 1));
     }
 }

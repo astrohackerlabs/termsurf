@@ -147,3 +147,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-055805-453461-prompt.md`
 - Result: `logs/codex-review/20260603-055805-453461-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` gained `SparseCoverageBuffer`
+(`values: Vec<u8>`, `lengths: Vec<u32>`, `len`, `capacity`) with
+`new`/`reset`/`covered_len`/`get`/`put`/`put_value`/`extend`/`split_inner`/
+`add_span`/`add_single` — the faithful RLE span-splitting and accumulation
+ports.
+
+Tests (the upstream `extend` suite transcribed directly, plus accumulation):
+
+- `extend_basic`, `extend_new_zero`, `extend_new_nonzero`,
+  `extend_split_end_no_extend`, `extend_split_end_with_extend`,
+  `extend_append_after_end`, `extend_past_end` (cap 11), `extend_zero_len`,
+  `extend_split_to_capacity` (cap 255, 2 spans) — each matching the upstream
+  `get`/`len` expectations.
+- `add_span_accumulates` — `add_span(0,1,5)` then `add_span(2,1,5)` gives
+  coverage `1`/`2`/`1` on `[0,2)`/`[2,5)`/`[5,7)`.
+- `add_single_accumulates` — `add_single` bumps a single run's coverage.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 28 passed (11 new).
+- `cargo test -p roastty` → 2529 passed, 0 failed (no regressions; +11).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The RLE coverage accumulator is in place, verified against z2d's own `extend`
+suite. The z2d port now has all three rasterizer ingredients: the `Polygon`
+tessellation, the `WorkingEdgeSet` active-edge-table, and the
+`SparseCoverageBuffer`. The next slice is the **multisample-4× rasterizer
+`run`** — it drives the `WorkingEdgeSet` over each pixel row's four
+sub-scanlines, records the filtered spans into the `SparseCoverageBuffer`
+(coverage `1` per sample), then writes each run's accumulated coverage as
+`alpha = coverage * (256 / 16)` (clamped) source-over into the alpha8 `Canvas`
+buffer. After that come the `fill_plotter` (path → `Polygon`) and
+`stroke_plotter` (stroke outline → `Polygon`, butt caps), then wiring
+`Canvas::line`/`fill`/`stroke` — which unblocks the box-drawing diagonals, arcs,
+circle/ellipse pieces, and geometric curves. Alongside the sprite font remain
+the discovery consumer, the UCD emoji-presentation default, codepoint overrides,
+the shaper, the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `new`/`reset`/`get`/`put`/`put_value`, `extend`,
+`split_inner`, `add_span`, and `add_single` match `sparse_coverage.zig`, that
+`Vec<u32>` is a behavioral equivalent for the length storage, and that the
+ported upstream `extend` tests plus the accumulation tests have the correct
+expectations. It judged the gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-060122-668447-prompt.md`
+- Result: `logs/codex-review/20260603-060122-668447-last-message.md`
