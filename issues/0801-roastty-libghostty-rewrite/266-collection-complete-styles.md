@@ -145,3 +145,66 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260602-221209-626886-prompt.md`
 - Result: `logs/codex-review/20260602-221209-626886-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`collection.rs` gained `CompleteError::DefaultUnavailable` and
+`complete_styles`. It no-ops when all four styles are populated; otherwise finds
+the first regular slot whose canonical direct-entry face has text
+(`!has_color() || glyph_index('A')`) and aliases the missing
+`Italic`/`Bold`/`BoldItalic` to it. Empty regular → `Ok` (nothing to do); no
+regular text face → `DefaultUnavailable`. The regular slot is canonicalized to
+its direct-entry `Index` before aliasing.
+
+Tests (live CoreText):
+
+- `complete_styles_aliases_missing` — Menlo-only `Regular`; after completion
+  each of `Italic`/`Bold`/`BoldItalic` resolves `{style,0}` to the Menlo face
+  and answers `has_codepoint('M', Any)`.
+- `complete_styles_noop_when_full` — all four styles populated → no list grows.
+- `complete_styles_empty_is_ok` — empty collection stays empty, returns `Ok`.
+- `complete_styles_default_unavailable` — an emoji-only `Regular` (asserted to
+  lack a text `'A'`) → `DefaultUnavailable`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty collection` → 23 passed, 0 failed.
+- `cargo test -p roastty` → 2406 passed, 0 failed (no regressions; +4).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+`complete_styles` ensures every style is renderable via aliasing — the full
+Collection style-completion behavior in the synthesis-disabled/unavailable case.
+The next experiment adds the **synthesis** path: a `Face::synthetic_italic`
+(CoreText oblique transform matrix) and an instance-method
+`Face::synthetic_bold` that copy an existing face, plus the `FontSyntheticStyle`
+config that selects synthesize-vs-alias (and the bold-italic
+synthesize-from-bold/italic preference). After that, the Collection's remaining
+work is the per-entry `scale_factor` + `load_options`/`setSize` size
+normalization and `setSize`/`updateMetrics`; then the `DeferredFace` +
+`discovery` lazy-loading sub-area, the `CodepointResolver`, the shaper, and the
+Nerd Font attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-221509-580102-prompt.md`
+- Result: `logs/codex-review/20260602-221509-580102-last-message.md`
+
+Codex confirmed `complete_styles` matches upstream's aliasing path (all-present
+no-op, empty-regular → `Ok`, no-text-face → `DefaultUnavailable`, the exact
+`!has_color() || glyph_index('A')` heuristic), that the canonicalization fixes
+the design-review risk (a regular alias slot is converted to its direct target
+so `add_alias` gets a validated direct entry — `CollectionFull` can't occur for
+empty lists and `InvalidAliasTarget` is ruled out, justifying the `expect`),
+that the borrow handling is sound (immutable search before mutation), and that
+the tests cover the meaningful branches.

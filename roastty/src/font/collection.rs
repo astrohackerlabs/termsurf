@@ -195,6 +195,13 @@ pub(crate) enum EntryError {
     IndexOutOfBounds,
 }
 
+/// An error completing the styles of a [`Collection`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompleteError {
+    /// There is no regular face with text glyphs to fall back to.
+    DefaultUnavailable,
+}
+
 /// A slot in a style's face list: either an owned [`Entry`] or an `Alias` to a
 /// face elsewhere in the collection. Faithful port of upstream `EntryOrAlias`,
 /// with the alias stored as an [`Index`] (upstream's `*Entry` pointer is not
@@ -334,6 +341,63 @@ impl Collection {
             return false;
         }
         self.entry_of(&list[i]).has_codepoint(cp, p_mode)
+    }
+
+    /// Ensure every style has at least one face by aliasing missing styles to
+    /// the first regular face that has text glyphs. Faithful port of upstream
+    /// `completeStyles`'s aliasing path (face synthesis is deferred).
+    ///
+    /// No-ops if every style is already populated. Returns `DefaultUnavailable`
+    /// if there are regular faces but none has text glyphs; returns `Ok` (doing
+    /// nothing) if there is no regular face at all.
+    pub(crate) fn complete_styles(&mut self) -> Result<(), CompleteError> {
+        // The common case: every style already has at least one entry.
+        if self.faces.iter().all(|list| !list.is_empty()) {
+            return Ok(());
+        }
+
+        // Find the first regular face that has non-color text glyphs. This is
+        // the face we fall back to; it may not be index 0 (e.g. if an emoji font
+        // is configured first). Capture its canonical direct-entry index.
+        let regular_list = &self.faces[Style::Regular as usize];
+        if regular_list.is_empty() {
+            // No regular face to fall back to; nothing we can do.
+            return Ok(());
+        }
+        let mut regular: Option<Index> = None;
+        for i in 0..regular_list.len() {
+            // Canonicalize an alias slot to its direct-entry target so the later
+            // `add_alias` accepts it (mirrors upstream resolving to the entry).
+            let canonical = match &regular_list[i] {
+                EntryOrAlias::Entry(_) => Index::new(Style::Regular, i as u16),
+                EntryOrAlias::Alias(target) => *target,
+            };
+            let face = self
+                .get_face(canonical)
+                .expect("a regular slot resolves to a face");
+            // Auto-italicize a normal text font; for mixed color/non-color fonts
+            // accept the regular face if it at least has basic ASCII.
+            if !face.has_color() || face.glyph_index('A' as u32).is_some() {
+                regular = Some(canonical);
+                break;
+            }
+        }
+        let Some(regular) = regular else {
+            // No regular text face found; we can't provide any fallback.
+            return Err(CompleteError::DefaultUnavailable);
+        };
+
+        // Alias each missing style to the regular face. (Synthesis is deferred,
+        // so this always aliases — upstream's synthesis-disabled path.)
+        for style in [Style::Italic, Style::Bold, Style::BoldItalic] {
+            if self.faces[style as usize].is_empty() {
+                // The target is a validated direct entry, so this can't fail.
+                self.add_alias(style, regular)
+                    .expect("regular is a valid direct entry");
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -599,6 +663,69 @@ mod tests {
             c.get_index('M' as u32, Style::Bold, PresentationMode::Any),
             None
         );
+    }
+
+    #[test]
+    fn complete_styles_aliases_missing() {
+        let mut c = menlo_collection(); // Menlo at {Regular, 0}
+        c.complete_styles().expect("complete");
+
+        // Each missing style now aliases the regular Menlo face at index 0.
+        for style in [Style::Italic, Style::Bold, Style::BoldItalic] {
+            let idx = Index::new(style, 0);
+            assert!(!c.get_face(idx).expect("aliased face").has_color());
+            assert!(c.has_codepoint(idx, 'M' as u32, PresentationMode::Any));
+        }
+    }
+
+    #[test]
+    fn complete_styles_noop_when_full() {
+        let mut c = Collection::new();
+        for style in [
+            Style::Regular,
+            Style::Bold,
+            Style::Italic,
+            Style::BoldItalic,
+        ] {
+            c.add(Face::new("Menlo", 32.0), style, false).unwrap();
+        }
+        c.complete_styles().expect("complete");
+        // No style gained a second entry: index 1 is out of bounds everywhere.
+        for style in [
+            Style::Regular,
+            Style::Bold,
+            Style::Italic,
+            Style::BoldItalic,
+        ] {
+            assert_eq!(
+                c.get_entry(Index::new(style, 1)).err(),
+                Some(EntryError::IndexOutOfBounds)
+            );
+        }
+    }
+
+    #[test]
+    fn complete_styles_empty_is_ok() {
+        let mut c = Collection::new();
+        c.complete_styles().expect("complete on empty");
+        // Still empty: no regular face to alias to.
+        assert_eq!(
+            c.get_entry(Index::new(Style::Italic, 0)).err(),
+            Some(EntryError::IndexOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn complete_styles_default_unavailable() {
+        let emoji = Face::new("Apple Color Emoji", 32.0);
+        // Precondition: this color font lacks a text 'A' glyph. If that ever
+        // changes, the heuristic would accept it and this test's premise is moot.
+        if emoji.glyph_index('A' as u32).is_some() {
+            return;
+        }
+        let mut c = Collection::new();
+        c.add(emoji, Style::Regular, false).unwrap();
+        assert_eq!(c.complete_styles(), Err(CompleteError::DefaultUnavailable));
     }
 
     #[test]
