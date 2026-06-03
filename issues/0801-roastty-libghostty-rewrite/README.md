@@ -1131,6 +1131,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 342: the shaper's clustered input](342-shaper-clustered-input.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 343: the shaper's reorder guard](343-shaper-reorder-guard.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
