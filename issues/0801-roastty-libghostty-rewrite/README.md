@@ -1137,6 +1137,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 345: applying variations to a face](345-face-set-variations.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 346: the score's variation-axis derivation](346-score-variation-axes.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
