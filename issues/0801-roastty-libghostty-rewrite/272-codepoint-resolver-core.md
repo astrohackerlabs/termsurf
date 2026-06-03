@@ -142,6 +142,67 @@ Review artifacts:
 - Prompt: `logs/codex-review/20260602-225625-792382-prompt.md`
 - Result: `logs/codex-review/20260602-225625-792382-last-message.md`
 
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/codepoint_resolver.rs` (new) holds `CodepointResolver` (owns a
+`Collection`, `styles: [bool; 4]`) with `new`, `collection`/
+`collection_mut`/`set_style_enabled`, and `get_index` — the faithful core chain:
+style-disabled → regular recursion, `Explicit`/`Default(Text)` presentation,
+collection lookup, non-regular → regular retry, the (dead) `p_mode == Any`
+guard, and the final regular/any fallback.
+
+Tests (live CoreText):
+
+- `resolve_basic` — `'M'` resolves to `{Regular, 0}` under `Some(Text)` and
+  `None`.
+- `resolve_missing` — a Private-Use codepoint → `None`.
+- `resolve_emoji_via_regular_any` — `😀` under `Some(Text)` is found at
+  `{Regular, 1}` only via the final regular/any fallback (the explicit-text
+  lookup misses the color glyph).
+- `resolve_style_disabled_falls_back` — a disabled `Bold` recurses to `Regular`
+  → `{Regular, 0}`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty codepoint_resolver` → 4 passed, 0 failed.
+- `cargo test -p roastty` → 2429 passed, 0 failed (no regressions; +4).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The resolver's core resolution chain is ported over the eager `Collection`. The
+remaining `CodepointResolver` pieces are its deferred dependencies: the **sprite
+face** check (which needs the sprite font — box-drawing/braille rendering, the
+z2d-adjacent sub-area), **codepoint overrides** (`CodepointMap`), the **UCD
+emoji-presentation default** (the `uucode` Unicode tables), and
+**discovery-based fallback** (`DeferredFace` + `discovery`). Alongside these sit
+the **shaper**, the **Nerd Font attribute table**, and **SVG color detection**.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-225838-871798-prompt.md`
+- Result: `logs/codex-review/20260602-225838-871798-last-message.md`
+
+Codex confirmed `get_index` follows the scoped upstream order (disabled
+non-regular styles recurse to `Regular`, the presentation mode is built before
+the collection lookup, the exact lookup precedes the regular retry, and the
+final `Regular/Any` fallback is reached for both regular and non-regular
+misses), that the `style != Regular` guard prevents disabled-style recursion
+from looping, and that the tests are meaningful (the emoji test forces an
+explicit-text miss before the `Any` fallback finds the color face; the
+style-disabled test would fail if the disabled `Bold` used the alias path
+instead of recursing). The UCD `None` default remains a documented deferred
+deviation.
+
 Codex confirmed the core chain matches upstream for the scoped eager path
 (disabled non-regular styles recurse to regular first, the exact
 style/presentation lookup precedes the regular retry, the non-regular retry

@@ -990,7 +990,7 @@ are past the correctness-critical foundation.
 - [Experiment 271: Collection updateMetrics — grid metrics from the primary face](271-collection-update-metrics.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 272: CodepointResolver core — getIndex with style/regular fallback](272-codepoint-resolver-core.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
