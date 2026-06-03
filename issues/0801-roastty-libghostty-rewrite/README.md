@@ -1005,6 +1005,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 279: Block Elements (U+2580–U+259F)](279-block-elements.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 280: Braille Patterns (U+2800–U+28FF)](280-braille.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
