@@ -178,3 +178,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-113936-991480-prompt.md`
 - Result: `logs/codex-review/20260603-113936-991480-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+The ranking score lands.
+
+- `roastty/src/font/discovery.rs`: a `Score` struct (`glyph_count: u16`,
+  `fuzzy_style: u8`,
+  `bold`/`italic`/`exact_style`/`monospace`/`codepoint: bool`);
+  `int(&self) -> u32` reproducing the packed layout (`glyph_count` at bits
+  `0..16`, `fuzzy_style` at `16..24`, then the five bools at bits `24..28`); a
+  **natural** `Ord`/`PartialOrd` by `int()` (higher is `Greater`), with
+  best-first sorting left to the consumer (`sort_by(|a, b| b.cmp(a))`).
+
+Tests: `score_field_offsets` (each field projects to its exact bit),
+`score_precedence` (each higher field alone outranks all lower fields maxed
+together, for fields `1..=6`), `score_glyph_count_tiebreak` (more glyphs ranks
+higher; `Ord` agrees), `score_ord_sorts_desc` (a best-first sort yields
+descending `int()`, codepoint first, the bare glyph-count score last).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2707 passed, 0 failed (+4, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+Discovery now has its ranking primitive: a `Score` whose integer projection
+reproduces upstream's packed-struct precedence (codepoint > monospace >
+exact_style > italic > bold > fuzzy_style > glyph_count), ready for a best-first
+sort.
+
+The next discovery experiment is **`score(desc, ct_desc)`** — computing a
+`Score` from a candidate by loading the font (size 12), reading its glyph count,
+the requested codepoint's coverage, the symbolic traits, the
+`head`/`OS/2`/variation bold-italic derivation (roastty already has the
+`Head`/`Os2` parsers), and the style exact/fuzzy match — followed by
+`sortMatchingDescriptors` (wiring the ordering into `discover_descriptors`),
+then the `DiscoverIterator`/`DeferredFace`, `discoverFallback`, and finally the
+resolver's discovery fallback and codepoint overrides.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It confirmed the `int()` layout matches upstream's
+packed `Score` exactly (`glyph_count` at `0..16`, `fuzzy_style` at `16..24`, the
+five bools at `24..28`, `codepoint` highest), that the `u32` projection is safe
+(max value `0x1FFF_FFFF`, no sign/overflow, ordering identical to Zig's `u29`),
+that the precedence test is sound (each field's lowest set bit is exactly one
+greater than the maximum of all lower fields combined), and that the
+natural-`Ord` + consumer-reverses choice is correct and internally consistent
+with `PartialEq` (`sort_by(|a, b| b.cmp(a))` gives upstream's "higher score is
+earlier"). No Optional findings.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-114200-920004-last-message.md`

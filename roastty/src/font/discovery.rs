@@ -200,6 +200,60 @@ impl Descriptor {
     }
 }
 
+/// The ranking score for a discovery candidate. Faithful port of upstream's
+/// `CoreText.Score` packed struct: the fields are laid out by **increasing
+/// precedence**, so the integer projection [`Score::int`] compares as a single
+/// value where a higher number is a better match. (Computing a `Score` from a
+/// font — `score()` — and wiring the sort into discovery are later experiments.)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Score {
+    /// Tie-breaker: more glyphs is preferred, all else equal (bits `0..16`).
+    pub glyph_count: u16,
+    /// Fuzzy style-string match strength (bits `16..24`).
+    pub fuzzy_style: u8,
+    /// The font's bold-ness matches the request (bit `24`).
+    pub bold: bool,
+    /// The font's italic-ness matches the request (bit `25`).
+    pub italic: bool,
+    /// An exact (case-insensitive) style-string match (bit `26`).
+    pub exact_style: bool,
+    /// The font is monospace (bit `27`).
+    pub monospace: bool,
+    /// The font has the requested codepoint (bit `28`, the highest precedence).
+    pub codepoint: bool,
+}
+
+impl Score {
+    /// Project the score to a single integer for comparison, reproducing
+    /// upstream's packed-struct bit layout (fields least- to most-significant).
+    /// Upstream's backing integer is `u29`; `u32` is wider with the top bits
+    /// always zero, so the ordering is identical.
+    pub(crate) fn int(&self) -> u32 {
+        self.glyph_count as u32
+            | (self.fuzzy_style as u32) << 16
+            | (self.bold as u32) << 24
+            | (self.italic as u32) << 25
+            | (self.exact_style as u32) << 26
+            | (self.monospace as u32) << 27
+            | (self.codepoint as u32) << 28
+    }
+}
+
+impl Ord for Score {
+    /// A natural ordering by [`Score::int`] — a higher score is `Greater`. A
+    /// best-first sort reverses this (`sort_by(|a, b| b.cmp(a))`), matching
+    /// upstream's "`lhs.int() > rhs.int()` ⇒ lhs is earlier".
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.int().cmp(&other.int())
+    }
+}
+
+impl PartialOrd for Score {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +416,145 @@ mod tests {
             !any_family(&list, "__no_such_font_family__"),
             "no candidate claims the impossible family"
         );
+    }
+
+    #[test]
+    fn score_field_offsets() {
+        let off = |s: Score| s.int();
+        assert_eq!(
+            off(Score {
+                glyph_count: 0xABCD,
+                ..Default::default()
+            }),
+            0xABCD
+        );
+        assert_eq!(
+            off(Score {
+                fuzzy_style: 0xEF,
+                ..Default::default()
+            }),
+            0x00EF_0000
+        );
+        assert_eq!(
+            off(Score {
+                bold: true,
+                ..Default::default()
+            }),
+            1 << 24
+        );
+        assert_eq!(
+            off(Score {
+                italic: true,
+                ..Default::default()
+            }),
+            1 << 25
+        );
+        assert_eq!(
+            off(Score {
+                exact_style: true,
+                ..Default::default()
+            }),
+            1 << 26
+        );
+        assert_eq!(
+            off(Score {
+                monospace: true,
+                ..Default::default()
+            }),
+            1 << 27
+        );
+        assert_eq!(
+            off(Score {
+                codepoint: true,
+                ..Default::default()
+            }),
+            1 << 28
+        );
+    }
+
+    #[test]
+    fn score_precedence() {
+        // Each higher-precedence field, alone, outranks every lower field
+        // maxed out together.
+        let all_lower_of = |field: u8| -> Score {
+            // Set every field strictly below `field` (0 = glyph_count ..
+            // 6 = codepoint) to its maximum.
+            Score {
+                glyph_count: if field > 0 { u16::MAX } else { 0 },
+                fuzzy_style: if field > 1 { u8::MAX } else { 0 },
+                bold: field > 2,
+                italic: field > 3,
+                exact_style: field > 4,
+                monospace: field > 5,
+                codepoint: false,
+            }
+        };
+        let only = |field: u8| -> Score {
+            let mut s = Score::default();
+            match field {
+                1 => s.fuzzy_style = 1,
+                2 => s.bold = true,
+                3 => s.italic = true,
+                4 => s.exact_style = true,
+                5 => s.monospace = true,
+                6 => s.codepoint = true,
+                _ => s.glyph_count = 1,
+            }
+            s
+        };
+        for field in 1..=6u8 {
+            assert!(
+                only(field).int() > all_lower_of(field).int(),
+                "field {field} must outrank all lower fields combined"
+            );
+        }
+    }
+
+    #[test]
+    fn score_glyph_count_tiebreak() {
+        let more = Score {
+            monospace: true,
+            glyph_count: 5000,
+            ..Default::default()
+        };
+        let fewer = Score {
+            monospace: true,
+            glyph_count: 100,
+            ..Default::default()
+        };
+        assert!(more.int() > fewer.int(), "more glyphs ranks higher");
+        assert!(more > fewer, "Ord agrees");
+    }
+
+    #[test]
+    fn score_ord_sorts_desc() {
+        let mut v = vec![
+            Score {
+                glyph_count: 10,
+                ..Default::default()
+            },
+            Score {
+                codepoint: true,
+                ..Default::default()
+            },
+            Score {
+                monospace: true,
+                ..Default::default()
+            },
+            Score {
+                bold: true,
+                ..Default::default()
+            },
+        ];
+        // Best-first: reverse the natural ordering.
+        v.sort_by(|a, b| b.cmp(a));
+        let ints: Vec<u32> = v.iter().map(Score::int).collect();
+        let mut sorted = ints.clone();
+        sorted.sort_unstable();
+        sorted.reverse();
+        assert_eq!(ints, sorted, "sorted best-first (descending int)");
+        // The codepoint score is first, the bare glyph_count score is last.
+        assert!(v[0].codepoint);
+        assert_eq!(v[3].glyph_count, 10);
     }
 }
