@@ -147,3 +147,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-054839-444008-prompt.md`
 - Result: `logs/codex-review/20260603-054839-444008-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` (new) holds the z2d polygon core: `Point`
+(`f64` x/y), `Edge` (`y0`/`y1` in original order, top-vertex `x_start`, downward
+`x_inc`, with `dir`/`top`/`bottom`), and `Polygon` (`new`/`add_edge`/`in_box`).
+`add_edge` scales, orients (down/up/horizontal-filter), seeds/grows the extents,
+and pushes; `in_box` rounds the scaled extents to device pixels and tests the
+box intersection (the upstream `@panic` branches → `assert!`). `sprite/mod.rs`
+declares the module.
+
+Tests (deterministic):
+
+- `edge_down` — `(1,1)→(3,5)` builds `{y0:1, y1:5, x_start:1, x_inc:0.5}`,
+  `dir=-1`, `top=1`, `bottom=5`.
+- `edge_up` — `(3,5)→(1,1)` keeps `{y0:5, y1:1}` with `x_start=1` (the top
+  vertex), `dir=+1`.
+- `edge_horizontal_filtered` — a horizontal edge adds nothing.
+- `extents_seed_and_grow` — the first edge seeds, a second min/maxes.
+- `scale_applied` — `scale=4` scales `(1,1)→(3,5)` to `(4,4)-(12,20)`.
+- `in_box_inside`/`in_box_degenerate`/`in_box_outside` — `true`/`false`/`false`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 8 passed.
+- `cargo test -p roastty` → 2511 passed, 0 failed (no regressions; +8).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The z2d port has its foundation: the `Polygon`/`Edge` tessellation core, with
+the top-vertex `x_start` / downward-`x_inc` edge representation and the
+extent/`inBox` machinery the rasterizer consumes. The next z2d slices, in order:
+the `WorkingEdgeSet` active-edge-table
+(`breakpoints`/`rescan`/`inc`/`sort`/`filter`) and the `SparseCoverageBuffer`;
+the multisample-4× rasterizer `run` (with a minimal alpha8 source-over
+composite); the `fill_plotter` (path → `Polygon`) and `stroke_plotter` (stroke
+outline → `Polygon`, with butt caps); then wiring `Canvas::line`/`fill`/`stroke`
+— which finally unblocks the box-drawing diagonals (`0x2571`–`0x2573`), the
+arcs, the circle/ellipse pieces, and the geometric curves. Alongside the sprite
+font remain the discovery consumer, the UCD emoji-presentation default,
+codepoint overrides, the shaper, the Nerd Font attribute table, and SVG color
+detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `Edge`, `add_edge`, the extent handling, `in_box`, and
+the tests match `Polygon.zig` lines 1–195 for this slice, that the `@panic`
+branches are appropriately represented as `assert!`, and that the
+fmt/test/build/name/diff gates are clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-055050-702141-prompt.md`
+- Result: `logs/codex-review/20260603-055050-702141-last-message.md`
