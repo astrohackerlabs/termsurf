@@ -1061,6 +1061,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 307: the rect-based special sprites (underline, double, strikethrough, overline)](307-special-underlines.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 308: the cursor sprites (block, hollow, bar, underline)](308-cursors.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
