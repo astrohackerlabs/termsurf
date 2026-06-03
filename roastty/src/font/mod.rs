@@ -9,6 +9,7 @@
 //! rasterization, faces, and shaping land in later experiments.
 
 pub(crate) mod atlas;
+pub(crate) mod face;
 pub(crate) mod glyph;
 pub(crate) mod metrics;
 pub(crate) mod opentype;

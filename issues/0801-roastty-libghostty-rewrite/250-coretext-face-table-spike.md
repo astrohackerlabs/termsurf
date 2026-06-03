@@ -164,3 +164,85 @@ tests robust for a spike (`magic_number == 0x5F0F3CF5` and `units_per_em` range
 are font-version-independent; creating a `CTFont` needs no GUI/main thread, and
 CoreText returns a fallback font with a valid `head` table if the name is
 unavailable). Deferring `getMetrics`/`bhed`/rasterization is cleanly scoped.
+
+## Result
+
+**Result:** Pass
+
+Added `objc2-core-foundation` (`CFBase`/`CFCGTypes`/`CFData`/`CFString`/`alloc`)
+and `objc2-core-text` (`CTFont`) to `roastty/Cargo.toml`, and the new
+`roastty/src/font/face/` module (`pub(crate) mod face;` in `font/mod.rs`) with
+`coretext.rs`: a `Face` wrapping a `CFRetained<CTFont>`, `Face::new(name, size)`
+(`CFString::from_str` + `CTFont::with_name` with a null matrix), and
+`Face::copy_table(&[u8; 4]) -> Option<Vec<u8>>` (`u32::from_be_bytes` tag →
+`CTFont::table` → `CFData::to_vec`), each FFI call wrapped in `unsafe` with a
+`SAFETY` note. The `face/mod.rs` re-export was dropped to avoid an unused-import
+warning until a consumer lands.
+
+**The FFI round-trip works end-to-end.** Tests added (2):
+`face_copies_and_parses_head` — creates a `CTFont` for Menlo, copies the `head`
+table via `CTFontCopyTable`, parses it with the ported `Head` parser, and
+asserts `magic_number == 0x5F0F3CF5` (valid in every `head` table) and
+`units_per_em` in `16..=16384`; `missing_table_is_none` — `copy_table(b"ZZZZ")`
+is `None`. Both run in `cargo test` on macOS with no GUI/main-thread
+requirement.
+
+### Verification
+
+```bash
+cargo fmt -p roastty
+cargo test -p roastty face
+cargo test -p roastty
+```
+
+Observed:
+
+- `face`: 2 passed (the live CoreText round-trip + the missing-table case).
+- Full `roastty`: 2357 unit tests passed (2355 prior + 2 new), plus the C ABI
+  harness passed.
+- `cargo fmt -p roastty -- --check`: clean.
+- `cargo build -p roastty`: no warnings.
+- No-`ghostty`-name gates passed for `roastty/src/font` and for
+  `roastty/src/lib.rs`, `roastty/include/roastty.h`,
+  `roastty/tests/abi_harness.c`.
+- `git diff --check`: clean. (`Cargo.lock` gains the two `objc2-core-*` crates.)
+
+No C ABI, header, or ABI inventory changes; the full `getMetrics` assembly, the
+`bhed` fallback, and rasterization cleanly deferred.
+
+### Completion Review
+
+Codex reviewed the completed implementation and found **no issues** ("nothing
+needs to change before the result commit").
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-200505-999693-prompt.md`
+- Result: `logs/codex-review/20260602-200505-999693-last-message.md`
+
+Codex confirmed the `Cargo.toml` deps are consistent with the existing objc2
+style (and that `CFCGTypes` does not pull in rasterization scope), that `Face`
+correctly owns `CFRetained<CTFont>` with the `CFString` kept alive through
+`with_name` and a null matrix, that `copy_table` uses the correct FourCharCode
+encoding and `to_vec`s into an owned `Vec`, that the `unsafe` blocks are
+narrowly scoped with accurate safety notes, and that the tests exercise the live
+CoreText path without binding to a specific font version. Scope is clean (no
+`getMetrics`/`bhed`/rasterization, no public C ABI change).
+
+## Conclusion
+
+Experiment 250 succeeds — the **first FFI-heavy slice works end-to-end**. The
+`objc2` CoreText bindings are wired, a `CTFont` is created and a raw OpenType
+table copied via `CTFontCopyTable` and parsed by the ported `Head` parser, all
+verified by a live `cargo test`. This de-risks the entire CoreText face/shaper
+line: the `CTFont` → `CTFontCopyTable` → parser path is proven.
+
+The next slice ports the full `Face::getMetrics` assembly: copy all four tables
+(`head` with the `bhed` fallback, `hhea`, `OS/2`, `post`) via the now-proven
+`copy_table`, then build a `FaceMetrics` — units-per-em from `head`; the
+ascent/descent/line-gap chain (prefer `OS/2` typo metrics when the
+`use_typo_metrics` bit is set, else `hhea`, else the `OS/2` win metrics);
+underline from `post` (with the broken-underline guard); cap/ex heights from
+`OS/2` — and feed it to the already-ported `Metrics::calc`. Glyph rasterization
+(CGBitmapContext → alpha bitmap → `Glyph` → atlas, adding `objc2-core-graphics`)
+follows as a separate slice.

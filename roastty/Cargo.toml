@@ -33,3 +33,13 @@ objc2-metal = { version = "0.3", default-features = false, features = [
     "MTLTypes",
     "MTLVertexDescriptor",
 ] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "CFBase",
+    "CFCGTypes",
+    "CFData",
+    "CFString",
+    "alloc",
+] }
+objc2-core-text = { version = "0.3", default-features = false, features = [
+    "CTFont",
+] }

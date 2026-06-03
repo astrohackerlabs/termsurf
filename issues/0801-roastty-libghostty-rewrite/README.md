@@ -946,7 +946,7 @@ are past the correctness-critical foundation.
 - [Experiment 249: Port the OpenType `os2` table parser (version-gated)](249-port-opentype-os2.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 250: CoreText `Face` FFI spike — create a `CTFont` and copy a table](250-coretext-face-table-spike.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
