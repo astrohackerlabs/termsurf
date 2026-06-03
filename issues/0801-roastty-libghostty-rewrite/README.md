@@ -1189,6 +1189,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 371: assembling one row's text cells](371-rebuild-row.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 372: rebuilding the whole viewport](372-rebuild-viewport.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
