@@ -1098,7 +1098,7 @@ are past the correctness-critical foundation.
 - [Experiment 325: font discovery — the CoreText descriptor](325-discovery-descriptor.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 326: font discovery — the collection match](326-discovery-collection-match.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

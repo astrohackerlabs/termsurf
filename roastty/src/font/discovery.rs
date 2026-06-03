@@ -4,18 +4,20 @@
 //! (and the `Variation` from `font/face.zig`). A [`Descriptor`] describes a font
 //! to search for; a [`Variation`] is a font-variation axis setting.
 //! [`Descriptor::to_core_text_descriptor`] turns one into a CoreText
-//! `CTFontDescriptor` (the query object); the `discover`/`discoverFallback`
-//! matching that consumes it is a later sub-area.
+//! `CTFontDescriptor` (the query object), and
+//! [`Descriptor::discover_descriptors`] runs the collection match to find
+//! candidate faces. The `Score` sort, the `DiscoverIterator`/`DeferredFace`, and
+//! `discoverFallback` are later sub-areas.
 
 use std::ffi::c_void;
 
 use objc2_core_foundation::{
-    CFCharacterSet, CFMutableDictionary, CFNumber, CFRange, CFRetained, CFString, CFType,
+    CFArray, CFCharacterSet, CFMutableDictionary, CFNumber, CFRange, CFRetained, CFString, CFType,
 };
 use objc2_core_text::{
     kCTFontCharacterSetAttribute, kCTFontFamilyNameAttribute, kCTFontSizeAttribute,
-    kCTFontStyleNameAttribute, kCTFontSymbolicTrait, kCTFontTraitsAttribute, CTFontDescriptor,
-    CTFontSymbolicTraits,
+    kCTFontStyleNameAttribute, kCTFontSymbolicTrait, kCTFontTraitsAttribute, CTFontCollection,
+    CTFontDescriptor, CTFontSymbolicTraits,
 };
 
 /// A font-variation axis setting (e.g. weight `wght`, slant `slnt`).
@@ -159,6 +161,45 @@ fn ct_ptr<T>(obj: &T) -> *const c_void {
     (obj as *const T).cast::<c_void>()
 }
 
+impl Descriptor {
+    /// Discover the candidate CoreText font descriptors matching this descriptor.
+    /// Faithful port of upstream `CoreText.discover` through
+    /// `copyMatchingDescriptors`: wrap the query descriptor in a one-element
+    /// `CFArray`, build a `CTFontCollection`, ask it for the matching descriptors,
+    /// and copy them into an owned (retained) `Vec`. The list is returned
+    /// **unsorted** — the `Score` sort that orders discovery results is a later
+    /// experiment. An empty result means no matches.
+    pub(crate) fn discover_descriptors(&self) -> Vec<CFRetained<CTFontDescriptor>> {
+        let ct_desc = self.to_core_text_descriptor();
+        let query = CFArray::from_retained_objects(&[ct_desc]);
+
+        // SAFETY: `query` is a live `CFArray` of font descriptors; the collection
+        // only reads it.
+        let collection =
+            unsafe { CTFontCollection::with_font_descriptors(Some(query.as_opaque()), None) };
+
+        // SAFETY: the collection only reads to produce its matching descriptors.
+        let Some(matches) = (unsafe { collection.matching_font_descriptors() }) else {
+            return Vec::new();
+        };
+
+        // The matching array's elements are `CTFontDescriptor`s.
+        // SAFETY: `CTFontCollectionCreateMatchingFontDescriptors` yields an array
+        // of `CTFontDescriptor`.
+        let matches: CFRetained<CFArray<CTFontDescriptor>> =
+            unsafe { CFRetained::cast_unchecked(matches) };
+
+        // `CFArray::get` retains each element (upstream retains explicitly).
+        let mut out = Vec::with_capacity(matches.len());
+        for i in 0..matches.len() {
+            if let Some(d) = matches.get(i) {
+                out.push(d);
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +310,57 @@ mod tests {
         // An all-default descriptor builds a valid (empty-attributes) descriptor
         // without panicking.
         let _ = Descriptor::default().to_core_text_descriptor();
+    }
+
+    /// Whether any candidate descriptor reports the given family name.
+    fn any_family(list: &[CFRetained<CTFontDescriptor>], name: &str) -> bool {
+        list.iter().any(|desc| {
+            // SAFETY: a static CF string key; the descriptor is live.
+            unsafe { desc.attribute(kCTFontFamilyNameAttribute) }
+                .and_then(|v| v.downcast::<CFString>().ok())
+                .is_some_and(|s| s.to_string() == name)
+        })
+    }
+
+    #[test]
+    fn discover_descriptors_finds_menlo() {
+        let d = Descriptor {
+            family: Some("Menlo".into()),
+            ..Default::default()
+        };
+        let list = d.discover_descriptors();
+        assert!(!list.is_empty(), "Menlo matches at least one face");
+        assert!(
+            any_family(&list, "Menlo"),
+            "a candidate has the Menlo family"
+        );
+    }
+
+    #[test]
+    fn discover_descriptors_monospace() {
+        // A traits-only search (monospace) goes through the collection and yields
+        // the system's monospace faces.
+        let d = Descriptor {
+            monospace: true,
+            ..Default::default()
+        };
+        let list = d.discover_descriptors();
+        assert!(!list.is_empty(), "monospace search yields faces");
+    }
+
+    #[test]
+    fn discover_descriptors_unknown_family() {
+        // CoreText may return nothing or a permissive fallback for an impossible
+        // family; either way no candidate should actually claim it, and the call
+        // must not panic.
+        let d = Descriptor {
+            family: Some("__no_such_font_family__".into()),
+            ..Default::default()
+        };
+        let list = d.discover_descriptors();
+        assert!(
+            !any_family(&list, "__no_such_font_family__"),
+            "no candidate claims the impossible family"
+        );
     }
 }

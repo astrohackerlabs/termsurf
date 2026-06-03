@@ -34,6 +34,7 @@ objc2-metal = { version = "0.3", default-features = false, features = [
     "MTLVertexDescriptor",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "CFArray",
     "CFBase",
     "CFCGTypes",
     "CFCharacterSet",
@@ -45,6 +46,7 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 ] }
 objc2-core-text = { version = "0.3", default-features = false, features = [
     "CTFont",
+    "CTFontCollection",
     "CTFontDescriptor",
     "CTFontTraits",
     "objc2-core-graphics",

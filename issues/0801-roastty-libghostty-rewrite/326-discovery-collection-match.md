@@ -157,3 +157,67 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-113258-462902-prompt.md`
 - Result: `logs/codex-review/20260603-113258-462902-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+The collection match lands.
+
+- `roastty/Cargo.toml`: enabled `CFArray` (`objc2-core-foundation`) and
+  `CTFontCollection` (`objc2-core-text`).
+- `roastty/src/font/discovery.rs`:
+  `Descriptor::discover_descriptors(&self) -> Vec<CFRetained<CTFontDescriptor>>`
+  builds the query descriptor, wraps it in a one-element `CFArray`
+  (`CFArray::from_retained_objects`), creates a `CTFontCollection`
+  (`with_font_descriptors`), asks for the matching descriptors
+  (`matching_font_descriptors`, `None → empty Vec`), casts the opaque match
+  array to `CFArray<CTFontDescriptor>` (`CFRetained::cast_unchecked`), and
+  copies each retained element (`get(i)`) into an owned `Vec`. The list is
+  returned **unsorted** (the `Score` sort is the next experiment).
+
+Tests: `discover_descriptors_finds_menlo` (non-empty; a candidate reads back the
+`"Menlo"` family), `discover_descriptors_monospace` (a monospace-trait search
+yields faces), `discover_descriptors_unknown_family` (no candidate claims an
+impossible family; no panic).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2703 passed, 0 failed (+3, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+Discovery can now produce the candidate descriptor list for a `Descriptor` — the
+descriptor → `CTFontCollection` → matching descriptors pipeline, faithful to
+upstream through `copyMatchingDescriptors`.
+
+The next discovery experiment is the **`Score` sort**
+(`sortMatchingDescriptors`/ `Score` — loading each candidate font, reading its
+glyph count, codepoint coverage, symbolic traits, and `head`-table bold/italic
+to rank the candidates), then the `DiscoverIterator`/`DeferredFace`, then
+`discoverFallback`/ `discoverCodepoint`, and finally the resolver's
+discovery-based fallback and codepoint overrides in `get_index`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It confirmed the pipeline faithfully ports upstream
+through `copyMatchingDescriptors` (query descriptor → one-element `CFArray` →
+`CTFontCollection` → matching descriptor array → owned retained `Vec`), and that
+deferring the `Score` sort is acceptable because the method documents the list
+as **unsorted candidates**. It confirmed ownership is correct:
+`CFArray::from_retained_objects` retains the query descriptor before the
+temporary drops; `CFRetained::cast_unchecked` to `CFArray<CTFontDescriptor>` is
+sound (CoreText documents that array as font descriptors); and `get(i)` already
+retains each descriptor, so pushing it directly avoids both double-retain and
+dangling references. It confirmed `Some(query.as_opaque())`/`None` match the
+binding signature, `None → empty Vec` is reasonable, and the tests are valid and
+non-flaky (family matching, trait-path matching, and unknown-family
+non-panic/non-claim, none depending on sorted order). No Optional findings.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-113613-763630-last-message.md`
