@@ -182,6 +182,8 @@ pub(crate) enum PresentationMode {
 pub(crate) enum AddError {
     /// There's no more room in the collection for this style.
     CollectionFull,
+    /// An alias's target index doesn't name a direct (non-alias) entry.
+    InvalidAliasTarget,
 }
 
 /// An error resolving an [`Index`] to an entry.
@@ -193,15 +195,27 @@ pub(crate) enum EntryError {
     IndexOutOfBounds,
 }
 
+/// A slot in a style's face list: either an owned [`Entry`] or an `Alias` to a
+/// face elsewhere in the collection. Faithful port of upstream `EntryOrAlias`,
+/// with the alias stored as an [`Index`] (upstream's `*Entry` pointer is not
+/// expressible in safe Rust; the behavior — resolving to the same target entry —
+/// is identical). Aliases always point to a direct `Entry`, never another alias.
+pub(crate) enum EntryOrAlias {
+    Entry(Entry),
+    Alias(Index),
+}
+
 /// A collection of font faces grouped by [`Style`].
 ///
 /// Faithful port of upstream `Collection`, scoped to **eagerly loaded** faces:
-/// the per-style face lists with `add`/`get_entry`/`get_face`. Deferred-face
-/// loading + discovery, per-entry scale factors, style aliasing, and codepoint
-/// resolution land in later experiments.
+/// the per-style face lists (entries or aliases) with `add`/`add_alias`/
+/// `get_entry`/`get_face` and codepoint resolution. Deferred-face loading +
+/// discovery, per-entry scale factors, and the `completeStyles` style-completion
+/// logic land in later experiments.
 pub(crate) struct Collection {
-    /// The per-style face lists, indexed by `Style as usize` (`0..=3`).
-    faces: [Vec<Entry>; 4],
+    /// The per-style face lists, indexed by `Style as usize` (`0..=3`). Each
+    /// slot is an owned entry or an alias to a face elsewhere in the collection.
+    faces: [Vec<EntryOrAlias>; 4],
 }
 
 /// True if a style's face list (of length `len`) can't accept another face
@@ -231,12 +245,52 @@ impl Collection {
         if list_is_full(idx) {
             return Err(AddError::CollectionFull);
         }
-        list.push(Entry { face, fallback });
+        list.push(EntryOrAlias::Entry(Entry { face, fallback }));
         Ok(Index::new(style, idx as u16))
     }
 
+    /// Add an `alias` of `style` pointing at `target`, returning its [`Index`].
+    /// `target` must name a **direct** entry (not a special / out-of-bounds /
+    /// alias index), preserving the invariant that aliases never chain.
+    pub(crate) fn add_alias(&mut self, style: Style, target: Index) -> Result<Index, AddError> {
+        // Validate the target is a direct entry by inspecting it directly (not
+        // via `get_entry`, which would follow an alias).
+        if target.special_kind().is_some() {
+            return Err(AddError::InvalidAliasTarget);
+        }
+        let tlist = &self.faces[target.style() as usize];
+        match tlist.get(target.idx() as usize) {
+            Some(EntryOrAlias::Entry(_)) => {}
+            _ => return Err(AddError::InvalidAliasTarget),
+        }
+
+        let list = &mut self.faces[style as usize];
+        let idx = list.len();
+        if list_is_full(idx) {
+            return Err(AddError::CollectionFull);
+        }
+        list.push(EntryOrAlias::Alias(target));
+        Ok(Index::new(style, idx as u16))
+    }
+
+    /// Resolve a list slot to its underlying entry, following an alias (one step
+    /// — aliases never point to aliases).
+    fn entry_of<'a>(&'a self, eoa: &'a EntryOrAlias) -> &'a Entry {
+        match eoa {
+            EntryOrAlias::Entry(e) => e,
+            EntryOrAlias::Alias(target) => {
+                match &self.faces[target.style() as usize][target.idx() as usize] {
+                    EntryOrAlias::Entry(e) => e,
+                    EntryOrAlias::Alias(_) => {
+                        unreachable!("alias points to another alias")
+                    }
+                }
+            }
+        }
+    }
+
     /// Get the entry for an index, or the faithful error for a special index or
-    /// an out-of-bounds index.
+    /// an out-of-bounds index. Follows an alias to its target entry.
     pub(crate) fn get_entry(&self, index: Index) -> Result<&Entry, EntryError> {
         if index.special_kind().is_some() {
             return Err(EntryError::SpecialHasNoFace);
@@ -246,7 +300,7 @@ impl Collection {
         if i >= list.len() {
             return Err(EntryError::IndexOutOfBounds);
         }
-        Ok(&list[i])
+        Ok(self.entry_of(&list[i]))
     }
 
     /// Get the loaded face for an index. (Deferred-face loading is deferred.)
@@ -263,8 +317,8 @@ impl Collection {
         p_mode: PresentationMode,
     ) -> Option<Index> {
         let list = &self.faces[style as usize];
-        for (i, entry) in list.iter().enumerate() {
-            if entry.has_codepoint(cp, p_mode) {
+        for (i, eoa) in list.iter().enumerate() {
+            if self.entry_of(eoa).has_codepoint(cp, p_mode) {
                 return Some(Index::new(style, i as u16));
             }
         }
@@ -279,7 +333,7 @@ impl Collection {
         if i >= list.len() {
             return false;
         }
-        list[i].has_codepoint(cp, p_mode)
+        self.entry_of(&list[i]).has_codepoint(cp, p_mode)
     }
 }
 
@@ -514,5 +568,63 @@ mod tests {
             'M' as u32,
             PresentationMode::Any
         ));
+    }
+
+    #[test]
+    fn alias_resolves_to_target() {
+        let mut c = menlo_collection(); // Menlo at {Regular, 0}
+        let italic = c
+            .add_alias(Style::Italic, Index::new(Style::Regular, 0))
+            .expect("alias italic -> regular");
+        assert_eq!(italic, Index::new(Style::Italic, 0));
+
+        // The alias resolves to the Menlo face and entry.
+        assert!(!c.get_face(italic).expect("aliased face").has_color());
+        assert!(!c.get_entry(italic).unwrap().fallback());
+        assert!(c.has_codepoint(italic, 'M' as u32, PresentationMode::Any));
+    }
+
+    #[test]
+    fn get_index_follows_alias() {
+        let mut c = menlo_collection();
+        c.add_alias(Style::Italic, Index::new(Style::Regular, 0))
+            .unwrap();
+        // The italic alias position resolves the codepoint through the target.
+        assert_eq!(
+            c.get_index('M' as u32, Style::Italic, PresentationMode::Any),
+            Some(Index::new(Style::Italic, 0))
+        );
+        // Bold has no entry or alias.
+        assert_eq!(
+            c.get_index('M' as u32, Style::Bold, PresentationMode::Any),
+            None
+        );
+    }
+
+    #[test]
+    fn add_alias_rejects_bad_target() {
+        // Target doesn't exist (empty collection).
+        let mut c = Collection::new();
+        assert_eq!(
+            c.add_alias(Style::Italic, Index::new(Style::Regular, 0)),
+            Err(AddError::InvalidAliasTarget)
+        );
+
+        // Target is itself an alias -> rejected (aliases must point to a direct
+        // entry, so they never chain).
+        let mut c = menlo_collection();
+        let italic = c
+            .add_alias(Style::Italic, Index::new(Style::Regular, 0))
+            .unwrap();
+        assert_eq!(
+            c.add_alias(Style::Bold, italic),
+            Err(AddError::InvalidAliasTarget)
+        );
+
+        // A special target is rejected too.
+        assert_eq!(
+            c.add_alias(Style::Bold, Index::special(Special::Sprite)),
+            Err(AddError::InvalidAliasTarget)
+        );
     }
 }

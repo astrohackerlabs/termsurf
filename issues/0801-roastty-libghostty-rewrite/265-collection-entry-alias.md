@@ -154,3 +154,67 @@ Review artifacts:
   `…-220554-984710-prompt.md`
 - Results: `logs/codex-review/20260602-220501-861624-last-message.md`,
   `…-220554-984710-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`collection.rs` now stores `[Vec<EntryOrAlias>; 4]` (`EntryOrAlias::Entry` |
+`Alias(Index)`). The private `entry_of` resolver follows an alias one step to
+its target `Entry`; `get_entry`/`get_index`/`has_codepoint` route through it so
+aliases participate transparently. `add` pushes an `Entry`; `add_alias`
+validates the target is a **direct** entry by inspecting `faces[target][...]`
+directly (rejecting special / out-of-bounds / alias targets with the new
+`AddError::InvalidAliasTarget`), then pushes the `Alias` with the
+`CollectionFull` guard. (`entry_of` needed an explicit shared lifetime `'a`
+since the alias arm returns from `self`.)
+
+Tests (live CoreText):
+
+- `alias_resolves_to_target` — an `Italic` alias to `{Regular,0}` resolves to
+  the Menlo face/entry and answers `has_codepoint('M', Any)`.
+- `get_index_follows_alias` — `get_index('M', Italic, Any)` returns the alias
+  position `{Italic,0}`; `Bold` (no entry/alias) is `None`.
+- `add_alias_rejects_bad_target` — a nonexistent target, an alias target, and a
+  special target are all rejected with `InvalidAliasTarget`.
+- The existing `add`/`get`/resolution tests still pass unchanged.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty collection` → 19 passed, 0 failed.
+- `cargo test -p roastty` → 2402 passed, 0 failed (no regressions; +3).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The Collection's per-style lists now hold entries or aliases, with transparent
+alias resolution through the whole query path. This is the storage
+`completeStyles` needs. The next experiment ports `completeStyles` itself: when
+a style has no entry, alias it to the first regular text face (or, where
+supported, synthesize — synthetic bold is already ported as
+`Face::new_synthetic_bold`; synthetic italic needs a CoreText oblique-matrix
+face, a small new FFI piece). Above that remain the per-entry `scale_factor` +
+`load_options`/`setSize` normalization, the `DeferredFace` + `discovery`
+lazy-loading sub-area, the `CodepointResolver`, the shaper, and the Nerd Font
+attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-220915-750152-prompt.md`
+- Result: `logs/codex-review/20260602-220915-750152-last-message.md`
+
+Codex confirmed `add_alias` enforces the direct-entry invariant (inspecting
+`faces[target][...]` directly and rejecting special / out-of-bounds / alias
+targets), so `entry_of`'s one-step resolution can't recurse into an alias; that
+`get_entry`/`get_index`/`has_codepoint` resolve aliases consistently with
+`get_index` returning the alias slot's `Index` (not the target's); that the
+shared lifetime on `entry_of` is sound for the immutable borrows (including
+during `get_index` iteration); and that the tests cover live resolution,
+alias-position lookup, and the nonexistent / alias / special target rejections.
