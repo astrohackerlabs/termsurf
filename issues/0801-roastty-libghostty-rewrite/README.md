@@ -1187,6 +1187,8 @@ are past the correctness-critical foundation.
   Claude/Codex/Codex
 - [Experiment 370: exposing foreground color resolution](370-resolve-fg.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 371: assembling one row's text cells](371-rebuild-row.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
