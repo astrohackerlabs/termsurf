@@ -1128,7 +1128,7 @@ are past the correctness-critical foundation.
 - [Experiment 340: the shaper's non-LTR run sort](340-shaper-nonltr-sort.md) —
   **Pass** · Claude/Codex/Codex
 - [Experiment 341: the shaper's cluster→cell mapping](341-shaper-cluster-cell-map.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

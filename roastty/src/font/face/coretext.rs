@@ -265,20 +265,34 @@ impl Face {
 
     /// Shape a run of Unicode codepoints into positioned glyphs with this face,
     /// via CoreText (`CFAttributedString` → `CTLine` → `CTRun`). Faithful port of
-    /// the core of upstream `Shaper.shape`: the glyph + cluster (string-index)
-    /// extraction. Each [`shape::Cell`]'s `x` is the source UTF-16 string index
-    /// (the advance-based positioning, the special-font path, RTL sorting, and the
-    /// glyph offsets are deferred to the full `Shaper`).
+    /// the core of upstream `Shaper.shape`: each [`shape::Cell`]'s `x` is the
+    /// glyph's cluster (its source cell), and `x_offset`/`y_offset` are the
+    /// glyph's nudge from the cell origin. The cluster source is the input scalar
+    /// index until the `RunIterator`/terminal grid lands, and the ligature/mark
+    /// heuristic and the special-font path are deferred to the full `Shaper`.
     pub(crate) fn shape_codepoints(&self, codepoints: &[u32]) -> Vec<shape::Cell> {
         if codepoints.is_empty() {
             return Vec::new();
         }
-        // Build the run's string. The CoreText string indices index into its
-        // UTF-16 storage, which a `CFString` from this `String` preserves.
-        let text: String = codepoints
-            .iter()
-            .filter_map(|&c| char::from_u32(c))
-            .collect();
+        // Build the run's string and, alongside it, a reverse lookup from each
+        // UTF-16 unit back to its cluster (the source cell). The CoreText string
+        // indices index into the UTF-16 storage a `CFString` from this `String`
+        // preserves; pushing each scalar's cluster once per UTF-16 unit keeps
+        // `clusters` aligned with those indices and lets both halves of a
+        // surrogate pair share one cluster (mirroring upstream's padding). Until
+        // the `RunIterator`/terminal grid lands, the cluster is the input scalar
+        // index.
+        let mut text = String::new();
+        let mut clusters: Vec<u32> = Vec::new();
+        for (i, &c) in codepoints.iter().enumerate() {
+            let Some(ch) = char::from_u32(c) else {
+                continue;
+            };
+            text.push(ch);
+            for _ in 0..ch.len_utf16() {
+                clusters.push(i as u32);
+            }
+        }
         if text.is_empty() {
             return Vec::new();
         }
@@ -311,8 +325,14 @@ impl Face {
 
         let mut cells = Vec::new();
         // The pen's x: the accumulated advance width across the whole line (all
-        // runs), against which each glyph's position gives its `x_offset`.
+        // runs) — upstream's `run_offset.x`.
         let mut pen: f64 = 0.0;
+        // The current cell's cluster and the pen-x captured at its start —
+        // upstream's `cell_offset`. Line-wide (persists across runs). `x_offset`
+        // is measured from `cell_x`, not the running pen, so a multi-glyph cell's
+        // later glyphs are offset from the cell origin.
+        let mut cell_cluster: u32 = 0;
+        let mut cell_x: f64 = 0.0;
         // CoreText, despite an enforced LTR embedding level, may emit runs that
         // are non-monotonic or right-to-left, leaving `cells` out of grid order.
         // If any run carries either status, we sort the buffer by `x` at the end.
@@ -334,9 +354,20 @@ impl Face {
             let positions = run_positions(&run, n);
             let advances = run_advances(&run, n);
             for k in 0..n {
+                // Map the glyph back to its cluster (cell). On a new cluster,
+                // reset the cell origin to the current pen. (Exp 341: this reset
+                // is unconditional — faithful for monotonic forward runs; the
+                // ligature/mark heuristic is deferred to Exp 342.)
+                let idx = indices[k].max(0) as usize;
+                debug_assert!(idx < clusters.len());
+                let cluster = clusters.get(idx).copied().unwrap_or(0);
+                if cell_cluster != cluster {
+                    cell_cluster = cluster;
+                    cell_x = pen;
+                }
                 cells.push(shape::Cell {
-                    x: indices[k].max(0) as u16,
-                    x_offset: (positions[k].x - pen).round() as i16,
+                    x: cell_cluster as u16,
+                    x_offset: (positions[k].x - cell_x).round() as i16,
                     y_offset: positions[k].y.round() as i16,
                     glyph_index: glyphs[k] as u32,
                 });
@@ -1743,7 +1774,10 @@ mod tests {
                 face.glyph_index(cp).expect("a glyph"),
                 "cell {i} shapes to the cmap glyph"
             );
-            assert_eq!(cells[i].x, i as u16, "x is the source string index");
+            assert_eq!(
+                cells[i].x, i as u16,
+                "x is the cluster (== index for ASCII)"
+            );
         }
     }
 
@@ -1813,6 +1847,39 @@ mod tests {
         assert!(
             cells.windows(2).all(|w| w[0].x <= w[1].x),
             "the cell x positions are non-decreasing after the non-LTR sort"
+        );
+    }
+
+    #[test]
+    fn shape_clusters_monospace() {
+        // Each ASCII scalar is its own cluster/cell: x = 0, 1, 2 and, since the
+        // cell origin resets to the pen at each, every x_offset is 0.
+        let face = Face::new("Menlo", 24.0);
+        let cells = face.shape_codepoints(&['A' as u32, 'B' as u32, 'C' as u32]);
+        assert_eq!(cells.len(), 3);
+        for (i, c) in cells.iter().enumerate() {
+            assert_eq!(c.x, i as u16, "cell {i} maps to its cluster");
+            assert_eq!(c.x_offset, 0, "cell {i} sits at the cell origin");
+        }
+    }
+
+    #[test]
+    fn shape_cluster_collapses_surrogate() {
+        // 'A' (cluster 0), U+1D400 𝐀 (non-BMP, cluster 1, UTF-16 units 1–2), then
+        // 'B' (cluster 2, UTF-16 unit 3). CoreText assigns 'B' string index 3; the
+        // cluster table collapses the surrogate pair so 'B' maps to cluster 2 —
+        // NOT the raw UTF-16 index 3. We find the 'B' cell by its cmap glyph (the
+        // run order may vary with the host's font for 𝐀).
+        let face = Face::new("Menlo", 24.0);
+        let b_glyph = face.glyph_index('B' as u32).expect("a glyph for 'B'") as u32;
+        let cells = face.shape_codepoints(&['A' as u32, 0x1D400, 'B' as u32]);
+        let b_cell = cells
+            .iter()
+            .find(|c| c.glyph_index == b_glyph)
+            .expect("the 'B' cell");
+        assert_eq!(
+            b_cell.x, 2,
+            "'B' maps to its cluster (2), collapsing the surrogate pair, not the UTF-16 index (3)"
         );
     }
 }

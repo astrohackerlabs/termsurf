@@ -222,3 +222,78 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-131919-793042-prompt.md` (design)
 - Result: `logs/codex-review/20260603-131919-793042-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The shaper now maps each glyph to its cell.
+
+- `roastty/src/font/face/coretext.rs`: `shape_codepoints` builds `text` and a
+  parallel `clusters: Vec<u32>` in lockstep — pushing each valid scalar's input
+  index once per `ch.len_utf16()` (`1` BMP / `2` surrogate) — so `clusters` is
+  indexed by the same UTF-16 offset CoreText reports and both halves of a
+  surrogate pair share the scalar's cluster (mirroring upstream's `addCodepoint`
+  padding `{codepoint: 0, cluster}`). It tracks line-wide
+  `cell_cluster`/`cell_x` (upstream's `cell_offset`, init `{0, 0.0}`), and per
+  glyph maps `cluster = clusters[idx]` (with
+  `debug_assert!(idx < clusters.len())`), resets `cell_cluster`/`cell_x = pen`
+  on a new cluster (unconditional — faithful for monotonic runs), and emits
+  `Cell { x: cell_cluster, x_offset: round(position.x − cell_x), y_offset: round(position.y), glyph_index }`.
+  The `shape_codepoints` doc comment and the `shape_ascii_monospace` assertion
+  comment were updated (`x` is now the cluster, `== index` for ASCII).
+
+Tests: `shape_clusters_monospace` (Menlo `"ABC"` → `x = 0, 1, 2`, all
+`x_offset == 0`), `shape_cluster_collapses_surrogate` (`['A', 0x1D400, 'B']` →
+the cell with `glyph_index == face.glyph_index('B')` has `x == 2`, the cluster,
+**not** `3`, the raw UTF-16 index — confirming the surrogate pair collapses to
+one cell). The surrogate-collapse test passes on the host.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2748 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+`Shaper.shape`'s cluster→cell positioning is ported for monotonic runs: glyphs
+map back to their cluster (cell) through the UTF-16-indexed `clusters` table,
+`Cell.x` is the cluster (collapsing surrogate pairs), and `x_offset` is measured
+from the cell origin captured at each cell's start. The surrogate-collapse test
+proves the cluster mapping is no longer the raw UTF-16 index.
+
+The remaining shaper work: the **ligature/mark heuristic** (Exp 342 — the
+_conditional_ `cell_offset` reset via `is_first_codepoint_in_cluster` and
+`!is_after_glyph_from_current_or_next_clusters`, plus the `run_offset.cluster`
+max-tracking it consumes); the **special-font** fast path (codepoint == glyph);
+and the `Shaper` struct with its run state, caching, and the **`RunIterator`**
+over terminal cells (which supplies the real grid clusters). The deferred
+**variation-axis** `score()` refinement and **variations** application also
+remain.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It confirmed: `clusters` is built in lockstep with
+`text` (one entry per UTF-16 unit) so CoreText string indices map back to the
+intended cluster, and surrogate pairs sharing the scalar index mirror upstream's
+dummy `{codepoint: 0, cluster}` padding; `cell_cluster = 0`/`cell_x = 0.0`
+matches upstream's `cell_offset = .{}`, the first cluster `0` correctly does not
+reset (already in the right state), and later monotonic forward clusters reset
+to the current `pen` matching upstream; `x_offset = position.x − cell_x`
+faithfully measures from the captured cell origin, not the running pen;
+`Cell.x = cell_cluster as u16` matches upstream's
+`@intCast(cell_offset.cluster)`; and the surrogate-collapse test (finding `'B'`
+by glyph id) is the right assertion, avoiding run-order/fallback noise. The only
+non-blocking caveat — that invalid `u32` values before valid scalars
+intentionally leave gaps in cluster values while the UTF-16 lookup stays aligned
+(skipped scalars add neither text nor cluster entries) — matches the documented
+"input scalar index" stand-in, and the real path is fed valid codepoints from
+the run iterator. The deferred scope (ligature heuristic, `run_offset.cluster`,
+special-font, `Shaper`/`RunIterator`, variations) is intact.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-132247-241631-last-message.md`
