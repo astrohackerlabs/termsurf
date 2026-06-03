@@ -1067,6 +1067,8 @@ are past the correctness-critical foundation.
   Claude/Codex/Codex
 - [Experiment 310: the arc primitive + the dotted underline](310-dotted-underline.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 311: Canvas::triangle + the solid powerline triangles (E0B0–E0BE)](311-powerline-triangles.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
