@@ -1160,7 +1160,7 @@ are past the correctness-critical foundation.
 - [Experiment 356: the run iterator's core grouping loop](356-runiter-next-core.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 357: the run iterator's spacer skip and selection/cursor breaks](357-runiter-breaks.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

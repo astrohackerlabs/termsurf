@@ -4,9 +4,9 @@
 //! shaping input ([`RunOptions`]/[`RunCell`]) and output ([`TextRun`]/[`run_hash`]),
 //! the per-cell decision helpers ([`font_style`]/[`is_bad_ligature_break`]/
 //! [`presentation_for_grapheme`]/[`comparable_style`]), and [`RunIterator`]'s
-//! common-path grouping loop (narrow cells, no selection/cursor). The spacer skip
-//! and the selection/cursor breaks, and the renderer code that builds [`RunCell`]s
-//! from terminal cells, are later sub-areas.
+//! cell-walking grouping loop (with the trailing-empty trim, the invisible/spacer
+//! skips, and the selection/cursor/style/ligature breaks). The renderer code that
+//! builds [`RunCell`]s from terminal cells is a later sub-area.
 
 use std::hash::{Hash, Hasher};
 
@@ -14,6 +14,7 @@ use crate::font::codepoint_resolver::CodepointResolver;
 use crate::font::collection::Index;
 use crate::font::shape::Codepoint;
 use crate::font::{Presentation, Style};
+use crate::terminal::kitty::graphics_unicode::PLACEHOLDER;
 use crate::terminal::style::{Color, Style as TermStyle};
 
 /// The position-independent content hash of a run — a shaping-cache key. Hashes
@@ -212,20 +213,39 @@ impl<'a> RunIterator<'a> {
         if self.i >= self.max {
             return None;
         }
-        // This slice handles the common path only; Exp 357 adds these.
-        debug_assert!(self.opts.selection.is_none() && self.opts.cursor_x.is_none());
         let start = self.i;
         let style = cells[start].style;
         let mut codepoints: Vec<Codepoint> = Vec::new();
-        let mut current_font: Option<Index> = None;
+        // The run's font, the default index until set at the first cell (matching
+        // upstream's `Collection.Index = .{}` — so a run that begins on a skipped
+        // spacer keeps a following default-font cell rather than breaking).
+        let mut current_font = Index::new(Style::Regular, 0);
 
         let mut j = start;
         while j < self.max {
             let cell = &cells[j];
-            // Spacers are out of scope for this slice (Exp 357).
-            debug_assert!(matches!(cell.wide, Wide::Narrow | Wide::Wide));
             // A run-relative cluster (a column count fits `u16`, so `u32` is safe).
             let cluster = u32::try_from(j - start).expect("a run cluster fits u32");
+
+            // Selection break: split at the selection's start column and just past
+            // its end. Compare the loop index (`usize`) to the widened bounds.
+            if let Some(bounds) = self.opts.selection {
+                if j > start {
+                    if bounds[0] > 0 && j == usize::from(bounds[0]) {
+                        break;
+                    }
+                    if bounds[1] > 0 && j == usize::from(bounds[1]) + 1 {
+                        break;
+                    }
+                }
+            }
+
+            // Spacer skip: a wide cell's padding carries no glyph (but still
+            // advances the index, preserving the cluster gap).
+            if matches!(cell.wide, Wide::SpacerHead | Wide::SpacerTail) {
+                j += 1;
+                continue;
+            }
 
             if j > start {
                 let prev = &cells[j - 1];
@@ -251,11 +271,26 @@ impl<'a> RunIterator<'a> {
             } else {
                 None
             };
+
+            // Cursor break (non-grapheme cells only): isolate the cursor cell so a
+            // row with a cursor has up to three runs (before / exactly / after).
+            if !cell.has_grapheme() {
+                if let Some(cursor_x) = self.opts.cursor_x {
+                    let cursor = usize::from(cursor_x);
+                    if start == cursor && j == start + 1 {
+                        break;
+                    }
+                    if start < cursor && j == cursor {
+                        break;
+                    }
+                }
+            }
+
             let (idx, fallback) = self.resolve_font(cell, fstyle, presentation);
             if j == start {
-                current_font = Some(idx);
+                current_font = idx;
             }
-            if Some(idx) != current_font {
+            if idx != current_font {
                 break; // font change → run ends (cell `j` starts the next run)
             }
 
@@ -263,6 +298,16 @@ impl<'a> RunIterator<'a> {
                 // A fallback substitutes a single codepoint, not the grapheme.
                 codepoints.push(Codepoint {
                     codepoint: cp,
+                    cluster,
+                });
+                j += 1;
+                continue;
+            }
+            // A kitty unicode placeholder shapes as a blank space (it is a
+            // positioning marker for an image, not a glyph).
+            if cell.codepoint == PLACEHOLDER {
+                codepoints.push(Codepoint {
+                    codepoint: ' ' as u32,
                     cluster,
                 });
                 j += 1;
@@ -290,7 +335,7 @@ impl<'a> RunIterator<'a> {
             j += 1;
         }
 
-        let font_index = current_font.expect("a non-empty run resolves a font");
+        let font_index = current_font;
         let cell_count = u16::try_from(j - start).expect("a run's cell count fits u16");
         let offset = u16::try_from(start).expect("a run's column offset fits u16");
         self.i = j;
@@ -307,16 +352,23 @@ impl<'a> RunIterator<'a> {
 
     /// Resolve a cell's font index, with upstream's fallback chain: the grapheme's
     /// own font, else `U+FFFD`, else space. Returns the index and, for a fallback,
-    /// the substituted codepoint.
+    /// the substituted codepoint. A kitty placeholder resolves like an empty cell
+    /// (a space), matching upstream `indexForCell`.
     fn resolve_font(
         &mut self,
         cell: &RunCell,
         fstyle: Style,
         p: Option<Presentation>,
     ) -> (Index, Option<u32>) {
-        if let Some(idx) =
-            self.resolver
-                .index_for_grapheme(cell.codepoint, &cell.graphemes, fstyle, p)
+        // The placeholder is an image-positioning marker; resolve it as a space.
+        let primary_cp = if cell.codepoint == PLACEHOLDER {
+            0
+        } else {
+            cell.codepoint
+        };
+        if let Some(idx) = self
+            .resolver
+            .index_for_grapheme(primary_cp, &cell.graphemes, fstyle, p)
         {
             return (idx, None);
         }
@@ -534,6 +586,13 @@ mod tests {
             .collect()
     }
 
+    fn with_wide(codepoint: u32, wide: Wide) -> RunCell {
+        RunCell {
+            wide,
+            ..narrow(codepoint)
+        }
+    }
+
     #[test]
     fn next_groups_one_run() {
         let opts = RunOptions {
@@ -611,6 +670,120 @@ mod tests {
         // An empty row.
         let empty = RunOptions::default();
         assert!(RunIterator::new(&empty, &mut r).next().is_none());
+    }
+
+    #[test]
+    fn next_skips_spacer() {
+        // A wide char, its spacer-tail padding, then a narrow cell: one run; the
+        // spacer at index 1 emits nothing but its cluster gap remains (A → 2).
+        let opts = RunOptions {
+            cells: vec![
+                with_wide('W' as u32, Wide::Wide),
+                with_wide(0, Wide::SpacerTail),
+                narrow('A' as u32),
+            ],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let out = it.next().expect("a run");
+        assert_eq!(out.run.cells, 3);
+        assert_eq!(cps(&out), vec![('W' as u32, 0), ('A' as u32, 2)]);
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_breaks_on_selection() {
+        // "ABCD" with selection [1, 2] breaks at j==1 and at j==3 (= bounds[1]+1).
+        let opts = RunOptions {
+            cells: vec![
+                narrow('A' as u32),
+                narrow('B' as u32),
+                narrow('C' as u32),
+                narrow('D' as u32),
+            ],
+            selection: Some([1, 2]),
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        assert_eq!(cps(&it.next().expect("run 1")), vec![('A' as u32, 0)]);
+        assert_eq!(
+            cps(&it.next().expect("run 2")),
+            vec![('B' as u32, 0), ('C' as u32, 1)]
+        );
+        assert_eq!(cps(&it.next().expect("run 3")), vec![('D' as u32, 0)]);
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_breaks_on_cursor_exact() {
+        // Cursor at column 0: the cursor cell is its own run.
+        let opts = RunOptions {
+            cells: vec![narrow('A' as u32), narrow('B' as u32)],
+            cursor_x: Some(0),
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        assert_eq!(cps(&it.next().expect("run 1")), vec![('A' as u32, 0)]);
+        assert_eq!(cps(&it.next().expect("run 2")), vec![('B' as u32, 0)]);
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_breaks_on_cursor_before() {
+        // Cursor at column 1: the run breaks when reaching the cursor.
+        let opts = RunOptions {
+            cells: vec![narrow('A' as u32), narrow('B' as u32)],
+            cursor_x: Some(1),
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        assert_eq!(cps(&it.next().expect("run 1")), vec![('A' as u32, 0)]);
+        assert_eq!(cps(&it.next().expect("run 2")), vec![('B' as u32, 0)]);
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_leading_spacer_default_font() {
+        // A leading spacer then 'A' (which resolves to the default Menlo regular
+        // face): one run — the spacer is skipped but does not break the run.
+        let opts = RunOptions {
+            cells: vec![with_wide(0, Wide::SpacerTail), narrow('A' as u32)],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let out = it.next().expect("a run");
+        assert_eq!(out.run.cells, 2);
+        assert_eq!(
+            cps(&out),
+            vec![('A' as u32, 1)],
+            "the spacer does not break"
+        );
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_placeholder_is_space() {
+        // A kitty unicode placeholder shapes as a blank space (resolved via the
+        // space font, not U+FFFD), so it groups with the surrounding text.
+        let opts = RunOptions {
+            cells: vec![narrow('A' as u32), narrow(PLACEHOLDER), narrow('B' as u32)],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let out = it.next().expect("a run");
+        assert_eq!(out.run.cells, 3, "the placeholder joins the run");
+        assert_eq!(
+            cps(&out),
+            vec![('A' as u32, 0), (' ' as u32, 1), ('B' as u32, 2)],
+            "the placeholder shapes as a space"
+        );
+        assert!(it.next().is_none());
     }
 
     #[test]

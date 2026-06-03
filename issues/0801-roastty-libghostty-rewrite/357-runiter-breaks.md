@@ -230,3 +230,74 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-163751-955802-prompt.md` (design)
 - Result: `logs/codex-review/20260603-163751-955802-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`RunIterator.next()` is now a complete faithful port.
+
+- `roastty/src/font/run.rs`: added the **selection break** (`bounds[0]` /
+  `bounds[1] + 1` at `j > start`, widened `usize` comparisons), the **spacer
+  skip** (`SpacerHead`/`SpacerTail` → advance the index, emit nothing), and the
+  **cursor break** (exactly/before the cursor, non-grapheme only, after
+  presentation); changed `current_font` to an `Index` initialized to
+  `Index::new(Style::Regular, 0)` (upstream's `.{}`), set at `j == start`; and —
+  per the completion review — added the **kitty placeholder** handling
+  (`resolve_font` resolves a placeholder as space; accumulation emits a space
+  and continues). Removed the common-path `debug_assert!`s.
+
+Tests: `next_skips_spacer` (`[W, spacer, A]` → one 3-cell run, `[(W,0),(A,2)]`),
+`next_breaks_on_selection` (`"ABCD"` sel `[1,2]` → `[A]`/`[B,C]`/`[D]`),
+`next_breaks_on_cursor_exact` / `next_breaks_on_cursor_before` (`"AB"` → two
+runs), `next_leading_spacer_default_font` (`[spacer, A]` → one run `[(A,1)]`),
+`next_placeholder_is_space` (`[A, placeholder, B]` → `[(A,0),(space,1),(B,2)]`).
+All pass; the existing `next_*`/`run` tests unchanged.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2803 passed, 0 failed (+6, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+`RunIterator.next()` is **complete** relative to upstream over the modeled
+`RunCell` input — every break (selection, spacer, style, ligature, cursor,
+font), the fallback chain, the kitty placeholder, the default-`current_font`
+behavior, the trailing-empty trim, the invisible skip, the codepoint
+accumulation, and the run hash. The libghostty **shaping subsystem is
+functionally complete**: a row of `RunCell`s shapes to `TextRun`s + glyph
+streams end to end.
+
+The remaining work is the renderer-side integration: building
+`RunCell`s/`RunOptions` from roastty's `terminal/page.rs` cells (extracting each
+cell's codepoint / graphemes / style / wide-kind across the `pub(super)`
+boundary) so the pipeline runs live against real terminal rows, and wiring the
+resulting `TextRun`s + glyphs into the renderer's draw path.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result. The **first** result
+review found **one Required finding** — the kitty placeholder branch was missing
+(upstream treats the placeholder as space in both resolution and accumulation),
+so `next()` was not yet a complete port. **Fixed:** imported
+`crate::terminal::kitty::graphics_unicode::PLACEHOLDER`; `resolve_font` maps a
+placeholder to `0` so it resolves through the space path; and the accumulation
+emits a space and `continue`s (after the fallback branch, before the primary
+push) — with a `next_placeholder_is_space` test added.
+
+The **re-review** found **no Required findings**: it confirmed both placeholder
+branches match upstream (resolve as space; shape as blank), and that the
+selection, spacer, cursor, default-`current_font`, and common-path behavior
+remain faithful — `RunIterator::next` is now complete for the modeled `RunCell`
+input. It ran `cargo test -p roastty next_` (all 32 matching tests passed,
+including `next_placeholder_is_space`).
+
+Review artifacts:
+
+- Result review (placeholder finding):
+  `logs/codex-review/20260603-164245-555750-last-message.md`
+- Completion re-review:
+  `logs/codex-review/20260603-164613-879148-last-message.md`
