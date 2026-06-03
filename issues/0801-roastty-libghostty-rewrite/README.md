@@ -73,63 +73,87 @@ The rewrite includes, at minimum:
   edge cases
 - the renamed macOS Swift frontend integration once the Rust library has enough
   behavior to host it
-- Rust reimplementations of the third-party libraries Ghostty depends on (see
-  **Reimplemented dependencies** below) — Roastty does not vendor or link
-  Ghostty's Zig or C packages
+- Rust replacements for the third-party libraries Ghostty depends on (see
+  **Dependency replacements** below) — Roastty does not vendor or link Ghostty's
+  Zig or C packages; each is provided in Rust (a crate or a from-scratch port
+  per the hybrid policy)
 
-### Reimplemented dependencies
+### Dependency replacements
 
 Roastty does **not** vendor, link, or carry forward Ghostty's third-party Zig or
-C packages. The capability each provides is **reimplemented in Rust** as
-first-class Roastty code, in scope for this issue. Each library is its own
-subsystem slice under the standard experiment process (design → review →
-implement → test → review). A mature Rust crate may stand in for a library
-**only** where an experiment documents it as a faithful, well-maintained
-equivalent; otherwise the default is a Roastty reimplementation.
+C packages. The capability each provides is **provided in Rust**, in scope for
+this issue. How that capability is provided follows a **hybrid policy by
+layer**:
+
+- **Crate-eligible (commodity primitives).** Where a component is a well-solved,
+  general-purpose primitive with **no byte-for-byte requirement** — compression,
+  image decoding, UTF-8 validation, regex, fuzzy matching, an event loop — a
+  mature, well-maintained Rust crate may be used. Behavioral faithfulness (it
+  decodes the same image, matches the same URL) is the bar, not bit-identical
+  output.
+- **From-scratch (identity / fidelity).** Where a component is part of Ghostty's
+  own behavior/identity, or is constrained by a **fidelity test** (a golden
+  fixture that demands byte-exact output), it is reimplemented as first-class
+  Roastty code. Examples: the sprite path rasterizer (its glyph PNGs are
+  compared byte-for-byte) and the Unicode tables (must match Ghostty's exact
+  property/grapheme semantics).
+
+So **byte-for-byte equivalence with the original C/Zig is required only where a
+test encodes it**; otherwise correct behavior suffices. Each dependency's
+crate-vs-from-scratch choice (and, for a crate, which one) is decided and
+recorded in that dependency's own experiment, under the standard process (design
+→ review → implement → test → review).
 
 The macOS-only constraint above still applies: dependencies that exist solely
 for Linux/GTK/Wayland/X11/OpenGL or non-macOS build paths are out of scope, and
 capabilities already supplied by macOS **system frameworks** (CoreText,
 CoreGraphics, etc., reached via `objc2` bindings) are bound, not reimplemented.
 
-Zig-origin libraries → Rust:
+Zig-origin libraries:
 
-- **uucode** — Unicode property, grapheme-break, and width tables/lookups used
-  across the terminal and font layers. Reimplemented as Roastty Unicode tables
-  generated from the UCD, matching Ghostty's exact property semantics.
-- **libxev** — the async event loop. Reimplemented as a Rust kqueue-based event
-  loop driving the PTY read/write loops and timers (macOS only; the
+- **uucode** — _from-scratch._ Unicode property, grapheme-break, and width
+  tables used across the terminal and font layers. Roastty Unicode tables
+  generated from the UCD, matching Ghostty's exact property semantics (crates
+  like `unicode-width`/`unicode-segmentation` may cross-check, not replace).
+- **z2d** — _fidelity decision (open)._ 2D vector rasterization, used only for
+  the sprite font's anti-aliased path glyphs and the CPU debug overlay. Because
+  the glyph PNGs are compared byte-for-byte, this is the one rasterizer subject
+  to the fidelity rule — resolved in its own experiment (byte-exact port vs. a
+  Rust rasterizer with regenerated fixtures). The exact-fill sprite path needs
+  no rasterizer and is already ported.
+- **libxev** — _crate-eligible._ The async event loop. A Rust event-loop crate
+  (e.g. `mio`/`polling` over kqueue, or `tokio`) may drive the PTY read/write
+  loops and timers; no byte-exact requirement (macOS only — the
   epoll/io_uring/IOCP backends are not ported).
-- **z2d** — 2D vector rasterization, used only for the sprite font's
-  anti-aliased path glyphs and the CPU debug overlay. Reimplemented as a Rust
-  alpha-coverage rasterizer (the exact-fill sprite path needs no rasterizer and
-  is already ported).
-- **zf** — fuzzy matching for list/command filtering. Reimplemented in Rust.
-- **zig-objc** — Objective-C runtime bindings. Already satisfied by `objc2`; no
-  further work.
+- **zf** — _crate-eligible._ Fuzzy matching for list/command filtering (e.g.
+  `nucleo`/`fuzzy-matcher`).
+- **zig-objc** — _done._ Objective-C runtime bindings — already satisfied by
+  `objc2`.
 - **vaxis** — TUI toolkit; used only by the `+list-*` CLI tools, not the
-  library. Reimplemented only if/when those CLIs are ported.
+  library. Addressed only if/when those CLIs are ported.
 - **zig-js** — WASM/JS interop; not part of the macOS library (out of scope).
 
-C-origin libraries → Rust:
+C-origin libraries (mostly crate-eligible — none carries a byte-exact fixture):
 
-- **wuffs / libpng / zlib** — image decoding (Kitty graphics PNG) and DEFLATE.
-  Reimplemented in Rust.
-- **oniguruma** — regular expressions (link/URL detection). Reimplemented in
-  Rust.
-- **simdutf** — fast UTF-8 validation/transcoding. Reimplemented in Rust.
-- **highway** — SIMD primitives used by the above; reimplemented with Rust SIMD
-  where still needed.
-- **sentry** — crash reporting (app-level, optional). Reimplemented/replaced in
-  Rust if retained.
-- **dcimgui** — Dear ImGui for the inspector UI. Reimplemented/replaced in Rust
-  if the inspector is retained.
-- **glslang / spirv-cross** — GLSL→SPIR-V→MSL shader translation. Needed only if
-  Roastty translates shaders at runtime; the Metal path uses precompiled
-  shaders, so this is deferred unless a runtime need appears.
-- **harfbuzz / freetype / fontconfig** — shaping, rasterization, font discovery.
-  Superseded on macOS by CoreText/CoreGraphics (bound via `objc2`), so they are
-  not reimplemented; fontconfig is Linux-only.
+- **wuffs / libpng / zlib** — _crate-eligible._ Image decoding (Kitty graphics
+  PNG) and DEFLATE (e.g. `png`, `flate2`/`miniz_oxide`).
+- **oniguruma** — _crate-eligible._ Regular expressions for link/URL detection
+  (e.g. the `regex` crate; confirm the flavor covers Ghostty's link patterns).
+- **simdutf** — _crate-eligible._ Fast UTF-8 validation/transcoding (e.g.
+  `simdutf8`, or `std`).
+- **highway** — _crate-eligible / subsumed._ SIMD primitives — mostly absorbed
+  by the crates above or `std::simd`; reimplemented only where still needed.
+- **sentry** — _crate-eligible._ Crash reporting (app-level, optional; e.g. the
+  `sentry` crate) if retained.
+- **dcimgui** — _crate-eligible._ Dear ImGui for the inspector UI (e.g.
+  `imgui-rs`/`egui`) if the inspector is retained.
+- **glslang / spirv-cross** — _crate-eligible / deferred._ GLSL→SPIR-V→MSL
+  shader translation (e.g. `naga`). Needed only if Roastty translates shaders at
+  runtime; the Metal path uses precompiled shaders, so deferred unless a runtime
+  need appears.
+- **harfbuzz / freetype / fontconfig** — _system framework._ Shaping,
+  rasterization, font discovery — superseded on macOS by CoreText/CoreGraphics
+  (bound via `objc2`), so not reimplemented; fontconfig is Linux-only.
 
 Out of scope (non-macOS): gobject/GTK, gtk4-layer-shell, wayland (and
 protocols), opengl, libintl, and the Android/SDK packages.
@@ -254,7 +278,7 @@ Experiment 246).
 Out of scope / tooling: `build/`, `benchmark/`, `extra/`, `simd/`, `stb/`,
 `lib/`, and all non-macOS paths (Linux/GTK/Wayland/OpenGL).
 
-### Dependencies (reimplemented in Rust)
+### Dependencies (provided in Rust — crate or from-scratch per the hybrid policy)
 
 - [x] `zig-objc` → satisfied by `objc2`
 - [ ] `uucode` (Unicode tables) — not started (no Unicode tables exist yet)
