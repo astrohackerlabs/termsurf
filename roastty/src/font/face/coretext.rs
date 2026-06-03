@@ -151,6 +151,27 @@ impl Face {
         face
     }
 
+    /// Resize this face to a new point size in place, replacing its `CTFont`
+    /// with a copy at the new size (color is re-detected). Faithful port of
+    /// upstream `setSize`. If the face was synthetic-bold, the bold flag is
+    /// preserved and its line width is **recomputed** for the new size (an
+    /// improvement over upstream, whose `setSize` drops `synthetic_bold` — it
+    /// never resizes synthetic faces, so the case never arises there; the
+    /// size-derived `max(size / 14, 1)` width would otherwise go stale).
+    pub(crate) fn set_size(&mut self, points: f64) {
+        let was_synthetic_bold = self.synthetic_bold.is_some();
+        // SAFETY: `self.font` is a live `CTFont`; a null matrix/attributes copies
+        // it at the new size.
+        let copy = unsafe {
+            self.font
+                .copy_with_attributes(points, std::ptr::null(), None)
+        };
+        *self = Face::from_ct_font(copy);
+        if was_synthetic_bold {
+            self.synthetic_bold = Some((points / 14.0).max(1.0));
+        }
+    }
+
     /// Synthesize an italic (oblique) face from this one — a copy sheared by the
     /// [`ITALIC_SKEW`] matrix. Faithful port of upstream `syntheticItalic`.
     pub(crate) fn synthetic_italic(&self) -> Face {
@@ -1373,5 +1394,27 @@ mod tests {
         // A text font's synthetic variants are still non-color.
         assert!(!Face::new("Menlo", 32.0).synthetic_italic().has_color());
         assert!(!Face::new("Menlo", 32.0).synthetic_bold().has_color());
+    }
+
+    #[test]
+    fn set_size_resizes() {
+        let mut face = Face::new("Menlo", 32.0);
+        assert!((face.size() - 32.0).abs() < 1e-6);
+        face.set_size(20.0);
+        assert!((face.size() - 20.0).abs() < 1e-6);
+        // The resized face still resolves and renders 'M'.
+        assert!(face.glyph_index('M' as u32).is_some());
+        assert!(m_ink(&face) > 0);
+    }
+
+    #[test]
+    fn set_size_preserves_synthetic_bold() {
+        let mut face = Face::new_synthetic_bold("Menlo", 32.0);
+        assert!(face.synthetic_bold.is_some());
+        face.set_size(24.0);
+        assert!((face.size() - 24.0).abs() < 1e-6);
+        // The synthetic-bold marker survives, with its width recomputed for the
+        // new size (not the stale 32pt width).
+        assert_eq!(face.synthetic_bold, Some((24.0_f64 / 14.0).max(1.0)));
     }
 }

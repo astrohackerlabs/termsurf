@@ -1,10 +1,11 @@
 //! A collection of font faces, grouped by style.
 //!
 //! Faithful port of upstream `font/Collection.zig`: the packed [`Index`] handle,
-//! the per-style [`Collection`] of eagerly-loaded [`Entry`] faces with
-//! `add`/`get_entry`/`get_face`, and codepoint resolution
-//! (`get_index`/`has_codepoint`). Deferred-face loading + discovery, per-entry
-//! scale factors, and style aliasing land in later experiments.
+//! the per-style [`Collection`] of eagerly-loaded [`Entry`] faces (or aliases)
+//! with `add`/`add_alias`/`add_with_adjustment`/`get_entry`/`get_face`, codepoint
+//! resolution (`get_index`/`has_codepoint`), style completion (`complete_styles`),
+//! and the size-adjustment scale factor. Deferred-face loading + discovery and
+//! the collection-size resize land in later experiments.
 
 use crate::font::face::coretext::Face;
 use crate::font::metrics::FaceMetrics;
@@ -121,11 +122,12 @@ impl Default for Index {
 }
 
 /// A single face in a [`Collection`]. Faithful (eager) port of upstream `Entry`:
-/// it owns a loaded [`Face`] and a fallback flag. (The deferred-face arm and the
-/// per-entry scale factor are deferred to later experiments.)
+/// it owns a loaded [`Face`], a fallback flag, and the resolved size-adjustment
+/// scale factor (`1.0` when not adjusted). (The deferred-face arm is deferred.)
 pub(crate) struct Entry {
     face: Face,
     fallback: bool,
+    scale_factor: f64,
 }
 
 impl Entry {
@@ -137,6 +139,12 @@ impl Entry {
     /// Whether this is a fallback face (searched after the primary faces).
     pub(crate) fn fallback(&self) -> bool {
         self.fallback
+    }
+
+    /// The size-adjustment scale factor recorded for this face (`1.0` when the
+    /// face was added without a size adjustment).
+    pub(crate) fn scale_factor(&self) -> f64 {
+        self.scale_factor
     }
 
     /// Whether this face has the given codepoint in the requested presentation.
@@ -314,13 +322,16 @@ pub(crate) enum EntryOrAlias {
 ///
 /// Faithful port of upstream `Collection`, scoped to **eagerly loaded** faces:
 /// the per-style face lists (entries or aliases) with `add`/`add_alias`/
-/// `get_entry`/`get_face` and codepoint resolution. Deferred-face loading +
-/// discovery, per-entry scale factors, and the `completeStyles` style-completion
-/// logic land in later experiments.
+/// `get_entry`/`get_face`, codepoint resolution, style completion, and the
+/// size-adjustment scale factor. Deferred-face loading + discovery and the
+/// collection-size resize land in later experiments.
 pub(crate) struct Collection {
     /// The per-style face lists, indexed by `Style as usize` (`0..=3`). Each
     /// slot is an owned entry or an alias to a face elsewhere in the collection.
     faces: [Vec<EntryOrAlias>; 4],
+    /// Cached metrics of the primary face (index 0), used by the size-adjustment
+    /// scale factor. Computed lazily on first use.
+    primary_face_metrics: Option<FaceMetrics>,
 }
 
 /// True if a style's face list (of length `len`) can't accept another face
@@ -334,11 +345,14 @@ impl Collection {
     pub(crate) fn new() -> Collection {
         Collection {
             faces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            primary_face_metrics: None,
         }
     }
 
     /// Add an eagerly-loaded `face` of `style`, returning its [`Index`]. The face
     /// is added last in priority for its style. `fallback` marks a fallback face.
+    /// The face is recorded with a scale factor of `1.0` (no size adjustment);
+    /// use [`add_with_adjustment`](Self::add_with_adjustment) to size-adjust.
     pub(crate) fn add(
         &mut self,
         face: Face,
@@ -350,8 +364,58 @@ impl Collection {
         if list_is_full(idx) {
             return Err(AddError::CollectionFull);
         }
-        list.push(EntryOrAlias::Entry(Entry { face, fallback }));
+        list.push(EntryOrAlias::Entry(Entry {
+            face,
+            fallback,
+            scale_factor: 1.0,
+        }));
         Ok(Index::new(style, idx as u16))
+    }
+
+    /// Add a `face` whose size is adjusted to match the primary face by the given
+    /// `adjustment`, recording the computed scale factor on its [`Entry`]. The
+    /// physical resize to the collection size is deferred (this slice has no
+    /// collection-size / load-options path), but the size-independent factor is
+    /// computed and recorded now. Faithful port of the eager `add` size-adjust.
+    pub(crate) fn add_with_adjustment(
+        &mut self,
+        face: Face,
+        style: Style,
+        fallback: bool,
+        adjustment: SizeAdjustment,
+    ) -> Result<Index, AddError> {
+        let factor = self.compute_scale_factor(&face.get_metrics(), adjustment);
+        let list = &mut self.faces[style as usize];
+        let idx = list.len();
+        if list_is_full(idx) {
+            return Err(AddError::CollectionFull);
+        }
+        list.push(EntryOrAlias::Entry(Entry {
+            face,
+            fallback,
+            scale_factor: factor,
+        }));
+        Ok(Index::new(style, idx as u16))
+    }
+
+    /// Compute the size-adjustment scale factor for a face with metrics `face`,
+    /// against the primary face (index 0). Lazily loads and caches the primary
+    /// face's metrics; returns `1.0` if there is no loadable primary. Faithful
+    /// port of upstream `scaleFactor`'s primary handling.
+    fn compute_scale_factor(&mut self, face: &FaceMetrics, adjustment: SizeAdjustment) -> f64 {
+        if adjustment == SizeAdjustment::None {
+            return 1.0;
+        }
+        if self.primary_face_metrics.is_none() {
+            // The primary face is index 0. If it can't be resolved, fall back to
+            // a scale of 1.0 (matching upstream).
+            match self.get_face(Index::default()) {
+                Ok(primary) => self.primary_face_metrics = Some(primary.get_metrics()),
+                Err(_) => return 1.0,
+            }
+        }
+        let primary = self.primary_face_metrics.as_ref().unwrap();
+        scale_factor(primary, face, adjustment)
     }
 
     /// Add an `alias` of `style` pointing at `target`, returning its [`Index`].
@@ -1062,5 +1126,67 @@ mod tests {
         let via_ic2 = scale_factor(&p, &f2, SizeAdjustment::IcWidth);
         let via_lh2 = scale_factor(&p, &f2, SizeAdjustment::LineHeight);
         assert!((via_ic2 - via_lh2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn plain_add_scale_factor_is_one() {
+        let c = menlo_collection();
+        assert_eq!(
+            c.get_entry(Index::new(Style::Regular, 0))
+                .unwrap()
+                .scale_factor(),
+            1.0
+        );
+    }
+
+    #[test]
+    fn add_with_adjustment_none_is_unscaled() {
+        let mut c = menlo_collection(); // primary at {Regular, 0}
+        let idx = c
+            .add_with_adjustment(
+                Face::new("Menlo", 32.0),
+                Style::Regular,
+                true,
+                SizeAdjustment::None,
+            )
+            .expect("add");
+        assert_eq!(c.get_entry(idx).unwrap().scale_factor(), 1.0);
+    }
+
+    #[test]
+    fn add_with_adjustment_same_font_is_one() {
+        let mut c = menlo_collection();
+        let idx = c
+            .add_with_adjustment(
+                Face::new("Menlo", 32.0),
+                Style::Regular,
+                true,
+                SizeAdjustment::LineHeight,
+            )
+            .expect("add");
+        // Same font, same em-normalized metrics -> factor ~ 1.0.
+        let f = c.get_entry(idx).unwrap().scale_factor();
+        assert!((f - 1.0).abs() < 1e-6, "factor {f} should be ~1.0");
+    }
+
+    #[test]
+    fn add_with_adjustment_distinct_font_scales() {
+        let mut c = menlo_collection(); // primary Menlo
+        let idx = c
+            .add_with_adjustment(
+                Face::new("Helvetica", 32.0),
+                Style::Regular,
+                true,
+                SizeAdjustment::LineHeight,
+            )
+            .expect("add");
+        let f = c.get_entry(idx).unwrap().scale_factor();
+        // The primary was loaded and used: a proportional face has a different
+        // em-normalized line height than monospace Menlo.
+        assert!(
+            f.is_finite() && f > 0.0,
+            "factor {f} should be finite positive"
+        );
+        assert!((f - 1.0).abs() > 1e-6, "factor {f} should differ from 1.0");
     }
 }

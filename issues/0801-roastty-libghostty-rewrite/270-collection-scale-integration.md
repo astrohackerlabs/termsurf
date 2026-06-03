@@ -165,3 +165,63 @@ Review artifacts:
   `…-224343-021541-prompt.md`
 - Results: `logs/codex-review/20260602-224149-302529-last-message.md`,
   `…-224343-021541-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`Face::set_size` (resizing copy, re-detect color, preserve `synthetic_bold`)
+landed. `Entry` gained `scale_factor` (+ accessor); `Collection` gained the
+`primary_face_metrics` cache, `compute_scale_factor` (lazy primary load from
+index 0, `→ 1.0` on no primary), and `add_with_adjustment` (computes + records
+the factor, resize deferred). `add` records `1.0`.
+
+Tests (live CoreText):
+
+- `set_size_resizes` / `set_size_preserves_synthetic_bold` — resize works and
+  the bold marker survives with its width **recomputed** for the new size (the
+  result-review **Low** fix below).
+- `plain_add_scale_factor_is_one` — `add` records `1.0`.
+- `add_with_adjustment_none_is_unscaled` — `None` → `1.0`.
+- `add_with_adjustment_same_font_is_one` — same-font `LineHeight` → ≈ `1.0`.
+- `add_with_adjustment_distinct_font_scales` — Menlo primary + Helvetica
+  fallback `LineHeight` → a finite, positive factor `≠ 1.0`, proving the primary
+  was loaded and the computation ran against it.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2422 passed, 0 failed (no regressions; +6).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The `Collection`'s size-adjustment factor is computed and recorded per entry,
+and `Face::set_size` is ready to apply it. The `Collection`'s remaining work is
+the **collection load size** (so the recorded factor can physically resize a
+face via `set_size`) plus `setSize`/`updateMetrics`/`metric_modifiers`. That,
+together with the **`DeferredFace` + `discovery`** lazy-loading sub-area
+(CoreText font matching), is the last of the Collection. Above it: the
+**`CodepointResolver`** (sprite/box routing over `Collection.getIndex`), the
+**shaper**, the **Nerd Font attribute table**, and **SVG color detection**.
+
+## Completion Review
+
+Codex reviewed the completed implementation. It raised one **Low** finding:
+`Face::set_size` carried the stale 32pt-derived `synthetic_bold` stroke width
+forward after a resize. The fix recomputes the width from the new size
+(`Some((points / 14).max(1))`) when the face was synthetic-bold — a documented
+improvement over upstream's `setSize` (which drops `synthetic_bold` but never
+resizes synthetic faces) — and the `set_size_preserves_synthetic_bold` test now
+asserts the exact recomputed width. A follow-up review confirmed the finding is
+**fully resolved** with no new issues (the borrow soundness of
+`compute_scale_factor`'s lazy primary load, the no-resize factor recording, and
+the distinct-font test all stand).
+
+Review artifacts:
+
+- Prompts: `logs/codex-review/20260602-224641-571205-prompt.md`,
+  `…-224812-081261-prompt.md`
+- Results: `logs/codex-review/20260602-224641-571205-last-message.md`,
+  `…-224812-081261-last-message.md`

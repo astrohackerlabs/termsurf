@@ -986,7 +986,7 @@ are past the correctness-critical foundation.
 - [Experiment 269: Collection scale factor — match a face to the primary](269-collection-scale-factor.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 270: Collection scale-factor integration — add with size adjustment](270-collection-scale-integration.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
