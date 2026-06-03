@@ -1135,6 +1135,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 344: the shaper's `is_first` term](344-shaper-is-first-term.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 345: applying variations to a face](345-face-set-variations.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
