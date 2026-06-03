@@ -194,3 +194,77 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-132730-187558-prompt.md` (design)
 - Result: `logs/codex-review/20260603-132730-187558-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The shaper now accepts the caller-supplied cluster stream.
+
+- `roastty/src/font/shape.rs`: added
+  `pub(crate) struct Codepoint { codepoint: u32, cluster: u32 }`
+  (Debug/Clone/Copy/PartialEq/Eq), mirroring upstream's `RunState.codepoints`
+  entries fed by `addCodepoint(cp, cluster)`.
+- `roastty/src/font/face/coretext.rs`: extracted the shaping body into
+  `shape_run(&self, run: &[shape::Codepoint]) -> Vec<shape::Cell>`, which builds
+  `text` + `clusters` from the run (pushing each entry's `cluster` once per
+  `ch.len_utf16()`, skipping invalid `char::from_u32` so `clusters` stays
+  aligned with the CoreText UTF-16 indices). The `cell_offset` tracking, the
+  unconditional reset, the non-LTR sort, and the offsets are unchanged from
+  Experiments 339–341. `shape_codepoints(&[u32])` is now a thin wrapper
+  assigning each scalar the sequential cluster (`i`) and calling `shape_run`.
+
+Tests: `shape_run_combining_marks`
+(`[(‘n’, 0), (0x0308, 0), (0x0308, 0), (‘a’, 1)]` → cells non-empty, all
+`x ≤ 1`, some `x == 0`, last `x == 1`), confirming the marks fold into the
+base's cell; `shape_run_matches_sequential_wrapper` (`shape_codepoints("ABC")`
+== `shape_run([(‘A’, 0), (‘B’, 1), (‘C’, 2)])`), confirming the wrapper is
+behavior-preserving. All prior `shape_*` tests pass unchanged.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2750 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings (`Codepoint` is used by
+  `shape_codepoints`).
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The shaper's input contract is now upstream's `(codepoint, cluster)` stream:
+`shape_run` consumes caller-supplied clusters (grouping a grapheme's codepoints
+into one cell), and `shape_codepoints` is a sequential-cluster convenience
+wrapper. The combining-marks test proves that supplied clusters fold a
+grapheme's marks into the base's cell — the behavior the `RunIterator` will rely
+on.
+
+The remaining shaper work: the **ligature/mark heuristic** (Exp 343 — the
+_conditional_ `cell_offset` reset via `is_first_codepoint_in_cluster` and
+`!is_after_glyph_from_current_or_next_clusters`, plus the `run_offset.cluster`
+max-tracking it consumes — now testable against the clustered input); the
+**special-font** fast path (codepoint == glyph); and the `Shaper` struct with
+its run state, caching, and the **`RunIterator`** over terminal cells (which
+supplies real grapheme clusters). The deferred **variation-axis** `score()`
+refinement and **variations** application also remain.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It confirmed: `shape_run` consumes caller-supplied
+`(codepoint, cluster)` pairs and builds the UTF-16-indexed `clusters` table from
+`cp.cluster` (including surrogate-pair duplication), mirroring upstream's
+`addCodepoint` + padding model; `shape_codepoints` preserves Experiment 341
+behavior by assigning `cluster = i` before calling `shape_run`, with invalid
+scalar filtering still in the shared body (so the "skip invalid but keep the
+input-index cluster" behavior is unchanged); `shape::Codepoint` is the right
+internal representation of the caller-facing `addCodepoint` stream (the
+surrogate dummy entries remain an internal detail of the reverse table); and the
+combining-marks test soundly verifies the clustered-input contract (supplied
+clusters constrain output to cells `0`/`1`, with `'a'` landing in cluster `1`).
+The deferred scope is intact — no `run_offset.cluster` bookkeeping or
+conditional heuristic was introduced, and the special-font path, full
+`Shaper`/`RunIterator`, and variations remain deferred.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-133025-465033-last-message.md`

@@ -263,34 +263,50 @@ impl Face {
         Some(glyphs[0])
     }
 
-    /// Shape a run of Unicode codepoints into positioned glyphs with this face,
-    /// via CoreText (`CFAttributedString` → `CTLine` → `CTRun`). Faithful port of
-    /// the core of upstream `Shaper.shape`: each [`shape::Cell`]'s `x` is the
-    /// glyph's cluster (its source cell), and `x_offset`/`y_offset` are the
-    /// glyph's nudge from the cell origin. The cluster source is the input scalar
-    /// index until the `RunIterator`/terminal grid lands, and the ligature/mark
-    /// heuristic and the special-font path are deferred to the full `Shaper`.
+    /// Shape a run of bare Unicode codepoints, assigning each scalar its own
+    /// sequential cluster (cell). A convenience wrapper over [`Self::shape_run`]
+    /// for the common case where no grapheme grouping is supplied; equivalent to
+    /// calling `shape_run` with `cluster = i` for each scalar `i`.
     pub(crate) fn shape_codepoints(&self, codepoints: &[u32]) -> Vec<shape::Cell> {
-        if codepoints.is_empty() {
+        let run: Vec<shape::Codepoint> = codepoints
+            .iter()
+            .enumerate()
+            .map(|(i, &codepoint)| shape::Codepoint {
+                codepoint,
+                cluster: i as u32,
+            })
+            .collect();
+        self.shape_run(&run)
+    }
+
+    /// Shape a clustered run of codepoints into positioned glyphs with this face,
+    /// via CoreText (`CFAttributedString` → `CTLine` → `CTRun`). Faithful port of
+    /// the core of upstream `Shaper.shape`: the input is a `(codepoint, cluster)`
+    /// stream (upstream's `RunState.codepoints`, fed by `addCodepoint`), where the
+    /// caller supplies each codepoint's cluster (the terminal cell, grouping a
+    /// grapheme's codepoints). Each [`shape::Cell`]'s `x` is the glyph's cluster,
+    /// and `x_offset`/`y_offset` are the glyph's nudge from the cell origin. The
+    /// ligature/mark heuristic and the special-font path are deferred to the full
+    /// `Shaper`.
+    pub(crate) fn shape_run(&self, run: &[shape::Codepoint]) -> Vec<shape::Cell> {
+        if run.is_empty() {
             return Vec::new();
         }
         // Build the run's string and, alongside it, a reverse lookup from each
         // UTF-16 unit back to its cluster (the source cell). The CoreText string
         // indices index into the UTF-16 storage a `CFString` from this `String`
-        // preserves; pushing each scalar's cluster once per UTF-16 unit keeps
-        // `clusters` aligned with those indices and lets both halves of a
-        // surrogate pair share one cluster (mirroring upstream's padding). Until
-        // the `RunIterator`/terminal grid lands, the cluster is the input scalar
-        // index.
+        // preserves; pushing each codepoint's supplied cluster once per UTF-16
+        // unit keeps `clusters` aligned with those indices and lets both halves of
+        // a surrogate pair share one cluster (mirroring upstream's padding).
         let mut text = String::new();
         let mut clusters: Vec<u32> = Vec::new();
-        for (i, &c) in codepoints.iter().enumerate() {
-            let Some(ch) = char::from_u32(c) else {
+        for cp in run {
+            let Some(ch) = char::from_u32(cp.codepoint) else {
                 continue;
             };
             text.push(ch);
             for _ in 0..ch.len_utf16() {
-                clusters.push(i as u32);
+                clusters.push(cp.cluster);
             }
         }
         if text.is_empty() {
@@ -355,9 +371,9 @@ impl Face {
             let advances = run_advances(&run, n);
             for k in 0..n {
                 // Map the glyph back to its cluster (cell). On a new cluster,
-                // reset the cell origin to the current pen. (Exp 341: this reset
-                // is unconditional — faithful for monotonic forward runs; the
-                // ligature/mark heuristic is deferred to Exp 342.)
+                // reset the cell origin to the current pen. (This reset is
+                // unconditional — faithful for monotonic forward runs; the
+                // ligature/mark heuristic is deferred to Exp 343.)
                 let idx = indices[k].max(0) as usize;
                 debug_assert!(idx < clusters.len());
                 let cluster = clusters.get(idx).copied().unwrap_or(0);
@@ -1881,5 +1897,62 @@ mod tests {
             b_cell.x, 2,
             "'B' maps to its cluster (2), collapsing the surrogate pair, not the UTF-16 index (3)"
         );
+    }
+
+    #[test]
+    fn shape_run_combining_marks() {
+        // 'n' + two U+0308 combining diaereses grouped into cell 0 (one grapheme),
+        // then 'a' in cell 1. The marks share the base's cluster, so they fold
+        // into cell 0 — NOT cells 1/2 the sequential mapping would produce. Robust
+        // to how many glyphs the host emits for the grapheme.
+        let face = Face::new("Menlo", 24.0);
+        let run = [
+            shape::Codepoint {
+                codepoint: 'n' as u32,
+                cluster: 0,
+            },
+            shape::Codepoint {
+                codepoint: 0x0308,
+                cluster: 0,
+            },
+            shape::Codepoint {
+                codepoint: 0x0308,
+                cluster: 0,
+            },
+            shape::Codepoint {
+                codepoint: 'a' as u32,
+                cluster: 1,
+            },
+        ];
+        let cells = face.shape_run(&run);
+        assert!(
+            !cells.is_empty(),
+            "the grapheme shapes to at least one cell"
+        );
+        assert!(
+            cells.iter().all(|c| c.x <= 1),
+            "every cell maps to cluster 0 or 1 (the marks fold into the base's cell)"
+        );
+        assert!(
+            cells.iter().any(|c| c.x == 0),
+            "the base/marks occupy cell 0"
+        );
+        assert_eq!(cells.last().unwrap().x, 1, "'a' occupies its own cell (1)");
+    }
+
+    #[test]
+    fn shape_run_matches_sequential_wrapper() {
+        // `shape_codepoints` is exactly `shape_run` with sequential clusters.
+        let face = Face::new("Menlo", 24.0);
+        let cps = ['A' as u32, 'B' as u32, 'C' as u32];
+        let run: Vec<shape::Codepoint> = cps
+            .iter()
+            .enumerate()
+            .map(|(i, &codepoint)| shape::Codepoint {
+                codepoint,
+                cluster: i as u32,
+            })
+            .collect();
+        assert_eq!(face.shape_codepoints(&cps), face.shape_run(&run));
     }
 }

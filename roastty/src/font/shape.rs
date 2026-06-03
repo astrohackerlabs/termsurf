@@ -22,6 +22,18 @@ pub(crate) struct Cell {
     pub glyph_index: u32,
 }
 
+/// One input codepoint paired with its cluster (the source cell), the shaper's
+/// input contract. Mirrors upstream's `RunState.codepoints` entries, fed by
+/// `addCodepoint(cp, cluster)`: the caller (the run iterator) supplies the
+/// cluster, grouping a grapheme's codepoints into one terminal cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Codepoint {
+    /// The Unicode scalar to shape.
+    pub codepoint: u32,
+    /// The terminal cell this codepoint belongs to. Drives the shaped `Cell.x`.
+    pub cluster: u32,
+}
+
 /// Options controlling shaping. Faithful port of upstream `shape.Options`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Options {
