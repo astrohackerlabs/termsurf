@@ -349,6 +349,10 @@ impl Face {
         // later glyphs are offset from the cell origin.
         let mut cell_cluster: u32 = 0;
         let mut cell_x: f64 = 0.0;
+        // The maximum cluster among glyphs already emitted — upstream's
+        // `run_offset.cluster`. A glyph whose cluster is `<=` this was rendered
+        // out of input order (a reordered glyph); we skip its cell reset.
+        let mut run_offset_cluster: u32 = 0;
         // CoreText, despite an enforced LTR embedding level, may emit runs that
         // are non-monotonic or right-to-left, leaving `cells` out of grid order.
         // If any run carries either status, we sort the buffer by `x` at the end.
@@ -371,15 +375,21 @@ impl Face {
             let advances = run_advances(&run, n);
             for k in 0..n {
                 // Map the glyph back to its cluster (cell). On a new cluster,
-                // reset the cell origin to the current pen. (This reset is
-                // unconditional — faithful for monotonic forward runs; the
-                // ligature/mark heuristic is deferred to Exp 343.)
+                // reset the cell origin to the current pen — unless this glyph is
+                // from a cluster we've already passed (`cluster <=
+                // run_offset_cluster`), i.e. a reordered glyph: it inherits the
+                // current cell instead of snapping the origin back. (The companion
+                // `is_first` term is deferred to Exp 344; it is always true for
+                // the runs this covers.)
                 let idx = indices[k].max(0) as usize;
                 debug_assert!(idx < clusters.len());
                 let cluster = clusters.get(idx).copied().unwrap_or(0);
                 if cell_cluster != cluster {
-                    cell_cluster = cluster;
-                    cell_x = pen;
+                    let is_after = cluster <= run_offset_cluster;
+                    if !is_after {
+                        cell_cluster = cluster;
+                        cell_x = pen;
+                    }
                 }
                 cells.push(shape::Cell {
                     x: cell_cluster as u16,
@@ -387,8 +397,10 @@ impl Face {
                     y_offset: positions[k].y.round() as i16,
                     glyph_index: glyphs[k] as u32,
                 });
-                // The advance applies to the next glyph's pen position.
+                // The advance applies to the next glyph's pen position; the max
+                // cluster tracks the furthest cell we've emitted.
                 pen += advances[k].width;
+                run_offset_cluster = run_offset_cluster.max(cluster);
             }
         }
         // A non-LTR run left the buffer out of grid order; restore it by `x`.
@@ -1954,5 +1966,65 @@ mod tests {
             })
             .collect();
         assert_eq!(face.shape_codepoints(&cps), face.shape_run(&run));
+    }
+
+    #[test]
+    fn shape_run_reorder_skips_reset() {
+        // Mechanically exercises the `is_after` reorder guard (not full
+        // complex-shaping). Synthetic descending clusters [2, 1, 0] over ABC: 'A'
+        // resets to cell 2, then 'B' (1 ≤ 2) and 'C' (0 ≤ 2) are from clusters
+        // already passed, so their resets are skipped and they inherit cell 2.
+        // Under the unconditional reset this would have been [2, 1, 0]. Menlo
+        // emits one glyph per ASCII scalar in order, so `is_first` is true
+        // throughout (the deferred term does not affect this case).
+        let face = Face::new("Menlo", 24.0);
+        let run = [
+            shape::Codepoint {
+                codepoint: 'A' as u32,
+                cluster: 2,
+            },
+            shape::Codepoint {
+                codepoint: 'B' as u32,
+                cluster: 1,
+            },
+            shape::Codepoint {
+                codepoint: 'C' as u32,
+                cluster: 0,
+            },
+        ];
+        let cells = face.shape_run(&run);
+        assert_eq!(cells.len(), 3);
+        for (i, c) in cells.iter().enumerate() {
+            assert_eq!(
+                c.x, 2,
+                "cell {i} inherits cell 2 (the reorder guard skips its reset)"
+            );
+        }
+    }
+
+    #[test]
+    fn shape_run_forward_clusters_unchanged() {
+        // Forward clusters never trip `is_after`, so the reset always happens and
+        // monotonic runs are undisturbed: x = 0, 1, 2.
+        let face = Face::new("Menlo", 24.0);
+        let run = [
+            shape::Codepoint {
+                codepoint: 'A' as u32,
+                cluster: 0,
+            },
+            shape::Codepoint {
+                codepoint: 'B' as u32,
+                cluster: 1,
+            },
+            shape::Codepoint {
+                codepoint: 'C' as u32,
+                cluster: 2,
+            },
+        ];
+        let cells = face.shape_run(&run);
+        assert_eq!(cells.len(), 3);
+        for (i, c) in cells.iter().enumerate() {
+            assert_eq!(c.x, i as u16, "cell {i} keeps its forward cluster");
+        }
     }
 }

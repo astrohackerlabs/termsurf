@@ -87,8 +87,8 @@ before.
   ```rust
   if cell_cluster != cluster {
       // Skip the reset for a reordered glyph (one from a cluster we've already
-      // passed); it inherits the current cell. (Exp 343: the `is_first`
-      // ligature term is Exp 344 — always true for non-ligature runs.)
+      // passed); it inherits the current cell. (Exp 343: the `is_first` term is
+      // Exp 344 — always true for the scoped runs this experiment covers.)
       let is_after = cluster <= run_offset_cluster;
       if !is_after {
           cell_cluster = cluster;
@@ -216,3 +216,73 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-133420-139953-prompt.md` (design)
 - Result: `logs/codex-review/20260603-133420-139953-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The shaper now skips the cell reset for reordered glyphs.
+
+- `roastty/src/font/face/coretext.rs`: `shape_run` adds a line-wide
+  `run_offset_cluster: u32` (upstream's `run_offset.cluster`), makes the
+  `cell_offset` reset conditional on `!is_after`
+  (`let is_after = cluster <= run_offset_cluster; if !is_after { cell_cluster = cluster; cell_x = pen; }`),
+  and updates `run_offset_cluster = run_offset_cluster.max(cluster)` after each
+  emit/advance. A glyph from a cluster already passed inherits the current cell
+  (emitted `Cell.x = cell_cluster`) instead of snapping the cell origin back.
+
+Tests: `shape_run_reorder_skips_reset` (synthetic descending clusters
+`[2, 1, 0]` over `"ABC"` → `x = [2, 2, 2]`, mechanically exercising the
+`is_after` skip; under Experiment 342 this was `[2, 1, 0]`),
+`shape_run_forward_clusters_unchanged` (`[0, 1, 2]` → `[0, 1, 2]`). The
+combining-marks fold and all prior tests pass unchanged.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2752 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The reorder guard of `Shaper.shape` is ported: `run_offset.cluster` tracks the
+furthest cell emitted, and a glyph from an already-seen cluster keeps the
+current cell rather than resetting the origin. The synthetic descending-cluster
+test proves the `is_after` branch deterministically; monotonic and forward runs
+are undisturbed.
+
+The remaining shaper work: the **`is_first_codepoint_in_cluster`** term (Exp 344
+— the backward walk over `state.codepoints` skipping surrogate padding,
+completing the conditional reset for ligatures and within-cluster mark/pre-base
+reordering); the **special-font** fast path (codepoint == glyph); and the
+`Shaper` struct with its run state, caching, and the **`RunIterator`** over
+terminal cells (which supplies the real grapheme clusters). The deferred
+**variation-axis** `score()` refinement and **variations** application also
+remain.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with one
+**Required documentation finding (fixed)** and **no Required code findings**.
+
+- **Required (fixed):** a stale sentence in the design doc's Rust-mapping code
+  snippet still read "always true for non-ligature runs", reintroducing the
+  pre-review overclaim. It was changed to "always true for the scoped runs this
+  experiment covers" (and the matching `coretext.rs` comment was tightened to
+  drop "ligature", since `is_first` also covers within-cluster reordering).
+
+Codex confirmed the implementation: `cluster <= run_offset_cluster` with the
+`.max` update after emit/advance faithfully ports upstream's `is_after` (the
+comparison is against prior emitted glyphs only); the skipped-reset behavior is
+correct (`cell_cluster`/`cell_x` stay inherited and the emitted
+`Cell.x = cell_cluster` matches upstream's `cell_offset.cluster`); the
+`[2, 1, 0] → [2, 2, 2]` result is upstream's for the ASCII 1:1 case; the
+narrowed scope is conceptually accurate (Exp 344 owns both ligatures and
+within-cluster mark/pre-base reordering); and monotonic/sequential behavior is
+preserved with the deferred scope (`is_first`, special-font,
+`Shaper`/`RunIterator`, variations) intact. No behavioral blocker.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-133721-757289-last-message.md`
