@@ -154,3 +154,67 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-005059-839836-prompt.md`
 - Result: `logs/codex-review/20260603-005059-839836-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/draw.rs` gained the `Fraction` enum (all upstream
+variants, with `fraction`/`min`/`max`/`float`) and the `fill` free function. The
+`min` uses the complementary-rounding formula
+`size - round((1 - fraction) * size)` and `max` the direct
+`round(fraction * size)`; `fill` boxes
+`(x0.min(w), y0.min(h))..(x1.max(w), y1.max(h))` with `Color::ON`.
+
+Tests (deterministic):
+
+- `fraction_values` — the per-variant `f64` values and the alias collapses
+  (`Start/Left/Top/Zero → 0`; `End/Right/Bottom/One/Full → 1`), plus
+  `Half.float(7) == 3.5`.
+- `min_max_even_tiling` — the upstream doc example: `Half.min(7)=3`,
+  `Half.max(7)=4`, and both `start→half` and `half→end` spans are 4px.
+- `min_max_exact_half` — `Half.min/max(8)=4` (clean even split); `Half.max(9)=5`
+  (`round(4.5)` away from zero), `Half.min(9)=4`.
+- `fill_top_left_quadrant` — `fill(Zero,Half,Zero,Half)` on `9×18` → `x[0,5)`,
+  `y[0,9)` (exact row/col spans).
+- `fill_bottom_right_quadrant` — `fill(Half,Full,Half,Full)` → `x[4,9)`,
+  `y[9,18)`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty sprite` → 42 passed (5 new).
+- `cargo test -p roastty` → 2468 passed, 0 failed (no regressions; +5).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The shared `Fraction`/`fill` cell-geometry primitive is ported and its subtle
+complementary-rounding (which makes adjacent half-blocks tile to equal widths)
+is pixel-verified. This is the foundation the rectangle-based sprite families
+build on. The next experiment is the **block elements** (`U+2580`–`U+259F`):
+`Shade`/`Alignment`/`Quads` plus
+`blockShade`/`block`/`fullBlockShade`/`quadrant` and the `draw2580_259F`
+dispatch — all rect/`fill`-based, no `z2d`. After that come the remaining
+rect-based families (eighth blocks/octants, geometric shapes that don't need
+curves) and, separately, the larger `z2d` anti-aliased-path port that the arcs
+and diagonals require. Alongside the sprite font remain the discovery consumer,
+the UCD emoji-presentation default, codepoint overrides, the shaper, the Nerd
+Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `Fraction` includes every upstream variant with the
+exact `fraction()` alias/value groups, that `min`/`max`/`float` match the Zig
+formulas with exact `as i32` casts, and that `fill` matches
+`box(x0.min(w), y0.min(h), x1.max(w), y1.max(h), Color::ON)`. It judged the
+tests to cover the critical rounding and geometry (`Half.min/max` at 7/8/9,
+`float(7)=3.5`, the alias collapses, and the exact quadrant-fill spans) and the
+verification clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-005437-221547-prompt.md`
+- Result: `logs/codex-review/20260603-005437-221547-last-message.md`

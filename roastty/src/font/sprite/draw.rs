@@ -32,6 +32,116 @@ impl Thickness {
     }
 }
 
+/// A value that indicates some fraction across the cell, either horizontally or
+/// vertically. Faithful port of upstream `common.Fraction`; the redundant names
+/// exist so callers can use whichever reads most naturally, and collapse to the
+/// same value only in [`fraction`](Fraction::fraction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fraction {
+    // Names for the min edge
+    Start,
+    Left,
+    Top,
+    Zero,
+    // Names based on eighths
+    Eighth,
+    OneEighth,
+    TwoEighths,
+    ThreeEighths,
+    FourEighths,
+    FiveEighths,
+    SixEighths,
+    SevenEighths,
+    // Names based on quarters
+    Quarter,
+    OneQuarter,
+    TwoQuarters,
+    ThreeQuarters,
+    // Names based on thirds
+    Third,
+    OneThird,
+    TwoThirds,
+    // Names based on halves
+    Half,
+    OneHalf,
+    // Alternative names for 1/2
+    Center,
+    Middle,
+    // Names for the max edge
+    End,
+    Right,
+    Bottom,
+    One,
+    Full,
+}
+
+impl Fraction {
+    /// The `f64` value of this fraction.
+    pub(crate) fn fraction(self) -> f64 {
+        match self {
+            Fraction::Start | Fraction::Left | Fraction::Top | Fraction::Zero => 0.0,
+            Fraction::Eighth | Fraction::OneEighth => 0.125,
+            Fraction::Quarter | Fraction::OneQuarter | Fraction::TwoEighths => 0.25,
+            Fraction::Third | Fraction::OneThird => 1.0 / 3.0,
+            Fraction::ThreeEighths => 0.375,
+            Fraction::Half
+            | Fraction::OneHalf
+            | Fraction::TwoQuarters
+            | Fraction::FourEighths
+            | Fraction::Center
+            | Fraction::Middle => 0.5,
+            Fraction::FiveEighths => 0.625,
+            Fraction::TwoThirds => 2.0 / 3.0,
+            Fraction::ThreeQuarters | Fraction::SixEighths => 0.75,
+            Fraction::SevenEighths => 0.875,
+            Fraction::End | Fraction::Right | Fraction::Bottom | Fraction::One | Fraction::Full => {
+                1.0
+            }
+        }
+    }
+
+    /// The left/top pixel for this fraction across `size`, used as the **min**
+    /// (left/top) coordinate of a block. Rounds the complementary fraction from
+    /// the far edge so adjacent blocks tile evenly. Faithful port of
+    /// `Fraction.min`.
+    pub(crate) fn min(self, size: u32) -> i32 {
+        let s = size as f64;
+        (s - ((1.0 - self.fraction()) * s).round()) as i32
+    }
+
+    /// The right/bottom pixel for this fraction across `size`, used as the
+    /// **max** (right/bottom) coordinate of a block. Faithful port of
+    /// `Fraction.max`.
+    pub(crate) fn max(self, size: u32) -> i32 {
+        (self.fraction() * size as f64).round() as i32
+    }
+
+    /// This fraction across `size`, unrounded (for path drawing). Faithful port
+    /// of `Fraction.float`.
+    pub(crate) fn float(self, size: u32) -> f64 {
+        self.fraction() * size as f64
+    }
+}
+
+/// Fill the rectangle between a horizontal and vertical pair of fraction lines.
+/// Faithful port of upstream `common.fill`.
+fn fill(
+    metrics: &Metrics,
+    canvas: &mut Canvas,
+    x0: Fraction,
+    x1: Fraction,
+    y0: Fraction,
+    y1: Fraction,
+) {
+    canvas.r#box(
+        x0.min(metrics.cell_width),
+        y0.min(metrics.cell_height),
+        x1.max(metrics.cell_width),
+        y1.max(metrics.cell_height),
+        Color::ON,
+    );
+}
+
 /// The style of a single line in a direction. Faithful port of upstream
 /// `box.Lines.Style` (`enum(u2) { none, light, heavy, double }`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1174,5 +1284,108 @@ mod tests {
                 .any(|y| (0..m.cell_width as i32).any(|x| inked(&c, x, y)));
             assert!(!any, "{cp:#06x} drew ink");
         }
+    }
+
+    #[test]
+    fn fraction_values() {
+        assert_eq!(Fraction::Zero.fraction(), 0.0);
+        assert_eq!(Fraction::OneEighth.fraction(), 0.125);
+        assert_eq!(Fraction::TwoEighths.fraction(), 0.25);
+        assert_eq!(Fraction::Quarter.fraction(), 0.25);
+        assert_eq!(Fraction::ThreeEighths.fraction(), 0.375);
+        assert_eq!(Fraction::Half.fraction(), 0.5);
+        assert_eq!(Fraction::Center.fraction(), 0.5);
+        assert_eq!(Fraction::FiveEighths.fraction(), 0.625);
+        assert_eq!(Fraction::TwoThirds.fraction(), 2.0 / 3.0);
+        assert_eq!(Fraction::ThreeQuarters.fraction(), 0.75);
+        assert_eq!(Fraction::SevenEighths.fraction(), 0.875);
+        assert_eq!(Fraction::Full.fraction(), 1.0);
+        // Aliases collapse to the same value.
+        for f in [
+            Fraction::Start,
+            Fraction::Left,
+            Fraction::Top,
+            Fraction::Zero,
+        ] {
+            assert_eq!(f.fraction(), 0.0);
+        }
+        for f in [
+            Fraction::End,
+            Fraction::Right,
+            Fraction::Bottom,
+            Fraction::One,
+            Fraction::Full,
+        ] {
+            assert_eq!(f.fraction(), 1.0);
+        }
+        assert_eq!(Fraction::OneThird.fraction(), 1.0 / 3.0);
+        assert_eq!(Fraction::SixEighths.fraction(), 0.75);
+        // float() scales without rounding.
+        assert_eq!(Fraction::Half.float(7), 3.5);
+    }
+
+    #[test]
+    fn min_max_even_tiling() {
+        // The upstream doc example: size 7 splits into two even 4px halves.
+        assert_eq!(Fraction::Half.min(7), 3);
+        assert_eq!(Fraction::Half.max(7), 4);
+        assert_eq!(Fraction::Zero.min(7), 0);
+        assert_eq!(Fraction::Full.max(7), 7);
+        // start->half and half->end are both 4px (even tiling).
+        assert_eq!(Fraction::Half.max(7) - Fraction::Zero.min(7), 4);
+        assert_eq!(Fraction::Full.max(7) - Fraction::Half.min(7), 4);
+    }
+
+    #[test]
+    fn min_max_exact_half() {
+        // Even size splits cleanly.
+        assert_eq!(Fraction::Half.max(8), 4);
+        assert_eq!(Fraction::Half.min(8), 4);
+        // Odd size: max rounds 4.5 away from zero -> 5; min is the complement.
+        assert_eq!(Fraction::Half.max(9), 5);
+        assert_eq!(Fraction::Half.min(9), 4);
+    }
+
+    #[test]
+    fn fill_top_left_quadrant() {
+        // fill(Zero, Half, Zero, Half) on 9x18 -> x[0,5) y[0,9).
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        fill(
+            &m,
+            &mut c,
+            Fraction::Zero,
+            Fraction::Half,
+            Fraction::Zero,
+            Fraction::Half,
+        );
+        assert!(inked(&c, 0, 0));
+        assert!(inked(&c, 4, 8));
+        assert!(!inked(&c, 5, 0), "x=5 is outside [0,5)");
+        assert!(!inked(&c, 0, 9), "y=9 is outside [0,9)");
+        // Exact span on row 0 and column 0.
+        assert_eq!(row_spans(&c, 0, m.cell_width), vec![(0, 5)]);
+        assert_eq!(col_spans(&c, 0, m.cell_height), vec![(0, 9)]);
+    }
+
+    #[test]
+    fn fill_bottom_right_quadrant() {
+        // fill(Half, Full, Half, Full) on 9x18 -> x[4,9) y[9,18).
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        fill(
+            &m,
+            &mut c,
+            Fraction::Half,
+            Fraction::Full,
+            Fraction::Half,
+            Fraction::Full,
+        );
+        assert!(inked(&c, 4, 9));
+        assert!(inked(&c, 8, 17));
+        assert!(!inked(&c, 3, 17), "x=3 is outside [4,9)");
+        assert!(!inked(&c, 4, 8), "y=8 is outside [9,18)");
+        assert_eq!(row_spans(&c, 17, m.cell_width), vec![(4, 9)]);
+        assert_eq!(col_spans(&c, 8, m.cell_height), vec![(9, 18)]);
     }
 }
