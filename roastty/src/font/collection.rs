@@ -8,7 +8,7 @@
 //! the collection-size resize land in later experiments.
 
 use crate::font::face::coretext::Face;
-use crate::font::metrics::FaceMetrics;
+use crate::font::metrics::{FaceMetrics, Metrics};
 use crate::font::{Presentation, Style};
 
 /// Bits used for the face index within an [`Index`]. `Style` is a 3-bit field,
@@ -211,6 +211,13 @@ pub(crate) enum CompleteError {
     DefaultUnavailable,
 }
 
+/// An error updating a [`Collection`]'s grid metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateMetricsError {
+    /// The primary font (index 0) couldn't be loaded.
+    CannotLoadPrimaryFont,
+}
+
 /// Which styles may be **synthesized** (vs. aliased) when missing. Stand-in for
 /// upstream's `config.FontSyntheticStyle` (the config subsystem is a separate
 /// future area).
@@ -332,6 +339,9 @@ pub(crate) struct Collection {
     /// Cached metrics of the primary face (index 0), used by the size-adjustment
     /// scale factor. Computed lazily on first use.
     primary_face_metrics: Option<FaceMetrics>,
+    /// The collection's grid metrics, derived from the primary face by
+    /// [`update_metrics`](Self::update_metrics).
+    metrics: Option<Metrics>,
 }
 
 /// True if a style's face list (of length `len`) can't accept another face
@@ -346,7 +356,28 @@ impl Collection {
         Collection {
             faces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             primary_face_metrics: None,
+            metrics: None,
         }
+    }
+
+    /// Derive the collection's grid [`Metrics`] from the primary face (index 0)
+    /// and cache the primary's `FaceMetrics`. Faithful port of upstream
+    /// `updateMetrics` (the `metric_modifiers` apply is deferred — the default
+    /// modifier set is identity). Errors if there's no loadable primary font.
+    pub(crate) fn update_metrics(&mut self) -> Result<(), UpdateMetricsError> {
+        let fm = self
+            .get_face(Index::default())
+            .map_err(|_| UpdateMetricsError::CannotLoadPrimaryFont)?
+            .get_metrics();
+        self.primary_face_metrics = Some(fm);
+        self.metrics = Some(Metrics::calc(fm));
+        Ok(())
+    }
+
+    /// The collection's grid metrics, if [`update_metrics`](Self::update_metrics)
+    /// has been run.
+    pub(crate) fn metrics(&self) -> Option<&Metrics> {
+        self.metrics.as_ref()
     }
 
     /// Add an eagerly-loaded `face` of `style`, returning its [`Index`]. The face
@@ -1167,6 +1198,37 @@ mod tests {
         // Same font, same em-normalized metrics -> factor ~ 1.0.
         let f = c.get_entry(idx).unwrap().scale_factor();
         assert!((f - 1.0).abs() < 1e-6, "factor {f} should be ~1.0");
+    }
+
+    #[test]
+    fn update_metrics_from_primary() {
+        let mut c = menlo_collection();
+        c.update_metrics().expect("update");
+        let m = c.metrics().expect("metrics");
+        assert!(m.cell_width > 0);
+        assert!(m.cell_height > 0);
+        assert!(m.cell_baseline <= m.cell_height);
+        // It matches calc'ing the primary face's metrics directly.
+        let expected = Metrics::calc(c.get_face(Index::default()).unwrap().get_metrics());
+        assert_eq!(*c.metrics().unwrap(), expected);
+    }
+
+    #[test]
+    fn update_metrics_no_primary() {
+        let mut c = Collection::new();
+        assert_eq!(
+            c.update_metrics(),
+            Err(UpdateMetricsError::CannotLoadPrimaryFont)
+        );
+        assert!(c.metrics().is_none());
+    }
+
+    #[test]
+    fn update_metrics_caches_primary() {
+        let mut c = menlo_collection();
+        assert!(c.primary_face_metrics.is_none());
+        c.update_metrics().expect("update");
+        assert!(c.primary_face_metrics.is_some());
     }
 
     #[test]

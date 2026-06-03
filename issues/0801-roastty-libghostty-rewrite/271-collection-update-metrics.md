@@ -133,3 +133,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260602-225056-067207-prompt.md`
 - Result: `logs/codex-review/20260602-225056-067207-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`collection.rs` gained `UpdateMetricsError::CannotLoadPrimaryFont`, the
+`metrics: Option<Metrics>` field, `update_metrics` (loads the primary face index
+0, caches its `FaceMetrics`, sets `metrics = Metrics::calc(...)`), and the
+`metrics()` accessor. `metric_modifiers` remain deferred (identity default).
+
+Tests (live CoreText):
+
+- `update_metrics_from_primary` — `Ok`; `metrics()` is `Some` with
+  `cell_width > 0`, `cell_height > 0`, `cell_baseline <= cell_height`, and
+  equals `Metrics::calc` of the primary's metrics.
+- `update_metrics_no_primary` — empty collection → `Err(CannotLoadPrimaryFont)`,
+  `metrics()` stays `None`.
+- `update_metrics_caches_primary` — the `primary_face_metrics` cache is
+  populated after the call (asserted directly).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty collection` → 37 passed, 0 failed.
+- `cargo test -p roastty` → 2425 passed, 0 failed (no regressions; +3).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The `Collection` now derives the terminal's grid metrics from its primary face.
+This effectively completes the **eager** `Collection`: storage, codepoint
+resolution, aliasing, style completion, size adjustment, and grid metrics. The
+remaining `Collection` pieces are config-driven or lazy: the `metric_modifiers`
+(`Metrics.ModifierSet`/`apply`) with the config subsystem, the collection-size
+resize application (so a recorded scale factor physically resizes via
+`set_size`), and the `DeferredFace` + `discovery` lazy-loading sub-area
+(CoreText font matching). Above the Collection sit the `CodepointResolver`
+(sprite/box routing over `Collection.getIndex`), the shaper, the Nerd Font
+attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-225318-946896-prompt.md`
+- Result: `logs/codex-review/20260602-225318-946896-last-message.md`
+
+Codex confirmed the code matches upstream `updateMetrics` for the eager slice
+(loads primary index 0, maps any load failure to `CannotLoadPrimaryFont`,
+refreshes `primary_face_metrics`, derives `Metrics::calc(fm)`, stores it), that
+deferring the `metric_modifiers` apply is consistent with the documented
+identity-default scope, that the borrow chain is sound (`get_metrics()` returns
+an owned value so the `get_face` borrow ends before the assignments), and that
+the tests cover the primary calculation, the no-primary error path, and direct
+cache population.
