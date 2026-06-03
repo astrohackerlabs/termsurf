@@ -323,3 +323,67 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-152420-716700-prompt.md` (design)
 - Result: `logs/codex-review/20260603-152420-716700-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The run iterator's core grouping loop is implemented — `RunIterator.next()`
+runs.
+
+- `roastty/src/font/run.rs`: `RunOutput` (the `TextRun` + accumulated
+  `(codepoint, cluster)` stream), `RunIterator` (`new`/`next`/`resolve_font`),
+  and `trailing_trim`. `next()` trims trailing empties, skips leading
+  invisibles, and walks the row's cells — grouping by font index and comparable
+  style (with the `style_id` fast path and the bad-ligature break), resolving
+  each cell's font via the fallback chain (`index_for_grapheme` → `U+FFFD` →
+  space), accumulating the codepoint stream (primary `0`→space, grapheme
+  components minus `FE0E`/`FE0F`), and emitting a `TextRun` with
+  `run_hash`/`offset`/`cells`/`font_index`. Checked conversions
+  (`u32`/`u16::try_from`) are used for the cluster/offset/cell-count;
+  `debug_assert!`s pin the common-path scope (no selection/cursor; no spacers).
+
+Tests (over a Menlo `CodepointResolver`): `next_groups_one_run` (`"AB"` → one
+run, `[(A,0),(B,1)]`), `next_trims_trailing_empties`,
+`next_breaks_on_bad_ligature` (`"fl"` → two runs), `next_empty_cell_is_space`,
+`next_all_empty_is_none`. All pass.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2797 passed, 0 failed (+5, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The shaping pipeline is now **functionally complete for the common path**: a row
+of `RunCell`s → `RunIterator::next()` → a `TextRun` plus its
+`(codepoint, cluster)` stream → `Face::shape_run` → positioned glyphs.
+`RunIterator.next()` — the orchestration function that applies every ported
+decision helper, resolves fonts, accumulates the stream, computes the hash, and
+emits runs — is implemented and gated.
+
+The remaining work: Experiment 357 adds the **spacer skip** and the
+**selection/cursor breaks** (the inputs absent on the common path), and a final
+renderer-side experiment wires roastty's `terminal/page.rs` cells into
+`RunCell`s (and `RunOptions`) so the path runs live against real terminal rows.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It verified the common-path control flow matches
+upstream: breaks leave `j` unchanged for the next run, the fallback and normal
+paths advance `j`, and `current_font` is set before the font comparison at
+`j == start` (so the font break cannot fire on the first cell); the checked
+conversions resolve the design-gate finding; the accumulation is faithful (a
+fallback emits only the substituted codepoint, a non-fallback emits the primary
+plus grapheme components skipping `FE0E`/`FE0F`, and `0` maps to space); and
+`trailing_trim`, the leading invisible skip, `None` termination, and
+`self.i = j` are all safe for the scoped common path (no infinite loop —
+`self.i` advances each `next()`). It ran `cargo test -p roastty next_` — all 5
+new `next_*` tests passed.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-152816-734273-last-message.md`

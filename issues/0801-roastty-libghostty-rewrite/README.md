@@ -1158,7 +1158,7 @@ are past the correctness-critical foundation.
 - [Experiment 355: the run iterator's input view](355-runiter-input-view.md) —
   **Pass** · Claude/Codex/Codex
 - [Experiment 356: the run iterator's core grouping loop](356-runiter-next-core.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

@@ -1,14 +1,16 @@
 //! The run iterator — grouping a terminal row's cells into shaping runs.
 //!
-//! Faithful (in progress) port of upstream `font/shaper/run.zig`. This slice
-//! provides the pure decision helpers of `RunIterator.next()`: the bold/italic
-//! style mapping, the bad-ligature run split, and the grapheme presentation
-//! derivation. The cell-walking `next()` loop (which extracts these values from a
-//! terminal `Cell`), `comparableStyle`, the selection/cursor/spacer breaks, and
-//! the `TextRun` value type are later sub-areas.
+//! Faithful (in progress) port of upstream `font/shaper/run.zig`. Provides the
+//! shaping input ([`RunOptions`]/[`RunCell`]) and output ([`TextRun`]/[`run_hash`]),
+//! the per-cell decision helpers ([`font_style`]/[`is_bad_ligature_break`]/
+//! [`presentation_for_grapheme`]/[`comparable_style`]), and [`RunIterator`]'s
+//! common-path grouping loop (narrow cells, no selection/cursor). The spacer skip
+//! and the selection/cursor breaks, and the renderer code that builds [`RunCell`]s
+//! from terminal cells, are later sub-areas.
 
 use std::hash::{Hash, Hasher};
 
+use crate::font::codepoint_resolver::CodepointResolver;
 use crate::font::collection::Index;
 use crate::font::shape::Codepoint;
 use crate::font::{Presentation, Style};
@@ -164,6 +166,181 @@ pub(crate) fn presentation_for_grapheme(first_cp: u32) -> Option<Presentation> {
         0xFE0F => Some(Presentation::Emoji),
         _ => None,
     }
+}
+
+/// One run's shaped input: the [`TextRun`] descriptor plus the accumulated
+/// `(codepoint, cluster)` stream to hand to `Face::shape_run`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RunOutput {
+    pub run: TextRun,
+    pub codepoints: Vec<Codepoint>,
+}
+
+/// Groups a terminal row's cells into shaping runs. Faithful port of upstream
+/// `RunIterator` (its common path): each [`RunIterator::next`] yields the next run
+/// of cells that share a font and a comparable style. The spacer skip and the
+/// selection/cursor breaks are deferred (Exp 357); this slice handles narrow cells
+/// with no selection and no cursor.
+pub(crate) struct RunIterator<'a> {
+    opts: &'a RunOptions,
+    resolver: &'a mut CodepointResolver,
+    /// The current position in the row.
+    i: usize,
+    /// The exclusive upper bound after trimming trailing empty cells.
+    max: usize,
+}
+
+impl<'a> RunIterator<'a> {
+    /// Create an iterator over `opts`'s row, resolving fonts through `resolver`.
+    pub(crate) fn new(opts: &'a RunOptions, resolver: &'a mut CodepointResolver) -> Self {
+        let max = trailing_trim(&opts.cells);
+        Self {
+            opts,
+            resolver,
+            i: 0,
+            max,
+        }
+    }
+
+    /// The next run, or `None` when the row is exhausted.
+    pub(crate) fn next(&mut self) -> Option<RunOutput> {
+        let cells = &self.opts.cells;
+        // Skip leading invisible cells.
+        while self.i < self.max && cells[self.i].style.flags.invisible {
+            self.i += 1;
+        }
+        if self.i >= self.max {
+            return None;
+        }
+        // This slice handles the common path only; Exp 357 adds these.
+        debug_assert!(self.opts.selection.is_none() && self.opts.cursor_x.is_none());
+        let start = self.i;
+        let style = cells[start].style;
+        let mut codepoints: Vec<Codepoint> = Vec::new();
+        let mut current_font: Option<Index> = None;
+
+        let mut j = start;
+        while j < self.max {
+            let cell = &cells[j];
+            // Spacers are out of scope for this slice (Exp 357).
+            debug_assert!(matches!(cell.wide, Wide::Narrow | Wide::Wide));
+            // A run-relative cluster (a column count fits `u16`, so `u32` is safe).
+            let cluster = u32::try_from(j - start).expect("a run cluster fits u32");
+
+            if j > start {
+                let prev = &cells[j - 1];
+                // Bad-ligature break (both cells must be plain codepoints).
+                if prev.is_codepoint
+                    && cell.is_codepoint
+                    && is_bad_ligature_break(prev.codepoint, cell.codepoint)
+                {
+                    break;
+                }
+                // Style break: a different `style_id` whose comparable style
+                // (ignoring background) differs ends the run.
+                if prev.style_id != cell.style_id
+                    && comparable_style(style) != comparable_style(cell.style)
+                {
+                    break;
+                }
+            }
+
+            let fstyle = font_style(style.flags.bold, style.flags.italic);
+            let presentation = if cell.has_grapheme() {
+                presentation_for_grapheme(cell.graphemes[0])
+            } else {
+                None
+            };
+            let (idx, fallback) = self.resolve_font(cell, fstyle, presentation);
+            if j == start {
+                current_font = Some(idx);
+            }
+            if Some(idx) != current_font {
+                break; // font change → run ends (cell `j` starts the next run)
+            }
+
+            if let Some(cp) = fallback {
+                // A fallback substitutes a single codepoint, not the grapheme.
+                codepoints.push(Codepoint {
+                    codepoint: cp,
+                    cluster,
+                });
+                j += 1;
+                continue;
+            }
+            let primary = if cell.codepoint == 0 {
+                ' ' as u32
+            } else {
+                cell.codepoint
+            };
+            codepoints.push(Codepoint {
+                codepoint: primary,
+                cluster,
+            });
+            for &cp in &cell.graphemes {
+                // Presentation selectors are not sent to the shaper.
+                if cp == 0xFE0E || cp == 0xFE0F {
+                    continue;
+                }
+                codepoints.push(Codepoint {
+                    codepoint: cp,
+                    cluster,
+                });
+            }
+            j += 1;
+        }
+
+        let font_index = current_font.expect("a non-empty run resolves a font");
+        let cell_count = u16::try_from(j - start).expect("a run's cell count fits u16");
+        let offset = u16::try_from(start).expect("a run's column offset fits u16");
+        self.i = j;
+        Some(RunOutput {
+            run: TextRun {
+                hash: run_hash(&codepoints, cell_count, font_index),
+                offset,
+                cells: cell_count,
+                font_index,
+            },
+            codepoints,
+        })
+    }
+
+    /// Resolve a cell's font index, with upstream's fallback chain: the grapheme's
+    /// own font, else `U+FFFD`, else space. Returns the index and, for a fallback,
+    /// the substituted codepoint.
+    fn resolve_font(
+        &mut self,
+        cell: &RunCell,
+        fstyle: Style,
+        p: Option<Presentation>,
+    ) -> (Index, Option<u32>) {
+        if let Some(idx) =
+            self.resolver
+                .index_for_grapheme(cell.codepoint, &cell.graphemes, fstyle, p)
+        {
+            return (idx, None);
+        }
+        if let Some(idx) = self.resolver.get_index(0xFFFD, fstyle, p) {
+            return (idx, Some(0xFFFD));
+        }
+        let idx = self
+            .resolver
+            .get_index(' ' as u32, fstyle, p)
+            .expect("a font renders space");
+        (idx, Some(' ' as u32))
+    }
+}
+
+/// The exclusive upper bound after trimming trailing empty cells (last non-empty
+/// cell index + 1, or `0` if the row is entirely empty).
+fn trailing_trim(cells: &[RunCell]) -> usize {
+    for k in 0..cells.len() {
+        let rev = cells.len() - 1 - k;
+        if !cells[rev].is_empty {
+            return rev + 1;
+        }
+    }
+    0
 }
 
 #[cfg(test)]
@@ -327,6 +504,113 @@ mod tests {
         assert_eq!(opts.cells[0], cell);
         assert_eq!(opts.selection, Some([1, 4]));
         assert_eq!(opts.cursor_x, Some(2));
+    }
+
+    fn menlo_resolver() -> CodepointResolver {
+        use crate::font::collection::Collection;
+        use crate::font::face::coretext::Face;
+        let mut c = Collection::new();
+        c.add(Face::new("Menlo", 32.0), Style::Regular, false)
+            .unwrap();
+        CodepointResolver::new(c)
+    }
+
+    fn narrow(codepoint: u32) -> RunCell {
+        RunCell {
+            codepoint,
+            graphemes: vec![],
+            style: TermStyle::default(),
+            style_id: 0,
+            wide: Wide::Narrow,
+            is_empty: codepoint == 0,
+            is_codepoint: true,
+        }
+    }
+
+    fn cps(out: &RunOutput) -> Vec<(u32, u32)> {
+        out.codepoints
+            .iter()
+            .map(|c| (c.codepoint, c.cluster))
+            .collect()
+    }
+
+    #[test]
+    fn next_groups_one_run() {
+        let opts = RunOptions {
+            cells: vec![narrow('A' as u32), narrow('B' as u32)],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let out = it.next().expect("a run");
+        assert_eq!(out.run.offset, 0);
+        assert_eq!(out.run.cells, 2);
+        assert_eq!(cps(&out), vec![('A' as u32, 0), ('B' as u32, 1)]);
+        assert!(it.next().is_none(), "the row has one run");
+    }
+
+    #[test]
+    fn next_trims_trailing_empties() {
+        let opts = RunOptions {
+            cells: vec![narrow('A' as u32), narrow('B' as u32), narrow(0), narrow(0)],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let out = it.next().expect("a run");
+        assert_eq!(out.run.cells, 2, "trailing empty cells are trimmed");
+        assert_eq!(cps(&out), vec![('A' as u32, 0), ('B' as u32, 1)]);
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_breaks_on_bad_ligature() {
+        let opts = RunOptions {
+            cells: vec![narrow('f' as u32), narrow('l' as u32)],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let first = it.next().expect("the 'f' run");
+        assert_eq!(first.run.offset, 0);
+        assert_eq!(first.run.cells, 1);
+        assert_eq!(cps(&first), vec![('f' as u32, 0)]);
+        let second = it.next().expect("the 'l' run");
+        assert_eq!(second.run.offset, 1);
+        assert_eq!(second.run.cells, 1);
+        assert_eq!(cps(&second), vec![('l' as u32, 0)]);
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn next_empty_cell_is_space() {
+        // A leading empty (non-invisible) cell contributes a space codepoint.
+        let opts = RunOptions {
+            cells: vec![narrow(0), narrow('A' as u32)],
+            ..Default::default()
+        };
+        let mut r = menlo_resolver();
+        let mut it = RunIterator::new(&opts, &mut r);
+        let out = it.next().expect("a run");
+        assert_eq!(
+            cps(&out),
+            vec![(' ' as u32, 0), ('A' as u32, 1)],
+            "the empty cell shapes as a space"
+        );
+    }
+
+    #[test]
+    fn next_all_empty_is_none() {
+        let mut r = menlo_resolver();
+        // An all-empty row.
+        let opts = RunOptions {
+            cells: vec![narrow(0), narrow(0)],
+            ..Default::default()
+        };
+        assert!(RunIterator::new(&opts, &mut r).next().is_none());
+        // An empty row.
+        let empty = RunOptions::default();
+        assert!(RunIterator::new(&empty, &mut r).next().is_none());
     }
 
     #[test]
