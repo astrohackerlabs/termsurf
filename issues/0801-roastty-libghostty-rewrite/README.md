@@ -1181,6 +1181,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 367: per-cell RenderOptions derivation](367-render-options.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 368: placing a shaped run's glyphs](368-add-run.md) — **Designed**
+  · Claude/Codex/Codex
 
 ## Non-Goals
 
