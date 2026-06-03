@@ -165,3 +165,69 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-174752-681545-prompt.md` (design)
 - Result: `logs/codex-review/20260603-174752-681545-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`SharedGrid::render_glyph` now returns the glyph's presentation alongside it, so
+the draw path can pick the atlas.
+
+- `roastty/src/font/shared_grid.rs`:
+  - added `Render { glyph: Glyph, presentation: Presentation }` (derives
+    `Copy`), upstream's `SharedGrid.Render`;
+  - the glyph cache is now `HashMap<GlyphKey, Render>`;
+  - `render_glyph` returns `Result<Render, ResolverRenderError>` — a cache hit
+    returns the cached `Render`, and on a miss it builds
+    `Render { glyph, presentation }` (the presentation already computed to
+    select the atlas), inserts, and returns. The `?` after the render match
+    still propagates a render error before the `Render` is built/inserted, so a
+    failed render is never cached. The method doc was updated (returns `Render`;
+    the stale "sans the glyph cache" wording removed).
+
+Tests (in `shared_grid.rs`): the existing three updated to read `render.glyph.*`
+and assert the presentation — text `'M'` → `Presentation::Text` (grayscale), the
+box-drawing sprite `U+2500` → `Presentation::Text`, and the cache test now
+compares full `Render` values (still one entry for a repeat, two for distinct).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2812 passed, 0 failed (no regressions; the three
+  tests were updated in place rather than added).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The shared grid's render output now matches upstream's `Render` exactly: a glyph
+and the presentation that decided its atlas. The draw path can
+`match render.presentation` to sample the grayscale or color atlas, and use
+`render.glyph` for the atlas coordinates, size, and bearings. This is the last
+piece of information the cell-assembly needs from `font/`.
+
+The remaining renderer-bridge work is the **cell assembly / Metal draw path**:
+for each shaped glyph of a `ShapedRun`, call `render_glyph`, skip zero-size
+glyphs, and emit a GPU cell record (atlas kind from `presentation`, grid
+position `run.offset + cell.x`, glyph atlas placement/size, and bearings
+`glyph.offset + cell.x_offset/y_offset`) — upstream's `addGlyph`/`rebuildCells`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation is faithful — `render_glyph`
+computes `presentation`, uses that same value to choose the atlas, then stores
+and returns `Render { glyph, presentation }`, and cache hits return the cached
+`Render` so the draw path gets the atlas-selection metadata without recomputing.
+It confirmed the `?` placement is correct (the render match resolves to a
+`Glyph` only on success; any render error returns before `Render` is built and
+before the cache insert, so failed renders are not cached), that the updated
+tests cover the expected behavior (text and sprite assert `Presentation::Text`
+and glyph fields via `render.glyph`; the cache test compares full `Render`
+values and confirms cache-size stability), and that the source docs were updated
+to remove the stale "cache deferred" wording. Nothing needed to change before
+the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-174957-320764-last-message.md`

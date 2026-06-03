@@ -20,6 +20,16 @@ use crate::font::Presentation;
 /// Initial atlas edge length in pixels. Matches upstream `SharedGrid.init`.
 const ATLAS_INITIAL_SIZE: u32 = 512;
 
+/// A rendered glyph paired with the presentation that decided its atlas. Faithful
+/// port of upstream `SharedGrid.Render`: the draw path uses `presentation` to
+/// sample the right atlas (`Emoji` → color, `Text` → grayscale) and `glyph` for
+/// the atlas placement, size, and bearings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Render {
+    pub glyph: Glyph,
+    pub presentation: Presentation,
+}
+
 /// The glyph cache key. Mirrors upstream `GlyphKey.Packed`: the packed font
 /// index, the glyph id, and the **integer** render options. The float-bearing
 /// `grid_metrics`/`constraint` are excluded — `grid_metrics` is constant per grid
@@ -64,7 +74,7 @@ pub(crate) struct SharedGrid {
     pub resolver: CodepointResolver,
     pub metrics: Metrics,
     /// The glyph cache: each distinct glyph is rasterized into an atlas once.
-    glyphs: HashMap<GlyphKey, Glyph>,
+    glyphs: HashMap<GlyphKey, Render>,
 }
 
 impl SharedGrid {
@@ -86,20 +96,22 @@ impl SharedGrid {
     }
 
     /// Render `glyph_index` at `index` into the correct atlas — grayscale for
-    /// text, color for emoji — returning its [`Glyph`]. Emoji get upstream's
-    /// cover/center constraint. On `AtlasFull`, grows the atlas (`size * 2`) and
-    /// retries once. Faithful port of upstream `SharedGrid.renderGlyph` (sans the
-    /// glyph cache).
+    /// text, color for emoji — returning a [`Render`] (the glyph plus the
+    /// presentation that chose its atlas). Returns the cached `Render` on a hit;
+    /// otherwise emoji get upstream's cover/center constraint, and on `AtlasFull`
+    /// the atlas grows (`size * 2`) and the render retries once. Faithful port of
+    /// upstream `SharedGrid.renderGlyph`.
     pub(crate) fn render_glyph(
         &mut self,
         index: Index,
         glyph_index: u32,
         opts: &RenderOptions,
-    ) -> Result<Glyph, ResolverRenderError> {
+    ) -> Result<Render, ResolverRenderError> {
         let key = GlyphKey::new(index, glyph_index, opts);
-        if let Some(&glyph) = self.glyphs.get(&key) {
-            // Cache hit: no re-rasterization, no atlas reservation.
-            return Ok(glyph);
+        if let Some(&render) = self.glyphs.get(&key) {
+            // Cache hit: no re-rasterization, no atlas reservation. Carries the
+            // glyph and the presentation that selected its atlas.
+            return Ok(render);
         }
 
         // CoreText glyph ids fit `u16`; a sprite index ignores the glyph here.
@@ -135,8 +147,12 @@ impl SharedGrid {
             ),
         }?; // a render error is propagated WITHOUT caching
 
-        self.glyphs.insert(key, glyph);
-        Ok(glyph)
+        let render = Render {
+            glyph,
+            presentation,
+        };
+        self.glyphs.insert(key, render);
+        Ok(render)
     }
 }
 
@@ -203,19 +219,21 @@ mod tests {
         let opts = menlo_opts();
         let glyph = Face::new("Menlo", 32.0).glyphs_for_characters(&[b'M' as u16])[0];
 
-        let g = grid
+        let r = grid
             .render_glyph(Index::default(), u32::from(glyph), &opts)
             .expect("'M' renders");
 
-        // It rasterized something.
-        assert!(g.width > 0);
-        assert!(g.height > 0);
+        // It rasterized something, and reports the text presentation that routed
+        // it to the grayscale atlas.
+        assert_eq!(r.presentation, Presentation::Text);
+        assert!(r.glyph.width > 0);
+        assert!(r.glyph.height > 0);
         // The reserved region fits inside the un-grown 512px grayscale atlas. A
         // monochrome glyph routed to the BGRA color atlas would have failed
         // `InvalidAtlasFormat`, so a successful render proves text → grayscale.
         assert_eq!(grid.atlas_grayscale.size(), 512);
-        assert!((g.atlas_x + g.width) as usize <= 512);
-        assert!((g.atlas_y + g.height) as usize <= 512);
+        assert!((r.glyph.atlas_x + r.glyph.width) as usize <= 512);
+        assert!((r.glyph.atlas_y + r.glyph.height) as usize <= 512);
     }
 
     #[test]
@@ -226,11 +244,13 @@ mod tests {
         // A box-drawing horizontal line (U+2500) renders via the sprite font,
         // which `new` configured. Without `set_sprite_metrics`, this would be
         // `SpriteUnavailable`.
-        let g = grid
+        let r = grid
             .render_glyph(Index::special(Special::Sprite), 0x2500, &opts)
             .expect("the box-drawing sprite renders");
-        assert!(g.width > 0);
-        assert!(g.height > 0);
+        // A sprite is text presentation (it draws into the grayscale atlas).
+        assert_eq!(r.presentation, Presentation::Text);
+        assert!(r.glyph.width > 0);
+        assert!(r.glyph.height > 0);
     }
 
     #[test]

@@ -1176,7 +1176,7 @@ are past the correctness-critical foundation.
 - [Experiment 364: the shared grid's glyph cache](364-glyph-cache.md) — **Pass**
   · Claude/Codex/Codex
 - [Experiment 365: render returns the glyph's presentation](365-render-presentation.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
