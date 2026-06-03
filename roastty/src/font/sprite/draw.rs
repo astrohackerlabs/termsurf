@@ -757,7 +757,7 @@ pub(crate) fn draw_box_arc(cp: u32, metrics: &Metrics, canvas: &mut Canvas) -> b
         ],
     };
 
-    canvas.stroke_path(&nodes, float_thick);
+    canvas.stroke_path(&nodes, float_thick, raster::CapMode::Butt);
     true
 }
 

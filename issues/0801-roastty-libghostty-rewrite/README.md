@@ -1050,7 +1050,7 @@ are past the correctness-critical foundation.
 - [Experiment 301: the box-drawing arcs (`U+256D`–`U+2570`)](301-box-arcs.md) —
   **Pass** · Claude/Codex/Codex
 - [Experiment 302: z2d port — round and square line caps](302-z2d-caps.md) —
-  **Designed** · Claude/Codex/Codex
+  **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

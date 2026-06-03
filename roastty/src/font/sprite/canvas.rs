@@ -226,13 +226,19 @@ impl Canvas {
     }
 
     /// Stroke an anti-aliased open path (in unpadded cell coordinates) with the
-    /// given `thickness`, painting the opaque (`.on`) source. Faithful port of
-    /// upstream `Canvas.strokePath` as used by the box arcs: butt caps, miter
-    /// joins (`miter_limit` 10, `tolerance` 0.1) — z2d's `StrokeOptions`
-    /// defaults. The padding translation (upstream's CTM) is applied to every
+    /// given `thickness` and `cap_mode`, painting the opaque (`.on`) source.
+    /// Faithful port of upstream `Canvas.strokePath`: miter joins (`miter_limit`
+    /// 10, `tolerance` 0.1) — z2d's `StrokeOptions` defaults — with the caller's
+    /// chosen line caps (the box arcs pass `Butt`; the curly underline will pass
+    /// `Round`). The padding translation (upstream's CTM) is applied to every
     /// node here; the stroke is rasterized with 4× multisample anti-aliasing
     /// into the padded surface.
-    pub(crate) fn stroke_path(&mut self, nodes: &[raster::PathNode], thickness: f64) {
+    pub(crate) fn stroke_path(
+        &mut self,
+        nodes: &[raster::PathNode],
+        thickness: f64,
+        cap_mode: raster::CapMode,
+    ) {
         let translated: Vec<raster::PathNode> =
             nodes.iter().map(|n| self.translate_node(*n)).collect();
         let poly = raster::stroke_path(
@@ -242,6 +248,7 @@ impl Canvas {
             10.0,
             0.1,
             raster::JoinMode::Miter,
+            cap_mode,
         );
         raster::fill_polygon(
             &mut self.buf,
