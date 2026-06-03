@@ -1007,6 +1007,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 280: Braille Patterns (U+2800–U+28FF)](280-braille.md) — **Pass**
   · Claude/Codex/Codex
+- [Experiment 281: Sextants (U+1FB00–U+1FB3B)](281-sextants.md) — **Designed** ·
+  Claude/Codex/Codex
 
 ## Non-Goals
 
