@@ -949,6 +949,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 251: CoreText `Face` scalar metric accessors](251-coretext-scalar-metrics.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 252: CoreText `Face` glyph-measurement accessors](252-coretext-glyph-measurement.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
