@@ -1076,7 +1076,7 @@ are past the correctness-critical foundation.
 - [Experiment 314: the powerline diagonal spacers (E0B9/E0BB/E0BD/E0BF)](314-powerline-diagonals.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 315: the powerline flame separators (E0D2/E0D4)](315-powerline-flames.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

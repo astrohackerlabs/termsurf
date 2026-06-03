@@ -1150,6 +1150,54 @@ pub(crate) fn draw_powerline_diagonal(cp: u32, metrics: &Metrics, canvas: &mut C
     draw_box_diagonal(box_cp, metrics, canvas)
 }
 
+/// The flame powerline separators (`E0D2`, `E0D4`) — two filled quadrilaterals
+/// tapering toward a thin gap at the cell center. `E0D4` is `E0D2` mirrored.
+/// Faithful port of upstream `powerline.zig`'s `drawE0D2`/`drawE0D4`. Returns
+/// `false` for any other codepoint.
+pub(crate) fn draw_powerline_flame(
+    cp: u32,
+    width: u32,
+    height: u32,
+    metrics: &Metrics,
+    canvas: &mut Canvas,
+) -> bool {
+    let flip = match cp {
+        0xe0d2 => false,
+        0xe0d4 => true,
+        _ => return false,
+    };
+
+    let w = width as f64;
+    let h = height as f64;
+    let t = metrics.box_thickness as f64;
+    let pt = raster::Point::new;
+
+    // Top piece.
+    let top = [
+        raster::PathNode::MoveTo(pt(0.0, 0.0)),
+        raster::PathNode::LineTo(pt(w, 0.0)),
+        raster::PathNode::LineTo(pt(w / 2.0, h / 2.0 - t / 2.0)),
+        raster::PathNode::LineTo(pt(0.0, h / 2.0 - t / 2.0)),
+        raster::PathNode::ClosePath,
+    ];
+    canvas.fill_path(&top);
+
+    // Bottom piece.
+    let bottom = [
+        raster::PathNode::MoveTo(pt(0.0, h)),
+        raster::PathNode::LineTo(pt(w, h)),
+        raster::PathNode::LineTo(pt(w / 2.0, h / 2.0 + t / 2.0)),
+        raster::PathNode::LineTo(pt(0.0, h / 2.0 + t / 2.0)),
+        raster::PathNode::ClosePath,
+    ];
+    canvas.fill_path(&bottom);
+
+    if flip {
+        canvas.flip_horizontal();
+    }
+    true
+}
+
 /// The block cursor: a full-cell rect. Faithful port of upstream `special.zig`'s
 /// `cursor_rect`.
 pub(crate) fn draw_cursor_rect(canvas: &mut Canvas, width: u32, height: u32, _metrics: &Metrics) {
@@ -3777,6 +3825,44 @@ mod tests {
             assert!(
                 !draw_powerline_diagonal(cp, &m, &mut c),
                 "{cp:#06x} not a powerline diagonal"
+            );
+            assert!(all_alpha(&c, &m, 0), "{cp:#06x} drew ink");
+        }
+    }
+
+    // The flame powerline separators (two filled quads + flip).
+
+    #[test]
+    fn powerline_e0d2_flame() {
+        // The top and bottom pieces fill the left side, with a thin gap at the
+        // center.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_powerline_flame(0xe0d2, 9, 18, &m, &mut c));
+        assert!(inked(&c, 0, 2), "top piece");
+        assert!(inked(&c, 0, 16), "bottom piece");
+        assert!(!inked(&c, 0, 9), "center gap empty");
+    }
+
+    #[test]
+    fn powerline_e0d4_flipped() {
+        // E0D4 is E0D2 mirrored: the wide side on the right.
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_powerline_flame(0xe0d4, 9, 18, &m, &mut c));
+        assert!(inked(&c, 8, 2), "top piece on the right");
+        assert!(inked(&c, 8, 16), "bottom piece on the right");
+        assert!(!inked(&c, 8, 9), "center gap empty");
+    }
+
+    #[test]
+    fn draw_powerline_flame_excludes() {
+        let m = fixture_metrics();
+        for cp in [0x2500u32, 0xe0b0, 'M' as u32] {
+            let mut c = cell_canvas();
+            assert!(
+                !draw_powerline_flame(cp, 9, 18, &m, &mut c),
+                "{cp:#06x} not a flame"
             );
             assert!(all_alpha(&c, &m, 0), "{cp:#06x} drew ink");
         }

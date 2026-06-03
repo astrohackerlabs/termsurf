@@ -127,3 +127,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-091654-545587-prompt.md`
 - Result: `logs/codex-review/20260603-091654-545587-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/draw.rs` gained
+`draw_powerline_flame(cp, width, height, metrics, canvas)`: it fills the top
+quad (`MoveTo(0,0)`, `LineTo(w,0)`, `LineTo(w/2, h/2 − t/2)`,
+`LineTo(0, h/2 − t/2)`, `ClosePath`) and the bottom quad (`MoveTo(0,h)`,
+`LineTo(w,h)`, `LineTo(w/2, h/2 + t/2)`, `LineTo(0, h/2 + t/2)`, `ClosePath`)
+via `fill_path`, with `t = box_thickness`; `E0D4` then `flip_horizontal`;
+`_ => false`.
+
+Tests (the fixture `9×18` cell, `t = 2`, gap at `y = 8–9`), confirmed against
+the render:
+
+- `powerline_e0d2_flame` — top piece `(0,2)` inked, bottom piece `(0,16)` inked,
+  center gap `(0,9)` empty.
+- `powerline_e0d4_flipped` — the wide side on the right (`(8,2)`/`(8,16)` inked,
+  `(8,9)` empty).
+- `draw_powerline_flame_excludes` — `0x2500`, `0xE0B0`, `'M'` return `false` and
+  draw nothing.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2659 passed, 0 failed (+3, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The flame separators render faithfully — completing the **entire powerline
+block** (`E0B0`–`E0BF` and `E0D2`/`E0D4`). The sprite font's `z2d`-backed and
+geometric coverage is now comprehensive: the box diagonals/arcs, the geometric
+corner triangles, the full underline/special-sprite family, the cursors, and the
+whole powerline family.
+
+With all the rendering primitives (stroke, fill, inner-stroke, arc, triangle)
+and essentially all the glyph families ported, the major remaining sprite-font
+work is the unifying sprite `has_codepoint`/draw and **sprite-kind dispatch**
+(mapping the codepoint tables — box, braille, sextant, octant, quadrant, block,
+diagonals, arcs, geometric shapes, powerline — and a `Sprite` enum to all the
+standalone `draw_*` functions, filling the resolver's deferred
+`SpriteUnavailable` arm). After the sprite font: the discovery consumer, the UCD
+emoji-presentation default, codepoint overrides, the shaper, the Nerd Font
+attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no Required
+changes**. It confirmed `draw_powerline_flame` matches upstream: both quads use
+the correct `w`/`h` dimensions and the `box_thickness` half-gap, each is filled
+as a closed path, and `E0D4` is the same render followed by `flip_horizontal`;
+and that the two separate fills introduce no compositing concern. No Optional
+findings.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-091912-595869-last-message.md`
