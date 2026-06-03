@@ -7,6 +7,7 @@
 //! scale factors, and style aliasing land in later experiments.
 
 use crate::font::face::coretext::Face;
+use crate::font::metrics::FaceMetrics;
 use crate::font::{Presentation, Style};
 
 /// Bits used for the face index within an [`Index`]. `Style` is a 3-bit field,
@@ -210,6 +211,93 @@ pub(crate) struct SyntheticStyle {
     pub italic: bool,
     pub bold: bool,
     pub bold_italic: bool,
+}
+
+/// How to scale a (fallback) face to match the primary face — the
+/// `font-size-adjust` behavior. Faithful port of upstream `SizeAdjustment`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SizeAdjustment {
+    /// Don't adjust; use the face's original size.
+    None,
+    /// Match the ideograph width with the primary face.
+    IcWidth,
+    /// Match the ex height with the primary face.
+    ExHeight,
+    /// Match the cap height with the primary face.
+    CapHeight,
+    /// Match the line height with the primary face.
+    LineHeight,
+}
+
+/// The factor by which to scale a face (with metrics `face`) so the chosen
+/// `adjustment` metric matches the `primary` face. Faithful port of upstream
+/// `scaleFactor`: the metrics are normalized from pixels to ems (so the actual
+/// sizes don't matter), and the chosen metric falls through
+/// `ic_width → ex_height → cap_height → line_height` whenever the **face** does
+/// not validly define it.
+pub(crate) fn scale_factor(
+    primary: &FaceMetrics,
+    face: &FaceMetrics,
+    adjustment: SizeAdjustment,
+) -> f64 {
+    if adjustment == SizeAdjustment::None {
+        return 1.0;
+    }
+
+    // Normalize px to ems so the faces' actual sizes don't matter.
+    let primary_scale = 1.0 / primary.px_per_em;
+    let face_scale = 1.0 / face.px_per_em;
+
+    // Fall through any metric the face doesn't validly define (its effective
+    // accessor would return an estimate, not the stored value). `line_height` is
+    // the always-valid terminus.
+    let mut adj = adjustment;
+    loop {
+        match adj {
+            SizeAdjustment::IcWidth => {
+                if face.ic_width.is_some_and(|v| v > 0.0) {
+                    break;
+                }
+                adj = SizeAdjustment::ExHeight;
+            }
+            SizeAdjustment::ExHeight => {
+                if face.ex_height.is_some_and(|v| v > 0.0) {
+                    break;
+                }
+                adj = SizeAdjustment::CapHeight;
+            }
+            SizeAdjustment::CapHeight => {
+                if face.cap_height.is_some_and(|v| v > 0.0) {
+                    break;
+                }
+                adj = SizeAdjustment::LineHeight;
+            }
+            SizeAdjustment::LineHeight => break,
+            SizeAdjustment::None => unreachable!(),
+        }
+    }
+
+    let (primary_metric, face_metric) = match adj {
+        SizeAdjustment::IcWidth => (
+            primary.effective_ic_width() * primary_scale,
+            face.effective_ic_width() * face_scale,
+        ),
+        SizeAdjustment::ExHeight => (
+            primary.effective_ex_height() * primary_scale,
+            face.effective_ex_height() * face_scale,
+        ),
+        SizeAdjustment::CapHeight => (
+            primary.effective_cap_height() * primary_scale,
+            face.effective_cap_height() * face_scale,
+        ),
+        SizeAdjustment::LineHeight => (
+            primary.line_height() * primary_scale,
+            face.line_height() * face_scale,
+        ),
+        SizeAdjustment::None => unreachable!(),
+    };
+
+    primary_metric / face_metric
 }
 
 /// A slot in a style's face list: either an owned [`Entry`] or an `Alias` to a
@@ -469,6 +557,7 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::metrics::FaceMetrics;
 
     #[test]
     fn index_bit_layout() {
@@ -886,5 +975,92 @@ mod tests {
             c.add_alias(Style::Bold, Index::special(Special::Sprite)),
             Err(AddError::InvalidAliasTarget)
         );
+    }
+
+    /// A `FaceMetrics` fixture; non-relevant fields are zeroed.
+    fn fm(
+        px_per_em: f64,
+        ascent: f64,
+        descent: f64,
+        line_gap: f64,
+        cell_width: f64,
+        cap_height: Option<f64>,
+        ex_height: Option<f64>,
+        ic_width: Option<f64>,
+    ) -> FaceMetrics {
+        FaceMetrics {
+            px_per_em,
+            cell_width,
+            ascent,
+            descent,
+            line_gap,
+            underline_position: None,
+            underline_thickness: None,
+            strikethrough_position: None,
+            strikethrough_thickness: None,
+            cap_height,
+            ex_height,
+            ascii_height: None,
+            ic_width,
+        }
+    }
+
+    #[test]
+    fn scale_factor_none_is_one() {
+        let p = fm(16.0, 12.0, -4.0, 0.0, 8.0, Some(9.0), Some(7.0), Some(15.0));
+        let f = fm(
+            32.0,
+            24.0,
+            -8.0,
+            2.0,
+            16.0,
+            Some(18.0),
+            Some(14.0),
+            Some(30.0),
+        );
+        assert_eq!(scale_factor(&p, &f, SizeAdjustment::None), 1.0);
+    }
+
+    #[test]
+    fn scale_factor_same_metrics_is_one() {
+        let m = fm(16.0, 12.0, -4.0, 1.0, 8.0, Some(9.0), Some(7.0), Some(15.0));
+        for adj in [
+            SizeAdjustment::IcWidth,
+            SizeAdjustment::ExHeight,
+            SizeAdjustment::CapHeight,
+            SizeAdjustment::LineHeight,
+        ] {
+            assert!((scale_factor(&m, &m, adj) - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn scale_factor_line_height() {
+        // primary line height = 12 - (-4) + 0 = 16, at 16 px/em -> 1.0 em.
+        let p = fm(16.0, 12.0, -4.0, 0.0, 8.0, None, None, None);
+        // face line height = 30 - (-9) + 0 = 39, at 30 px/em -> 1.3 em.
+        let f = fm(30.0, 30.0, -9.0, 0.0, 16.0, None, None, None);
+        let expected = (16.0 / 16.0) / (39.0 / 30.0);
+        assert!((scale_factor(&p, &f, SizeAdjustment::LineHeight) - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn scale_factor_falls_through() {
+        let p = fm(16.0, 12.0, -4.0, 0.0, 8.0, Some(9.0), Some(7.0), Some(15.0));
+        // The face validly defines ex_height but not ic_width, so IcWidth falls
+        // through to ExHeight.
+        let f = fm(16.0, 12.0, -4.0, 0.0, 8.0, Some(9.0), Some(8.0), None);
+        let via_ic = scale_factor(&p, &f, SizeAdjustment::IcWidth);
+        let via_ex = scale_factor(&p, &f, SizeAdjustment::ExHeight);
+        assert!((via_ic - via_ex).abs() < 1e-12);
+        // And it is NOT what forcing the ic_width estimate would give.
+        let ic_forced = (p.effective_ic_width() / 16.0) / (f.effective_ic_width() / 16.0);
+        assert!((via_ic - ic_forced).abs() > 1e-9);
+
+        // A face with none of ic/ex/cap falls all the way to line_height.
+        let f2 = fm(16.0, 12.0, -4.0, 0.0, 8.0, None, None, None);
+        let via_ic2 = scale_factor(&p, &f2, SizeAdjustment::IcWidth);
+        let via_lh2 = scale_factor(&p, &f2, SizeAdjustment::LineHeight);
+        assert!((via_ic2 - via_lh2).abs() < 1e-12);
     }
 }

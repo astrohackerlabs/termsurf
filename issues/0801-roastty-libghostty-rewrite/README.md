@@ -984,7 +984,7 @@ are past the correctness-critical foundation.
 - [Experiment 268: completeStyles synthesis — synthesize vs. alias](268-complete-styles-synthesis.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 269: Collection scale factor — match a face to the primary](269-collection-scale-factor.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

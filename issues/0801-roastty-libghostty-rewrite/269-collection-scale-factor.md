@@ -143,6 +143,65 @@ Review artifacts:
 - Prompt: `logs/codex-review/20260602-223440-515842-prompt.md`
 - Result: `logs/codex-review/20260602-223440-515842-last-message.md`
 
+## Result
+
+**Result:** Pass
+
+`collection.rs` gained `SizeAdjustment` and `scale_factor`: `None` → `1.0`; else
+both faces are px→em normalized and the chosen metric falls through
+`ic_width → ex_height → cap_height → line_height` (using each face field's
+`is_some_and(|v| v > 0.0)` validity), returning `primary_metric / face_metric`
+from the effective accessors.
+
+Tests (pure fixture `FaceMetrics`):
+
+- `scale_factor_none_is_one` — `None` → `1.0`.
+- `scale_factor_same_metrics_is_one` — identical metrics → `1.0` for every
+  adjustment.
+- `scale_factor_line_height` — the computed em-normalized ratio for two faces of
+  different sizes.
+- `scale_factor_falls_through` — `IcWidth` with an undefined `ic_width` falls
+  through to `ex_height` (and differs from the ic estimate); all-of-ic/ex/cap
+  absent falls to `line_height`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty collection` → 30 passed, 0 failed.
+- `cargo test -p roastty` → 2416 passed, 0 failed (no regressions; +4).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The `font-size-adjust` metric-matching computation is ported and fixture-pinned.
+The remaining `Collection` work is the **integration**: an `Entry`
+`scale_factor` field, an `AddOptions { size_adjustment }` so `add` computes it
+(caching the primary face's metrics, loaded from index 0, with the `→ 1.0`
+fallback), and the application via a `Face::set_size` / `load_options` path
+(which also brings in `setSize`/`updateMetrics`). Beyond the Collection: the
+`DeferredFace` + `discovery` lazy-loading sub-area, the `CodepointResolver`, the
+shaper, and the Nerd Font attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-223826-671253-prompt.md`
+- Result: `logs/codex-review/20260602-223826-671253-last-message.md`
+
+Codex confirmed `scale_factor` matches upstream's fall-through order using the
+candidate face's explicit-metric validity with `LineHeight` as the terminus,
+that the px→em normalization and `primary_metric / face_metric` formula are
+correct and use the same effective-accessor semantics, that the `unreachable!()`
+arms are truly unreachable (`None` returns before the loop and `adj` is never
+set to `None`), and that the tests are meaningful (the fall-through test proves
+`IcWidth` → `ExHeight` rather than the ic estimate, and the all-the-way fallback
+to `LineHeight`).
+
 Codex confirmed the design matches upstream: validity is based on the
 **candidate face** metric (not the primary), the fall-through order is
 `ic_width → ex_height → cap_height → line_height` with `line_height` as the
