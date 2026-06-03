@@ -9,7 +9,7 @@
 use std::ptr::NonNull;
 
 use objc2_core_foundation::{CFRetained, CFString, CGPoint, CGSize};
-use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext};
+use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext, CGTextDrawingMode};
 use objc2_core_text::{CTFont, CTFontOrientation, CTFontTableOptions};
 
 use super::constraint::{Constraint, GlyphSize, Size};
@@ -22,6 +22,9 @@ use crate::font::opentype::{head::Head, hhea::Hhea, os2::Os2, post::Post};
 /// underlying CoreFoundation retain/release.
 pub(crate) struct Face {
     font: CFRetained<CTFont>,
+    /// When set, the synthetic-bold line width (faux bold for fonts without a
+    /// real bold variant).
+    synthetic_bold: Option<f64>,
 }
 
 /// A rasterized glyph: a grayscale coverage bitmap (`width * height` bytes, one
@@ -85,7 +88,19 @@ impl Face {
         // SAFETY: `cf_name` is a valid `CFString` that lives through the call,
         // and a null `matrix` pointer is documented as valid (no transform).
         let font = unsafe { CTFont::with_name(&cf_name, size, std::ptr::null()) };
-        Face { font }
+        Face {
+            font,
+            synthetic_bold: None,
+        }
+    }
+
+    /// Create a face that applies a synthetic-bold effect — a faux bold for
+    /// fonts without a real bold variant. The line width scales with the point
+    /// size (`max(size / 14, 1)`), the heuristic from upstream `syntheticBold`.
+    pub(crate) fn new_synthetic_bold(name: &str, size: f64) -> Face {
+        let mut face = Face::new(name, size);
+        face.synthetic_bold = Some((size / 14.0).max(1.0));
+        face
     }
 
     /// Copy the raw bytes of an OpenType table identified by its four-character
@@ -391,7 +406,8 @@ impl Face {
         let px_w = (rect.size.width + frac_x).ceil() as usize;
         let px_h = (rect.size.height + frac_y).ceil() as usize;
 
-        // Unconstrained: identity scale, drawn at the negated raw bearings.
+        // Unconstrained: identity scale, drawn at the negated raw bearings, no
+        // synthetic-bold stroke.
         let bitmap = self.draw_coverage(
             glyph,
             -rect.origin.x,
@@ -404,6 +420,7 @@ impl Face {
             px_h,
             false,
             1.0,
+            None,
         )?;
 
         Some(RasterizedGlyph {
@@ -436,6 +453,7 @@ impl Face {
         px_h: usize,
         thicken: bool,
         fill_gray: f64,
+        stroke_width: Option<f64>,
     ) -> Option<Vec<u8>> {
         let colorspace = CGColorSpace::new_device_gray()?;
         let mut buf = vec![0u8; px_w * px_h];
@@ -474,8 +492,18 @@ impl Face {
         CGContext::set_allows_antialiasing(Some(&ctx), true);
 
         // White (or `thicken_strength`-grayed) glyph on the zeroed (black)
-        // buffer; the gray value is coverage.
+        // buffer; the gray value is coverage. The stroke color matches the fill
+        // and is set unconditionally (it only takes effect when stroking).
         CGContext::set_gray_fill_color(Some(&ctx), fill_gray, 1.0);
+        CGContext::set_gray_stroke_color(Some(&ctx), fill_gray, 1.0);
+
+        // Synthetic bold: fill *and* stroke the outline at the given line width,
+        // making the glyph heavier. Set before the CTM transforms (upstream
+        // order), so the stroke width scales with any constraint stretch.
+        if let Some(lw) = stroke_width {
+            CGContext::set_text_drawing_mode(Some(&ctx), CGTextDrawingMode::FillStroke);
+            CGContext::set_line_width(Some(&ctx), lw);
+        }
 
         // Shift by `(tx, ty)` (the fractional bearing plus any canvas padding)
         // for sub-pixel positioning, then scale so the raw outline is stretched
@@ -505,8 +533,8 @@ impl Face {
     /// Render a glyph into the grayscale `atlas`, applying the sizing/alignment
     /// constraint in `opts`, and return its [`Glyph`] (pixel size, whole-pixel
     /// bearings, and atlas coordinates). Faithful port of the monochrome core of
-    /// upstream `renderGlyph`: cell constraints are applied, but color/sbix,
-    /// synthetic bold, and thicken are deferred.
+    /// upstream `renderGlyph`: cell constraints, thicken, and synthetic bold are
+    /// applied, but the color/sbix path is deferred.
     pub(crate) fn render_glyph(
         &self,
         atlas: &mut Atlas,
@@ -528,9 +556,26 @@ impl Face {
             )
         };
 
+        // Synthetic bold gains half the line width on every edge, so grow the
+        // rect by the line width before everything downstream (the guard,
+        // `constrain`, the draw position, and the scale denominators) sees it.
+        // (No sbix exemption here — the color/sbix path is deferred.)
+        let (mut rw, mut rh, mut ox, mut oy) = (
+            rect.size.width,
+            rect.size.height,
+            rect.origin.x,
+            rect.origin.y,
+        );
+        if let Some(lw) = self.synthetic_bold {
+            rw += lw;
+            rh += lw;
+            ox -= lw / 2.0;
+            oy -= lw / 2.0;
+        }
+
         // No outline (or one too small to render) -> a zero glyph, matching
         // upstream. Nothing is reserved in the atlas.
-        if rect.size.width < 0.25 || rect.size.height < 0.25 {
+        if rw < 0.25 || rh < 0.25 {
             return Ok(Glyph {
                 width: 0,
                 height: 0,
@@ -549,10 +594,10 @@ impl Face {
         // cell-relative positions, not baseline-relative ones.
         let glyph_size = opts.constraint.constrain(
             GlyphSize {
-                width: rect.size.width,
-                height: rect.size.height,
-                x: rect.origin.x,
-                y: rect.origin.y + cell_baseline,
+                width: rw,
+                height: rh,
+                x: ox,
+                y: oy + cell_baseline,
             },
             &opts.grid_metrics,
             opts.constraint_width,
@@ -601,16 +646,17 @@ impl Face {
         let bitmap = self
             .draw_coverage(
                 glyph,
-                -rect.origin.x,
-                -rect.origin.y,
+                -ox,
+                -oy,
                 frac_x + pad,
                 frac_y + pad,
-                width / rect.size.width,
-                height / rect.size.height,
+                width / rw,
+                height / rh,
                 px_w,
                 px_h,
                 opts.thicken,
                 opts.thicken_strength as f64 / 255.0,
+                self.synthetic_bold,
             )
             .ok_or(RenderGlyphError::ContextCreationFailed)?;
 
@@ -931,6 +977,54 @@ mod tests {
         assert!(
             max_pixel(255) > max_pixel(64),
             "a stronger fill should reach a brighter peak coverage"
+        );
+    }
+
+    #[test]
+    fn new_face_has_no_synthetic_bold() {
+        assert_eq!(Face::new("Menlo", 32.0).synthetic_bold, None);
+    }
+
+    #[test]
+    fn new_synthetic_bold_sets_width() {
+        let face = Face::new_synthetic_bold("Menlo", 32.0);
+        assert_eq!(face.synthetic_bold, Some((32.0_f64 / 14.0).max(1.0)));
+    }
+
+    #[test]
+    fn synthetic_bold_is_heavier() {
+        // Total ink (sum of pixel coverage) and canvas size for a face's 'M'.
+        let measure = |face: &Face| -> (u64, u32, u32) {
+            let mut atlas = Atlas::new(512, Format::Grayscale);
+            let opts = none_opts(face);
+            let glyph = face.glyphs_for_characters(&[b'M' as u16])[0];
+            let g = face
+                .render_glyph(&mut atlas, glyph, &opts)
+                .expect("'M' should render");
+            let size = 512usize;
+            let data = atlas.data();
+            let mut sum = 0u64;
+            for row in 0..g.height {
+                for col in 0..g.width {
+                    let px = data[((g.atlas_y + row) as usize) * size + (g.atlas_x + col) as usize];
+                    sum += px as u64;
+                }
+            }
+            (sum, g.width, g.height)
+        };
+
+        let plain = Face::new("Menlo", 32.0);
+        let bold = Face::new_synthetic_bold("Menlo", 32.0);
+        let (plain_ink, plain_w, plain_h) = measure(&plain);
+        let (bold_ink, bold_w, bold_h) = measure(&bold);
+
+        // The grown rect makes the bold canvas at least as large.
+        assert!(bold_w >= plain_w, "bold width {bold_w} < plain {plain_w}");
+        assert!(bold_h >= plain_h, "bold height {bold_h} < plain {plain_h}");
+        // Fill-stroke makes the bold glyph strictly heavier.
+        assert!(
+            bold_ink > plain_ink,
+            "bold ink {bold_ink} should exceed plain ink {plain_ink}"
         );
     }
 }

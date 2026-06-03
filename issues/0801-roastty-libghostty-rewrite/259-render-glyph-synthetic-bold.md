@@ -161,3 +161,67 @@ verify. The `max(size / 14, 1)` line-width adaptation is reasonable because
 unconditional stroke color / pre-CTM `set_line_width` (with constraint-scaled
 stroke width) all match upstream, and the heavier/larger test catches the
 meaningful failure modes without brittle pixel pinning.
+
+## Result
+
+**Result:** Pass
+
+`Face` gained `synthetic_bold: Option<f64>` (`None` in `new`; set by
+`new_synthetic_bold` to `(size / 14).max(1.0)`). `render_glyph` grows the rect
+by the line width into `rw/rh/ox/oy` locals **before** the `< 0.25` guard, and
+every downstream use — the guard, the `constrain` input, the draw position
+(`-ox`, `-oy`), and the scale denominators (`width / rw`, `height / rh`) — uses
+the grown locals. `draw_coverage` gained `stroke_width: Option<f64>`: it sets
+the gray stroke color unconditionally and, when `Some(lw)`, the `FillStroke`
+drawing mode
+
+- line width (before the CTM transforms, upstream order). `rasterize_glyph`
+  passes `None`.
+
+Tests (live CoreText):
+
+- `new_face_has_no_synthetic_bold` / `new_synthetic_bold_sets_width` — the field
+  is `None` for a plain face and `Some((32 / 14).max(1))` for a bold one.
+- `synthetic_bold_is_heavier` — the synthetic-bold `'M'` has a canvas at least
+  as large (`bold_w >= plain_w`, `bold_h >= plain_h`) and strictly more total
+  ink than the plain `'M'`, confirming both the rect growth and the fill-stroke
+  draw.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty face` → 26 passed, 0 failed.
+- `cargo test -p roastty` → 2377 passed, 0 failed (no regressions; +3).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+With synthetic bold landed, **every monochrome branch of upstream `renderGlyph`
+is now ported** — constraints, sub-pixel positioning, thicken/font-smoothing,
+and synthetic bold all feed the rasterization and atlas write. The one remaining
+`renderGlyph` branch is the **color/sbix** path: `isColorGlyph`/`ColorState`
+detection (font color traits + the sbix table presence and SVG-table
+`hasGlyph`), the depth-4 P3 RGBA bitmap context
+(`byte_order_32_little | premultiplied_first`), an RGBA atlas write, and the
+sbix whole-pixel quantization. That is the next sub-area (it needs font-traits
+FFI and an RGBA atlas write, so it likely spans two experiments: detection, then
+the colored render). Beyond `renderGlyph`: the Collection/CodepointResolver, the
+shaper, and the Nerd Font attribute table.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260602-212140-675654-prompt.md`
+- Result: `logs/codex-review/20260602-212140-675654-last-message.md`
+
+Codex confirmed the grown `rw/rh/ox/oy` locals are used consistently in the
+guard, constrain input, draw position, and scale denominators with no accidental
+downstream use of the ungrown `rect`, that the line-width heuristic and
+rect-growth signs match upstream, that the stroke color / `FillStroke` /
+line-width setup is ordered before the CTM transforms, that `rasterize_glyph`
+stays on the non-stroked path, and that the tests are appropriate and non-flaky.

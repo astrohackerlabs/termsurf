@@ -964,7 +964,7 @@ are past the correctness-critical foundation.
 - [Experiment 258: Faithful drawing context + thicken (font smoothing)](258-render-glyph-thicken.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 259: Synthetic bold — rect growth + fill-stroke draw](259-render-glyph-synthetic-bold.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
