@@ -1010,7 +1010,7 @@ are past the correctness-critical foundation.
 - [Experiment 281: Sextants (U+1FB00–U+1FB3B)](281-sextants.md) — **Pass** ·
   Claude/Codex/Codex
 - [Experiment 282: Separated Block Quadrants (U+1CC21–U+1CC2F)](282-separated-block-quadrants.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

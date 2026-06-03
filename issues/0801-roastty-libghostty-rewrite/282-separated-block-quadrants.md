@@ -137,3 +137,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-011434-227615-prompt.md`
 - Result: `logs/codex-review/20260603-011434-227615-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/draw.rs` gained `draw_separated_quadrant` (the nibble
+decode, the `gap`/`mid_gap`/`w`/`h` layout with the even-numerator `assert!` for
+`divExact`, and the four `Canvas::box` quad rectangles). The module doc now
+notes separated-quadrant coverage, and a `rects_inked` test helper was added.
+
+Tests (deterministic, the fixture; `gap=1`, `mid_gap_x=3`, `mid_gap_y=2`, `w=2`,
+`h=7`; the four boxes `tl (1,1,3,8)`, `tr (6,1,8,8)`, `bl (1,10,3,17)`,
+`br (6,10,8,17)`). `rects_inked` asserts every pixel matches exactly the union
+of the expected boxes:
+
+- `sep_quad_tl/tr/bl/br` (`0x1CC21/22/24/28`) — each single quad.
+- `sep_quad_all` (`0x1CC2F`) — all four boxes, the gaps between them empty.
+- `draw_separated_quadrant_excludes` — `0x1CC20`, `0x1CC30`, `'M'` return
+  `false`, draw nothing.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty sprite` → 71 passed (6 new).
+- `cargo test -p roastty` → 2497 passed, 0 failed (no regressions; +6).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The Separated Block Quadrants (`U+1CC21`–`U+1CC2F`) are ported and
+pixel-verified — the nibble→quad decode and the gap-based 2×2 box layout both
+confirmed. Seven rect/`fill`-based sprite families are now in place. The clear
+next big step for the sprite font is the **`z2d` anti-aliased-path port**, which
+unblocks the box-drawing arcs/diagonals, the geometric-shape curves, the
+circle/ellipse pieces in this supplement, and the remaining legacy-computing
+glyphs. A self-contained rect-only family that remains without `z2d` is the
+**octants** (`U+1CD00`–`U+1CDE5`), which need the embedded `octants.txt` pattern
+table — a data-embedding step worth its own experiment. Wiring the per-family
+dispatchers under one sprite `has_codepoint`/draw entry point (which the
+resolver's deferred sprite render arm needs) is increasingly worthwhile.
+Alongside the sprite font remain the discovery consumer, the UCD
+emoji-presentation default, codepoint overrides, the shaper, the Nerd Font
+attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed the nibble decode matches upstream (`q = cp - 0x1CC20`,
+`tl=0x01`/`tr=0x02`/`bl=0x04`/`br=0x08`), the layout formulas match exactly with
+the even-numerator `assert!` a sound stand-in for `@divExact`, all four
+`Canvas::box` coordinate sets match upstream, the function returns `false`
+outside `0x1CC21..=0x1CC2F`, and the test rects and `rects_inked` helper are
+correct for `9×18`. It judged the verification clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-011647-447625-prompt.md`
+- Result: `logs/codex-review/20260603-011647-447625-last-message.md`

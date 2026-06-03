@@ -6,10 +6,11 @@
 //! `Fraction`/`fill`, the `hline`/`vline` helpers, `Shade`/`Alignment`/`Quads`).
 //! Covered so far: the box-drawing line glyphs (`U+2500`–`U+257F` `linesChar`
 //! dispatch), the dashes, the Block Elements (`U+2580`–`U+259F`), the Braille
-//! Patterns (`U+2800`–`U+28FF`), and the legacy-computing Sextants
-//! (`U+1FB00`–`U+1FB3B`). The `z2d`-based primitives (arcs, diagonals), the
+//! Patterns (`U+2800`–`U+28FF`), the legacy-computing Sextants
+//! (`U+1FB00`–`U+1FB3B`), and the Separated Block Quadrants
+//! (`U+1CC21`–`U+1CC2F`). The `z2d`-based primitives (arcs, diagonals), the
 //! sprite `hasCodepoint` inventory, and the other sprite categories (powerline,
-//! the rest of legacy-computing, geometric) are later experiments.
+//! octants, the rest of legacy-computing, geometric) are later experiments.
 
 use crate::font::metrics::Metrics;
 use crate::font::sprite::canvas::{Canvas, Color, Rect};
@@ -1190,6 +1191,65 @@ pub(crate) fn draw_sextant(cp: u32, metrics: &Metrics, canvas: &mut Canvas) -> b
     true
 }
 
+/// Draw the Separated Block Quadrant glyph for `cp` (`U+1CC21`–`U+1CC2F`) into
+/// `canvas`, returning `true` if `cp` is one. Faithful port of upstream
+/// `draw1CC21_1CC2F`: a 2×2 grid of `w × h` boxes with gaps between them,
+/// selected by the low nibble of `cp - 0x1CC20`.
+pub(crate) fn draw_separated_quadrant(cp: u32, metrics: &Metrics, canvas: &mut Canvas) -> bool {
+    if !(0x1CC21..=0x1CC2F).contains(&cp) {
+        return false;
+    }
+    let q = (cp - 0x1CC20) as u8;
+    let (tl, tr, bl, br) = (q & 0x01 != 0, q & 0x02 != 0, q & 0x04 != 0, q & 0x08 != 0);
+
+    let width = metrics.cell_width as i32;
+    let height = metrics.cell_height as i32;
+
+    let gap: i32 = (metrics.cell_width / 12).max(1) as i32;
+    let mid_gap_x: i32 = gap * 2 + (metrics.cell_width % 2) as i32;
+    let mid_gap_y: i32 = gap * 2 + (metrics.cell_height % 2) as i32;
+
+    // Upstream uses @divExact; the numerator is provably even (dim - dim%2 is
+    // even and 4*gap is even), so an exact /2 with an assertion matches.
+    let w_num = width - gap * 2 - mid_gap_x;
+    let h_num = height - gap * 2 - mid_gap_y;
+    assert!(w_num % 2 == 0 && h_num % 2 == 0);
+    let w = w_num / 2;
+    let h = h_num / 2;
+
+    if tl {
+        canvas.r#box(gap, gap, gap + w, gap + h, Color::ON);
+    }
+    if tr {
+        canvas.r#box(
+            gap + w + mid_gap_x,
+            gap,
+            gap + w + mid_gap_x + w,
+            gap + h,
+            Color::ON,
+        );
+    }
+    if bl {
+        canvas.r#box(
+            gap,
+            gap + h + mid_gap_y,
+            gap + w,
+            gap + h + mid_gap_y + h,
+            Color::ON,
+        );
+    }
+    if br {
+        canvas.r#box(
+            gap + w + mid_gap_x,
+            gap + h + mid_gap_y,
+            gap + w + mid_gap_x + w,
+            gap + h + mid_gap_y + h,
+            Color::ON,
+        );
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2097,6 +2157,78 @@ mod tests {
         for cp in [0x1FAFFu32, 0x1FB3C, 'M' as u32] {
             let mut c = cell_canvas();
             assert!(!draw_sextant(cp, &m, &mut c), "{cp:#07x} not a sextant");
+            assert!(all_alpha(&c, &m, 0), "{cp:#07x} drew ink");
+        }
+    }
+
+    /// Assert every cell pixel belongs to exactly the union of the given
+    /// `[x0, y0, x1, y1)` rectangles.
+    fn rects_inked(c: &Canvas, m: &Metrics, rects: &[(i32, i32, i32, i32)]) {
+        for y in 0..m.cell_height as i32 {
+            for x in 0..m.cell_width as i32 {
+                let want = rects
+                    .iter()
+                    .any(|&(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1);
+                assert_eq!(inked(c, x, y), want, "pixel ({x},{y})");
+            }
+        }
+    }
+
+    // The four separated-quadrant boxes for the 9x18 fixture.
+    const SQ_TL: (i32, i32, i32, i32) = (1, 1, 3, 8);
+    const SQ_TR: (i32, i32, i32, i32) = (6, 1, 8, 8);
+    const SQ_BL: (i32, i32, i32, i32) = (1, 10, 3, 17);
+    const SQ_BR: (i32, i32, i32, i32) = (6, 10, 8, 17);
+
+    #[test]
+    fn sep_quad_tl() {
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_separated_quadrant(0x1CC21, &m, &mut c));
+        rects_inked(&c, &m, &[SQ_TL]);
+    }
+
+    #[test]
+    fn sep_quad_tr() {
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_separated_quadrant(0x1CC22, &m, &mut c));
+        rects_inked(&c, &m, &[SQ_TR]);
+    }
+
+    #[test]
+    fn sep_quad_bl() {
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_separated_quadrant(0x1CC24, &m, &mut c));
+        rects_inked(&c, &m, &[SQ_BL]);
+    }
+
+    #[test]
+    fn sep_quad_br() {
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_separated_quadrant(0x1CC28, &m, &mut c));
+        rects_inked(&c, &m, &[SQ_BR]);
+    }
+
+    #[test]
+    fn sep_quad_all() {
+        let m = fixture_metrics();
+        let mut c = cell_canvas();
+        assert!(draw_separated_quadrant(0x1CC2F, &m, &mut c));
+        rects_inked(&c, &m, &[SQ_TL, SQ_TR, SQ_BL, SQ_BR]);
+    }
+
+    #[test]
+    fn draw_separated_quadrant_excludes() {
+        let m = fixture_metrics();
+        for cp in [0x1CC20u32, 0x1CC30, 'M' as u32] {
+            let mut c = cell_canvas();
+            assert!(
+                !draw_separated_quadrant(cp, &m, &mut c),
+                "{cp:#07x} not a separated quadrant"
+            );
             assert!(all_alpha(&c, &m, 0), "{cp:#07x} drew ink");
         }
     }
