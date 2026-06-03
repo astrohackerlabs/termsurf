@@ -1031,6 +1031,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 292: z2d port — Slope](292-z2d-slope.md) — **Pass** ·
   Claude/Codex/Codex
+- [Experiment 293: z2d port — Face (stroke offsets + butt cap)](293-z2d-face.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
