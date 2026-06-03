@@ -1142,7 +1142,7 @@ are past the correctness-critical foundation.
 - [Experiment 347: default font features in shaping](347-shaper-default-features.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 348: the feature-string parser](348-shaper-feature-parser.md) —
-  **Designed** · Claude/Codex/Codex
+  **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

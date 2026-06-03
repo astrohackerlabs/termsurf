@@ -54,6 +54,243 @@ pub(crate) fn default_features() -> Vec<Feature> {
     }]
 }
 
+/// The states of the feature-string parser. Faithful port of upstream
+/// `Feature.fromReader`'s `state:` switch.
+enum FeatureState {
+    /// Initial: skip leading whitespace, read an optional `+`/`-` and the tag.
+    Start,
+    /// Reading the 4-byte tag.
+    Tag,
+    /// The gap between the tag and the value.
+    Space,
+    /// Reading an integer value.
+    Int,
+    /// Reading an `on`/`off` keyword value.
+    Bool,
+    /// A complete value; skip trailing whitespace until the delimiter.
+    Done,
+    /// Unrecoverable syntax error; fast-forward to the boundary.
+    Err,
+}
+
+/// Read one byte at `*pos`, advancing. End-of-input is reported as `,` (the
+/// feature delimiter) **without** advancing — mirroring upstream's
+/// `reader.readByte() catch ','`.
+fn feature_read_byte(bytes: &[u8], pos: &mut usize) -> u8 {
+    if *pos < bytes.len() {
+        let b = bytes[*pos];
+        *pos += 1;
+        b
+    } else {
+        b','
+    }
+}
+
+/// Advance `*pos` to just past the next `,` (or to end-of-input). Mirrors
+/// upstream's `skipUntilDelimiterOrEof(',')`.
+fn feature_skip_to_boundary(bytes: &[u8], pos: &mut usize) {
+    while *pos < bytes.len() {
+        let b = bytes[*pos];
+        *pos += 1;
+        if b == b',' {
+            break;
+        }
+    }
+}
+
+impl Feature {
+    /// Parse a single OpenType feature setting from `s`, in a subset of HarfBuzz's
+    /// feature-string syntax (`"kern"`, `"+kern"`, `"-kern"`, `"kern on"`,
+    /// `"kern off"`, `"aalt=2"`, …). Returns `None` for invalid syntax. Faithful
+    /// port of upstream `Feature.fromString`.
+    pub(crate) fn from_str(s: &str) -> Option<Feature> {
+        let mut pos = 0;
+        Feature::parse_one(s.as_bytes(), &mut pos)
+    }
+
+    /// Parse one feature from `bytes` starting at `*pos`, advancing `*pos` past it
+    /// (and its trailing `,` if present). Returns `None` on invalid syntax,
+    /// advancing through the next `,` so further features can be read. Faithful
+    /// port of upstream `Feature.fromReader`.
+    fn parse_one(bytes: &[u8], pos: &mut usize) -> Option<Feature> {
+        let mut tag = [0u8; 4];
+        let mut tag_len = 0usize;
+        let mut value: Option<u32> = None;
+        let mut state = FeatureState::Start;
+
+        'sm: loop {
+            match state {
+                FeatureState::Start => loop {
+                    match feature_read_byte(bytes, pos) {
+                        b' ' | b'\t' => continue,
+                        b',' => return None,
+                        b'+' => {
+                            value = Some(1);
+                            state = FeatureState::Tag;
+                            continue 'sm;
+                        }
+                        b'-' => {
+                            value = Some(0);
+                            state = FeatureState::Tag;
+                            continue 'sm;
+                        }
+                        b'"' | b'\'' => {
+                            state = FeatureState::Tag;
+                            continue 'sm;
+                        }
+                        byte => {
+                            tag[0] = byte;
+                            tag_len = 1;
+                            state = FeatureState::Tag;
+                            continue 'sm;
+                        }
+                    }
+                },
+                FeatureState::Tag => loop {
+                    match feature_read_byte(bytes, pos) {
+                        b',' => return None,
+                        b'"' | b'\'' => continue,
+                        byte => {
+                            tag[tag_len] = byte;
+                            tag_len += 1;
+                            if tag_len == 4 {
+                                state = FeatureState::Space;
+                                continue 'sm;
+                            }
+                        }
+                    }
+                },
+                FeatureState::Space => loop {
+                    match feature_read_byte(bytes, pos) {
+                        b' ' | b'\t' | b'"' | b'\'' => continue,
+                        // An `=` is allowed (and ignored) only without a prefix
+                        // value; with a `+`/`-` value already set it is an error.
+                        b'=' => {
+                            if value.is_some() {
+                                state = FeatureState::Err;
+                                continue 'sm;
+                            }
+                        }
+                        // Only a tag turns the feature on.
+                        b',' => {
+                            if value.is_none() {
+                                value = Some(1);
+                            }
+                            break 'sm;
+                        }
+                        byte @ b'0'..=b'9' => {
+                            if value.is_some() {
+                                state = FeatureState::Err;
+                                continue 'sm;
+                            }
+                            value = Some((byte - b'0') as u32);
+                            state = FeatureState::Int;
+                            continue 'sm;
+                        }
+                        b'o' | b'O' => {
+                            if value.is_some() {
+                                state = FeatureState::Err;
+                                continue 'sm;
+                            }
+                            state = FeatureState::Bool;
+                            continue 'sm;
+                        }
+                        _ => {
+                            state = FeatureState::Err;
+                            continue 'sm;
+                        }
+                    }
+                },
+                FeatureState::Int => loop {
+                    match feature_read_byte(bytes, pos) {
+                        b',' => break 'sm,
+                        byte @ b'0'..=b'9' => {
+                            match value
+                                .unwrap()
+                                .checked_mul(10)
+                                .and_then(|v| v.checked_add((byte - b'0') as u32))
+                            {
+                                Some(v) => value = Some(v),
+                                None => {
+                                    state = FeatureState::Err;
+                                    continue 'sm;
+                                }
+                            }
+                        }
+                        _ => {
+                            state = FeatureState::Err;
+                            continue 'sm;
+                        }
+                    }
+                },
+                FeatureState::Bool => loop {
+                    match feature_read_byte(bytes, pos) {
+                        b',' => return None,
+                        b'n' | b'N' => {
+                            // "ofn": a value already set (the first `f`) is an error.
+                            if value.is_some() {
+                                state = FeatureState::Err;
+                                continue 'sm;
+                            }
+                            value = Some(1);
+                            state = FeatureState::Done;
+                            continue 'sm;
+                        }
+                        b'f' | b'F' => {
+                            // First `f` sets the value; the second `f` finishes.
+                            if value.is_none() {
+                                value = Some(0);
+                            } else {
+                                state = FeatureState::Done;
+                                continue 'sm;
+                            }
+                        }
+                        _ => {
+                            state = FeatureState::Err;
+                            continue 'sm;
+                        }
+                    }
+                },
+                FeatureState::Done => loop {
+                    match feature_read_byte(bytes, pos) {
+                        b' ' | b'\t' => continue,
+                        b',' => break 'sm,
+                        _ => {
+                            state = FeatureState::Err;
+                            continue 'sm;
+                        }
+                    }
+                },
+                FeatureState::Err => {
+                    feature_skip_to_boundary(bytes, pos);
+                    return None;
+                }
+            }
+        }
+
+        // A valid feature has a complete tag and a resolved value.
+        if tag_len == 4 {
+            value.map(|value| Feature { tag, value })
+        } else {
+            None
+        }
+    }
+}
+
+/// Parse a comma-separated list of feature settings, dropping invalid entries.
+/// Faithful port of upstream `FeatureList.fromString`.
+pub(crate) fn parse_features(s: &str) -> Vec<Feature> {
+    let bytes = s.as_bytes();
+    let mut pos = 0;
+    let mut out = Vec::new();
+    while pos < bytes.len() {
+        if let Some(f) = Feature::parse_one(bytes, &mut pos) {
+            out.push(f);
+        }
+    }
+    out
+}
+
 /// Options controlling shaping. Faithful port of upstream `shape.Options`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Options {
@@ -123,6 +360,113 @@ mod tests {
                 value: 1
             }]
         );
+    }
+
+    #[test]
+    fn feature_from_string_boolean_on() {
+        let kern_on = Feature {
+            tag: *b"kern",
+            value: 1,
+        };
+        for s in [
+            "kern",
+            "kern, ",
+            "kern on",
+            "kern on, ",
+            "+kern",
+            "+kern, ",
+            "\"kern\" = 1",
+            "\"kern\" = 1, ",
+        ] {
+            assert_eq!(Feature::from_str(s), Some(kern_on), "parsing {s:?}");
+        }
+    }
+
+    #[test]
+    fn feature_from_string_boolean_off() {
+        let kern_off = Feature {
+            tag: *b"kern",
+            value: 0,
+        };
+        for s in [
+            "kern off",
+            "kern off, ",
+            "-'kern'",
+            "-'kern', ",
+            "\"kern\" = 0",
+            "\"kern\" = 0, ",
+        ] {
+            assert_eq!(Feature::from_str(s), Some(kern_off), "parsing {s:?}");
+        }
+    }
+
+    #[test]
+    fn feature_from_string_numeric() {
+        let aalt_2 = Feature {
+            tag: *b"aalt",
+            value: 2,
+        };
+        for s in ["aalt=2", "aalt=2, ", "'aalt' 2", "'aalt' 2, "] {
+            assert_eq!(Feature::from_str(s), Some(aalt_2), "parsing {s:?}");
+        }
+    }
+
+    #[test]
+    fn feature_from_string_invalid() {
+        for s in [
+            "aalt=2x",   // bad number
+            "toolong",   // tag too long
+            "sht",       // tag too short
+            "-kern 1",   // redundant/conflicting
+            "-kern on",  // redundant/conflicting
+            "aalt=o,",   // bad keyword
+            "aalt=ofn,", // bad keyword
+        ] {
+            assert_eq!(Feature::from_str(s), None, "parsing {s:?}");
+        }
+    }
+
+    #[test]
+    fn feature_from_string_overflow() {
+        assert_eq!(
+            Feature::from_str("aalt=4294967295"),
+            Some(Feature {
+                tag: *b"aalt",
+                value: u32::MAX
+            }),
+        );
+        assert_eq!(Feature::from_str("aalt=4294967296"), None, "overflow");
+    }
+
+    #[test]
+    fn feature_list_from_string() {
+        let s = concat!(
+            "  kern, kern on , +kern, \"kern\"  = 1,", // 4× kern=1
+            "kern    off, -'kern' , \"kern\"=0,",      // 3× kern=0
+            "aalt=2,  'aalt'\t2,",                     // 2× aalt=2
+            "aalt=2x, toolong, sht, -kern 1, -kern on, aalt=o, aalt=ofn,", // invalid
+            "last",                                    // last=1
+        );
+        let kern1 = Feature {
+            tag: *b"kern",
+            value: 1,
+        };
+        let kern0 = Feature {
+            tag: *b"kern",
+            value: 0,
+        };
+        let aalt2 = Feature {
+            tag: *b"aalt",
+            value: 2,
+        };
+        let last = Feature {
+            tag: *b"last",
+            value: 1,
+        };
+        let expected = vec![
+            kern1, kern1, kern1, kern1, kern0, kern0, kern0, aalt2, aalt2, last,
+        ];
+        assert_eq!(parse_features(s), expected);
     }
 
     #[test]

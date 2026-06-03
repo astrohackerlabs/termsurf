@@ -206,3 +206,65 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-142244-237266-prompt.md` (design)
 - Result: `logs/codex-review/20260603-142244-237266-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The feature-string parser is ported.
+
+- `roastty/src/font/shape.rs`: `Feature::from_str` / `Feature::parse_one`
+  implement the HarfBuzz-subset state machine (`FeatureState` enum
+  `Start`/`Tag`/`Space`/ `Int`/`Bool`/`Done`/`Err`, a labeled outer loop with
+  per-state read loops, the `feature_read_byte` EOF-as-`,` helper, and
+  `feature_skip_to_boundary`). The integer value uses a single checked
+  accumulation (`checked_mul(10).and_then(checked_add(d))`). `parse_features`
+  loops `parse_one` over a comma-separated string, dropping invalid entries.
+  Success requires `tag_len == 4` and a resolved value.
+
+Tests (mirroring upstream's `Feature.fromString`/`FeatureList.fromString`):
+`feature_from_string_boolean_on` (`kern`/`kern on`/`+kern`/`"kern" = 1` →
+`kern=1`), `feature_from_string_boolean_off` (`kern off`/`-'kern'`/`"kern"=0` →
+`kern=0`), `feature_from_string_numeric` (`aalt=2`/`'aalt' 2` → `aalt=2`),
+`feature_from_string_invalid` (`aalt=2x`, `toolong`, `sht`, `-kern 1`,
+`-kern on`, `aalt=o`, `aalt=ofn` → `None`), `feature_from_string_overflow`
+(`4294967295` → `u32::MAX`, `4294967296` → `None`), and
+`feature_list_from_string` (the combined string →
+`[kern=1 ×4, kern=0 ×3, aalt=2 ×2, last=1]`).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2768 passed, 0 failed (+6, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+roastty can now parse HarfBuzz-syntax font-feature strings into `Feature`s,
+matching upstream's tolerant state machine on every mirrored test vector. The
+`Feature` type (Exp 347) and its parser (Exp 348) are both in place.
+
+The follow-up: thread the parsed features through shaping — a user
+`Options.features` string → `parse_features` → merged with `default_features`
+(plus the `features_no_default` variant) into `shape_run`. Then the special-font
+fast path and the `Shaper` struct + `RunIterator` remain.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no Required findings**. It verified the state transitions match upstream's
+`Feature.fromReader`/`FeatureList.fromString` — including EOF-as-`,` without
+advancing, error recovery consuming through the next `,`, the `+`/`-` conflicts,
+`on`/`off` with the two-`f` handling, `Done`'s whitespace-only behavior, and
+dropping invalid entries while continuing the list. It confirmed the
+`tag[tag_len]` write is safe under the state invariant (`Tag` is entered with
+`tag_len <= 1` and exits to `Space` at `tag_len == 4`, so no write occurs at
+`tag_len == 4`); that the checked-both overflow is the documented deliberate
+improvement (rejecting final-add overflow rather than wrapping/panicking); and
+that the `tag_len == 4 && value` postcondition is correct. It also ran
+`cargo test -p roastty feature` (9 passed, 0 failed).
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-142738-035676-last-message.md`
