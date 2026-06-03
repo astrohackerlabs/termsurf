@@ -1183,8 +1183,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 368: placing a shaped run's glyphs](368-add-run.md) — **Pass** ·
   Claude/Codex/Codex
-- [Experiment 369: deriving the CellInfo row](369-cell-infos.md) — **Designed**
-  · Claude/Codex/Codex
+- [Experiment 369: deriving the CellInfo row](369-cell-infos.md) — **Pass** ·
+  Claude/Codex/Codex
 
 ## Non-Goals
 

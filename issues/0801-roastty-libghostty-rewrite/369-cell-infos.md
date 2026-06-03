@@ -162,3 +162,58 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-181341-382142-prompt.md` (design)
 - Result: `logs/codex-review/20260603-181341-382142-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The row's `CellInfo` view is now derivable from the shaping input.
+
+- `roastty/src/renderer/cell.rs`: `grid_width(wide)` maps a `Wide` kind to the
+  cell grid width (`Wide → 2`, narrow/spacer-head/spacer-tail → `1`), an exact
+  port of upstream `Cell.gridWidth()`; `cell_infos(cells)` maps a row's
+  `RunCell`s to `Vec<CellInfo>` (each column's codepoint passed through, grid
+  width from `grid_width(cell.wide)`). Imported `font::run::{RunCell, Wide}`.
+
+Test (in `cell.rs`): `cell_infos_maps_codepoint_and_grid_width` builds a row
+`[narrow 'A', wide 'W', SpacerTail, SpacerHead, empty]` and asserts the
+codepoints round-trip (`'A'`, `'W'`, `0`, `0`, `0`) and the grid widths are
+`[1, 2, 1, 1, 1]` — guarding that **both** spacer kinds map to `1`, not `2`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2819 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+One of the two per-row inputs the outer `rebuildCells` loop needs is now a pure
+derivation from the shaping input: a row's `RunCell`s (already produced by
+`Terminal::shape_run_options`) → the `CellInfo` slice that `render_options` and
+`add_run` read. The remaining per-row input is the per-column `fg_colors`
+(resolving each cell's style foreground to RGBA).
+
+The remaining renderer-bridge work: the **`fg_colors` derivation** (cell style →
+resolved RGBA, a terminal color concern), then the **outer `rebuildCells` loop**
+(per row: `cell_infos` + `fg_colors`, iterate the row's `ShapedRun`s, call
+`add_run`), the background/decoration/cursor cells, and the Metal upload of
+`Contents`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `grid_width` is an exact port of upstream
+`Cell.gridWidth()` (only `Wide::Wide → 2`;
+`Narrow`/`SpacerHead`/`SpacerTail → 1`), that `cell_infos` correctly passes
+through `RunCell.codepoint` and derives only the grid width from `RunCell.wide`
+(the right `CellInfo` view for `render_options`/`constraint_width`), and that
+the test adequately guards the spacer behavior now that it includes both
+`SpacerTail` and `SpacerHead` plus narrow, wide, and empty cells. It noted that
+deferring the foreground color derivation and the outer rebuild loop remains a
+clean scope boundary. Nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-181527-448110-last-message.md`

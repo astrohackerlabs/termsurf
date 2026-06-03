@@ -21,7 +21,7 @@ use crate::font::face::constraint::{Constraint, Size};
 use crate::font::face::coretext::RenderOptions;
 use crate::font::face::nerd_font_attributes::get_constraint;
 use crate::font::metrics::Metrics;
-use crate::font::run::ShapedRun;
+use crate::font::run::{RunCell, ShapedRun, Wide};
 use crate::font::shape;
 use crate::font::shared_grid::SharedGrid;
 use crate::font::Presentation;
@@ -149,6 +149,28 @@ pub(crate) fn constraint_width(raw_slice: &[CellInfo], x: usize, cols: usize) ->
 
     // Otherwise, this has to be 1 cell wide.
     1
+}
+
+/// The grid width of a cell from its [`Wide`] kind — upstream `Cell.gridWidth()`:
+/// a wide cell spans two columns, everything else (narrow, spacer head/tail) one.
+fn grid_width(wide: Wide) -> u8 {
+    match wide {
+        Wide::Wide => 2,
+        Wide::Narrow | Wide::SpacerHead | Wide::SpacerTail => 1,
+    }
+}
+
+/// Map a row's decoded [`RunCell`]s to the [`CellInfo`] slice the render options
+/// read (each column's codepoint and grid width). The `CellInfo` half of the
+/// per-row inputs the future `rebuildCells` feeds to [`add_run`].
+pub(crate) fn cell_infos(cells: &[RunCell]) -> Vec<CellInfo> {
+    cells
+        .iter()
+        .map(|cell| CellInfo {
+            codepoint: cell.codepoint,
+            grid_width: grid_width(cell.wide),
+        })
+        .collect()
 }
 
 /// Identifies which GPU buffer a cell belongs to. Conceptually maps to a cell
@@ -814,6 +836,36 @@ mod tests {
         assert_eq!(v1.color, [40, 50, 60, 255]);
         assert_eq!(v0.atlas, CellTextAtlas::Grayscale);
         assert_eq!(v1.atlas, CellTextAtlas::Grayscale);
+    }
+
+    #[test]
+    fn cell_infos_maps_codepoint_and_grid_width() {
+        use crate::terminal::style::Style as TermStyle;
+        let run_cell = |cp: u32, wide: Wide, is_empty: bool| RunCell {
+            codepoint: cp,
+            graphemes: vec![],
+            style: TermStyle::default(),
+            style_id: 0,
+            wide,
+            is_empty,
+            is_codepoint: !is_empty,
+        };
+        let row = [
+            run_cell('A' as u32, Wide::Narrow, false),
+            run_cell('W' as u32, Wide::Wide, false),
+            run_cell(0, Wide::SpacerTail, false),
+            run_cell(0, Wide::SpacerHead, false),
+            run_cell(0, Wide::Narrow, true),
+        ];
+
+        let infos = cell_infos(&row);
+
+        let codepoints: Vec<u32> = infos.iter().map(|c| c.codepoint).collect();
+        assert_eq!(codepoints, vec!['A' as u32, 'W' as u32, 0, 0, 0]);
+
+        let widths: Vec<u8> = infos.iter().map(|c| c.grid_width).collect();
+        // Narrow 1, Wide 2, both spacer kinds 1 (not 2), empty 1.
+        assert_eq!(widths, vec![1, 2, 1, 1, 1]);
     }
 
     #[test]
