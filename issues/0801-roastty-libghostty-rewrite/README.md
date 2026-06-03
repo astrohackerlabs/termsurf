@@ -1053,6 +1053,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 303: the curly underline (the first round-cap glyph)](303-curly-underline.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 304: z2d port — the closed-path stroke (`plotClosedJoined`)](304-z2d-closed-stroke.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
