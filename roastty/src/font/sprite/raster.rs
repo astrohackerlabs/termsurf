@@ -472,6 +472,54 @@ impl SparseCoverageBuffer {
     }
 }
 
+/// The multisample anti-aliasing scale: each device pixel spans `MSAA_SCALE`
+/// horizontal (and vertical) subpixels, for `MSAA_SCALE * MSAA_SCALE` = 16
+/// samples per pixel. z2d's multisample `scale`.
+pub(crate) const MSAA_SCALE: u32 = 4;
+
+/// Record a filled span (in `MSAA_SCALE`-supersampled x-coordinates) into the
+/// coverage buffer, distributing it into per-device-pixel coverage counts: a
+/// fully-covered pixel gets `MSAA_SCALE` coverage, a partially-covered edge
+/// pixel gets the subpixel fraction. Faithful port of z2d's module-private
+/// `multisample.addSpan`. `x`/`len` must be pre-clamped non-negative.
+fn add_supersampled_span(cb: &mut SparseCoverageBuffer, x: u32, len: u32) {
+    assert!(
+        x + len <= cb.capacity * MSAA_SCALE,
+        "attempt to add span beyond capacity"
+    );
+    if len == 0 {
+        return;
+    }
+
+    let start_x = x / MSAA_SCALE;
+    let start_offset = x - start_x * MSAA_SCALE;
+
+    if start_offset == 0 && len >= MSAA_SCALE {
+        // Start coverage is full: write the opaque middle, then the tail.
+        let front_len = len / MSAA_SCALE;
+        cb.add_span(start_x, MSAA_SCALE as u8, front_len);
+        let end_coverage = MSAA_SCALE.min(len - front_len * MSAA_SCALE);
+        if end_coverage > 0 {
+            cb.add_single(start_x + front_len, end_coverage as u8);
+        }
+    } else {
+        // Starts mid-pixel: leading partial, full middle, trailing partial.
+        let start_coverage = MSAA_SCALE.min(len.min(MSAA_SCALE - start_offset));
+        cb.add_single(start_x, start_coverage as u8);
+
+        let after_start = len - start_coverage;
+        let mid_len = after_start / MSAA_SCALE;
+        if mid_len > 0 {
+            cb.add_span(start_x + 1, MSAA_SCALE as u8, mid_len);
+        }
+
+        let end_coverage = MSAA_SCALE.min(after_start - mid_len * MSAA_SCALE);
+        if end_coverage > 0 {
+            cb.add_single(start_x + 1 + mid_len, end_coverage as u8);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,5 +851,66 @@ mod tests {
         assert_eq!(c.get(0), (1, 2));
         assert_eq!(c.get(2), (4, 1));
         assert_eq!(c.get(3), (1, 1));
+    }
+
+    // add_supersampled_span — the MSAA coverage distributor.
+
+    #[test]
+    fn supersample_span_triangle() {
+        // The full upstream `addSpan` test: a triangle cross-section built from
+        // four accumulating spans.
+        let mut c = SparseCoverageBuffer::new(1024);
+        add_supersampled_span(&mut c, 200, 400);
+        assert_eq!(c.get(50), (4, 100));
+
+        add_supersampled_span(&mut c, 201, 398);
+        assert_eq!(c.get(50), (7, 1));
+        assert_eq!(c.get(51), (8, 98));
+        assert_eq!(c.get(149), (7, 1));
+
+        add_supersampled_span(&mut c, 202, 396);
+        assert_eq!(c.get(50), (9, 1));
+        assert_eq!(c.get(51), (12, 98));
+        assert_eq!(c.get(149), (9, 1));
+
+        add_supersampled_span(&mut c, 203, 394);
+        assert_eq!(c.get(50), (10, 1));
+        assert_eq!(c.get(51), (16, 98));
+        assert_eq!(c.get(149), (10, 1));
+
+        // Walking the runs yields exactly 4 spans.
+        let mut x = 0u32;
+        let mut spans = 0usize;
+        while x < c.len {
+            let (_, inc) = c.get(x);
+            x += inc;
+            spans += 1;
+        }
+        assert_eq!(spans, 4);
+    }
+
+    #[test]
+    fn supersample_span_partial_start() {
+        // x=2..6: second half of pixel 0, first half of pixel 1 (each 2/4).
+        let mut c = SparseCoverageBuffer::new(10);
+        add_supersampled_span(&mut c, 2, 4);
+        assert_eq!(c.get(0), (2, 1));
+        assert_eq!(c.get(1), (2, 1));
+    }
+
+    #[test]
+    fn supersample_span_full_plus_partial() {
+        // x=0..6: pixel 0 full (4), pixel 1 half (2).
+        let mut c = SparseCoverageBuffer::new(10);
+        add_supersampled_span(&mut c, 0, 6);
+        assert_eq!(c.get(0), (4, 1));
+        assert_eq!(c.get(1), (2, 1));
+    }
+
+    #[test]
+    fn supersample_span_zero() {
+        let mut c = SparseCoverageBuffer::new(10);
+        add_supersampled_span(&mut c, 0, 0);
+        assert_eq!(c.len, 0);
     }
 }

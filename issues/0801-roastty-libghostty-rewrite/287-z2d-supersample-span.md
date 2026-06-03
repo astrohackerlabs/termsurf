@@ -135,3 +135,61 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-060336-602790-prompt.md`
 - Result: `logs/codex-review/20260603-060336-602790-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` gained `MSAA_SCALE` (= 4) and
+`add_supersampled_span` (the faithful port of z2d's module-private
+`multisample.addSpan`): the capacity `assert!`, the `len == 0` short-circuit,
+the boundary-start full-pixel path, and the mid-pixel leading/middle/trailing
+distribution, all over the Experiment 286 `SparseCoverageBuffer`.
+
+Tests:
+
+- `supersample_span_triangle` — the **complete** upstream `addSpan` test (four
+  accumulating spans of a triangle cross-section), matching `get(50)`/`get(51)`/
+  `get(149)` at each step and the 4-run total.
+- `supersample_span_partial_start` (`x=2..6` → two half-coverage pixels),
+  `supersample_span_full_plus_partial` (`x=0..6` → full + half),
+  `supersample_span_zero` (no-op).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 32 passed (4 new).
+- `cargo test -p roastty` → 2533 passed, 0 failed (no regressions; +4).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The supersampled-span coverage distributor is in place, verified against z2d's
+own triangle test. Every ingredient of the multisample fill now exists: the
+`Polygon`, the `WorkingEdgeSet`, the `SparseCoverageBuffer`, and this
+`add_supersampled_span`. The next slice is the **multisample rasterizer `run`**
+itself — the scanline loop that, for each pixel row, drives the `WorkingEdgeSet`
+over the four sub-scanlines (rescan at breakpoints, inc, sort, filter), feeds
+the filtered spans into `add_supersampled_span`, then writes each coverage run
+as `alpha = clamp(coverage * (256/16) - 1, 0, 255)` (full coverage → opaque)
+source-over into the alpha8 `Canvas` buffer (a new `Canvas` compositing method).
+After that come the `fill_plotter` and `stroke_plotter`, then wiring
+`Canvas::line`/`fill`/`stroke` — which unblocks the box-drawing diagonals, arcs,
+circle/ellipse pieces, and geometric curves. Alongside the sprite font remain
+the discovery consumer, the UCD emoji-presentation default, codepoint overrides,
+the shaper, the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `MSAA_SCALE` and `add_supersampled_span` match z2d's
+module-private `multisample.addSpan` for the capacity guard, the zero-length
+return, the boundary/full-pixel path, and the mid-pixel leading/middle/trailing
+distribution, and that the full triangle test plus the partial/no-op tests have
+the correct expectations. It judged the gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-060630-685097-prompt.md`
+- Result: `logs/codex-review/20260603-060630-685097-last-message.md`
