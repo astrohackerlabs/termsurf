@@ -1195,6 +1195,8 @@ are past the correctness-critical foundation.
   Claude/Codex/Codex
 - [Experiment 374: backgrounds in the viewport pass](374-viewport-bg.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 375: the underline decoration cell](375-add-underline.md) —
+  **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
