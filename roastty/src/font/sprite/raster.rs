@@ -683,6 +683,144 @@ pub(crate) fn is_closed_node_set(nodes: &[PathNode]) -> bool {
     closed
 }
 
+/// Squared length `x² + y²`. Faithful port of z2d's `Spline.dotSq`.
+fn dot_sq(x: f64, y: f64) -> f64 {
+    x * x + y * y
+}
+
+/// The midpoint of `a` and `b` (`a + (b - a) / 2`). Faithful port of z2d's
+/// `Spline.lerpHalf`.
+fn lerp_half(a: Point, b: Point) -> Point {
+    Point::new(a.x + (b.x - a.x) / 2.0, a.y + (b.y - a.y) / 2.0)
+}
+
+/// Four control points of a (sub)spline. Faithful port of z2d's `Spline.Knots`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Knots {
+    a: Point,
+    b: Point,
+    c: Point,
+    d: Point,
+}
+
+impl Knots {
+    /// An upper bound on the squared error of approximating the spline by the
+    /// chord `a → d`. Faithful port of z2d's `Knots.errorSq` (the Cairo metric):
+    /// project the `b`/`c` control deltas onto the chord (clamped) and return the
+    /// larger squared residual.
+    fn error_sq(&self) -> f64 {
+        let mut b_x_delta = self.b.x - self.a.x;
+        let mut b_y_delta = self.b.y - self.a.y;
+        let mut c_x_delta = self.c.x - self.a.x;
+        let mut c_y_delta = self.c.y - self.a.y;
+
+        if self.a.x != self.d.x || self.a.y != self.d.y {
+            let d_x_delta = self.d.x - self.a.x;
+            let d_y_delta = self.d.y - self.a.y;
+            let d_dot_sq = dot_sq(d_x_delta, d_y_delta);
+
+            let b_d_dot = b_x_delta * d_x_delta + b_y_delta * d_y_delta;
+            if b_d_dot >= d_dot_sq {
+                b_x_delta -= d_x_delta;
+                b_y_delta -= d_y_delta;
+            } else {
+                b_x_delta -= b_d_dot / d_dot_sq * d_x_delta;
+                b_y_delta -= b_d_dot / d_dot_sq * d_y_delta;
+            }
+
+            let c_d_dot = c_x_delta * d_x_delta + c_y_delta * d_y_delta;
+            if c_d_dot >= d_dot_sq {
+                c_x_delta -= d_x_delta;
+                c_y_delta -= d_y_delta;
+            } else {
+                c_x_delta -= c_d_dot / d_dot_sq * d_x_delta;
+                c_y_delta -= c_d_dot / d_dot_sq * d_y_delta;
+            }
+        }
+
+        let b_err = dot_sq(b_x_delta, b_y_delta);
+        let c_err = dot_sq(c_x_delta, c_y_delta);
+        if b_err > c_err {
+            b_err
+        } else {
+            c_err
+        }
+    }
+
+    /// Midpoint (De Casteljau) subdivision: sets `self` to the first half
+    /// (`a → middle`) and returns the second half (`middle → d`). Faithful port
+    /// of z2d's `Knots.deCasteljau`.
+    fn de_casteljau(&mut self) -> Knots {
+        let ab = lerp_half(self.a, self.b);
+        let bc = lerp_half(self.b, self.c);
+        let cd = lerp_half(self.c, self.d);
+        let abbc = lerp_half(ab, bc);
+        let bccd = lerp_half(bc, cd);
+        let final_pt = lerp_half(abbc, bccd);
+
+        let result = Knots {
+            a: final_pt,
+            b: bccd,
+            c: cd,
+            d: self.d,
+        };
+
+        self.b = ab;
+        self.c = abbc;
+        self.d = final_pt;
+
+        result
+    }
+}
+
+/// Recursive flattening of `s1` into `out`, emitting `s1.a` (unless it equals the
+/// original `start`) once the error drops below `tolerance`. Faithful port of
+/// z2d's `Spline.decomposeInto`.
+fn decompose_into(s1: &mut Knots, start: Point, tolerance: f64, out: &mut Vec<Point>) {
+    if s1.error_sq() < tolerance {
+        if s1.a != start {
+            out.push(s1.a);
+        }
+        return;
+    }
+
+    let mut s2 = s1.de_casteljau();
+    decompose_into(s1, start, tolerance, out);
+    decompose_into(&mut s2, start, tolerance, out);
+}
+
+/// A cubic Bézier curve to be flattened into line segments. Faithful port of
+/// z2d's `Spline` (derived from Cairo's `cairo-spline.c`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Spline {
+    pub a: Point,
+    pub b: Point,
+    pub c: Point,
+    pub d: Point,
+    pub tolerance: f64,
+}
+
+impl Spline {
+    /// Flatten the curve into a series of points appended to `out` (the analog
+    /// of z2d's `line_to` plotting). Faithful port of `Spline.decompose`.
+    pub(crate) fn decompose(&self, out: &mut Vec<Point>) {
+        // Both tangents zero means this is just a straight line.
+        if self.a == self.b && self.c == self.d {
+            out.push(self.d);
+            return;
+        }
+
+        let mut s1 = Knots {
+            a: self.a,
+            b: self.b,
+            c: self.c,
+            d: self.d,
+        };
+        decompose_into(&mut s1, self.a, self.tolerance * self.tolerance, out);
+        out.push(self.d);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1225,5 +1363,116 @@ mod tests {
     #[test]
     fn closed_node_set_empty() {
         assert!(!is_closed_node_set(&[]));
+    }
+
+    // Spline — the cubic-Bézier flattener.
+
+    fn pt(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    #[test]
+    fn lerp_half_midpoint() {
+        assert_eq!(lerp_half(pt(0.0, 0.0), pt(4.0, 6.0)), pt(2.0, 3.0));
+    }
+
+    #[test]
+    fn dot_sq_value() {
+        assert_eq!(dot_sq(3.0, 4.0), 25.0);
+    }
+
+    #[test]
+    fn error_sq_offset() {
+        // Control points 3 off the a->d chord -> squared residual 9.
+        let k = Knots {
+            a: pt(0.0, 0.0),
+            b: pt(0.0, 3.0),
+            c: pt(4.0, 3.0),
+            d: pt(4.0, 0.0),
+        };
+        assert_eq!(k.error_sq(), 9.0);
+    }
+
+    #[test]
+    fn de_casteljau_exact() {
+        let mut k = Knots {
+            a: pt(0.0, 0.0),
+            b: pt(0.0, 12.0),
+            c: pt(12.0, 12.0),
+            d: pt(12.0, 0.0),
+        };
+        let second = k.de_casteljau();
+        assert_eq!(
+            k,
+            Knots {
+                a: pt(0.0, 0.0),
+                b: pt(0.0, 6.0),
+                c: pt(3.0, 9.0),
+                d: pt(6.0, 9.0),
+            }
+        );
+        assert_eq!(
+            second,
+            Knots {
+                a: pt(6.0, 9.0),
+                b: pt(9.0, 9.0),
+                c: pt(12.0, 6.0),
+                d: pt(12.0, 0.0),
+            }
+        );
+    }
+
+    #[test]
+    fn decompose_straight() {
+        // Both tangents zero -> a straight line -> just the endpoint.
+        let s = Spline {
+            a: pt(0.0, 0.0),
+            b: pt(0.0, 0.0),
+            c: pt(10.0, 10.0),
+            d: pt(10.0, 10.0),
+            tolerance: 0.1,
+        };
+        let mut out = Vec::new();
+        s.decompose(&mut out);
+        assert_eq!(out, vec![pt(10.0, 10.0)]);
+    }
+
+    #[test]
+    fn decompose_collinear() {
+        // All control points on the line y=x -> zero error -> just the endpoint.
+        let s = Spline {
+            a: pt(0.0, 0.0),
+            b: pt(1.0, 1.0),
+            c: pt(2.0, 2.0),
+            d: pt(3.0, 3.0),
+            tolerance: 0.1,
+        };
+        let mut out = Vec::new();
+        s.decompose(&mut out);
+        assert_eq!(out, vec![pt(3.0, 3.0)]);
+    }
+
+    #[test]
+    fn decompose_curved() {
+        // A real arch: flattens to several points, ending at d, rising in y.
+        let s = Spline {
+            a: pt(0.0, 0.0),
+            b: pt(0.0, 10.0),
+            c: pt(10.0, 10.0),
+            d: pt(10.0, 0.0),
+            tolerance: 0.1,
+        };
+        let mut out = Vec::new();
+        s.decompose(&mut out);
+        assert!(out.len() > 2, "the arch flattens to several segments");
+        assert_eq!(*out.last().unwrap(), pt(10.0, 0.0));
+        // Every point is within the control bounding box, and the arch rises.
+        let mut max_y = f64::MIN;
+        for p in &out {
+            assert!((0.0..=10.0).contains(&p.x), "x in box");
+            assert!((0.0..=10.0).contains(&p.y), "y in box");
+            max_y = max_y.max(p.y);
+        }
+        assert!(max_y > 0.0, "the curve rises above the chord");
     }
 }

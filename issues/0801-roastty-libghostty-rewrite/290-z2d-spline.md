@@ -146,3 +146,61 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-062216-211482-prompt.md`
 - Result: `logs/codex-review/20260603-062216-211482-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` gained `Spline` (+ `decompose`), `Knots` (+
+`error_sq`, `de_casteljau`), and the `decompose_into`/`dot_sq`/`lerp_half`
+helpers — the faithful recursive de Casteljau flattener emitting into a
+`Vec<Point>`.
+
+Tests (deterministic):
+
+- `lerp_half_midpoint` (`(2,3)`), `dot_sq_value` (`25`).
+- `error_sq_offset` — the `3`-off-chord arch → `9`.
+- `de_casteljau_exact` — the symmetric cubic splits into
+  `{(0,0),(0,6),(3,9),(6,9)}` / `{(6,9),(9,9),(12,6),(12,0)}`.
+- `decompose_straight` — zero tangents → `[(10,10)]`.
+- `decompose_collinear` — control points on the line → `[(3,3)]`.
+- `decompose_curved` — a real arch flattens to several in-box points ending at
+  `(10,0)` and rising above the chord.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 49 passed (7 new).
+- `cargo test -p roastty` → 2550 passed, 0 failed (no regressions; +7).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The cubic-Bézier flattener is in place — the last primitive before the plotters.
+The next z2d slices: the `fill_plotter` (path nodes → `Polygon` contours: walk
+the nodes tracking the current point, flatten `curve_to` via `Spline`, close
+open subpaths, and `add_edge` each segment) and the `stroke_plotter` (a stroked
+path → outline `Polygon` with the `Pen`/join/cap machinery); then a
+`Canvas::fill_path`/ `line`/`stroke` that builds the polygon and calls
+`fill_polygon` on the (padded) `Canvas` buffer. The simplest first consumer
+remains `Canvas::line` (a 2-node butt-cap path) → the three box-drawing
+diagonals (`0x2571`–`0x2573`). Alongside the sprite font remain the discovery
+consumer, the UCD emoji-presentation default, codepoint overrides, the shaper,
+the Nerd Font attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `decompose`, `decompose_into`, `error_sq`,
+`de_casteljau`, `lerp_half`, and `dot_sq` match the upstream control flow and
+math (the Cairo error metric and the de Casteljau split ported exactly,
+including the `>= d_dot_sq` clamp branches and preserving the original `start`
+through the recursion), with the `Vec<Point>` emission correctly standing in for
+`lineTo`, and that the seven tests are deterministic and correct. It judged the
+gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-062448-592388-prompt.md`
+- Result: `logs/codex-review/20260603-062448-592388-last-message.md`
