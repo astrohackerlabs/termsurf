@@ -133,3 +133,60 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-065715-528567-prompt.md`
 - Result: `logs/codex-review/20260603-065715-528567-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/font/sprite/raster.rs` gained `stroke_line` — the faithful
+`plotSingle` butt-cap stroke: the segment's `Face` + the reversed face, the two
+`cap_butt` emissions into the outer `Contour`, and the contour → `Polygon`
+assembly.
+
+Tests (deterministic):
+
+- `stroke_horizontal` — `(0,0)→(10,0)` thk 2 → the two vertical edges
+  `{1,-1,0,0}`/`{-1,1,10,0}` (the 2-thick bar over `x[0,10] y[-1,1]`).
+- `stroke_vertical` — `(0,0)→(0,10)` → 2 edges, extents `x[-1,1] y[0,10]`.
+- `stroke_diagonal` — `(0,0)→(4,4)` → 4 edges (the rotated rectangle), extents
+  enclosing the segment.
+- `stroke_scaled` — scale 4 → the same shape ×4 (`{4,-4,0,0}`/`{-4,4,40,0}`).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty raster` → 70 passed (4 new).
+- `cargo test -p roastty` → 2571 passed, 0 failed (no regressions; +4).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates clean; `git diff --check` clean.
+
+## Conclusion
+
+The single-segment stroke is in place: a 2-point line strokes to its outline
+`Polygon`, ready for the rasterizer. The next slice is the **`Canvas::line` +
+diagonal dispatch** — a `Canvas::line(p0, p1, thickness)` that applies the
+padding translation to the endpoints, calls `stroke_line(…, MSAA_SCALE)`, and
+`fill_polygon`s the result into the padded `Canvas` buffer; plus a
+`draw_box_lines` extension (or a new `draw_box_diagonals`) dispatching
+`0x2571 ╱`, `0x2572 ╲`, `0x2573 ╳` via the upstream `lightDiagonal*` geometry
+(the corner-to-corner lines with the slope-overshoot). That renders the
+**diagonals** end to end — the first `z2d`-backed sprite glyphs. The arcs and
+circle/ellipse pieces (curves + `Pen` round joins) and the multi-segment join
+stroke come after. Alongside the sprite font remain the discovery consumer, the
+UCD emoji-presentation default, codepoint overrides, the shaper, the Nerd Font
+attribute table, and SVG color detection.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and found **no required
+changes**. It confirmed `stroke_line` builds the forward and reversed `Face`,
+appends `reversed.cap_butt(true)` then `face.cap_butt(true)` into the scaled
+outer contour, and assembles through `Polygon::new(1.0)` +
+`add_edges_from_contour` (matching upstream's `before = null` append), and that
+the horizontal/vertical/ diagonal/scaled tests check the right geometry and cap
+ordering. It judged the gates clean.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260603-065924-026491-prompt.md`
+- Result: `logs/codex-review/20260603-065924-026491-last-message.md`

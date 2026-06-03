@@ -1259,6 +1259,31 @@ impl Polygon {
     }
 }
 
+/// Stroke a single line segment `p0 → p1` with butt caps into a fill `Polygon`
+/// (at `scale`). Faithful port of z2d's `stroke_plotter.plotSingle`: build the
+/// segment's `Face`, emit the start cap (the reversed face's butt cap) then the
+/// end cap into the outer contour, and assemble the rectangle's edges.
+pub(crate) fn stroke_line(p0: Point, p1: Point, thickness: f64, scale: f64) -> Polygon {
+    let face = Face::init(p0, p1, thickness);
+    let reversed = Face::init(p1, p0, thickness);
+
+    let mut pts = Vec::new();
+    // cap_p0: the start cap is the reversed face's butt cap (clockwise).
+    reversed.cap_butt(true, &mut pts);
+    // cap_p1: the end cap is this face's butt cap (clockwise).
+    face.cap_butt(true, &mut pts);
+
+    let mut outer = Contour::new(scale);
+    for p in pts {
+        outer.plot(p);
+    }
+
+    // The contour scales the points, so the result polygon stays at scale 1.
+    let mut result = Polygon::new(1.0);
+    result.add_edges_from_contour(&outer);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2148,6 +2173,54 @@ mod tests {
         assert_eq!(
             poly.edges,
             vec![edge(0.0, 16.0, 16.0, 0.0), edge(16.0, 0.0, 0.0, 0.0)]
+        );
+    }
+
+    // stroke_line — the single-segment butt-cap stroke.
+
+    #[test]
+    fn stroke_horizontal() {
+        let poly = stroke_line(pt(0.0, 0.0), pt(10.0, 0.0), 2.0, 1.0);
+        assert_eq!(
+            poly.edges,
+            vec![edge(1.0, -1.0, 0.0, 0.0), edge(-1.0, 1.0, 10.0, 0.0)]
+        );
+    }
+
+    #[test]
+    fn stroke_vertical() {
+        // A vertical segment strokes to a horizontal bar: two horizontal-running
+        // edges of the rotated rectangle.
+        let poly = stroke_line(pt(0.0, 0.0), pt(0.0, 10.0), 2.0, 1.0);
+        // dev_slope (0,1) -> offset_cw (-1,0); corners are at x = ±1, y in [0,10].
+        // The two non-horizontal edges run along the left/right of the bar.
+        assert_eq!(poly.edges.len(), 2);
+        assert_eq!(poly.extent_left, -1.0);
+        assert_eq!(poly.extent_right, 1.0);
+        assert_eq!(poly.extent_top, 0.0);
+        assert_eq!(poly.extent_bottom, 10.0);
+    }
+
+    #[test]
+    fn stroke_diagonal() {
+        // A 45-degree segment strokes to a rotated rectangle: all four edges are
+        // non-axis-aligned.
+        let poly = stroke_line(pt(0.0, 0.0), pt(4.0, 4.0), 2.0, 1.0);
+        assert_eq!(poly.edges.len(), 4);
+        // The rectangle encloses the segment endpoints.
+        assert!(poly.extent_left < 0.0);
+        assert!(poly.extent_right > 4.0);
+        assert!(poly.extent_top < 0.0);
+        assert!(poly.extent_bottom > 4.0);
+    }
+
+    #[test]
+    fn stroke_scaled() {
+        // Same as the horizontal case but at scale 4: all coordinates ×4.
+        let poly = stroke_line(pt(0.0, 0.0), pt(10.0, 0.0), 2.0, 4.0);
+        assert_eq!(
+            poly.edges,
+            vec![edge(4.0, -4.0, 0.0, 0.0), edge(-4.0, 4.0, 40.0, 0.0)]
         );
     }
 }

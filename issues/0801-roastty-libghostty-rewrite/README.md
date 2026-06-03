@@ -1036,7 +1036,7 @@ are past the correctness-critical foundation.
 - [Experiment 294: z2d port — Polygon Contour](294-z2d-contour.md) — **Pass** ·
   Claude/Codex/Codex
 - [Experiment 295: z2d port — the single-segment stroke](295-z2d-stroke-line.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
