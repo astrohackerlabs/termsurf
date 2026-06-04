@@ -1500,7 +1500,7 @@ are past the correctness-critical foundation.
 - [Experiment 526: parseAutoStruct for Theme (Theme::parse_auto_struct)](526-config-theme-auto-struct.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 527: Theme::parse_cli and the theme Config::set arm](527-config-theme-parse-cli.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

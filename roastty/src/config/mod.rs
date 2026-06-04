@@ -523,6 +523,9 @@ impl Config {
                     self.background_blur.parse_cli(value)?;
                 }
             }
+            "theme" => {
+                self.theme = set_optional_value_field(value, default.theme, Theme::parse_cli)?
+            }
             _ => return Err(ConfigSetError::UnknownField),
         }
         Ok(())
@@ -2327,6 +2330,8 @@ pub(crate) enum ThemeParseError {
     /// The value was malformed (missing `:`, an unknown key, a missing required
     /// field, a quoted-value decode failure, or a comma-splitter error).
     Invalid,
+    /// No value was supplied, or the value was empty.
+    ValueRequired,
 }
 
 /// The `theme` config (upstream `Theme`): the theme names for light mode and dark
@@ -2390,6 +2395,31 @@ impl Theme {
             light: light.ok_or(ThemeParseError::Invalid)?,
             dark: dark.ok_or(ThemeParseError::Invalid)?,
         })
+    }
+
+    /// Parse the `theme` value (upstream `Theme.parseCLI`): a missing or empty value
+    /// is `ValueRequired`; a value with `,` / `=` / `:` is the light/dark pair
+    /// (`parse_auto_struct`); otherwise the single-name form (`light = dark =
+    /// trimmed`).
+    pub(crate) fn parse_cli(value: Option<&str>) -> Result<Theme, ThemeParseError> {
+        let input = value.ok_or(ThemeParseError::ValueRequired)?;
+        if input.is_empty() {
+            return Err(ThemeParseError::ValueRequired);
+        }
+        if input.contains(',') || input.contains('=') || input.contains(':') {
+            return Theme::parse_auto_struct(input);
+        }
+        let trimmed = input.trim_matches(|c: char| c == ' ' || c == '\t');
+        Ok(Theme::single(trimmed.to_string()))
+    }
+}
+
+impl From<ThemeParseError> for ConfigSetError {
+    fn from(e: ThemeParseError) -> Self {
+        match e {
+            ThemeParseError::Invalid => ConfigSetError::InvalidValue,
+            ThemeParseError::ValueRequired => ConfigSetError::ValueRequired,
+        }
     }
 }
 
@@ -5623,6 +5653,73 @@ mod tests {
         let mut out = String::new();
         parsed.format_entry(&mut EntryFormatter::new("theme", &mut out));
         assert_eq!(out, "theme = light:day,dark:night\n");
+    }
+
+    #[test]
+    fn theme_parse_cli_single_and_pair() {
+        let theme = |light: &str, dark: &str| Theme {
+            light: light.to_string(),
+            dark: dark.to_string(),
+        };
+
+        // A single name sets light = dark; whitespace is trimmed.
+        assert_eq!(
+            Theme::parse_cli(Some("catppuccin-mocha")),
+            Ok(theme("catppuccin-mocha", "catppuccin-mocha"))
+        );
+        assert_eq!(
+            Theme::parse_cli(Some("  solarized  ")),
+            Ok(theme("solarized", "solarized"))
+        );
+        // A value with `,` / `:` is the light/dark pair form.
+        assert_eq!(
+            Theme::parse_cli(Some("light:day,dark:night")),
+            Ok(theme("day", "night"))
+        );
+        // A `=` routes to the pair parser, which then fails (no `:` separator).
+        assert_eq!(
+            Theme::parse_cli(Some("light=day")),
+            Err(ThemeParseError::Invalid)
+        );
+        // A missing or empty value is `ValueRequired`.
+        assert_eq!(Theme::parse_cli(None), Err(ThemeParseError::ValueRequired));
+        assert_eq!(
+            Theme::parse_cli(Some("")),
+            Err(ThemeParseError::ValueRequired)
+        );
+    }
+
+    #[test]
+    fn config_set_routes_theme_field() {
+        let line = |cfg: &Config| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with("theme = "))
+                .unwrap()
+                .to_string()
+        };
+
+        // A single name and a pair route to the `theme` field (via format_config).
+        let mut cfg = Config::default();
+        cfg.set("theme", Some("catppuccin-mocha")).unwrap();
+        assert_eq!(line(&cfg), "theme = catppuccin-mocha");
+
+        let mut cfg = Config::default();
+        cfg.set("theme", Some("light:day,dark:night")).unwrap();
+        assert_eq!(line(&cfg), "theme = light:day,dark:night");
+
+        // `Some("")` resets to `None` (the void line).
+        cfg.set("theme", Some("")).unwrap();
+        assert_eq!(line(&cfg), "theme = ");
+
+        // A missing value is `ValueRequired`; an invalid pair is `InvalidValue`.
+        let mut cfg = Config::default();
+        assert_eq!(cfg.set("theme", None), Err(ConfigSetError::ValueRequired));
+        assert_eq!(
+            cfg.set("theme", Some("bright:x,dark:y")),
+            Err(ConfigSetError::InvalidValue)
+        );
     }
 
     #[test]

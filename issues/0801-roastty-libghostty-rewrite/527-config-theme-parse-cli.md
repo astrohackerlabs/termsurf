@@ -193,3 +193,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-185141-d527-prompt.md` (design)
 - Result: `logs/codex-review/20260604-185141-d527-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`ThemeParseError` gained `ValueRequired`; `Theme::parse_cli`,
+`From<ThemeParseError> for ConfigSetError`, and the `theme` `Config::set` arm
+were added. `parse_cli` matches upstream `Theme.parseCLI` (missing/empty ⇒
+`ValueRequired`; `,`/`=`/`:` ⇒ the pair form; else the single-name form, trim
+`" \t"` and `light = dark = trimmed`); the `theme` arm uses
+`set_optional_value_field` (reset to `None` on `Some("")`, `None` ⇒
+`ValueRequired`, else `Some(parse)`). `theme` was the last parseable field —
+`Config::set` now routes **43 of 44** fields (only the float-blocked
+`background-image-opacity` remains). Two new tests cover `parse_cli` (single /
+pair / whitespace / `=` typo route / missing / empty) and the `theme`
+`Config::set` arm (single, pair, reset, missing, invalid).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3016 passed, 0 failed (two new tests; no
+  regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `Theme.parseCLI` for macOS —
+missing/empty ⇒ `ValueRequired`, any `,` / `=` / `:` routes to the pair parser,
+otherwise the single-name branch trims `" \t"` and sets both light/dark; the
+`theme` `Config::set` arm is faithful to optional-as-child + empty-reset
+(`Some("")` ⇒ `None`, `None` ⇒ `ValueRequired` via `parse_cli`, non-empty ⇒
+`Some(Theme)`); the tests cover the key behaviors (the `=` typo route,
+reset-vs-missing, invalid pair, format verification); gates are clean. "Approved
+with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-185355-r527-prompt.md` (result)
+- Result: `logs/codex-review/20260604-185355-r527-last-message.md` (result)
+
+## Conclusion
+
+`Config::set` now routes **43 of the 44** `Config` fields — every field except
+the float-blocked `background-image-opacity`. The per-field config **loader** is
+complete: both directions (`Config::format_config` and `Config::set`) plus all
+the leaf parsers/formatters. The remaining config work is the top-level
+**`loadCli` / config-file loader** — splitting a config source into
+`key = value` lines (comments, trimming, the `--key=value` CLI form) and driving
+`Config::set` per line. After that, the entire non-config rewrite remains.
