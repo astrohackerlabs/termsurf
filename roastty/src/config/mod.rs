@@ -279,12 +279,33 @@ pub(crate) enum MiddleClickAction {
     Ignore,
 }
 
+/// The `osc-color-report-format` config (upstream `OSCColorReportFormat`): the
+/// precision of OSC color query reports. The `Config` default is `Bits16`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OscColorReportFormat {
+    /// Color reports disabled.
+    None,
+    /// Report at 8-bit channel precision (upstream `8-bit`).
+    Bits8,
+    /// Report at 16-bit channel precision (upstream `16-bit`).
+    Bits16,
+}
+
+impl OscColorReportFormat {
+    /// Whether OSC color queries are answered at all (upstream's
+    /// `osc_color_report_format == .none` guard): `None` disables reports;
+    /// `Bits8` and `Bits16` enable them.
+    pub(crate) fn reports(self) -> bool {
+        !matches!(self, OscColorReportFormat::None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, CopyOnSelect,
         CustomShaderAnimation, FontShapingBreak, FontStyle, GraphemeWidthMethod, MiddleClickAction,
-        MouseShiftCapture, RightClickAction,
+        MouseShiftCapture, OscColorReportFormat, RightClickAction,
     };
 
     #[test]
@@ -477,5 +498,25 @@ mod tests {
         let a = MiddleClickAction::PrimaryPaste;
         let copied = a;
         assert_eq!(a, copied);
+    }
+
+    #[test]
+    fn osc_color_report_format_reports_unless_none() {
+        let formats = [
+            OscColorReportFormat::None,
+            OscColorReportFormat::Bits8,
+            OscColorReportFormat::Bits16,
+        ];
+        assert_eq!(formats.len(), 3);
+
+        assert!(!OscColorReportFormat::None.reports());
+        assert!(OscColorReportFormat::Bits8.reports());
+        assert!(OscColorReportFormat::Bits16.reports());
+
+        assert_ne!(OscColorReportFormat::Bits8, OscColorReportFormat::Bits16);
+        // `Copy` + `Eq`: a trivial round-trip.
+        let f = OscColorReportFormat::Bits16;
+        let copied = f;
+        assert_eq!(f, copied);
     }
 }

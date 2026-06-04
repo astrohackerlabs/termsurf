@@ -179,3 +179,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-105217-d444-prompt.md` (design)
 - Result: `logs/codex-review/20260604-105217-d444-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The osc-color-report-format config enum and its reports predicate are now live.
+
+- `roastty/src/config/mod.rs`:
+  `pub(crate) enum OscColorReportFormat { None, Bits8, Bits16 }` (upstream
+  `OSCColorReportFormat`; the non-identifier tags `8-bit` / `16-bit` map to
+  `Bits8` / `Bits16`) and `OscColorReportFormat::reports(self) -> bool`
+  (`!matches!(self, OscColorReportFormat::None)`), the extraction of upstream's
+  `osc_color_report_format == .none` query guard.
+
+Test (in `config/mod.rs`): `osc_color_report_format_reports_unless_none` — the
+exact variant set (array, `assert_eq!(len, 3)`); `None.reports() == false`,
+`Bits8.reports() == true`, `Bits16.reports() == true`;
+`assert_ne!(Bits8, Bits16)`; `Copy`/`Eq`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2932 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The config layer now carries `OscColorReportFormat` and its reports predicate —
+the seventh config slice in a row to land its consumer logic alongside the type,
+and the first to reach the terminal-OSC / termio subsystem. The `Config` struct
+/ parsing, the 8-bit / 16-bit report formatting (the `writer.print` and the
+`× 257` channel scaling), and the stream-handler call site stay deferred. The
+config-type family — now spanning renderer, font, terminal-mode, input,
+clipboard, and terminal-OSC consumers — remains a clean, gated way to advance
+the rewrite while the larger coupled subsystems stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `OscColorReportFormat { None, Bits8, Bits16 }`
+faithfully maps upstream `none`/`8-bit`/`16-bit`; `reports()` correctly captures
+the upstream `!= .none` query guard; deferring the byte formatting and `× 257`
+scaling to the stream-handler call-site slice is the right boundary; and the
+test covers all variants and the predicate behavior. No public C ABI/header
+impact; nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-105415-r444-prompt.md` (result)
+- Result: `logs/codex-review/20260604-105415-r444-last-message.md` (result)

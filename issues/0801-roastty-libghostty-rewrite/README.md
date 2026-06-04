@@ -1334,7 +1334,7 @@ are past the correctness-critical foundation.
 - [Experiment 443: the click-action config enums (RightClickAction, MiddleClickAction)](443-config-click-actions.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 444: the osc-color-report-format config enum and its reports predicate (OscColorReportFormat, reports)](444-config-osc-color-report-format.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
