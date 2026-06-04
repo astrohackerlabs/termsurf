@@ -1259,6 +1259,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 406: the foreground-cell buffer upload (sync_from_array_lists)](406-sync-from-array-lists.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 407: the Contents upload accessors](407-contents-upload-accessors.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
