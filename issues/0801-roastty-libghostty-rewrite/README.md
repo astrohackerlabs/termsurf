@@ -1410,7 +1410,7 @@ are past the correctness-critical foundation.
 - [Experiment 481: the config WindowPadding CLI parser (WindowPadding::parse_cli)](481-config-window-padding-parse-cli.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 482: the config WindowDecoration CLI parser (WindowDecoration::parse_cli)](482-config-window-decoration-parse-cli.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

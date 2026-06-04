@@ -242,3 +242,52 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-135258-d482-prompt.md` (design)
 - Result: `logs/codex-review/20260604-135258-d482-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`WindowDecoration::parse_cli` and the reusable `parse_bool` were added to
+`roastty/src/config/mod.rs` exactly as designed — the missing-value `Auto`
+default, the boolean-first resolution (`true`→`Auto`, `false`→`None`), the exact
+variant-name match, and the `InvalidValue` fallthrough; `parse_bool` matches
+upstream's exact `1/t/T/true` and `0/f/F/false` token sets. The new test
+`window_decoration_parse_cli_resolves_bool_and_variants` asserts the upstream
+cases, the single-letter bool tokens, and the case-sensitivity edge (`"True"` →
+`InvalidValue`).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2962 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: `WindowDecoration::parse_cli` faithfully ports upstream (missing
+input → `Auto`, bool tokens tried first with `true`→`Auto` / `false`→`None`,
+exact enum names as the fallback); `parse_bool` matches the upstream token sets
+and case-sensitivity; the test covers the upstream cases plus the single-letter
+and case-sensitivity edges; and deferring the C-ABI repr, the GTK
+`getGObjectType`, and the broader config parser/formatter remains properly
+scoped. "Approved for the result commit."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-135542-r482-prompt.md` (result)
+- Result: `logs/codex-review/20260604-135542-r482-last-message.md` (result)
+
+## Conclusion
+
+`WindowDecoration` now parses, and this slice lands the reusable `parse_bool`
+(upstream `cli.args.parseBool`) — the boolean primitive that many config fields
+(and the per-field parser dispatch) will use. The config parse layer now spans
+`Color`, `TerminalColor`, `BoldColor`, `Palette`, `ColorList`, `Duration`,
+`WindowPadding`, and `WindowDecoration`, plus reusable base-0 `u8`, base-10
+`u32`, and boolean parsers. The next slice can port another self-contained
+config value type's `parseCLI`, or begin the per-field parser dispatch that ties
+these parsers to the aggregate `Config`, continuing toward the full config
+loader.

@@ -697,6 +697,63 @@ fn parse_u32_dec(buf: &str) -> Option<u32> {
     Some(acc as u32)
 }
 
+/// An error parsing `WindowDecoration` (upstream `error.InvalidValue`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowDecorationParseError {
+    /// The value is neither a boolean nor a known variant name.
+    InvalidValue,
+}
+
+/// The `window-decoration` config (upstream `Config.WindowDecoration`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowDecoration {
+    Auto,
+    Client,
+    Server,
+    None,
+}
+
+impl WindowDecoration {
+    /// Parse the `window-decoration` value (upstream `WindowDecoration.parseCLI`):
+    /// a missing value is `Auto`; a boolean (`true` → `Auto`, `false` → `None`) is
+    /// honored first; otherwise the variant name `auto`/`client`/`server`/`none`
+    /// is matched, else `InvalidValue`.
+    pub(crate) fn parse_cli(
+        input: Option<&str>,
+    ) -> Result<WindowDecoration, WindowDecorationParseError> {
+        let Some(input) = input else {
+            return Ok(WindowDecoration::Auto);
+        };
+
+        if let Some(b) = parse_bool(input) {
+            return Ok(if b {
+                WindowDecoration::Auto
+            } else {
+                WindowDecoration::None
+            });
+        }
+
+        match input {
+            "auto" => Ok(WindowDecoration::Auto),
+            "client" => Ok(WindowDecoration::Client),
+            "server" => Ok(WindowDecoration::Server),
+            "none" => Ok(WindowDecoration::None),
+            _ => Err(WindowDecorationParseError::InvalidValue),
+        }
+    }
+}
+
+/// Parse a config boolean (upstream `cli.args.parseBool`): `1`/`t`/`T`/`true` are
+/// `true`; `0`/`f`/`F`/`false` are `false`; anything else is `None` (upstream's
+/// `error.InvalidValue`, surfaced as `None` for the try-then-fallback callers).
+fn parse_bool(v: &str) -> Option<bool> {
+    match v {
+        "1" | "t" | "T" | "true" => Some(true),
+        "0" | "f" | "F" | "false" => Some(false),
+        _ => None,
+    }
+}
+
 /// The `notify-on-command-finish` config (upstream `NotifyOnCommandFinish`): when
 /// to notify on a finished command. The `Config` default is `Never`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1319,8 +1376,8 @@ mod tests {
         NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OscColorReportFormat, Palette, PaletteParseError, RightClickAction, ScrollToBottom,
         ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme,
-        WindowColorspace, WindowPadding, WindowPaddingColor, WindowPaddingParseError,
-        WindowSubtitle,
+        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowPadding,
+        WindowPaddingColor, WindowPaddingParseError, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
 
@@ -2359,6 +2416,70 @@ mod tests {
         assert_eq!(
             WindowPadding::parse_cli(Some("100,x")), // bad side
             Err(WindowPaddingParseError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn window_decoration_parse_cli_resolves_bool_and_variants() {
+        // Upstream `WindowDecoration.parseCLI` cases.
+        assert_eq!(
+            WindowDecoration::parse_cli(None),
+            Ok(WindowDecoration::Auto)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("true")),
+            Ok(WindowDecoration::Auto)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("false")),
+            Ok(WindowDecoration::None)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("server")),
+            Ok(WindowDecoration::Server)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("client")),
+            Ok(WindowDecoration::Client)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("auto")),
+            Ok(WindowDecoration::Auto)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("none")),
+            Ok(WindowDecoration::None)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("")),
+            Err(WindowDecorationParseError::InvalidValue)
+        );
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("aaaa")),
+            Err(WindowDecorationParseError::InvalidValue)
+        );
+
+        // The other `parse_bool` true / false tokens.
+        for t in ["1", "t", "T"] {
+            assert_eq!(
+                WindowDecoration::parse_cli(Some(t)),
+                Ok(WindowDecoration::Auto),
+                "{t}"
+            );
+        }
+        for f in ["0", "f", "F"] {
+            assert_eq!(
+                WindowDecoration::parse_cli(Some(f)),
+                Ok(WindowDecoration::None),
+                "{f}"
+            );
+        }
+
+        // `parse_bool` is case-sensitive: "True" is neither a boolean nor a
+        // variant name.
+        assert_eq!(
+            WindowDecoration::parse_cli(Some("True")),
+            Err(WindowDecorationParseError::InvalidValue)
         );
     }
 
