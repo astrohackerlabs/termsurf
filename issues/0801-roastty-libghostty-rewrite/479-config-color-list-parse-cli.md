@@ -234,3 +234,54 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-133103-d479-prompt.md` (design)
 - Result: `logs/codex-review/20260604-133103-d479-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`ColorList::parse_cli` was added to `roastty/src/config/mod.rs` exactly as
+designed — the missing/empty `ValueRequired` guard, the reset, the comma split
+skipping empty tokens, the `count > 64` cap, the per-token `" \t"` trim +
+`Color::parse_cli`, and the all-empty `Invalid`, reusing `ColorParseError`. The
+new test `color_list_parse_cli_parses_comma_separated_colors` asserts the
+upstream cases (`"black,white"`, the whitespace variants), plus the two
+design-review-Low behaviors (empty-token skipping; the 64-item cap with the 65th
+`Invalid`), the reset-on-parse, the missing/empty/whitespace/all-empty/bad-color
+errors.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2959 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no findings**
+(the design Low is resolved): `ColorList::parse_cli` preserves the upstream
+ordering (missing/empty → `ValueRequired` before reset, then reset,
+comma-tokenize skipping empties, per-token space/tab trim, `Color::parse_cli`,
+cap at 64, reject all-empty); `Vec::clear()` is an appropriate semantic reset;
+reusing `ColorParseError` is fine for the exposed `ValueRequired` / `Invalid`;
+the expanded test covers the upstream cases plus empty-token skipping, reset,
+empty/all-empty inputs, bad colors, and the 64-item cap; and deferring
+`colors_c` / `cval` / `formatEntry` / the broader config parser remains properly
+scoped. "Approved for the result commit."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-133348-r479-prompt.md` (result)
+- Result: `logs/codex-review/20260604-133348-r479-last-message.md` (result)
+
+## Conclusion
+
+The `ColorList` config now parses: a comma-separated, whitespace-tolerant,
+empty-skipping, 64-capped list of colors reusing `Color::parse_cli`. With
+`Color`, `TerminalColor`, `BoldColor`, `Palette`, and `ColorList` all parsing,
+the config color value types are largely covered on the parse side. The next
+slice can move to a non-color config value type's `parseCLI` (e.g. `Duration`,
+`WindowPadding`, or `MouseScrollMultiplier`) or port the color formatters once
+the config `EntryFormatter` lands, continuing toward the per-field parser
+dispatch and the full config loader.

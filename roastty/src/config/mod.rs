@@ -451,6 +451,47 @@ fn char_to_digit(c: u8, base: u32) -> Result<u32, PaletteParseError> {
     Ok(value)
 }
 
+/// The config `ColorList` (upstream `Config.ColorList`): a comma-separated list of
+/// colors (1..=64). The `colors_c` C mirror and the `formatEntry` formatter are
+/// ported in later slices.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ColorList {
+    pub colors: Vec<Color>,
+}
+
+impl ColorList {
+    /// Parse a comma-separated color list (upstream `ColorList.parseCLI`): a
+    /// missing or empty value is `ColorParseError::ValueRequired`; the list is
+    /// reset, then each comma-separated token (empties skipped) is trimmed and
+    /// parsed via [`Color::parse_cli`]; more than 64 colors, or an all-empty
+    /// input, is `Invalid`.
+    pub(crate) fn parse_cli(&mut self, input: Option<&str>) -> Result<(), ColorParseError> {
+        let input = input.ok_or(ColorParseError::ValueRequired)?;
+        if input.is_empty() {
+            return Err(ColorParseError::ValueRequired);
+        }
+
+        // Always reset on parse.
+        self.colors.clear();
+
+        let mut count: usize = 0;
+        for raw in input.split(',').filter(|tok| !tok.is_empty()) {
+            count += 1;
+            if count > 64 {
+                return Err(ColorParseError::Invalid);
+            }
+            let trimmed = raw.trim_matches(|c: char| c == ' ' || c == '\t');
+            let color = Color::parse_cli(Some(trimmed))?;
+            self.colors.push(color);
+        }
+
+        if self.colors.is_empty() {
+            return Err(ColorParseError::Invalid);
+        }
+        Ok(())
+    }
+}
+
 /// The `notify-on-command-finish` config (upstream `NotifyOnCommandFinish`): when
 /// to notify on a finished command. The `Config` default is `Never`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1066,14 +1107,14 @@ impl OscColorReportFormat {
 mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, BoldColor,
-        ClipboardAccess, Color, ColorParseError, Config, ConfirmCloseSurface, CopyOnSelect,
-        CustomShaderAnimation, FontShapingBreak, FontStyle, Fullscreen, GraphemeWidthMethod,
-        LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons,
-        MiddleClickAction, MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish,
-        NotifyOnCommandFinishAction, OscColorReportFormat, Palette, PaletteParseError,
-        RightClickAction, ScrollToBottom, ShellIntegration, ShellIntegrationFeatures,
-        TerminalBoldColor, TerminalColor, Theme, WindowColorspace, WindowPaddingColor,
-        WindowSubtitle,
+        ClipboardAccess, Color, ColorList, ColorParseError, Config, ConfirmCloseSurface,
+        CopyOnSelect, CustomShaderAnimation, FontShapingBreak, FontStyle, Fullscreen,
+        GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle,
+        MacWindowButtons, MiddleClickAction, MouseShiftCapture, NonNativeFullscreen,
+        NotifyOnCommandFinish, NotifyOnCommandFinishAction, OscColorReportFormat, Palette,
+        PaletteParseError, RightClickAction, ScrollToBottom, ShellIntegration,
+        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
+        WindowPaddingColor, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
 
@@ -1918,6 +1959,68 @@ mod tests {
         assert_eq!(
             p.parse_cli(Some("0x=#AABBCC")),
             Err(PaletteParseError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn color_list_parse_cli_parses_comma_separated_colors() {
+        let black = Color { r: 0, g: 0, b: 0 };
+        let white = Color {
+            r: 255,
+            g: 255,
+            b: 255,
+        };
+
+        // Upstream `ColorList.parseCLI`: `"black,white"` → 2 colors.
+        let mut list = ColorList::default();
+        assert_eq!(list.parse_cli(Some("black,white")), Ok(()));
+        assert_eq!(list.colors, vec![black, white]);
+
+        // Whitespace around the commas and ends is trimmed per token.
+        for input in ["black, white", "black , white", " black , white "] {
+            let mut list = ColorList::default();
+            assert_eq!(list.parse_cli(Some(input)), Ok(()));
+            assert_eq!(list.colors, vec![black, white], "{input}");
+        }
+
+        // Empty tokens (doubled / leading / trailing commas) are skipped.
+        for input in ["black,,white", ",black,white,", "black,white,"] {
+            let mut list = ColorList::default();
+            assert_eq!(list.parse_cli(Some(input)), Ok(()));
+            assert_eq!(list.colors, vec![black, white], "{input}");
+        }
+
+        // Each parse resets the list rather than appending.
+        let mut list = ColorList::default();
+        assert_eq!(list.parse_cli(Some("black,white")), Ok(()));
+        assert_eq!(list.parse_cli(Some("white")), Ok(()));
+        assert_eq!(list.colors, vec![white]);
+
+        // Missing / empty input is `ValueRequired`; a whitespace-only token,
+        // an all-empty input, and a bad color are `Invalid`.
+        let mut list = ColorList::default();
+        assert_eq!(list.parse_cli(None), Err(ColorParseError::ValueRequired));
+        assert_eq!(
+            list.parse_cli(Some("")),
+            Err(ColorParseError::ValueRequired)
+        );
+        assert_eq!(list.parse_cli(Some(" ")), Err(ColorParseError::Invalid));
+        assert_eq!(list.parse_cli(Some(",,")), Err(ColorParseError::Invalid));
+        assert_eq!(
+            list.parse_cli(Some("black,nope")),
+            Err(ColorParseError::Invalid)
+        );
+
+        // The cap is 64 colors; the 65th token is `Invalid`.
+        let ok = ["black"; 64].join(",");
+        let mut list = ColorList::default();
+        assert_eq!(list.parse_cli(Some(&ok)), Ok(()));
+        assert_eq!(list.colors.len(), 64);
+        let too_many = ["black"; 65].join(",");
+        let mut list = ColorList::default();
+        assert_eq!(
+            list.parse_cli(Some(&too_many)),
+            Err(ColorParseError::Invalid)
         );
     }
 
