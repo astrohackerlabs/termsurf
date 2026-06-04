@@ -175,3 +175,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-112926-d453-prompt.md` (design)
 - Result: `logs/codex-review/20260604-112926-d453-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The link-previews config enum and its preview predicates are now live.
+
+- `roastty/src/config/mod.rs`:
+  `pub(crate) enum LinkPreviews { False, True, Osc8 }` (upstream `LinkPreviews`)
+  and two predicates — `previews_regular_link(self) -> bool`
+  (`matches!(self, LinkPreviews::True)`, the regular-link `== .true` check) and
+  `previews_osc8_link(self) -> bool` (`!matches!(self, LinkPreviews::False)`,
+  the OSC8 `!= .false` check).
+
+Test (in `config/mod.rs`): `link_previews_predicates_by_link_kind` — over the
+three variants: `False → false/false`, `True → true/true`, `Osc8 → false/true`
+(regular / osc8); the variants distinct; `Copy`/`Eq`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2941 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The config layer now carries `LinkPreviews` and its two preview predicates — the
+first config enum to land **two** distinct consumer predicates (one per link
+kind), capturing upstream's separate `== .true` (regular link) and `!= .false`
+(OSC8 hyperlink) checks rather than collapsing them into one. The `Config`
+struct / parsing and the surface preview call sites (resolving the link / OSC8
+URI, updating the status bar) stay deferred. The config-type family — now
+fourteen enums/flag-structs with consumers plus three color value types —
+remains a clean, gated way to advance the rewrite while the larger coupled
+subsystems stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `LinkPreviews { False, True, Osc8 }` faithfully
+ports the upstream enum; `previews_regular_link()` correctly preserves the
+regular-link `== .true` behavior; `previews_osc8_link()` correctly preserves the
+OSC8 `!= .false` behavior; and the test covers the complete 3-variant behavior
+matrix and value semantics. No public C ABI/header impact; nothing needed to
+change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-113113-r453-prompt.md` (result)
+- Result: `logs/codex-review/20260604-113113-r453-last-message.md` (result)

@@ -181,6 +181,32 @@ impl Default for ShellIntegrationFeatures {
     }
 }
 
+/// The `link-previews` config (upstream `LinkPreviews`): when to show a preview
+/// for a link. The `Config` default is `True`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkPreviews {
+    /// No link previews.
+    False,
+    /// Preview every link.
+    True,
+    /// Preview only OSC8 hyperlinks.
+    Osc8,
+}
+
+impl LinkPreviews {
+    /// Whether to preview a regular (detected) link (upstream's `link_previews ==
+    /// .true` check): only when `True`.
+    pub(crate) fn previews_regular_link(self) -> bool {
+        matches!(self, LinkPreviews::True)
+    }
+
+    /// Whether to preview an OSC8 hyperlink (upstream's `link_previews != .false`
+    /// check): when `True` or `Osc8`.
+    pub(crate) fn previews_osc8_link(self) -> bool {
+        !matches!(self, LinkPreviews::False)
+    }
+}
+
 /// The color space the window renders in (upstream `WindowColorspace`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowColorspace {
@@ -500,9 +526,10 @@ mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, BoldColor,
         Color, CopyOnSelect, CustomShaderAnimation, FontShapingBreak, FontStyle,
-        GraphemeWidthMethod, MiddleClickAction, MouseShiftCapture, NotifyOnCommandFinish,
-        NotifyOnCommandFinishAction, OscColorReportFormat, RightClickAction, ScrollToBottom,
-        ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor, TerminalColor,
+        GraphemeWidthMethod, LinkPreviews, MiddleClickAction, MouseShiftCapture,
+        NotifyOnCommandFinish, NotifyOnCommandFinishAction, OscColorReportFormat, RightClickAction,
+        ScrollToBottom, ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor,
+        TerminalColor,
     };
     use crate::terminal::color::Rgb;
 
@@ -581,6 +608,25 @@ mod tests {
         // `Copy` + `Eq`: a trivial round-trip.
         let copied = off;
         assert_eq!(off, copied);
+    }
+
+    #[test]
+    fn link_previews_predicates_by_link_kind() {
+        // (previews_regular_link, previews_osc8_link) per variant.
+        assert!(!LinkPreviews::False.previews_regular_link());
+        assert!(!LinkPreviews::False.previews_osc8_link());
+
+        assert!(LinkPreviews::True.previews_regular_link());
+        assert!(LinkPreviews::True.previews_osc8_link());
+
+        assert!(!LinkPreviews::Osc8.previews_regular_link());
+        assert!(LinkPreviews::Osc8.previews_osc8_link());
+
+        assert_ne!(LinkPreviews::True, LinkPreviews::Osc8);
+        // `Copy` + `Eq`: a trivial round-trip.
+        let l = LinkPreviews::Osc8;
+        let copied = l;
+        assert_eq!(l, copied);
     }
 
     #[test]

@@ -1352,7 +1352,7 @@ are past the correctness-critical foundation.
 - [Experiment 452: the shell-integration-features config type (ShellIntegrationFeatures)](452-config-shell-integration-features.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 453: the link-previews config enum and its preview predicates (LinkPreviews, previews_regular_link / previews_osc8_link)](453-config-link-previews.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
