@@ -1243,6 +1243,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 398: the column-ordered decoration merge](398-column-ordered-merge.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 399: wire the link underline into the pass](399-wire-link-underline.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
