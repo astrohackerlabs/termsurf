@@ -785,62 +785,17 @@ pub(crate) fn add_glyph(
     Ok(())
 }
 
-/// Place every glyph of one [`ShapedRun`] into `contents` on row `y`. For each
-/// shaped cell, the absolute column is `run.offset + cell.x`; its
-/// [`RenderOptions`] come from [`render_options`] over `row_cells`, its
-/// color/alpha from `fg_colors[col]`, and its `no_min_contrast` from the cell's
-/// codepoint. The per-run inner loop of upstream `rebuildCells`.
-pub(crate) fn add_run(
-    contents: &mut Contents,
-    grid: &mut SharedGrid,
-    y: u16,
-    run: &ShapedRun,
-    row_cells: &[CellInfo],
-    fg_colors: &[[u8; 4]],
-    cols: usize,
-    thicken: bool,
-    thicken_strength: u8,
-) -> Result<(), ResolverRenderError> {
-    let grid_metrics = grid.metrics;
-    for cell in &run.glyphs {
-        let col = usize::from(run.run.offset) + usize::from(cell.x);
-        debug_assert!(col < cols && cols <= row_cells.len() && cols <= fg_colors.len());
-        // Checked, like upstream's `@intCast` (and the bearings in `add_glyph`).
-        let grid_x = u16::try_from(col).expect("glyph column fits u16");
-        let opts = render_options(
-            grid_metrics,
-            row_cells,
-            col,
-            cols,
-            thicken,
-            thicken_strength,
-        );
-        let cp = row_cells[col].codepoint;
-        let rgba = fg_colors[col];
-        add_glyph(
-            contents,
-            grid,
-            [grid_x, y],
-            run.run.font_index,
-            cell,
-            [rgba[0], rgba[1], rgba[2]],
-            rgba[3],
-            no_min_contrast(cp),
-            &opts,
-        )?;
-    }
-    Ok(())
-}
-
 /// Assemble one viewport row's foreground text cells into `contents`. Derives the
 /// row's [`CellInfo`] slice ([`cell_infos`]) and per-column `fg_colors` (each
-/// cell's foreground + `alpha`), then places every glyph of each [`ShapedRun`]
-/// via [`add_run`]. Each cell's [`Selected`] state ([`selected_state`], from the
-/// row's `selection` and `highlights`) drives its foreground: a selected/search
-/// cell takes [`selected_colors`] (the `selection_config`); otherwise
-/// [`cell_colors`] (so the foreground is inverse-aware — reverse-video swaps the
-/// glyph color). That one per-cell foreground feeds the glyph and all three
-/// decorations (via `fg_colors`). The per-row foreground body of upstream
+/// cell's foreground + `alpha`), then emits the foreground in **one column-ordered
+/// loop** (as upstream): per column — the underline and overline (underneath), the
+/// glyph(s) at that column (walking the shaped runs with a monotonic cursor), then
+/// the strikethrough (on top). Each cell's [`Selected`] state ([`selected_state`],
+/// from the row's `selection` and `highlights`) drives its foreground: a
+/// selected/search cell takes [`selected_colors`] (the `selection_config`);
+/// otherwise [`cell_colors`] (so the foreground is inverse-aware — reverse-video
+/// swaps the glyph color). That one per-cell foreground feeds the glyph and all
+/// three decorations (via `fg_colors`). The per-row foreground body of upstream
 /// `rebuildCells`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rebuild_row(
@@ -903,14 +858,20 @@ pub(crate) fn rebuild_row(
         })
         .collect();
 
-    // Decorations that layer UNDERNEATH the text: underline (its own color, else
-    // the foreground) and overline (the foreground). Emitted before the glyphs so
-    // they sit below them in the foreground cell list.
+    // One column-ordered pass (as upstream): per column, emit the underline and
+    // overline (underneath), then the glyph(s) at that column, then the
+    // strikethrough (on top). The glyph step walks the shaped runs with a cursor
+    // that advances monotonically with `col`.
+    let grid_metrics = grid.metrics;
+    let mut run_i = 0usize;
+    let mut glyph_i = 0usize;
     for (col, cell) in row_cells.iter().enumerate() {
         let grid_pos = [u16::try_from(col).expect("column fits u16"), y];
         let rgba = fg_colors[col];
         let fg = [rgba[0], rgba[1], rgba[2]];
         let flags = cell.style.flags;
+
+        // 1. Underline (its own color, else the foreground) — underneath.
         if flags.underline != Underline::None {
             let underline_color = cell
                 .style
@@ -926,37 +887,48 @@ pub(crate) fn rebuild_row(
                 rgba[3],
             )?;
         }
+        // 2. Overline — underneath.
         if flags.overline {
             add_overline(contents, grid, grid_pos, fg, rgba[3])?;
         }
-    }
 
-    for run in row_runs {
-        add_run(
-            contents,
-            grid,
-            y,
-            run,
-            &infos,
-            &fg_colors,
-            cols,
-            thicken,
-            thicken_strength,
-        )?;
-    }
+        // 3. The glyph(s) at this column, walking the shaped runs in column order.
+        while run_i < row_runs.len() && glyph_i >= row_runs[run_i].glyphs.len() {
+            run_i += 1;
+            glyph_i = 0;
+        }
+        if run_i < row_runs.len() {
+            let run = &row_runs[run_i];
+            // The cursor never falls behind `col` (monotonic, like upstream's
+            // assert) — `shape_row` returns runs in row order with glyphs sorted by
+            // absolute column.
+            debug_assert!(
+                glyph_i >= run.glyphs.len()
+                    || usize::from(run.run.offset) + usize::from(run.glyphs[glyph_i].x) >= col
+            );
+            let opts = render_options(grid_metrics, &infos, col, cols, thicken, thicken_strength);
+            let cp = infos[col].codepoint;
+            while glyph_i < run.glyphs.len()
+                && usize::from(run.run.offset) + usize::from(run.glyphs[glyph_i].x) == col
+            {
+                add_glyph(
+                    contents,
+                    grid,
+                    grid_pos,
+                    run.run.font_index,
+                    &run.glyphs[glyph_i],
+                    fg,
+                    rgba[3],
+                    no_min_contrast(cp),
+                    &opts,
+                )?;
+                glyph_i += 1;
+            }
+        }
 
-    // Strikethrough layers ON TOP of the text (emitted after the glyphs).
-    for (col, cell) in row_cells.iter().enumerate() {
-        if cell.style.flags.strikethrough {
-            let grid_pos = [u16::try_from(col).expect("column fits u16"), y];
-            let rgba = fg_colors[col];
-            add_strikethrough(
-                contents,
-                grid,
-                grid_pos,
-                [rgba[0], rgba[1], rgba[2]],
-                rgba[3],
-            )?;
+        // 4. Strikethrough — on top.
+        if flags.strikethrough {
+            add_strikethrough(contents, grid, grid_pos, fg, rgba[3])?;
         }
     }
     Ok(())
@@ -1606,14 +1578,19 @@ mod tests {
     }
 
     #[test]
-    fn add_run_places_glyphs_at_absolute_columns() {
+    fn rebuild_row_places_glyphs_at_absolute_columns() {
         use crate::font::collection::Index;
         use crate::font::run::TextRun;
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Color, Style as TermStyle};
+
         let mut shared = menlo_grid();
         let mut c = Contents::default();
         c.resize(grid(4, 2));
 
-        // A run at column offset 2 with two glyphs at run-relative x 0/1.
+        // A run at column offset 2 with two glyphs ('A'/'B') at run-relative x 0/1,
+        // landing at absolute columns 2/3 of a 4-wide row (the run cursor's
+        // offset/column mapping, now via `rebuild_row`).
         let run = ShapedRun {
             run: TextRun {
                 hash: 0,
@@ -1636,21 +1613,46 @@ mod tests {
                 },
             ],
         };
-        // 'A'/'B' live at columns 2/3 of a 4-wide row.
-        let row = [
-            ci('x' as u32, 1),
-            ci('x' as u32, 1),
-            ci('A' as u32, 1),
-            ci('B' as u32, 1),
-        ];
-        let fg = [
-            [0, 0, 0, 255],
-            [0, 0, 0, 255],
-            [10, 20, 30, 255],
-            [40, 50, 60, 255],
+        // Columns 2/3 carry explicit foreground colors; columns 0/1 are plain (no
+        // glyphs, since the run starts at offset 2).
+        let cell = |cp: u32, fg: Color| RunCell {
+            codepoint: cp,
+            graphemes: vec![],
+            style: TermStyle {
+                fg_color: fg,
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide: Wide::Narrow,
+            is_empty: false,
+            is_codepoint: true,
+        };
+        let row_cells = [
+            cell('x' as u32, Color::None),
+            cell('x' as u32, Color::None),
+            cell('A' as u32, Color::Rgb(Rgb::new(10, 20, 30))),
+            cell('B' as u32, Color::Rgb(Rgb::new(40, 50, 60))),
         ];
 
-        add_run(&mut c, &mut shared, 1, &run, &row, &fg, 4, false, 255).expect("add_run");
+        rebuild_row(
+            &mut c,
+            &mut shared,
+            1,
+            &[run],
+            &row_cells,
+            None,
+            &[],
+            &SelectionConfig::default(),
+            Rgb::new(200, 200, 200),
+            Rgb::new(0, 0, 0),
+            &DEFAULT_PALETTE,
+            None,
+            255,
+            255,
+            false,
+            255,
+        )
+        .expect("rebuild_row");
 
         // Two glyphs land at absolute columns 2 and 3 (offset 2 + x 0/1).
         assert_eq!(c.fg_rows[2].len(), 2);
@@ -1662,6 +1664,86 @@ mod tests {
         assert_eq!(v1.color, [40, 50, 60, 255]);
         assert_eq!(v0.atlas, CellTextAtlas::Grayscale);
         assert_eq!(v1.atlas, CellTextAtlas::Grayscale);
+    }
+
+    #[test]
+    fn rebuild_row_emits_foreground_column_ordered() {
+        use crate::font::collection::Index;
+        use crate::font::run::TextRun;
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Flags, Style as TermStyle};
+
+        // Two cells, each with an underline AND a glyph. The column-ordered
+        // emission interleaves per column — `[col0 underline, col0 glyph, col1
+        // underline, col1 glyph]` (grid-pos columns `[0, 0, 1, 1]`) — not the old
+        // three-pass order `[col0 ul, col1 ul, col0 glyph, col1 glyph]` (columns
+        // `[0, 1, 0, 1]`).
+        let cell = |cp: u32| RunCell {
+            codepoint: cp,
+            graphemes: vec![],
+            style: TermStyle {
+                flags: Flags {
+                    underline: Underline::Single,
+                    ..Flags::default()
+                },
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide: Wide::Narrow,
+            is_empty: false,
+            is_codepoint: true,
+        };
+        let row_cells = [cell('A' as u32), cell('B' as u32)];
+        let run = ShapedRun {
+            run: TextRun {
+                hash: 0,
+                offset: 0,
+                cells: 2,
+                font_index: Index::default(),
+            },
+            glyphs: vec![
+                shape::Cell {
+                    x: 0,
+                    x_offset: 0,
+                    y_offset: 0,
+                    glyph_index: glyph_for(b'A'),
+                },
+                shape::Cell {
+                    x: 1,
+                    x_offset: 0,
+                    y_offset: 0,
+                    glyph_index: glyph_for(b'B'),
+                },
+            ],
+        };
+
+        let mut shared = menlo_grid();
+        let mut c = Contents::default();
+        c.resize(grid(2, 1));
+        rebuild_row(
+            &mut c,
+            &mut shared,
+            0,
+            &[run],
+            &row_cells,
+            None,
+            &[],
+            &SelectionConfig::default(),
+            Rgb::new(200, 200, 200),
+            Rgb::new(0, 0, 0),
+            &DEFAULT_PALETTE,
+            None,
+            255,
+            255,
+            false,
+            255,
+        )
+        .expect("rebuild_row");
+
+        // Four foreground cells (two underlines + two glyphs), interleaved by
+        // column: the grid-pos column sequence is `[0, 0, 1, 1]`.
+        let columns: Vec<u16> = c.fg_rows[1].iter().map(|v| v.grid_pos[0]).collect();
+        assert_eq!(columns, [0, 0, 1, 1]);
     }
 
     #[test]

@@ -233,3 +233,82 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-055335-385074-prompt.md` (design)
 - Result: `logs/codex-review/20260604-055335-385074-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`rebuild_row`'s foreground is now emitted in one column-ordered pass.
+
+- `roastty/src/renderer/cell.rs`:
+  - `rebuild_row`: the three passes (underline/overline loop, run loop,
+    strikethrough loop) are replaced by **one column loop** — per cell, in
+    column order: the underline (with the explicit-color fallback) and overline
+    (underneath), then the glyph(s) at that column (walking the shaped runs with
+    a `(run_i, glyph_i)` cursor: advance past exhausted runs, then emit every
+    glyph whose `run.offset + glyph.x == col`, `opts`/`cp` hoisted once per
+    column), then the strikethrough (on top). A `debug_assert` guards the
+    monotonic cursor. The doc comment now describes the column-ordered emission.
+  - `add_run` is removed — its glyph step is now the column loop's glyph
+    emission; `add_glyph`, the decoration writers, `render_options`,
+    `no_min_contrast`, and the `fg_colors` builder are unchanged.
+
+Tests (in `cell.rs`):
+
+- `rebuild_row_places_glyphs_at_absolute_columns` (migrated from the removed
+  `add_run` test) — an offset-2 shaped run's two glyphs land at absolute columns
+  2/3 with the right colors, via `rebuild_row`.
+- `rebuild_row_emits_foreground_column_ordered` — two cells each with an
+  underline and a glyph → the foreground grid-pos column sequence is
+  `[0, 0, 1, 1]` (column-interleaved), proving the new order vs the old
+  three-pass `[0, 1, 0, 1]`.
+- The existing single-column `rebuild_row` tests (faint, the selection
+  foreground, the explicit-underline-color) are unchanged — they cover the
+  within-cell layering (a single column has the same order in both schemes).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2857 passed, 0 failed (net +1: +2 new, −1 removed
+  `add_run` test; no regressions — the single-column layering tests still pass).
+- `cargo build -p roastty` → no warnings (the `ci` helper is still used
+  elsewhere).
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+The row foreground is now emitted byte-exact to upstream: one column-ordered
+loop (underline → overline → glyph(s) → strikethrough per column), the glyph
+step walking the shaped runs with a monotonic cursor. This removes the
+cross-column overhang caveat from Experiment 378 — a glyph that overhangs into a
+neighbor now layers exactly as upstream. With the cursor/cursor-uniform colors,
+the selection and search recolor, the lock cursor, and now the decoration merge
+all live, the CPU-side renderer bridge (`renderer/cell.rs`'s `Contents`
+assembly) is faithful to upstream's `rebuildCells`.
+
+The remaining renderer-bridge work: the link-underline wiring (the
+`link_underline` override, Experiment 397, into the underline pass) and the
+hovered-link set; and the **Metal upload** of `Contents` (the GPU buffer/uniform
+upload — the largest remaining piece, which carries the min-contrast and cursor
+uniforms).
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design:
+`rebuild_row` now emits foreground cells in one column-ordered pass — underline
+and overline first, all glyphs for the current column via the `(run_i, glyph_i)`
+cursor, strikethrough last — with the glyph cursor advancing exhausted runs,
+emitting every glyph whose `run.offset + glyph.x == col`, and keeping the same
+`add_glyph` inputs as the old `add_run` path (`grid_pos`, font index,
+foreground/alpha, `render_options`, `no_min_contrast(cp)`). It confirmed
+`add_glyph`, the decoration writers, `render_options`, and the `fg_colors`
+builder are unchanged, that removing `add_run` is sound (its behavior is covered
+by the migrated offset-2 test), that the new interleave test proves the
+cross-column order changed to upstream's column order while the existing
+single-column tests cover the within-cell layering, and that there is no public
+C ABI/header impact. Nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260604-055757-002055-last-message.md`
