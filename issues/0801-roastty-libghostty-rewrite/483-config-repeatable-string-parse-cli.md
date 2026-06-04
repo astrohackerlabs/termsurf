@@ -281,3 +281,55 @@ Review artifacts:
 - Round 1 result: `logs/codex-review/20260604-140303-d483-last-message.md`
 - Round 2 prompt: `logs/codex-review/20260604-140439-d483b-prompt.md`
 - Round 2 result: `logs/codex-review/20260604-140439-d483b-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`RepeatableString` was implemented exactly as the (Round-2-approved) design —
+the struct (`list: Vec<String>`, `overwrite_next: bool`), the manual `Clone`
+(drops `overwrite_next` to `false`) and `PartialEq`/`Eq` (compare only `list`),
+`parse_cli` (the `ValueRequired` guard, the empty-value reset, the
+`overwrite_next` clear-and-reset before the append, the one-value-per-call
+append), and `count`. Two tests were added:
+`repeatable_string_parse_cli_accumulates_and_resets` (accumulation,
+missing-value, empty-reset, `overwrite_next`, and the empty-reset ordering) and
+`repeatable_string_clone_and_eq_match_upstream` (the custom clone / equality
+semantics).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2964 passed, 0 failed (two new tests; no
+  regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `RepeatableString` (parse
+appends one whole non-empty value, empty input clears without appending,
+`overwrite_next` clears before append then resets, `count` is the list length,
+`Clone` drops `overwrite_next`, and equality ignores it —
+`Config.zig:6005`/`:6024`/`:6048`); the added tests cover the important stateful
+cases, including the empty-reset ordering and the custom clone/equality
+semantics; gates are clean. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-140731-r483-prompt.md` (result)
+- Result: `logs/codex-review/20260604-140731-r483-last-message.md` (result)
+
+## Conclusion
+
+`RepeatableString` now parses — an accumulating, empty-resetting,
+`overwrite_next`- aware string list with upstream-faithful clone/equality
+semantics. This is the first repeatable (accumulating) config value type ported,
+and the manual clone/equal pattern (copy/compare a subset of fields) will recur
+for other `Required by Config` types. The next slice can port another
+self-contained config value type's `parseCLI` (e.g. `RepeatablePath`,
+`SelectionWordChars`, or — once a faithful `parseFloat` lands — the deferred
+`QuickTerminalSize`), continuing toward the per-field parser dispatch and the
+full config loader.

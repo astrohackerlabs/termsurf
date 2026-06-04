@@ -1412,7 +1412,7 @@ are past the correctness-critical foundation.
 - [Experiment 482: the config WindowDecoration CLI parser (WindowDecoration::parse_cli)](482-config-window-decoration-parse-cli.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 483: the config RepeatableString CLI parser (RepeatableString::parse_cli)](483-config-repeatable-string-parse-cli.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

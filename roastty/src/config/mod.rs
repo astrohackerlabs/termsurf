@@ -754,6 +754,78 @@ fn parse_bool(v: &str) -> Option<bool> {
     }
 }
 
+/// An error parsing a `RepeatableString` (upstream `error.ValueRequired`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepeatableStringParseError {
+    /// No value was supplied (upstream `error.ValueRequired`).
+    ValueRequired,
+}
+
+/// An accumulating string-list config (upstream `Config.RepeatableString`): each
+/// parse appends one value; an empty value resets the list; `overwrite_next` clears
+/// before the next append. The `formatEntry` formatter is ported later.
+#[derive(Debug, Default)]
+pub(crate) struct RepeatableString {
+    pub list: Vec<String>,
+    pub overwrite_next: bool,
+}
+
+// `Clone` and `PartialEq`/`Eq` follow upstream's `clone` / `equal` (which copy /
+// compare only `list`, dropping / ignoring `overwrite_next`), so they are
+// implemented manually rather than derived.
+impl Clone for RepeatableString {
+    fn clone(&self) -> Self {
+        // Upstream `clone` returns `.{ .list = list }`: `overwrite_next` resets to
+        // its default `false`.
+        RepeatableString {
+            list: self.list.clone(),
+            overwrite_next: false,
+        }
+    }
+}
+
+impl PartialEq for RepeatableString {
+    fn eq(&self, other: &Self) -> bool {
+        // Upstream `equal` compares only the list contents.
+        self.list == other.list
+    }
+}
+
+impl Eq for RepeatableString {}
+
+impl RepeatableString {
+    /// Parse one repeatable string value (upstream `RepeatableString.parseCLI`): a
+    /// missing value is `ValueRequired`; an empty value resets the list; an
+    /// `overwrite_next` clears before appending (and resets the flag); otherwise
+    /// the value is appended.
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), RepeatableStringParseError> {
+        let value = input.ok_or(RepeatableStringParseError::ValueRequired)?;
+
+        // An empty value resets the list.
+        if value.is_empty() {
+            self.list.clear();
+            return Ok(());
+        }
+
+        // If we're overwriting, clear before appending.
+        if self.overwrite_next {
+            self.list.clear();
+            self.overwrite_next = false;
+        }
+
+        self.list.push(value.to_string());
+        Ok(())
+    }
+
+    /// The number of items in the list (upstream `RepeatableString.count`).
+    pub(crate) fn count(&self) -> usize {
+        self.list.len()
+    }
+}
+
 /// The `notify-on-command-finish` config (upstream `NotifyOnCommandFinish`): when
 /// to notify on a finished command. The `Config` default is `Never`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1374,10 +1446,11 @@ mod tests {
         FontStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon,
         MacTitlebarStyle, MacWindowButtons, MiddleClickAction, MouseShiftCapture,
         NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
-        OscColorReportFormat, Palette, PaletteParseError, RightClickAction, ScrollToBottom,
-        ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme,
-        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowPadding,
-        WindowPaddingColor, WindowPaddingParseError, WindowSubtitle,
+        OscColorReportFormat, Palette, PaletteParseError, RepeatableString,
+        RepeatableStringParseError, RightClickAction, ScrollToBottom, ShellIntegration,
+        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
+        WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
+        WindowPaddingParseError, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
 
@@ -2481,6 +2554,71 @@ mod tests {
             WindowDecoration::parse_cli(Some("True")),
             Err(WindowDecorationParseError::InvalidValue)
         );
+    }
+
+    #[test]
+    fn repeatable_string_parse_cli_accumulates_and_resets() {
+        // Accumulation: each call appends one whole value.
+        let mut rs = RepeatableString::default();
+        assert_eq!(rs.parse_cli(Some("a")), Ok(()));
+        assert_eq!(rs.parse_cli(Some("b")), Ok(()));
+        assert_eq!(rs.list, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(rs.count(), 2);
+
+        // A missing value is `ValueRequired`.
+        assert_eq!(
+            rs.parse_cli(None),
+            Err(RepeatableStringParseError::ValueRequired)
+        );
+        assert_eq!(rs.count(), 2); // unchanged
+
+        // An empty value resets the list (and does not append an empty string).
+        assert_eq!(rs.parse_cli(Some("")), Ok(()));
+        assert!(rs.list.is_empty());
+
+        // `overwrite_next` clears before the append and resets the flag.
+        let mut rs = RepeatableString::default();
+        rs.parse_cli(Some("x")).unwrap();
+        rs.parse_cli(Some("y")).unwrap();
+        rs.overwrite_next = true;
+        assert_eq!(rs.parse_cli(Some("c")), Ok(()));
+        assert_eq!(rs.list, vec!["c".to_string()]);
+        assert!(!rs.overwrite_next);
+        assert_eq!(rs.parse_cli(Some("d")), Ok(()));
+        assert_eq!(rs.list, vec!["c".to_string(), "d".to_string()]);
+
+        // Empty-reset order: with `overwrite_next` set, an empty value clears the
+        // list but leaves the flag set (the empty branch returns first); the next
+        // non-empty parse then clears-and-resets.
+        let mut rs = RepeatableString::default();
+        rs.parse_cli(Some("p")).unwrap();
+        rs.overwrite_next = true;
+        assert_eq!(rs.parse_cli(Some("")), Ok(()));
+        assert!(rs.list.is_empty());
+        assert!(rs.overwrite_next); // still set
+        rs.list.push("q".to_string()); // simulate a prior value surviving
+        assert_eq!(rs.parse_cli(Some("r")), Ok(()));
+        assert_eq!(rs.list, vec!["r".to_string()]); // overwrite cleared "q"
+        assert!(!rs.overwrite_next);
+    }
+
+    #[test]
+    fn repeatable_string_clone_and_eq_match_upstream() {
+        // `clone` copies only the list; `overwrite_next` resets to `false`.
+        let mut rs = RepeatableString::default();
+        rs.list.push("a".to_string());
+        rs.overwrite_next = true;
+        let cloned = rs.clone();
+        assert_eq!(cloned.list, vec!["a".to_string()]);
+        assert!(!cloned.overwrite_next);
+
+        // Equality compares only the list, ignoring `overwrite_next`.
+        let mut x = RepeatableString::default();
+        x.list.push("z".to_string());
+        let mut y = RepeatableString::default();
+        y.list.push("z".to_string());
+        y.overwrite_next = true;
+        assert_eq!(x, y);
     }
 
     #[test]
