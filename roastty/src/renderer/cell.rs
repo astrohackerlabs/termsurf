@@ -798,8 +798,9 @@ pub(crate) fn add_glyph(
 /// swaps the glyph color). That one per-cell foreground feeds the glyph and all
 /// three decorations (via `fg_colors`). A cell inside the row's hovered-link
 /// `link_ranges` (raw column, inclusive — no `x_compare`) has its underline
-/// overridden ([`link_underline`]). The per-row foreground body of upstream
-/// `rebuildCells`.
+/// overridden ([`link_underline`]). A **concealed** cell (the `invisible` flag,
+/// SGR 8) draws no foreground (its glyph cursor still advances). The per-row
+/// foreground body of upstream `rebuildCells`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rebuild_row(
     contents: &mut Contents,
@@ -874,33 +875,40 @@ pub(crate) fn rebuild_row(
         let rgba = fg_colors[col];
         let fg = [rgba[0], rgba[1], rgba[2]];
         let flags = cell.style.flags;
+        // A concealed cell (SGR 8, invisible) draws its background but no
+        // foreground (no decorations and no glyph), matching xterm. The glyph
+        // cursor still advances below, so its shaped glyph is consumed and later
+        // cells stay aligned.
+        let conceal = flags.invisible;
 
         // 1. Underline (its own color, else the foreground) — underneath. A
         //    hovered-link cell overrides the underline ([`link_underline`]); the
         //    link membership uses the raw column (no `x_compare`, unlike
         //    selection/highlights).
-        let is_link = link_ranges
-            .iter()
-            .any(|&[start, end]| grid_pos[0] >= start && grid_pos[0] <= end);
-        let underline = link_underline(is_link, flags.underline);
-        if underline != Underline::None {
-            let underline_color = cell
-                .style
-                .resolve_underline_color(palette)
-                .map(|rgb| [rgb.r, rgb.g, rgb.b])
-                .unwrap_or(fg);
-            add_underline(
-                contents,
-                grid,
-                grid_pos,
-                underline,
-                underline_color,
-                rgba[3],
-            )?;
-        }
-        // 2. Overline — underneath.
-        if flags.overline {
-            add_overline(contents, grid, grid_pos, fg, rgba[3])?;
+        if !conceal {
+            let is_link = link_ranges
+                .iter()
+                .any(|&[start, end]| grid_pos[0] >= start && grid_pos[0] <= end);
+            let underline = link_underline(is_link, flags.underline);
+            if underline != Underline::None {
+                let underline_color = cell
+                    .style
+                    .resolve_underline_color(palette)
+                    .map(|rgb| [rgb.r, rgb.g, rgb.b])
+                    .unwrap_or(fg);
+                add_underline(
+                    contents,
+                    grid,
+                    grid_pos,
+                    underline,
+                    underline_color,
+                    rgba[3],
+                )?;
+            }
+            // 2. Overline — underneath.
+            if flags.overline {
+                add_overline(contents, grid, grid_pos, fg, rgba[3])?;
+            }
         }
 
         // 3. The glyph(s) at this column, walking the shaped runs in column order.
@@ -922,23 +930,26 @@ pub(crate) fn rebuild_row(
             while glyph_i < run.glyphs.len()
                 && usize::from(run.run.offset) + usize::from(run.glyphs[glyph_i].x) == col
             {
-                add_glyph(
-                    contents,
-                    grid,
-                    grid_pos,
-                    run.run.font_index,
-                    &run.glyphs[glyph_i],
-                    fg,
-                    rgba[3],
-                    no_min_contrast(cp),
-                    &opts,
-                )?;
+                // Always advance the cursor; emit the glyph only when not concealed.
+                if !conceal {
+                    add_glyph(
+                        contents,
+                        grid,
+                        grid_pos,
+                        run.run.font_index,
+                        &run.glyphs[glyph_i],
+                        fg,
+                        rgba[3],
+                        no_min_contrast(cp),
+                        &opts,
+                    )?;
+                }
                 glyph_i += 1;
             }
         }
 
         // 4. Strikethrough — on top.
-        if flags.strikethrough {
+        if !conceal && flags.strikethrough {
             add_strikethrough(contents, grid, grid_pos, fg, rgba[3])?;
         }
     }
@@ -1947,6 +1958,136 @@ mod tests {
         );
         assert_eq!(c.fg_rows[1].len(), 1);
         assert_eq!(c.fg_rows[1][0].grid_pos[0], 0);
+    }
+
+    #[test]
+    fn rebuild_row_skips_concealed_foreground() {
+        use crate::font::collection::Index;
+        use crate::font::run::TextRun;
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Flags, Style as TermStyle};
+
+        let default_fg = Rgb::new(200, 200, 200);
+        let default_bg = Rgb::new(0, 0, 0);
+
+        let styled_cell = |cp: u32, flags: Flags| RunCell {
+            codepoint: cp,
+            graphemes: vec![],
+            style: TermStyle {
+                flags,
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide: Wide::Narrow,
+            is_empty: false,
+            is_codepoint: true,
+        };
+        // A concealed cell carrying every foreground decoration (to prove they are
+        // all skipped).
+        let concealed = |cp: u32| {
+            styled_cell(
+                cp,
+                Flags {
+                    invisible: true,
+                    underline: Underline::Single,
+                    overline: true,
+                    strikethrough: true,
+                    ..Flags::default()
+                },
+            )
+        };
+        // A plain visible cell with no decorations (so its only foreground is the
+        // glyph).
+        let plain = |cp: u32| styled_cell(cp, Flags::default());
+        let glyph = |x: u16, ch: u8| shape::Cell {
+            x,
+            x_offset: 0,
+            y_offset: 0,
+            glyph_index: glyph_for(ch),
+        };
+        let run = |offset: u16, cells: u16, glyphs: Vec<shape::Cell>| ShapedRun {
+            run: TextRun {
+                hash: 0,
+                offset,
+                cells,
+                font_index: Index::default(),
+            },
+            glyphs,
+        };
+        let build = |row_cells: &[RunCell], runs: &[ShapedRun]| {
+            let mut shared = menlo_grid();
+            let mut c = Contents::default();
+            c.resize(grid(u16::try_from(row_cells.len()).unwrap(), 1));
+            rebuild_row(
+                &mut c,
+                &mut shared,
+                0,
+                runs,
+                row_cells,
+                None,
+                &[],
+                &SelectionConfig::default(),
+                default_fg,
+                default_bg,
+                &DEFAULT_PALETTE,
+                None,
+                255,
+                255,
+                false,
+                255,
+                &[],
+            )
+            .expect("rebuild_row");
+            c
+        };
+
+        // A concealed cell with a glyph and underline + overline + strikethrough
+        // draws no foreground at all.
+        let c = build(&[concealed('A' as u32)], &[run(0, 1, vec![glyph(0, b'A')])]);
+        assert!(c.fg_rows[1].is_empty());
+
+        // Cursor alignment: cell 0 is concealed (shaped glyph), cell 1 is a plain
+        // visible cell (shaped glyph, no decorations). Its only foreground is the
+        // glyph, which must land at column 1 — proving the cursor advanced past the
+        // concealed glyph (else the visible cell would emit the concealed glyph at
+        // column 0, or emit nothing).
+        let mut shared = menlo_grid();
+        let mut c = Contents::default();
+        c.resize(grid(2, 1));
+        rebuild_row(
+            &mut c,
+            &mut shared,
+            0,
+            &[run(0, 2, vec![glyph(0, b'A'), glyph(1, b'B')])],
+            &[concealed('A' as u32), plain('B' as u32)],
+            None,
+            &[],
+            &SelectionConfig::default(),
+            default_fg,
+            default_bg,
+            &DEFAULT_PALETTE,
+            None,
+            255,
+            255,
+            false,
+            255,
+            &[],
+        )
+        .expect("rebuild_row");
+        // Exactly one foreground cell — the visible 'B' glyph at column 1.
+        assert_eq!(c.fg_rows[1].len(), 1);
+        let v = c.fg_rows[1][0];
+        assert_eq!(v.grid_pos, [1, 0]);
+        // It is 'B' (not the concealed 'A'): the cursor consumed 'A' and emitted
+        // 'B'. Cache identity using the exact options `rebuild_row` used for column
+        // 1 of this row.
+        let infos = cell_infos(&[concealed('A' as u32), plain('B' as u32)]);
+        let opts = render_options(shared.metrics, &infos, 1, 2, false, 255);
+        let b_glyph = shared
+            .render_glyph(Index::default(), u32::from(glyph_for(b'B')), &opts)
+            .expect("'B' renders")
+            .glyph;
+        assert_eq!(v.glyph_pos, [b_glyph.atlas_x, b_glyph.atlas_y]);
     }
 
     #[test]

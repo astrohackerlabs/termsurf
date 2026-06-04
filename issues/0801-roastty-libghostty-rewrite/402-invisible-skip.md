@@ -195,3 +195,73 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-062906-721957-prompt.md` (design)
 - Result: `logs/codex-review/20260604-062906-721957-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+A concealed cell's foreground is now skipped.
+
+- `roastty/src/renderer/cell.rs`: in `rebuild_row`'s column loop,
+  `let conceal = flags.invisible;` wraps the underline (including the
+  `is_link`/`link_underline` override) and overline in `if !conceal`, guards the
+  per-glyph `add_glyph` with `if !conceal` (the glyph cursor advances
+  regardless, consuming the concealed cell's shaped glyph), and guards the
+  strikethrough with `if !conceal`. `rebuild_bg_row` is unchanged — a concealed
+  cell's background is still drawn (upstream writes the bg before the
+  `invisible` skip). The doc comment is updated.
+
+Test (in `cell.rs`): `rebuild_row_skips_concealed_foreground` — a concealed cell
+carrying an underline + overline + strikethrough **and** a glyph draws **no**
+foreground; and a cursor-alignment case where cell 0 is concealed (shaped glyph)
+and cell 1 is a **plain** visible cell (shaped glyph, no decorations) → exactly
+one foreground vertex, the glyph at column 1, with its `glyph_pos` matching a
+direct render of `'B'` (the exact `render_options` `rebuild_row` used for
+column 1) — proving the cursor consumed the concealed `'A'` and emitted `'B'` at
+the right column.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2861 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+A concealed cell (SGR 8, `invisible`) now draws its background but no foreground
+— no underline (link override included), overline, glyph, or strikethrough —
+matching xterm, with the glyph cursor advancing so later cells stay aligned. The
+renderer bridge now honors the `invisible` flag.
+
+The remaining renderer-bridge work: the under-preedit/under-cursor cell skipping
+and the `rebuild_viewport` cursor/preedit assembly (which depend on the live
+render `State`/`Mouse` threading model, ported separately); and the **Metal
+upload** of `Contents`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** after
+one **Required** finding was fixed:
+
+- **Required (fixed):** the first cursor-alignment test asserted the foreground
+  cells were at column 1 and that some vertex was at `[1, 0]`, but the visible
+  cell's own decorations were also at `[1, 0]` — so a broken implementation that
+  failed to advance the cursor (and emitted no visible glyph) could still pass.
+  The test now uses a **plain** visible second cell (no decorations), asserts
+  exactly one foreground vertex, that it is at `[1, 0]`, and that its
+  `glyph_pos` matches a direct render of `'B'` with the same `render_options` —
+  genuinely proving the concealed `'A'` glyph was consumed and the visible `'B'`
+  glyph emitted at the correct column.
+
+The re-review confirmed the fix and that the code path is faithful (concealed
+cells skip the underline/link override, overline, glyph emission, and
+strikethrough while still advancing the shaped-glyph cursor; `rebuild_bg_row`
+unchanged so backgrounds still draw), with no public C ABI/header impact.
+
+Review artifacts:
+
+- Result review (1st):
+  `logs/codex-review/20260604-063142-919862-last-message.md`
+- Result review (re-review):
+  `logs/codex-review/20260604-063343-233315-last-message.md`
