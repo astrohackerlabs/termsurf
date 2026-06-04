@@ -1367,6 +1367,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 460: the clipboard-access config enum and its predicates (ClipboardAccess, denied / needs_confirm)](460-config-clipboard-access.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 461: begin the aggregating Config struct (the clipboard config group)](461-config-struct-clipboard-group.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
