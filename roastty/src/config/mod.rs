@@ -275,6 +275,36 @@ pub(crate) enum MacTitlebarProxyIcon {
     Hidden,
 }
 
+/// The `fullscreen` config (upstream `Fullscreen`): the startup fullscreen mode.
+/// The `Config` default is `False`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fullscreen {
+    /// Windowed (not fullscreen).
+    False,
+    /// Native fullscreen.
+    True,
+    /// Non-native fullscreen.
+    NonNative,
+    /// Non-native fullscreen with the menu bar visible.
+    NonNativeVisibleMenu,
+    /// Non-native fullscreen padded around the notch.
+    NonNativePaddedNotch,
+}
+
+/// The `macos-non-native-fullscreen` config (upstream `NonNativeFullscreen`): the
+/// non-native fullscreen style. The `Config` default is `False`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NonNativeFullscreen {
+    /// Disabled.
+    False,
+    /// Enabled.
+    True,
+    /// Enabled with the menu bar visible.
+    VisibleMenu,
+    /// Enabled, padded around the notch.
+    PaddedNotch,
+}
+
 /// The color space the window renders in (upstream `WindowColorspace`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowColorspace {
@@ -594,10 +624,11 @@ mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, BoldColor,
         Color, ConfirmCloseSurface, CopyOnSelect, CustomShaderAnimation, FontShapingBreak,
-        FontStyle, GraphemeWidthMethod, LinkPreviews, MacTitlebarProxyIcon, MacTitlebarStyle,
-        MiddleClickAction, MouseShiftCapture, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
-        OscColorReportFormat, RightClickAction, ScrollToBottom, ShellIntegration,
-        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, WindowSubtitle,
+        FontStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacTitlebarProxyIcon,
+        MacTitlebarStyle, MiddleClickAction, MouseShiftCapture, NonNativeFullscreen,
+        NotifyOnCommandFinish, NotifyOnCommandFinishAction, OscColorReportFormat, RightClickAction,
+        ScrollToBottom, ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor,
+        TerminalColor, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
 
@@ -676,6 +707,39 @@ mod tests {
         // `Copy` + `Eq`: a trivial round-trip.
         let copied = off;
         assert_eq!(off, copied);
+    }
+
+    #[test]
+    fn fullscreen_has_the_five_upstream_variants() {
+        let modes = [
+            Fullscreen::False,
+            Fullscreen::True,
+            Fullscreen::NonNative,
+            Fullscreen::NonNativeVisibleMenu,
+            Fullscreen::NonNativePaddedNotch,
+        ];
+        assert_eq!(modes.len(), 5);
+        assert_ne!(Fullscreen::False, Fullscreen::NonNativePaddedNotch);
+        // `Copy` + `Eq`: a trivial round-trip.
+        let m = Fullscreen::NonNative;
+        let copied = m;
+        assert_eq!(m, copied);
+    }
+
+    #[test]
+    fn non_native_fullscreen_has_the_four_upstream_variants() {
+        let modes = [
+            NonNativeFullscreen::False,
+            NonNativeFullscreen::True,
+            NonNativeFullscreen::VisibleMenu,
+            NonNativeFullscreen::PaddedNotch,
+        ];
+        assert_eq!(modes.len(), 4);
+        assert_ne!(NonNativeFullscreen::False, NonNativeFullscreen::PaddedNotch);
+        // `Copy` + `Eq`: a trivial round-trip.
+        let m = NonNativeFullscreen::VisibleMenu;
+        let copied = m;
+        assert_eq!(m, copied);
     }
 
     #[test]

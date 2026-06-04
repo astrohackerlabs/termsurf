@@ -185,3 +185,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-114518-d457-prompt.md` (design)
 - Result: `logs/codex-review/20260604-114518-d457-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The fullscreen config enums are now live.
+
+- `roastty/src/config/mod.rs`:
+  `pub(crate) enum Fullscreen { False, True, NonNative, NonNativeVisibleMenu, NonNativePaddedNotch }`
+  (upstream `Fullscreen`) and
+  `pub(crate) enum NonNativeFullscreen { False, True, VisibleMenu, PaddedNotch }`
+  (upstream `NonNativeFullscreen`), both deriving
+  `Debug, Clone, Copy, PartialEq, Eq`. Plain enums (the consumers are imperative
+  macOS-frontend fullscreen handling, ported with the frontend window code
+  later); the `Config` field defaults (both `.false`) documented but kept off
+  the enums.
+
+Tests (in `config/mod.rs`):
+
+- `fullscreen_has_the_five_upstream_variants` — an array of all five variants,
+  `assert_eq!(len, 5)`, `assert_ne!(False, NonNativePaddedNotch)`, `Copy`/`Eq`.
+- `non_native_fullscreen_has_the_four_upstream_variants` — an array of all four
+  variants, `assert_eq!(len, 4)`, `assert_ne!(False, PaddedNotch)`, `Copy`/`Eq`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2947 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The config layer now carries the fullscreen config enums `Fullscreen` and
+`NonNativeFullscreen` — continuing the macOS-window frontend config (directly
+relevant since roastty is macOS-only). These are dispatch enums (no extracted
+method — the consumers are imperative macOS-frontend fullscreen handling), so
+they land as plain enums with exact-variant-set tests, like the macOS titlebar
+pair (Experiment 456). The `Config` struct / parsing and the macOS frontend that
+enters fullscreen stay deferred. The config-type family — now twenty
+enums/flag-structs with consumers plus three color value types — remains a
+clean, gated way to advance the rewrite while the larger coupled subsystems stay
+deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `Fullscreen` and `NonNativeFullscreen` carry the
+exact upstream variant sets with faithful CamelCase mappings; plain internal
+enums are appropriate (`repr(C)` remains deferred until a C ABI boundary
+exists); the defaults are documented but correctly left off the enums; and the
+tests reference every variant. No public C ABI/header impact; nothing needed to
+change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-114714-r457-prompt.md` (result)
+- Result: `logs/codex-review/20260604-114714-r457-last-message.md` (result)

@@ -1360,7 +1360,7 @@ are past the correctness-critical foundation.
 - [Experiment 456: the macOS titlebar config enums (MacTitlebarStyle, MacTitlebarProxyIcon)](456-config-mac-titlebar.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 457: the fullscreen config enums (Fullscreen, NonNativeFullscreen)](457-config-fullscreen.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
