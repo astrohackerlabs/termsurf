@@ -1203,7 +1203,7 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 378: wiring decorations into the row pass](378-decoration-integration.md)
   — **Pass** · Claude/Codex/Codex
-- [Experiment 379: the cursor cell](379-add-cursor.md) — **Designed** ·
+- [Experiment 379: the cursor cell](379-add-cursor.md) — **Pass** ·
   Claude/Codex/Codex
 
 ## Non-Goals

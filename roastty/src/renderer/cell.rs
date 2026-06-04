@@ -738,6 +738,62 @@ pub(crate) fn add_overline(
     )
 }
 
+/// Render the cursor sprite for `cursor_style` through `grid` and set it as the
+/// cursor cell in `contents` (via [`Contents::set_cursor`]) at `grid_pos`, with
+/// `color`/`alpha`. `wide` widens the sprite to two cells. Faithful port of
+/// upstream `addCursor` (the sprite cursor styles). `CursorStyle::Lock` renders a
+/// codepoint glyph upstream, not a sprite, and is deferred — it clears any prior
+/// cursor and returns.
+pub(crate) fn add_cursor(
+    contents: &mut Contents,
+    grid: &mut SharedGrid,
+    grid_pos: [u16; 2],
+    cursor_style: CursorStyle,
+    wide: bool,
+    color: [u8; 3],
+    alpha: u8,
+) -> Result<(), ResolverRenderError> {
+    let sprite = match cursor_style {
+        CursorStyle::Block => Sprite::CursorRect,
+        CursorStyle::BlockHollow => Sprite::CursorHollowRect,
+        CursorStyle::Bar => Sprite::CursorBar,
+        CursorStyle::Underline => Sprite::CursorUnderline,
+        // The lock cursor renders a codepoint glyph (deferred), not a sprite.
+        // Still clear any prior cursor so a stale one does not linger.
+        CursorStyle::Lock => {
+            contents.set_cursor(None, Some(CursorStyle::Lock));
+            return Ok(());
+        }
+    };
+
+    let opts = RenderOptions {
+        grid_metrics: grid.metrics,
+        cell_width: Some(if wide { 2 } else { 1 }),
+        constraint: Constraint::default(),
+        constraint_width: 1,
+        thicken: false,
+        thicken_strength: 255,
+    };
+    let render = grid.render_glyph(Index::special(Special::Sprite), sprite as u32, &opts)?;
+
+    let vertex = CellTextVertex {
+        glyph_pos: [render.glyph.atlas_x, render.glyph.atlas_y],
+        glyph_size: [render.glyph.width, render.glyph.height],
+        bearings: [
+            i16::try_from(render.glyph.offset_x).expect("cursor x bearing fits i16"),
+            i16::try_from(render.glyph.offset_y).expect("cursor y bearing fits i16"),
+        ],
+        grid_pos,
+        color: [color[0], color[1], color[2], alpha],
+        atlas: CellTextAtlas::Grayscale,
+        // `is_cursor_glyph = true` — upstream marks the cursor vertex.
+        flags: CellTextFlags::new(false, true),
+        _padding: [0, 0],
+    };
+    contents.set_cursor(Some(vertex), Some(cursor_style));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1551,6 +1607,134 @@ mod tests {
                 "{sprite:?}"
             );
         }
+    }
+
+    fn cursor_opts(grid: &SharedGrid, wide: bool) -> RenderOptions {
+        RenderOptions {
+            grid_metrics: grid.metrics,
+            cell_width: Some(if wide { 2 } else { 1 }),
+            constraint: Constraint::default(),
+            constraint_width: 1,
+            thicken: false,
+            thicken_strength: 255,
+        }
+    }
+
+    #[test]
+    fn add_cursor_maps_styles_and_routes() {
+        // (style, expected sprite, target cursor list). Block -> fg_rows[0];
+        // the others -> fg_rows[last] (rows + 1 = 4 for a 3-row grid).
+        let cases = [
+            (CursorStyle::Block, Sprite::CursorRect, 0usize),
+            (CursorStyle::BlockHollow, Sprite::CursorHollowRect, 4usize),
+            (CursorStyle::Bar, Sprite::CursorBar, 4usize),
+            (CursorStyle::Underline, Sprite::CursorUnderline, 4usize),
+        ];
+        for (style, sprite, list) in cases {
+            let mut shared = menlo_grid();
+            let mut c = Contents::default();
+            c.resize(grid(4, 3));
+
+            add_cursor(&mut c, &mut shared, [2, 1], style, false, [9, 0, 9], 255)
+                .expect("add_cursor");
+
+            assert_eq!(c.fg_rows[list].len(), 1, "{style:?}");
+            let other = if list == 0 { 4 } else { 0 };
+            assert!(c.fg_rows[other].is_empty(), "{style:?}");
+
+            let v = c.fg_rows[list][0];
+            assert_eq!(v.grid_pos, [2, 1]);
+            assert_eq!(v.atlas, CellTextAtlas::Grayscale);
+            assert_eq!(v.color, [9, 0, 9, 255]);
+            assert_eq!(v.flags, CellTextFlags::new(false, true), "{style:?}");
+
+            let opts = cursor_opts(&shared, false);
+            let expected = shared
+                .render_glyph(Index::special(Special::Sprite), sprite as u32, &opts)
+                .unwrap()
+                .glyph;
+            assert_eq!(
+                v.glyph_pos,
+                [expected.atlas_x, expected.atlas_y],
+                "{style:?}"
+            );
+            assert_eq!(v.glyph_size, [expected.width, expected.height], "{style:?}");
+        }
+    }
+
+    #[test]
+    fn add_cursor_wide_uses_two_cells() {
+        let mut shared = menlo_grid();
+        let mut c = Contents::default();
+        c.resize(grid(4, 3));
+
+        add_cursor(
+            &mut c,
+            &mut shared,
+            [0, 0],
+            CursorStyle::Block,
+            true,
+            [9, 0, 9],
+            255,
+        )
+        .expect("add_cursor");
+        let v = c.fg_rows[0][0];
+
+        // The wide cursor rendered with cell_width 2 (same-grid cache identity).
+        let wide = shared
+            .render_glyph(
+                Index::special(Special::Sprite),
+                Sprite::CursorRect as u32,
+                &cursor_opts(&shared, true),
+            )
+            .unwrap()
+            .glyph;
+        assert_eq!(v.glyph_pos, [wide.atlas_x, wide.atlas_y]);
+        assert_eq!(v.glyph_size, [wide.width, wide.height]);
+
+        // A narrow (cell_width 1) cursor is a different (narrower) glyph.
+        let narrow = menlo_grid()
+            .render_glyph(
+                Index::special(Special::Sprite),
+                Sprite::CursorRect as u32,
+                &cursor_opts(&shared, false),
+            )
+            .unwrap()
+            .glyph;
+        assert_ne!(wide.width, narrow.width);
+    }
+
+    #[test]
+    fn add_cursor_lock_clears() {
+        let mut shared = menlo_grid();
+        let mut c = Contents::default();
+        c.resize(grid(4, 3));
+
+        // Pre-seed a block cursor, then a Lock cursor clears it (no sprite drawn).
+        add_cursor(
+            &mut c,
+            &mut shared,
+            [2, 1],
+            CursorStyle::Block,
+            false,
+            [9, 0, 9],
+            255,
+        )
+        .expect("add_cursor");
+        assert_eq!(c.fg_rows[0].len(), 1);
+
+        add_cursor(
+            &mut c,
+            &mut shared,
+            [2, 1],
+            CursorStyle::Lock,
+            false,
+            [9, 0, 9],
+            255,
+        )
+        .expect("add_cursor");
+        assert!(c.fg_rows[0].is_empty());
+        assert!(c.fg_rows[4].is_empty());
     }
 
     #[test]

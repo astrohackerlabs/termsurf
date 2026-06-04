@@ -223,3 +223,69 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-191103-138404-prompt.md` (design)
 - Result: `logs/codex-review/20260603-191103-138404-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The cursor cell is ported.
+
+- `roastty/src/renderer/cell.rs`:
+  `add_cursor(contents, grid, grid_pos, cursor_style, wide, color, alpha)` maps
+  the cursor style to its sprite (`Block → CursorRect`,
+  `BlockHollow → CursorHollowRect`, `Bar → CursorBar`,
+  `Underline → CursorUnderline`), renders it at `cell_width = wide ? 2 : 1`,
+  builds the cursor `CellTextVertex` (grayscale, the cursor color, glyph-only
+  bearings, `is_cursor_glyph = true`), and calls `Contents::set_cursor` (which
+  routes Block first, the others last). `Lock` actively clears the cursor and
+  no-ops (its lock-codepoint glyph is deferred).
+
+Tests (in `cell.rs`):
+
+- `add_cursor_maps_styles_and_routes` — table over the four sprite styles; each
+  lands in the right cursor list (`Block → fg_rows[0]`, others →
+  `fg_rows[last]`) with `grid_pos`, grayscale atlas, the color,
+  `flags == CellTextFlags::new(false, true)`, and a same-grid cache-identity
+  match to the expected cursor sprite.
+- `add_cursor_wide_uses_two_cells` — a `wide = true` Block cursor matches a
+  same-grid `cell_width = Some(2)` render, and its width differs from the narrow
+  render — proving the wide width is honored.
+- `add_cursor_lock_clears` — pre-seeds a Block cursor, then `Lock` clears both
+  cursor lists.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2833 passed, 0 failed (+3, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+Every renderer cell kind a frame needs is now ported: backgrounds, foreground
+glyphs, the three decorations, and the cursor. From a terminal screen, the
+renderer can fill `Contents` with the complete cell data the GPU draws (modulo
+the deferred color adjustments and the lock-cursor glyph).
+
+The remaining renderer-bridge work: the renderer-layer **color adjustments**
+(reverse-video, selection, min-contrast, faint/dim alpha, default-bg fill,
+opacity); the lock-cursor codepoint glyph and the under-cursor text recolor; the
+strict column-ordered decoration merge and the link double-underline; and the
+**Metal upload** of `Contents` to the GPU.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `add_cursor` is faithful to upstream `addCursor`'s
+sprite path (the four sprite styles map correctly, `cell_width` is `Some(2)` for
+wide and `Some(1)` otherwise, the cursor vertex is grayscale with cursor
+color/alpha and glyph-only bearings, and it sets
+`CellTextFlags::new(false, true)` before calling `Contents::set_cursor`), that
+all three Required fixes are applied (`Lock` actively clears, the flag is
+asserted, `wide = true` is covered against a `cell_width = Some(2)` render), and
+that the tests prove the list routing, sprite identity, color, and lock
+clearing. Nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-191453-118071-last-message.md`
