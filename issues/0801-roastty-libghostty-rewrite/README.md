@@ -1347,6 +1347,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 450: the notify-on-command-finish-action config type (NotifyOnCommandFinishAction)](450-config-notify-action.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 451: the shell-integration config enum and its enabled predicate (ShellIntegration, enabled)](451-config-shell-integration.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
