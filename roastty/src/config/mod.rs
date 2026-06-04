@@ -9,7 +9,9 @@
 
 mod string;
 
+use crate::config::string::codepoint_iterator;
 use crate::terminal::color::{Palette as TerminalPalette, PaletteMask, Rgb, DEFAULT_PALETTE};
+use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
 use crate::terminal::style::BoldColor as TerminalBoldColor;
 
 /// The aggregating config struct (upstream `config.Config`) — the home of the
@@ -828,6 +830,54 @@ impl RepeatableString {
     }
 }
 
+/// An error parsing `SelectionWordChars` (upstream `parseCLI`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionWordCharsParseError {
+    /// No value was supplied (upstream `error.ValueRequired`).
+    ValueRequired,
+    /// A codepoint failed to parse (a bad escape / bad UTF-8; upstream
+    /// `error.InvalidValue`).
+    InvalidValue,
+}
+
+/// The `selection-word-chars` config (upstream `Config.SelectionWordChars`): the
+/// word-boundary codepoints, always starting with the null codepoint. The
+/// `formatEntry` formatter is ported later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectionWordChars {
+    pub codepoints: Vec<u32>,
+}
+
+impl Default for SelectionWordChars {
+    fn default() -> Self {
+        SelectionWordChars {
+            codepoints: DEFAULT_WORD_BOUNDARIES.to_vec(),
+        }
+    }
+}
+
+impl SelectionWordChars {
+    /// Parse the `selection-word-chars` value (upstream `parseCLI`): a missing value
+    /// is `ValueRequired`; otherwise the codepoints (with escape support) are parsed
+    /// into a fresh list that always starts with the null codepoint, and an iterator
+    /// failure is `InvalidValue`.
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), SelectionWordCharsParseError> {
+        let value = input.ok_or(SelectionWordCharsParseError::ValueRequired)?;
+
+        // Always include null as the first boundary.
+        let mut list = vec![0u32];
+        for cp in codepoint_iterator(value.as_bytes()) {
+            list.push(cp.map_err(|_| SelectionWordCharsParseError::InvalidValue)?);
+        }
+
+        self.codepoints = list;
+        Ok(())
+    }
+}
+
 /// The `notify-on-command-finish` config (upstream `NotifyOnCommandFinish`): when
 /// to notify on a finished command. The `Config` default is `Never`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1449,12 +1499,14 @@ mod tests {
         MacTitlebarStyle, MacWindowButtons, MiddleClickAction, MouseShiftCapture,
         NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OscColorReportFormat, Palette, PaletteParseError, RepeatableString,
-        RepeatableStringParseError, RightClickAction, ScrollToBottom, ShellIntegration,
-        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
-        WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
-        WindowPaddingParseError, WindowSubtitle,
+        RepeatableStringParseError, RightClickAction, ScrollToBottom, SelectionWordChars,
+        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
+        TerminalBoldColor, TerminalColor, Theme, WindowColorspace, WindowDecoration,
+        WindowDecorationParseError, WindowPadding, WindowPaddingColor, WindowPaddingParseError,
+        WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
+    use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
 
     #[test]
     fn alpha_blending_is_linear_truth_table() {
@@ -2621,6 +2673,62 @@ mod tests {
         y.list.push("z".to_string());
         y.overwrite_next = true;
         assert_eq!(x, y);
+    }
+
+    #[test]
+    fn selection_word_chars_parse_cli_parses_codepoints() {
+        let sp = ' ' as u32;
+        let tab = '\t' as u32;
+        let semi = ';' as u32;
+        let comma = ',' as u32;
+
+        // Upstream `parseCLI` cases: null is always first.
+        let mut chars = SelectionWordChars::default();
+        assert_eq!(chars.parse_cli(Some(" \t;,")), Ok(()));
+        assert_eq!(chars.codepoints, vec![0, sp, tab, semi, comma]);
+
+        // The `\t` escape parses to a tab — same result as the literal tab.
+        let mut chars = SelectionWordChars::default();
+        assert_eq!(chars.parse_cli(Some(" \\t;,")), Ok(()));
+        assert_eq!(chars.codepoints, vec![0, sp, tab, semi, comma]);
+
+        // `\\` → a single backslash.
+        let mut chars = SelectionWordChars::default();
+        assert_eq!(chars.parse_cli(Some("\\\\;")), Ok(()));
+        assert_eq!(chars.codepoints, vec![0, '\\' as u32, semi]);
+
+        // `\u{2502}` → the box-drawing vertical line.
+        let mut chars = SelectionWordChars::default();
+        assert_eq!(chars.parse_cli(Some("\\u{2502};")), Ok(()));
+        assert_eq!(chars.codepoints, vec![0, 0x2502, semi]);
+
+        // A missing value is `ValueRequired`; a bad escape is `InvalidValue`.
+        let mut chars = SelectionWordChars::default();
+        assert_eq!(
+            chars.parse_cli(None),
+            Err(SelectionWordCharsParseError::ValueRequired)
+        );
+
+        // An empty value seeds only the null boundary (not `ValueRequired`).
+        let mut chars = SelectionWordChars::default();
+        assert_eq!(chars.parse_cli(Some("")), Ok(()));
+        assert_eq!(chars.codepoints, vec![0]);
+
+        // A bad codepoint errors and leaves the prior value intact.
+        let mut chars = SelectionWordChars::default();
+        chars.parse_cli(Some("ab")).unwrap();
+        let before = chars.codepoints.clone();
+        assert_eq!(
+            chars.parse_cli(Some("\\q")),
+            Err(SelectionWordCharsParseError::InvalidValue)
+        );
+        assert_eq!(chars.codepoints, before);
+
+        // The default is the terminal word-boundary set.
+        assert_eq!(
+            SelectionWordChars::default().codepoints,
+            DEFAULT_WORD_BOUNDARIES.to_vec()
+        );
     }
 
     #[test]

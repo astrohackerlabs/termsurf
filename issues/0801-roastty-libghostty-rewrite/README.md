@@ -1416,7 +1416,7 @@ are past the correctness-critical foundation.
 - [Experiment 484: the config string codepoint iterator (config::string::CodepointIterator)](484-config-string-codepoint-iterator.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 485: the config SelectionWordChars CLI parser (SelectionWordChars::parse_cli)](485-config-selection-word-chars-parse-cli.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

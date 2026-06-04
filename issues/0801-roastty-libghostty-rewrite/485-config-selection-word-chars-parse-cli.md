@@ -253,3 +253,54 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-142034-d485-prompt.md` (design)
 - Result: `logs/codex-review/20260604-142034-d485-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`SelectionWordChars` was implemented exactly as designed — the struct
+(`codepoints: Vec<u32>` defaulting to `DEFAULT_WORD_BOUNDARIES`), the derived
+`Clone`/`PartialEq`/`Eq`, and `parse_cli` (the `ValueRequired` guard, the fresh
+list seeded with the null codepoint, the escape-aware codepoint iteration via
+the Exp 484 `config::string::codepoint_iterator`, the iterator-failure →
+`InvalidValue`, and the full-list replacement only on success).
+`terminal::selection_codepoints` and `DEFAULT_WORD_BOUNDARIES` were widened to
+`pub(crate)`. The new test `selection_word_chars_parse_cli_parses_codepoints`
+covers the upstream cases, the missing-value error, the empty-string `[0]` case,
+the no-mutation-on-invalid case, and the default.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2968 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation is faithful to upstream `SelectionWordChars` (the
+default uses the terminal boundary table, parsing seeds a fresh list with `0`,
+consumes the escape-aware codepoint iterator, maps iterator errors to
+`InvalidValue`, and replaces `self.codepoints` only after a successful full
+parse — `Config.zig:6150`/ `:6156`, `selection_codepoints.zig:7`); the folded-in
+tests cover the two edge cases (empty input → `[0]`; invalid input leaves the
+prior value unchanged); gates are clean. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-142359-r485-prompt.md` (result)
+- Result: `logs/codex-review/20260604-142359-r485-last-message.md` (result)
+
+## Conclusion
+
+`SelectionWordChars` now parses — the first consumer of the Experiment 484
+`config::string` codepoint iterator, with escape-aware word-boundary codepoints
+defaulting to the terminal boundary table. The config parse layer now spans
+eleven value types plus the reusable `u8`/`u32`/bool parsers and the
+`config::string` iterator. The next slice can port another self-contained config
+value type's `parseCLI` (e.g. `RepeatableFontVariation`,
+`RepeatableCodepointMap`, or — once a faithful `parseFloat` lands —
+`QuickTerminalSize`), or begin the per-field parser dispatch, continuing toward
+the full config loader.

@@ -1,7 +1,7 @@
 //! Default codepoint tables used by selection logic.
 
 /// Default boundary characters for word selection: ` \t'"│`|:;,()[]{}<>$`
-pub(super) const DEFAULT_WORD_BOUNDARIES: &[u32] = &[
+pub(crate) const DEFAULT_WORD_BOUNDARIES: &[u32] = &[
     0,           // null
     ' ' as u32,  // space
     '\t' as u32, // tab
