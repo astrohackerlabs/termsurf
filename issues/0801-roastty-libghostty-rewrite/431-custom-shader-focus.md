@@ -166,3 +166,61 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-093847-d431-prompt.md` (design)
 - Result: `logs/codex-review/20260604-093847-d431-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The custom-shader focus update is now live, completing
+`updateCustomShaderUniformsForFrame`.
+
+- `roastty/src/renderer/shadertoy.rs`:
+  `CustomShaderUniforms::update_focus(&mut self, focused: bool, focus_changed: bool) -> bool`
+  sets `focus = i32::from(focused)`, stamps `time_focus = self.time` only on a
+  focus-gain (`focus_changed && focused`), and returns the `focus_changed` flag
+  cleared (`false`) exactly then, else unchanged.
+
+Test (in `shadertoy.rs`): `update_focus_sets_focus_and_stamps_on_gain`
+(`time = 5.0`) — `update_focus(true, true)` → returns `false`, `focus 1`,
+`time_focus 5.0`; `update_focus(true, false)` → returns `false`, `focus 1`,
+`time_focus 0.0`; `update_focus(false, true)` → returns `true`, `focus 0`,
+`time_focus 0.0`; `update_focus(false, false)` → returns `false`, `focus 0`;
+`frame` / `resolution` untouched.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2913 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+`updateCustomShaderUniformsForFrame` is now fully ported across three
+experiments — the time/resolution group (429), the cursor group (430), and the
+focus group (this one) — all driven by parameters with the live
+timing/focus/Contents tracking deferred. The remaining custom-shader work — the
+`updateCustomShaderUniformsFromState` group (the palette and the
+background/foreground/cursor/selection colors from the terminal state), the
+`Target` enum, and the shader loading (`loadFromFiles`) — stays deferred, along
+with the broader live per-frame call sites and the `neverExtendBg` terminal-core
+row/cell access; beyond the renderer, the other subsystems.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `update_focus` matches upstream exactly: `focus`
+is set with `i32::from(focused)` (`1`/`0`), `time_focus` is stamped from
+`self.time` only when `focus_changed && focused`, and the returned flag is
+cleared only in that consumed focus-gain case; the
+`focused = false, focus_changed = true` case correctly returns `true`,
+preserving upstream's unconsumed `custom_shader_focused_changed` state. It
+judged the test to cover all four truth-table cases and check representative
+untouched fields. No public C ABI/header impact; nothing needed to change before
+the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-094016-r431-prompt.md` (result)
+- Result: `logs/codex-review/20260604-094016-r431-last-message.md` (result)

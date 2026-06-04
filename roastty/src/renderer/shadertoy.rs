@@ -155,6 +155,20 @@ impl CustomShaderUniforms {
             self.cursor_change_time = self.time;
         }
     }
+
+    /// Update the focus uniforms (upstream `updateCustomShaderUniformsForFrame`'s
+    /// focus block): `focus` is `1` when `focused`, else `0`; `time_focus` is
+    /// stamped with the frame `time` when focus was just gained
+    /// (`focus_changed && focused`). Returns the new `focus_changed` flag (cleared
+    /// to `false` when consumed — upstream resets `custom_shader_focused_changed`).
+    pub(crate) fn update_focus(&mut self, focused: bool, focus_changed: bool) -> bool {
+        self.focus = i32::from(focused);
+        if focus_changed && focused {
+            self.time_focus = self.time;
+            return false;
+        }
+        focus_changed
+    }
 }
 
 #[cfg(test)]
@@ -274,5 +288,39 @@ mod tests {
         let before = u;
         u.update_cursor(None, 8, 16, 4, 5);
         assert_eq!(u, before);
+    }
+
+    #[test]
+    fn update_focus_sets_focus_and_stamps_on_gain() {
+        let mut u = CustomShaderUniforms::new();
+        u.time = 5.0;
+
+        // Focus gained → focus 1, time_focus stamped, flag consumed.
+        assert!(!u.update_focus(true, true));
+        assert_eq!(u.focus, 1);
+        assert_eq!(u.time_focus, 5.0);
+
+        // Focused, no change → focus 1, time_focus unchanged, flag stays false.
+        let mut u = CustomShaderUniforms::new();
+        u.time = 5.0;
+        assert!(!u.update_focus(true, false));
+        assert_eq!(u.focus, 1);
+        assert_eq!(u.time_focus, 0.0);
+
+        // Unfocused but "changed" → focus 0, time_focus NOT stamped (not gained),
+        // and the flag is NOT consumed (returns true).
+        let mut u = CustomShaderUniforms::new();
+        u.time = 5.0;
+        assert!(u.update_focus(false, true));
+        assert_eq!(u.focus, 0);
+        assert_eq!(u.time_focus, 0.0);
+
+        // Unfocused, no change → focus 0, returns false.
+        assert!(!u.update_focus(false, false));
+        assert_eq!(u.focus, 0);
+
+        // The other fields are untouched.
+        assert_eq!(u.frame, 0);
+        assert_eq!(u.resolution, [0.0, 0.0, 1.0]);
     }
 }
