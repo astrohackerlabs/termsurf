@@ -326,6 +326,49 @@ pub(crate) fn cursor_text_color(
     .fg
 }
 
+/// Compute the cursor's own color — what [`add_cursor`] paints the cursor glyph
+/// with (upstream's `cursor_color`). Precedence: the OSC 12 override
+/// (`osc12_cursor`), then the `cursor-color` config (an explicit color or the
+/// under-cursor cell's resolved foreground/background swapped under `inverse`),
+/// then the default **foreground**. The configured `Some(...)` resolution is the
+/// selection foreground arm (so it reuses [`selection_colors`] `.fg`); only the
+/// OSC 12 override and the `None` default (foreground, not background) differ from
+/// [`cursor_text_color`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cursor_color(
+    osc12_cursor: Option<Rgb>,
+    config: Option<SelectionColor>,
+    cursor_style: TermStyle,
+    default_fg: Rgb,
+    default_bg: Rgb,
+    palette: &Palette,
+    bold: Option<BoldColor>,
+) -> Rgb {
+    // OSC 12 takes precedence over the config and the default.
+    if let Some(rgb) = osc12_cursor {
+        return rgb;
+    }
+    match config {
+        // No configured cursor color → the default foreground.
+        None => default_fg,
+        // The `.color`/`.cell-foreground`/`.cell-background` resolution is the
+        // selection foreground arm — `Some(...)` never reaches its `None`
+        // (default-background) default, so this matches upstream's configured arm.
+        Some(cfg) => {
+            selection_colors(
+                cursor_style,
+                default_fg,
+                default_bg,
+                palette,
+                bold,
+                None,
+                Some(cfg),
+            )
+            .fg
+        }
+    }
+}
+
 /// The per-cell selected state (upstream's `selected` enum). `False` uses the
 /// base [`cell_colors`]; the three selected states use [`selected_colors`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3489,6 +3532,113 @@ mod tests {
         // default background.
         assert_eq!(
             color(false, Color::None, Some(SelectionColor::CellBackground)),
+            default_bg
+        );
+    }
+
+    #[test]
+    fn cursor_color_resolves_with_precedence() {
+        use crate::terminal::color::DEFAULT_PALETTE;
+        use crate::terminal::style::{Color, Flags, Style as TermStyle};
+
+        let a = Rgb::new(10, 20, 30);
+        let b = Rgb::new(40, 50, 60);
+        let c1 = Rgb::new(1, 2, 3);
+        let osc = Rgb::new(99, 88, 77);
+        let default_fg = Rgb::new(200, 200, 200);
+        let default_bg = Rgb::new(7, 8, 9);
+
+        // The under-cursor cell: explicit SGR fg=a / bg=b.
+        let styled = |inverse: bool, bg: Color| TermStyle {
+            fg_color: Color::Rgb(a),
+            bg_color: bg,
+            flags: Flags {
+                inverse,
+                ..Flags::default()
+            },
+            ..TermStyle::default()
+        };
+        let color = |osc12, inverse, bg, cfg| {
+            cursor_color(
+                osc12,
+                cfg,
+                styled(inverse, bg),
+                default_fg,
+                default_bg,
+                &DEFAULT_PALETTE,
+                None,
+            )
+        };
+
+        // OSC 12 takes precedence, even with a config set.
+        assert_eq!(
+            color(
+                Some(osc),
+                false,
+                Color::Rgb(b),
+                Some(SelectionColor::Color(c1))
+            ),
+            osc
+        );
+
+        // No OSC 12, no config → the default foreground (NOT the background).
+        assert_eq!(color(None, false, Color::Rgb(b), None), default_fg);
+        // An explicit color is used verbatim.
+        assert_eq!(
+            color(None, false, Color::Rgb(b), Some(SelectionColor::Color(c1))),
+            c1
+        );
+
+        // CellForeground: the cell's foreground (a); inverse swaps to its
+        // background (b).
+        assert_eq!(
+            color(
+                None,
+                false,
+                Color::Rgb(b),
+                Some(SelectionColor::CellForeground)
+            ),
+            a
+        );
+        assert_eq!(
+            color(
+                None,
+                true,
+                Color::Rgb(b),
+                Some(SelectionColor::CellForeground)
+            ),
+            b
+        );
+        // CellBackground: the cell's background (b); inverse swaps to its
+        // foreground (a).
+        assert_eq!(
+            color(
+                None,
+                false,
+                Color::Rgb(b),
+                Some(SelectionColor::CellBackground)
+            ),
+            b
+        );
+        assert_eq!(
+            color(
+                None,
+                true,
+                Color::Rgb(b),
+                Some(SelectionColor::CellBackground)
+            ),
+            a
+        );
+
+        // No explicit SGR background: CellBackground non-inverse falls back to the
+        // default background.
+        assert_eq!(
+            color(
+                None,
+                false,
+                Color::None,
+                Some(SelectionColor::CellBackground)
+            ),
             default_bg
         );
     }

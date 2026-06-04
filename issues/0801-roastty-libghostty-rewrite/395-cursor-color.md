@@ -201,3 +201,67 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-210547-733551-prompt.md` (design)
 - Result: `logs/codex-review/20260603-210547-733551-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The cursor's own color is now computable.
+
+- `roastty/src/renderer/cell.rs`:
+  `cursor_color(osc12_cursor, config, cursor_style, default_fg, default_bg, palette, bold) -> Rgb`
+  — the OSC 12 override (`Some(rgb)`) wins; else a `None` config → the default
+  **foreground**; else the configured `Some(cfg)` reuses
+  `selection_colors(cursor_style, default_fg, default_bg, palette, bold, None, Some(cfg)).fg`
+  (the selection foreground arm; `Some` never hits its `None`→default-background
+  default). `pub(crate)` and not yet called in production (the OSC 12 state, the
+  `add_cursor` wiring, and the Metal upload are deferred), but reachable in the
+  library crate, so no dead-code warning.
+
+Test (in `cell.rs`): `cursor_color_resolves_with_precedence` — over a cell with
+explicit SGR `fg = a` / `bg = b`: OSC 12 `Some(osc)` wins even with a config
+set; no OSC 12 + `None` config → `default_fg` (foreground, distinct from
+cursor-text's `default_bg`); `Color(c1)` → `c1`; `CellForeground` → `a`
+(non-inverse) / `b` (inverse); `CellBackground` → `b` (non-inverse) / `a`
+(inverse); a no-explicit-bg `CellBackground` non-inverse → `default_bg`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2854 passed, 0 failed (+1, no regressions; the
+  `selection_colors` tests guard the shared resolution).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+The cursor's own color is now ported faithfully as `cursor_color`, the companion
+to the under-cursor recolor (`cursor_text_color`): the OSC 12 override → the
+`cursor-color` config (the shared selection-foreground resolution) → the default
+foreground. Both cursor colors reuse the one `TerminalColor` foreground
+resolution, differing only in the OSC 12 override and the `None` default. Like
+the other color computations, this is CPU-side; passing it into `add_cursor` and
+the uniforms is part of the deferred Metal upload.
+
+The remaining renderer-bridge work: the block-cursor uniforms (`cursor_pos`/
+`cursor_wide`/`cursor_color`) and wiring the cursor colors into `add_cursor`
+(with the Metal upload); the column-ordered decoration merge + link
+double-underline; and the **Metal upload** of `Contents`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design:
+OSC 12 wins first, a `None` config falls back to `default_fg`, and the
+configured `SelectionColor` values reuse
+`selection_colors(..., None, Some(cfg)).fg`, which preserves upstream's
+`Color`/`CellForeground`/`CellBackground` behavior including the inverse swaps
+and `final_bg`. It confirmed the test covers the required precedence and
+resolution matrix — including the important distinction from `cursor_text_color`
+(`None → default_fg` here, not `default_bg`) and the no-explicit-background
+fallback — with the change internal Rust only and no public C ABI/header change.
+Nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-210743-073925-last-message.md`

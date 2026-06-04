@@ -1235,7 +1235,7 @@ are past the correctness-critical foundation.
   Claude/Codex/Codex
 - [Experiment 394: the under-cursor text recolor](394-cursor-text-color.md) —
   **Pass** · Claude/Codex/Codex
-- [Experiment 395: the cursor's own color](395-cursor-color.md) — **Designed** ·
+- [Experiment 395: the cursor's own color](395-cursor-color.md) — **Pass** ·
   Claude/Codex/Codex
 
 ## Non-Goals
