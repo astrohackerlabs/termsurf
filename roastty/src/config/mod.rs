@@ -612,6 +612,61 @@ fn is_ascii_ws_zig(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
 }
 
+/// An error parsing `WorkingDirectory` (upstream `error.ValueRequired`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkingDirectoryParseError {
+    /// No value, or an empty/all-whitespace value (upstream `error.ValueRequired`).
+    ValueRequired,
+}
+
+/// The `working-directory` config (upstream `Config.WorkingDirectory`): a keyword
+/// (`home` / `inherit`) or an explicit path. The `finalize` (tilde expansion) and
+/// `formatEntry` are ported later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkingDirectory {
+    Home,
+    Inherit,
+    Path(String),
+}
+
+impl WorkingDirectory {
+    /// Parse the `working-directory` value (upstream `parseCLI`): trim whitespace,
+    /// strip a surrounding pair of quotes, then match `home` / `inherit` or fall
+    /// back to a `Path`. A missing or empty/all-whitespace value is `ValueRequired`.
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), WorkingDirectoryParseError> {
+        let input = input.ok_or(WorkingDirectoryParseError::ValueRequired)?;
+        let input = input.trim_matches(|c: char| c.is_ascii() && is_ascii_ws_zig(c as u8));
+        if input.is_empty() {
+            return Err(WorkingDirectoryParseError::ValueRequired);
+        }
+
+        // Match the path quoting behavior: strip a surrounding pair of quotes.
+        let input = if input.len() >= 2 && input.starts_with('"') && input.ends_with('"') {
+            &input[1..input.len() - 1]
+        } else {
+            input
+        };
+
+        *self = match input {
+            "home" => WorkingDirectory::Home,
+            "inherit" => WorkingDirectory::Inherit,
+            other => WorkingDirectory::Path(other.to_string()),
+        };
+        Ok(())
+    }
+
+    /// The explicit path, if any (upstream `value`): `Some` for `Path`, else `None`.
+    pub(crate) fn value(&self) -> Option<&str> {
+        match self {
+            WorkingDirectory::Path(path) => Some(path),
+            WorkingDirectory::Home | WorkingDirectory::Inherit => None,
+        }
+    }
+}
+
 /// An error parsing `WindowPadding` (upstream `WindowPadding.parseCLI`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowPaddingParseError {
@@ -1551,7 +1606,7 @@ mod tests {
         SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
         ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
         WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
-        WindowPaddingParseError, WindowSubtitle,
+        WindowPaddingParseError, WindowSubtitle, WorkingDirectory, WorkingDirectoryParseError,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -2918,6 +2973,50 @@ mod tests {
         // Overflow is distinct from invalid.
         assert_eq!(parse_uint("256", 0, 0xFF), Err(IntParseError::Overflow));
         assert_eq!(parse_uint("100", 16, 0xFF), Err(IntParseError::Overflow));
+    }
+
+    #[test]
+    fn working_directory_parse_cli_parses_keywords_and_paths() {
+        let parse = |s: Option<&str>| {
+            let mut wd = WorkingDirectory::Inherit;
+            wd.parse_cli(s).map(|()| wd)
+        };
+
+        // Upstream `parseCLI` cases (with a neutral path).
+        assert_eq!(parse(Some("inherit")), Ok(WorkingDirectory::Inherit));
+        assert_eq!(parse(Some("home")), Ok(WorkingDirectory::Home));
+        assert_eq!(
+            parse(Some("~/projects/app")),
+            Ok(WorkingDirectory::Path("~/projects/app".to_string()))
+        );
+        // A quoted path has its surrounding quotes stripped.
+        assert_eq!(
+            parse(Some("\"/tmp path\"")),
+            Ok(WorkingDirectory::Path("/tmp path".to_string()))
+        );
+
+        // Whitespace is trimmed; a plain path is a `Path`.
+        assert_eq!(parse(Some(" home ")), Ok(WorkingDirectory::Home));
+        assert_eq!(
+            parse(Some("/usr/local")),
+            Ok(WorkingDirectory::Path("/usr/local".to_string()))
+        );
+
+        // A missing or empty/all-whitespace value is `ValueRequired`.
+        assert_eq!(parse(None), Err(WorkingDirectoryParseError::ValueRequired));
+        assert_eq!(
+            parse(Some("")),
+            Err(WorkingDirectoryParseError::ValueRequired)
+        );
+        assert_eq!(
+            parse(Some("   ")),
+            Err(WorkingDirectoryParseError::ValueRequired)
+        );
+
+        // `value`: the path for `Path`, else `None`.
+        assert_eq!(WorkingDirectory::Inherit.value(), None);
+        assert_eq!(WorkingDirectory::Home.value(), None);
+        assert_eq!(WorkingDirectory::Path("x".to_string()).value(), Some("x"));
     }
 
     #[test]

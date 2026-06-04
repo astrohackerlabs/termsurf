@@ -234,3 +234,52 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-145344-d489-prompt.md` (design)
 - Result: `logs/codex-review/20260604-145344-d489-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`WorkingDirectory` was implemented exactly as designed — the enum (`Home` /
+`Inherit` / `Path(String)`), `parse_cli` (the `ValueRequired` guard, the full
+Zig-whitespace trim via `is_ascii_ws_zig` with the empty-after-trim
+`ValueRequired`, the `>= 2` + both-ends quote strip, and the `home` / `inherit`
+keyword match or `Path` fallback), and `value`. The new test
+`working_directory_parse_cli_parses_keywords_and_paths` covers the upstream
+cases (a quoted path has its quotes stripped), whitespace, a plain path, the
+missing/empty errors, and `value`.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2973 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean (a test comment was reworded off the literal name); `git diff --check`
+  clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `WorkingDirectory.parseCLI`
+(required input, full ASCII-whitespace trim, empty-after-trim → `ValueRequired`,
+paired quote stripping, exact `home` / `inherit` keywords, and the path fallback
+with owned storage — `Config.zig:5302`), and `value()` matches upstream (a path
+only for the path variant, `:5347`); the tests cover the upstream cases plus
+trim, plain path, missing/empty input, and `value()`; gates are clean. "Approved
+with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-145718-r489-prompt.md` (result)
+- Result: `logs/codex-review/20260604-145718-r489-last-message.md` (result)
+
+## Conclusion
+
+`WorkingDirectory` now parses — a keyword-or-quoted-path union reusing the Zig
+whitespace set from Experiment 480. The config parse layer now spans thirteen
+value types plus the reusable `parse_uint` / `config::string` /
+`config::unicode_range` helpers. The next slice can port another self-contained
+value type (e.g. `BackgroundBlur`), the font `CodepointMap` storage (toward
+`RepeatableCodepointMap`), or begin the per-field parser dispatch / the config
+`EntryFormatter` (which unblocks the deferred `formatEntry` side), continuing
+toward the full config loader.

@@ -1424,7 +1424,7 @@ are past the correctness-critical foundation.
 - [Experiment 488: consolidate the config integer parsers into one parse_uint](488-config-consolidate-int-parsers.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 489: the config WorkingDirectory CLI parser (WorkingDirectory::parse_cli)](489-config-working-directory-parse-cli.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
