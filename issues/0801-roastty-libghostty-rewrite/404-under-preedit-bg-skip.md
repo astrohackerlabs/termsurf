@@ -181,3 +181,78 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-064538-080494-prompt.md` (design)
 - Result: `logs/codex-review/20260604-064538-080494-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The under-preedit background skip is now live, completing the under-preedit cell
+skip begun in Experiment 403 (foreground).
+
+- `roastty/src/renderer/cell.rs`:
+  - `rebuild_bg_row` (new `preedit_range: Option<[u16; 2]>` param, last): at the
+    top of the per-cell loop, after computing the raw column `x`, a cell with
+    `x` in the inclusive range writes `CellBg([0, 0, 0, 0])` and `continue`s —
+    **before** any selection/explicit-background/inverse/default background
+    computation. Raw column (no `x_compare`), like links. Doc comment updated.
+  - `rebuild_viewport`: passes the already-computed per-row `row_preedit` (from
+    `preedit_skip.filter(|p| p.row == y).map(|p| p.range)`) to `rebuild_bg_row`,
+    so Experiments 403 and 404 together cover the whole-cell under-preedit skip.
+  - The existing `rebuild_bg_row` test call sites are updated (`None`).
+
+Tests (in `cell.rs`):
+
+- `rebuild_bg_row_skips_under_preedit` — a 4-cell row, all with explicit
+  (opaque) palette backgrounds, `preedit_range = Some([1, 2])` → columns 1 and 2
+  are transparent (`[0, 0, 0, 0]`), columns 0 and 3 keep their opaque palette
+  backgrounds.
+- `rebuild_bg_row_preedit_uses_raw_column` — a `SpacerTail` at column 1 with
+  `preedit_range = Some([0, 0])` is **not** skipped (raw column 1 ∉ `[0, 0]`; an
+  incorrect `x_compare` backstep to column 0 would wrongly make it transparent),
+  while column 0 (under the preedit) is transparent.
+- `rebuild_viewport_skips_under_preedit_bg_and_fg` — end-to-end: a preedit on
+  row 0 over column 0 → that column has a transparent background **and** no
+  foreground, while the neighbor (column 1) is drawn normally (opaque background
+  - glyph at column 1).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2865 passed, 0 failed (+3, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + `lib.rs`/header/`abi_harness.c`)
+  clean; `git diff --check` clean.
+
+## Conclusion
+
+The cells under the IME preedit now draw **no background** (transparent) as well
+as no foreground — the preedit (Experiments 400–401) draws its own cells, with
+no background, over them, so the screen background shows through. Together with
+Experiment 403, this faithfully ports upstream's whole-cell under-preedit
+`continue` (`rebuildCells`, `renderer/generic.zig`), adapted to roastty's
+write-every-cell background pass by writing transparent rather than skipping.
+
+The remaining renderer-bridge work: the `rebuild_viewport` cursor/preedit
+assembly and the preedit-range origin (which depend on the live render
+`State`/`Mouse`); and the **Metal upload** of `Contents`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design and
+upstream's net behavior: `rebuild_bg_row` checks the row-local preedit range
+**before** the normal background computation, uses the raw column, writes
+`CellBg([0, 0, 0, 0])`, and continues — the right adaptation for roastty's
+unconditional background writes (preserving upstream's cleared/transparent
+under-preedit cell without risking stale background data). It confirmed
+`rebuild_viewport` threads the same `row_preedit` into both the background and
+foreground paths, so Experiments 403 and 404 now cover the whole-cell
+under-preedit skip, and judged the tests sufficient (the transparent range,
+unchanged neighbors, the raw-column `SpacerTail`, and the end-to-end bg+fg
+skip). Internal Rust only, no public C ABI/header impact — nothing needed to
+change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-065141-6N-prompt.md` (result)
+- Result: `logs/codex-review/20260604-065141-6N-last-message.md` (result)

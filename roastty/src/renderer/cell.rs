@@ -1018,6 +1018,7 @@ pub(crate) fn rebuild_viewport(
             palette,
             bold,
             alpha,
+            row_preedit,
         );
 
         // Then the foreground: shape the row (this borrows the grid's resolver) —
@@ -1059,8 +1060,12 @@ pub(crate) fn rebuild_viewport(
 /// for a selected, inverse, or explicit-background cell, transparent (`0`)
 /// otherwise — so a covering-derived or default background lets the already-drawn
 /// screen background show through, while an inverse cell stays opaque even when
-/// its resolved background is `None`. The `background_opacity_cells` branch is
-/// deferred. The background half of upstream `rebuildCells`'s per-cell work.
+/// its resolved background is `None`. A cell within the row's `preedit_range`
+/// (raw column, inclusive — the IME preedit draws its own cells over it) is
+/// written **transparent** (`[0, 0, 0, 0]`) instead, so the preedit shows through
+/// on the screen background — upstream skips the cell entirely, leaving its
+/// background cleared. The `background_opacity_cells` branch is deferred. The
+/// background half of upstream `rebuildCells`'s per-cell work.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rebuild_bg_row(
     contents: &mut Contents,
@@ -1074,10 +1079,19 @@ pub(crate) fn rebuild_bg_row(
     palette: &Palette,
     bold: Option<BoldColor>,
     alpha: u8,
+    preedit_range: Option<[u16; 2]>,
 ) {
     let row = usize::from(y);
     for (col, cell) in row_cells.iter().enumerate() {
         let x = u16::try_from(col).expect("viewport column fits u16");
+        // A cell under the preedit draws no background (the preedit shows through
+        // on the screen background, with its glyph over). Written transparent (not
+        // skipped), since the background pass writes every cell. Raw column (no
+        // `x_compare`), like links.
+        if preedit_range.is_some_and(|[start, end]| x >= start && x <= end) {
+            *contents.bg_cell_mut(row, col) = CellBg([0, 0, 0, 0]);
+            continue;
+        }
         let state = selected_state(selection, highlights, x, cell.wide);
         let colors = selected_colors(
             state,
@@ -2875,6 +2889,71 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_viewport_skips_under_preedit_bg_and_fg() {
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Color, Style as TermStyle};
+
+        let mut shared = menlo_grid();
+        let mut c = Contents::default();
+        c.resize(grid(2, 1));
+
+        // Both columns have explicit (opaque) backgrounds and visible glyphs.
+        // Column 0 is under the preedit; column 1 is a normal neighbor.
+        let cell = |cp: u32, bg: Color| RunCell {
+            codepoint: cp,
+            graphemes: vec![],
+            style: TermStyle {
+                bg_color: bg,
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide: Wide::Narrow,
+            is_empty: false,
+            is_codepoint: true,
+        };
+        let rows = vec![RunOptions {
+            cells: vec![
+                cell('A' as u32, Color::Palette(1)),
+                cell('B' as u32, Color::Palette(2)),
+            ],
+            ..Default::default()
+        }];
+
+        rebuild_viewport(
+            &mut c,
+            &mut shared,
+            &rows,
+            &[],
+            &SelectionConfig::default(),
+            Rgb::new(200, 200, 200),
+            Rgb::new(0, 0, 0),
+            &DEFAULT_PALETTE,
+            None,
+            255,
+            255,
+            false,
+            255,
+            &[],
+            Some(PreeditSkip {
+                row: 0,
+                range: [0, 0],
+            }),
+        )
+        .expect("rebuild_viewport");
+
+        // Column 0 (under the preedit): no background (transparent, even though it
+        // has an explicit one) and no foreground — the preedit draws over it.
+        assert_eq!(*c.bg_cell(0, 0), CellBg([0, 0, 0, 0]));
+        assert!(c.fg_rows[1].iter().all(|v| v.grid_pos[0] != 0));
+        // Column 1 (the neighbor) is drawn normally: its opaque background and its
+        // glyph land at column 1.
+        let p2 = DEFAULT_PALETTE[2];
+        assert_eq!(*c.bg_cell(0, 1), CellBg([p2.r, p2.g, p2.b, 255]));
+        assert_eq!(c.fg_rows[1].len(), 1);
+        assert_eq!(c.fg_rows[1][0].grid_pos, [1, 0]);
+    }
+
+    #[test]
     fn rebuild_bg_row_writes_and_clears() {
         use crate::terminal::color::DEFAULT_PALETTE;
         use crate::terminal::style::{Color, Style as TermStyle};
@@ -2912,12 +2991,109 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
 
         let p1 = DEFAULT_PALETTE[1];
         assert_eq!(*c.bg_cell(0, 0), CellBg([p1.r, p1.g, p1.b, 255]));
         // The default-background cell is cleared to transparent.
         assert_eq!(*c.bg_cell(0, 1), CellBg([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn rebuild_bg_row_skips_under_preedit() {
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Color, Style as TermStyle};
+
+        let mut c = Contents::default();
+        c.resize(grid(4, 1));
+
+        // Four cells, each with an explicit (opaque) palette background.
+        let cell = |idx: u8| RunCell {
+            codepoint: 'x' as u32,
+            graphemes: vec![],
+            style: TermStyle {
+                bg_color: Color::Palette(idx),
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide: Wide::Narrow,
+            is_empty: false,
+            is_codepoint: true,
+        };
+        let row_cells = [cell(1), cell(2), cell(3), cell(4)];
+
+        rebuild_bg_row(
+            &mut c,
+            0,
+            &row_cells,
+            None,
+            &[],
+            &SelectionConfig::default(),
+            Rgb::new(200, 200, 200),
+            Rgb::new(0, 0, 0),
+            &DEFAULT_PALETTE,
+            None,
+            255,
+            Some([1, 2]),
+        );
+
+        // Columns 1 and 2 (the preedit range, raw inclusive) are transparent.
+        assert_eq!(*c.bg_cell(0, 1), CellBg([0, 0, 0, 0]));
+        assert_eq!(*c.bg_cell(0, 2), CellBg([0, 0, 0, 0]));
+        // Columns 0 and 3 keep their opaque palette backgrounds.
+        let p1 = DEFAULT_PALETTE[1];
+        let p4 = DEFAULT_PALETTE[4];
+        assert_eq!(*c.bg_cell(0, 0), CellBg([p1.r, p1.g, p1.b, 255]));
+        assert_eq!(*c.bg_cell(0, 3), CellBg([p4.r, p4.g, p4.b, 255]));
+    }
+
+    #[test]
+    fn rebuild_bg_row_preedit_uses_raw_column() {
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Color, Style as TermStyle};
+
+        let mut c = Contents::default();
+        c.resize(grid(2, 1));
+
+        // A normal cell at column 0 and a `SpacerTail` at column 1, both with an
+        // explicit (opaque) palette background.
+        let cell = |idx: u8, wide: Wide| RunCell {
+            codepoint: 'x' as u32,
+            graphemes: vec![],
+            style: TermStyle {
+                bg_color: Color::Palette(idx),
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide,
+            is_empty: false,
+            is_codepoint: true,
+        };
+        let row_cells = [cell(1, Wide::Narrow), cell(2, Wide::SpacerTail)];
+
+        rebuild_bg_row(
+            &mut c,
+            0,
+            &row_cells,
+            None,
+            &[],
+            &SelectionConfig::default(),
+            Rgb::new(200, 200, 200),
+            Rgb::new(0, 0, 0),
+            &DEFAULT_PALETTE,
+            None,
+            255,
+            Some([0, 0]),
+        );
+
+        // Column 0 (under the preedit) is transparent.
+        assert_eq!(*c.bg_cell(0, 0), CellBg([0, 0, 0, 0]));
+        // Column 1 is a `SpacerTail`: the raw column 1 ∉ [0, 0], so it is NOT
+        // skipped (an incorrect `x_compare` backstep to column 0 would wrongly
+        // make it transparent). Its opaque palette background is drawn.
+        let p2 = DEFAULT_PALETTE[2];
+        assert_eq!(*c.bg_cell(0, 1), CellBg([p2.r, p2.g, p2.b, 255]));
     }
 
     #[test]
@@ -3018,6 +3194,7 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
 
         // The full block paints its bg with the foreground color (a), not b.
@@ -3064,6 +3241,7 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
 
         // Covering-derived bg, no explicit bg, not inverse → transparent.
@@ -3114,6 +3292,7 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
 
         // Inverse, no explicit bg → opaque default background (proves the inverse
@@ -3291,6 +3470,7 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
 
         // Column 0 is selected: the default selection background is the default
@@ -3348,6 +3528,7 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
         assert_eq!(*c.bg_cell(0, 0), CellBg([amber.r, amber.g, amber.b, 255]));
         assert_eq!(*c.bg_cell(0, 1), CellBg([0, 0, 0, 0]));
@@ -3370,6 +3551,7 @@ mod tests {
             &DEFAULT_PALETTE,
             None,
             255,
+            None,
         );
         assert_eq!(
             *c2.bg_cell(0, 0),
