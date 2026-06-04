@@ -36,6 +36,14 @@ pub(crate) struct Config {
     pub notify_on_command_finish: NotifyOnCommandFinish,
     /// `notify-on-command-finish-action`.
     pub notify_on_command_finish_action: NotifyOnCommandFinishAction,
+    /// `window-colorspace`.
+    pub window_colorspace: WindowColorspace,
+    /// `alpha-blending`.
+    pub alpha_blending: AlphaBlending,
+    /// `background-blur`.
+    pub background_blur: BackgroundBlur,
+    /// `window-padding-color`.
+    pub window_padding_color: WindowPaddingColor,
 }
 
 impl Default for Config {
@@ -54,6 +62,10 @@ impl Default for Config {
             shell_integration_features: ShellIntegrationFeatures::default(),
             notify_on_command_finish: NotifyOnCommandFinish::Never,
             notify_on_command_finish_action: NotifyOnCommandFinishAction::default(),
+            window_colorspace: WindowColorspace::Srgb,
+            alpha_blending: AlphaBlending::Native,
+            background_blur: BackgroundBlur::False,
+            window_padding_color: WindowPaddingColor::Background,
         }
     }
 }
@@ -743,7 +755,8 @@ mod tests {
         MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MiddleClickAction,
         MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OscColorReportFormat, RightClickAction, ScrollToBottom, ShellIntegration,
-        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowSubtitle,
+        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
+        WindowPaddingColor, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
 
@@ -928,6 +941,11 @@ mod tests {
             d.notify_on_command_finish_action,
             NotifyOnCommandFinishAction::default()
         );
+        // Renderer-appearance group (Experiment 465).
+        assert_eq!(d.window_colorspace, WindowColorspace::Srgb);
+        assert_eq!(d.alpha_blending, AlphaBlending::Native);
+        assert_eq!(d.background_blur, BackgroundBlur::False);
+        assert_eq!(d.window_padding_color, WindowPaddingColor::Background);
 
         // A modified config differs from the default and round-trips Clone/PartialEq.
         let mut modified = Config::default();
