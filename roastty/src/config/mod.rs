@@ -44,6 +44,14 @@ pub(crate) struct Config {
     pub background_blur: BackgroundBlur,
     /// `window-padding-color`.
     pub window_padding_color: WindowPaddingColor,
+    /// `background-image-opacity`.
+    pub bg_image_opacity: f32,
+    /// `background-image-position`.
+    pub bg_image_position: BackgroundImagePosition,
+    /// `background-image-fit`.
+    pub bg_image_fit: BackgroundImageFit,
+    /// `background-image-repeat`.
+    pub bg_image_repeat: bool,
 }
 
 impl Default for Config {
@@ -66,6 +74,10 @@ impl Default for Config {
             alpha_blending: AlphaBlending::Native,
             background_blur: BackgroundBlur::False,
             window_padding_color: WindowPaddingColor::Background,
+            bg_image_opacity: 1.0,
+            bg_image_position: BackgroundImagePosition::Center,
+            bg_image_fit: BackgroundImageFit::Contain,
+            bg_image_repeat: false,
         }
     }
 }
@@ -946,6 +958,11 @@ mod tests {
         assert_eq!(d.alpha_blending, AlphaBlending::Native);
         assert_eq!(d.background_blur, BackgroundBlur::False);
         assert_eq!(d.window_padding_color, WindowPaddingColor::Background);
+        // Background-image group (Experiment 466).
+        assert_eq!(d.bg_image_opacity, 1.0);
+        assert_eq!(d.bg_image_position, BackgroundImagePosition::Center);
+        assert_eq!(d.bg_image_fit, BackgroundImageFit::Contain);
+        assert!(!d.bg_image_repeat);
 
         // A modified config differs from the default and round-trips Clone/PartialEq.
         let mut modified = Config::default();

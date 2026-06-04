@@ -165,3 +165,56 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-122311-d466-prompt.md` (design)
 - Result: `logs/codex-review/20260604-122311-d466-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The `Config` struct now carries the background-image field group.
+
+- `roastty/src/config/mod.rs`: `Config` gains `bg_image_opacity: f32`,
+  `bg_image_position: BackgroundImagePosition`,
+  `bg_image_fit: BackgroundImageFit`, and `bg_image_repeat: bool`;
+  `Config::default()` sets their upstream Config-field defaults — `1.0`,
+  `BackgroundImagePosition::Center`, `BackgroundImageFit::Contain`, `false`.
+
+Test (in `config/mod.rs`): `config_default_clipboard_group` extended to assert
+the four new background-image defaults (`1.0` / `Center` / `Contain` / `false`)
+alongside the five prior groups' defaults; the modified-config inequality and
+the `Clone`/`PartialEq` round-trip remain.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2952 passed, 0 failed (no regressions; the existing
+  `config_default` test was extended).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The aggregating `Config` struct now holds six field groups — clipboard (461),
+mouse/click (462), shell-integration (463), notification (464),
+renderer-appearance (465), and background-image — eighteen fields total, and the
+first **float** field (`bg_image_opacity: f32`), which validates the
+`PartialEq`-not-`Eq` derive chosen forward-lookingly in Experiment 461. The
+`bg_image` path field (a `Path` type not yet ported), the parser, the
+`changeConfig` machinery, the conditional-config system, and the remaining
+upstream `Config` fields stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the four background-image fields were added with
+faithful defaults (`1.0`, standalone `Center`, `Contain`, `false`); deferring
+the `bg_image` path remains the right scope (the `Path` type is not ported yet);
+`f32` plus `PartialEq` is appropriate for this internal aggregate; and extending
+the existing `Config::default()` test is adequate and keeps all prior groups
+covered. No public C ABI/header impact; nothing needed to change before the
+result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-122508-r466-prompt.md` (result)
+- Result: `logs/codex-review/20260604-122508-r466-last-message.md` (result)

@@ -1378,7 +1378,7 @@ are past the correctness-critical foundation.
 - [Experiment 465: grow the Config struct with the renderer-appearance group](465-config-struct-appearance-group.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 466: grow the Config struct with the background-image group](466-config-struct-bg-image-group.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
