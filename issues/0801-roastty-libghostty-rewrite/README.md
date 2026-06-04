@@ -1475,6 +1475,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 514: more enum-keyword config parsers (from_keyword: the mac / background-image / shader-mouse enums)](514-config-enum-from-keyword-2.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 515: more enum-keyword config parsers (from_keyword: the misc + fullscreen enums)](515-config-enum-from-keyword-3.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
