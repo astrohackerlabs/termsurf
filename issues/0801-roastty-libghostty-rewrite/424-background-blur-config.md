@@ -192,3 +192,60 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-085935-d424-prompt.md` (design)
 - Result: `logs/codex-review/20260604-085935-d424-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The `BackgroundBlur` config enum is now live.
+
+- `roastty/src/config/mod.rs`: the
+  `BackgroundBlur { False, True, MacosGlassRegular, MacosGlassClear, Radius(u8) }`
+  enum, with `enabled()` (`False` off; `True` and the two glass styles on;
+  `Radius(v)` on when `v > 0`) and `is_macos_glass()` (the two glass styles —
+  the macOS-glass `bg_color` override's predicate).
+
+Tests (in `config`):
+
+- `background_blur_enabled_truth_table` — `False` false, `True` true,
+  `Radius(0)` false, `Radius(5)` true, both glass styles true.
+- `background_blur_is_macos_glass_only_for_glass_styles` — the two glass styles
+  true; `False` / `True` / `Radius(5)` false.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2904 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The config layer now has four enums (`WindowColorspace`, `AlphaBlending`,
+`WindowPaddingColor`, `BackgroundBlur`). With `BackgroundBlur::is_macos_glass`
+in place, the macOS-glass `bg_color` alpha override (setting `bg_color[3] = 0`
+under a glass style — the deferred half of Experiment 419) is now portable as a
+small follow-up. The other remaining renderer-bridge work: the full
+`neverExtendBg` and its per-row `padding_extend` refinement (awaiting the
+renderer's terminal-core row/cell representation), a production `MetalUniforms`
+constructor composing the update groups, and the live per-frame call sites;
+`parseCLI` / `cval` and the broader config subsystem stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation faithfully maps upstream's
+`BackgroundBlur` tagged union (`False` / `True` / `MacosGlassRegular` /
+`MacosGlassClear` / `Radius(u8)`); that `enabled()` matches upstream exactly
+(including the critical `Radius(v) => v > 0` behavior); and that
+`is_macos_glass()` is exactly the two glass variants used by upstream's
+`updateFrame` switch for the future `bg_color[3] = 0` override. It judged the
+tests to cover both truth tables clearly, and the deferred parsing / C-bridge /
+glass-override scope correct. No public C ABI/header impact; nothing needed to
+change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-090118-r424-prompt.md` (result)
+- Result: `logs/codex-review/20260604-090118-r424-last-message.md` (result)

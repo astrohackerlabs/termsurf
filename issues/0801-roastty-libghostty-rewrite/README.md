@@ -1294,7 +1294,7 @@ are past the correctness-critical foundation.
 - [Experiment 423: the perfect-fit powerline predicate (is_perfect_fit_powerline)](423-perfect-fit-powerline.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 424: the BackgroundBlur config enum (enabled + is_macos_glass)](424-background-blur-config.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
