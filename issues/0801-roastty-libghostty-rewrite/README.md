@@ -1403,6 +1403,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 478: the config Palette CLI parser (Palette::parse_cli)](478-config-palette-parse-cli.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 479: the config ColorList CLI parser (ColorList::parse_cli)](479-config-color-list-parse-cli.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
