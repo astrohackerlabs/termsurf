@@ -795,7 +795,9 @@ pub(crate) fn add_glyph(
 /// selected/search cell takes [`selected_colors`] (the `selection_config`);
 /// otherwise [`cell_colors`] (so the foreground is inverse-aware — reverse-video
 /// swaps the glyph color). That one per-cell foreground feeds the glyph and all
-/// three decorations (via `fg_colors`). The per-row foreground body of upstream
+/// three decorations (via `fg_colors`). A cell inside the row's hovered-link
+/// `link_ranges` (raw column, inclusive — no `x_compare`) has its underline
+/// overridden ([`link_underline`]). The per-row foreground body of upstream
 /// `rebuildCells`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rebuild_row(
@@ -815,6 +817,7 @@ pub(crate) fn rebuild_row(
     faint_opacity: u8,
     thicken: bool,
     thicken_strength: u8,
+    link_ranges: &[[u16; 2]],
 ) -> Result<(), ResolverRenderError> {
     let cols = row_cells.len();
     let infos = cell_infos(row_cells);
@@ -871,8 +874,15 @@ pub(crate) fn rebuild_row(
         let fg = [rgba[0], rgba[1], rgba[2]];
         let flags = cell.style.flags;
 
-        // 1. Underline (its own color, else the foreground) — underneath.
-        if flags.underline != Underline::None {
+        // 1. Underline (its own color, else the foreground) — underneath. A
+        //    hovered-link cell overrides the underline ([`link_underline`]); the
+        //    link membership uses the raw column (no `x_compare`, unlike
+        //    selection/highlights).
+        let is_link = link_ranges
+            .iter()
+            .any(|&[start, end]| grid_pos[0] >= start && grid_pos[0] <= end);
+        let underline = link_underline(is_link, flags.underline);
+        if underline != Underline::None {
             let underline_color = cell
                 .style
                 .resolve_underline_color(palette)
@@ -882,7 +892,7 @@ pub(crate) fn rebuild_row(
                 contents,
                 grid,
                 grid_pos,
-                flags.underline,
+                underline,
                 underline_color,
                 rgba[3],
             )?;
@@ -936,12 +946,13 @@ pub(crate) fn rebuild_row(
 
 /// Rebuild every viewport row's background **and** foreground into `contents`
 /// from the viewport's per-row [`RunOptions`] (from `Terminal::shape_run_options`).
-/// `highlights` is the per-row search highlight lists (parallel to `rows`, like
-/// upstream's `row_highlights`; a row beyond the array has none). For each row,
-/// write its backgrounds ([`rebuild_bg_row`]) then shape it into [`ShapedRun`]s
-/// ([`shape_row`] over the grid's resolver) and assemble its foreground
-/// ([`rebuild_row`]) — one pass per row, as upstream `rebuildCells`. The
-/// decorations, cursor, and Metal upload remain separate.
+/// `highlights` is the per-row search highlight lists and `link_ranges` the per-row
+/// hovered-link column ranges (both parallel to `rows`, like upstream's
+/// `row_highlights`; a row beyond either array has none). For each row, write its
+/// backgrounds ([`rebuild_bg_row`]) then shape it into [`ShapedRun`]s ([`shape_row`]
+/// over the grid's resolver) and assemble its foreground ([`rebuild_row`]) — one
+/// pass per row, as upstream `rebuildCells`. The decorations, cursor, and Metal
+/// upload remain separate.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rebuild_viewport(
     contents: &mut Contents,
@@ -957,10 +968,13 @@ pub(crate) fn rebuild_viewport(
     faint_opacity: u8,
     thicken: bool,
     thicken_strength: u8,
+    link_ranges: &[Vec<[u16; 2]>],
 ) -> Result<(), ResolverRenderError> {
     for (y, opts) in rows.iter().enumerate() {
-        // This row's highlights (empty for a row beyond the array).
+        // This row's search highlights and hovered-link ranges (empty for a row
+        // beyond the array).
         let row_highlights = highlights.get(y).map(Vec::as_slice).unwrap_or(&[]);
+        let row_links = link_ranges.get(y).map(Vec::as_slice).unwrap_or(&[]);
         let y = u16::try_from(y).expect("viewport row fits u16");
 
         // Backgrounds first (behind the glyphs); needs no shaping or grid.
@@ -999,6 +1013,7 @@ pub(crate) fn rebuild_viewport(
             faint_opacity,
             thicken,
             thicken_strength,
+            row_links,
         )?;
     }
     Ok(())
@@ -1651,6 +1666,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -1737,6 +1753,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -1744,6 +1761,97 @@ mod tests {
         // column: the grid-pos column sequence is `[0, 0, 1, 1]`.
         let columns: Vec<u16> = c.fg_rows[1].iter().map(|v| v.grid_pos[0]).collect();
         assert_eq!(columns, [0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn rebuild_row_applies_link_underline() {
+        use crate::font::collection::Index;
+        use crate::terminal::color::{Rgb, DEFAULT_PALETTE};
+        use crate::terminal::style::{Flags, Style as TermStyle};
+
+        let default_fg = Rgb::new(200, 200, 200);
+        let default_bg = Rgb::new(0, 0, 0);
+
+        let cell = |underline: Underline, wide: Wide| RunCell {
+            codepoint: 'A' as u32,
+            graphemes: vec![],
+            style: TermStyle {
+                flags: Flags {
+                    underline,
+                    ..Flags::default()
+                },
+                ..TermStyle::default()
+            },
+            style_id: 0,
+            wide,
+            is_empty: false,
+            is_codepoint: true,
+        };
+
+        // No glyphs (empty runs), so only a drawn underline appears in `fg_rows`.
+        let build = |row_cells: &[RunCell], links: &[[u16; 2]]| {
+            let mut shared = menlo_grid();
+            let mut c = Contents::default();
+            c.resize(grid(u16::try_from(row_cells.len()).unwrap(), 1));
+            rebuild_row(
+                &mut c,
+                &mut shared,
+                0,
+                &[],
+                row_cells,
+                None,
+                &[],
+                &SelectionConfig::default(),
+                default_fg,
+                default_bg,
+                &DEFAULT_PALETTE,
+                None,
+                255,
+                255,
+                false,
+                255,
+                links,
+            )
+            .expect("rebuild_row");
+            (shared, c)
+        };
+        let sprite_glyph = |shared: &mut SharedGrid, sprite: Sprite| {
+            let opts = underline_opts(shared);
+            shared
+                .render_glyph(Index::special(Special::Sprite), sprite as u32, &opts)
+                .expect("sprite renders")
+                .glyph
+        };
+
+        // A link over an un-underlined cell → a single underline (cache identity
+        // vs the directly-rendered single-underline sprite).
+        let (mut shared, c) = build(&[cell(Underline::None, Wide::Narrow)], &[[0, 0]]);
+        assert_eq!(c.fg_rows[1].len(), 1);
+        let g = sprite_glyph(&mut shared, Sprite::Underline);
+        assert_eq!(c.fg_rows[1][0].glyph_pos, [g.atlas_x, g.atlas_y]);
+
+        // A link over a single-underlined cell → a double underline.
+        let (mut shared, c) = build(&[cell(Underline::Single, Wide::Narrow)], &[[0, 0]]);
+        assert_eq!(c.fg_rows[1].len(), 1);
+        let g = sprite_glyph(&mut shared, Sprite::UnderlineDouble);
+        assert_eq!(c.fg_rows[1][0].glyph_pos, [g.atlas_x, g.atlas_y]);
+
+        // No link → the un-underlined cell draws nothing.
+        let (_shared, c) = build(&[cell(Underline::None, Wide::Narrow)], &[]);
+        assert!(c.fg_rows[1].is_empty());
+
+        // Raw column: a `SpacerTail` at column 1 with link range `[0, 0]` is NOT
+        // linked (raw column 1 ∉ `[0, 0]`; an `x_compare` of 0 would wrongly link
+        // it). Column 0 IS linked → exactly one underline, at column 0 only.
+        let (_shared, c) = build(
+            &[
+                cell(Underline::None, Wide::Narrow),
+                cell(Underline::None, Wide::SpacerTail),
+            ],
+            &[[0, 0]],
+        );
+        assert_eq!(c.fg_rows[1].len(), 1);
+        assert_eq!(c.fg_rows[1][0].grid_pos[0], 0);
     }
 
     #[test]
@@ -1816,6 +1924,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -1900,6 +2009,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -2001,6 +2111,7 @@ mod tests {
             128, // faint_opacity
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -2053,6 +2164,7 @@ mod tests {
             128,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
         assert_eq!(c2.fg_rows[1][0].color[3], 255);
@@ -2126,6 +2238,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
         assert_eq!(c.fg_rows[1].len(), 4);
@@ -2157,6 +2270,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
         for v in &c2.fg_rows[1] {
@@ -2231,6 +2345,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -2302,6 +2417,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_viewport");
 
@@ -2358,6 +2474,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_viewport");
 
@@ -2464,6 +2581,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_viewport");
 
@@ -2929,6 +3047,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_row");
 
@@ -2991,6 +3110,7 @@ mod tests {
             255,
             false,
             255,
+            &[],
         )
         .expect("rebuild_viewport");
 

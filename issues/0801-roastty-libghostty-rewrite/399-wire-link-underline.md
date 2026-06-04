@@ -180,3 +180,75 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-060111-799278-prompt.md` (design)
 - Result: `logs/codex-review/20260604-060111-799278-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The link underline override is now live in the rebuild.
+
+- `roastty/src/renderer/cell.rs`:
+  - `rebuild_row` (new `link_ranges: &[[u16; 2]]` param, placed last for
+    call-site clarity): the underline step computes
+    `is_link = link_ranges.iter().any(|&[s, e]| grid_pos[0] >= s && grid_pos[0] <= e)`
+    (the **raw** column `grid_pos[0]`, no `x_compare`) and draws
+    `link_underline(is_link, flags.underline)` (Experiment 397) — with the
+    explicit-color fallback, only when `!= None`.
+  - `rebuild_viewport` (new `link_ranges: &[Vec<[u16; 2]>]` param, last): per
+    row, `row_links = link_ranges.get(y).map(Vec::as_slice).unwrap_or(&[])` is
+    threaded to `rebuild_row` (only — `rebuild_bg_row` is unchanged; links
+    affect only the underline). Doc comments updated; all test call sites
+    updated (`&[]`).
+
+Test (in `cell.rs`): `rebuild_row_applies_link_underline` (empty runs, so only a
+drawn underline appears) — a link over an un-underlined cell → a single
+underline (cache identity vs `Sprite::Underline`); a link over a
+single-underlined cell → a double underline (vs `Sprite::UnderlineDouble`); no
+link → nothing; and a **`SpacerTail` at column 1** with link range `[0, 0]` →
+**not** linked (only column 0 is underlined), proving the raw-column membership
+(an `x_compare` of 0 would wrongly link it).
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2858 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+The hovered-link underline override is now live: a cell inside a row's link
+ranges draws the overridden underline (a single for an un-underlined link, a
+double to distinguish a single-underlined one), using the raw column — faithful
+to upstream's `links.contains({x, y})`. With `link_underline` now wired, the
+only thing left for live links is the **origin** of the ranges (the OSC 8
+hovered-link detection from the terminal + mouse state), which is outside the
+renderer bridge.
+
+The CPU-side renderer bridge — `renderer/cell.rs`'s `Contents` assembly — is now
+a **complete, faithful** port of upstream's `rebuildCells`: cell colors
+(reverse-video, full-block, faint, min-contrast flag), backgrounds + alpha,
+selection/search recolor (live), the cursor (sprite + lock glyph) and its
+colors/uniform inputs, the column-ordered decorations, and the link underline.
+The sole remaining renderer-bridge work is the **Metal upload** of `Contents`
+(the GPU buffer/uniform upload) — the GPU boundary, which depends on the GUI's
+Metal/wgpu layer rather than further `rebuildCells` porting.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design and
+addresses the prior Low: `is_link` uses `grid_pos[0]` directly (inclusive
+ranges, no `x_compare`), and the added `SpacerTail` test at column 1 with range
+`[0, 0]` protects that upstream distinction. It confirmed `link_underline` is
+applied only in the underline step with the draw gate intact (drawn only when
+`!= None`, same explicit-color fallback), that no-link rows pass `&[]` and
+preserve prior behavior, that `rebuild_viewport` threads the per-row link ranges
+to `rebuild_row` only (`rebuild_bg_row` correctly unchanged), and that placing
+`link_ranges` last in the signatures is acceptable (an internal Rust API choice
+with all call sites updated, no fidelity or public C ABI/header impact). Nothing
+needed to change before the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260604-060958-177060-last-message.md`
