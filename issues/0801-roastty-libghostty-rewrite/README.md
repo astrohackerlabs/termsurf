@@ -1205,6 +1205,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 379: the cursor cell](379-add-cursor.md) — **Pass** ·
   Claude/Codex/Codex
+- [Experiment 380: per-cell colors with reverse-video](380-cell-colors-inverse.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
