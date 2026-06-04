@@ -1309,6 +1309,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 431: the custom-shader focus update (update_focus)](431-custom-shader-focus.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 432: the custom-shader palette update (update_palette)](432-custom-shader-palette.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
