@@ -1267,6 +1267,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 410: the texture region upload (replace_region)](410-texture-replace-region.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 411: the font-atlas texture sync (sync_atlas_texture)](411-sync-atlas-texture.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
