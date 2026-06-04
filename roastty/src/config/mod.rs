@@ -656,6 +656,32 @@ impl Duration {
             .map(|duration| Duration { duration })
             .ok_or(DurationParseError::ValueRequired)
     }
+
+    /// Decompose into the largest matching units (upstream `Duration.format`):
+    /// `{quotient}{unit}` segments, space-separated (e.g. `1m 30s`). `0` → empty.
+    fn format_value(self) -> String {
+        use std::fmt::Write as _;
+        let mut value = self.duration;
+        let mut out = String::new();
+        for &(name, factor) in DURATION_UNITS {
+            if value >= factor {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                let quotient = value / factor;
+                // `name` is valid UTF-8 (a unit-name byte literal, incl. `µs`).
+                let _ = write!(out, "{}{}", quotient, std::str::from_utf8(name).unwrap());
+                value %= factor;
+            }
+        }
+        out
+    }
+
+    /// Format as a config entry (upstream `Duration.formatEntry`): the decomposed
+    /// duration string.
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(&self.format_value());
+    }
 }
 
 /// Zig's `std.ascii.isWhitespace` set: space, `\t`, `\n`, `\r`, vertical tab, and
@@ -3539,5 +3565,30 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 256);
         assert_eq!(lines[0], "a = 0=#aabbcc");
+    }
+
+    #[test]
+    fn duration_format_entry_decomposes_units() {
+        let fmt = |ns: u64| {
+            let mut out = String::new();
+            Duration { duration: ns }.format_entry(&mut EntryFormatter::new("a", &mut out));
+            out
+        };
+
+        assert_eq!(fmt(1_000_000_000), "a = 1s\n");
+        assert_eq!(fmt(500_000_000), "a = 500ms\n");
+        assert_eq!(fmt(90_000_000_000), "a = 1m 30s\n");
+        assert_eq!(fmt(1_000), "a = 1µs\n"); // µs preferred over us
+        assert_eq!(fmt(3_600_000_000_000), "a = 1h\n");
+        assert_eq!(fmt(0), "a = \n"); // empty span
+
+        // A multi-segment value spanning several units.
+        assert_eq!(fmt(93_784_000_000_000), "a = 1d 2h 3m 4s\n"); // 1d 2h 3m 4s
+
+        // The upstream max-value case (the whole largest-first table).
+        assert_eq!(
+            fmt(u64::MAX),
+            "a = 584y 49w 23h 34m 33s 709ms 551µs 615ns\n"
+        );
     }
 }

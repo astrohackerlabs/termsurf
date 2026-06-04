@@ -1438,7 +1438,7 @@ are past the correctness-critical foundation.
 - [Experiment 495: the Palette config formatter (Palette::format_entry)](495-config-palette-format-entry.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 496: the Duration config formatter (Duration::format_entry)](496-config-duration-format-entry.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

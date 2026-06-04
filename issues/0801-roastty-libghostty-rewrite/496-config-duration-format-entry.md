@@ -196,3 +196,47 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-153214-d496-prompt.md` (design)
 - Result: `logs/codex-review/20260604-153214-d496-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`Duration::format_value` and `Duration::format_entry` were added to the existing
+`impl Duration` exactly as designed — the largest-first unit decomposition over
+`DURATION_UNITS` (`{quotient}{unit}` segments, single-space-separated, `µs` over
+`us`, empty for `0`), written as a string entry. The new test
+`duration_format_entry_decomposes_units` covers the single-unit, multi-segment,
+`µs`, and zero cases, plus the folded-in `u64::MAX` full-table case
+(`a = 584y 49w 23h 34m 33s 709ms 551µs 615ns\n`).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2981 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `Duration.format` /
+`formatEntry` (largest-first unit decomposition, one-space separators, `µs`
+preferred over `us`, zero as an empty entry, and the exact `u64::MAX` output —
+`Config.zig:10065`/`:10320`); the folded-in max-value test covers the tricky
+full-table decomposition; gates are clean. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-153456-r496-prompt.md` (result)
+- Result: `logs/codex-review/20260604-153456-r496-last-message.md` (result)
+
+## Conclusion
+
+`Duration` now round-trips: `parse_cli` (Experiment 480) reads `1m30s` and
+`format_value` / `format_entry` write it back as `1m 30s`, reusing the same
+`DURATION_UNITS` table. The config formatter side now covers ten types. The next
+slices can port the remaining types' `formatEntry` (`SelectionWordChars` — which
+re-encodes codepoints to UTF-8 — `QuickTerminalSize`, the codepoint maps), then
+the generic field-dispatch `formatEntry`, continuing toward the full config
+formatter and loader.
