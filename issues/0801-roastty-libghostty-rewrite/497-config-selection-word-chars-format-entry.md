@@ -189,3 +189,49 @@ Review artifacts:
 - Round 1 result: `logs/codex-review/20260604-153710-d497-last-message.md`
 - Round 2 prompt: `logs/codex-review/20260604-153853-d497b-prompt.md`
 - Round 2 result: `logs/codex-review/20260604-153853-d497b-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`SelectionWordChars::format_entry` was added to the existing impl exactly as the
+(Round-2-approved) design — it skips the leading null (`skip(1)`), re-encodes
+each remaining codepoint to UTF-8 (`char::from_u32`, skipping surrogates /
+out-of-range), breaks before exceeding the 4096-byte buffer, and writes the
+prefix as a string entry. The new test
+`selection_word_chars_format_entry_reencodes_codepoints` covers the round-trip,
+a multi-byte char, the surrogate skip, the null-only case, and the
+4096/4097-byte cap.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2982 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `SelectionWordChars.formatEntry`
+(skips the leading null, UTF-8-encodes valid codepoints, skips un-encodable
+values, stops before exceeding the 4096-byte buffer, and writes the buffered
+prefix as a string entry — `Config.zig:6185`/`:6192`/`:6195`); the tests cover
+the round-trip, multi-byte UTF-8, invalid-codepoint skipping, null-only output,
+and the 4096-byte cap; gates are clean. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-154124-r497-prompt.md` (result)
+- Result: `logs/codex-review/20260604-154124-r497-last-message.md` (result)
+
+## Conclusion
+
+`SelectionWordChars` now round-trips: the Experiment 485 parser reads the
+escape-laden boundary string, and `format_entry` re-encodes the codepoints back
+to a UTF-8 string (with the leading-null skip, the un-encodable skip, and the
+upstream 4096-byte cap). The config formatter side now covers eleven types. The
+next slices can port the remaining types' `formatEntry` (`QuickTerminalSize`,
+the `RepeatableClipboardCodepointMap`), then the generic field-dispatch
+`formatEntry`, continuing toward the full config formatter and loader.

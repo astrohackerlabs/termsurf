@@ -1006,6 +1006,24 @@ impl SelectionWordChars {
         self.codepoints = list;
         Ok(())
     }
+
+    /// Format as a config entry (upstream `SelectionWordChars.formatEntry`):
+    /// re-encode the codepoints (skipping the leading null) to UTF-8, skipping any
+    /// that cannot be encoded, capped at the upstream 4096-byte buffer.
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        let mut out = String::new();
+        for &cp in self.codepoints.iter().skip(1) {
+            if let Some(c) = char::from_u32(cp) {
+                // Upstream caps the output at a [4096]u8 buffer: stop before a
+                // codepoint that would exceed it (writing only the buffered prefix).
+                if out.len() + c.len_utf8() > 4096 {
+                    break;
+                }
+                out.push(c);
+            }
+        }
+        formatter.entry_str(&out);
+    }
 }
 
 /// A `clipboard-codepoint-map` replacement (upstream
@@ -3590,5 +3608,40 @@ mod tests {
             fmt(u64::MAX),
             "a = 584y 49w 23h 34m 33s 709ms 551µs 615ns\n"
         );
+    }
+
+    #[test]
+    fn selection_word_chars_format_entry_reencodes_codepoints() {
+        let fmt = |cps: Vec<u32>| {
+            let mut out = String::new();
+            SelectionWordChars { codepoints: cps }
+                .format_entry(&mut EntryFormatter::new("a", &mut out));
+            out
+        };
+
+        // Round-trip: parse, then format back to the boundary chars (after the null).
+        let mut sc = SelectionWordChars::default();
+        sc.parse_cli(Some(" \t;,")).unwrap();
+        assert_eq!(fmt(sc.codepoints), "a =  \t;,\n");
+
+        // A multi-byte char is re-encoded.
+        assert_eq!(fmt(vec![0, ';' as u32, ',' as u32, 0x2502]), "a = ;,│\n");
+
+        // An un-encodable codepoint (a surrogate) is skipped.
+        assert_eq!(fmt(vec![0, 'A' as u32, 0xD800, 'B' as u32]), "a = AB\n");
+
+        // The null-only case formats to an empty entry.
+        assert_eq!(fmt(vec![0]), "a = \n");
+
+        // The 4096-byte cap: 4096 chars fit; the 4097th is dropped.
+        let cap = |n: usize| {
+            let mut cps = vec![0u32];
+            cps.extend(std::iter::repeat_n('a' as u32, n));
+            let out = fmt(cps);
+            // The value sits between "a = " and the trailing "\n".
+            out["a = ".len()..out.len() - 1].len()
+        };
+        assert_eq!(cap(4096), 4096);
+        assert_eq!(cap(4097), 4096);
     }
 }
