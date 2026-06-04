@@ -1307,6 +1307,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 430: the custom-shader cursor update (update_cursor)](430-custom-shader-cursor.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 431: the custom-shader focus update (update_focus)](431-custom-shader-focus.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
