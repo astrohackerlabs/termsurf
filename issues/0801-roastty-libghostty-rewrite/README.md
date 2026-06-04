@@ -1455,6 +1455,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 504: the background-image enum-keyword config formatters (BackgroundImageFit / BackgroundImagePosition)](504-config-enum-format-entries-bgimage.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 505: the remaining small enum-keyword config formatters (OscColorReportFormat / ConfirmCloseSurface / LinkPreviews / WindowSubtitle / WindowPaddingColor)](505-config-enum-format-entries-misc.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
