@@ -1365,6 +1365,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 459: the theme config type and its single-name constructor (Theme, single)](459-config-theme.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 460: the clipboard-access config enum and its predicates (ClipboardAccess, denied / needs_confirm)](460-config-clipboard-access.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
