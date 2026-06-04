@@ -183,3 +183,71 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260603-204801-377579-prompt.md` (design)
 - Result: `logs/codex-review/20260603-204801-377579-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The codepoint render path is now ported.
+
+- `roastty/src/font/codepoint_resolver.rs`:
+  `CodepointResolver::glyph_index(index, cp) -> Result<Option<u16>, EntryError>`
+  = `self.collection.get_face(index)? .glyph_index(cp)` (mirrors
+  `get_presentation`'s `collection.get_face(index)?`).
+- `roastty/src/font/shared_grid.rs`:
+  `SharedGrid::render_codepoint(cp, style, presentation, opts) -> Result<Option<Render>, ResolverRenderError>`
+  — the faithful three-step port: `get_index` (no font → `Ok(None)`),
+  `glyph_index` (face lacks it → `Ok(None)`), else
+  `render_glyph(index, u32::from(gid), opts)`. `Style` is imported; `EntryError`
+  converts to `ResolverRenderError` via the existing `?`. `render_codepoint` is
+  `pub(crate)` (no production caller yet — the lock cursor is Experiment 393 —
+  but reachable in the library crate, so no dead-code warning).
+
+Tests (in `shared_grid.rs`):
+
+- `render_codepoint_renders_a_present_glyph` — `'M'` over a Menlo grid → `Some`,
+  a nonzero text glyph, **and** equal to `render_glyph` of the directly-resolved
+  `'M'` cmap glyph id (proving the lookup found the right glyph id, not the
+  codepoint).
+- `render_codepoint_missing_codepoint_is_none` — `0xE000` (a PUA codepoint Menlo
+  lacks, discovery disabled) → `None`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2852 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer) clean; `git diff --check` clean.
+
+## Conclusion
+
+`SharedGrid::render_codepoint` is the faithful port of upstream's
+`renderCodepoint` — a Unicode codepoint resolves to a face, its cmap glyph id is
+looked up, and the glyph renders through the existing atlas/cache path,
+returning `None` when no font has the codepoint. This is the prerequisite for
+the **lock cursor** (which renders `0xF023`): the next experiment wires
+`add_cursor`'s `Lock` branch to call `render_codepoint`.
+
+The remaining renderer-bridge work: wiring the lock cursor (Experiment 393 —
+call `render_codepoint(0xF023)` in `add_cursor`, falling back to a cleared
+cursor when no font has the lock glyph, as roastty embeds no Nerd Font); the
+under-cursor text recolor; the column-ordered decoration merge + link
+double-underline; and the **Metal upload** of `Contents`.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design:
+`glyph_index` is the direct `get_face(index)?.glyph_index(cp)` helper, and
+`SharedGrid::render_codepoint` follows the upstream sequence exactly
+(`get_index` missing → `Ok(None)`, the cmap lookup missing → `Ok(None)`,
+otherwise render the resolved glyph id through `render_glyph`). It noted the
+tests are stronger than the plan (the `'M'` case proves the rendered output
+equals the direct render of the face cmap glyph id, and the `0xE000` case covers
+the missing-codepoint `None` path with discovery off), and that the changes are
+internal Rust only with no public C ABI/header impact. Nothing needed to change
+before the result commit.
+
+Review artifacts:
+
+- Result review: `logs/codex-review/20260603-205021-689984-last-message.md`

@@ -15,7 +15,7 @@ use crate::font::face::constraint::{Align, Constraint, Size};
 use crate::font::face::coretext::{RenderGlyphError, RenderOptions};
 use crate::font::glyph::Glyph;
 use crate::font::metrics::Metrics;
-use crate::font::Presentation;
+use crate::font::{Presentation, Style};
 
 /// Initial atlas edge length in pixels. Matches upstream `SharedGrid.init`.
 const ATLAS_INITIAL_SIZE: u32 = 512;
@@ -154,6 +154,32 @@ impl SharedGrid {
         self.glyphs.insert(key, render);
         Ok(render)
     }
+
+    /// Render a Unicode codepoint as a real font glyph: resolve `cp` to a face
+    /// ([`CodepointResolver::get_index`]), look up its glyph id
+    /// ([`CodepointResolver::glyph_index`]), and render it ([`Self::render_glyph`]).
+    /// Returns `None` if no font has the codepoint or the resolved face lacks it.
+    /// Faithful port of upstream `SharedGrid.renderCodepoint` — used for the lock
+    /// cursor and preedit text (which render real codepoints, not sprites).
+    pub(crate) fn render_codepoint(
+        &mut self,
+        cp: u32,
+        style: Style,
+        presentation: Option<Presentation>,
+        opts: &RenderOptions,
+    ) -> Result<Option<Render>, ResolverRenderError> {
+        let Some(index) = self.resolver.get_index(cp, style, presentation) else {
+            return Ok(None);
+        };
+        let Some(glyph_index) = self.resolver.glyph_index(index, cp)? else {
+            return Ok(None);
+        };
+        Ok(Some(self.render_glyph(
+            index,
+            u32::from(glyph_index),
+            opts,
+        )?))
+    }
 }
 
 /// Render into `atlas`, growing it (`size * 2`) and retrying once on `AtlasFull`.
@@ -271,5 +297,42 @@ mod tests {
         // A distinct glyph is a distinct key — the cache grows to two entries.
         grid.render_glyph(Index::default(), n, &opts).expect("'N'");
         assert_eq!(grid.glyphs.len(), 2);
+    }
+
+    #[test]
+    fn render_codepoint_renders_a_present_glyph() {
+        let mut grid = menlo_grid();
+        let opts = menlo_opts();
+
+        // 'M' is in Menlo: the codepoint resolves to a face, its glyph id is
+        // looked up, and the glyph renders into the grayscale (text) atlas.
+        let r = grid
+            .render_codepoint('M' as u32, Style::Regular, Some(Presentation::Text), &opts)
+            .expect("render ok")
+            .expect("'M' is present");
+        assert_eq!(r.presentation, Presentation::Text);
+        assert!(r.glyph.width > 0);
+        assert!(r.glyph.height > 0);
+
+        // It renders the same glyph as resolving 'M' directly (the path looked up
+        // the correct cmap glyph id, not the codepoint).
+        let gid = u32::from(Face::new("Menlo", 32.0).glyphs_for_characters(&[b'M' as u16])[0]);
+        let direct = grid
+            .render_glyph(Index::default(), gid, &opts)
+            .expect("'M' direct");
+        assert_eq!(r, direct);
+    }
+
+    #[test]
+    fn render_codepoint_missing_codepoint_is_none() {
+        let mut grid = menlo_grid();
+        let opts = menlo_opts();
+
+        // A Private-Use codepoint Menlo lacks, with discovery disabled (the
+        // default), resolves to no font → `None`.
+        let r = grid
+            .render_codepoint(0xE000, Style::Regular, Some(Presentation::Text), &opts)
+            .expect("render ok");
+        assert_eq!(r, None);
     }
 }

@@ -293,6 +293,14 @@ impl CodepointResolver {
         })
     }
 
+    /// The glyph id for codepoint `cp` in the face at `index` (its cmap lookup),
+    /// or `None` if the face lacks the codepoint. Upstream `face.glyphIndex(cp)`,
+    /// used by [`crate::font::shared_grid::SharedGrid::render_codepoint`].
+    pub(crate) fn glyph_index(&self, index: Index, cp: u32) -> Result<Option<u16>, EntryError> {
+        let face = self.collection.get_face(index)?;
+        Ok(face.glyph_index(cp))
+    }
+
     /// Render the glyph `glyph_index` at `index` into `atlas`, returning its
     /// [`Glyph`]. For a sprite index the `glyph_index` is the codepoint (hence
     /// `u32`, which holds the high sprite ranges); it renders via the sprite
