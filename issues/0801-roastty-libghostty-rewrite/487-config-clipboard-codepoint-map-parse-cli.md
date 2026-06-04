@@ -317,3 +317,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-143718-d487-prompt.md` (design)
 - Result: `logs/codex-review/20260604-143718-d487-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`RepeatableClipboardCodepointMap` was implemented as designed — the
+`ClipboardReplacement` enum, the entry struct, the `Vec`-backed map, `parse_cli`
+(the `ValueRequired` guard, the first-`=` split with `" \t"` trim, the
+replacement-first parse, and the per-range append via the reused
+`unicode_range::UnicodeRangeParser`, with no reset), and the faithful base-16
+`u21` helper `parse_u21_hex`. The `trim` closure was switched to an inline
+`trim_matches(ws)` to avoid a closure-lifetime error (behavior identical). The
+new test `clipboard_codepoint_map_parse_cli_parses_entries` covers the upstream
+cases, accumulation, whitespace, the empty-string replacement, the error cases,
+and the folded-in raw-`parseInt` replacement edges (`+`, `-0`, underscore,
+overflow).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2971 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream
+`RepeatableClipboardCodepointMap.parseCLI` (the first `=`, the space/tab trim,
+the replacement parsed before iterating ranges, the exact `U+` codepoint
+detection, the UTF-8 string branch, the append-without-reset, and the reused
+`UnicodeRangeParser` for one or more ranges — `Config.zig:8250`,
+`ClipboardCodepointMap.zig:37`); the folded-in tests cover the raw
+`parseInt(u21, _, 16)` replacement edges (`+`, `-0`, underscores, overflow);
+gates are clean. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-144102-r487-prompt.md` (result)
+- Result: `logs/codex-review/20260604-144102-r487-last-message.md` (result)
+
+## Conclusion
+
+`RepeatableClipboardCodepointMap` now parses — the first consumer of the
+Experiment 486 `UnicodeRangeParser`, mapping codepoint ranges to a
+codepoint-or-string replacement, and landing a faithful base-16 `u21` `parseInt`
+(`parse_u21_hex`) to join the base-0 `u8` and base-10 `u32` parsers. The next
+slice can port the font `CodepointMap` storage (toward the sibling
+`RepeatableCodepointMap`), consolidate the integer parsers into one generic
+helper, port another self-contained value type, or begin the per-field parser
+dispatch, continuing toward the full config loader.

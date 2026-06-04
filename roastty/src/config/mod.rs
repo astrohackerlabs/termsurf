@@ -879,6 +879,120 @@ impl SelectionWordChars {
     }
 }
 
+/// A `clipboard-codepoint-map` replacement (upstream
+/// `ClipboardCodepointMap.Replacement`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClipboardReplacement {
+    /// Replace with another codepoint (`U+XXXX`).
+    Codepoint(u32),
+    /// Replace with a literal string.
+    String(String),
+}
+
+/// One `clipboard-codepoint-map` entry (upstream `ClipboardCodepointMap.Entry`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClipboardCodepointMapEntry {
+    pub range: [u32; 2],
+    pub replacement: ClipboardReplacement,
+}
+
+/// An error parsing a `clipboard-codepoint-map` (upstream `parseCLI`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClipboardCodepointMapParseError {
+    /// No value was supplied (upstream `error.ValueRequired`).
+    ValueRequired,
+    /// No `=`, a bad range, or a bad codepoint replacement (upstream
+    /// `error.InvalidValue`).
+    InvalidValue,
+}
+
+/// The `clipboard-codepoint-map` config (upstream
+/// `Config.RepeatableClipboardCodepointMap`): codepoint ranges mapped to a
+/// replacement. The `formatEntry` formatter is ported later.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RepeatableClipboardCodepointMap {
+    pub map: Vec<ClipboardCodepointMapEntry>,
+}
+
+impl RepeatableClipboardCodepointMap {
+    /// Parse one `ranges=replacement` assignment (upstream `parseCLI`): split on the
+    /// first `=`, trim, parse the replacement (a `U+XXXX` codepoint or a literal
+    /// string), then append `{ range, replacement }` for each range the key yields.
+    /// A missing value is `ValueRequired`; a missing `=`, a bad range, or a bad
+    /// codepoint replacement is `InvalidValue`.
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), ClipboardCodepointMapParseError> {
+        let input = input.ok_or(ClipboardCodepointMapParseError::ValueRequired)?;
+        let eql = input
+            .find('=')
+            .ok_or(ClipboardCodepointMapParseError::InvalidValue)?;
+        let ws = |c: char| c == ' ' || c == '\t';
+        let key = input[..eql].trim_matches(ws);
+        let value = input[eql + 1..].trim_matches(ws);
+
+        let replacement = if let Some(cp_str) = value.strip_prefix("U+") {
+            let cp = parse_u21_hex(cp_str).ok_or(ClipboardCodepointMapParseError::InvalidValue)?;
+            ClipboardReplacement::Codepoint(cp)
+        } else {
+            // `value` is already valid UTF-8 (it is a `&str`).
+            ClipboardReplacement::String(value.to_string())
+        };
+
+        let mut parser = unicode_range::UnicodeRangeParser::new(key.as_bytes());
+        while let Some(range) = parser
+            .next()
+            .map_err(|_| ClipboardCodepointMapParseError::InvalidValue)?
+        {
+            self.map.push(ClipboardCodepointMapEntry {
+                range,
+                replacement: replacement.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Parse a base-16 `u21` (upstream `std.fmt.parseInt(u21, _, 16)`): an optional
+/// `+`/`-` sign, then hex digits with interior-only `_` separators
+/// (leading/trailing `_` rejected). `-0` is `0`; a negative nonzero, an overflow
+/// beyond the `u21` max (`0x1FFFFF`), or any non-hex is `None`. (Mirrors the
+/// `parse_u32_dec` base-10 helper, with base 16 and the `u21` bound — distinct from
+/// `unicode_range`'s pure-hex `parse_hex_u21`, whose input is pre-scanned to hex.)
+fn parse_u21_hex(buf: &str) -> Option<u32> {
+    let (neg, rest): (bool, &str) = match buf.as_bytes().first() {
+        Some(b'+') => (false, &buf[1..]),
+        Some(b'-') => (true, &buf[1..]),
+        _ => (false, buf),
+    };
+    let bytes = rest.as_bytes();
+    if bytes.is_empty() || bytes[0] == b'_' || bytes[bytes.len() - 1] == b'_' {
+        return None;
+    }
+    let mut acc: i64 = 0;
+    for &c in bytes {
+        if c == b'_' {
+            continue;
+        }
+        let digit = (c as char).to_digit(16)? as i64;
+        if acc != 0 {
+            acc = acc.checked_mul(16).filter(|&v| v <= 0x1FFFFF)?;
+        } else if neg {
+            acc = -digit;
+            if acc < 0 {
+                return None;
+            }
+            continue;
+        }
+        acc = if neg { acc - digit } else { acc + digit };
+        if !(0..=0x1FFFFF).contains(&acc) {
+            return None;
+        }
+    }
+    Some(acc as u32)
+}
+
 /// The `notify-on-command-finish` config (upstream `NotifyOnCommandFinish`): when
 /// to notify on a finished command. The `Config` default is `Never`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1494,17 +1608,18 @@ impl OscColorReportFormat {
 mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, BoldColor,
-        ClipboardAccess, Color, ColorList, ColorParseError, Config, ConfirmCloseSurface,
+        ClipboardAccess, ClipboardCodepointMapEntry, ClipboardCodepointMapParseError,
+        ClipboardReplacement, Color, ColorList, ColorParseError, Config, ConfirmCloseSurface,
         CopyOnSelect, CustomShaderAnimation, Duration, DurationParseError, FontShapingBreak,
         FontStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon,
         MacTitlebarStyle, MacWindowButtons, MiddleClickAction, MouseShiftCapture,
         NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
-        OscColorReportFormat, Palette, PaletteParseError, RepeatableString,
-        RepeatableStringParseError, RightClickAction, ScrollToBottom, SelectionWordChars,
-        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
-        TerminalBoldColor, TerminalColor, Theme, WindowColorspace, WindowDecoration,
-        WindowDecorationParseError, WindowPadding, WindowPaddingColor, WindowPaddingParseError,
-        WindowSubtitle,
+        OscColorReportFormat, Palette, PaletteParseError, RepeatableClipboardCodepointMap,
+        RepeatableString, RepeatableStringParseError, RightClickAction, ScrollToBottom,
+        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
+        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
+        WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
+        WindowPaddingParseError, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -2729,6 +2844,115 @@ mod tests {
         assert_eq!(
             SelectionWordChars::default().codepoints,
             DEFAULT_WORD_BOUNDARIES.to_vec()
+        );
+    }
+
+    #[test]
+    fn clipboard_codepoint_map_parse_cli_parses_entries() {
+        let entry = |lo: u32, hi: u32, r: ClipboardReplacement| ClipboardCodepointMapEntry {
+            range: [lo, hi],
+            replacement: r,
+        };
+
+        // Upstream `parseCLI` cases.
+        let mut m = RepeatableClipboardCodepointMap::default();
+        assert_eq!(m.parse_cli(Some("U+2500=U+002D")), Ok(()));
+        assert_eq!(
+            m.map,
+            vec![entry(0x2500, 0x2500, ClipboardReplacement::Codepoint(0x2D))]
+        );
+
+        let mut m = RepeatableClipboardCodepointMap::default();
+        assert_eq!(m.parse_cli(Some("U+03A3=SUM")), Ok(()));
+        assert_eq!(
+            m.map,
+            vec![entry(
+                0x3A3,
+                0x3A3,
+                ClipboardReplacement::String("SUM".to_string())
+            )]
+        );
+
+        let mut m = RepeatableClipboardCodepointMap::default();
+        assert_eq!(m.parse_cli(Some("U+2500-U+2503=|")), Ok(()));
+        assert_eq!(
+            m.map,
+            vec![entry(
+                0x2500,
+                0x2503,
+                ClipboardReplacement::String("|".to_string())
+            )]
+        );
+
+        // The map is not reset — repeated parses accumulate.
+        let mut m = RepeatableClipboardCodepointMap::default();
+        m.parse_cli(Some("U+2500=U+002D")).unwrap();
+        m.parse_cli(Some("U+03A3=SUM")).unwrap();
+        assert_eq!(m.map.len(), 2);
+
+        // Whitespace around the key, `=`, and value is trimmed.
+        let mut m = RepeatableClipboardCodepointMap::default();
+        assert_eq!(m.parse_cli(Some(" U+2500 = U+002D ")), Ok(()));
+        assert_eq!(
+            m.map,
+            vec![entry(0x2500, 0x2500, ClipboardReplacement::Codepoint(0x2D))]
+        );
+
+        // An empty value is a string replacement.
+        let mut m = RepeatableClipboardCodepointMap::default();
+        assert_eq!(m.parse_cli(Some("U+2500=")), Ok(()));
+        assert_eq!(
+            m.map,
+            vec![entry(
+                0x2500,
+                0x2500,
+                ClipboardReplacement::String(String::new())
+            )]
+        );
+
+        // Errors.
+        let mut m = RepeatableClipboardCodepointMap::default();
+        assert_eq!(
+            m.parse_cli(None),
+            Err(ClipboardCodepointMapParseError::ValueRequired)
+        );
+        assert_eq!(
+            m.parse_cli(Some("U+2500")), // no `=`
+            Err(ClipboardCodepointMapParseError::InvalidValue)
+        );
+        assert_eq!(
+            m.parse_cli(Some("X=A")), // bad range key
+            Err(ClipboardCodepointMapParseError::InvalidValue)
+        );
+        assert_eq!(
+            m.parse_cli(Some("U+2500=U+ZZ")), // bad codepoint replacement
+            Err(ClipboardCodepointMapParseError::InvalidValue)
+        );
+        assert_eq!(
+            m.parse_cli(Some("U+2500=U+")), // empty codepoint replacement
+            Err(ClipboardCodepointMapParseError::InvalidValue)
+        );
+
+        // Replacement-codepoint parser edges (raw `parseInt(u21, _, 16)` path).
+        let cp = |s: &str| {
+            let mut m = RepeatableClipboardCodepointMap::default();
+            m.parse_cli(Some(s)).map(|()| m.map[0].replacement.clone())
+        };
+        assert_eq!(
+            cp("U+2500=U++2D"), // leading `+`
+            Ok(ClipboardReplacement::Codepoint(0x2D))
+        );
+        assert_eq!(
+            cp("U+2500=U+-0"), // unsigned `-0`
+            Ok(ClipboardReplacement::Codepoint(0))
+        );
+        assert_eq!(
+            cp("U+2500=U+2_D"), // interior underscore
+            Ok(ClipboardReplacement::Codepoint(0x2D))
+        );
+        assert_eq!(
+            cp("U+2500=U+200000"), // u21 overflow
+            Err(ClipboardCodepointMapParseError::InvalidValue)
         );
     }
 
