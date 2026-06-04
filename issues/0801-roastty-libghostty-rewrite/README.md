@@ -1393,6 +1393,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 473: the config Color hex parser (Color::from_hex)](473-config-color-from-hex.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 474: the config Color CLI parser (Color::parse_cli)](474-config-color-parse-cli.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
