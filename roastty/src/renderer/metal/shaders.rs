@@ -9,6 +9,7 @@ use crate::renderer::metal::pipeline::{
     standard_pipeline_build_values, MetalPipeline, MetalPipelineError, MetalPipelineOptions,
     MetalStandardPipelineDescription, STANDARD_PIPELINE_DESCRIPTIONS,
 };
+use crate::renderer::size::{GridSize, Size};
 
 pub(crate) const STANDARD_METAL_SHADER_SOURCE: &str = include_str!("shaders.metal");
 
@@ -134,7 +135,47 @@ pub(crate) struct MetalUniforms {
     pub(crate) _padding2: [u8; 8],
 }
 
+/// The 2D orthographic projection matrix (upstream `math.ortho2d`). Maps the
+/// `[left, right] × [bottom, top]` rectangle to clip space; the `bottom`/`top`
+/// convention yields the negative-Y scale used for terminal coordinates.
+pub(crate) fn ortho2d(left: f32, right: f32, bottom: f32, top: f32) -> [[f32; 4]; 4] {
+    let w = right - left;
+    let h = top - bottom;
+    [
+        [2.0 / w, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / h, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+        [-(right + left) / w, -(top + bottom) / h, 0.0, 1.0],
+    ]
+}
+
 impl MetalUniforms {
+    /// Update the screen-size-derived uniform fields (upstream
+    /// `updateScreenSizeUniforms`): the orthographic `projection_matrix`, the
+    /// `grid_padding` (the blank space around the grid), and the `screen_size`.
+    /// The other uniform groups (cell/grid size, min-contrast, colors, cursor,
+    /// bools) are set by their own updates.
+    pub(crate) fn update_screen_size(&mut self, size: Size, grid: GridSize) {
+        let terminal = size.terminal();
+        let blank = size
+            .screen
+            .blank_padding(size.padding, grid, size.cell)
+            .add(size.padding);
+        self.projection_matrix = ortho2d(
+            -(size.padding.left as f32),
+            (terminal.width + size.padding.right) as f32,
+            (terminal.height + size.padding.bottom) as f32,
+            -(size.padding.top as f32),
+        );
+        self.grid_padding = [
+            blank.top as f32,
+            blank.right as f32,
+            blank.bottom as f32,
+            blank.left as f32,
+        ];
+        self.screen_size = [size.screen.width as f32, size.screen.height as f32];
+    }
+
     #[cfg(test)]
     pub(crate) fn test_bg_color(width: u16, height: u16, bg_color: [u8; 4]) -> Self {
         Self::test_with_grid(
@@ -204,12 +245,13 @@ mod tests {
     use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary};
 
     use super::{
-        build_from_library, compile_source, MetalShaderLibrary, MetalShaderLibraryError,
+        build_from_library, compile_source, ortho2d, MetalShaderLibrary, MetalShaderLibraryError,
         MetalStandardPipelines, MetalStandardPipelinesError, MetalUniformBools, MetalUniforms,
         STANDARD_METAL_SHADER_SOURCE,
     };
     use crate::renderer::metal::api::MetalPixelFormat;
     use crate::renderer::metal::pipeline::{MetalPipelineError, STANDARD_PIPELINE_DESCRIPTIONS};
+    use crate::renderer::size::GridSize;
 
     const INCOMPATIBLE_STANDARD_SHADER_SOURCE: &str = r#"
 #include <metal_stdlib>
@@ -450,5 +492,70 @@ fragment float4 bg_image_fragment() {
             panic!("expected pipeline creation error");
         };
         assert!(!message.trim().is_empty());
+    }
+
+    #[test]
+    fn ortho2d_matches_upstream_matrix() {
+        // ortho2d(0, 4, 2, 0): w = 4, h = -2.
+        assert_eq!(
+            ortho2d(0.0, 4.0, 2.0, 0.0),
+            [
+                [0.5, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0, 0.0],
+                [-1.0, 1.0, 0.0, 1.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn update_screen_size_sets_screen_derived_fields_only() {
+        use crate::renderer::size::{CellSize, Padding, ScreenSize, Size};
+
+        // Start from a uniforms with distinctive cell/grid/bg values to prove they
+        // are untouched.
+        let mut uniforms =
+            MetalUniforms::test_with_grid([1, 1], [7, 9], [11.0, 13.0], [0.0; 4], 0, [1, 2, 3, 4]);
+
+        let size = Size {
+            screen: ScreenSize {
+                width: 100,
+                height: 80,
+            },
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: Padding {
+                top: 2,
+                bottom: 3,
+                right: 5,
+                left: 4,
+            },
+        };
+        let grid = GridSize {
+            columns: 8,
+            rows: 3,
+        };
+
+        uniforms.update_screen_size(size, grid);
+
+        // terminal = screen - padding = {91, 75}; projection bounds
+        // (-left, terminal.width + right, terminal.height + bottom, -top)
+        // = (-4, 96, 78, -2).
+        assert_eq!(uniforms.projection_matrix, ortho2d(-4.0, 96.0, 78.0, -2.0));
+
+        // blank_padding: grid 80×60, padded 89×65, leftover 11×15 →
+        // {top: 0, bottom: 15, right: 11, left: 0}; `.add(padding)` →
+        // {top: 2, bottom: 18, right: 16, left: 4}; grid_padding is
+        // [top, right, bottom, left].
+        assert_eq!(uniforms.grid_padding, [2.0, 16.0, 18.0, 4.0]);
+
+        assert_eq!(uniforms.screen_size, [100.0, 80.0]);
+
+        // The non-screen-size fields are untouched.
+        assert_eq!(uniforms.cell_size, [11.0, 13.0]);
+        assert_eq!(uniforms.grid_size, [7, 9]);
+        assert_eq!(uniforms.bg_color, [1, 2, 3, 4]);
     }
 }

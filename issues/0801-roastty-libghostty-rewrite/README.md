@@ -1276,7 +1276,7 @@ are past the correctness-critical foundation.
 - [Experiment 414: the frame draw (draw_frame)](414-draw-frame.md) — **Pass** ·
   Claude/Codex/Codex
 - [Experiment 415: the screen-size uniform update (ortho2d + update_screen_size)](415-screen-size-uniforms.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

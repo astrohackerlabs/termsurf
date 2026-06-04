@@ -219,3 +219,70 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-081256-d415-prompt.md` (design)
 - Result: `logs/codex-review/20260604-081256-d415-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The screen-size uniform update is now live.
+
+- `roastty/src/renderer/metal/shaders.rs`: a production
+  `ortho2d(left, right, bottom, top) -> [[f32; 4]; 4]` (the upstream 2D
+  orthographic projection matrix), and
+  `MetalUniforms::update_screen_size(&mut self, size: Size, grid: GridSize)`
+  setting `projection_matrix` (from
+  `ortho2d(-left, terminal.width + right, terminal.height + bottom, -top)`),
+  `grid_padding` (the blank padding `[top, right, bottom, left]`), and
+  `screen_size` — upstream's `updateScreenSizeUniforms`, touching only the three
+  screen-size fields. Added `use crate::renderer::size::{GridSize, Size};`.
+
+Tests (in `shaders.rs`):
+
+- `ortho2d_matches_upstream_matrix` — `ortho2d(0, 4, 2, 0)` equals the
+  hand-computed matrix `[[0.5,0,0,0], [0,-1,0,0], [0,0,-1,0], [-1,1,0,1]]`.
+- `update_screen_size_sets_screen_derived_fields_only` — a `Size` (screen
+  100×80, cell 10×20, padding {top 2, bottom 3, right 5, left 4}) + grid {cols
+  8, rows 3} → `projection_matrix == ortho2d(-4, 96, 78, -2)` (terminal 91×75),
+  `grid_padding == [2, 16, 18, 4]` (blank leftover 11×15 → {top 0, bottom 15,
+  right 11, left 0}, `.add(padding)` → {top 2, bottom 18, right 16, left 4}),
+  `screen_size == [100, 80]`; and `cell_size` / `grid_size` / `bg_color` are
+  unchanged.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2891 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + `lib.rs`/header/`abi_harness.c`)
+  clean; `git diff --check` clean.
+
+## Conclusion
+
+The per-frame uniforms now carry the real orthographic projection and grid
+padding derived from the screen/grid/cell sizes — no longer the test-only
+identity. `ortho2d` is a reusable production primitive, and `update_screen_size`
+is the first of upstream's uniform-update functions ported. The remaining
+uniform groups — the cell/grid size (the resize path in `rebuildCells`), the
+min-contrast and color-space settings, the background color, and the cursor
+group — and a full production `MetalUniforms` constructor are the next
+renderer-bridge slices, along with the live call sites that run these updates on
+resize/config-change and the `FrameState` per-frame loop.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design and
+upstream behavior: `ortho2d` is the same matrix as `math.ortho2d` (including the
+negative-Y scale), and `update_screen_size` derives `terminal`, `blank`, the
+projection bounds, `grid_padding`, and `screen_size` exactly as specified, only
+mutating the three screen-size fields. It verified the test expectations are
+correctly derived (terminal 91×75; projection bounds `(-4, 96, 78, -2)`; grid
+80×60, padded 89×65, leftover 11×15; blank+padding
+`{top 2, right 16, bottom 18, left 4}` → `[2, 16, 18, 4]`) and that the
+untouched-field assertions cover the scope boundary. No public C ABI/header
+impact; nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-081635-r415-prompt.md` (result)
+- Result: `logs/codex-review/20260604-081635-r415-last-message.md` (result)
