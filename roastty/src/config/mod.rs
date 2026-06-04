@@ -1270,6 +1270,17 @@ impl NotifyOnCommandFinish {
         }
     }
 
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "never" => Some(NotifyOnCommandFinish::Never),
+            "unfocused" => Some(NotifyOnCommandFinish::Unfocused),
+            "always" => Some(NotifyOnCommandFinish::Always),
+            _ => None,
+        }
+    }
+
     /// Format as a config entry (upstream's enum branch): the keyword.
     pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
         formatter.entry_str(self.keyword());
@@ -1351,6 +1362,21 @@ impl ShellIntegration {
             ShellIntegration::Fish => "fish",
             ShellIntegration::Nushell => "nushell",
             ShellIntegration::Zsh => "zsh",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(ShellIntegration::None),
+            "detect" => Some(ShellIntegration::Detect),
+            "bash" => Some(ShellIntegration::Bash),
+            "elvish" => Some(ShellIntegration::Elvish),
+            "fish" => Some(ShellIntegration::Fish),
+            "nushell" => Some(ShellIntegration::Nushell),
+            "zsh" => Some(ShellIntegration::Zsh),
+            _ => None,
         }
     }
 
@@ -5177,5 +5203,30 @@ mod tests {
             assert_eq!(NonNativeFullscreen::from_keyword(v.keyword()), Some(v));
         }
         assert_eq!(NonNativeFullscreen::from_keyword("nope"), None);
+    }
+
+    #[test]
+    fn enum_from_keyword_round_trips_shell_notify() {
+        for v in [
+            ShellIntegration::None,
+            ShellIntegration::Detect,
+            ShellIntegration::Bash,
+            ShellIntegration::Elvish,
+            ShellIntegration::Fish,
+            ShellIntegration::Nushell,
+            ShellIntegration::Zsh,
+        ] {
+            assert_eq!(ShellIntegration::from_keyword(v.keyword()), Some(v));
+        }
+        assert_eq!(ShellIntegration::from_keyword("nope"), None);
+
+        for v in [
+            NotifyOnCommandFinish::Never,
+            NotifyOnCommandFinish::Unfocused,
+            NotifyOnCommandFinish::Always,
+        ] {
+            assert_eq!(NotifyOnCommandFinish::from_keyword(v.keyword()), Some(v));
+        }
+        assert_eq!(NotifyOnCommandFinish::from_keyword("nope"), None);
     }
 }

@@ -130,3 +130,49 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-171315-d516-prompt.md` (design)
 - Result: `logs/codex-review/20260604-171315-d516-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`from_keyword(value: &str) -> Option<Self>` was added to `ShellIntegration`
+(`none`/`detect`/`bash`/`elvish`/`fish`/`nushell`/`zsh`) and
+`NotifyOnCommandFinish` (`never`/`unfocused`/`always`), each an exact tag match
+(the inverse of `keyword()`) returning `None` otherwise — the
+`std.meta.stringToEnum` parse. The new test
+`enum_from_keyword_round_trips_shell_notify` round-trips every variant and
+rejects an unknown string. With this, every plain config enum now has
+`from_keyword`.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3002 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches the approved design — exact
+`stringToEnum`-style matching, inverse of `keyword()`, for the two remaining
+plain enums; the packed structs are correctly left out of this sweep; the test
+is adequate (every tag round-trips, unknowns reject) and the gates are clean
+with no deferred-scope spillover. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-171444-r516-prompt.md` (result)
+- Result: `logs/codex-review/20260604-171444-r516-last-message.md` (result)
+
+## Conclusion
+
+The plain-enum `from_keyword` sweep is complete — every plain config enum (24
+across Experiments 513–516) now parses its keyword via `std.meta.stringToEnum`.
+The remaining loader work is: the **packed-struct parse**
+(`ShellIntegrationFeatures`, `NotifyOnCommandFinishAction`, `ScrollToBottom`,
+`FontShapingBreak` — the `[no-]flag` comma-list parser); the bool / int / float
+/ string "magic" parse paths; the empty-string reset-to-default rule; and the
+per-field `parseIntoField` dispatch (`Config::set(key, value)`) + the `loadCli`
+/ file loader — the inverse of `Config::format_config`.
