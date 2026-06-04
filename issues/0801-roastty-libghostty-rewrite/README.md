@@ -1425,6 +1425,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 489: the config WorkingDirectory CLI parser (WorkingDirectory::parse_cli)](489-config-working-directory-parse-cli.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 490: the config BackgroundBlur CLI parser (BackgroundBlur::parse_cli)](490-config-background-blur-parse-cli.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
