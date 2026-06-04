@@ -166,3 +166,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-123828-d470-prompt.md` (design)
 - Result: `logs/codex-review/20260604-123828-d470-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The `Config` struct now carries the font field group.
+
+- `roastty/src/config/mod.rs`: `Config` gains `font_style`, `font_style_bold`,
+  `font_style_italic`, `font_style_bold_italic` (each `FontStyle`), and
+  `font_shaping_break: FontShapingBreak`; `Config::default()` sets their
+  upstream Config-field defaults — each `font_style*` is `FontStyle::Default`,
+  and `font_shaping_break` is `FontShapingBreak::default()` (`cursor = true`).
+
+Test (in `config/mod.rs`): `config_default_clipboard_group` extended to assert
+the four `font_style*` are `FontStyle::Default` and `font_shaping_break` is
+`FontShapingBreak::default()` alongside the nine prior groups' defaults; the
+modified-config inequality and the `Clone`/`PartialEq` round-trip remain.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2952 passed, 0 failed (no regressions; the existing
+  `config_default` test was extended).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The aggregating `Config` struct now holds ten field groups — clipboard (461)
+through macOS-window (469), plus font — thirty-seven fields total, and the first
+`String`-backed field (`FontStyle`), which validates the `Config`
+`Clone`-not-`Copy` derive (and complements the float field added in Experiment
+466 for the `PartialEq`-not-`Eq` derive). The parser, the `changeConfig`
+machinery, the conditional-config system, and the remaining upstream `Config`
+fields stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the four `font_style*` fields default to
+`FontStyle::Default` (faithfully mapping upstream `.{ .default = {} }`);
+`font_shaping_break` defaults through `FontShapingBreak::default()`, preserving
+`cursor = true`; adding `FontStyle` validates the aggregate's `Clone`-not-`Copy`
+shape; and extending the existing `Config::default()` test is adequate and keeps
+all prior groups covered. No public C ABI/header impact; nothing needed to
+change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-124028-r470-prompt.md` (result)
+- Result: `logs/codex-review/20260604-124028-r470-last-message.md` (result)

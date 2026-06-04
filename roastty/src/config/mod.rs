@@ -80,6 +80,16 @@ pub(crate) struct Config {
     pub macos_window_buttons: MacWindowButtons,
     /// `macos-hidden`.
     pub macos_hidden: MacHidden,
+    /// `font-style`.
+    pub font_style: FontStyle,
+    /// `font-style-bold`.
+    pub font_style_bold: FontStyle,
+    /// `font-style-italic`.
+    pub font_style_italic: FontStyle,
+    /// `font-style-bold-italic`.
+    pub font_style_bold_italic: FontStyle,
+    /// `font-shaping-break`.
+    pub font_shaping_break: FontShapingBreak,
 }
 
 impl Default for Config {
@@ -120,6 +130,11 @@ impl Default for Config {
             macos_titlebar_proxy_icon: MacTitlebarProxyIcon::Visible,
             macos_window_buttons: MacWindowButtons::Visible,
             macos_hidden: MacHidden::Never,
+            font_style: FontStyle::Default,
+            font_style_bold: FontStyle::Default,
+            font_style_italic: FontStyle::Default,
+            font_style_bold_italic: FontStyle::Default,
+            font_shaping_break: FontShapingBreak::default(),
         }
     }
 }
@@ -1022,6 +1037,12 @@ mod tests {
         assert_eq!(d.macos_titlebar_proxy_icon, MacTitlebarProxyIcon::Visible);
         assert_eq!(d.macos_window_buttons, MacWindowButtons::Visible);
         assert_eq!(d.macos_hidden, MacHidden::Never);
+        // Font group (Experiment 470).
+        assert_eq!(d.font_style, FontStyle::Default);
+        assert_eq!(d.font_style_bold, FontStyle::Default);
+        assert_eq!(d.font_style_italic, FontStyle::Default);
+        assert_eq!(d.font_style_bold_italic, FontStyle::Default);
+        assert_eq!(d.font_shaping_break, FontShapingBreak::default());
 
         // A modified config differs from the default and round-trips Clone/PartialEq.
         let mut modified = Config::default();
