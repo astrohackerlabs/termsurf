@@ -186,3 +186,50 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-180052-d519-prompt.md` (design)
 - Result: `logs/codex-review/20260604-180052-d519-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`MagicParseError`, `parse_bool_field`, and `parse_string_field` were added. The
+bool path matches `parseBool(value orelse "t")` — `None` (a bare flag) is
+`true`, a recognized value parses, and an unrecognized value is `InvalidValue`;
+the string path requires a value (`ValueRequired` when absent) and otherwise
+returns an owned copy. The new test `parse_bool_field_and_string_field` covers
+the bare flag, every recognized bool token, an invalid value, the missing
+string, and the folded `Some("")` edge cases (bool → `InvalidValue`, string →
+`Ok("")`) that distinguish these helpers from the future empty-string reset
+branch.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3005 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches the two upstream type-magic paths — bool
+uses `parseBool(value orelse "t")` (so `None` is `true` and invalid/empty
+explicit values are `InvalidValue`), and string requires a value and copies it
+(incl. an explicit empty string); the folded edge tests cover the important
+separation from the future empty-string reset branch; the gates are clean and
+the deferred scope is intact. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-180347-r519-prompt.md` (result)
+- Result: `logs/codex-review/20260604-180347-r519-last-message.md` (result)
+
+## Conclusion
+
+The bool and string type-magic parse paths are ported. The remaining loader work
+is: the **int** type-magic path (`u8`…`isize`, base-0 — to port when a raw-int
+`Config` field exists; float stays blocked); the set-but-empty
+**reset-to-default** rule; and the per-field `parseIntoField` **dispatch**
+(`Config::set(key, value)`) + the `loadCli` / file loader — the inverse of
+`Config::format_config`, wiring together `from_keyword`, the packed-struct
+`parse_cli`, the leaf `parse_cli`, and these magic helpers.

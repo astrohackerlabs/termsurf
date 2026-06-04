@@ -1032,6 +1032,35 @@ fn parse_packed_flags(
     Ok(())
 }
 
+/// An error from a type-magic field parse (upstream `error.InvalidValue` /
+/// `error.ValueRequired` from `cli.args.parseIntoField`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MagicParseError {
+    /// The value was set but not a recognized value.
+    InvalidValue,
+    /// The field requires a value but none was given.
+    ValueRequired,
+}
+
+/// Parse a `bool` field (upstream `parseIntoField`'s `bool => parseBool(value
+/// orelse "t")`): a missing value is a bare flag, which is `true`; otherwise
+/// `parse_bool` of the value, with `InvalidValue` for an unrecognized value.
+pub(crate) fn parse_bool_field(value: Option<&str>) -> Result<bool, MagicParseError> {
+    match value {
+        None => Ok(true),
+        Some(v) => parse_bool(v).ok_or(MagicParseError::InvalidValue),
+    }
+}
+
+/// Parse a string field (upstream `parseIntoField`'s `[]const u8` / `[:0]const u8`
+/// copy): a missing value is `ValueRequired`; otherwise an owned copy of the value.
+pub(crate) fn parse_string_field(value: Option<&str>) -> Result<String, MagicParseError> {
+    match value {
+        None => Err(MagicParseError::ValueRequired),
+        Some(v) => Ok(v.to_string()),
+    }
+}
+
 /// An error parsing a `RepeatableString` (upstream `error.ValueRequired`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepeatableStringParseError {
@@ -2789,6 +2818,7 @@ impl OscColorReportFormat {
 #[cfg(test)]
 mod tests {
     use super::EntryFormatter;
+    use super::{parse_bool_field, parse_string_field};
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
         BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
@@ -2796,14 +2826,14 @@ mod tests {
         Config, ConfirmCloseSurface, CopyOnSelect, CustomShaderAnimation, Duration,
         DurationParseError, FlagsParseError, FontShapingBreak, FontStyle, Fullscreen,
         GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle,
-        MacWindowButtons, MiddleClickAction, MouseShiftCapture, NonNativeFullscreen,
-        NotifyOnCommandFinish, NotifyOnCommandFinishAction, OscColorReportFormat, Palette,
-        PaletteParseError, RepeatableClipboardCodepointMap, RepeatableString,
-        RepeatableStringParseError, RightClickAction, ScrollToBottom, SelectionWordChars,
-        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
-        TerminalBoldColor, TerminalColor, Theme, WindowColorspace, WindowDecoration,
-        WindowDecorationParseError, WindowPadding, WindowPaddingColor, WindowPaddingParseError,
-        WindowSubtitle, WorkingDirectory, WorkingDirectoryParseError,
+        MacWindowButtons, MagicParseError, MiddleClickAction, MouseShiftCapture,
+        NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
+        OscColorReportFormat, Palette, PaletteParseError, RepeatableClipboardCodepointMap,
+        RepeatableString, RepeatableStringParseError, RightClickAction, ScrollToBottom,
+        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
+        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
+        WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
+        WindowPaddingParseError, WindowSubtitle, WorkingDirectory, WorkingDirectoryParseError,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -5549,5 +5579,40 @@ mod tests {
         ));
         let rendered = out.trim_end().split(" = ").nth(1).unwrap().to_string();
         assert_eq!(ShellIntegrationFeatures::parse_cli(&rendered), Ok(original));
+    }
+
+    #[test]
+    fn parse_bool_field_and_string_field() {
+        // bool: a bare flag (no value) is `true`.
+        assert_eq!(parse_bool_field(None), Ok(true));
+        // Recognized values (upstream `parseBool`).
+        assert_eq!(parse_bool_field(Some("1")), Ok(true));
+        assert_eq!(parse_bool_field(Some("t")), Ok(true));
+        assert_eq!(parse_bool_field(Some("T")), Ok(true));
+        assert_eq!(parse_bool_field(Some("true")), Ok(true));
+        assert_eq!(parse_bool_field(Some("0")), Ok(false));
+        assert_eq!(parse_bool_field(Some("f")), Ok(false));
+        assert_eq!(parse_bool_field(Some("F")), Ok(false));
+        assert_eq!(parse_bool_field(Some("false")), Ok(false));
+        // Unrecognized value → InvalidValue. The set-but-empty `""` reset is a
+        // separate dispatch branch, so in isolation `Some("")` is InvalidValue.
+        assert_eq!(
+            parse_bool_field(Some("x")),
+            Err(MagicParseError::InvalidValue)
+        );
+        assert_eq!(
+            parse_bool_field(Some("")),
+            Err(MagicParseError::InvalidValue)
+        );
+
+        // string: a missing value is `ValueRequired`; otherwise an owned copy.
+        assert_eq!(
+            parse_string_field(None),
+            Err(MagicParseError::ValueRequired)
+        );
+        assert_eq!(parse_string_field(Some("hi")), Ok("hi".to_string()));
+        // The set-but-empty `""` reset is a separate dispatch branch, so in
+        // isolation `Some("")` is a copy of the empty string.
+        assert_eq!(parse_string_field(Some("")), Ok(String::new()));
     }
 }
