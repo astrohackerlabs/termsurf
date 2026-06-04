@@ -295,6 +295,55 @@ pub(crate) fn sync_atlas_texture(
     texture.replace_region(0, 0, size, size, atlas.data())
 }
 
+/// A frame's atlas texture plus the last atlas `modified` value it was synced
+/// to. Mirrors upstream's per-frame `grayscale` / `color` texture + the
+/// `grayscale_modified` / `color_modified` counters: the texture is re-uploaded
+/// only when the atlas's `modified` counter has advanced (upstream's `drawFrame`
+/// `texture:` gate).
+pub(crate) struct FrameAtlasTexture {
+    texture: MetalTexture,
+    last_modified: usize,
+}
+
+impl FrameAtlasTexture {
+    /// Create the frame's atlas texture, sized/formatted to `atlas` but not yet
+    /// uploaded (`last_modified = 0`, so the first `sync_if_modified` runs).
+    pub(crate) fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        storage_mode: MetalStorageMode,
+        atlas: &Atlas,
+    ) -> Result<Self, MetalTextureError> {
+        Ok(Self {
+            texture: init_atlas_texture(device, storage_mode, atlas)?,
+            last_modified: 0,
+        })
+    }
+
+    /// Upload `atlas` only if its `modified` counter advanced past the last sync.
+    /// Returns whether a sync happened (upstream's `texture:` gate). The atlas
+    /// counter is read once and recorded before the sync (upstream's
+    /// store-before-sync order); the live `font_grid` shared lock is deferred.
+    pub(crate) fn sync_if_modified(
+        &mut self,
+        device: &ProtocolObject<dyn MTLDevice>,
+        storage_mode: MetalStorageMode,
+        atlas: &Atlas,
+    ) -> Result<bool, MetalTextureError> {
+        let modified = atlas.modified();
+        if modified <= self.last_modified {
+            return Ok(false);
+        }
+        self.last_modified = modified;
+        sync_atlas_texture(device, storage_mode, &mut self.texture, atlas)?;
+        Ok(true)
+    }
+
+    /// The GPU texture (bound at the cell-text draw step).
+    pub(crate) fn texture(&self) -> &MetalTexture {
+        &self.texture
+    }
+}
+
 pub(crate) struct MetalImageUploadBackend<'a> {
     device: &'a ProtocolObject<dyn MTLDevice>,
     storage_mode: MetalStorageMode,
@@ -737,5 +786,52 @@ mod tests {
             init_atlas_texture(&device, MetalStorageMode::Shared, &bgr).err(),
             Some(MetalTextureError::UnsupportedAtlasFormat(Format::Bgr))
         );
+    }
+
+    #[test]
+    fn frame_atlas_texture_syncs_first_then_skips_unchanged() {
+        let device = metal_device();
+
+        let mut atlas = Atlas::new(4, Format::Grayscale);
+        let region = atlas.reserve(1, 1).expect("reserve a 1×1 region");
+        atlas.set(region, &[200]);
+
+        let mut frame_tex = FrameAtlasTexture::new(&device, MetalStorageMode::Shared, &atlas)
+            .expect("frame atlas texture should be created");
+
+        // The atlas changed since `last_modified == 0`, so the first sync runs.
+        assert!(frame_tex
+            .sync_if_modified(&device, MetalStorageMode::Shared, &atlas)
+            .expect("first sync should succeed"));
+        assert_eq!(frame_tex.texture().read_bytes(), atlas.data());
+
+        // No further change → the second sync is skipped.
+        assert!(!frame_tex
+            .sync_if_modified(&device, MetalStorageMode::Shared, &atlas)
+            .expect("second sync should succeed"));
+    }
+
+    #[test]
+    fn frame_atlas_texture_resyncs_after_change() {
+        let device = metal_device();
+
+        let mut atlas = Atlas::new(4, Format::Grayscale);
+        let region = atlas.reserve(1, 1).expect("reserve a 1×1 region");
+        atlas.set(region, &[200]);
+
+        let mut frame_tex = FrameAtlasTexture::new(&device, MetalStorageMode::Shared, &atlas)
+            .expect("frame atlas texture should be created");
+        assert!(frame_tex
+            .sync_if_modified(&device, MetalStorageMode::Shared, &atlas)
+            .expect("first sync should succeed"));
+
+        // A further change advances the atlas `modified` counter → resync.
+        let region2 = atlas.reserve(1, 1).expect("reserve a second 1×1 region");
+        atlas.set(region2, &[100]);
+
+        assert!(frame_tex
+            .sync_if_modified(&device, MetalStorageMode::Shared, &atlas)
+            .expect("resync should succeed"));
+        assert_eq!(frame_tex.texture().read_bytes(), atlas.data());
     }
 }

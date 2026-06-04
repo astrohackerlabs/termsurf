@@ -192,3 +192,69 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-074947-d412-prompt.md` (design)
 - Result: `logs/codex-review/20260604-074947-d412-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The modified-gated atlas sync is now live.
+
+- `roastty/src/renderer/metal/texture.rs`: a `FrameAtlasTexture` struct
+  (`texture: MetalTexture`, `last_modified: usize`) with `new` (the texture via
+  `init_atlas_texture`, `last_modified = 0`), `sync_if_modified` (reads the
+  atlas `modified` counter once, skips when `<= last_modified`, else records it
+  and runs `sync_atlas_texture`, returning whether it synced), and a `texture()`
+  accessor.
+
+Tests (in `texture.rs`, live Metal device, grayscale atlas):
+
+- `frame_atlas_texture_syncs_first_then_skips_unchanged` — a grayscale
+  `Atlas::new(4, Grayscale)` with a reserved pixel `set`;
+  `FrameAtlasTexture::new` then `sync_if_modified` returns `true` and the
+  texture holds `atlas.data()`; an immediate second `sync_if_modified` returns
+  `false`.
+- `frame_atlas_texture_resyncs_after_change` — after the first sync, a further
+  `set` advances the atlas `modified` counter, so `sync_if_modified` returns
+  `true` again and the texture reflects the new `atlas.data()`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2886 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + `lib.rs`/header/`abi_harness.c`)
+  clean; `git diff --check` clean.
+
+## Conclusion
+
+The font-atlas texture now re-uploads only when the atlas actually changed —
+upstream's `drawFrame` `texture:` gate, factored as a reusable per-frame unit
+(the grayscale and color atlases each get one). With the cell buffers
+(`FrameCells`), the atlas textures (`FrameAtlasTexture`), the draw sequence
+(`draw_cells`), and the upload/sync primitives in place, the renderer bridge has
+all the per-frame GPU building blocks. The remaining renderer-bridge work is the
+frame-state struct that owns these (`FrameCells` + the grayscale/color
+`FrameAtlasTexture`s + the uniform buffer) and the per-frame orchestration that
+acquires the target, runs the syncs, and issues `draw_cells` — which depends on
+the live render `State` and the `begin_frame` target plumbing — plus the
+deferred bg-image / kitty / overlay draws and the `rebuild_viewport`
+cursor/preedit assembly.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed the implementation matches the approved design and
+upstream's texture gate: `sync_if_modified` uses the correct
+`modified <= last_modified` skip condition, starts `last_modified` at `0`,
+records the observed value before calling `sync_atlas_texture`, and returns
+`true` only when a sync occurred; the single-load adaptation is consistent with
+the scoped design while the live font-grid shared lock remains deferred. It
+judged the tests sufficient (first sync uploads, the unchanged second sync
+skips, a later atlas mutation retriggers the sync and updates the texture bytes
+to `atlas.data()`). Internal Rust only — no public C ABI/header impact; nothing
+needed to change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-075155-r412-prompt.md` (result)
+- Result: `logs/codex-review/20260604-075155-r412-last-message.md` (result)
