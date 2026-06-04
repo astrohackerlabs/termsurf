@@ -1327,6 +1327,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 440: the font-style config union and its enabled predicate (FontStyle, enabled)](440-config-font-style.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 441: the mouse-shift-capture config enum and its capture decision (MouseShiftCapture, capture_shift)](441-config-mouse-shift-capture.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
