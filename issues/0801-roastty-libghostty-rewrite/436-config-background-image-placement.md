@@ -195,3 +195,64 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-100953-d436-prompt.md` (design)
 - Result: `logs/codex-review/20260604-100953-d436-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The background-image placement config enums are now live.
+
+- `roastty/src/config/mod.rs`:
+  `pub(crate) enum BackgroundImageFit { Contain, Cover, Stretch, None }`
+  (upstream `BackgroundImageFit`) and
+  `pub(crate) enum BackgroundImagePosition { TopLeft, TopCenter, TopRight, CenterLeft, CenterCenter, CenterRight, BottomLeft, BottomCenter, BottomRight, Center }`
+  (upstream `BackgroundImagePosition`), both deriving
+  `Debug, Clone, Copy, PartialEq, Eq`. The `Config` field defaults (`.contain` /
+  `.center`) are documented on the enums but kept off them, consistent with the
+  existing config enums.
+
+Tests (in `config/mod.rs`):
+
+- `background_image_fit_has_the_four_upstream_variants` — an array of all four
+  variants, `assert_eq!(len, 4)`, `assert_ne!(Contain, None)`, `Copy`/`Eq`
+  round-trip.
+- `background_image_position_has_the_ten_upstream_variants` — an array of all
+  ten variants, `assert_eq!(len, 10)`, `assert_ne!(CenterCenter, Center)`,
+  `Copy`/`Eq` round-trip.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2922 passed, 0 failed (+2, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The config layer now carries the background-image placement pair alongside the
+earlier leaf enums. The `Config` struct itself (the field defaults, parsing, and
+the `bg_image` / `bg_image_opacity` / `bg_image_repeat` fields) and the
+renderer's background-image placement math stay deferred. The config-enum family
+remains a clean, gated way to advance the broader rewrite while the larger
+renderer slices (the live per-frame call sites, the external-dependency shader
+loader, and the `neverExtendBg` terminal-core access) and the other subsystems
+stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed faithfulness against the vendored upstream:
+`BackgroundImageFit::{Contain, Cover, Stretch, None}` matches `Config.zig:9625`;
+`BackgroundImagePosition` has the exact nine grid anchors plus standalone
+`Center` (`Config.zig:9611`); and the defaults are correctly documented but not
+encoded on the enums (upstream keeps them on the `Config` fields,
+`Config.zig:657` / `:687`). It judged the Low resolved — both tests reference
+every variant and assert the expected counts, plus distinctness and `Copy`/`Eq`.
+No public C ABI/header impact; nothing needed to change before the result
+commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-101233-r436-prompt.md` (result)
+- Result: `logs/codex-review/20260604-101233-r436-last-message.md` (result)

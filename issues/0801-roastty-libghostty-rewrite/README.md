@@ -1318,7 +1318,7 @@ are past the correctness-critical foundation.
 - [Experiment 435: the custom-shader target enum (Target) and the Metal target constant](435-custom-shader-target.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 436: the background-image placement config enums (BackgroundImageFit, BackgroundImagePosition)](436-config-background-image-placement.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

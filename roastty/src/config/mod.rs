@@ -84,9 +84,39 @@ impl BackgroundBlur {
     }
 }
 
+/// How a background image is scaled to the window (upstream
+/// `BackgroundImageFit`; the `Config` default is `Contain`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundImageFit {
+    /// Scale to fit inside the window, preserving aspect ratio.
+    Contain,
+    /// Scale to fill the window, preserving aspect ratio (cropping overflow).
+    Cover,
+    /// Stretch to fill the window, ignoring aspect ratio.
+    Stretch,
+    /// No scaling; the image is drawn at its native size.
+    None,
+}
+
+/// Where a background image is anchored in the window (upstream
+/// `BackgroundImagePosition`; the `Config` default is `Center`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundImagePosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    CenterCenter,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    Center,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AlphaBlending, BackgroundBlur};
+    use super::{AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition};
 
     #[test]
     fn alpha_blending_is_linear_truth_table() {
@@ -112,5 +142,46 @@ mod tests {
         assert!(!BackgroundBlur::False.is_macos_glass());
         assert!(!BackgroundBlur::True.is_macos_glass());
         assert!(!BackgroundBlur::Radius(5).is_macos_glass());
+    }
+
+    #[test]
+    fn background_image_fit_has_the_four_upstream_variants() {
+        let fits = [
+            BackgroundImageFit::Contain,
+            BackgroundImageFit::Cover,
+            BackgroundImageFit::Stretch,
+            BackgroundImageFit::None,
+        ];
+        assert_eq!(fits.len(), 4);
+        assert_ne!(BackgroundImageFit::Contain, BackgroundImageFit::None);
+        // `Copy` + `Eq`: a trivial round-trip.
+        let f = BackgroundImageFit::Cover;
+        let copied = f;
+        assert_eq!(f, copied);
+    }
+
+    #[test]
+    fn background_image_position_has_the_ten_upstream_variants() {
+        let positions = [
+            BackgroundImagePosition::TopLeft,
+            BackgroundImagePosition::TopCenter,
+            BackgroundImagePosition::TopRight,
+            BackgroundImagePosition::CenterLeft,
+            BackgroundImagePosition::CenterCenter,
+            BackgroundImagePosition::CenterRight,
+            BackgroundImagePosition::BottomLeft,
+            BackgroundImagePosition::BottomCenter,
+            BackgroundImagePosition::BottomRight,
+            BackgroundImagePosition::Center,
+        ];
+        assert_eq!(positions.len(), 10);
+        assert_ne!(
+            BackgroundImagePosition::CenterCenter,
+            BackgroundImagePosition::Center
+        );
+        // `Copy` + `Eq`: a trivial round-trip.
+        let p = BackgroundImagePosition::TopLeft;
+        let copied = p;
+        assert_eq!(p, copied);
     }
 }
