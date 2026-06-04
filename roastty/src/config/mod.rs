@@ -178,11 +178,42 @@ pub(crate) struct Color {
     pub b: u8,
 }
 
+/// An error parsing a config `Color` (upstream `error.InvalidValue`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorParseError {
+    /// The input is not a valid hex color (wrong length or a non-hex digit).
+    Invalid,
+}
+
 impl Color {
     /// Convert to the terminal-native `Rgb` (upstream `Color.toTerminalRGB`): a
     /// field-for-field copy of the three channels.
     pub(crate) fn to_terminal_rgb(self) -> Rgb {
         Rgb::new(self.r, self.g, self.b)
+    }
+
+    /// Parse a hex color (upstream `Color.fromHex`): `#RRGGBB` / `RRGGBB` /
+    /// `#RGB` / `RGB`. The leading `#` is optional; a 3-digit value doubles each
+    /// digit; a bad length or non-hex digit is `ColorParseError::Invalid`.
+    pub(crate) fn from_hex(input: &str) -> Result<Color, ColorParseError> {
+        let trimmed = input.strip_prefix('#').unwrap_or(input);
+        let bytes = trimmed.as_bytes();
+        let expanded: [u8; 6] = match bytes.len() {
+            6 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]],
+            3 => [bytes[0], bytes[0], bytes[1], bytes[1], bytes[2], bytes[2]],
+            _ => return Err(ColorParseError::Invalid),
+        };
+        let digit = |c: u8| -> Result<u8, ColorParseError> {
+            (c as char)
+                .to_digit(16)
+                .map(|d| d as u8)
+                .ok_or(ColorParseError::Invalid)
+        };
+        Ok(Color {
+            r: digit(expanded[0])? * 16 + digit(expanded[1])?,
+            g: digit(expanded[2])? * 16 + digit(expanded[3])?,
+            b: digit(expanded[4])? * 16 + digit(expanded[5])?,
+        })
     }
 }
 
@@ -848,13 +879,13 @@ impl OscColorReportFormat {
 mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, BoldColor,
-        ClipboardAccess, Color, Config, ConfirmCloseSurface, CopyOnSelect, CustomShaderAnimation,
-        FontShapingBreak, FontStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden,
-        MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MiddleClickAction,
-        MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
-        OscColorReportFormat, RightClickAction, ScrollToBottom, ShellIntegration,
-        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
-        WindowPaddingColor, WindowSubtitle,
+        ClipboardAccess, Color, ColorParseError, Config, ConfirmCloseSurface, CopyOnSelect,
+        CustomShaderAnimation, FontShapingBreak, FontStyle, Fullscreen, GraphemeWidthMethod,
+        LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons,
+        MiddleClickAction, MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish,
+        NotifyOnCommandFinishAction, OscColorReportFormat, RightClickAction, ScrollToBottom,
+        ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme,
+        WindowColorspace, WindowPaddingColor, WindowSubtitle,
     };
     use crate::terminal::color::Rgb;
 
@@ -1528,5 +1559,65 @@ mod tests {
         // `Copy` + `Eq`: a trivial round-trip.
         let copied = explicit;
         assert_eq!(explicit, copied);
+    }
+
+    #[test]
+    fn from_hex_parses_hex_colors() {
+        // Upstream `Color.fromHex` cases.
+        assert_eq!(Color::from_hex("#000000"), Ok(Color { r: 0, g: 0, b: 0 }));
+        assert_eq!(
+            Color::from_hex("#0A0B0C"),
+            Ok(Color {
+                r: 10,
+                g: 11,
+                b: 12
+            })
+        );
+        assert_eq!(
+            Color::from_hex("0A0B0C"),
+            Ok(Color {
+                r: 10,
+                g: 11,
+                b: 12
+            })
+        );
+        assert_eq!(
+            Color::from_hex("FFFFFF"),
+            Ok(Color {
+                r: 255,
+                g: 255,
+                b: 255
+            })
+        );
+        assert_eq!(
+            Color::from_hex("FFF"),
+            Ok(Color {
+                r: 255,
+                g: 255,
+                b: 255
+            })
+        );
+        assert_eq!(
+            Color::from_hex("#345"),
+            Ok(Color {
+                r: 51,
+                g: 68,
+                b: 85
+            })
+        );
+
+        // Lowercase parses the same as uppercase.
+        assert_eq!(
+            Color::from_hex("0a0b0c"),
+            Ok(Color {
+                r: 10,
+                g: 11,
+                b: 12
+            })
+        );
+
+        // Errors: a wrong length and a non-hex digit are both `Invalid`.
+        assert_eq!(Color::from_hex("12345"), Err(ColorParseError::Invalid));
+        assert_eq!(Color::from_hex("ZZZZZZ"), Err(ColorParseError::Invalid));
     }
 }

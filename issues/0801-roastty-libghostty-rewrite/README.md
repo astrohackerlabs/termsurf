@@ -1392,7 +1392,7 @@ are past the correctness-critical foundation.
 - [Experiment 472: grow the Config struct with the base-colors group](472-config-struct-base-colors-group.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 473: the config Color hex parser (Color::from_hex)](473-config-color-from-hex.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

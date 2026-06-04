@@ -187,3 +187,48 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-125105-d473-prompt.md` (design)
 - Result: `logs/codex-review/20260604-125105-d473-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`ColorParseError { Invalid }` and `Color::from_hex` were added to
+`roastty/src/config/mod.rs` exactly as designed — optional leading `#`, the
+6-or-3-digit length check (else `Invalid`), the 3-digit short-form doubling, and
+`high * 16 + low` per channel with a non-hex digit erroring. The new test
+`from_hex_parses_hex_colors` asserts the upstream `fromHex` cases (`#000000`,
+`#0A0B0C`, `0A0B0C`, `FFFFFF`, `FFF`, `#345`), a lowercase input parsing the
+same as uppercase, and the two error paths (wrong length, non-hex digit).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2952 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: `Color::from_hex` faithfully ports `Color.fromHex` (optional `#`,
+3-or-6-digit inputs only, short-form expansion, two-hex-digit channel parsing);
+`ColorParseError::Invalid` is an appropriate mapping for `error.InvalidValue`;
+`to_digit(16)` handles upper/lowercase ASCII hex; the test covers all upstream
+success cases plus lowercase and the key error paths; and deferring the X11
+names, trimming, and the full `parseCLI` remains the right scope. "Approved for
+the result commit."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-125604-r473-prompt.md` (result)
+- Result: `logs/codex-review/20260604-125604-r473-last-message.md` (result)
+
+## Conclusion
+
+The config parser is under way: the hex-color parser `Color::from_hex` is
+ported, faithful to upstream's `fromHex`, with `ColorParseError` as the
+parse-error type. The next slice can extend the config `Color` parser with the
+X11 named-color map (the other `Color.parseCLI` path) or move on to a per-field
+`parseCLI`, building toward the full config parser (`loadCli` / file loading)
+over later experiments.
