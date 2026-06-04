@@ -1353,6 +1353,53 @@ impl BackgroundBlur {
             BackgroundBlur::MacosGlassRegular | BackgroundBlur::MacosGlassClear
         )
     }
+
+    /// Parse the `background-blur` value (upstream `parseCLI`): a missing value or a
+    /// boolean resolves on/off (`true` / `false`); `macos-glass-regular` /
+    /// `macos-glass-clear` select a glass style; anything else is a base-0 `u8`
+    /// radius (a bad digit or overflow is `InvalidValue`).
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), BackgroundBlurParseError> {
+        let Some(input) = input else {
+            *self = BackgroundBlur::True; // emulate the bool default
+            return Ok(());
+        };
+
+        if let Some(b) = parse_bool(input) {
+            *self = if b {
+                BackgroundBlur::True
+            } else {
+                BackgroundBlur::False
+            };
+            return Ok(());
+        }
+
+        match input {
+            "macos-glass-regular" => {
+                *self = BackgroundBlur::MacosGlassRegular;
+                return Ok(());
+            }
+            "macos-glass-clear" => {
+                *self = BackgroundBlur::MacosGlassClear;
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        let radius =
+            parse_uint(input, 0, 0xFF).map_err(|_| BackgroundBlurParseError::InvalidValue)?;
+        *self = BackgroundBlur::Radius(radius as u8);
+        Ok(())
+    }
+}
+
+/// An error parsing `BackgroundBlur` (upstream `error.InvalidValue`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundBlurParseError {
+    /// The value is neither a boolean, a glass keyword, nor a base-0 `u8` radius.
+    InvalidValue,
 }
 
 /// How a background image is scaled to the window (upstream
@@ -1594,19 +1641,20 @@ impl OscColorReportFormat {
 #[cfg(test)]
 mod tests {
     use super::{
-        AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, BoldColor,
-        ClipboardAccess, ClipboardCodepointMapEntry, ClipboardCodepointMapParseError,
-        ClipboardReplacement, Color, ColorList, ColorParseError, Config, ConfirmCloseSurface,
-        CopyOnSelect, CustomShaderAnimation, Duration, DurationParseError, FontShapingBreak,
-        FontStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon,
-        MacTitlebarStyle, MacWindowButtons, MiddleClickAction, MouseShiftCapture,
-        NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
-        OscColorReportFormat, Palette, PaletteParseError, RepeatableClipboardCodepointMap,
-        RepeatableString, RepeatableStringParseError, RightClickAction, ScrollToBottom,
-        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
-        ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, WindowColorspace,
-        WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
-        WindowPaddingParseError, WindowSubtitle, WorkingDirectory, WorkingDirectoryParseError,
+        AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
+        BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
+        ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
+        Config, ConfirmCloseSurface, CopyOnSelect, CustomShaderAnimation, Duration,
+        DurationParseError, FontShapingBreak, FontStyle, Fullscreen, GraphemeWidthMethod,
+        LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons,
+        MiddleClickAction, MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish,
+        NotifyOnCommandFinishAction, OscColorReportFormat, Palette, PaletteParseError,
+        RepeatableClipboardCodepointMap, RepeatableString, RepeatableStringParseError,
+        RightClickAction, ScrollToBottom, SelectionWordChars, SelectionWordCharsParseError,
+        ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme,
+        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowPadding,
+        WindowPaddingColor, WindowPaddingParseError, WindowSubtitle, WorkingDirectory,
+        WorkingDirectoryParseError,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -3017,6 +3065,45 @@ mod tests {
         assert_eq!(WorkingDirectory::Inherit.value(), None);
         assert_eq!(WorkingDirectory::Home.value(), None);
         assert_eq!(WorkingDirectory::Path("x".to_string()).value(), Some("x"));
+    }
+
+    #[test]
+    fn background_blur_parse_cli_resolves_bool_glass_and_radius() {
+        let parse = |s: Option<&str>| {
+            let mut b = BackgroundBlur::False;
+            b.parse_cli(s).map(|()| b)
+        };
+
+        // Upstream `parse BackgroundBlur` cases.
+        assert_eq!(parse(None), Ok(BackgroundBlur::True)); // missing → True
+        assert_eq!(parse(Some("true")), Ok(BackgroundBlur::True));
+        assert_eq!(parse(Some("false")), Ok(BackgroundBlur::False));
+        assert_eq!(parse(Some("42")), Ok(BackgroundBlur::Radius(42)));
+        assert_eq!(
+            parse(Some("macos-glass-regular")),
+            Ok(BackgroundBlur::MacosGlassRegular)
+        );
+        assert_eq!(
+            parse(Some("macos-glass-clear")),
+            Ok(BackgroundBlur::MacosGlassClear)
+        );
+        assert_eq!(parse(Some("")), Err(BackgroundBlurParseError::InvalidValue));
+        assert_eq!(
+            parse(Some("aaaa")),
+            Err(BackgroundBlurParseError::InvalidValue)
+        );
+        assert_eq!(
+            parse(Some("420")), // overflows u8
+            Err(BackgroundBlurParseError::InvalidValue)
+        );
+
+        // `parse_bool`-first order: "0"/"1" are booleans, not radii.
+        assert_eq!(parse(Some("1")), Ok(BackgroundBlur::True));
+        assert_eq!(parse(Some("0")), Ok(BackgroundBlur::False));
+
+        // A real radius, including base-0.
+        assert_eq!(parse(Some("5")), Ok(BackgroundBlur::Radius(5)));
+        assert_eq!(parse(Some("0x10")), Ok(BackgroundBlur::Radius(16)));
     }
 
     #[test]

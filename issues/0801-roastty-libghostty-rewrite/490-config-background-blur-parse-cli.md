@@ -214,3 +214,50 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-150020-d490-prompt.md` (design)
 - Result: `logs/codex-review/20260604-150020-d490-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`BackgroundBlur::parse_cli` and `BackgroundBlurParseError` were added to the
+existing `impl BackgroundBlur` exactly as designed — the missing-value `True`
+default, the `parse_bool`-first resolution, the two `macos-glass-*` keyword
+variants, and the base-0 `u8` radius fallback (via `parse_uint(_, 0, 0xFF)`)
+with every error → `InvalidValue`. The existing `enabled` / `is_macos_glass` are
+unchanged. The new test
+`background_blur_parse_cli_resolves_bool_glass_and_radius` covers the upstream
+cases plus the `parse_bool`-first `"0"` / `"1"` and the base-0 radius behavior.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2974 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `BackgroundBlur.parseCLI`
+(`None` → `True`, bool parsing first, the two macOS glass tags handled as void
+variants, and the radius fallback using base-0 `u8` parsing with all failures →
+`InvalidValue` — `Config.zig:9676`/`:9707`); the tests cover the upstream cases
+plus the bool-first `"0"` / `"1"` and the base-0 radius behavior; gates are
+clean. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-150302-r490-prompt.md` (result)
+- Result: `logs/codex-review/20260604-150302-r490-last-message.md` (result)
+
+## Conclusion
+
+`BackgroundBlur` now parses — the second consumer of the shared `parse_bool`
+(Experiment 482) and another consumer of the base-0 `parse_uint` (Experiment
+488), combining a bool, two keywords, and an integer radius. The config parse
+layer now spans fourteen value types plus the reusable parsing helpers. The next
+slice can port another self-contained value type, the font `CodepointMap`
+storage (toward `RepeatableCodepointMap`), or begin the per-field parser
+dispatch / the config `EntryFormatter` (which unblocks the deferred
+`formatEntry` / `cval` sides), continuing toward the full config loader.
