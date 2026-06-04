@@ -1405,6 +1405,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 479: the config ColorList CLI parser (ColorList::parse_cli)](479-config-color-list-parse-cli.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 480: the config Duration CLI parser (Duration::parse_cli)](480-config-duration-parse-cli.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
