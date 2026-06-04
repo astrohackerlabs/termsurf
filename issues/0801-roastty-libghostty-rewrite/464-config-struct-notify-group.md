@@ -153,3 +153,57 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-121514-d464-prompt.md` (design)
 - Result: `logs/codex-review/20260604-121514-d464-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The `Config` struct now carries the notification field group.
+
+- `roastty/src/config/mod.rs`: `Config` gains
+  `notify_on_command_finish: NotifyOnCommandFinish` and
+  `notify_on_command_finish_action: NotifyOnCommandFinishAction`;
+  `Config::default()` sets their upstream Config-field defaults —
+  `NotifyOnCommandFinish::Never` and `NotifyOnCommandFinishAction::default()`
+  (the `{ bell = true, notify = false }` literal).
+
+Test (in `config/mod.rs`): `config_default_clipboard_group` extended to assert
+the new notification defaults (`Never`;
+`NotifyOnCommandFinishAction::default()`) alongside the existing clipboard,
+mouse/click, and shell-integration defaults; the modified-config inequality and
+the `Clone`/`PartialEq` round-trip remain.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2952 passed, 0 failed (no regressions; the existing
+  `config_default` test was extended).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The aggregating `Config` struct now holds four field groups — clipboard (461),
+mouse/click (462), shell-integration (463), and notification — ten fields total.
+Like the shell-integration group, the notification group reuses a leaf type's
+own `Default` (`NotifyOnCommandFinishAction::default()`, Experiment 450) as the
+aggregate's field default, confirming the composition pattern. The parser, the
+`changeConfig` machinery, the conditional-config system, and the remaining
+upstream `Config` fields stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `notify_on_command_finish` defaults to `Never`;
+`notify_on_command_finish_action` defaults through
+`NotifyOnCommandFinishAction::default()`, preserving `bell = true` and
+`notify = false`; extending the existing `Config::default()` test is adequate
+and keeps the prior groups covered; and the deferred parser / `changeConfig` /
+conditional-config work remains properly scoped. No public C ABI/header impact;
+nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-121700-r464-prompt.md` (result)
+- Result: `logs/codex-review/20260604-121700-r464-last-message.md` (result)

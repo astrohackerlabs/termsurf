@@ -32,6 +32,10 @@ pub(crate) struct Config {
     pub shell_integration: ShellIntegration,
     /// `shell-integration-features`.
     pub shell_integration_features: ShellIntegrationFeatures,
+    /// `notify-on-command-finish`.
+    pub notify_on_command_finish: NotifyOnCommandFinish,
+    /// `notify-on-command-finish-action`.
+    pub notify_on_command_finish_action: NotifyOnCommandFinishAction,
 }
 
 impl Default for Config {
@@ -48,6 +52,8 @@ impl Default for Config {
             middle_click_action: MiddleClickAction::PrimaryPaste,
             shell_integration: ShellIntegration::Detect,
             shell_integration_features: ShellIntegrationFeatures::default(),
+            notify_on_command_finish: NotifyOnCommandFinish::Never,
+            notify_on_command_finish_action: NotifyOnCommandFinishAction::default(),
         }
     }
 }
@@ -915,6 +921,12 @@ mod tests {
         assert_eq!(
             d.shell_integration_features,
             ShellIntegrationFeatures::default()
+        );
+        // Notification group (Experiment 464).
+        assert_eq!(d.notify_on_command_finish, NotifyOnCommandFinish::Never);
+        assert_eq!(
+            d.notify_on_command_finish_action,
+            NotifyOnCommandFinishAction::default()
         );
 
         // A modified config differs from the default and round-trips Clone/PartialEq.
