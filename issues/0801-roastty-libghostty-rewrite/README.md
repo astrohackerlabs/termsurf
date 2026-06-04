@@ -1253,6 +1253,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 403: the under-preedit foreground skip](403-under-preedit-fg-skip.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 404: the under-preedit background skip](404-under-preedit-bg-skip.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
