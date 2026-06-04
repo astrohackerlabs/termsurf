@@ -9,6 +9,7 @@
 // This shadertoy layer is consumed by later slices.
 
 use crate::renderer::shader::CellTextVertex;
+use crate::terminal::color::Palette;
 
 /// The uniform struct custom shaders read (upstream `shadertoy.Uniforms`). The
 /// `#[repr(C, align(16))]` layout with explicit padding reproduces upstream's
@@ -169,6 +170,20 @@ impl CustomShaderUniforms {
         }
         focus_changed
     }
+
+    /// Update the 256-color palette uniform (the palette loop of upstream
+    /// `updateCustomShaderUniformsFromState`): each palette color becomes a
+    /// `vec4` of the normalized RGB (`channel / 255`) with an opaque alpha.
+    pub(crate) fn update_palette(&mut self, palette: &Palette) {
+        for (i, color) in palette.iter().enumerate() {
+            self.palette[i] = [
+                f32::from(color.r) / 255.0,
+                f32::from(color.g) / 255.0,
+                f32::from(color.b) / 255.0,
+                1.0,
+            ];
+        }
+    }
 }
 
 #[cfg(test)]
@@ -322,5 +337,26 @@ mod tests {
         // The other fields are untouched.
         assert_eq!(u.frame, 0);
         assert_eq!(u.resolution, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn update_palette_normalizes_each_entry() {
+        use crate::terminal::color::Rgb;
+
+        let mut palette = [Rgb::new(0, 0, 0); 256];
+        palette[5] = Rgb::new(255, 128, 0);
+        palette[255] = Rgb::new(0, 0, 255);
+
+        let mut u = CustomShaderUniforms::new();
+        u.update_palette(&palette);
+
+        assert_eq!(u.palette[0], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(u.palette[5], [1.0, 128.0 / 255.0, 0.0, 1.0]);
+        assert_eq!(u.palette[255], [0.0, 0.0, 1.0, 1.0]);
+
+        // The other fields are untouched.
+        assert_eq!(u.background_color, [0.0; 4]);
+        assert_eq!(u.focus, 1);
+        assert_eq!(u.frame, 0);
     }
 }

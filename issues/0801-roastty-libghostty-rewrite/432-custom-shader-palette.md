@@ -155,3 +155,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-094305-d432-prompt.md` (design)
 - Result: `logs/codex-review/20260604-094305-d432-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The custom-shader palette update is now live.
+
+- `roastty/src/renderer/shadertoy.rs`:
+  `CustomShaderUniforms::update_palette(&mut self, palette: &Palette)` sets each
+  of the 256 `palette` entries to `[r/255, g/255, b/255, 1.0]` from the
+  `Palette` (`[Rgb; 256]`). Added `use crate::terminal::color::Palette;`.
+
+Test (in `shadertoy.rs`): `update_palette_normalizes_each_entry` — a `Palette`
+zeroed with `[5] = Rgb(255, 128, 0)` and `[255] = Rgb(0, 0, 255)` →
+`palette[0] == [0, 0, 0, 1]`, `palette[5] == [1.0, 128.0/255.0, 0.0, 1.0]`,
+`palette[255] == [0, 0, 1, 1]`; and `background_color` / `focus` / `frame`
+untouched.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2914 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The custom-shader uniforms now take their 256-color palette from a `Palette`.
+The remaining `updateCustomShaderUniformsFromState` work — the
+background/foreground/cursor/cursor-text/selection colors, the `cursor_visible`
+flag, and the cursor-style fields — plus the `dirty` gate stays deferred (each
+is a small param-driven slice like the palette), along with the `Target` enum,
+the shader loading, the broader live per-frame call sites, and the
+`neverExtendBg` terminal-core row/cell access; beyond the renderer, the other
+subsystems.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed `update_palette` is faithful to upstream's palette
+loop: it iterates the full `[Rgb; 256]`, writes into the matching
+`[[f32; 4]; 256]` slot, normalizes each RGB channel with
+`f32::from(channel) / 255.0`, and sets the alpha to `1.0`. It judged the test to
+cover entry `0`, a middle entry with a fractional channel (`128 / 255`), and
+entry `255`, plus representative untouched fields. No public C ABI/header
+impact; nothing needed to change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-094442-r432-prompt.md` (result)
+- Result: `logs/codex-review/20260604-094442-r432-last-message.md` (result)
