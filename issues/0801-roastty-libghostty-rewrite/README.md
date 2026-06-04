@@ -1419,6 +1419,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 486: the config Unicode range parser (config::unicode_range::UnicodeRangeParser)](486-config-unicode-range-parser.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 487: the config RepeatableClipboardCodepointMap CLI parser (parse_cli)](487-config-clipboard-codepoint-map-parse-cli.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
