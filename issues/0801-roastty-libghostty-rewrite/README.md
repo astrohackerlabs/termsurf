@@ -1279,6 +1279,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 416: the font-grid uniform update (update_font_grid)](416-font-grid-uniform.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 417: the cursor uniform group (clear_cursor + update_block_cursor)](417-cursor-uniforms.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
