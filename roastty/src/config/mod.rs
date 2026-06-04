@@ -522,6 +522,22 @@ impl ColorList {
         }
         Ok(())
     }
+
+    /// Format as a config entry (upstream `ColorList.formatEntry`): an empty list
+    /// writes one empty entry; otherwise the colors' `#rrggbb` joined by commas.
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        if self.colors.is_empty() {
+            formatter.entry_void();
+            return;
+        }
+        let joined = self
+            .colors
+            .iter()
+            .map(|c| c.format_buf())
+            .collect::<Vec<_>>()
+            .join(",");
+        formatter.entry_str(&joined);
+    }
 }
 
 /// An error parsing a `Duration` config value (upstream `Duration.parseCLI`).
@@ -895,6 +911,18 @@ impl RepeatableString {
     /// The number of items in the list (upstream `RepeatableString.count`).
     pub(crate) fn count(&self) -> usize {
         self.list.len()
+    }
+
+    /// Format as config entries (upstream `RepeatableString.formatEntry`): an empty
+    /// list writes one empty entry; otherwise one entry per item.
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        if self.list.is_empty() {
+            formatter.entry_void();
+            return;
+        }
+        for value in &self.list {
+            formatter.entry_str(value);
+        }
     }
 }
 
@@ -3444,6 +3472,45 @@ mod tests {
         assert_eq!(
             fmt(&|f| BackgroundBlur::MacosGlassClear.format_entry(f)),
             "a = macos-glass-clear\n"
+        );
+    }
+
+    #[test]
+    fn list_format_entries() {
+        let fmt = |v: &dyn Fn(&mut EntryFormatter)| {
+            let mut out = String::new();
+            let mut f = EntryFormatter::new("a", &mut out);
+            v(&mut f);
+            out
+        };
+
+        // RepeatableString: empty → one empty entry; else one entry per item.
+        let rs = |items: &[&str]| {
+            let mut r = RepeatableString::default();
+            for i in items {
+                r.list.push(i.to_string());
+            }
+            r
+        };
+        assert_eq!(fmt(&|f| rs(&[]).format_entry(f)), "a = \n");
+        assert_eq!(fmt(&|f| rs(&["x"]).format_entry(f)), "a = x\n");
+        assert_eq!(fmt(&|f| rs(&["x", "y"]).format_entry(f)), "a = x\na = y\n");
+
+        // ColorList: empty → one empty entry; else comma-joined `#rrggbb`.
+        let cl = |colors: &[Color]| ColorList {
+            colors: colors.to_vec(),
+        };
+        let black = Color { r: 0, g: 0, b: 0 };
+        let white = Color {
+            r: 255,
+            g: 255,
+            b: 255,
+        };
+        assert_eq!(fmt(&|f| cl(&[]).format_entry(f)), "a = \n");
+        assert_eq!(fmt(&|f| cl(&[black]).format_entry(f)), "a = #000000\n");
+        assert_eq!(
+            fmt(&|f| cl(&[black, white]).format_entry(f)),
+            "a = #000000,#ffffff\n"
         );
     }
 }

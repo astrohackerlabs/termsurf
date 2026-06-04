@@ -188,3 +188,49 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-152213-d494-prompt.md` (design)
 - Result: `logs/codex-review/20260604-152213-d494-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The two list `format_entry` methods were added to their existing impls exactly
+as designed — `RepeatableString` writes one empty entry (empty list) or one
+`name = item\n` line per item; `ColorList` writes one empty entry or the
+comma-joined `#rrggbb` colors (reusing `Color::format_buf`) as a single entry.
+The new test `list_format_entries` covers the empty / single / multi cases,
+including the upstream `a = #000000,#ffffff\n`.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 2979 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementations preserve the two distinct upstream list formats
+(`RepeatableString` writes one empty entry or one same-name line per item, while
+`ColorList` writes one empty entry or one comma-joined color line —
+`Config.zig:6058`/`:5743`); the tests cover the empty / single / multi cases,
+including the upstream `a = #000000,#ffffff\n` output; gates are clean.
+"Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-152451-r494-prompt.md` (result)
+- Result: `logs/codex-review/20260604-152451-r494-last-message.md` (result)
+
+## Conclusion
+
+The two list formatters are ported — `RepeatableString` (multi-line) and
+`ColorList` (single comma-joined line), both with the empty-list void entry. The
+config formatter side now covers `Color`, `TerminalColor`, `BoldColor`,
+`WorkingDirectory`, `WindowPadding`, `BackgroundBlur`, `RepeatableString`, and
+`ColorList`. The next slices can port the remaining types' `formatEntry`
+(`Palette`, `Duration` — which needs its `format` unit decomposition —
+`SelectionWordChars` — which re-encodes codepoints to UTF-8 —
+`QuickTerminalSize`, the codepoint maps), then the generic field-dispatch
+`formatEntry`, continuing toward the full config formatter and loader.
