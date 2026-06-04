@@ -186,3 +186,59 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-102644-d439-prompt.md` (design)
 - Result: `logs/codex-review/20260604-102644-d439-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+The custom-shader-animation config enum and its animate decision are now live.
+
+- `roastty/src/config/mod.rs`:
+  `pub(crate) enum CustomShaderAnimation { False, True, Always }` (upstream
+  `CustomShaderAnimation`) and
+  `CustomShaderAnimation::should_animate(self, focused: bool) -> bool` — an
+  exhaustive `match` (`Always → true`, `True → focused`, `False → false`), the
+  extraction of upstream's `syncDrawTimer` `break :skip` condition.
+
+Test (in `config/mod.rs`): `custom_shader_animation_should_animate_truth_table`
+— the full 3×2 truth table (`Always → true/true`, `True → true/false`,
+`False → false/false`), the variants distinct, `Copy`/`Eq`.
+
+Gate results:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty` → 2926 passed, 0 failed (+1, no regressions).
+- `cargo build -p roastty` → no warnings.
+- No-`ghostty`-name gates (font + renderer + config +
+  `lib.rs`/header/`abi_harness.c`) clean; `git diff --check` clean.
+
+## Conclusion
+
+The config layer now carries `CustomShaderAnimation` and its animate decision —
+the third config slice in a row (after `FontShapingBreak` and
+`GraphemeWidthMethod`) to land its consumer logic alongside the type, here the
+bool the render thread's `syncDrawTimer` uses to keep the animation draw timer
+running. The `Config` struct / parsing and the render-thread call site (the
+`hasAnimations` gate and the `draw_active` toggle) stay deferred, as does the
+eventual `#[repr(C)]` if this config ever crosses roastty's C ABI. The
+config-type family — consistently pairing a config type with its behavior —
+remains a clean, gated way to advance the rewrite while the larger coupled
+subsystems stay deferred.
+
+## Completion Review
+
+Codex reviewed the completed implementation and result and **approved** with
+**no findings**. It confirmed faithfulness against the vendored upstream:
+`CustomShaderAnimation::{False, True, Always}` matches the `enum(c_int)`
+variants (`Config.zig:5244`); the deferred default `.true` (`Config.zig:3067`)
+is documented; `should_animate` exactly extracts the `syncDrawTimer` condition
+(`Thread.zig:303`, `Always → true`, `True → focused`, `False → false`, with
+`false` corresponding to falling through to stop the timer at `Thread.zig:313`);
+and a plain enum remains appropriate while internal. It judged the full 3×2
+truth-table test adequate. No public C ABI/header impact; nothing needed to
+change before the result commit.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-102848-r439-prompt.md` (result)
+- Result: `logs/codex-review/20260604-102848-r439-last-message.md` (result)

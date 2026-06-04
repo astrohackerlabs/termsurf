@@ -151,11 +151,37 @@ impl GraphemeWidthMethod {
     }
 }
 
+/// The `custom-shader-animation` config (upstream `CustomShaderAnimation`):
+/// whether custom-shader animations run. The `Config` default is `True`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CustomShaderAnimation {
+    /// Never animate.
+    False,
+    /// Animate only when the window is focused.
+    True,
+    /// Always animate, focused or not.
+    Always,
+}
+
+impl CustomShaderAnimation {
+    /// Whether the custom-shader animation draw timer should run, given the
+    /// window's focused state (upstream `Thread.zig`'s `syncDrawTimer` switch):
+    /// `Always` always animates, `True` animates only when `focused`, `False`
+    /// never animates.
+    pub(crate) fn should_animate(self, focused: bool) -> bool {
+        match self {
+            CustomShaderAnimation::Always => true,
+            CustomShaderAnimation::True => focused,
+            CustomShaderAnimation::False => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition,
-        FontShapingBreak, GraphemeWidthMethod,
+        CustomShaderAnimation, FontShapingBreak, GraphemeWidthMethod,
     };
 
     #[test]
@@ -244,5 +270,24 @@ mod tests {
         let m = GraphemeWidthMethod::Unicode;
         let copied = m;
         assert_eq!(m, copied);
+    }
+
+    #[test]
+    fn custom_shader_animation_should_animate_truth_table() {
+        // Always: animate regardless of focus.
+        assert!(CustomShaderAnimation::Always.should_animate(true));
+        assert!(CustomShaderAnimation::Always.should_animate(false));
+        // True: animate only when focused.
+        assert!(CustomShaderAnimation::True.should_animate(true));
+        assert!(!CustomShaderAnimation::True.should_animate(false));
+        // False: never animate.
+        assert!(!CustomShaderAnimation::False.should_animate(true));
+        assert!(!CustomShaderAnimation::False.should_animate(false));
+
+        assert_ne!(CustomShaderAnimation::Always, CustomShaderAnimation::True);
+        // `Copy` + `Eq`: a trivial round-trip.
+        let a = CustomShaderAnimation::Always;
+        let copied = a;
+        assert_eq!(a, copied);
     }
 }
