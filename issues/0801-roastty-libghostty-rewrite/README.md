@@ -1631,6 +1631,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 592: search ActiveSearch (active-area searcher)](592-search-active.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 593: search PageListSearch (history/scrollback searcher)](593-search-pagelist.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
