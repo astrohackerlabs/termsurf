@@ -1535,6 +1535,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 544: temp-path generation (os::file)](544-os-file-tmppath.md) —
   **Pass** · Claude/Codex/Codex
+- [Experiment 545: the RAII temporary directory (os::TempDir)](545-os-temp-dir.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
