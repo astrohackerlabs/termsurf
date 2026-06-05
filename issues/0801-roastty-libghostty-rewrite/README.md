@@ -1609,6 +1609,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 581: split tree split (insert a split node)](581-split-tree-split.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 582: split tree remove (delete a node, collapsing its parent split)](582-split-tree-remove.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
