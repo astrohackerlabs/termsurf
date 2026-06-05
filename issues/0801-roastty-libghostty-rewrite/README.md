@@ -1548,7 +1548,7 @@ are past the correctness-critical foundation.
 - [Experiment 550: thread QoS class (os::macos)](550-os-macos-qos.md) — **Pass**
   · Claude/Codex/Codex
 - [Experiment 551: tilde home expansion (os::homedir)](551-os-homedir-expand.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

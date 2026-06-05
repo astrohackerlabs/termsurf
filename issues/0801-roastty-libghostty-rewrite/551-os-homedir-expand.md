@@ -183,3 +183,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d551-prompt.md` (design)
 - Result: `logs/codex-review/20260604-d551-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`os::homedir` was opened with the pure, byte-faithful
+`expand_home(path, home_dir) -> Cow<OsStr>`: a path starting with `~/` is
+rewritten to `home_dir ++ path[1..]` (owned, `~` dropped / `/` kept, so `~/` ⇒ a
+trailing separator); any other path is returned unchanged (borrowed). The module
+is registered in `os/mod.rs`. Four tests: the `~/` and `~/Downloads/shader.glsl`
+expansions; the unchanged cases (`~`, `~abc/`, `/home/user`, `""`, all
+`Cow::Borrowed`); the expanded case being `Cow::Owned`; and a non-UTF-8
+`home_dir` (`b"/h\xff"`) preserved byte-for-byte.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3069 passed, 0 failed (four new tests; no
+  regressions, up from 3065).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + os/homedir.rs + os/mod.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings): the doc had `## Result` but no `## Conclusion` —
+fixed by adding the conclusion below. Codex confirmed the implementation matches
+upstream `expandHomeUnix` — only `~/` expands, `~` is dropped while `/` is kept,
+unchanged paths borrow and expanded paths own, and the `OsStr` / byte handling
+is faithful; deferring `home()` remains the right scope split, and the tests
+cover the upstream cases plus ownership and non-UTF-8 preservation.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r551-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r551-last-message.md` (result)
+
+## Conclusion
+
+`os::homedir::expand_home` — the `~/`-to-home tilde expansion — is faithfully
+ported from `os/homedir.zig` as a pure, byte-faithful `Cow<OsStr>` function
+parameterized over the resolved home directory, opening the `os::homedir`
+module. It is the expansion config path values (`~/.config`,
+`background-image = ~/pic.png`) need (wiring into the config loader deferred).
+The full `home()` resolver stays deferred — its macOS chain prefers
+`NSFileManager` (an objc binding) before the already-ported `os::passwd::get`,
+so faithfully ordering it needs that binding. The OS-utility frontier still has
+a few self-contained slices (`locale`, `i18n_locales`, `pthread_setname_np`).
+The objc/bundle-naming helpers and config `loadDefaultFiles` remain deferred
+pending roastty's naming decision; `background-image-opacity` stays
+float-blocked.
