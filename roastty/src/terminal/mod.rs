@@ -107,6 +107,9 @@ mod semantic_prompt;
 mod screen;
 
 #[allow(dead_code)]
+pub(crate) mod search;
+
+#[allow(dead_code)]
 pub(crate) mod sgr;
 
 #[allow(dead_code)]

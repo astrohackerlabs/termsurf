@@ -340,3 +340,73 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d587-prompt.md`
 - Result: `logs/codex-review/20260604-d587-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+A new `terminal::search` module landed (`search/mod.rs` declaring
+`sliding_window`; `search/sliding_window.rs`), declared
+`#[allow(dead_code)] pub(crate) mod search;` in `terminal/mod.rs`. It ports the
+`SlidingWindow` vocabulary and lifecycle: `Direction` (`Forward` / `Reverse`);
+`Meta` (`node` / `serial` / `cell_map`, `pub(in crate::terminal)` so it does not
+leak the `pub(super)` `Node`); the `SlidingWindow` struct (`data` / `meta` as
+`VecDeque`, `chunk_buf` as `Vec<Chunk>`, `data_offset` / `needle` / `direction`
+/ `overlap_buf`); `new` (copies the needle, reverses it for a reverse search,
+sizes `overlap_buf` to `needle.len() * 2`, starts both buffers empty); and
+`clear_and_retain_capacity` (clears `meta` and `data`, resetting `data_offset`,
+retaining capacity; clearing `meta` drops each `Meta`'s `cell_map`, subsuming
+upstream's per-meta `deinit`). The search algorithm is deferred.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3244 passed, 0 failed (six new tests; no regressions,
+  up from 3238).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/search +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The six new tests: `new` forward (needle `b"abc"`, `Forward`, empty data/meta,
+`overlap_buf` len `6`, `data_offset` `0`), `new` reverse (needle `b"cba"`,
+`overlap_buf` len `6`), `new` empty needle (empty needle, `overlap_buf` len
+`0`), `clear_and_retain_capacity` (push data + a `Meta` with a
+`NonNull::dangling()` node and a non-empty `cell_map` + `data_offset` = `1`,
+then clear empties both buffers and resets `data_offset`, capacities retained),
+`clear` leaves `chunk_buf` untouched, and `Direction` `Copy` / equality.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet in the saved file — added here). Codex confirmed the lifecycle slice is
+faithful: `Direction` maps correctly, `new` copies and reverses the needle only
+for a reverse search and sizes `overlap_buf` to `needle.len() * 2`, owned Rust
+fields cover upstream `deinit` via `Drop`, and `clear_and_retain_capacity`
+clears `meta` / `data` (dropping each `Meta.cell_map`), resets `data_offset`,
+retains buffer capacity, and leaves `chunk_buf` untouched; the `VecDeque`
+mapping remains sound for the future sliding-window operations, the `Meta`
+visibility fix avoids leaking the terminal-private `Node`, and the
+dangling-pointer tests are safe because nothing dereferences the node.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r587-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r587-last-message.md` (result)
+
+## Conclusion
+
+This experiment opens the terminal **search** subsystem — the last major
+unported terminal subsystem — with the `SlidingWindow` skeleton (the search
+core's vocabulary and lifecycle). The key adaptation: both upstream search
+`CircBuf`s become `VecDeque`, because roastty's `CircBuf` port is fixed-capacity
+and `Copy`-bound and cannot hold the growing data buffer nor the non-`Copy`
+`Meta`; `VecDeque` grows, holds non-`Copy` elements, retains capacity on
+`clear`, and exposes the two-slice `as_slices()` the later overlap matcher
+needs. A design-phase discovery: roastty already ports the **formatter** inline
+in `page_list.rs`, so the search subsystem's text-encoding dependency is already
+satisfied. The next slices build out the `SlidingWindow` search algorithm
+(`append` to encode a page node's text into `data` with a `cell_map`, then
+`next` / `highlight` with the cross-page overlap and prune logic and buffer
+growth), followed by the higher-level searchers (`active` / `pagelist` /
+`screen` / `viewport`) and the search `Thread`.
