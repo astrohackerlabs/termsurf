@@ -186,3 +186,52 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d553-prompt.md` (design)
 - Result: `logs/codex-review/20260604-d553-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`os::mach` was opened with `VMTag` (the 16 application-specific tags
+`240`–`255`) and `make` (`((self as u32) << 24) as i32` — the `VM_MAKE_TAG`
+macro). The module is registered in `os/mod.rs` (`cargo fmt` ordered `mach`
+before `macos`, accepted). Two tests, both driven by an `ALL` table of the 16
+(tag, value) pairs: the discriminants (`tag as u8 == value`), and `make`
+(`tag.make() == ((value as u32) << 24) as i32` for every tag, plus the boundary
+spot-checks `ApplicationSpecific1.make() == -268435456` and
+`ApplicationSpecific16.make() == ((255u32 << 24) as i32)`).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3073 passed, 0 failed (two new tests; no regressions,
+  up from 3071).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + os/mach.rs + os/mod.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings): the doc had `## Result` but no `## Conclusion` —
+fixed by adding the conclusion below. Codex confirmed the implementation matches
+upstream: all 16 tag values are exact, and `make()` correctly implements
+`VM_MAKE_TAG` by shifting the tag byte into the high byte and preserving the
+resulting bit pattern as `i32`; the table-driven tests are sound.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r553-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r553-last-message.md` (result)
+
+## Conclusion
+
+`os::mach::VMTag` + `make` — the macOS application-specific VM memory tags and
+the `VM_MAKE_TAG` value — are faithfully ported from `os/mach.zig`, opening the
+`os::mach` module. This is the reusable building block roastty will pass to a
+tagged `mmap` so its large allocations show up labeled in `vmmap` / Instruments
+(the `TaggedPageAllocator` that wires it into a Zig `Allocator` is deferred —
+that machinery doesn't map onto Rust's allocator model). The OS-utility frontier
+still has self-contained slices (`locale`, `i18n_locales`). The objc/bundle-id
+helpers, the `home()` resolver, and config `loadDefaultFiles` remain deferred
+pending roastty's naming decision; `background-image-opacity` stays
+float-blocked.
