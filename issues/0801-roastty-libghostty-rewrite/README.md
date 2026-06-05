@@ -1635,6 +1635,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 594: search ScreenSearch skeleton (state machine vocabulary + struct)](594-search-screen-skeleton.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 595: search ScreenSearch result accessors](595-search-screen-results.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
