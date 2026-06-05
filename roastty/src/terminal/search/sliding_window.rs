@@ -1,8 +1,8 @@
-//! The search sliding window (port of upstream `terminal/search/sliding_window.zig`). This first
-//! slice lands the vocabulary and lifecycle: the search `Direction`, the per-page `Meta` record,
-//! the `SlidingWindow` struct, its constructor, and `clear_and_retain_capacity`. The search
-//! algorithm itself (`next` / `append` / `highlight`, the overlap/prune logic, the integrity
-//! assertions, and buffer growth) is deferred to later slices.
+//! The search sliding window (port of upstream `terminal/search/sliding_window.zig`). So far it
+//! lands the vocabulary and lifecycle (the search `Direction`, the per-page `Meta` record, the
+//! `SlidingWindow` struct, its constructor, and `clear_and_retain_capacity`), plus `append` (encode
+//! a page node's text into the window with its cell map) and the `assert_integrity` invariant. The
+//! cross-page matcher (`next` / `highlight`, the overlap/prune logic) is deferred to later slices.
 
 use std::collections::VecDeque;
 use std::ptr::NonNull;
@@ -80,10 +80,66 @@ impl SlidingWindow {
         self.data.clear();
         self.data_offset = 0;
     }
+
+    /// Encode `node`'s page text into the window, recording its `Meta` (upstream `append`). Returns
+    /// the number of content bytes added (0 if the page contributes nothing).
+    ///
+    /// # Safety
+    /// `node` must point to a live `Node`. The window dereferences it here and **stores the pointer
+    /// in `meta`** for later use by the matcher (`next` / `highlight`), so the caller must keep the
+    /// node valid for as long as it remains in the window — in particular, the caller must not
+    /// mutate or drop the owning `PageList` in any way that reallocates or removes the node while
+    /// the window may still reference it (clear the window first). The window does not own pages.
+    pub(in crate::terminal) unsafe fn append(&mut self, node: NonNull<Node>) -> usize {
+        let node_ref = unsafe { node.as_ref() };
+        let (text, mut cell_map) = node_ref.search_encode();
+        let mut bytes = text.into_bytes();
+
+        // Trailing newline if the last row isn't soft-wrapped (added before the empty check, so an
+        // unwrapped empty page still contributes one '\n').
+        if !node_ref.last_row_wrapped() {
+            let last = cell_map.last().copied().unwrap_or(Coordinate::new(0, 0));
+            bytes.push(b'\n');
+            cell_map.push(last);
+        }
+
+        if bytes.is_empty() {
+            self.assert_integrity();
+            return 0;
+        }
+
+        // Reverse the encoding for a reverse search.
+        if self.direction == Direction::Reverse {
+            bytes.reverse();
+            cell_map.reverse();
+        }
+
+        let written_len = bytes.len();
+        self.data.extend(bytes);
+        self.meta.push_back(Meta {
+            node,
+            serial: node_ref.serial(),
+            cell_map,
+        });
+
+        self.assert_integrity();
+        written_len
+    }
+
+    /// Debug-only integrity check (upstream `assertIntegrity`): the `data` length equals the sum of
+    /// every meta's `cell_map` length, and `data_offset` is in bounds.
+    fn assert_integrity(&self) {
+        debug_assert_eq!(
+            self.meta.iter().map(|m| m.cell_map.len()).sum::<usize>(),
+            self.data.len(),
+        );
+        debug_assert!(self.data.is_empty() || self.data_offset < self.data.len());
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::page_list::PageList;
     use super::*;
 
     #[test]
@@ -159,5 +215,80 @@ mod tests {
         let copy = d;
         assert_eq!(d, copy);
         assert_ne!(Direction::Forward, Direction::Reverse);
+    }
+
+    #[test]
+    fn append_forward_encodes_page_with_trailing_newline() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["abc"]);
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Forward, b"abc");
+        // SAFETY: `list` outlives `w`, and the node pointer is not invalidated below.
+        let added = unsafe { w.append(node) };
+
+        assert_eq!(added, 4); // "abc" + trailing '\n'
+        assert_eq!(w.data.iter().copied().collect::<Vec<u8>>(), b"abc\n");
+        assert_eq!(w.meta.len(), 1);
+        assert_eq!(w.meta[0].cell_map.len(), 4);
+        assert_eq!(w.meta[0].serial, unsafe { node.as_ref() }.serial());
+        assert_eq!(w.data_offset, 0);
+    }
+
+    #[test]
+    fn append_reverse_reverses_bytes_and_cell_map() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["abc"]);
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Reverse, b"abc");
+        // SAFETY: `list` outlives `w`, and the node pointer is not invalidated below.
+        let added = unsafe { w.append(node) };
+
+        assert_eq!(added, 4);
+        // The forward encoding "abc\n" is reversed byte-wise.
+        assert_eq!(w.data.iter().copied().collect::<Vec<u8>>(), b"\ncba");
+        // The cell map is reversed in lockstep. Forward is a@(0,0), b@(1,0), c@(2,0), and the '\n'
+        // maps to the previous coordinate (2,0); reversed, that is (2,0),(2,0),(1,0),(0,0).
+        assert_eq!(
+            w.meta[0].cell_map,
+            vec![
+                Coordinate::new(2, 0),
+                Coordinate::new(2, 0),
+                Coordinate::new(1, 0),
+                Coordinate::new(0, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn append_empty_page_adds_only_trailing_newline() {
+        let list = PageList::init(80, 24, None).unwrap();
+        // No text set: the page is blank, so the encoded text is empty, but the last row is not
+        // soft-wrapped, so a single '\n' is still appended (before the empty check).
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Forward, b"x");
+        // SAFETY: `list` outlives `w`, and the node pointer is not invalidated below.
+        let added = unsafe { w.append(node) };
+
+        assert_eq!(added, 1);
+        assert_eq!(w.data.iter().copied().collect::<Vec<u8>>(), b"\n");
+        assert_eq!(w.meta[0].cell_map, vec![Coordinate::new(0, 0)]);
+    }
+
+    #[test]
+    fn append_maintains_data_meta_length_invariant() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["hello"]);
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Forward, b"hello");
+        // SAFETY: `list` outlives `w`, and the node pointer is not invalidated below.
+        // (`append` also calls `assert_integrity` internally; this re-checks explicitly.)
+        unsafe { w.append(node) };
+
+        let summed: usize = w.meta.iter().map(|m| m.cell_map.len()).sum();
+        assert_eq!(summed, w.data.len());
     }
 }

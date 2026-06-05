@@ -1624,7 +1624,7 @@ are past the correctness-critical foundation.
 - [Experiment 588: search page encoder (Node plain-text + cell map)](588-search-page-encoder.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 589: search SlidingWindow append (+ integrity)](589-search-sliding-window-append.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

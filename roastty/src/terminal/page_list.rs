@@ -69,6 +69,21 @@ pub(super) struct Node {
 }
 
 impl Node {
+    /// This page's serial (upstream `node.serial`).
+    pub(in crate::terminal) fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// Whether the page's last row is soft-wrapped (upstream
+    /// `node.data.getRow(size.rows - 1).wrap`). Search uses this to decide the trailing newline.
+    pub(in crate::terminal) fn last_row_wrapped(&self) -> bool {
+        let rows = self.page.size_rows();
+        if rows == 0 {
+            return false;
+        }
+        self.page.get_row(rows as usize - 1).wrap()
+    }
+
     /// Encode this page's full contents as plain, soft-unwrapped text with a per-byte cell map
     /// (upstream `PageFormatter` with `emit: plain, unwrap: true`, plus its `point_map`). Used by
     /// the search subsystem (`SlidingWindow::append`). Each output byte gets one page-relative
@@ -2066,7 +2081,7 @@ impl PageList {
         }) || self.viewport_pin.node == node
     }
 
-    fn first_node_ptr(&self) -> NonNull<Node> {
+    pub(in crate::terminal) fn first_node_ptr(&self) -> NonNull<Node> {
         NonNull::from(
             self.pages
                 .first()

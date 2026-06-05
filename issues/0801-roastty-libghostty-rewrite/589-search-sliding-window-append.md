@@ -109,7 +109,7 @@ impl SlidingWindow {
     /// node valid for as long as it remains in the window — in particular, the caller must not
     /// mutate or drop the owning `PageList` in any way that reallocates or removes the node while
     /// the window may still reference it (clear the window first). The window does not own pages.
-    pub(crate) unsafe fn append(&mut self, node: NonNull<Node>) -> usize {
+    pub(in crate::terminal) unsafe fn append(&mut self, node: NonNull<Node>) -> usize {
         let node_ref = unsafe { node.as_ref() };
         let (text, mut cell_map) = node_ref.search_encode();
         let mut bytes = text.into_bytes();
@@ -304,3 +304,79 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d589-prompt.md`
 - Result: `logs/codex-review/20260604-d589-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`terminal::search::sliding_window` gained `SlidingWindow::append` and
+`assert_integrity`; `page_list.rs` gained `Node::serial` and
+`Node::last_row_wrapped`, and `PageList::first_node_ptr` was promoted to
+`pub(in crate::terminal)`. `append` reads the node via `as_ref()`, encodes its
+page with `search_encode`, appends a trailing `\n` (with a cell-map entry — the
+last coordinate, or `(0, 0)`) when the last row isn't soft-wrapped, returns `0`
+if the result is empty, reverses the bytes and cell map for a reverse search,
+pushes the bytes to `data` and the `Meta` (node, serial, cell map) to `meta`,
+and returns the content-byte count. `assert_integrity` debug-checks that
+`data.len()` equals the summed cell-map lengths and that `data_offset` is in
+bounds.
+
+One deviation from the plan, validated by the result review: `append` is
+`pub(in crate::terminal) unsafe fn`, not the `pub(crate)` the plan wrote —
+because the signature names `Node` (`pub(in crate::terminal)`), a `pub(crate)`
+fn would trip the `private_interfaces` warning (the no-warnings gate). Codex
+confirmed `pub(in crate::terminal)` is the right call (it matches `Node`'s
+visibility boundary without exposing search internals more broadly).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3252 passed, 0 failed (four new tests; no
+  regressions, up from 3248).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/search + page_list.rs
+  - lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The four new tests (each `unsafe { w.append(node) }` with a `first_node_ptr`,
+the `PageList` outliving the window): a forward append (`["abc"]` → `4`,
+`data == b"abc\n"`, one meta, `cell_map.len() == 4`, matching serial,
+`data_offset == 0`), a reverse append (`data == b"\ncba"` with the cell map
+reversed to `(2,0),(2,0),(1,0),(0,0)`), an empty/blank page (`→ 1`,
+`data == b"\n"`, `cell_map == [(0, 0)]` — the newline-before-empty-check order
+plus the `unwrap_or` default), and the data/meta length invariant.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+findings** (one Optional — strengthen the reverse test to assert the reversed
+`cell_map` contents, not just its length — adopted; one Nit — the `## Result` /
+`## Conclusion` sections were not yet saved — added here). Codex confirmed the
+port is faithful: `append` builds `Meta` with the node pointer, serial, and
+per-byte cell map; adds the trailing newline before the empty check; preserves
+the empty-to-`0` path only for empty soft-wrapped pages; reverses raw bytes and
+cell map together for a reverse search; returns the byte count including the
+newline; and keeps the aggregate integrity check debug-only. Codex also
+confirmed the `pub(in crate::terminal)` visibility deviation is the right call.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r589-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r589-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports `SlidingWindow::append` — the step that feeds the search
+window. A page node's text is encoded (via `Node::search_encode`) into the
+window's `data` with a per-byte `cell_map`, recorded in a `Meta` (node pointer,
+serial, cell map); a trailing newline is appended for non-soft-wrapped last rows
+(before the empty check, so an unwrapped blank page still contributes one `\n`),
+and both bytes and cell map are reversed for a reverse search. `append` is an
+`unsafe fn` (it dereferences and stores a `NonNull<Node>` the window does not
+own), and `assert_integrity` debug-checks the data/cell-map invariant. The next
+slice is the matcher: `SlidingWindow::next` (scan the window's data — across the
+two `VecDeque` slices and the `overlap_buf` for cross-page matches — for the
+needle, prune consumed pages while keeping `needle.len() - 1` bytes for future
+overlaps) and `highlight` (turn a match's byte range into a `FlattenedHighlight`
+via the `chunk_buf` and the cell map). After the matcher come the higher-level
+searchers (`active` / `pagelist` / `screen` / `viewport`) and the search
+`Thread`.
