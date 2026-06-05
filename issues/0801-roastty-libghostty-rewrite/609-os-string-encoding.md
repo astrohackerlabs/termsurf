@@ -235,3 +235,50 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260605-d609-prompt.md`
 - Result: `logs/codex-review/20260605-d609-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+Implemented `roastty/src/os/string_encoding.rs` (registered in `os/mod.rs`),
+porting all of upstream `os/string_encoding.zig`: `printf_q_decode`,
+`url_percent_decode`, `url_percent_encode`, and the `hex` / `upper_hex` /
+`is_valid_char` helpers + `DecodeError`. Output appends to a `&mut Vec<u8>` (the
+Zig `*std.Io.Writer`), the infallible writer-error arm drops, and
+`url_percent_encode` inlines `std.Uri.Component.percentEncode` (uppercase `%XX`)
+so no URI/URL crate is pulled in. Fully self-contained — no `Terminal`, no
+`unsafe`, no new dependencies.
+
+Twenty-one tests mirror the upstream corpus (every `printf %q` escape and quote
+case incl. all errors; every byte `0..=255` percent-round-trip in both hex
+cases; the percent-decode error cases; the encode table + an encode→decode
+round-trip). Gates: `cargo fmt --check` clean, `cargo build -p roastty` no
+warnings, `cargo test -p roastty` **3355 passed / 0 failed** (3334 → 3355, +21),
+no-ghostty grep clean, `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **APPROVED** it with **no Required,
+Optional, or Nit findings** (beyond recording this result), confirming the port
+is faithful byte-for-byte: the `$'…'` / `'…'` stripping guards and slice bounds
+(incl. unterminated/lone-quote errors); the escape handling (literal, control,
+trailing-backslash, invalid); the `%` bound check and hex validation in
+`url_percent_decode`; uppercase-hex emission and valid-char pass-through in
+`url_percent_encode`; the `is_valid_char` printable-ASCII model; and the
+partial-output-on-error behavior. The test coverage includes the upstream corpus
+plus useful supersets.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260605-r609-prompt.md`
+- Result: `logs/codex-review/20260605-r609-last-message.md`
+
+## Conclusion
+
+`os/string_encoding` is fully ported — a clean, dependency-free slice taken
+while the search subsystem's last piece (the outer libxev `Thread`) stays
+blocked. roastty's `os/` still lacks several upstream modules (`locale`,
+`kernel_info`, `resourcesdir`, `args`, …) and `datastruct/` lacks `comparison` /
+`array_list_collection`; these self-contained, unblocked modules are the natural
+next slices for Issue 801 while the libxev, regex/oniguruma, and URI (`std.Uri`)
+dependency boundaries remain.

@@ -11,4 +11,5 @@ pub(crate) mod passwd;
 pub(crate) mod path;
 pub(crate) mod pipe;
 pub(crate) mod shell;
+pub(crate) mod string_encoding;
 pub(crate) mod temp_dir;
