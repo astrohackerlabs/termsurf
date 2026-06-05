@@ -257,3 +257,54 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260605-d618-prompt.md`
 - Result: `logs/codex-review/20260605-d618-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+Implemented `roastty/src/os/uri.rs` (registered `pub(crate) mod uri;`),
+hand-porting the RFC-3986 generic URI parser `os/uri` builds on: `Uri<'a>`
+(borrowed verbatim component slices),
+`ParseError { InvalidFormat, InvalidPort }`, `parse` / `parse_after_scheme`
+(fragment → query → authority/path), and `parse_authority` (userinfo via
+`rfind('@')`; host/port via the greedy last `:` — the `:` after `]` for
+bracketed IPv6 — with digit-only/overflow → `InvalidPort` and empty port →
+`None`). The Required completion-review fix is in: the port must be all ASCII
+digits before `u16::parse` (rejecting the leading `+` Rust would otherwise
+accept).
+
+Thirteen tests cover the corpus: basic http, with-port, no-authority (mailto),
+userinfo, IPv6, the greedy MAC-like split (→ Exp 619 repair target), invalid /
+sign / overflow ports → `InvalidPort`, missing scheme → `InvalidFormat`, empty
+authority (`file:///path`), and the empty/non-empty path raw-start pointer (for
+Exp 619's `raw_path`). Gates: `cargo fmt --check` clean,
+`cargo build -p roastty` no warnings, `cargo test -p roastty` **3407 passed / 0
+failed** (3394 → 3407, +13), no-ghostty grep clean, `git diff --check` clean.
+
+## Completion Review
+
+Codex's first completion review raised **one Required** finding — `u16::parse`
+accepts a leading `+`, but an RFC-3986 port is digits-only (`https://h:+80/`
+should be `InvalidPort`). Fixed with a digit-only guard + a
+`parse_port_rejects_sign` test, and the adopted non-empty raw-start test. Codex
+**re-confirmed APPROVED**, noting the parser matches the observable `std.Uri`
+behavior `os/uri` needs (greedy last-colon split, IPv6 brackets,
+digit-only/overflow `InvalidPort`, verbatim borrowed slices, correct component
+boundaries).
+
+Review artifacts:
+
+- Design prompt/result:
+  `logs/codex-review/20260605-d618-{prompt,last-message}.md`
+- Result prompt/result:
+  `logs/codex-review/20260605-r618-{prompt,last-message}.md`
+- Re-confirmation: `logs/codex-review/20260605-r618b-{prompt,last-message}.md`
+
+## Conclusion
+
+The RFC-3986 URI parser foundation is in place (per the chosen hand-port
+direction). **Exp 619** layers `os/uri`'s options on top: the `mac_address`
+fallback (re-parse a MAC-host URI on `InvalidPort`) + repair heuristic (the
+14-char/4-colon/port-≤99 case), the `raw_path` option (the path slice's offset →
+`text[path_start..]`, clearing query/fragment), and `is_valid_mac_address` —
+completing the URI area. Issue 801 stays open and broad.
