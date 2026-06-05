@@ -296,3 +296,60 @@ Review artifacts:
   `logs/codex-review/20260604-d542b-prompt.md` (design re-review)
 - Result: `logs/codex-review/20260604-d542-last-message.md` (design),
   `logs/codex-review/20260604-d542b-last-message.md` (design re-review)
+
+## Result
+
+**Result:** Pass
+
+`os::path` was added with `expand` (the `/`-passthrough wrapper reading env
+`PATH`), `expand_in(cmd, path_var)` (the search core: skip empty components,
+`PATH_MAX`-bound `PathTooLong`, raw `dir + "/" + cmd` construction via
+`OsString::push`, `File::open` open-then-stat with `NotFound` skip /
+`PermissionDenied` accumulated / other errors propagated, non-directory +
+`mode & 0o111` match, `seen_eacces` ⇒ `AccessDenied` else `None`),
+`is_executable`, and `ExpandError`. The module is registered in `os/mod.rs`.
+Five tests: the three upstream cases (`uname` found, missing ⇒ `None`, `foo/env`
+passthrough), plus two hermetic temp-dir tests locking the review fixes — empty
+`PATH` components skipped (`:{tmp}:` still finds the temp executable) and the
+trailing-slash entry preserving a `//` in the result path.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3043 passed, 0 failed (five new tests; no
+  regressions, up from 3038).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + os/path.rs + os/mod.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings): the doc had `## Result` but no `## Conclusion` —
+fixed by adding the conclusion below. Codex confirmed the implementation matches
+the approved design and upstream `path.zig`: both review fixes are present
+(empty `PATH` components skipped to match `tokenizeScalar`; candidate paths
+built as raw `dir + "/" + cmd` via `OsString::push`, preserving `//`), and the
+rest is faithful — slash passthrough does no filesystem check, `File::open`
+preserves the read-access behavior, `PermissionDenied` is delayed via
+`seen_eacces`, `NotFound` skips, `metadata` / `mode & 0o111` matches executable
+non-directories, and `PATH_MAX` is enforced before opening. The tests adequately
+cover the upstream cases plus the two edge cases.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r542-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r542-last-message.md` (result)
+
+## Conclusion
+
+`os::path::expand` (the `which`-style PATH executable search) is faithfully
+ported, adding to the `os` module opened in Experiment 541. The Codex design
+review caught two real faithfulness gaps (empty-component skipping and raw `//`
+construction) that the `std::env::split_paths` / `PathBuf::join` conveniences
+would have silently changed — fixed and locked down with hermetic temp-dir
+tests. Wiring `expand` into the eventual termio / shell-launch path stays
+deferred (no termio in roastty yet). The OS-utility frontier remains rich —
+`pipe`, `file`, `env`, `homedir`, `passwd`, `xdg`, etc. are each a natural next
+slice. The config `loadDefaultFiles` stays deferred pending roastty's naming
+decision; `background-image-opacity` stays float-blocked.

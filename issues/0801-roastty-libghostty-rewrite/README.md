@@ -1530,7 +1530,7 @@ are past the correctness-critical foundation.
 - [Experiment 541: the hostname validator (first os/ slice)](541-os-hostname.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 542: PATH executable search (os::path::expand)](542-os-path-expand.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
