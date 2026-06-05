@@ -4,8 +4,8 @@
 //! `dimensions`) and `Rc<V>`-based view ref-counting, the leaf `iter`ator, `zoom`, and the `Goto`
 //! enum, the `Spatial` container's normalization (`spatial` / `fillSpatialSlots`), and the full
 //! navigation (the spatial `nearest` / `nearest_wrapped`, the in-order `previous` / `next`, and the
-//! `goto` dispatch), and the `split` tree-shaping operation. Still deferred: the remaining
-//! tree-shaping operations (`remove` / `equalize` / `resize`) and the formatters.
+//! `goto` dispatch), and the `split` / `remove` tree-shaping operations. Still deferred: the
+//! remaining tree-shaping operations (`equalize` / `resize`) and the formatters.
 
 use half::f16;
 use std::rc::Rc;
@@ -382,6 +382,102 @@ impl<V> SplitTree<V> {
             nodes,
             zoomed: None, // split always resets zoom
         })
+    }
+
+    /// Build a new tree with the node `at` removed, collapsing its parent split into the surviving
+    /// sibling (upstream `remove`). Removing the root yields the empty tree. Shares views with
+    /// `self` (ref-counted); the zoomed node migrates to its new index (or is dropped if removed).
+    pub(crate) fn remove(&self, at: Handle) -> SplitTree<V> {
+        assert!(at.idx() < self.nodes.len(), "remove handle out of range");
+        if at == Handle::ROOT {
+            return SplitTree::empty();
+        }
+
+        let count = self.count_after_removal(Handle::ROOT, at);
+        let mut new_nodes: Vec<Option<Node<V>>> = (0..count).map(|_| None).collect();
+        let mut new_zoomed: Option<Handle> = None;
+        let written = self.remove_node(&mut new_nodes, &mut new_zoomed, 0, Handle::ROOT, at);
+        debug_assert_eq!(written, count);
+
+        let nodes = new_nodes
+            .into_iter()
+            .map(|n| n.expect("every slot written"))
+            .collect();
+        SplitTree {
+            nodes,
+            zoomed: new_zoomed,
+        }
+    }
+
+    /// The node count of the tree after removing `target` (upstream `countAfterRemoval`, without the
+    /// vestigial `acc`).
+    fn count_after_removal(&self, current: Handle, target: Handle) -> usize {
+        match &self.nodes[current.idx()] {
+            Node::Leaf(_) => 1,
+            Node::Split(s) => {
+                if s.left == target {
+                    self.count_after_removal(s.right, target)
+                } else if s.right == target {
+                    self.count_after_removal(s.left, target)
+                } else {
+                    self.count_after_removal(s.left, target)
+                        + self.count_after_removal(s.right, target)
+                        + 1
+                }
+            }
+        }
+    }
+
+    /// Copy the subtree at `current` (with `target` removed) into `new_nodes` starting at
+    /// `new_offset`, returning the number of nodes written (upstream `removeNode`).
+    fn remove_node(
+        &self,
+        new_nodes: &mut [Option<Node<V>>],
+        new_zoomed: &mut Option<Handle>,
+        new_offset: usize,
+        current: Handle,
+        target: Handle,
+    ) -> usize {
+        assert!(current != target);
+
+        // Migrate a zoomed node to its new index.
+        if self.zoomed == Some(current) {
+            *new_zoomed = Some(Handle::from_index(new_offset));
+        }
+
+        match &self.nodes[current.idx()] {
+            Node::Leaf(view) => {
+                new_nodes[new_offset] = Some(Node::Leaf(Rc::clone(view)));
+                1
+            }
+            Node::Split(s) => {
+                let s = *s;
+                // If a child is the target, drop this split and keep only the other child.
+                if s.left == target {
+                    return self.remove_node(new_nodes, new_zoomed, new_offset, s.right, target);
+                }
+                if s.right == target {
+                    return self.remove_node(new_nodes, new_zoomed, new_offset, s.left, target);
+                }
+                // Keep the split: copy its children (filling the slots after `new_offset`), then
+                // write the split node itself into `new_offset` with the children's new offsets.
+                let left = self.remove_node(new_nodes, new_zoomed, new_offset + 1, s.left, target);
+                let right = self.remove_node(
+                    new_nodes,
+                    new_zoomed,
+                    new_offset + left + 1,
+                    s.right,
+                    target,
+                );
+                new_nodes[new_offset] = Some(Node::Split(Split {
+                    layout: s.layout,
+                    ratio: s.ratio,
+                    left: Handle::from_index(new_offset + 1),
+                    right: Handle::from_index(new_offset + 1 + left),
+                }));
+                left + right + 1
+            }
+        }
     }
 
     /// The in-order previous view of `from`, or `None` if it is the first (upstream `previous`).
@@ -1482,6 +1578,131 @@ mod tests {
         drop(tree);
         assert_eq!(Rc::strong_count(&a), 2);
         assert_eq!(Rc::strong_count(&b), 2);
+    }
+
+    /// A two-leaf horizontal split of `a` and `b` (root@0, a@1, b@2).
+    fn two_leaf() -> SplitTree<&'static str> {
+        SplitTree {
+            nodes: vec![
+                Node::Split(split_ratio(Layout::Horizontal, 0.5, 1, 2)),
+                Node::Leaf(Rc::new("a")),
+                Node::Leaf(Rc::new("b")),
+            ],
+            zoomed: None,
+        }
+    }
+
+    /// A three-leaf tree: root H split of a vertical `a|b` column and leaf `c`
+    /// (root@0, col@1, a@2, b@3, c@4).
+    fn three_leaf() -> SplitTree<&'static str> {
+        SplitTree {
+            nodes: vec![
+                Node::Split(split_ratio(Layout::Horizontal, 0.5, 1, 4)),
+                Node::Split(split_ratio(Layout::Vertical, 0.5, 2, 3)),
+                Node::Leaf(Rc::new("a")),
+                Node::Leaf(Rc::new("b")),
+                Node::Leaf(Rc::new("c")),
+            ],
+            zoomed: None,
+        }
+    }
+
+    #[test]
+    fn remove_leaf_from_two_leaf_split_collapses() {
+        let tree = two_leaf();
+        // Remove `a` (handle 1): the split collapses to just `b`.
+        let result = tree.remove(Handle::from_index(1));
+        assert!(!result.is_split());
+        assert_eq!(collect_views(&result), vec![(0, "b")]);
+    }
+
+    #[test]
+    fn remove_leaf_from_three_leaf_tree() {
+        let tree = three_leaf();
+        // Remove `a` (handle 2): the `a|b` column collapses to `b`; root becomes H(b, c).
+        let result = tree.remove(Handle::from_index(2));
+        assert!(result.is_split());
+        assert_eq!(collect_views(&result), vec![(1, "b"), (2, "c")]);
+        assert_eq!(
+            result.dimensions(Handle::ROOT),
+            Dimensions {
+                width: 2,
+                height: 1
+            }
+        );
+    }
+
+    #[test]
+    fn remove_root_yields_empty() {
+        let tree = two_leaf();
+        let result = tree.remove(Handle::ROOT);
+        assert!(result.is_empty());
+    }
+
+    /// The view at a leaf handle (test helper; reads the node arena directly).
+    fn view_at<V: Copy>(tree: &SplitTree<V>, handle: Handle) -> V {
+        match &tree.nodes[handle.idx()] {
+            Node::Leaf(v) => **v,
+            Node::Split(_) => panic!("not a leaf"),
+        }
+    }
+
+    #[test]
+    fn remove_migrates_a_surviving_zoom() {
+        let mut tree = three_leaf();
+        tree.zoom(Some(Handle::from_index(4))); // zoom `c`
+                                                // Remove `a` (handle 2): `c` survives, relocating to handle 2.
+        let result = tree.remove(Handle::from_index(2));
+        assert_eq!(result.zoomed(), Some(Handle::from_index(2)));
+        assert_eq!(view_at(&result, result.zoomed().unwrap()), "c");
+    }
+
+    #[test]
+    fn remove_drops_zoom_when_the_zoomed_node_is_removed() {
+        let mut tree = three_leaf();
+        tree.zoom(Some(Handle::from_index(2))); // zoom `a`
+        let result = tree.remove(Handle::from_index(2)); // remove `a`
+        assert_eq!(result.zoomed(), None);
+    }
+
+    #[test]
+    fn remove_migrates_zoom_on_a_collapsed_parent_split() {
+        let mut tree = three_leaf();
+        tree.zoom(Some(Handle::from_index(1))); // zoom the `a|b` column (which collapses)
+                                                // Remove `a`: the column collapses to `b`; the zoom migrates to `b`'s new handle.
+        let result = tree.remove(Handle::from_index(2));
+        assert_eq!(result.zoomed(), Some(Handle::from_index(1)));
+        assert_eq!(view_at(&result, result.zoomed().unwrap()), "b");
+    }
+
+    #[test]
+    fn remove_ref_counts_are_immutable_on_self() {
+        let a = Rc::new("a");
+        let b = Rc::new("b");
+        let tree = SplitTree {
+            nodes: vec![
+                Node::Split(split_ratio(Layout::Horizontal, 0.5, 1, 2)),
+                Node::Leaf(Rc::clone(&a)),
+                Node::Leaf(Rc::clone(&b)),
+            ],
+            zoomed: None,
+        };
+        // Each view: local Rc + the tree's leaf.
+        assert_eq!(Rc::strong_count(&a), 2);
+        assert_eq!(Rc::strong_count(&b), 2);
+
+        // Remove `a` (handle 1) → new tree holds only `b`.
+        let result = tree.remove(Handle::from_index(1));
+        // `remove` is immutable: the surviving `b` gains a ref; the removed `a` is unchanged.
+        assert_eq!(Rc::strong_count(&b), 3);
+        assert_eq!(Rc::strong_count(&a), 2);
+
+        // Dropping the old tree releases its references (including the removed `a`).
+        drop(tree);
+        assert_eq!(Rc::strong_count(&a), 1);
+        assert_eq!(Rc::strong_count(&b), 2);
+        drop(result);
+        assert_eq!(Rc::strong_count(&b), 1);
     }
 
     #[test]

@@ -290,3 +290,67 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d582-prompt.md`
 - Result: `logs/codex-review/20260604-d582-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`terminal::split_tree` gained `SplitTree::remove`, `count_after_removal`, and
+`remove_node`. `remove` returns the empty tree for the root; otherwise it sizes
+a `Vec<Option<Node<V>>>` to the post-removal count, writes the compacted nodes
+by index (collapsing a split whose child is the target into the surviving
+sibling, children copied before the parent), migrates the zoom (to the surviving
+node's new index, or drops it if the zoomed node was removed), and unwraps into
+the new arena — `Rc::clone` at copy time supplying the view ref-counting. The
+module doc comment was updated to mark `remove` landed.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3213 passed, 0 failed (seven new tests; no
+  regressions, up from 3206).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/split_tree.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The seven new tests: collapsing a 2-leaf split to its survivor, removing a leaf
+from a 3-leaf tree (`H(b@1, c@2)`, `{2,1}`), root removal → empty, zoom
+migration on a surviving node, zoom dropped when the zoomed node is removed,
+zoom migration when the **collapsed parent split** is zoomed (→ the surviving
+sibling), and the immutable ref-count behavior (a survivor `2 → 3` on `remove`;
+the removed view unchanged; dropping the old tree then releases the removed
+view).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet in the saved file — added here). Codex confirmed the implementation
+matches upstream (root removal → empty, the compacted count, collapsing a parent
+split when either child is the target, surviving subtrees written into
+contiguous offsets, zoom migrated before collapse and dropped when the target
+itself is removed), that the `Rc::clone` timing is faithful to the deferred
+ref-all (survivors gain one reference in the new immutable tree, removed views
+gain none, and the old tree is untouched), and that the collapsed-parent zoom
+and immutable-refcount tests cover the important edge cases.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r582-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r582-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports `remove` — the tenth split_tree slice and the inverse of
+`split`. `remove` builds a new compacted immutable tree with a node deleted, its
+parent split collapsed into the surviving sibling, the zoom migrated, and views
+ref-counted via `Rc::clone` — mirroring `split`'s construction style (pre-sized
+arena, contiguous writes, `Rc`-based view lifecycle). With `split` and `remove`
+both ported, the remaining split_tree work is the **`f16`-ratio rebalancers**
+(`equalize`, which sets each split's ratio from its children's relative leaf
+weight, and `resize`, which nudges a split's divider) and the **formatters**
+(`formatText` / `formatDiagram`). The other remaining big-ticket subsystem is
+the terminal **search subsystem** (coupled to `PageList` / `Pin` / `Screen` /
+`Selection` / `PageFormatter`); the dependency-blocked helpers persist
+(regex/oniguruma for `Link::oniRegex`, a URI parser for `os/uri`, the
+config-directory naming decision for `file_load` / `edit` / `loadDefaultFiles`).
