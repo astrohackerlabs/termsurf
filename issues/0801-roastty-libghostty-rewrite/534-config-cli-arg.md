@@ -155,3 +155,48 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-192701-d534-prompt.md` (design)
 - Result: `logs/codex-review/20260604-192701-d534-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`config::loader::parse_cli_arg` was added — the per-arg extraction of
+`cli.args.parse`: require `--`, strip it, split on the first `=` (preserving an
+empty value), and treat a no-`=` arg as a bare flag; a non-`--` arg yields
+`None` (the invalid-field diagnostic is the deferred driver's job). The new test
+`parse_cli_arg_extracts_flag_key_value` covers the `--key=value` / `--key`
+forms, the first-`=` split (`--key=a=b`), an empty value, bare `--`, and the
+non-flag args.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3024 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream's per-arg extraction — require
+`--`, strip it, split on the first `=`, preserve empty values, and treat no `=`
+as a bare flag; the edge-case tests cover the important behavior (`--key=a=b`,
+`--key=`, bare `--`, non-flag args); the deferred multi-arg diagnostic driver
+boundary is clean; gates are passing. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-192823-r534-prompt.md` (result)
+- Result: `logs/codex-review/20260604-192823-r534-last-message.md` (result)
+
+## Conclusion
+
+Both config-source per-item parsers now exist — `parse_config_line` (a
+config-file line) and `parse_cli_arg` (a CLI argument) — each producing a
+`(key, Option<value>)` pair for `Config::set`. The remaining config work is the
+multi-arg **CLI driver** (`Config::set_cli_args` — iterate args, `parse_cli_arg`
+→ `Config::set`, recording an "invalid field" diagnostic for a non-flag arg) and
+the **`loadDefaultFiles` orchestration** (pending roastty's config naming
+decision). `background-image-opacity` stays float-blocked. After the config
+subsystem, the entire non-config rewrite remains.

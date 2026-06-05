@@ -102,6 +102,20 @@ pub(crate) fn parse_config_line(line: &str) -> Option<(&str, Option<&str>)> {
     }
 }
 
+/// Parse one CLI argument into a `(key, value)` config pair (upstream
+/// `cli.args.parse`'s per-arg logic). A `--key=value` argument yields
+/// `(key, Some(value))` and a `--key` argument yields `(key, None)`; the first `=`
+/// splits the key from the value. A non-`--` argument is not a config flag and yields
+/// `None` (upstream records an "invalid field" diagnostic). roastty does not support
+/// positional arguments or space-separated values.
+pub(crate) fn parse_cli_arg(arg: &str) -> Option<(&str, Option<&str>)> {
+    let key = arg.strip_prefix("--")?;
+    match key.find('=') {
+        Some(idx) => Some((&key[..idx], Some(&key[idx + 1..]))),
+        None => Some((key, None)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +179,28 @@ mod tests {
         );
         // Neither set is `None` (upstream `NoHomeDir`).
         assert_eq!(resolve_xdg_config(None, None, Some("roastty/config")), None);
+    }
+
+    #[test]
+    fn parse_cli_arg_extracts_flag_key_value() {
+        // `--key=value` and `--key` forms.
+        assert_eq!(
+            parse_cli_arg("--fullscreen=non-native"),
+            Some(("fullscreen", Some("non-native")))
+        );
+        assert_eq!(
+            parse_cli_arg("--background-image-repeat"),
+            Some(("background-image-repeat", None))
+        );
+        // The first `=` splits the key from the value.
+        assert_eq!(parse_cli_arg("--key=a=b"), Some(("key", Some("a=b"))));
+        // An empty value after the `=`.
+        assert_eq!(parse_cli_arg("--key="), Some(("key", Some(""))));
+        // `--` alone is an empty key with no value.
+        assert_eq!(parse_cli_arg("--"), Some(("", None)));
+        // A non-`--` argument is not a config flag.
+        assert_eq!(parse_cli_arg("key=value"), None);
+        assert_eq!(parse_cli_arg("-h"), None);
     }
 
     #[test]
