@@ -1513,6 +1513,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 533: the optional-file load action (Config::load_optional_file)](533-config-load-optional-file.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 534: the CLI-arg config form (parse_cli_arg)](534-config-cli-arg.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
