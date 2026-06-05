@@ -1516,7 +1516,7 @@ are past the correctness-critical foundation.
 - [Experiment 534: the CLI-arg config form (parse_cli_arg)](534-config-cli-arg.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 535: the CLI-args driver (Config::set_cli_args)](535-config-set-cli-args.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

@@ -576,6 +576,39 @@ impl Config {
             Err(e) => OptionalFileAction::Error(e),
         }
     }
+
+    /// Apply config from CLI arguments (upstream `cli.args.parse` over args): for each
+    /// argument, parse the `--key=value` form (`parse_cli_arg`) and apply it via
+    /// `Config::set`; a non-flag argument or a `Config::set` error records a diagnostic,
+    /// and the loop continues. The diagnostic's `line` is the 1-based argument position.
+    /// The caller passes the config arguments (the outer `+action`-arg filtering is a
+    /// separate layer).
+    pub(crate) fn set_cli_args<'a, I>(&mut self, args: I) -> Vec<ConfigDiagnostic>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let mut diagnostics = Vec::new();
+        for (i, arg) in args.into_iter().enumerate() {
+            match loader::parse_cli_arg(arg) {
+                Some((key, value)) => {
+                    if let Err(error) = self.set(key, value) {
+                        diagnostics.push(ConfigDiagnostic {
+                            line: i + 1,
+                            key: key.to_string(),
+                            error,
+                        });
+                    }
+                }
+                // A non-flag argument is not a valid config field.
+                None => diagnostics.push(ConfigDiagnostic {
+                    line: i + 1,
+                    key: arg.to_string(),
+                    error: ConfigSetError::UnknownField,
+                }),
+            }
+        }
+        diagnostics
+    }
 }
 
 /// The result of `Config::load_optional_file` (upstream `OptionalFileAction`).
@@ -5933,6 +5966,62 @@ mod tests {
             cfg.load_optional_file(&dir),
             OptionalFileAction::Error(_)
         ));
+    }
+
+    #[test]
+    fn config_set_cli_args_applies_and_collects_diagnostics() {
+        let has = |cfg: &Config, key: &str, val: &str| {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines().any(|l| l == format!("{} = {}", key, val))
+        };
+
+        // A clean list of `--key=value` args (and a bare flag) applies every field
+        // with no diagnostics.
+        let mut cfg = Config::default();
+        let diags = cfg.set_cli_args([
+            "--fullscreen=non-native",
+            "--theme=catppuccin-mocha",
+            "--background-image-repeat", // bare flag ⇒ true
+        ]);
+        assert!(diags.is_empty());
+        assert!(has(&cfg, "fullscreen", "non-native"));
+        assert!(has(&cfg, "theme", "catppuccin-mocha"));
+        assert!(has(&cfg, "background-image-repeat", "true"));
+
+        // Errors record a diagnostic per failing arg (1-based position) and the good
+        // args still apply. A non-flag arg is an invalid field; an unknown key and an
+        // invalid value are field errors.
+        let mut cfg = Config::default();
+        let diags = cfg.set_cli_args([
+            "--copy-on-select=clipboard", // arg 1, ok
+            "not-a-flag",                 // arg 2, invalid field
+            "--badkey=x",                 // arg 3, unknown field
+            "--fullscreen=nope",          // arg 4, invalid value
+        ]);
+        assert_eq!(
+            diags,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "not-a-flag".to_string(),
+                    error: ConfigSetError::UnknownField,
+                },
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "badkey".to_string(),
+                    error: ConfigSetError::UnknownField,
+                },
+                ConfigDiagnostic {
+                    line: 4,
+                    key: "fullscreen".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+            ]
+        );
+        // The good arg still applied; the bad `fullscreen` kept its default.
+        assert!(has(&cfg, "copy-on-select", "clipboard"));
+        assert!(has(&cfg, "fullscreen", "false"));
     }
 
     #[test]

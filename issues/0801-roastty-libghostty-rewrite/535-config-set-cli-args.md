@@ -173,3 +173,54 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-193048-d535-prompt.md` (design)
 - Result: `logs/codex-review/20260604-193048-d535-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`Config::set_cli_args` was added — the multi-arg CLI driver. For each argument
+it parses the `--key=value` form (`parse_cli_arg`) and applies it via
+`Config::set`, recording a `ConfigDiagnostic` (with the 1-based argument
+position) for a non-flag argument or a field error and continuing. The new test
+`config_set_cli_args_applies_and_collects_diagnostics` covers a clean apply
+(including a bare-flag arg ⇒ `true`) with no diagnostics, and an apply with
+errors producing the correct positioned diagnostics (a non-flag arg, an unknown
+key, an invalid value) while the good args still apply.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3025 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches the approved CLI driver slice — 1-based
+argument positions, `--key[=value]` extraction into `Config::set`, diagnostics
+collected on errors, and continued processing after each failure; the non-flag
+handling is a faithful coarse diagnostic adaptation, and the `+` action-arg
+behavior is documented as an outer-layer filtering contract; the tests cover
+clean application, bare bool args, non-flag diagnostics, unknown keys, invalid
+values, and good-lines-still-apply; gates are clean. "Approved with no
+findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-193325-r535-prompt.md` (result)
+- Result: `logs/codex-review/20260604-193325-r535-last-message.md` (result)
+
+## Conclusion
+
+All three config sources now have drivers — `Config::load_str` (a config
+string), `Config::load_file` (a config file), and `Config::set_cli_args` (CLI
+arguments) — each applying over the 43-of-44-field `Config::set` and collecting
+diagnostics. The only remaining config piece is the **`loadDefaultFiles`
+orchestration**, which needs roastty's concrete config naming (the XDG
+subdir/filename and the macOS bundle id) and the config-template content — an
+unmade product decision, so it stays deferred until that is settled; every
+building block for it (the path resolvers, `load_optional_file`, `load_file`) is
+in place. `background-image-opacity` stays float-blocked. After the config
+subsystem, the entire non-config rewrite remains.
