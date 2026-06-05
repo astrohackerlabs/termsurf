@@ -122,8 +122,9 @@ fn maybe_dir(base: &Path, sub: &str, sentinel: &str) -> Option<PathBuf> { ... }
 - Debug builds (`debug == true`): filesystem detection runs first, then a
   non-empty `ROASTTY_RESOURCES_DIR` fallback is used if detection fails. This
   mirrors upstream's stale-resources avoidance for debug app launches.
-- If executable-path discovery fails and release env did not already return,
-  detection is skipped and only the debug env fallback can still produce a path.
+- If executable-path discovery fails and release env did not already return, the
+  result is empty. Upstream returns immediately on `selfExePath` failure before
+  the debug env fallback.
 - Detection walks the current executable's ancestors, starting at `exe.parent()`
   (the upstream `dirname(exe)` first step). For each ancestor:
   - macOS app bundle layout:
@@ -163,6 +164,8 @@ fn maybe_dir(base: &Path, sub: &str, sentinel: &str) -> Option<PathBuf> { ... }
     is unavailable;
   - debug mode prefers detected resources over an env override;
   - debug mode falls back to a non-empty env override when detection misses;
+  - debug mode returns empty if executable-path discovery is unavailable, even
+    with an env override;
   - empty env overrides are ignored;
   - app-bundle sentinel resolves to `Contents/Resources/roastty`;
   - share-layout sentinel resolves to `share/roastty`;
@@ -200,3 +203,58 @@ precedence.
 Follow-up review approved the design with no Required findings. Codex confirmed
 the Roastty naming substitutions are appropriate and the verification plan
 covers the important ordering and missing-sentinel cases.
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/os/resources_dir.rs` now provides `ResourcesDir`,
+`resources_dir()`, and a testable `resolve_resources_dir` core. The resolver
+uses Roastty-facing names (`ROASTTY_RESOURCES_DIR`, `roastty`, `xterm-roastty`),
+preserves upstream's release/debug ordering, starts detection at the executable
+parent, checks app-bundle layout before share layout, and ignores missing or
+inaccessible sentinels.
+
+The product wrapper checks a non-empty release env override before calling
+`current_exe()`, preserving the upstream case where an env override wins even if
+executable-path discovery would fail. The injected resolver accepts
+`Option<&Path>` so this ordering is directly covered by tests. In debug mode,
+the resolver returns empty when executable discovery is unavailable, matching
+upstream's immediate return before the debug env fallback.
+
+Gates (all green):
+
+- `cargo build -p roastty` — no warnings.
+- `cargo test -p roastty` — **3436 passed / 0 failed** unit tests, plus **1
+  passed / 0 failed** ABI harness test.
+- `cargo fmt -p roastty -- --check` — clean.
+- no-ghostty grep on `roastty/src/os/resources_dir.rs` and
+  `roastty/src/os/mod.rs` — clean.
+- `git diff --check` — clean.
+
+## Conclusion
+
+Roastty now has the resources-directory primitive needed by future theme,
+terminfo, i18n, and app-startup slices. The port deliberately uses Roastty names
+for product-facing env vars, directories, and terminfo sentinels while keeping
+upstream's search order and debug/release behavior.
+
+## Completion Review
+
+**Reviewer:** Codex (gpt-5.5, medium) · resumed session
+`019e8f83-9029-7d43-8e82-f4c5754e14ba`
+
+**Verdict:** APPROVED.
+
+Initial completion review found one Required issue: debug mode with no
+executable path incorrectly fell back to the env override. Upstream returns an
+empty resources directory immediately when executable discovery fails, before
+the debug env fallback. The resolver was fixed to track `exe_available` and only
+apply the debug env fallback when executable discovery succeeded but sentinel
+detection missed. The regression test
+`debug_missing_exe_path_returns_empty_even_with_env_override` covers this case.
+
+Follow-up review approved the result with no Required findings. Codex confirmed
+the debug missing-executable behavior, release env-before-exe ordering, ancestor
+walk start, app-bundle precedence, ignored sentinel access failures, Roastty
+naming, and result documentation.

@@ -1688,7 +1688,7 @@ are past the correctness-critical foundation.
 - [Experiment 620: os args iterator (NSProcessInfo-backed command-line args)](620-os-args.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 621: os resources directory resolver](621-os-resources-dir.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
