@@ -1519,6 +1519,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 536: the C0 control-character enum (terminal::ansi::C0)](536-terminal-ansi-c0.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 537: the non-exhaustive ANSI value enums (RenditionAspect / StatusLineType)](537-terminal-ansi-value-enums.md)
+  — **Designed** · Claude/Codex/—
 
 ## Non-Goals
 
