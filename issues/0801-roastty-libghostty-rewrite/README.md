@@ -1605,6 +1605,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 579: split tree nearest / nearestWrapped (spatial navigation)](579-split-tree-nearest.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 580: split tree previous / next traversal and goto dispatch](580-split-tree-goto.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
