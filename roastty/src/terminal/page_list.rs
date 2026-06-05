@@ -90,6 +90,11 @@ impl Node {
         self.page.size_rows()
     }
 
+    /// The page's column count (upstream `node.data.size.cols`).
+    pub(in crate::terminal) fn page_cols(&self) -> CellCountInt {
+        self.page.size_cols()
+    }
+
     /// Encode this page's full contents as plain, soft-unwrapped text with a per-byte cell map
     /// (upstream `PageFormatter` with `emit: plain, unwrap: true`, plus its `point_map`). Used by
     /// the search subsystem (`SlidingWindow::append`). Each output byte gets one page-relative
@@ -192,6 +197,22 @@ impl Pin {
     pub(in crate::terminal) const fn with_x(mut self, x: CellCountInt) -> Self {
         self.x = x;
         self
+    }
+
+    /// The node this pin points at (upstream `pin.node`).
+    pub(in crate::terminal) fn node(&self) -> NonNull<Node> {
+        self.node
+    }
+
+    /// Whether this tracked pin was invalidated by page pruning (upstream `pin.garbage`).
+    pub(in crate::terminal) fn is_garbage(&self) -> bool {
+        self.garbage
+    }
+
+    /// Move this pin to a different node (upstream `pin.node = node`). Used by the history searcher
+    /// to advance the tracked search position.
+    pub(in crate::terminal) fn set_node(&mut self, node: NonNull<Node>) {
+        self.node = node;
     }
 
     #[cfg(test)]
@@ -2111,6 +2132,16 @@ impl PageList {
             .collect()
     }
 
+    /// The page node immediately older than `node` (upstream `node.prev`); `None` if `node` is the
+    /// oldest page or not in this list. Used by the history searcher to walk pages in reverse.
+    pub(in crate::terminal) fn prev_node_ptr(&self, node: NonNull<Node>) -> Option<NonNull<Node>> {
+        let idx = self.node_index(node)?;
+        if idx == 0 {
+            return None;
+        }
+        Some(NonNull::from(self.pages[idx - 1].as_ref()))
+    }
+
     /// Put a single content cell in the first (oldest) page and set whether its last row is
     /// soft-wrapped (test helper for the search overlap pass: the content makes the page's encoding
     /// non-empty, and the wrap flag controls whether the overlap pass appends it).
@@ -2121,6 +2152,28 @@ impl PageList {
         page.update_row_kitty_virtual_placeholder_flag(0);
         let last = page.size_rows() as usize - 1;
         page.get_row_mut(last).set_wrap(wrapped);
+    }
+
+    /// Write `text` into row 0 of the page at `page_index` (test helper for the history searcher,
+    /// which needs searchable content on specific pages — `set_screen_text_lines_for_tests` writes
+    /// via the viewport and cannot target an arbitrary page).
+    #[cfg(test)]
+    pub(in crate::terminal) fn set_page_row0_text_for_tests(
+        &mut self,
+        page_index: usize,
+        text: &str,
+    ) {
+        let page = &mut self.pages[page_index].page;
+        for (x, ch) in text.chars().enumerate() {
+            *page.get_row_and_cell_mut(x, 0).cell = Cell::init(ch as u32);
+        }
+        page.update_row_kitty_virtual_placeholder_flag(0);
+    }
+
+    /// The number of tracked pins (test helper for the history searcher's pin lifecycle).
+    #[cfg(test)]
+    pub(in crate::terminal) fn tracked_pin_count(&self) -> usize {
+        self.tracked_pins.len()
     }
 
     pub(in crate::terminal) fn last_node_ptr(&self) -> NonNull<Node> {

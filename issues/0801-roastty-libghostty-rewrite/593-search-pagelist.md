@@ -358,3 +358,80 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d593-prompt.md`
 - Result: `logs/codex-review/20260604-d593-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+A new `terminal::search::pagelist` module landed (`PageListSearch`), declared
+`pub(crate) mod pagelist;`. It holds `NonNull<PageList>` + a reverse
+`SlidingWindow` + `NonNull<Pin>` (a tracked pin). `new` tracks a pin at the
+start page's last cell, builds the reverse window, appends the start page, and
+stores the list pointer; `deinit` untracks the pin (explicit, not `Drop`);
+`next` delegates to the window; `feed` short-circuits on a garbage pin, then
+walks older pages from `prev_node_ptr(pin.node)` — appending each (saturating
+the `needle.len` byte budget), reading the next `prev` before the `&mut Pin`
+`set_node` (so the borrows never overlap), advancing the tracked pin, breaking
+when the budget is met — and returns whether any data was fed. Accessors added:
+`Pin::node` / `is_garbage` / `set_node`, `Node::page_cols`,
+`PageList::prev_node_ptr` (plus `#[cfg(test)]` `tracked_pin_count` and
+`set_page_row0_text_for_tests`).
+
+One test-helper deviation from the plan, validated by the result review: the
+planned `set_first_page_text_for_tests` became
+`set_page_row0_text_for_tests(page_index, text)` — because
+`grow_to_two_pages_for_tests` leaves the active bottom in `pages.last` (blank)
+while `set_screen_text_lines_for_tests` routes through the viewport (which after
+growing maps to `pages[0]`), so neither could place a match on a chosen page for
+the feed tests. Writing directly into a chosen page's row 0 lets the feed tests
+put a match on the start page (`pages[1]`) and the older page (`pages[0]`).
+Codex confirmed this is a sound, faithful test setup (roastty's `prev_node_ptr`
+returns `idx - 1`, so `pages[0]` is the oldest — consistent with the start being
+`pages.last` and `feed` walking toward index 0).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3275 passed, 0 failed (five new tests; no
+  regressions, up from 3270).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/search + page_list.rs
+  - lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The five new tests: a single-page search; `feed` loading an older page with a
+match; `feed` with content but no matches (feeds data, finds nothing); a garbage
+pin ending `feed` immediately; and `deinit` untracking the pin (tracked-pin
+count returns to baseline).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet saved — added here). Codex confirmed the implementation is faithful
+(reverse `SlidingWindow`, tracked pin at the start page's last cell, the initial
+start-page append, `next` delegation, `feed`'s garbage short-circuit, saturating
+byte budget, previous-page walk, pin advancement, and `rem < needle_len` return
+all match upstream) and that the raw-pointer model is handled correctly
+(`deinit` explicit; `feed` computes `prev` before mutating the tracked pin; the
+safety docs cover the list lifetime/lock contract); the page-index test helper
+is sound.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r593-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r593-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports `PageListSearch` — the history/scrollback searcher and the
+most pointer-coupled search slice. It drives a reverse `SlidingWindow` backward
+through a `PageList`'s pages, feeding older pages on demand and tracking its
+position with a tracked pin that survives page pruning (the `garbage` flag ends
+the search when the position is reused). The faithful mapping keeps upstream's
+raw-pointer model — `NonNull<PageList>` / `NonNull<Pin>` with `unsafe` methods
+and the documented lock/lifetime contract — rather than inventing a borrow-based
+scheme. The remaining search work is the two screen-oriented searchers that
+combine `ActiveSearch` and `PageListSearch` — `ScreenSearch`
+(`search/screen.zig`, the largest at ~1552 lines: searches a whole `Screen`,
+deduping the active area against history) and `ViewportSearch`
+(`search/viewport.zig`) — and finally the search `Thread`.
