@@ -271,3 +271,63 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d539-prompt.md` (design)
 - Result: `logs/codex-review/20260604-d539-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`input::mouse` was created with the six mouse input types: `Action` /
+`ButtonState` / `Button` as `#[repr(i32)]` (the `enum(c_int)` types), `Momentum`
+/ `PressureStage` as `#[repr(u8)]` (the `u3` / `u2` enums) with their exact
+discriminants, `Button::MAX = 11` (the comptime `max` fold), and `ScrollMods` as
+a struct with `int(self) -> u8` reproducing upstream's `packed struct(u8)`
+layout (precision = bit 0, momentum = bits 1-3, padding = bits 4-7). The module
+is registered in `input/mod.rs` (which already carries crate-level
+`#![allow(dead_code)]`). Two new tests verify the `ScrollMods` bit encoding
+(including upstream's `default == 0` and `precision == 0b1` cases) and the enum
+discriminants.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3031 passed, 0 failed (two new tests; no regressions,
+  up from 3029).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + input/mouse.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean; `roastty.h`
+  untouched.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings): the doc had `## Result` but no `## Conclusion`,
+which the issue process expects — fixed by adding the conclusion below. Codex
+confirmed the six type definitions match upstream `mouse.zig` (including
+`Button` `0..=11`, `Momentum` `0..=6`, `PressureStage` `0..=2`, and
+`Button::MAX = 11`); `ScrollMods::int()` correctly reproduces the packed-`u8`
+layout (`precision` at bit 0, `momentum` in bits 1-3, padding zero);
+`#[repr(i32)]` for the `enum(c_int)` types is correct on macOS and `#[repr(u8)]`
+is the right carrier for the `u3` / `u2` enums; leaving `roastty.h` untouched is
+the right scope while these remain internal; and the tests adequately cover the
+slice.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r539-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r539-last-message.md` (result)
+
+## Conclusion
+
+`input::mouse` now holds the GUI-side mouse input types (`Action`,
+`ButtonState`, `Button`, `Momentum`, `PressureStage`, `ScrollMods`), faithfully
+ported from `input/mouse.zig` — the first slice of the input layer beyond the
+already-ported `key` / `key_encode` / `key_mods` / `paste`. The `enum(c_int)`
+types use `#[repr(i32)]` so they stay ABI-compatible for when the embedding API
+exposes them, but `roastty.h` is untouched until that wiring happens (deferred).
+This also recorded a dead end: the APC handler is already ported as
+`terminal::terminal::KittyGraphicsApc`, so `apc.zig` needs no separate port.
+Natural next input slices are the other self-contained upstream input files
+(`keyboard.zig`'s `Layout`, `function_keys.zig`, `keycodes.zig`,
+`mouse_encode`), each genuinely unported. The config `loadDefaultFiles` stays
+deferred pending roastty's naming decision; `background-image-opacity` stays
+float-blocked.

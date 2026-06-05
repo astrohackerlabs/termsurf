@@ -1523,8 +1523,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 538: the remaining ANSI mode enums (CursorStyle / StatusDisplay / ModifyKeyFormat / ProtectedMode)](538-terminal-ansi-mode-enums.md)
   — **Pass** · Claude/Codex/Codex
-- [Experiment 539: the mouse input types](539-input-mouse-types.md) —
-  **Designed** · Claude/Codex/Codex
+- [Experiment 539: the mouse input types](539-input-mouse-types.md) — **Pass** ·
+  Claude/Codex/Codex
 
 ## Non-Goals
 
