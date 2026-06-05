@@ -10,6 +10,8 @@
 mod comma_splitter;
 #[allow(dead_code)]
 mod conditional;
+#[allow(dead_code)]
+mod edit;
 mod formatter;
 mod loader;
 mod string;

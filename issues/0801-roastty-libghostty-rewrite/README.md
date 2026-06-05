@@ -1588,7 +1588,7 @@ are past the correctness-critical foundation.
 - [Experiment 570: the input Link type (regex → action)](570-input-link.md) —
   **Pass** · Claude/Codex/Codex
 - [Experiment 571: config edit-path selection (configPath)](571-config-edit-path.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

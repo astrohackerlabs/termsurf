@@ -214,3 +214,69 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d571-prompt.md`
 - Result: `logs/codex-review/20260604-d571-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`config::edit::config_path(candidates: &[PathBuf]) -> io::Result<&Path>` was
+added: it asserts the candidate list is non-empty, then for each candidate
+**opens** the file (skipping `NotFound` / `InvalidInput`, propagating other IO
+errors) and **stats** the open handle — returning the first non-empty candidate
+immediately, remembering the first existing (empty) one, and falling back to
+that (else `candidates[0]`). Registered via `#[allow(dead_code)] mod edit;` in
+`config/mod.rs`. The candidate generation (`configPathCandidates`, needs the
+deferred `file_load` AppSupport/XDG helpers) and `openPath` (filesystem
+mutation) remain deferred.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3159 passed, 0 failed (four new tests; no
+  regressions, up from 3155).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer + config/edit.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The four new tests (each with a per-test temp dir cleaned on `Drop`): first
+non-empty wins (`[empty, a, b]` → `a`), first existing-empty fallback
+(`[missing, empty_a, empty_b]` → `empty_a`), nothing-exists → first candidate
+(`[missing_1, missing_2]` → `missing_1`), and earlier-non-empty beating a later
+non-empty (`[a, b]` → `a`).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet in the saved file — added here as part of result recording). Codex
+confirmed the implementation now matches upstream's selection loop — opens
+first, stats the opened file, skips missing/malformed paths, propagates other IO
+errors, returns the first non-empty candidate / else the first existing empty /
+else `candidates[0]` — and that the temp-dir tests cover the key precedence
+cases cleanly.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r571-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r571-last-message.md` (result)
+
+## Conclusion
+
+`config::edit::config_path` ports the config-path selection algorithm from
+`config/edit.zig`'s `configPath` — the precedence "first non-empty file → first
+existing file → first candidate", with upstream's open-then-stat order preserved
+(a Required review fix: `File::open` then `file.metadata()`, so an unreadable
+file errors on open rather than being silently selected by a `metadata` probe)
+and its skip-set mirrored (`NotFound` + `InvalidInput` ≈ `FileNotFound` +
+`BadPathName`). The two pieces that compose around it — `configPathCandidates`
+(the AppSupport / XDG candidate list) and `openPath` (directory + file creation)
+— stay **deferred**, blocked on the same config-directory naming decision as
+`loadDefaultFiles` / `appSupportDir`; once that lands, the candidate generation
+and `openPath` follow, and `config_path` slots straight in. This session has now
+exhausted most of the cleanly-independent leaf files; the remaining work is
+concentrated in the dependency-blocked helpers (regex/oniguruma for
+`Link::oniRegex`, a URI parser for `os/uri`, the config-dir naming decision for
+`file_load`/`edit`/`loadDefaultFiles`) and the big-ticket subsystems
+(`datastruct/split_tree`, 2517 lines; the terminal **search subsystem** coupled
+to `PageList` / `Pin` / `Screen` / `Selection` / `PageFormatter`).
+`background-image-opacity` stays float-blocked.
