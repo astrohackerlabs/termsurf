@@ -1633,6 +1633,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 593: search PageListSearch (history/scrollback searcher)](593-search-pagelist.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 594: search ScreenSearch skeleton (state machine vocabulary + struct)](594-search-screen-skeleton.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
