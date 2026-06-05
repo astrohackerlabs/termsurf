@@ -8,7 +8,7 @@
 
 use std::ptr::NonNull;
 
-use super::super::highlight::Untracked;
+use super::super::highlight::{Flattened, Untracked};
 use super::super::terminal::{Terminal, TerminalScreenKey};
 use super::screen::{ScreenSearch, Tick as ScreenTick};
 use super::viewport::ViewportSearch;
@@ -81,6 +81,27 @@ pub(in crate::terminal) enum Tick {
     Progress,
     /// All incomplete searches are blocked on a feed.
     Blocked,
+}
+
+/// Events emitted by the search thread (upstream `Thread.Event`). The caller handles these as it
+/// sees fit. `ViewportMatches` borrows a `notify`-local buffer valid only for that callback call.
+pub(in crate::terminal) enum Event<'a> {
+    /// The search thread is exiting (emitted by the outer `Thread`; unused until it lands).
+    Quit,
+    /// Search is complete for the needle on all screens.
+    Complete,
+    /// The active screen's total match count changed.
+    TotalMatches(usize),
+    /// The selected match changed (or was cleared).
+    SelectedMatch(Option<EventSelectedMatch>),
+    /// The viewport matches changed (owned by `notify`, valid only during the callback).
+    ViewportMatches(&'a [Flattened]),
+}
+
+/// A selected match reported to the callback (upstream `Event.SelectedMatch`).
+pub(in crate::terminal) struct EventSelectedMatch {
+    pub(in crate::terminal) idx: usize,
+    pub(in crate::terminal) highlight: Flattened,
 }
 
 /// The multi-screen search aggregator owned by the search thread (upstream `Thread.Search`). It
@@ -235,6 +256,72 @@ impl Search {
                 // SAFETY: screen live; no terminal reference held here.
                 unsafe { ss.feed() };
             }
+        }
+    }
+
+    /// Emit state-change events to `cb` (upstream `notify`). Reads only internal, already-accumulated
+    /// searcher state — no lock and no screen access needed (hence safe).
+    pub(in crate::terminal) fn notify(&mut self, cb: &mut dyn FnMut(Event<'_>)) {
+        let key = self.last_screen.key;
+        // Snapshot everything from the active screen searcher up front, releasing the borrow before
+        // the mutations / callbacks below.
+        let (total, sel_idx, sel_flattened) = match self.screens.get(key) {
+            None => return,
+            Some(ss) => (ss.matches_len(), ss.selected_index(), ss.selected_match()),
+        };
+
+        // Total matches.
+        if Some(total) != self.last_screen.total {
+            self.last_screen.total = Some(total);
+            cb(Event::TotalMatches(total));
+        }
+
+        // Viewport matches. Clear the stale flag first: even a failed/empty drain requires a re-feed
+        // to re-search, and the feed makes it stale again.
+        if self.stale_viewport_matches {
+            self.stale_viewport_matches = false;
+            let mut results = Vec::new();
+            while let Some(hl) = self.viewport.next() {
+                results.push(hl);
+            }
+            cb(Event::ViewportMatches(&results));
+        }
+
+        // Selected match.
+        match sel_idx {
+            Some(idx) => {
+                // A selection exists, but its index may be out of range after a re-search; in that
+                // case (`sel_flattened` is `None`) do nothing — and crucially do not clear it.
+                if let Some(flattened) = sel_flattened {
+                    let untracked = flattened.untracked();
+                    let unchanged = matches!(
+                        &self.last_screen.selected,
+                        Some(prev) if prev.idx == idx && prev.highlight == untracked
+                    );
+                    if !unchanged {
+                        self.last_screen.selected = Some(SelectedMatch {
+                            idx,
+                            highlight: untracked,
+                        });
+                        cb(Event::SelectedMatch(Some(EventSelectedMatch {
+                            idx,
+                            highlight: flattened,
+                        })));
+                    }
+                }
+            }
+            None => {
+                if self.last_screen.selected.is_some() {
+                    self.last_screen.selected = None;
+                    cb(Event::SelectedMatch(None));
+                }
+            }
+        }
+
+        // Completion (emitted at most once).
+        if !self.last_complete && self.is_complete() {
+            self.last_complete = true;
+            cb(Event::Complete);
         }
     }
 }
@@ -507,5 +594,189 @@ mod tests {
 
         // SAFETY: `terminal` live; called once.
         unsafe { search.deinit() };
+    }
+
+    /// A simplified, owned snapshot of an `Event` for assertions (avoids the borrow lifetime).
+    #[derive(Debug, PartialEq)]
+    enum Ev {
+        Quit,
+        Complete,
+        Total(usize),
+        Selected(Option<usize>),
+        Viewport(usize),
+    }
+
+    /// Run `notify` and collect the emitted events.
+    fn collect(search: &mut Search) -> Vec<Ev> {
+        let mut evs = Vec::new();
+        let mut cb = |e: Event<'_>| {
+            evs.push(match e {
+                Event::Quit => Ev::Quit,
+                Event::Complete => Ev::Complete,
+                Event::TotalMatches(n) => Ev::Total(n),
+                Event::SelectedMatch(Some(m)) => Ev::Selected(Some(m.idx)),
+                Event::SelectedMatch(None) => Ev::Selected(None),
+                Event::ViewportMatches(v) => Ev::Viewport(v.len()),
+            });
+        };
+        search.notify(&mut cb);
+        evs
+    }
+
+    #[test]
+    fn notify_emits_total_and_viewport_matches() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: `terminal` outlives `search`.
+        unsafe { search.feed(t) };
+
+        let evs = collect(&mut search);
+        assert!(evs.iter().any(|e| matches!(e, Ev::Total(n) if *n == 2)));
+        assert!(evs.iter().any(|e| matches!(e, Ev::Viewport(n) if *n == 2)));
+
+        // Nothing changed → a second notify emits no total / viewport events.
+        let evs2 = collect(&mut search);
+        assert!(!evs2
+            .iter()
+            .any(|e| matches!(e, Ev::Total(_) | Ev::Viewport(_))));
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn notify_emits_complete_once() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+
+        // Drive the active searcher to completion.
+        // SAFETY: the screen is live.
+        unsafe {
+            search
+                .screens
+                .get_mut(TerminalScreenKey::Primary)
+                .unwrap()
+                .search_all()
+        };
+
+        let evs = collect(&mut search);
+        assert!(evs.contains(&Ev::Complete));
+        // `Complete` is emitted at most once.
+        let evs2 = collect(&mut search);
+        assert!(!evs2.contains(&Ev::Complete));
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn notify_emits_and_dedups_selected_match() {
+        use super::super::screen::Select;
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+
+        // Select a match on the active searcher.
+        // SAFETY: the screen is live.
+        unsafe {
+            search
+                .screens
+                .get_mut(TerminalScreenKey::Primary)
+                .unwrap()
+                .select(Select::Next)
+        };
+
+        let evs = collect(&mut search);
+        assert!(evs.iter().any(|e| matches!(e, Ev::Selected(Some(_)))));
+        // An unchanged selection is not re-emitted.
+        let evs2 = collect(&mut search);
+        assert!(!evs2.iter().any(|e| matches!(e, Ev::Selected(_))));
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn notify_clears_selection() {
+        use super::super::screen::Select;
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+        // SAFETY: the screen is live.
+        unsafe {
+            search
+                .screens
+                .get_mut(TerminalScreenKey::Primary)
+                .unwrap()
+                .select(Select::Next)
+        };
+        // First notify records the selection.
+        let _ = collect(&mut search);
+
+        // Clear the selection; the next notify reports it cleared.
+        search
+            .screens
+            .get_mut(TerminalScreenKey::Primary)
+            .unwrap()
+            .clear_selection_for_tests();
+        let evs = collect(&mut search);
+        assert!(evs.contains(&Ev::Selected(None)));
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn notify_with_out_of_range_selection_does_not_clear() {
+        use super::super::screen::Select;
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+        // SAFETY: the screen is live.
+        unsafe {
+            search
+                .screens
+                .get_mut(TerminalScreenKey::Primary)
+                .unwrap()
+                .select(Select::Next)
+        };
+        // First notify records the selection.
+        let _ = collect(&mut search);
+
+        // Force the selection index out of range: `selected_index()` is `Some`, but
+        // `selected_match()` is `None`. `notify` must emit nothing and NOT clear the prior selection.
+        search
+            .screens
+            .get_mut(TerminalScreenKey::Primary)
+            .unwrap()
+            .set_selected_idx_for_tests(usize::MAX);
+        let evs = collect(&mut search);
+        assert!(!evs.iter().any(|e| matches!(e, Ev::Selected(_))));
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn notify_with_no_active_screen_searcher_is_a_noop() {
+        // No `feed`, so the aggregator has no searcher for the active key.
+        let mut search = Search::new(b"Fizz");
+        let evs = collect(&mut search);
+        assert!(evs.is_empty());
     }
 }

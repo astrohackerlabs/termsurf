@@ -260,3 +260,58 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260605-d608-prompt.md`
 - Result: `logs/codex-review/20260605-d608-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+Implemented `Search::notify` and the `Event` / `EventSelectedMatch` types in
+`thread.rs`, plus `ScreenSearch::selected_index` (and two `#[cfg(test)]`
+helpers, `set_selected_idx_for_tests` / `clear_selection_for_tests`) in
+`screen.rs`. The port faithfully mirrors upstream `notify`: snapshot the active
+screen searcher's `(matches_len, selected_index, selected_match)` up front
+(early return if absent), then emit in upstream order — total (on change) →
+viewport (clear stale flag, drain `viewport.next()` into a local `Vec`, emit
+`ViewportMatches(&buf)`) → selection (emit on change; the out-of-range
+`selected_index Some` / `selected_match None` case does nothing and does not
+clear; `None` clears + emits only if a prior selection existed) → complete
+(once, via `last_complete`). `EventCallback` + opaque userdata becomes
+`&mut dyn FnMut(Event<'_>)`, and the `viewport_matches` "valid only during the
+callback" contract is the borrow on `Event::ViewportMatches`. `notify` is safe —
+it reads only accumulated in-memory state and copies (never dereferences) node
+pointers.
+
+Six tests cover total + viewport emission, complete-once, selected-match emit +
+dedup, the cleared-selection path, the out-of-range no-clear edge case, and the
+no-active-searcher noop. Gates: `cargo fmt --check` clean,
+`cargo build -p roastty` no warnings, `cargo test -p roastty` **3334 passed / 0
+failed** (3328 → 3334, +6), no-ghostty grep clean, `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **APPROVED** it with **no Required
+and no Optional findings**, confirming: the `Event` types map cleanly and
+`ViewportMatches(&[Flattened])` encodes callback-scoped validity; `notify`
+preserves upstream order, clears the stale flag before draining, matches the
+selection branch (including the out-of-range no-clear case), and emits
+`Complete` once; the snapshot-up-front restructuring is behavior-preserving
+(viewport draining doesn't mutate `ScreenSearch`); `notify` is correctly safe;
+and the `#[cfg(test)]` helpers are acceptable. The lone Nit (record `## Result`
+/ `## Conclusion`) is addressed here.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260605-r608-prompt.md`
+- Result: `logs/codex-review/20260605-r608-last-message.md`
+
+## Conclusion
+
+The inner `Search` of the search thread is now complete: `new` / `deinit` /
+`is_complete` / `tick` / `feed` / `notify`, plus the `Tick` and `Event` types.
+The _only_ remaining piece of the entire search subsystem is the **outer
+`Thread`** — the OS thread running a libxev event loop with a mailbox
+(`BlockingQueue<Message>`), `REFRESH_INTERVAL` timers, and the `Options` /
+`Message` types — which is **blocked on a libxev port** roastty does not have.
+That block is a genuine dependency boundary, shared with the regex/oniguruma and
+URI-parser work elsewhere in Issue 801; the next tractable slices lie outside
+the search subsystem.

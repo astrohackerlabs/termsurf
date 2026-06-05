@@ -161,6 +161,28 @@ impl ScreenSearch {
         self.screen
     }
 
+    /// The index of the currently-selected match, if any (upstream `screen_search.selected.?.idx`).
+    /// The search-thread `notify` gates its selection event on this.
+    pub(in crate::terminal) fn selected_index(&self) -> Option<usize> {
+        self.selected.as_ref().map(|m| m.idx)
+    }
+
+    /// Force the selected match's index (test-only), used to exercise `notify`'s
+    /// `selected_index() == Some` but `selected_match() == None` branch. Requires an existing
+    /// selection (its tracked highlight is left intact).
+    #[cfg(test)]
+    pub(in crate::terminal) fn set_selected_idx_for_tests(&mut self, idx: usize) {
+        self.selected.as_mut().expect("a selection must exist").idx = idx;
+    }
+
+    /// Drop the current selection without untracking its pins (test-only), used to exercise
+    /// `notify`'s selection-cleared branch. The orphaned pins are released when the backing screen
+    /// is dropped at the end of the test.
+    #[cfg(test)]
+    pub(in crate::terminal) fn clear_selection_for_tests(&mut self) {
+        self.selected = None;
+    }
+
     /// All matches, ordered newest-to-oldest (upstream `matches`): the active results (stored
     /// forward) reversed, then the history results (already newest-to-oldest) appended. Returns an
     /// owned `Vec` (Rust ownership replaces upstream's caller-frees slice).
