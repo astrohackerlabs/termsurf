@@ -1537,8 +1537,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 545: the RAII temporary directory (os::TempDir)](545-os-temp-dir.md)
   — **Pass** · Claude/Codex/Codex
-- [Experiment 546: the close-on-exec pipe (os::pipe)](546-os-pipe.md) —
-  **Designed** · Claude/Codex/Codex
+- [Experiment 546: the close-on-exec pipe (os::pipe)](546-os-pipe.md) — **Pass**
+  · Claude/Codex/Codex
 
 ## Non-Goals
 

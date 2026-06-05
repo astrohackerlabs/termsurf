@@ -172,3 +172,53 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d546-prompt.md` (design)
 - Result: `logs/codex-review/20260604-d546-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`os::pipe::pipe` was added: `libc::pipe` then `set_cloexec`
+(`fcntl(F_SETFD, flags | FD_CLOEXEC)`) on each end — the macOS emulation of
+`std.posix.pipe2(.{ .CLOEXEC = true })` — returning `(OwnedFd, OwnedFd)` as
+`(read, write)`, with both ends taken into `OwnedFd` before `set_cloexec` so a
+failure frees them. The module is registered in `os/mod.rs`. Two tests:
+`FD_CLOEXEC` is set on both ends (`fcntl(F_GETFD)`), and bytes written to the
+write end are read back from the read end (a real connected pipe).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3057 passed, 0 failed (two new tests; no regressions,
+  up from 3055).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + os/pipe.rs + os/mod.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings): the doc had `## Result` but no `## Conclusion` —
+fixed by adding the conclusion below. Codex confirmed the implementation matches
+upstream `pipe.zig` and the approved design: `libc::pipe` returns
+`[read, write]`, both ends are immediately owned by `OwnedFd`, and `FD_CLOEXEC`
+is set with `fcntl(F_SETFD, flags | FD_CLOEXEC)` on both descriptors; the
+`OwnedFd` ownership correctly closes fds on normal drop and on any `set_cloexec`
+error path; and the tests soundly verify close-on-exec on both ends and the
+connected read/write order.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r546-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r546-last-message.md` (result)
+
+## Conclusion
+
+`os::pipe::pipe` — a close-on-exec pipe — is faithfully ported from
+`os/pipe.zig`, using the macOS `libc::pipe` + `fcntl(FD_CLOEXEC)` emulation of
+`std.posix.pipe2` and returning RAII `(OwnedFd, OwnedFd)` ends. This is a core
+PTY/IO building block (self-pipe wakeups, child-process plumbing) for the
+eventual termio layer. The OS-utility frontier still has a few self-contained
+slices (`i18n_locales`, the `fixMaxFiles` / `restoreMaxFiles` rlimit remainder
+of `file.zig`, `kernel_info`). The config `loadDefaultFiles` stays deferred
+pending roastty's naming decision; `background-image-opacity` stays
+float-blocked.
