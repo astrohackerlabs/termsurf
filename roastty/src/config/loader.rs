@@ -6,6 +6,12 @@
 
 use std::path::PathBuf;
 
+/// Read an environment variable, treating an empty value as unset (upstream
+/// `getenvNotEmpty`).
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 /// Resolve the XDG config directory from explicit env values (upstream `xdg.dir`'s
 /// core for macOS): `$XDG_CONFIG_HOME` (joined with `subdir`, or used as-is with no
 /// subdir) when present; else `$HOME/.config` joined with `subdir`; else `None`
@@ -38,14 +44,31 @@ fn resolve_xdg_config(
 /// The XDG config directory (upstream `internal_os.xdg.config` for macOS): reads
 /// `$XDG_CONFIG_HOME` / `$HOME` from the environment and resolves the config path.
 pub(crate) fn xdg_config_dir(subdir: Option<&str>) -> Option<PathBuf> {
-    fn env_nonempty(name: &str) -> Option<String> {
-        std::env::var(name).ok().filter(|v| !v.is_empty())
-    }
     resolve_xdg_config(
         env_nonempty("XDG_CONFIG_HOME").as_deref(),
         env_nonempty("HOME").as_deref(),
         subdir,
     )
+}
+
+/// Resolve the macOS Application Support config path from the `$HOME` value (upstream
+/// `macos.appSupportDir` / `commonDir`): `$HOME/Library/Application
+/// Support/<bundle_id>/<sub_path>`, or `None` when `$HOME` is unset.
+fn resolve_app_support(home: Option<&str>, bundle_id: &str, sub_path: &str) -> Option<PathBuf> {
+    let home = home?;
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join(bundle_id)
+            .join(sub_path),
+    )
+}
+
+/// The macOS Application Support config path (upstream `macos.appSupportDir`): reads
+/// `$HOME` and resolves `$HOME/Library/Application Support/<bundle_id>/<sub_path>`.
+pub(crate) fn app_support_dir(bundle_id: &str, sub_path: &str) -> Option<PathBuf> {
+    resolve_app_support(env_nonempty("HOME").as_deref(), bundle_id, sub_path)
 }
 
 /// Parse one config-file line into a `(key, value)` pair (upstream
@@ -142,5 +165,21 @@ mod tests {
         );
         // Neither set is `None` (upstream `NoHomeDir`).
         assert_eq!(resolve_xdg_config(None, None, Some("roastty/config")), None);
+    }
+
+    #[test]
+    fn resolve_app_support_builds_path() {
+        // `$HOME/Library/Application Support/<bundle_id>/<sub_path>`.
+        assert_eq!(
+            resolve_app_support(Some("/h"), "com.termsurf.roastty", "config"),
+            Some(PathBuf::from(
+                "/h/Library/Application Support/com.termsurf.roastty/config"
+            ))
+        );
+        // `$HOME` unset is `None`.
+        assert_eq!(
+            resolve_app_support(None, "com.termsurf.roastty", "config"),
+            None
+        );
     }
 }

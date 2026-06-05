@@ -167,3 +167,51 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-191532-d532-prompt.md` (design)
 - Result: `logs/codex-review/20260604-191532-d532-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`env_nonempty` was extracted to a module-level helper (shared by
+`xdg_config_dir` and the new `app_support_dir`), and `resolve_app_support`
+(pure) + `app_support_dir` (env-reading) were added. The path is
+`$HOME/Library/Application Support/<bundle_id>/<sub_path>` — the faithful
+unsandboxed equivalent of upstream's `NSApplicationSupportDirectory` +
+`[bundle_id, sub_path]` join. The new test `resolve_app_support_builds_path`
+covers the construction and the no-`$HOME` (`None`) case.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3022 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches the approved macOS path slice —
+`$HOME/Library/Application Support/<bundle_id>/<sub_path>` is the faithful
+unsandboxed equivalent of upstream's `NSApplicationSupportDirectory` +
+`[bundle_id, sub_path]` join, with sandbox redirection explicitly out of scope;
+extracting `env_nonempty` to module scope does not change XDG behavior (it still
+treats missing and empty env vars as `None`, matching `getenvNotEmpty`); the
+test covers the path construction and the no-home case; gates are clean.
+"Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-191718-r532-prompt.md` (result)
+- Result: `logs/codex-review/20260604-191718-r532-last-message.md` (result)
+
+## Conclusion
+
+Both default config-path families are now resolvable — `xdg_config_dir`
+(`$XDG_CONFIG_HOME` / `$HOME/.config`) and `app_support_dir`
+(`$HOME/Library/Application Support/<bundle_id>`). The next experiment is the
+**`loadDefaultFiles` orchestration**: build roastty's concrete candidate paths
+(the XDG subdir/filename + the macOS app-support path with the bundle id, and
+the legacy variants), `load_file` each that exists (collecting diagnostics),
+warn on duplicates, and write a template when none exist. The `--key=value`
+CLI-arg form also remains; `background-image-opacity` stays float-blocked.
