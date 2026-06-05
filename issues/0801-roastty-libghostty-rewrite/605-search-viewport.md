@@ -299,3 +299,55 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260605-d605-prompt.md`
 - Result: `logs/codex-review/20260605-d605-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+Implemented `ViewportSearch` in the new
+`roastty/src/terminal/search/viewport.rs`, plus the two `PageList` accessors
+(`viewport_nodes`, `active_area_bottom_right_node`) and the `search/mod.rs`
+registration. The port faithfully mirrors upstream `viewport.zig`: the forward
+`SlidingWindow`, the `Fingerprint` (node-pointer identity only), the
+`active_dirty` gate (`None` → always check; `Some(false)` → skip; `Some(true)` →
+check and reset to `Some(false)`), the equal-fingerprint-but-overlaps-active
+fall-through, the rebuild order (leading soft-wrap overlap → viewport nodes →
+trailing soft-wrap overlap with the break-before/append-then asymmetry), and
+`overlap_target = needle_len().saturating_sub(1)`. No explicit `deinit` — the
+window and fingerprint `Vec` drop themselves. The Required design fixes are in:
+the `set_active_dirty(Option<bool>)` API (so the future search `Thread` can mark
+the active area dirty) and `viewport_nodes`'s `expect` + non-empty assert.
+
+Seven tests cover the needle accessor, matching / no-match, the
+viewport-covers-active re-search, `reset`, and both dirty-tracking states.
+Gates: `cargo fmt --check` clean, `cargo build -p roastty` no warnings,
+`cargo test -p roastty` **3317 passed / 0 failed** (3310 → 3317, +7), no-ghostty
+grep clean, `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **APPROVED** it with **no Required
+and no Optional findings**, confirming: `update` matches upstream (fingerprint
+equality, active-dirty gate, active TL/BR overlap fall-through, `false` only for
+unchanged/non-overlapping); the `set_active_dirty` API and the re-search
+reset-to-clean match upstream's `if (active_dirty) |*v| v.* = false`; the
+rebuild order and leading/trailing asymmetry are preserved; `viewport_nodes`
+preserves the bottom-right invariant with `expect` + non-empty assert;
+`unsafe fn update` is scoped appropriately; and the two accessors are minimal.
+The lone Nit (record `## Result` / `## Conclusion`) is addressed here. The
+deferred scrolled non-active viewport test is noted as a coverage follow-up.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260605-r605-prompt.md`
+- Result: `logs/codex-review/20260605-r605-last-message.md`
+
+## Conclusion
+
+`ViewportSearch` is complete, leaving the search subsystem with a single
+remaining piece: the search `Thread` (`terminal/search/Thread.zig`) — the
+background driver that owns a `ScreenSearch` and a `ViewportSearch`, pumps
+`tick` / `feed` off the render thread, and routes viewport vs. full-screen
+results. That `Thread` is the natural next experiment; it depends on roastty's
+threading/IPC conventions, so the next step is to study `Thread.zig` and map its
+event loop / channel model onto roastty before slicing it.

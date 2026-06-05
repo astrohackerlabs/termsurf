@@ -2217,6 +2217,37 @@ impl PageList {
         self.get_top_left(point::Tag::Active)
     }
 
+    /// The page nodes the viewport currently covers, front to back (upstream
+    /// `ViewportSearch.Fingerprint.init`: iterate the page chunks from
+    /// `getTopLeft(.viewport)` to `getBottomRight(.viewport)`). Used by the viewport search to
+    /// fingerprint the viewport; only the node pointers are kept (cached page contents are unsafe
+    /// to read across mutations — only pointer identity is).
+    pub(in crate::terminal) fn viewport_nodes(&self) -> Vec<NonNull<Node>> {
+        let top = self.get_top_left(point::Tag::Viewport);
+        // Upstream unwraps: the viewport bottom-right "can never fail".
+        let bottom = self
+            .get_bottom_right(point::Tag::Viewport)
+            .expect("viewport bottom-right must exist");
+        let mut it = PageIterator {
+            list: self,
+            row: Some(top),
+            limit: Some(bottom),
+            direction: Direction::RightDown,
+        };
+        let mut nodes = Vec::new();
+        while let Some(chunk) = it.next() {
+            nodes.push(chunk.node);
+        }
+        assert!(!nodes.is_empty(), "viewport must cover at least one node");
+        nodes
+    }
+
+    /// The active area's bottom-right page node (upstream `getBottomRight(.active).?.node`). The
+    /// top-left counterpart is `active_area_top_left().node()`.
+    pub(in crate::terminal) fn active_area_bottom_right_node(&self) -> Option<NonNull<Node>> {
+        self.get_bottom_right(point::Tag::Active).map(|p| p.node())
+    }
+
     fn get_top_left(&self, tag: point::Tag) -> Pin {
         match tag {
             point::Tag::Screen | point::Tag::History => Pin {
