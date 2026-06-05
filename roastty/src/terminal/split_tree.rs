@@ -4,10 +4,12 @@
 //! `dimensions`) and `Rc<V>`-based view ref-counting, the leaf `iter`ator, `zoom`, and the `Goto`
 //! enum, the `Spatial` container's normalization (`spatial` / `fillSpatialSlots`), and the full
 //! navigation (the spatial `nearest` / `nearest_wrapped`, the in-order `previous` / `next`, and the
-//! `goto` dispatch), and the `split` / `remove` / `equalize` / `resize` tree-shaping operations.
-//! Still deferred: the formatters (`formatText` / `formatDiagram`).
+//! `goto` dispatch), the `split` / `remove` / `equalize` / `resize` tree-shaping operations, and the
+//! `format_text` textual dump. Still deferred: the ASCII-art `format_diagram` and the combined
+//! `format`.
 
 use half::f16;
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 /// A handle into the tree's `nodes` array (upstream `Node.Handle`): a `u16`-backed index, so nodes
@@ -382,6 +384,45 @@ impl<V> SplitTree<V> {
             nodes,
             zoomed: None, // split always resets zoom
         })
+    }
+
+    /// Write the tree as an indented textual dump (upstream `formatText`). An empty tree writes
+    /// `empty`.
+    pub(crate) fn format_text(&self, out: &mut String) {
+        if self.nodes.is_empty() {
+            out.push_str("empty");
+            return;
+        }
+        self.format_text_inner(out, Handle::ROOT, 0);
+    }
+
+    fn format_text_inner(&self, out: &mut String, current: Handle, depth: usize) {
+        for _ in 0..depth {
+            out.push_str("  ");
+        }
+        if self.zoomed == Some(current) {
+            out.push_str("(zoomed) ");
+        }
+        match &self.nodes[current.idx()] {
+            Node::Leaf(_) => {
+                let _ = writeln!(out, "leaf: {}", current.idx());
+            }
+            Node::Split(s) => {
+                let s = *s;
+                let layout = match s.layout {
+                    Layout::Horizontal => "horizontal",
+                    Layout::Vertical => "vertical",
+                };
+                let _ = writeln!(
+                    out,
+                    "split (layout: {}, ratio: {:.2})",
+                    layout,
+                    s.ratio.to_f32()
+                );
+                self.format_text_inner(out, s.left, depth + 1);
+                self.format_text_inner(out, s.right, depth + 1);
+            }
+        }
     }
 
     /// Move the nearest split matching `layout` (an ancestor of `from`) by `ratio`, a signed delta
@@ -1814,6 +1855,81 @@ mod tests {
 
     fn quarter() -> f16 {
         f16::from_f32(0.25)
+    }
+
+    #[test]
+    fn format_text_empty() {
+        let tree: SplitTree<&str> = SplitTree::empty();
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert_eq!(out, "empty");
+    }
+
+    #[test]
+    fn format_text_single_leaf() {
+        let tree = SplitTree::new(Rc::new("v"));
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert_eq!(out, "leaf: 0\n");
+    }
+
+    #[test]
+    fn format_text_horizontal_split() {
+        let tree = two_leaf(); // H split ratio 0.5 of a@1, b@2
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert_eq!(
+            out,
+            "split (layout: horizontal, ratio: 0.50)\n  leaf: 1\n  leaf: 2\n"
+        );
+    }
+
+    #[test]
+    fn format_text_vertical_split_ratio_two_decimals() {
+        let tree = SplitTree {
+            nodes: vec![
+                Node::Split(split_ratio(Layout::Vertical, 0.25, 1, 2)),
+                Node::Leaf(Rc::new("a")),
+                Node::Leaf(Rc::new("b")),
+            ],
+            zoomed: None,
+        };
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert!(out.starts_with("split (layout: vertical, ratio: 0.25)\n"));
+    }
+
+    #[test]
+    fn format_text_zoom_prefix_on_leaf_and_split() {
+        // Zoomed leaf.
+        let mut tree = two_leaf();
+        tree.zoom(Some(Handle::from_index(2)));
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert_eq!(
+            out,
+            "split (layout: horizontal, ratio: 0.50)\n  leaf: 1\n  (zoomed) leaf: 2\n"
+        );
+
+        // Zoomed root split.
+        let mut tree = two_leaf();
+        tree.zoom(Some(Handle::ROOT));
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert!(out.starts_with("(zoomed) split (layout: horizontal, ratio: 0.50)\n"));
+    }
+
+    #[test]
+    fn format_text_nested_indentation() {
+        // root = H(left = V(a,b), right = c): the column's leaves are at depth 2 (four spaces).
+        let tree = three_leaf();
+        let mut out = String::new();
+        tree.format_text(&mut out);
+        assert_eq!(
+            out,
+            "split (layout: horizontal, ratio: 0.50)\n  \
+split (layout: vertical, ratio: 0.50)\n    leaf: 2\n    leaf: 3\n  leaf: 4\n"
+        );
     }
 
     #[test]

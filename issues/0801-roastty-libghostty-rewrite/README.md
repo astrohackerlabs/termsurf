@@ -1616,7 +1616,7 @@ are past the correctness-critical foundation.
 - [Experiment 584: split tree resize (move a split's divider by a grid-relative delta)](584-split-tree-resize.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 585: split tree formatText (textual tree dump)](585-split-tree-format-text.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

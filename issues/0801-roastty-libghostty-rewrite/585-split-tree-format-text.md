@@ -195,3 +195,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d585-prompt.md`
 - Result: `logs/codex-review/20260604-d585-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`terminal::split_tree` gained `SplitTree::format_text` and `format_text_inner`
+(and a `use std::fmt::Write as _;`). `format_text` writes `empty` for an empty
+tree; otherwise it recurses pre-order, indenting two spaces per depth, prefixing
+`(zoomed) ` on the zoomed node (before the leaf/split switch), printing
+`leaf: {index}` for a leaf and `split (layout: {tag}, ratio: {n.nn})` (lowercase
+layout, two-decimal ratio) for a split. The module doc comment was updated to
+mark `format_text` landed.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3232 passed, 0 failed (six new tests; no regressions,
+  up from 3226).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/split_tree.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The six new tests (exact-string asserts): empty → `empty`, a single leaf
+(`leaf: 0`), a horizontal split (`split (layout: horizontal, ratio: 0.50)` + two
+indented leaves), a vertical split's two-decimal `0.25` ratio, the `(zoomed) `
+prefix on both a leaf and a root split, and nested indentation (depth-2 leaves
+get four spaces).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet in the saved file — added here). Codex confirmed `format_text` matches
+upstream's text formatter for the chosen index-label path (empty → `empty`,
+two-spaces-per-depth indentation, zoom prefix applied before the leaf/split
+rendering, leaves printing the node index, splits printing the lowercase layout
+plus the two-decimal ratio, and pre-order left-then-right recursion) and that
+the exact-string tests are sound, including nested indentation and zoom on both
+a leaf and a split.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r585-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r585-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports `formatText` — the thirteenth split_tree slice — the
+indented textual dump of a tree (empty, indentation, zoom prefix, leaf index,
+split layout + two-decimal ratio, pre-order). The `splitTreeLabel` view-label
+leaf path is deferred (it needs a view-label trait; roastty uses the index path,
+upstream's `else` branch). The only remaining split_tree piece is the ASCII-art
+`format_diagram` (and the combined `format`, which runs the diagram then the
+text) — a large self-contained renderer that scales the spatial slots to integer
+cells and draws box-drawing borders. The other remaining big-ticket subsystem is
+the terminal **search subsystem** (coupled to `PageList` / `Pin` / `Screen` /
+`Selection` / `PageFormatter`); the dependency-blocked helpers persist
+(regex/oniguruma for `Link::oniRegex`, a URI parser for `os/uri`, the
+config-directory naming decision for `file_load` / `edit` / `loadDefaultFiles`).
