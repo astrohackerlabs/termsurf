@@ -1641,6 +1641,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 597: search ScreenSearch prune_history](597-search-screen-prune-history.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 598: search ScreenSearch selected_match](598-search-screen-selected-match.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
