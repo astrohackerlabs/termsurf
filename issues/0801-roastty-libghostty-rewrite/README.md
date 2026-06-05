@@ -1543,6 +1543,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 548: the passwd entry (os::passwd)](548-os-passwd.md) — **Pass** ·
   Claude/Codex/Codex
+- [Experiment 549: open a URL in the default handler (os::open)](549-os-open.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
