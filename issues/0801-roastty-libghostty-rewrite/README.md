@@ -1673,6 +1673,8 @@ are past the correctness-critical foundation.
   **Pass** · Claude/Codex/Codex
 - [Experiment 613: search Thread — part 4: the outer Thread foundation](613-search-thread-foundation.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 614: search Thread — part 5: the `select` message handler](614-search-thread-select.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
