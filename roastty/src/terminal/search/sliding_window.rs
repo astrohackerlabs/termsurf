@@ -77,6 +77,17 @@ impl SlidingWindow {
         }
     }
 
+    /// The needle length (upstream `window.needle.len`).
+    pub(in crate::terminal) fn needle_len(&self) -> usize {
+        self.needle.len()
+    }
+
+    /// The number of metas (pages) currently in the window (test helper).
+    #[cfg(test)]
+    pub(in crate::terminal) fn meta_len(&self) -> usize {
+        self.meta.len()
+    }
+
     /// Clear all data but retain allocated capacity (upstream `clearAndRetainCapacity`). Clearing
     /// `meta` drops each `Meta` (and its `cell_map`), subsuming upstream's per-meta `deinit`.
     pub(crate) fn clear_and_retain_capacity(&mut self) {

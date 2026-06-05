@@ -243,15 +243,19 @@ impl SlidingWindow {
    - **update returns the covering page**: for the single-page list, `update`
      returns `Some(node)` equal to the list's first node pointer.
    - **overlap pass appends a soft-wrapped older page**: a two-page list (via
-     `grow_to_two_pages_for_tests`) whose **older** page's last row is marked
-     soft-wrapped (a new `#[cfg(test)]`
-     `set_first_page_last_row_wrapped_for_tests` helper) → after `update`, the
-     window holds **two** metas (the active page plus the overlapped older
-     page); without the wrap it holds **one** (the overlap pass stops at the
-     non-wrapped boundary). Asserted via a `#[cfg(test)]` `meta_len` accessor on
-     `SlidingWindow` exposed through a same-module `ActiveSearch` test helper.
-     (Guards the shared-index handoff and the overlap stop condition — Codex's
-     design-review Optional.)
+     `grow_to_two_pages_for_tests`) whose **older** page is given a content cell
+     and its last row marked soft-wrapped (a new `#[cfg(test)]`
+     `set_first_page_content_and_wrap_for_tests(wrapped)` helper) → after
+     `update`, the window holds **two** metas (the active page plus the
+     overlapped older page); with `wrapped == false` it holds **one** (the
+     overlap pass stops at the non-wrapped boundary). The content cell is
+     essential: `grow_to_two_pages_for_tests` makes the older page **blank**,
+     and `append` on a blank page (whose wrapped last row yields no trailing
+     newline) returns `0` and adds no meta — so without content, `meta_len`
+     could not distinguish wrap from no-wrap. Asserted via a `#[cfg(test)]`
+     `meta_len` accessor on `SlidingWindow` exposed through a same-module
+     `ActiveSearch` test helper. (Guards the shared-index handoff and the
+     overlap stop condition — Codex's design-review Optional.)
 6. Format and test (`cargo fmt`, accept output).
 
 ## Verification
@@ -311,3 +315,72 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d592-prompt.md`
 - Result: `logs/codex-review/20260604-d592-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+A new `terminal::search::active` module landed (`ActiveSearch`), declared
+`pub(crate) mod active;` in `search/mod.rs`. `new` builds a forward
+`SlidingWindow`; `update` clears it, walks `node_ptrs_front_to_back()` in
+reverse to cover the active `rows` (tracking the oldest covering page as
+`last_node`), then runs the overlap pass (older pages while their last row is
+soft-wrapped, until `>= needle.len() - 1` bytes), returning `last_node`; `next`
+delegates to the window. Accessors added: `PageList::active_rows` /
+`node_ptrs_front_to_back` and `SlidingWindow::needle_len` (plus `#[cfg(test)]`
+`meta_len` and the page content/wrap test helper). `update` is `unsafe` (it
+stores list-derived node pointers in the window past the borrow).
+
+One test-construction deviation from the plan, validated by the result review:
+the overlap test's helper became `set_first_page_content_and_wrap_for_tests`
+(content cell + wrap flag) rather than a wrap-only setter — because
+`grow_to_two_pages_for_tests` makes the older page blank, and `append` on a
+blank wrapped page is a no-op (returns `0`, no meta), so `meta_len` could not
+otherwise distinguish the wrap from the no-wrap case. Codex confirmed this is a
+sound, test-only setup that better exercises the overlap pass and does not
+change production behavior.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3270 passed, 0 failed (five new tests; no
+  regressions, up from 3265).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/search + page_list.rs
+  - lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The five new tests: a simple active search (two `Fizz` matches on rows 0 and 2,
+then `None`); update clearing/refilling the window; a no-match `None`; the
+returned covering page; and the overlap pass appending a content-bearing
+soft-wrapped older page (`meta_len` 2 with wrap, 1 without).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the doc still named the planned wrap-only
+helper and lacked `## Result` / `## Conclusion` — both fixed here). Codex
+confirmed the implementation is faithful — a forward `SlidingWindow`,
+clear/refill on `update`, the reverse `node_ptrs_front_to_back()` walk with the
+shared-index handoff into the overlap pass, `last_node` preserved as the oldest
+active-covering page, and `next` delegation — and that the content-cell
+overlap-test deviation is sound (a test-only setup that makes `append` produce
+data so the wrap-enabled overlap is distinguishable from the non-wrapped stop,
+without changing production behavior).
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r592-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r592-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports `ActiveSearch` — the first higher-level searcher — driving
+a `SlidingWindow` over a `PageList`'s mutable active area: `update` copies the
+active rows (plus a soft-wrap overlap into history) into the window and returns
+the oldest covering page, and `next` delegates to the matcher. The intrusive
+`pages.last` / `node.prev` walk became reverse index iteration over a
+`node_ptrs_front_to_back()` snapshot with a shared index across the cover and
+overlap passes. The remaining search work is the history-spanning searchers —
+`PageListSearch` (`search/pagelist.zig`, which drives a reverse window over the
+scrollback and dedups against the active area returned here), then
+`ScreenSearch` / `ViewportSearch`, and finally the search `Thread`.

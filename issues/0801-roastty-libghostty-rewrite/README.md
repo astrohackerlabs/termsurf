@@ -1630,7 +1630,7 @@ are past the correctness-critical foundation.
 - [Experiment 591: search SlidingWindow next (the scan)](591-search-sliding-window-next.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 592: search ActiveSearch (active-area searcher)](592-search-active.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

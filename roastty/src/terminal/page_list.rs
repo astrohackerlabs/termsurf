@@ -2096,6 +2096,33 @@ impl PageList {
         )
     }
 
+    /// The active row count (upstream `list.rows`). Used by the search subsystem to size the active
+    /// area.
+    pub(in crate::terminal) fn active_rows(&self) -> CellCountInt {
+        self.rows
+    }
+
+    /// The page nodes front-to-back as pointers, for the search subsystem to walk (upstream
+    /// `pages.first/last` + `node.next/prev`).
+    pub(in crate::terminal) fn node_ptrs_front_to_back(&self) -> Vec<NonNull<Node>> {
+        self.pages
+            .iter()
+            .map(|p| NonNull::from(p.as_ref()))
+            .collect()
+    }
+
+    /// Put a single content cell in the first (oldest) page and set whether its last row is
+    /// soft-wrapped (test helper for the search overlap pass: the content makes the page's encoding
+    /// non-empty, and the wrap flag controls whether the overlap pass appends it).
+    #[cfg(test)]
+    pub(in crate::terminal) fn set_first_page_content_and_wrap_for_tests(&mut self, wrapped: bool) {
+        let page = &mut self.pages[0].page;
+        *page.get_row_and_cell_mut(0, 0).cell = Cell::init('x' as u32);
+        page.update_row_kitty_virtual_placeholder_flag(0);
+        let last = page.size_rows() as usize - 1;
+        page.get_row_mut(last).set_wrap(wrapped);
+    }
+
     pub(in crate::terminal) fn last_node_ptr(&self) -> NonNull<Node> {
         NonNull::from(
             self.pages
