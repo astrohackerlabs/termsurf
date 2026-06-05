@@ -1,15 +1,17 @@
 //! The search sliding window (port of upstream `terminal/search/sliding_window.zig`). So far it
 //! lands the vocabulary and lifecycle (the search `Direction`, the per-page `Meta` record, the
-//! `SlidingWindow` struct, its constructor, and `clear_and_retain_capacity`), plus `append` (encode
-//! a page node's text into the window with its cell map) and the `assert_integrity` invariant. The
-//! cross-page matcher (`next` / `highlight`, the overlap/prune logic) is deferred to later slices.
+//! `SlidingWindow` struct, its constructor, and `clear_and_retain_capacity`), `append` (encode a
+//! page node's text into the window with its cell map), the `assert_integrity` invariant, and
+//! `highlight` (turn a match byte-range into a `Flattened` highlight, pruning consumed pages). The
+//! scan that finds matches and calls `highlight` (`next`, the overlap/prune logic) is deferred.
 
 use std::collections::VecDeque;
 use std::ptr::NonNull;
 
-use super::super::highlight::Chunk;
+use super::super::highlight::{Chunk, Flattened};
 use super::super::page_list::Node;
 use super::super::point::Coordinate;
+use super::super::size::CellCountInt;
 
 /// The search direction (upstream `SlidingWindow.Direction`). For a reverse search the needle is
 /// stored reversed and pages are appended in reverse order (the caller's responsibility).
@@ -135,6 +137,153 @@ impl SlidingWindow {
         );
         debug_assert!(self.data.is_empty() || self.data_offset < self.data.len());
     }
+
+    /// Build a flattened highlight for a match at `start_offset` (relative to `data_offset`) of
+    /// length `len` (upstream `highlight`). Sets `top_x` / `bot_x`, emits one `Chunk` per spanned
+    /// page, prunes consumed metas/data, and advances `data_offset` one past the match.
+    ///
+    /// Dereferences stored `Meta.node` pointers for `page_rows`; sound under the window invariant
+    /// that every node remains valid while in the window (see `append`'s `# Safety`).
+    fn highlight(&mut self, start_offset: usize, len: usize) -> Flattened {
+        let start = start_offset + self.data_offset;
+        let end = start + len - 1;
+        debug_assert!(start < self.data.len());
+        debug_assert!(start + len <= self.data.len());
+
+        self.chunk_buf.clear();
+        let mut result = Flattened::empty();
+
+        // Top-left (start) search. `prune_*` = (meta count, data length) before the start meta; `br`
+        // = Some((next meta index, consumed)) when the end is in a later meta.
+        let mut br: Option<(usize, usize)> = None;
+        let mut prune_meta = 0usize;
+        let mut prune_data = 0usize;
+        let mut meta_consumed = 0usize;
+        let mut found = false;
+        for i in 0..self.meta.len() {
+            let meta = &self.meta[i];
+            let prior = meta_consumed;
+            meta_consumed += meta.cell_map.len();
+            let meta_i = start - prior;
+            if meta_i >= meta.cell_map.len() {
+                continue;
+            }
+            let end_i = end - prior;
+            if end_i < meta.cell_map.len() {
+                let start_map = meta.cell_map[meta_i];
+                let end_map = meta.cell_map[end_i];
+                result.top_x = start_map.x;
+                result.bot_x = end_map.x;
+                self.chunk_buf.push(Chunk {
+                    node: meta.node,
+                    serial: meta.serial,
+                    start: cell_row(start_map.y),
+                    end: cell_row(end_map.y + 1),
+                });
+            } else {
+                let map = meta.cell_map[meta_i];
+                result.top_x = map.x;
+                // SAFETY: stored nodes stay valid while in the window (append's contract).
+                let rows = unsafe { meta.node.as_ref() }.page_rows();
+                self.chunk_buf.push(Chunk {
+                    node: meta.node,
+                    serial: meta.serial,
+                    start: cell_row(map.y),
+                    end: rows,
+                });
+                br = Some((i + 1, meta_consumed));
+            }
+            prune_meta = i;
+            prune_data = prior;
+            found = true;
+            break;
+        }
+        assert!(
+            found,
+            "highlight start index must be within the data buffer"
+        );
+
+        // Bottom-right (end) search.
+        if let Some((mut idx, mut consumed)) = br {
+            let mut end_found = false;
+            while idx < self.meta.len() {
+                let meta = &self.meta[idx];
+                let meta_i = end - consumed;
+                if meta_i >= meta.cell_map.len() {
+                    // SAFETY: see above.
+                    let rows = unsafe { meta.node.as_ref() }.page_rows();
+                    self.chunk_buf.push(Chunk {
+                        node: meta.node,
+                        serial: meta.serial,
+                        start: 0,
+                        end: rows,
+                    });
+                    consumed += meta.cell_map.len();
+                    idx += 1;
+                    continue;
+                }
+                let map = meta.cell_map[meta_i];
+                result.bot_x = map.x;
+                self.chunk_buf.push(Chunk {
+                    node: meta.node,
+                    serial: meta.serial,
+                    start: 0,
+                    end: cell_row(map.y + 1),
+                });
+                end_found = true;
+                break;
+            }
+            assert!(
+                end_found,
+                "highlight end index must be within the data buffer"
+            );
+        }
+
+        // Advance one past the match, then prune everything before the start meta.
+        self.data_offset = start - prune_data + 1;
+        if prune_meta > 0 {
+            self.meta.drain(..prune_meta);
+            debug_assert!(prune_data > 0);
+            self.data.drain(..prune_data);
+            // The surviving front meta is the start meta — its node is the first chunk's node
+            // (upstream's post-prune cross-check, before the reverse fixup reorders `chunk_buf`).
+            debug_assert_eq!(
+                self.meta.front().map(|m| m.node),
+                self.chunk_buf.first().map(|c| c.node),
+            );
+        }
+
+        // Reverse fixup: the chunks were built in forward data order. NOTE: reversing the
+        // `Vec<Chunk>` reverses `serial` along with `node` / `start` / `end` — deliberately, so each
+        // chunk's `serial` stays paired with its `node`. Upstream reverses only the node/start/end
+        // arrays (leaving the serial array in place); this is a correctness-preserving deviation.
+        if self.direction == Direction::Reverse {
+            let n = self.chunk_buf.len();
+            if n > 1 {
+                self.chunk_buf.reverse();
+                // SAFETY: see above.
+                let first_rows = unsafe { self.chunk_buf[0].node.as_ref() }.page_rows();
+                self.chunk_buf[0].start = self.chunk_buf[0].end - 1;
+                self.chunk_buf[0].end = first_rows;
+                self.chunk_buf[n - 1].end = self.chunk_buf[n - 1].start + 1;
+                self.chunk_buf[n - 1].start = 0;
+            } else {
+                let start_y = self.chunk_buf[0].start;
+                self.chunk_buf[0].start = self.chunk_buf[0].end - 1;
+                self.chunk_buf[0].end = start_y + 1;
+            }
+            std::mem::swap(&mut result.top_x, &mut result.bot_x);
+        }
+
+        result.chunks = self.chunk_buf.clone();
+        result
+    }
+}
+
+/// Narrow a page-relative row coordinate (`u32`) to `CellCountInt` (upstream `@intCast`). Page rows
+/// always fit.
+fn cell_row(y: u32) -> CellCountInt {
+    y.try_into().expect("page row fits CellCountInt")
 }
 
 #[cfg(test)]
@@ -275,6 +424,128 @@ mod tests {
         assert_eq!(added, 1);
         assert_eq!(w.data.iter().copied().collect::<Vec<u8>>(), b"\n");
         assert_eq!(w.meta[0].cell_map, vec![Coordinate::new(0, 0)]);
+    }
+
+    #[test]
+    fn highlight_single_meta_forward() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["abcdef"]);
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Forward, b"abc");
+        // SAFETY: `list` outlives `w`; the node pointer is not invalidated below.
+        unsafe { w.append(node) };
+
+        let h = w.highlight(0, 3);
+        assert_eq!(h.chunks.len(), 1);
+        assert_eq!(h.chunks[0].start, 0);
+        assert_eq!(h.chunks[0].end, 1);
+        assert_eq!(h.top_x, 0);
+        assert_eq!(h.bot_x, 2);
+        assert_eq!(w.data_offset, 1);
+        assert_eq!(w.meta.len(), 1);
+    }
+
+    #[test]
+    fn highlight_two_meta_forward_br_path() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["abcdef"]);
+        let node = list.first_node_ptr();
+        let page_rows = unsafe { node.as_ref() }.page_rows();
+
+        let mut w = SlidingWindow::new(Direction::Forward, b"abc");
+        // Append the same node twice to get two metas without multi-page plumbing.
+        // SAFETY: `list` outlives `w`; the node pointer is not invalidated below.
+        unsafe {
+            w.append(node);
+            w.append(node);
+        }
+
+        // data is "abcdef\nabcdef\n"; offsets 5..=8 span the meta boundary.
+        let h = w.highlight(5, 4);
+        assert_eq!(h.chunks.len(), 2);
+        // First chunk: start of match to the page bottom.
+        assert_eq!(h.chunks[0].start, 0);
+        assert_eq!(h.chunks[0].end, page_rows);
+        // Second chunk: page top to the end of match.
+        assert_eq!(h.chunks[1].start, 0);
+        assert_eq!(h.chunks[1].end, 1);
+        assert_eq!(h.top_x, 5);
+        assert_eq!(h.bot_x, 1);
+        assert_eq!(w.data_offset, 6);
+        assert_eq!(w.meta.len(), 2);
+    }
+
+    #[test]
+    fn highlight_prunes_metas_before_the_match() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["abcdef"]);
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Forward, b"abc");
+        // SAFETY: `list` outlives `w`; the node pointer is not invalidated below.
+        unsafe {
+            w.append(node);
+            w.append(node);
+        }
+
+        // Match starts in the second meta (offset 8), so the first meta is pruned.
+        let h = w.highlight(8, 3);
+        assert_eq!(h.chunks.len(), 1);
+        assert_eq!(h.top_x, 1);
+        assert_eq!(h.bot_x, 3);
+        assert_eq!(w.meta.len(), 1);
+        assert_eq!(w.data.iter().copied().collect::<Vec<u8>>(), b"abcdef\n");
+        assert_eq!(w.data_offset, 2);
+    }
+
+    #[test]
+    fn highlight_single_chunk_reverse_fixup() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["ab", "cd"]);
+        let node = list.first_node_ptr();
+
+        let mut w = SlidingWindow::new(Direction::Reverse, b"xyz");
+        // SAFETY: `list` outlives `w`; the node pointer is not invalidated below.
+        unsafe { w.append(node) };
+
+        // Reverse data is "\ndc\nba"; an interior match exercises the single-chunk reverse fixup.
+        let h = w.highlight(1, 3);
+        assert_eq!(h.chunks.len(), 1);
+        // start/end are inverted by the reverse rule (forward {start:1,end:1} -> {0,2}).
+        assert_eq!(h.chunks[0].start, 0);
+        assert_eq!(h.chunks[0].end, 2);
+    }
+
+    #[test]
+    fn highlight_multi_meta_reverse_keeps_serial_paired_with_node() {
+        let mut list = PageList::init(80, 24, None).unwrap();
+        list.grow_to_two_pages_for_tests();
+        let first = list.first_node_ptr();
+        let last = list.last_node_ptr();
+        // The two pages have distinct serials.
+        let first_serial = unsafe { first.as_ref() }.serial();
+        let last_serial = unsafe { last.as_ref() }.serial();
+        assert_ne!(first_serial, last_serial);
+
+        // Reverse traversal appends pages last-to-first.
+        let mut w = SlidingWindow::new(Direction::Reverse, b"x");
+        // SAFETY: `list` outlives `w`; the node pointers are not invalidated below.
+        unsafe {
+            w.append(last);
+            w.append(first);
+        }
+
+        // Span both metas (each blank page contributes one '\n').
+        let h = w.highlight(0, 2);
+        assert_eq!(h.chunks.len(), 2);
+        // After the reverse fixup, every chunk's serial still matches its own node's serial — the
+        // guard for the reverse-`serial` deviation.
+        for chunk in &h.chunks {
+            assert_eq!(chunk.serial, unsafe { chunk.node.as_ref() }.serial());
+        }
+        // And the two chunks reference the two distinct nodes.
+        assert_ne!(h.chunks[0].serial, h.chunks[1].serial);
     }
 
     #[test]

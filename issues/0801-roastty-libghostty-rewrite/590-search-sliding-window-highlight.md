@@ -380,3 +380,75 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d590-prompt.md`
 - Result: `logs/codex-review/20260604-d590-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`terminal::search::sliding_window` gained `SlidingWindow::highlight` and the
+file-local `cell_row` helper; `page_list.rs` gained `Node::page_rows`, promoted
+`last_node_ptr` to `pub(in crate::terminal)`, and added a
+`#[cfg(test)] grow_to_two_pages_for_tests` helper. `highlight` performs the
+top-left search (within-one-meta vs start-only cases), the optional bottom-right
+continuation (full-page middle chunks + the terminal chunk), sets `top_x` /
+`bot_x`, advances `data_offset = start - prune_data + 1`, prunes the metas/data
+before the start meta (with the post-prune `meta.front()` vs `chunk_buf.first()`
+debug check), applies the reverse fixup (the `> 1` and single-chunk cases plus
+the `top_x` / `bot_x` swap), and clones `chunk_buf` into `result.chunks`. The
+reverse fixup reverses whole `Chunk`s, keeping each `serial` paired with its
+`node` — the one deliberate correctness-preserving deviation from upstream.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3257 passed, 0 failed (five new tests; no
+  regressions, up from 3252).
+- `cargo build -p roastty`: no warnings (`highlight` is uncalled until `next`,
+  but the search module carries `#[allow(dead_code)]`).
+- no-`ghostty`-name greps (font/renderer/config + terminal/search + page_list.rs
+  - lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The five new tests: single-meta forward (`highlight(0, 3)` → one chunk `{0, 1}`,
+`top_x 0` / `bot_x 2`, `data_offset 1`); two-meta forward `br` path (same node
+twice, `highlight(5, 4)` → two chunks `[{0, page_rows}, {0, 1}]`, `top_x 5` /
+`bot_x 1`, `data_offset 6`); prune (same node twice, `highlight(8, 3)` → first
+meta pruned, `meta.len() == 1`, `data == "abcdef\n"`, `data_offset 2`);
+single-chunk reverse fixup (`["ab", "cd"]`, the chunk's `start` / `end` inverted
+to `{0, 2}`); and the multi-meta reverse serial guard (a two-page list with
+distinct serials, reverse-appended, where every returned chunk's `serial` still
+equals its own node's serial).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet saved — added here). Codex confirmed the implementation matches the
+upstream `highlight` flow (top-left search, optional bottom-right continuation,
+chunk ranges, `top_x` / `bot_x`, `data_offset = start - prune_data + 1`, and the
+delayed meta/data pruning are all faithful; the post-prune debug check is in the
+right place before the reverse reordering), and that the reverse fixup is sound
+— reversing whole `Chunk`s deliberately keeps `serial` paired with `node`, and
+the distinct-node reverse test covers the deviation that same-node tests cannot;
+`cell_row` and `Node::page_rows` are the appropriate mappings for the row casts
+and full-page chunk bounds.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r590-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r590-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports `highlight` — the half of the search matcher that turns a
+match byte-range into a `Flattened` highlight (a `Chunk` per spanned page plus
+`top_x` / `bot_x`), pruning consumed metas/data and advancing `data_offset`. The
+`VecDeque` adaptation maps `MetaBuf.Iterator` + `.idx` to index iteration and
+`deleteOldest` to `drain`; the one deliberate divergence is reversing whole
+`Chunk`s in the reverse fixup so `serial` stays paired with `node` (upstream
+reverses only the node/start/end arrays). The remaining matcher half is
+`SlidingWindow::next`: scan the window's data — across the two `VecDeque` slices
+and the `overlap_buf` for cross-page matches — for the needle (case-insensitive
+ASCII), call `highlight` on a hit, special-case 1-length needles, and on a miss
+prune everything except the trailing `needle.len() - 1` overlap bytes. After
+`next`, the higher-level searchers (`active` / `pagelist` / `screen` /
+`viewport`) and the search `Thread` remain.

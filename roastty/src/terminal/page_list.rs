@@ -84,6 +84,12 @@ impl Node {
         self.page.get_row(rows as usize - 1).wrap()
     }
 
+    /// The page's row count (upstream `node.data.size.rows`). Search uses it for full-page chunk
+    /// bounds.
+    pub(in crate::terminal) fn page_rows(&self) -> CellCountInt {
+        self.page.size_rows()
+    }
+
     /// Encode this page's full contents as plain, soft-unwrapped text with a per-byte cell map
     /// (upstream `PageFormatter` with `emit: plain, unwrap: true`, plus its `point_map`). Used by
     /// the search subsystem (`SlidingWindow::append`). Each output byte gets one page-relative
@@ -2090,7 +2096,7 @@ impl PageList {
         )
     }
 
-    fn last_node_ptr(&self) -> NonNull<Node> {
+    pub(in crate::terminal) fn last_node_ptr(&self) -> NonNull<Node> {
         NonNull::from(
             self.pages
                 .last()
@@ -3173,6 +3179,15 @@ impl PageList {
             .page
             .append_grapheme_at(pin.x as usize, pin.y as usize, codepoint)
             .expect("test grapheme should append");
+    }
+
+    /// Grow this list until it spans at least two pages (one full page's worth of extra rows), so
+    /// tests have two distinct page nodes with distinct serials.
+    #[cfg(test)]
+    pub(in crate::terminal) fn grow_to_two_pages_for_tests(&mut self) {
+        let page_rows = self.pages[0].page.capacity().rows() as usize;
+        self.grow_rows(page_rows).expect("grow to two pages");
+        assert!(self.pages.len() >= 2, "expected at least two pages");
     }
 
     #[cfg(test)]

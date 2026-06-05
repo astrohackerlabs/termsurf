@@ -1626,7 +1626,7 @@ are past the correctness-critical foundation.
 - [Experiment 589: search SlidingWindow append (+ integrity)](589-search-sliding-window-append.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 590: search SlidingWindow highlight (flattened match builder)](590-search-sliding-window-highlight.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
