@@ -206,3 +206,69 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d562-prompt.md`
 - Result: `logs/codex-review/20260604-d562-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`Lru::resize` was added, **completing the `Lru` port**. The arena was refactored
+from `Vec<Node>` to `Vec<Option<Node>>` plus a `free: Vec<usize>` list, with
+private `node` / `node_mut` accessors (`as_ref()` /
+`as_mut().expect("occupied slot")`, justified by the map/list invariant). `get`,
+the at-capacity eviction path (now `nodes[lru].replace(…)`), and `unlink` /
+`link_tail` use the accessors; `get_or_put_with`'s miss-allocation reuses a
+freed slot (`free.pop()`) when available, else pushes. `resize(capacity)`
+returns `None` after just updating the capacity when growing or shrinking to ≥
+the current count, and otherwise evicts the `delta = count − capacity`
+least-recently-used entries (oldest first — popping `head`, `unlink`, `take()`,
+free the slot), returning their values as `Some(Vec<V>)`.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3117 passed, 0 failed (five new tests; no
+  regressions, up from 3112).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/lru.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The five new tests: grow (keeps entries, `capacity()` updated),
+shrink-without-removal, shrink-with-removal (`resize(1)` on `[1, 2]` ⇒
+`Some(vec![1])`; survivor `2` becomes the LRU and the next miss evicts
+`(2, 2)`), oldest-first eviction (`resize(1)` on `[1, 2, 3]` ⇒
+`Some(vec![1, 2])`), and free-slot reuse (a shrink frees a slot, a
+grow-then-insert reuses it with the LRU order intact).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet in the saved file — added here as part of result recording). Codex
+confirmed the implementation matches upstream `resize` semantics (grow /
+shrink-without-removal update capacity and return `None`; shrink-below-count
+evicts from the LRU end, oldest first, returning values in order), the
+`Vec<Option<Node>>` + `free` refactor is sound, the occupied-slot `expect()`s
+are justified by the map/list invariant, and `unlink` / `link_tail` preserve
+`head` / `tail` behavior through partial and full eviction; the tests cover the
+key paths including oldest-first eviction and free-slot reuse.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r562-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r562-last-message.md` (result)
+
+## Conclusion
+
+`terminal::lru::Lru` is now **fully ported** from `datastruct/lru.zig` (`init`,
+`get`, `get_or_put`, `resize`). Completing `resize` forced the arena's free-slot
+story: upstream's `alloc.destroy(entry)` became `take()`-ing the slot to `None`
+and recording its index in a `free` list that `get_or_put` reuses —
+`Vec<Option<Node>>` being the safe Rust representation of an arena slot whose
+value has been moved out. roastty's fourth `datastruct/` type is complete. The
+remaining `datastruct/` work is `intrusive_linked_list` (the raw-pointer
+machinery), `segmented_pool` (libuv-shaped), `blocking_queue` (channel-like),
+and the large `split_tree`. The terminal **search subsystem** (now that
+`CircBuf` and the cache datastructs are in place) is the other natural target.
+The objc/bundle-id helpers, the `home()` resolver, and config `loadDefaultFiles`
+remain deferred pending roastty's naming decision; `background-image-opacity`
+stays float-blocked.

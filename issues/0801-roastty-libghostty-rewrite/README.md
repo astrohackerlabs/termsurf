@@ -1570,7 +1570,7 @@ are past the correctness-critical foundation.
 - [Experiment 561: the LRU cache core (Lru)](561-lru-core.md) — **Pass** ·
   Claude/Codex/Codex
 - [Experiment 562: LRU resize (free-slot reuse + shrink eviction)](562-lru-resize.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
