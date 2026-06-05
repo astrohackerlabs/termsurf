@@ -194,3 +194,48 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-191100-d531-prompt.md` (design)
 - Result: `logs/codex-review/20260604-191100-d531-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`resolve_xdg_config` (pure) and `xdg_config_dir` (env-reading wrapper) were
+added to `config/loader.rs`. The resolution matches upstream's macOS XDG core:
+non-empty `$XDG_CONFIG_HOME` wins (used as-is with no subdir, or joined with
+one), else `$HOME/.config[/subdir]`, else `None`. The new test
+`resolve_xdg_config_precedence_and_fallback` covers the precedence, no-subdir,
+home-fallback, and no-home cases.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3021 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches the approved macOS XDG core — non-empty
+`XDG_CONFIG_HOME` wins (returned as-is or joined with the subdir), else
+`$HOME/.config[/subdir]`, else `None`; the doc clarification that `home` is the
+`$HOME` fallback (not Zig's higher-priority `opts.home`) resolves the only
+ambiguity; the tests cover precedence, no-subdir, home-fallback, and no-home;
+gates are clean and the remaining default-path orchestration is deferred.
+"Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-191304-r531-prompt.md` (result)
+- Result: `logs/codex-review/20260604-191304-r531-last-message.md` (result)
+
+## Conclusion
+
+The XDG config-directory resolution is ported. The next building block is the
+**macOS app-support path** (`macos.appSupportDir` —
+`~/Library/Application Support/<bundle>`), then the `loadDefaultFiles`
+orchestration (resolve the XDG + app-support candidate paths, `load_file` each
+that exists, warn on duplicates, write a template when none exist) with
+roastty's concrete config subdir/filename. The `--key=value` CLI-arg form also
+remains; `background-image-opacity` stays float-blocked.

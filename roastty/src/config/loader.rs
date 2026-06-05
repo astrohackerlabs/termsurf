@@ -4,6 +4,50 @@
 //! multi-line driver and file IO are layered on top of this per-line extraction.
 #![allow(dead_code)]
 
+use std::path::PathBuf;
+
+/// Resolve the XDG config directory from explicit env values (upstream `xdg.dir`'s
+/// core for macOS): `$XDG_CONFIG_HOME` (joined with `subdir`, or used as-is with no
+/// subdir) when present; else `$HOME/.config` joined with `subdir`; else `None`
+/// (upstream `error.NoHomeDir`). `xdg_config_home` / `home` are the **non-empty** env
+/// values (`None` when unset or empty); `home` is the `$HOME` fallback input (not
+/// Zig's higher-precedence `opts.home`).
+fn resolve_xdg_config(
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+    subdir: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(xdg) = xdg_config_home {
+        let mut p = PathBuf::from(xdg);
+        if let Some(s) = subdir {
+            p.push(s);
+        }
+        return Some(p);
+    }
+    if let Some(home) = home {
+        let mut p = PathBuf::from(home);
+        p.push(".config");
+        if let Some(s) = subdir {
+            p.push(s);
+        }
+        return Some(p);
+    }
+    None
+}
+
+/// The XDG config directory (upstream `internal_os.xdg.config` for macOS): reads
+/// `$XDG_CONFIG_HOME` / `$HOME` from the environment and resolves the config path.
+pub(crate) fn xdg_config_dir(subdir: Option<&str>) -> Option<PathBuf> {
+    fn env_nonempty(name: &str) -> Option<String> {
+        std::env::var(name).ok().filter(|v| !v.is_empty())
+    }
+    resolve_xdg_config(
+        env_nonempty("XDG_CONFIG_HOME").as_deref(),
+        env_nonempty("HOME").as_deref(),
+        subdir,
+    )
+}
+
 /// Parse one config-file line into a `(key, value)` pair (upstream
 /// `cli.args.LineIterator.next`'s per-line logic). Returns `None` for a blank line or
 /// a `#` comment. A line with `=` yields `(key, Some(value))` with the key and value
@@ -73,5 +117,30 @@ mod tests {
         assert_eq!(parse_config_line("# a comment"), None);
         // A comment is detected after the surrounding trim (leading spaces).
         assert_eq!(parse_config_line("   # x = y"), None);
+    }
+
+    #[test]
+    fn resolve_xdg_config_precedence_and_fallback() {
+        let p = |s: &str| PathBuf::from(s);
+
+        // `$XDG_CONFIG_HOME` takes precedence over `$HOME`, joined with the subdir.
+        assert_eq!(
+            resolve_xdg_config(Some("/x"), Some("/h"), Some("roastty/config")),
+            Some(p("/x/roastty/config"))
+        );
+        // `$XDG_CONFIG_HOME` with no subdir is used as-is.
+        assert_eq!(resolve_xdg_config(Some("/x"), None, None), Some(p("/x")));
+        // Only `$HOME`: `$HOME/.config` joined with the subdir.
+        assert_eq!(
+            resolve_xdg_config(None, Some("/h"), Some("roastty/config")),
+            Some(p("/h/.config/roastty/config"))
+        );
+        // `$HOME` with no subdir is `$HOME/.config`.
+        assert_eq!(
+            resolve_xdg_config(None, Some("/h"), None),
+            Some(p("/h/.config"))
+        );
+        // Neither set is `None` (upstream `NoHomeDir`).
+        assert_eq!(resolve_xdg_config(None, None, Some("roastty/config")), None);
     }
 }
