@@ -1512,7 +1512,7 @@ are past the correctness-critical foundation.
 - [Experiment 532: the macOS Application Support config path (app_support_dir)](532-config-app-support-path.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 533: the optional-file load action (Config::load_optional_file)](533-config-load-optional-file.md)
-  — **Designed** · Claude/Codex/—
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

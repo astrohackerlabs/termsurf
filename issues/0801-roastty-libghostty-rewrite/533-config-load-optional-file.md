@@ -161,3 +161,51 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-191947-d533-prompt.md` (design)
 - Result: `logs/codex-review/20260604-191947-d533-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`OptionalFileAction` and `Config::load_optional_file` were added: a successful
+`load_file` ⇒ `Loaded(diagnostics)`, a `NotFound` IO error ⇒ `NotFound`, and any
+other IO error ⇒ `Error(e)` — faithful to upstream's `.loaded` / `.not_found` /
+`.@"error"` three-way action (the error path is non-fatal, returned for the
+caller rather than aborting). The new test
+`config_load_optional_file_three_way_action` covers an existing file (`Loaded`,
+field applied), a missing path (`NotFound`), and a directory (`Error`).
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3023 passed, 0 failed (one new test; no regressions).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + lib.rs/header/abi_harness.c)
+  clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no
+findings**: the implementation matches upstream `loadOptionalFile` — a
+successful load returns loaded, a missing path is distinct, and other IO
+failures are non-fatal action results rather than aborts; carrying diagnostics
+in `Loaded` is a useful Rust adaptation of the existing `load_file` shape; the
+tests cover all three actions and verify the successful file actually applies
+configuration; gates are clean and the default-file orchestration remains
+deferred. "Approved with no findings."
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-192436-r533-prompt.md` (result)
+- Result: `logs/codex-review/20260604-192436-r533-last-message.md` (result)
+
+## Conclusion
+
+`load_optional_file` is the orchestration step `loadDefaultFiles` builds on. The
+remaining config work is the **`loadDefaultFiles` orchestration** itself — which
+needs roastty's concrete config naming (the XDG subdir/filename and the macOS
+bundle id) and the config-template content; that naming is a product decision
+not yet made, so the orchestration stays deferred until it is. The path
+resolvers (`xdg_config_dir`, `app_support_dir`), `load_optional_file`,
+`load_file`, `load_str`, and the 43-of-44 `Config::set` are all in place to
+assemble it. The `--key=value` CLI-arg form also remains;
+`background-image-opacity` stays float-blocked.

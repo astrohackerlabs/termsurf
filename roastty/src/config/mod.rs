@@ -565,6 +565,28 @@ impl Config {
         let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
         Ok(self.load_str(text))
     }
+
+    /// Load a config file if it exists (upstream `Config.loadOptionalFile`): `Loaded`
+    /// with the diagnostics on success, `NotFound` when the file does not exist, or
+    /// `Error` for another IO error (the load is skipped, not aborted).
+    pub(crate) fn load_optional_file(&mut self, path: &std::path::Path) -> OptionalFileAction {
+        match self.load_file(path) {
+            Ok(diagnostics) => OptionalFileAction::Loaded(diagnostics),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => OptionalFileAction::NotFound,
+            Err(e) => OptionalFileAction::Error(e),
+        }
+    }
+}
+
+/// The result of `Config::load_optional_file` (upstream `OptionalFileAction`).
+#[derive(Debug)]
+pub(crate) enum OptionalFileAction {
+    /// The file was read and applied; carries its per-line diagnostics.
+    Loaded(Vec<ConfigDiagnostic>),
+    /// The file does not exist.
+    NotFound,
+    /// Another IO error occurred reading the file (the load is skipped).
+    Error(std::io::Error),
 }
 
 /// An error from `Config::set` (upstream `parseIntoField`'s
@@ -3323,13 +3345,13 @@ mod tests {
         FontStyle, FontStyleParseError, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden,
         MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
         MiddleClickAction, MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish,
-        NotifyOnCommandFinishAction, OscColorReportFormat, Palette, PaletteParseError,
-        RepeatableClipboardCodepointMap, RepeatableString, RepeatableStringParseError,
-        RightClickAction, ScrollToBottom, SelectionWordChars, SelectionWordCharsParseError,
-        ShellIntegration, ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme,
-        ThemeParseError, WindowColorspace, WindowDecoration, WindowDecorationParseError,
-        WindowPadding, WindowPaddingColor, WindowPaddingParseError, WindowSubtitle,
-        WorkingDirectory, WorkingDirectoryParseError,
+        NotifyOnCommandFinishAction, OptionalFileAction, OscColorReportFormat, Palette,
+        PaletteParseError, RepeatableClipboardCodepointMap, RepeatableString,
+        RepeatableStringParseError, RightClickAction, ScrollToBottom, SelectionWordChars,
+        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
+        TerminalBoldColor, TerminalColor, Theme, ThemeParseError, WindowColorspace,
+        WindowDecoration, WindowDecorationParseError, WindowPadding, WindowPaddingColor,
+        WindowPaddingParseError, WindowSubtitle, WorkingDirectory, WorkingDirectoryParseError,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -5876,6 +5898,41 @@ mod tests {
         let path = dir.join(format!("roastty-cfg-{stamp}-does-not-exist.conf"));
         let mut cfg = Config::default();
         assert!(cfg.load_file(&path).is_err());
+    }
+
+    #[test]
+    fn config_load_optional_file_three_way_action() {
+        let dir = std::env::temp_dir();
+        let stamp = std::process::id();
+
+        // An existing file ⇒ `Loaded` with its diagnostics; the field applies.
+        let path = dir.join(format!("roastty-opt-{stamp}.conf"));
+        std::fs::write(&path, "macos-hidden = always\n").unwrap();
+        let mut cfg = Config::default();
+        let action = cfg.load_optional_file(&path);
+        std::fs::remove_file(&path).ok();
+        match action {
+            OptionalFileAction::Loaded(diags) => assert!(diags.is_empty()),
+            other => panic!("expected Loaded, got {other:?}"),
+        }
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out.lines().any(|l| l == "macos-hidden = always"));
+
+        // A nonexistent path ⇒ `NotFound`.
+        let path = dir.join(format!("roastty-opt-{stamp}-missing.conf"));
+        let mut cfg = Config::default();
+        assert!(matches!(
+            cfg.load_optional_file(&path),
+            OptionalFileAction::NotFound
+        ));
+
+        // A directory (a non-`NotFound` IO error) ⇒ `Error`.
+        let mut cfg = Config::default();
+        assert!(matches!(
+            cfg.load_optional_file(&dir),
+            OptionalFileAction::Error(_)
+        ));
     }
 
     #[test]
