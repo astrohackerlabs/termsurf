@@ -126,6 +126,66 @@ impl StatusLineType {
     }
 }
 
+/// Possible cursor styles set via `ESC [ q` (upstream `terminal.ansi.CursorStyle`).
+/// Used by name; the `ESC [ q` parameter → style mapping lives in the parser, and the
+/// upstream `lib.Enum` value is not a stable wire value, so no numeric value is exposed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CursorStyle {
+    /// Default cursor style.
+    Default,
+    /// Blinking block.
+    BlinkingBlock,
+    /// Steady block.
+    SteadyBlock,
+    /// Blinking underline.
+    BlinkingUnderline,
+    /// Steady underline.
+    SteadyUnderline,
+    /// Blinking bar.
+    BlinkingBar,
+    /// Steady bar.
+    SteadyBar,
+}
+
+/// The display to target for status updates via DECSASD (upstream
+/// `terminal.ansi.StatusDisplay`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusDisplay {
+    /// The main display.
+    Main,
+    /// The status line.
+    StatusLine,
+}
+
+/// The modify-key format for `ESC [ > a;b m` (upstream `terminal.ansi.ModifyKeyFormat`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModifyKeyFormat {
+    /// Legacy.
+    Legacy,
+    /// Cursor keys.
+    CursorKeys,
+    /// Function keys.
+    FunctionKeys,
+    /// Other keys: none.
+    OtherKeysNone,
+    /// Other keys: numeric except.
+    OtherKeysNumericExcept,
+    /// Other keys: numeric.
+    OtherKeysNumeric,
+}
+
+/// The terminal protection modes set via DECSCA and `ESC V, W` (upstream
+/// `terminal.ansi.ProtectedMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProtectedMode {
+    /// No protection.
+    Off,
+    /// ISO protection (`ESC V`, `ESC W`).
+    Iso,
+    /// DEC protection (`CSI Ps " q`).
+    Dec,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +256,51 @@ mod tests {
         }
         assert_eq!(StatusLineType::HostWritable.value(), 2);
         assert_eq!(StatusLineType::from_value(3), None);
+    }
+
+    #[test]
+    fn ansi_mode_enums() {
+        // The four mode enums have exactly the upstream variant sets (used by name).
+        let cursor = [
+            CursorStyle::Default,
+            CursorStyle::BlinkingBlock,
+            CursorStyle::SteadyBlock,
+            CursorStyle::BlinkingUnderline,
+            CursorStyle::SteadyUnderline,
+            CursorStyle::BlinkingBar,
+            CursorStyle::SteadyBar,
+        ];
+        assert_eq!(cursor.len(), 7);
+        // Each variant is distinct from the others.
+        for (i, a) in cursor.iter().enumerate() {
+            for (j, b) in cursor.iter().enumerate() {
+                assert_eq!(i == j, a == b);
+            }
+        }
+
+        let display = [StatusDisplay::Main, StatusDisplay::StatusLine];
+        assert_eq!(display.len(), 2);
+        assert_ne!(StatusDisplay::Main, StatusDisplay::StatusLine);
+
+        let modify = [
+            ModifyKeyFormat::Legacy,
+            ModifyKeyFormat::CursorKeys,
+            ModifyKeyFormat::FunctionKeys,
+            ModifyKeyFormat::OtherKeysNone,
+            ModifyKeyFormat::OtherKeysNumericExcept,
+            ModifyKeyFormat::OtherKeysNumeric,
+        ];
+        assert_eq!(modify.len(), 6);
+        for (i, a) in modify.iter().enumerate() {
+            for (j, b) in modify.iter().enumerate() {
+                assert_eq!(i == j, a == b);
+            }
+        }
+
+        let protected = [ProtectedMode::Off, ProtectedMode::Iso, ProtectedMode::Dec];
+        assert_eq!(protected.len(), 3);
+        assert_ne!(ProtectedMode::Off, ProtectedMode::Iso);
+        assert_ne!(ProtectedMode::Iso, ProtectedMode::Dec);
+        assert_ne!(ProtectedMode::Off, ProtectedMode::Dec);
     }
 }

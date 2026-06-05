@@ -187,3 +187,56 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d538-prompt.md` (design)
 - Result: `logs/codex-review/20260604-d538-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`CursorStyle` (7 variants), `StatusDisplay` (2), `ModifyKeyFormat` (6), and
+`ProtectedMode` (3) were added to `terminal::ansi` as plain Rust enums with
+PascalCase variants matching the upstream keys in order. No numeric `value()` /
+`from_value()` is exposed — these enums are used by name and upstream's
+`lib.Enum` Zig-target value is not a stable wire value. This completes the
+`terminal::ansi` enum port. The new `ansi_mode_enums` test constructs every
+variant of each enum, checks the exact variant counts (7 / 2 / 6 / 3), and
+confirms all variants are mutually distinct.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3029 passed, 0 failed (one new test; no regressions,
+  up from 3028).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/ansi.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings on the implementation). The Nit: the doc had
+`## Result` but no `## Conclusion`, which the issue workflow expects — fixed by
+adding the conclusion below. Codex confirmed the four variant sets are faithful
+to upstream (`ansi.zig:54-106`), including order (`CursorStyle` 7,
+`StatusDisplay` 2, `ModifyKeyFormat` 6, `ProtectedMode` 3); the by-name port
+with no `value()` / `from_value()` is correct because `lib.Enum` values are not
+stable wire values; `cursor::VisualStyle` remains a separate render-side
+abstraction, not a duplicate of `ansi::CursorStyle`; the `ansi_mode_enums` test
+adequately verifies the variant sets; and the VT-parameter mappings remain
+properly deferred.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r538-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r538-last-message.md` (result)
+
+## Conclusion
+
+The `terminal::ansi` enum port is now complete: all six `ansi.zig` enums are
+bridged — the three non-exhaustive value enums with stable wire values (`C0`,
+`RenditionAspect`, `StatusLineType`; Experiments 536–537) and the four by-name
+mode enums (`CursorStyle`, `StatusDisplay`, `ModifyKeyFormat`, `ProtectedMode`;
+this experiment). The next VT slices move to the parser/dispatch consumers that
+give these enums their parameter mappings — the `csi` types not already in
+`stream`, the `apc` handler, `parse_table`, and the `Parser`. The config
+`loadDefaultFiles` stays deferred pending roastty's naming decision;
+`background-image-opacity` stays float-blocked.
