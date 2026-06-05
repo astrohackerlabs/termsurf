@@ -1643,6 +1643,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 598: search ScreenSearch selected_match](598-search-screen-selected-match.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 599: highlight tracking lifecycle (Untracked::track / Tracked::init / deinit)](599-highlight-tracking-lifecycle.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
