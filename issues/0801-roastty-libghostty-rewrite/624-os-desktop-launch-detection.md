@@ -171,3 +171,56 @@ returns `false`. The unsafe PID call is isolated behind `current_parent_pid()`,
 and the test plan covers both the deterministic macOS rule and the public
 non-macOS shape. Follow-up review approved the corrected design with no
 remaining Required changes.
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/os/desktop.rs` now provides the macOS slice of upstream
+`os/desktop.zig`. `desktop_environment()` reports `Macos` on macOS and `Other`
+on non-macOS test/build hosts. `launched_from_desktop()` is cfg-gated so macOS
+uses the renamed `ROASTTY_MAC_LAUNCH_SOURCE` override plus `getppid() == 1`,
+while non-macOS returns `false`.
+
+The deterministic `launched_from_desktop_macos_rule` helper covers the upstream
+decision table without depending on the real Cargo test parent process. Only the
+`app` launch source forces a desktop launch; `cli`, `zig_run`, empty, unknown,
+and missing values fall back to the parent pid rule.
+
+Gates (all green):
+
+- `cargo test -p roastty os::desktop::tests` — **5 passed / 0 failed** focused
+  tests on this macOS host. The non-macOS public-false test is cfg-gated for
+  non-macOS hosts.
+- `cargo build -p roastty` — no warnings.
+- `cargo test -p roastty` — **3449 passed / 0 failed** unit tests, plus **1
+  passed / 0 failed** ABI harness test and **0** doc tests.
+- `cargo fmt -p roastty -- --check` — clean.
+- no-ghostty grep on `roastty/src/os/desktop.rs` and `roastty/src/os/mod.rs` —
+  clean.
+- `git diff --check` — clean.
+
+## Conclusion
+
+Roastty now has the macOS desktop launch signal needed by later app startup,
+environment setup, shell, and config slices. The port keeps the platform shape
+explicit: macOS gets Finder/`open` detection, and non-macOS hosts get inert test
+scaffolding rather than Linux/BSD desktop behavior.
+
+## Completion Review
+
+**Reviewer:** Codex (gpt-5.5, medium) · resumed session
+`019e8f83-9029-7d43-8e82-f4c5754e14ba`
+
+**Verdict:** APPROVED — no code or documentation fixes required before the
+result commit.
+
+Codex confirmed the implementation matches the approved design:
+`desktop_environment()` reports `Macos` on macOS and `Other` elsewhere;
+`launched_from_desktop()` uses `ROASTTY_MAC_LAUNCH_SOURCE` plus the isolated
+`getppid()` helper only on macOS; non-macOS returns `false`; and the
+deterministic helper covers the upstream macOS decision table.
+
+The only Required note was procedural: `roastty/src/os/desktop.rs` was untracked
+at review time and must be explicitly staged for the result commit so the new
+`os::desktop` module reference is committed with its implementation.
