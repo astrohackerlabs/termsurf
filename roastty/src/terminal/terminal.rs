@@ -662,6 +662,10 @@ struct TerminalFlags {
     mouse_event: mouse::MouseEventMode,
     mouse_format: mouse::MouseFormat,
     mouse_shift_capture: Option<bool>,
+    /// Set by the renderer when the viewport/active area changes, so the search thread re-searches
+    /// the viewport (upstream `Terminal.flags.search_viewport_dirty`). roastty has no renderer port
+    /// yet, so only the search thread's `feed` reads/clears it and tests set it.
+    search_viewport_dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -858,6 +862,72 @@ pub(crate) struct TerminalFormatterExtra {
 }
 
 impl Terminal {
+    /// Whether the renderer marked the viewport/active area dirty (upstream
+    /// `Terminal.flags.search_viewport_dirty`). Raw-pointer read for the search thread's `feed`,
+    /// which holds cached pointers into this terminal's screens — so this projects through a raw
+    /// pointer rather than materializing a `&Terminal`.
+    ///
+    /// # Safety
+    /// `t` must be live and exclusively accessed (the search thread holds the lock).
+    pub(in crate::terminal) unsafe fn search_viewport_dirty(t: NonNull<Terminal>) -> bool {
+        // SAFETY: caller's contract — `t` is live.
+        unsafe { core::ptr::addr_of!((*t.as_ptr()).flags.search_viewport_dirty).read() }
+    }
+
+    /// Clear the viewport-dirty flag (upstream `t.flags.search_viewport_dirty = false`).
+    ///
+    /// # Safety
+    /// As `search_viewport_dirty`.
+    pub(in crate::terminal) unsafe fn clear_search_viewport_dirty(t: NonNull<Terminal>) {
+        // SAFETY: caller's contract — `t` is live.
+        unsafe { core::ptr::addr_of_mut!((*t.as_ptr()).flags.search_viewport_dirty).write(false) }
+    }
+
+    /// Mark the viewport dirty (upstream's renderer write; here for the future renderer port and
+    /// tests).
+    ///
+    /// # Safety
+    /// As `search_viewport_dirty`.
+    pub(in crate::terminal) unsafe fn mark_search_viewport_dirty(t: NonNull<Terminal>) {
+        // SAFETY: caller's contract — `t` is live.
+        unsafe { core::ptr::addr_of_mut!((*t.as_ptr()).flags.search_viewport_dirty).write(true) }
+    }
+
+    /// The active screen key (upstream `t.screens.active_key`).
+    ///
+    /// # Safety
+    /// As `search_viewport_dirty`.
+    pub(in crate::terminal) unsafe fn search_active_screen_key(
+        t: NonNull<Terminal>,
+    ) -> TerminalScreenKey {
+        // SAFETY: caller's contract — `t` is live.
+        unsafe { core::ptr::addr_of!((*t.as_ptr()).screens.active).read() }
+    }
+
+    /// The present screens as raw pointers (upstream iterating `t.screens.all`): `primary` always,
+    /// `alternate` only when it exists. Pointers are projected so they alias this terminal's screen
+    /// storage directly (no intermediate `&mut Terminal`).
+    ///
+    /// # Safety
+    /// As `search_viewport_dirty`.
+    pub(in crate::terminal) unsafe fn present_screen_ptrs(
+        t: NonNull<Terminal>,
+    ) -> Vec<(TerminalScreenKey, NonNull<Screen>)> {
+        // SAFETY: caller's contract — `t` is live.
+        let screens = unsafe { core::ptr::addr_of_mut!((*t.as_ptr()).screens) };
+        let mut out = Vec::new();
+        // SAFETY: `primary` always exists.
+        let primary = unsafe { core::ptr::addr_of_mut!((*screens).primary) };
+        out.push((TerminalScreenKey::Primary, NonNull::new(primary).unwrap()));
+        // SAFETY: project the alternate through a *shared* reference (only its pointer identity is
+        // needed). Using `as_ref` rather than `as_mut` avoids a mutable retag that could invalidate a
+        // cached `ScreenSearch` pointer to the same alternate screen.
+        if let Some(alt) = unsafe { (*core::ptr::addr_of!((*screens).alternate)).as_ref() } {
+            out.push((TerminalScreenKey::Alternate, NonNull::from(alt)));
+        }
+        out
+    }
+
     pub(crate) fn init(
         cols: CellCountInt,
         rows: CellCountInt,

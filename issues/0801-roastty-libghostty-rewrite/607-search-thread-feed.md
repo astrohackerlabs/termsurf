@@ -335,3 +335,73 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260605-d607-prompt.md`
 - Result: `logs/codex-review/20260605-d607-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+Implemented `Search::feed(&mut self, t: NonNull<Terminal>)` in `thread.rs`, plus
+the new `Terminal` surface (`terminal.rs`) and `ScreenSearch` accessors
+(`screen.rs`):
+
+- `TerminalFlags.search_viewport_dirty: bool` + raw-projection associated
+  functions on `Terminal` (all `unsafe`, taking `NonNull<Terminal>`, projecting
+  via `addr_of!` / `addr_of_mut!` with no `&Terminal` / `&mut Terminal`
+  materialized): `search_viewport_dirty`, `clear_search_viewport_dirty`,
+  `mark_search_viewport_dirty`, `search_active_screen_key`,
+  `present_screen_ptrs`.
+- `ScreenSearch::needs_feed` and `screen_ptr`.
+- `feed` ports upstream's (A) active-switch reset, (B) reconcile (remove on
+  missing/pointer-changed — dropping the searcher WITHOUT `deinit` to avoid a
+  use-after-free on a freed screen — then add), (C) viewport-dirty → active
+  reload, (D) viewport update over the active pages, (E) feed each needs-feed
+  searcher.
+
+Six tests (over a real `Terminal` driven by `next_slice`): searcher add + match,
+idempotence, dirty-flag clear, deinit pin release, and the RIS-based
+alternate-removal path (drop-without-deinit, no UAF). Gates: `cargo fmt --check`
+clean, `cargo build -p roastty` no warnings, `cargo test -p roastty` **3328
+passed / 0 failed** (3323 → 3328, +5), `git diff --check` clean. The no-ghostty
+grep flags only pre-existing `ghostty` test names in `terminal.rs` (present at
+HEAD, not introduced here; my additions are clean).
+
+## Completion Review
+
+Codex reviewed the completed experiment and raised **one Required** provenance
+finding, fixed and re-confirmed **APPROVED**:
+
+- **Required (fixed)**: `present_screen_ptrs`'s alternate branch materialized a
+  transient `&mut Screen` (a mutable retag that could invalidate a cached
+  `ScreenSearch` pointer to the same alternate). Changed to project through a
+  shared reference (`(*addr_of!(...)).as_ref()` → `NonNull::from(&Screen)`); the
+  primary branch stays on the raw `addr_of_mut!` path. The feed tests also now
+  derive the terminal pointer via `NonNull::new(addr_of_mut!(terminal))` instead
+  of `NonNull::from(&mut terminal)`, avoiding a reference retag after cached
+  screen pointers exist.
+
+Codex confirmed the rest is faithful and sound: `feed` takes `NonNull<Terminal>`
+(no whole-call `&mut Terminal`); the stale-searcher remove drops without
+`deinit`; the ordering matches upstream; the viewport-dirty handling is
+faithful; and the RIS test validly exercises the drop-without-deinit path (the
+search structs have no `Drop` that dereferences freed screen state).
+
+Review artifacts:
+
+- Design prompt/result:
+  `logs/codex-review/20260605-d607-{prompt,last-message}.md`
+- Result prompt/result:
+  `logs/codex-review/20260605-r607-{prompt,last-message}.md`
+- Re-confirmation: `logs/codex-review/20260605-r607b-{prompt,last-message}.md`
+
+## Conclusion
+
+`Search::feed` lands the search subsystem's first reach into `Terminal`, with a
+sound raw-pointer provenance model (validated across two design-review rounds)
+for caching `NonNull<Screen>` into terminal-owned screens. The remaining search
+`Thread` work is:
+
+- **`Search::notify`** + the `Event` / `EventCallback` types — the external
+  notification interface (the next experiment).
+- **The outer `Thread`** (OS thread + libxev event loop + mailbox + timers) —
+  still blocked on a libxev port, a genuine dependency boundary alongside the
+  regex/oniguruma and URI-parser blocks elsewhere in Issue 801.

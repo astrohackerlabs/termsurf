@@ -1660,7 +1660,7 @@ are past the correctness-critical foundation.
 - [Experiment 606: search Thread — part 1: the `Search` aggregator core](606-search-thread-aggregator.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 607: search Thread — part 2: `Search::feed` + Terminal integration](607-search-thread-feed.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

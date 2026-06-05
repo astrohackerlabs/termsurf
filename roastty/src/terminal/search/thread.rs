@@ -6,8 +6,10 @@
 //! reconciliation) and `notify` (the `Event` / `EventCallback` machinery), and the outer libxev
 //! event-loop `Thread`, are deferred to later slices — roastty has no libxev port yet.
 
+use std::ptr::NonNull;
+
 use super::super::highlight::Untracked;
-use super::super::terminal::TerminalScreenKey;
+use super::super::terminal::{Terminal, TerminalScreenKey};
 use super::screen::{ScreenSearch, Tick as ScreenTick};
 use super::viewport::ViewportSearch;
 
@@ -150,6 +152,91 @@ impl Search {
         }
         result
     }
+
+    /// Reconcile searchers with the terminal's screens, honor the viewport-dirty flag, update the
+    /// viewport search, and feed each searcher that needs it (upstream `feed`). This is the
+    /// lock-holding step (it reads/mutates terminal state).
+    ///
+    /// # Safety
+    /// `t` must be live and outlive this `Search`, the `Terminal` must not be moved/reallocated, and
+    /// the caller holds the screen lock (no concurrent access). The per-screen searchers cache
+    /// `NonNull<Screen>` into `t`'s screens; reconciliation drops a searcher whose screen vanished
+    /// or was replaced *without* dereferencing the stale pointer (see step B).
+    pub(in crate::terminal) unsafe fn feed(&mut self, t: NonNull<Terminal>) {
+        // (A) Active screen switch resets the per-screen notification state.
+        // SAFETY: caller's contract — `t` is live.
+        let active_key = unsafe { Terminal::search_active_screen_key(t) };
+        if active_key != self.last_screen.key {
+            self.last_screen = ScreenState {
+                key: active_key,
+                total: None,
+                selected: None,
+            };
+        }
+
+        // (B) Reconcile searchers with the terminal's screens. Collect the present screen pointers
+        // up front; no terminal reference is retained afterwards.
+        // SAFETY: caller's contract — `t` is live.
+        let present = unsafe { Terminal::present_screen_ptrs(t) };
+        for key in [TerminalScreenKey::Primary, TerminalScreenKey::Alternate] {
+            let remove = match self.screens.get(key) {
+                None => false,
+                Some(ss) => match present.iter().find(|(k, _)| *k == key) {
+                    None => true,                              // screen gone
+                    Some((_, ptr)) => ss.screen_ptr() != *ptr, // screen replaced
+                },
+            };
+            if remove {
+                // The backing screen was dropped or replaced, so its pin storage is already gone.
+                // Drop the searcher WITHOUT `deinit` (untracking against a freed screen would be
+                // use-after-free): roastty's `Screen` owns its tracked pins, so a dropped/replaced
+                // screen takes them with it. This is a deliberate divergence from upstream's
+                // `entry.value.deinit()`.
+                let _ = self.screens.take(key);
+            }
+        }
+        let needle = self.viewport.needle().to_vec();
+        for (key, ptr) in &present {
+            if self.screens.get(*key).is_some() {
+                continue;
+            }
+            // SAFETY: `ptr` is a live terminal screen (see `# Safety`); no terminal reference held.
+            let ss = unsafe { ScreenSearch::new(*ptr, &needle) };
+            self.screens.insert(*key, ss);
+        }
+
+        // (C) Viewport dirty → re-search the active area.
+        // SAFETY: `t` live; raw-pointer flag read, no reference materialized.
+        if unsafe { Terminal::search_viewport_dirty(t) } {
+            // SAFETY: `t` live.
+            unsafe { Terminal::clear_search_viewport_dirty(t) };
+            self.viewport.set_active_dirty(Some(true));
+            if let Some(ss) = self.screens.get_mut(active_key) {
+                // SAFETY: active screen live; no terminal reference held here.
+                unsafe { ss.reload_active() };
+            }
+        }
+
+        // (D) Update the viewport search over the active screen's pages.
+        if let Some((_, active_ptr)) = present.iter().find(|(k, _)| *k == active_key) {
+            // SAFETY: `active_ptr` is the live active screen; the `&Screen` is used only to read its
+            // `&PageList` for `update`, which dereferences no `ScreenSearch` pointer.
+            let pages = unsafe { active_ptr.as_ref() }.pages();
+            // SAFETY: `pages` is read-only for the call.
+            let updated = unsafe { self.viewport.update(pages) };
+            if updated {
+                self.stale_viewport_matches = true;
+            }
+        }
+
+        // (E) Feed each searcher that needs more data.
+        for ss in self.screens.iter_mut() {
+            if ss.needs_feed() {
+                // SAFETY: screen live; no terminal reference held here.
+                unsafe { ss.feed() };
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -276,5 +363,149 @@ mod tests {
         let mut resident = map.take(TerminalScreenKey::Primary).unwrap();
         // SAFETY: `screen` is alive.
         unsafe { resident.deinit() };
+    }
+
+    use crate::terminal::terminal::Terminal;
+
+    /// The primary screen's current tracked-pin count, read through the terminal's raw screen
+    /// pointer (the screens are private to `terminal.rs`).
+    fn primary_pin_count(t: NonNull<Terminal>) -> usize {
+        // SAFETY: `t` is live; the primary screen is always present.
+        let ptr = unsafe { Terminal::present_screen_ptrs(t) }[0].1;
+        // SAFETY: `ptr` points at the live primary screen.
+        unsafe { ptr.as_ref() }.tracked_pin_count()
+    }
+
+    #[test]
+    fn feed_adds_a_searcher_for_the_active_screen() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: `terminal` outlives `search`; exclusive access.
+        unsafe { search.feed(t) };
+
+        // A searcher exists for the active (Primary) screen, pointing at the terminal's screen.
+        // SAFETY: `t` live.
+        let present = unsafe { Terminal::present_screen_ptrs(t) };
+        let primary_ptr = present
+            .iter()
+            .find(|(k, _)| *k == TerminalScreenKey::Primary)
+            .unwrap()
+            .1;
+        let ss = search.screens.get(TerminalScreenKey::Primary).unwrap();
+        assert_eq!(ss.screen_ptr(), primary_ptr);
+
+        // It finds the needle.
+        // SAFETY: the screen is live.
+        unsafe {
+            search
+                .screens
+                .get_mut(TerminalScreenKey::Primary)
+                .unwrap()
+                .search_all()
+        };
+        assert!(
+            search
+                .screens
+                .get(TerminalScreenKey::Primary)
+                .unwrap()
+                .matches_len()
+                >= 1
+        );
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn feed_is_idempotent_for_unchanged_screens() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+        let after_first = primary_pin_count(t);
+        // A second feed neither duplicates the searcher nor tracks new pins.
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+        assert_eq!(primary_pin_count(t), after_first);
+        assert!(search.screens.get(TerminalScreenKey::Primary).is_some());
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn feed_clears_viewport_dirty_flag() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: `t` live.
+        unsafe { Terminal::mark_search_viewport_dirty(t) };
+        // SAFETY: `t` live.
+        assert!(unsafe { Terminal::search_viewport_dirty(t) });
+
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+        // The dirty handler cleared the flag and marked the viewport matches stale.
+        // SAFETY: `t` live.
+        assert!(!unsafe { Terminal::search_viewport_dirty(t) });
+        assert!(search.stale_viewport_matches);
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+    }
+
+    #[test]
+    fn feed_then_deinit_releases_pins() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        let baseline = primary_pin_count(t);
+
+        let mut search = Search::new(b"Fizz");
+        // SAFETY: as above.
+        unsafe { search.feed(t) };
+        assert!(primary_pin_count(t) > baseline);
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
+        assert_eq!(primary_pin_count(t), baseline);
+    }
+
+    #[test]
+    fn feed_drops_searcher_when_alternate_screen_goes_away() {
+        let mut terminal = Terminal::init(10, 10, None).unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+        // Enter the alternate screen (mode 1049): the terminal now has an alternate screen.
+        terminal.next_slice(b"\x1b[?1049h").unwrap();
+        terminal.next_slice(b"Fizz").unwrap();
+
+        let mut search = Search::new(b"Fizz");
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        // SAFETY: `terminal` outlives `search`.
+        unsafe { search.feed(t) };
+        assert!(search.screens.get(TerminalScreenKey::Alternate).is_some());
+
+        // A full reset (RIS) returns to the primary screen and DROPS the alternate, dangling the
+        // alternate searcher's cached pointer.
+        terminal.next_slice(b"\x1bc").unwrap();
+        let t = NonNull::new(core::ptr::addr_of_mut!(terminal)).unwrap();
+        // Reconciliation drops the now-stale alternate searcher WITHOUT deref (no use-after-free):
+        // its backing screen — and pin storage — was freed by the reset.
+        // SAFETY: `terminal` live.
+        unsafe { search.feed(t) };
+        assert!(search.screens.get(TerminalScreenKey::Alternate).is_none());
+        // The active primary screen keeps (or is freshly given) a searcher.
+        assert!(search.screens.get(TerminalScreenKey::Primary).is_some());
+
+        // SAFETY: `terminal` live; called once.
+        unsafe { search.deinit() };
     }
 }

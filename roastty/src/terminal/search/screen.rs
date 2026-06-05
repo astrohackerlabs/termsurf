@@ -149,6 +149,18 @@ impl ScreenSearch {
         self.state.is_complete()
     }
 
+    /// Whether this search wants a feed (upstream `self.state.needsFeed()`). Used by the
+    /// search-thread aggregator's `feed`.
+    pub(in crate::terminal) fn needs_feed(&self) -> bool {
+        self.state.needs_feed()
+    }
+
+    /// This search's backing screen pointer (upstream `screen_search.screen`). Used by the
+    /// search-thread aggregator to detect when the terminal reinitialized a screen.
+    pub(in crate::terminal) fn screen_ptr(&self) -> NonNull<Screen> {
+        self.screen
+    }
+
     /// All matches, ordered newest-to-oldest (upstream `matches`): the active results (stored
     /// forward) reversed, then the history results (already newest-to-oldest) appended. Returns an
     /// owned `Vec` (Rust ownership replaces upstream's caller-frees slice).
