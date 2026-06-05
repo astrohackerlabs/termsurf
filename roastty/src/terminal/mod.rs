@@ -126,3 +126,6 @@ mod tabstops;
 
 #[allow(dead_code)]
 pub(crate) mod terminal;
+
+#[allow(dead_code)]
+mod utf8_decoder;

@@ -245,3 +245,68 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d566-prompt.md`
 - Result: `logs/codex-review/20260604-d566-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`terminal::utf8_decoder::Utf8Decoder` was added: the two verbatim lookup tables
+(`CHAR_CLASSES` 256, `TRANSITIONS` 108), the `ACCEPT_STATE` / `REJECT_STATE`
+constants, and a `Utf8Decoder` (`accumulator: u32`, `state: u8`, `Default`) with
+`new` and `next(byte) -> (Option<u32>, bool)` reproducing the DFA exactly —
+continuation shift-or, class-masked first byte, transition lookup, and the
+accept (codepoint, consumed) / reject (`0xFFFD`, consumed iff the first byte) /
+mid-sequence (`None`, consumed) return cases. Registered via
+`#[allow(dead_code)] mod utf8_decoder;` in `terminal/mod.rs`. `stream.rs` was
+not touched.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3135 passed, 0 failed (three new tests; no
+  regressions, up from 3132).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/utf8_decoder.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The three new tests are the exact upstream vectors: ASCII (`"Hello, World!"`
+reconstructed), well-formed (`"😄✤ÁA"` → `[0x1F604, 0x2724, 0xC1, 0x41]`, every
+byte consumed first try), and partially-invalid
+(`b"\xF0\x9F\xF0\x9F\x98\x84\xED\xA0\x80"` →
+`[0xFFFD, 0x1F604, 0xFFFD, 0xFFFD, 0xFFFD]`, with a re-feed loop and an
+assertion that at least one `next` returned `consumed == false`).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet in the saved file — added here as part of result recording). Codex
+mechanically re-checked the _implemented_ Rust tables against upstream —
+`CHAR_CLASSES` 256/256 identical, `TRANSITIONS` 108/108 identical — and
+confirmed the DFA arithmetic, accept/reject reset behavior, `consumed`
+semantics, default state, and tests all match the approved design and upstream
+vectors, with `stream.rs` untouched.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r566-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r566-last-message.md` (result)
+
+## Conclusion
+
+`terminal::utf8_decoder::Utf8Decoder` is a 1:1 port of
+`terminal/UTF8Decoder.zig` — Bjoern Hoehrmann's DFA-based, error-replacing UTF-8
+decoder, with both lookup tables transcribed verbatim and verified byte-for-byte
+by the reviewer. It is the canonical standalone decoder upstream's stream parser
+imports; roastty's `stream.rs` keeps its own separate length-based decoder, so
+this port is independent (a future experiment could unify them — replacing
+`stream.rs`'s decoder with this one and rewiring the pending/re-feed logic — but
+that is a larger, test-sensitive change held for its own slice). This is the
+first port mined from `terminal/`'s small leaf files (after the `os/` and
+`datastruct/` layers); other unported leaves include `csi`, `file_type`,
+`ScreenSet`, and `UTF8Decoder`'s siblings. The remaining big-ticket items are
+`datastruct/split_tree` (2517 lines) and the terminal **search subsystem**
+(coupled to `PageList` / `Pin` / `Screen` / `Selection` / `PageFormatter`). The
+objc/bundle-id helpers, the `home()` resolver, and config `loadDefaultFiles`
+remain deferred pending roastty's naming decision; `background-image-opacity`
+stays float-blocked.

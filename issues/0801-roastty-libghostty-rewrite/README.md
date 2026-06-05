@@ -1578,7 +1578,7 @@ are past the correctness-critical foundation.
 - [Experiment 565: the BlockingQueue (fixed-capacity SPSC ring)](565-blocking-queue.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 566: the DFA UTF-8 decoder (Utf8Decoder)](566-utf8-decoder.md) —
-  **Designed** · Claude/Codex/Codex
+  **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 
