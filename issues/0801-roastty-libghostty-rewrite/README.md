@@ -1591,6 +1591,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 572: split tree foundations (Handle, Layout, Direction)](572-split-tree-handle.md)
   — **Pass** · Claude/Codex/Codex
+- [Experiment 573: split tree f16 structs (Split, Slot) via half::f16](573-split-tree-f16.md)
+  — **Designed** · Claude/Codex/Codex
 
 ## Non-Goals
 
