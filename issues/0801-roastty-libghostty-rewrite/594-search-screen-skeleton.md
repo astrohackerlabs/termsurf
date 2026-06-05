@@ -278,3 +278,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d594-prompt.md`
 - Result: `logs/codex-review/20260604-d594-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+A new `terminal::search::screen` module landed, declared
+`pub(crate) mod screen;`. It holds the state-machine vocabulary and the struct
+skeleton: the module-private `State` enum (`Active` / `History` / `HistoryFeed`
+/ `Complete`) with `is_complete` (`Complete`) and `needs_feed` (`HistoryFeed` or
+`Complete`); the `pub(in crate::terminal)` `Select` enum (`Next` / `Prev`); and
+the field definitions of `ScreenSearch` (`screen` as `NonNull<Screen>`,
+`active`, `history`, `state`, `selected`, the two `Vec<Flattened>` result lists,
+`rows` / `cols`), `SelectedMatch` (`idx` / `highlight: Tracked`), and
+`HistorySearch` (`searcher` / `start_pin`). Construction, teardown, and the
+search/select/feed logic are deferred. The struct's currently-unused fields rely
+on the module's `#[allow(dead_code)]`.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3278 passed, 0 failed (three new tests; no
+  regressions, up from 3275).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/search +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The three new tests: `is_complete` (`Complete` true, others false), `needs_feed`
+(`HistoryFeed` / `Complete` true, `Active` / `History` false), and `Copy` /
+equality for both enums.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet saved — added here). Codex confirmed the skeleton is faithful: the four
+states and predicates match upstream, `Select` has the two exposed directions,
+and the `ScreenSearch` / `SelectedMatch` / `HistorySearch` fields map correctly
+to the upstream vocabulary; `State` being module-private is the right adopted
+adjustment.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r594-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r594-last-message.md` (result)
+
+## Conclusion
+
+This experiment opens `ScreenSearch` — the largest searcher (~1552 lines) — with
+its state-machine vocabulary (`State` + `Select`) and the `ScreenSearch` /
+`SelectedMatch` / `HistorySearch` struct skeleton, following the
+vocabulary-first pattern used for the other subsystems. The next slices build
+the behavior on this skeleton: `init` / `reloadActive` (construct the searcher
+and load the active area, the trickiest piece — it diffs the new active top
+against the previous history start to decide whether to re-search), then the
+`active` → `history` → `history_feed` → `complete` state transitions and `feed`,
+the result accessors (`matches` / `matchesLen` / `needle`), and `select` /
+`selectNext` / `selectPrev` (stepping the tracked selected match). After
+`ScreenSearch`, `ViewportSearch` (`search/viewport.zig`) and the search `Thread`
+remain.
