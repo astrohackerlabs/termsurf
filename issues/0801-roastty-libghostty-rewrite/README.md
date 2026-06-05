@@ -1638,7 +1638,7 @@ are past the correctness-critical foundation.
 - [Experiment 595: search ScreenSearch result accessors](595-search-screen-results.md)
   — **Pass** · Claude/Codex/Codex
 - [Experiment 596: search ScreenSearch tick (the state machine step)](596-search-screen-tick.md)
-  — **Designed** · Claude/Codex/Codex
+  — **Pass** · Claude/Codex/Codex
 
 ## Non-Goals
 

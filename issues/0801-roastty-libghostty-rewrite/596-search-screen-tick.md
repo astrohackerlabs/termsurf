@@ -251,3 +251,62 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d596-prompt.md`
 - Result: `logs/codex-review/20260604-d596-last-message.md`
+
+## Result
+
+**Result:** Pass
+
+`ScreenSearch` gained the `Tick` outcome enum (`Progressed` / `FeedRequired` /
+`Complete`) and the `tick` / `tick_active` / `tick_history` methods. `tick`
+dispatches on `state`: `Active` runs `tick_active` (drains `active.next()` into
+`active_results`, then → `History`), `History` runs `tick_history` (no history →
+`Complete`; otherwise drains `searcher.next()` into `history_results`, skipping
+matches whose first chunk is in the `start_pin`'s node, then → `HistoryFeed`),
+`HistoryFeed` → `FeedRequired`, `Complete` → `Complete`. roastty's `next()`
+returns an owned `Flattened`, so the results are pushed directly (no re-clone);
+`tick` / `tick_history` are safe with an internal `unsafe` `start_pin` deref
+under the screen-alive invariant.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3284 passed, 0 failed (three new tests; no
+  regressions, up from 3281).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/search +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+The three new tests: `tick` draining the active area then completing with no
+history (`tick()` → `Progressed`, `matches_len() == 1`, then `Progressed`, then
+`Complete`); `tick` in `HistoryFeed` returning `FeedRequired`; and `tick` when
+`Complete` returning `Complete`. The `tick_history` dedup-with-history path is
+deferred to the construction slice (which provides a tracked `start_pin`).
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **no Required
+or Optional findings** (one Nit: the `## Result` / `## Conclusion` sections were
+not yet saved — added here). Codex confirmed the implementation is faithful:
+`tick` dispatches by state, the active area drains into the owned
+`active_results` then moves to history, history with no searcher completes,
+history with loaded results dedups against the tracked start node then requests
+a feed, and `HistoryFeed` / `Complete` return explicit outcomes; dropping the
+extra clone is correct for roastty's owned `Flattened`.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r596-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r596-last-message.md` (result)
+
+## Conclusion
+
+This experiment ports the `ScreenSearch` `tick` state machine — the lock-free
+incremental progress step that drains the active area then the loaded history
+(deduping the start-node overlap), driving the `Active` → `History` →
+`HistoryFeed` → `Complete` transitions. The remaining `ScreenSearch` work is the
+construction (`init` / `reload_active`, the trickiest piece — it loads the
+active area, sets up the `HistorySearch` with its tracked `start_pin`, and
+handles active-area growth into history), `feed` / `prune_history` (advance the
+history searcher and prune stale results), and `select` / `select_next` /
+`select_prev` (step the tracked selected match). After `ScreenSearch`,
+`ViewportSearch` (`search/viewport.zig`) and the search `Thread` remain.

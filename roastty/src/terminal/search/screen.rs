@@ -1,7 +1,9 @@
 //! Searches a whole `Screen` (port of upstream `terminal/search/screen.zig`). A state machine over
 //! `ActiveSearch` (the mutable active area) and `PageListSearch` (history) that caches results so a
-//! background search survives screen changes. This first slice lands the state-machine vocabulary
-//! and the struct skeleton; construction and the search/select/feed logic are deferred.
+//! background search survives screen changes. So far it lands the state-machine vocabulary and
+//! struct skeleton, the read-only result accessors (`needle` / `matches_len` / `matches`), and the
+//! `tick` state machine (`tick` / `tick_active` / `tick_history`); construction (`init` /
+//! `reload_active`), `feed` / `prune_history`, and `select` are deferred.
 
 use std::ptr::NonNull;
 
@@ -46,6 +48,18 @@ pub(in crate::terminal) enum Select {
     Next,
     /// Previous selection, oldest to newest, non-wrapping.
     Prev,
+}
+
+/// The outcome of a `tick` (upstream's `TickError` set, minus the OOM case which is infallible in
+/// Rust). `Progressed` is upstream's `Ok(void)` "made progress".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::terminal) enum Tick {
+    /// Progress was made; call `tick` again.
+    Progressed,
+    /// The search needs more data; the caller must `feed` (upstream `error.FeedRequired`).
+    FeedRequired,
+    /// The search is complete given the current screen state (upstream `error.SearchComplete`).
+    Complete,
 }
 
 /// The currently-selected match (upstream `ScreenSearch.SelectedMatch`).
@@ -109,10 +123,63 @@ impl ScreenSearch {
         results.extend(self.history_results.iter().cloned());
         results
     }
+
+    /// Make incremental progress on the search without accessing screen state (upstream `tick`).
+    /// Returns whether progress was made, a feed is required, or the search is complete.
+    pub(in crate::terminal) fn tick(&mut self) -> Tick {
+        match self.state {
+            State::Active => {
+                self.tick_active();
+                Tick::Progressed
+            }
+            State::History => {
+                self.tick_history();
+                Tick::Progressed
+            }
+            State::HistoryFeed => Tick::FeedRequired,
+            State::Complete => Tick::Complete,
+        }
+    }
+
+    /// Consume the entire active area into `active_results`, then move to history (upstream
+    /// `tickActive`). The active area is small, so this drains it in one go.
+    fn tick_active(&mut self) {
+        while let Some(hl) = self.active.next() {
+            self.active_results.push(hl);
+        }
+        self.state = State::History;
+    }
+
+    /// Consume the loaded history matches into `history_results` (deduping against the active area),
+    /// then request a feed (upstream `tickHistory`). No history → complete.
+    fn tick_history(&mut self) {
+        let history = match &mut self.history {
+            Some(h) => h,
+            None => {
+                self.state = State::Complete;
+                return;
+            }
+        };
+
+        while let Some(hl) = history.searcher.next() {
+            // Skip matches whose first chunk is in the start node — that node overlaps the active
+            // area, which is searched separately.
+            // SAFETY: `start_pin` is a tracked pin in the (alive) screen's storage; the screen
+            // outlives the search (the construction-time invariant).
+            let start_node = unsafe { history.start_pin.as_ref() }.node();
+            if hl.chunks[0].node == start_node {
+                continue;
+            }
+            self.history_results.push(hl);
+        }
+
+        self.state = State::HistoryFeed;
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::page_list::PageList;
     use super::*;
 
     #[test]
@@ -194,5 +261,48 @@ mod tests {
 
         let empty = build(Vec::new(), Vec::new());
         assert!(empty.matches().is_empty());
+    }
+
+    #[test]
+    fn tick_drains_active_then_completes_with_no_history() {
+        let mut list = PageList::init(10, 10, None).unwrap();
+        list.set_screen_text_lines_for_tests(&["Fizz"]);
+        let mut active = ActiveSearch::new(b"Fizz");
+        // SAFETY: `list` outlives `s`; its pages are not mutated.
+        unsafe { active.update(&list) };
+
+        let mut s = ScreenSearch {
+            screen: NonNull::dangling(),
+            active,
+            history: None,
+            state: State::Active,
+            selected: None,
+            history_results: Vec::new(),
+            active_results: Vec::new(),
+            rows: 10,
+            cols: 10,
+        };
+
+        // First tick drains the active area.
+        assert_eq!(s.tick(), Tick::Progressed);
+        assert_eq!(s.matches_len(), 1);
+        // Second tick: no history -> complete.
+        assert_eq!(s.tick(), Tick::Progressed);
+        // Now complete.
+        assert_eq!(s.tick(), Tick::Complete);
+    }
+
+    #[test]
+    fn tick_in_history_feed_requests_a_feed() {
+        let mut s = build(Vec::new(), Vec::new());
+        s.state = State::HistoryFeed;
+        assert_eq!(s.tick(), Tick::FeedRequired);
+    }
+
+    #[test]
+    fn tick_when_complete_reports_complete() {
+        let mut s = build(Vec::new(), Vec::new());
+        s.state = State::Complete;
+        assert_eq!(s.tick(), Tick::Complete);
     }
 }
