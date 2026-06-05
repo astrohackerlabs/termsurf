@@ -1559,8 +1559,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Codex/Codex
 - [Experiment 556: the circular buffer core (CircBuf)](556-circ-buf-core.md) —
   **Pass** · Claude/Codex/Codex
-- [Experiment 557: the CircBuf iterator](557-circ-buf-iterator.md) —
-  **Designed** · Claude/Codex/Codex
+- [Experiment 557: the CircBuf iterator](557-circ-buf-iterator.md) — **Pass** ·
+  Claude/Codex/Codex
 
 ## Non-Goals
 

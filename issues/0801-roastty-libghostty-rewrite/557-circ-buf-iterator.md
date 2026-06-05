@@ -227,3 +227,54 @@ Review artifacts:
 
 - Prompt: `logs/codex-review/20260604-d557-prompt.md` (design)
 - Result: `logs/codex-review/20260604-d557-last-message.md` (design)
+
+## Result
+
+**Result:** Pass
+
+`terminal::circ_buf` gained `Direction` (`Forward` / `Reverse`), the borrowing
+`Iter<'a, T>`, and `CircBuf::iterator`. `Iter::next` translates the logical
+index to storage (`Forward` from `tail`, `Reverse` from `len - idx - 1`, modulo
+`capacity`) and stops at `len`; `seek_by` moves the index saturatingly; `reset`
+zeroes it. Four new tests: forward (oldest-first) / reverse (newest-first) over
+`[1, 2, 3]`; iteration across the wrap (after a `delete_oldest` + wrapping
+`append`, forward ⇒ `2, 3, 4`, reverse ⇒ `4, 3, 2`); `seek_by` (skip +
+saturating negative) and `reset`; and an empty-buffer `next() == None`.
+
+Gates:
+
+- `cargo fmt -p roastty` accepted; `--check` clean.
+- `cargo test -p roastty`: 3093 passed, 0 failed (four new tests; no
+  regressions, up from 3089).
+- `cargo build -p roastty`: no warnings.
+- no-`ghostty`-name greps (font/renderer/config + terminal/circ_buf.rs +
+  lib.rs/header/abi_harness.c) clean; `git diff --check` clean.
+
+## Completion Review
+
+Codex reviewed the completed experiment and **approved** it with **one Nit** (no
+Required or Optional findings): the doc had `## Result` but no `## Conclusion` —
+fixed by adding the conclusion below. Codex confirmed the implementation matches
+upstream — the forward/reverse index translation is exact, wrapped iteration is
+covered, `idx >= len` stops before any underflow/modulo edge, `seek_by` uses the
+right saturating behavior, and `reset` restores index `0` — and that the
+borrowing iterator is a sound Rust equivalent for this read-only view.
+
+Review artifacts:
+
+- Prompt: `logs/codex-review/20260604-r557-prompt.md` (result)
+- Result: `logs/codex-review/20260604-r557-last-message.md` (result)
+
+## Conclusion
+
+`terminal::circ_buf` now has its forward/reverse `Iter` (with `seek_by` /
+`reset`), faithfully ported from `CircBuf.Iterator` — the read-only traversal
+callers (and the search subsystem) use to walk the ring oldest→newest or
+newest→oldest. Combined with Experiment 556's core, the CircBuf can now be
+built, appended/wrapped, queried, deleted-from, and iterated. The remaining
+CircBuf slices are auto-growing (`resize` / `ensureUnusedCapacity`) and the
+two-span mutable `getPtrSlice` (plus `appendSliceAssumeCapacity`) — the last
+pieces before the search subsystem itself can be ported. The objc/bundle-id
+helpers, the `home()` resolver, and config `loadDefaultFiles` remain deferred
+pending roastty's naming decision; `background-image-opacity` stays
+float-blocked.

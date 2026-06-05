@@ -4,6 +4,51 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Full;
 
+/// Traversal direction for a `CircBuf` iterator (upstream `Iterator.Direction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Direction {
+    Forward,
+    Reverse,
+}
+
+/// A read-only forward/reverse iterator over a `CircBuf` (upstream `CircBuf.Iterator`).
+pub(crate) struct Iter<'a, T: Copy> {
+    buf: &'a CircBuf<T>,
+    idx: usize,
+    direction: Direction,
+}
+
+impl<'a, T: Copy> Iter<'a, T> {
+    /// The next element, or `None` once the iterator is past the end (upstream `next`).
+    pub(crate) fn next(&mut self) -> Option<&'a T> {
+        if self.idx >= self.buf.len() {
+            return None;
+        }
+        let tail_idx = match self.direction {
+            Direction::Forward => self.idx,
+            Direction::Reverse => self.buf.len() - self.idx - 1,
+        };
+        let storage_idx = (self.buf.tail + tail_idx) % self.buf.capacity();
+        self.idx += 1;
+        Some(&self.buf.storage[storage_idx])
+    }
+
+    /// Move the logical index by a signed amount, saturating at the bounds (upstream
+    /// `seekBy`).
+    pub(crate) fn seek_by(&mut self, amount: isize) {
+        if amount > 0 {
+            self.idx = self.idx.saturating_add(amount as usize);
+        } else {
+            self.idx = self.idx.saturating_sub(amount.unsigned_abs());
+        }
+    }
+
+    /// Reset back to the first element (upstream `reset`).
+    pub(crate) fn reset(&mut self) {
+        self.idx = 0;
+    }
+}
+
 /// A fixed-capacity ring buffer of `T` (upstream `datastruct.CircBuf`). `head` is the next
 /// write index, `tail` the oldest; `full` disambiguates `head == tail`.
 pub(crate) struct CircBuf<T: Copy> {
@@ -110,6 +155,16 @@ impl<T: Copy> CircBuf<T> {
         let cap = self.storage.len();
         Some(&self.storage[(self.head + cap - 1) % cap])
     }
+
+    /// Iterate over the logical elements, oldest-first (`Forward`) or newest-first
+    /// (`Reverse`) (upstream `iterator`).
+    pub(crate) fn iterator(&self, direction: Direction) -> Iter<'_, T> {
+        Iter {
+            buf: self,
+            idx: 0,
+            direction,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +229,67 @@ mod tests {
 
         assert_eq!(buf.append(7), Ok(()));
         assert_eq!(buf.first(), Some(&7));
+    }
+
+    /// Collect a whole iterator's elements (by value) for assertions.
+    fn collect(mut it: Iter<'_, u8>) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Some(v) = it.next() {
+            out.push(*v);
+        }
+        out
+    }
+
+    #[test]
+    fn iterates_forward_and_reverse() {
+        let mut buf = CircBuf::new(3, 0u8);
+        buf.append_assume_capacity(1);
+        buf.append_assume_capacity(2);
+        buf.append_assume_capacity(3);
+
+        assert_eq!(collect(buf.iterator(Direction::Forward)), vec![1, 2, 3]);
+        assert_eq!(collect(buf.iterator(Direction::Reverse)), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn iterates_across_the_wrap() {
+        let mut buf = CircBuf::new(3, 0u8);
+        buf.append_assume_capacity(1);
+        buf.append_assume_capacity(2);
+        buf.append_assume_capacity(3);
+        buf.delete_oldest(1); // tail advances
+        buf.append_assume_capacity(4); // head wraps to 0
+
+        assert_eq!(collect(buf.iterator(Direction::Forward)), vec![2, 3, 4]);
+        assert_eq!(collect(buf.iterator(Direction::Reverse)), vec![4, 3, 2]);
+    }
+
+    #[test]
+    fn seek_by_and_reset() {
+        let mut buf = CircBuf::new(3, 0u8);
+        buf.append_assume_capacity(1);
+        buf.append_assume_capacity(2);
+        buf.append_assume_capacity(3);
+
+        let mut it = buf.iterator(Direction::Forward);
+        it.seek_by(1); // skip the first element
+        assert_eq!(it.next(), Some(&2));
+
+        // A large negative seek saturates to index 0.
+        it.seek_by(-100);
+        assert_eq!(it.next(), Some(&1));
+
+        // reset returns to the start.
+        let _ = it.next(); // advance away from 0
+        it.reset();
+        assert_eq!(it.next(), Some(&1));
+    }
+
+    #[test]
+    fn iterating_empty_yields_none() {
+        let buf = CircBuf::new(3, 0u8);
+        let mut it = buf.iterator(Direction::Forward);
+        assert_eq!(it.next(), None);
     }
 
     #[test]
