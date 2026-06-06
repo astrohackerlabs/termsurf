@@ -1701,6 +1701,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 627: sys PNG decode abstraction audit](627-sys-png-decode-audit.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 628: CoreText Face audit](628-coretext-face-audit.md) —
+  **Designed**
 
 ## Non-Goals
 
