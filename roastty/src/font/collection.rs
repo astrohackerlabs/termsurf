@@ -1,12 +1,13 @@
 //! A collection of font faces, grouped by style.
 //!
 //! Faithful port of upstream `font/Collection.zig`: the packed [`Index`] handle,
-//! the per-style [`Collection`] of eagerly-loaded [`Entry`] faces (or aliases)
+//! the per-style [`Collection`] of loaded/deferred [`Entry`] faces (or aliases)
 //! with `add`/`add_alias`/`add_with_adjustment`/`get_entry`/`get_face`, codepoint
 //! resolution (`get_index`/`has_codepoint`), style completion (`complete_styles`),
-//! and the size-adjustment scale factor. Deferred-face loading + discovery and
-//! the collection-size resize land in later experiments.
+//! and the size-adjustment scale factor. Collection-size resize lands in a later
+//! experiment.
 
+use crate::font::deferred_face::DeferredFace;
 use crate::font::face::coretext::Face;
 use crate::font::metrics::{FaceMetrics, Metrics};
 use crate::font::{Presentation, Style};
@@ -121,20 +122,54 @@ impl Default for Index {
     }
 }
 
-/// A single eagerly loaded face in a [`Collection`].
+/// A face stored in a [`Collection`] entry.
+enum AnyFace {
+    /// Fully loaded and ready to shape or render.
+    Loaded(Face),
+    /// Lightweight descriptor that can answer codepoint coverage before loading.
+    Deferred(DeferredFace),
+}
+
+/// The size-adjustment state for a collection entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ScaleFactor {
+    /// The numeric scale factor has already been computed.
+    Scale(f64),
+    /// The entry is deferred; compute this adjustment once it loads.
+    Adjustment(SizeAdjustment),
+}
+
+/// A single face in a [`Collection`].
 ///
-/// Owns a loaded [`Face`], a fallback flag, and the resolved size-adjustment
-/// scale factor (`1.0` when not adjusted).
+/// Owns either a loaded [`Face`] or a [`DeferredFace`], a fallback flag, and the
+/// resolved or pending size-adjustment scale factor.
 pub(crate) struct Entry {
-    face: Face,
+    face: Option<AnyFace>,
     fallback: bool,
-    scale_factor: f64,
+    scale_factor: ScaleFactor,
 }
 
 impl Entry {
-    /// The loaded face.
-    pub(crate) fn face(&self) -> &Face {
-        &self.face
+    /// The loaded face, if this entry has already been loaded.
+    pub(crate) fn face(&self) -> Option<&Face> {
+        match self
+            .face
+            .as_ref()
+            .expect("entry face is temporarily unavailable")
+        {
+            AnyFace::Loaded(face) => Some(face),
+            AnyFace::Deferred(_) => None,
+        }
+    }
+
+    /// Whether this entry is still deferred.
+    pub(crate) fn is_deferred(&self) -> bool {
+        matches!(
+            self.face
+                .as_ref()
+                .expect("entry face is temporarily unavailable"),
+            AnyFace::Deferred(_)
+        )
     }
 
     /// Whether this is a fallback face (searched after the primary faces).
@@ -143,9 +178,21 @@ impl Entry {
     }
 
     /// The size-adjustment scale factor recorded for this face (`1.0` when the
-    /// face was added without a size adjustment).
+    /// face was added without a size adjustment). Deferred entries report their
+    /// pending adjustment as `1.0` until they load and the factor is computed.
     pub(crate) fn scale_factor(&self) -> f64 {
-        self.scale_factor
+        match self.scale_factor {
+            ScaleFactor::Scale(v) => v,
+            ScaleFactor::Adjustment(_) => 1.0,
+        }
+    }
+
+    /// The pending size adjustment for a deferred entry, if any.
+    pub(crate) fn pending_size_adjustment(&self) -> Option<SizeAdjustment> {
+        match self.scale_factor {
+            ScaleFactor::Scale(_) => None,
+            ScaleFactor::Adjustment(v) => Some(v),
+        }
     }
 
     /// Whether this face has the given codepoint in the requested presentation.
@@ -162,14 +209,36 @@ impl Entry {
                 };
                 self.has_codepoint(cp, resolved)
             }
-            PresentationMode::Explicit(p) => match self.face.glyph_index(cp) {
+            PresentationMode::Explicit(p) => self.has_explicit_codepoint(cp, p),
+            PresentationMode::Any => self.has_any_codepoint(cp),
+        }
+    }
+
+    fn has_explicit_codepoint(&self, cp: u32, p: Presentation) -> bool {
+        match self
+            .face
+            .as_ref()
+            .expect("entry face is temporarily unavailable")
+        {
+            AnyFace::Deferred(face) => face.has_codepoint(cp, Some(p)),
+            AnyFace::Loaded(face) => match face.glyph_index(cp) {
                 None => false,
                 Some(idx) => match p {
-                    Presentation::Text => !self.face.is_color_glyph(idx),
-                    Presentation::Emoji => self.face.is_color_glyph(idx),
+                    Presentation::Text => !face.is_color_glyph(idx),
+                    Presentation::Emoji => face.is_color_glyph(idx),
                 },
             },
-            PresentationMode::Any => self.face.glyph_index(cp).is_some(),
+        }
+    }
+
+    fn has_any_codepoint(&self, cp: u32) -> bool {
+        match self
+            .face
+            .as_ref()
+            .expect("entry face is temporarily unavailable")
+        {
+            AnyFace::Deferred(face) => face.has_codepoint(cp, None),
+            AnyFace::Loaded(face) => face.glyph_index(cp).is_some(),
         }
     }
 }
@@ -328,11 +397,10 @@ pub(crate) enum EntryOrAlias {
 
 /// A collection of font faces grouped by [`Style`].
 ///
-/// Faithful port of upstream `Collection`, scoped to **eagerly loaded** faces:
-/// the per-style face lists (entries or aliases) with `add`/`add_alias`/
-/// `get_entry`/`get_face`, codepoint resolution, style completion, and the
-/// size-adjustment scale factor. Deferred-face loading + discovery and the
-/// collection-size resize land in later experiments.
+/// Faithful port of upstream `Collection`: the per-style face lists (entries or
+/// aliases) with eager and deferred faces, `add`/`add_alias`/`get_entry`/
+/// `get_face`, codepoint resolution, style completion, and the size-adjustment
+/// scale factor. Collection-size resize lands in a later experiment.
 pub(crate) struct Collection {
     /// The per-style face lists, indexed by `Style as usize` (`0..=3`). Each
     /// slot is an owned entry or an alias to a face elsewhere in the collection.
@@ -402,9 +470,9 @@ impl Collection {
             return Err(AddError::CollectionFull);
         }
         list.push(EntryOrAlias::Entry(Entry {
-            face,
+            face: Some(AnyFace::Loaded(face)),
             fallback,
-            scale_factor: 1.0,
+            scale_factor: ScaleFactor::Scale(1.0),
         }));
         Ok(Index::new(style, idx as u16))
     }
@@ -428,9 +496,31 @@ impl Collection {
             return Err(AddError::CollectionFull);
         }
         list.push(EntryOrAlias::Entry(Entry {
-            face,
+            face: Some(AnyFace::Loaded(face)),
             fallback,
-            scale_factor: factor,
+            scale_factor: ScaleFactor::Scale(factor),
+        }));
+        Ok(Index::new(style, idx as u16))
+    }
+
+    /// Add a deferred `face` whose size will be adjusted to match the primary
+    /// face when it is first loaded.
+    pub(crate) fn add_deferred_with_adjustment(
+        &mut self,
+        face: DeferredFace,
+        style: Style,
+        fallback: bool,
+        adjustment: SizeAdjustment,
+    ) -> Result<Index, AddError> {
+        let list = &mut self.faces[style as usize];
+        let idx = list.len();
+        if list_is_full(idx) {
+            return Err(AddError::CollectionFull);
+        }
+        list.push(EntryOrAlias::Entry(Entry {
+            face: Some(AnyFace::Deferred(face)),
+            fallback,
+            scale_factor: ScaleFactor::Adjustment(adjustment),
         }));
         Ok(Index::new(style, idx as u16))
     }
@@ -495,6 +585,36 @@ impl Collection {
         }
     }
 
+    /// Resolve an index to the direct entry index it names, following an alias
+    /// one step. Aliases never chain.
+    fn canonical_index(&self, index: Index) -> Result<Index, EntryError> {
+        if index.special_kind().is_some() {
+            return Err(EntryError::SpecialHasNoFace);
+        }
+        let list = &self.faces[index.style() as usize];
+        let i = index.idx() as usize;
+        if i >= list.len() {
+            return Err(EntryError::IndexOutOfBounds);
+        }
+        Ok(match &list[i] {
+            EntryOrAlias::Entry(_) => index,
+            EntryOrAlias::Alias(target) => *target,
+        })
+    }
+
+    /// Get a direct mutable entry by canonical index.
+    fn get_direct_entry_mut(&mut self, index: Index) -> Result<&mut Entry, EntryError> {
+        let list = &mut self.faces[index.style() as usize];
+        let i = index.idx() as usize;
+        if i >= list.len() {
+            return Err(EntryError::IndexOutOfBounds);
+        }
+        match &mut list[i] {
+            EntryOrAlias::Entry(e) => Ok(e),
+            EntryOrAlias::Alias(_) => unreachable!("canonical index points to an alias"),
+        }
+    }
+
     /// Get the entry for an index, or the faithful error for a special index or
     /// an out-of-bounds index. Follows an alias to its target entry.
     pub(crate) fn get_entry(&self, index: Index) -> Result<&Entry, EntryError> {
@@ -509,9 +629,52 @@ impl Collection {
         Ok(self.entry_of(&list[i]))
     }
 
-    /// Get the loaded face for an index. (Deferred-face loading is deferred.)
-    pub(crate) fn get_face(&self, index: Index) -> Result<&Face, EntryError> {
-        Ok(self.get_entry(index)?.face())
+    /// Get the loaded face for an index, loading a deferred entry in place if
+    /// needed.
+    pub(crate) fn get_face(&mut self, index: Index) -> Result<&Face, EntryError> {
+        let index = self.canonical_index(index)?;
+        if self.get_entry(index)?.is_deferred() {
+            self.load_deferred_entry(index)?;
+        }
+        self.get_entry(index)?
+            .face()
+            .ok_or(EntryError::IndexOutOfBounds)
+    }
+
+    /// Load the deferred face at `index` into its entry, preserving the index.
+    fn load_deferred_entry(&mut self, index: Index) -> Result<(), EntryError> {
+        let (deferred, scale_factor) = {
+            let entry = self.get_direct_entry_mut(index)?;
+            let face = entry
+                .face
+                .take()
+                .expect("entry face is temporarily unavailable");
+            match face {
+                AnyFace::Loaded(face) => {
+                    entry.face = Some(AnyFace::Loaded(face));
+                    return Ok(());
+                }
+                AnyFace::Deferred(face) => (face, entry.scale_factor),
+            }
+        };
+
+        let face = deferred.load();
+        let metrics = face.get_metrics();
+        if index == Index::default() && self.primary_face_metrics.is_none() {
+            self.primary_face_metrics = Some(metrics);
+        }
+        let scale_factor = match scale_factor {
+            ScaleFactor::Scale(v) => ScaleFactor::Scale(v),
+            ScaleFactor::Adjustment(_) if index == Index::default() => ScaleFactor::Scale(1.0),
+            ScaleFactor::Adjustment(adjustment) => {
+                ScaleFactor::Scale(self.compute_scale_factor(&metrics, adjustment))
+            }
+        };
+
+        let entry = self.get_direct_entry_mut(index)?;
+        entry.face = Some(AnyFace::Loaded(face));
+        entry.scale_factor = scale_factor;
+        Ok(())
     }
 
     /// Return the index of the first face (in priority order) of `style` that
@@ -558,16 +721,16 @@ impl Collection {
         // Find the first regular face that has non-color text glyphs. This is
         // the face we fall back to; it may not be index 0 (e.g. if an emoji font
         // is configured first). Capture its canonical direct-entry index.
-        let regular_list = &self.faces[Style::Regular as usize];
-        if regular_list.is_empty() {
+        let regular_len = self.faces[Style::Regular as usize].len();
+        if regular_len == 0 {
             // No regular face to fall back to; nothing we can do.
             return Ok(());
         }
         let mut regular: Option<Index> = None;
-        for i in 0..regular_list.len() {
+        for i in 0..regular_len {
             // Canonicalize an alias slot to its direct-entry target so the later
             // `add_alias` accepts it (mirrors upstream resolving to the entry).
-            let canonical = match &regular_list[i] {
+            let canonical = match &self.faces[Style::Regular as usize][i] {
                 EntryOrAlias::Entry(_) => Index::new(Style::Regular, i as u16),
                 EntryOrAlias::Alias(target) => *target,
             };
@@ -658,6 +821,7 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::discovery::Descriptor;
     use crate::font::metrics::FaceMetrics;
 
     #[test]
@@ -801,6 +965,152 @@ mod tests {
         c.add(Face::new("Menlo", 32.0), Style::Regular, false)
             .unwrap();
         c
+    }
+
+    fn deferred_family(family: &str) -> DeferredFace {
+        let req = Descriptor {
+            family: Some(family.into()),
+            ..Default::default()
+        };
+        let desc = req
+            .discover_descriptors()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("{family} should have at least one descriptor"));
+        DeferredFace::from_descriptor(desc, Vec::new())
+    }
+
+    #[test]
+    fn collection_deferred_add_stores_deferred_entry() {
+        let mut c = menlo_collection();
+        let idx = c
+            .add_deferred_with_adjustment(
+                deferred_family("Menlo"),
+                Style::Regular,
+                true,
+                SizeAdjustment::IcWidth,
+            )
+            .unwrap();
+        let entry = c.get_entry(idx).unwrap();
+        assert!(entry.is_deferred());
+        assert!(entry.fallback());
+        assert_eq!(
+            entry.pending_size_adjustment(),
+            Some(SizeAdjustment::IcWidth)
+        );
+    }
+
+    #[test]
+    fn collection_deferred_coverage_does_not_load() {
+        let mut c = menlo_collection();
+        let idx = c
+            .add_deferred_with_adjustment(
+                deferred_family("Menlo"),
+                Style::Regular,
+                true,
+                SizeAdjustment::IcWidth,
+            )
+            .unwrap();
+
+        assert_eq!(
+            c.get_index(
+                'M' as u32,
+                Style::Regular,
+                PresentationMode::Explicit(Presentation::Text)
+            ),
+            Some(Index::new(Style::Regular, 0)),
+            "the primary Menlo remains higher priority"
+        );
+        assert!(c.has_codepoint(
+            idx,
+            'M' as u32,
+            PresentationMode::Explicit(Presentation::Text)
+        ));
+        assert!(
+            c.get_entry(idx).unwrap().is_deferred(),
+            "coverage checks must not load the deferred entry"
+        );
+    }
+
+    #[test]
+    fn collection_deferred_get_face_loads_in_place() {
+        let mut c = menlo_collection();
+        let idx = c
+            .add_deferred_with_adjustment(
+                deferred_family("Menlo"),
+                Style::Regular,
+                true,
+                SizeAdjustment::IcWidth,
+            )
+            .unwrap();
+        assert!(c.get_entry(idx).unwrap().is_deferred());
+
+        let face = c.get_face(idx).unwrap();
+        assert!(face.glyph_index('M' as u32).is_some());
+        assert!(!c.get_entry(idx).unwrap().is_deferred());
+        assert_eq!(idx, Index::new(Style::Regular, 1));
+    }
+
+    #[test]
+    fn collection_deferred_primary_loads_without_recursing() {
+        let mut c = Collection::new();
+        let idx = c
+            .add_deferred_with_adjustment(
+                deferred_family("Menlo"),
+                Style::Regular,
+                false,
+                SizeAdjustment::IcWidth,
+            )
+            .unwrap();
+        assert_eq!(idx, Index::default());
+        assert!(c.get_entry(idx).unwrap().is_deferred());
+
+        let face = c.get_face(idx).unwrap();
+        assert!(face.glyph_index('M' as u32).is_some());
+        assert!(!c.get_entry(idx).unwrap().is_deferred());
+        assert_eq!(c.get_entry(idx).unwrap().scale_factor(), 1.0);
+        assert!(
+            c.primary_face_metrics.is_some(),
+            "loading a deferred primary caches primary metrics"
+        );
+    }
+
+    #[test]
+    fn collection_deferred_adjustment_matches_eager_scale() {
+        let mut eager = menlo_collection();
+        let eager_idx = eager
+            .add_with_adjustment(
+                Face::new("Apple Color Emoji", 32.0),
+                Style::Regular,
+                true,
+                SizeAdjustment::IcWidth,
+            )
+            .unwrap();
+        let expected = eager.get_entry(eager_idx).unwrap().scale_factor();
+
+        let mut deferred = menlo_collection();
+        let deferred_idx = deferred
+            .add_deferred_with_adjustment(
+                deferred_family("Apple Color Emoji"),
+                Style::Regular,
+                true,
+                SizeAdjustment::IcWidth,
+            )
+            .unwrap();
+        assert!(deferred.get_entry(deferred_idx).unwrap().is_deferred());
+        assert_eq!(
+            deferred
+                .get_entry(deferred_idx)
+                .unwrap()
+                .pending_size_adjustment(),
+            Some(SizeAdjustment::IcWidth)
+        );
+
+        let face = deferred.get_face(deferred_idx).unwrap();
+        assert!(face.glyph_index(0x1F600).is_some());
+        let actual = deferred.get_entry(deferred_idx).unwrap().scale_factor();
+        assert!(actual.is_finite());
+        assert!((actual - expected).abs() < 1e-9);
     }
 
     #[test]

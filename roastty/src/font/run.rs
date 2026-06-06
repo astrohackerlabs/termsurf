@@ -253,7 +253,7 @@ fn shape_row_with(
         // rejects special/out-of-bounds indices). A non-special error means a
         // broken invariant, not skippable text — fail loudly rather than drop it.
         let face = resolver
-            .collection()
+            .collection_mut()
             .get_face(out.run.font_index)
             .expect("a text run's font index must be face-backed");
         let glyphs = face.shape_run(&out.codepoints);

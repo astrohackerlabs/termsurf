@@ -250,10 +250,15 @@ impl Descriptor {
     /// requested variations applied (upstream's `DeferredFace`-time
     /// `setVariations`). The face is produced only when the iterator advances.
     pub(crate) fn discover_faces(&self) -> impl Iterator<Item = Face> {
+        self.discover_deferred_faces().map(|face| face.load())
+    }
+
+    /// Discover matching faces as deferred descriptors, ranked best-first.
+    pub(crate) fn discover_deferred_faces(&self) -> impl Iterator<Item = DeferredFace> {
         let variations = self.variations.clone();
         self.discover_descriptors()
             .into_iter()
-            .map(move |d| DeferredFace::from_descriptor(d, variations.clone()).load())
+            .map(move |d| DeferredFace::from_descriptor(d, variations.clone()))
     }
 
     /// Discover fallback faces for this descriptor, ranked best-first. Faithful
@@ -287,6 +292,14 @@ impl Descriptor {
             .into_iter()
             .map(|d| DeferredFace::from_descriptor(d, self.variations.clone()).load())
             .collect()
+    }
+
+    /// Discover fallback candidates that can remain deferred in a collection.
+    ///
+    /// CoreText's `font_for_codepoint` fallback already returns a loaded face, so
+    /// this only covers the general descriptor discovery path.
+    pub(crate) fn discover_fallback_deferred_faces(&self) -> Vec<DeferredFace> {
+        self.discover_deferred_faces().collect()
     }
 }
 

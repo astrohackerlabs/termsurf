@@ -115,3 +115,64 @@ immutable and non-loading, specify the borrow-safe take/replace strategy for
 loading deferred entries in place, and add a focused pending-scale-factor test.
 The plan was updated for all three points. Follow-up review approved the revised
 design with no findings.
+
+## Result
+
+**Result:** Pass
+
+`Collection` now stores entries as either loaded `Face`s or deferred
+`DeferredFace`s. Eager additions still store loaded faces, while
+`add_deferred_with_adjustment` stores a deferred face with a pending
+`SizeAdjustment`. `get_index` and `has_codepoint` remain read-only and check
+deferred coverage without loading. Render-facing `get_face` now takes
+`&mut self`, loads a deferred entry in place, computes the pending scale factor,
+and preserves the entry's index.
+
+Discovery now exposes deferred descriptor candidates for the resolver fallback
+path. `CodepointResolver` adds those as deferred fallback entries when possible,
+while preserving the eager CoreText `font_for_codepoint` path for CJK and for
+candidates that CoreText only provides as loaded faces. Shaping and shared-grid
+rendering now use mutable resolver/collection access where a deferred face may
+need to load.
+
+Verification:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty collection_deferred` — 5 tests passed
+- `cargo test -p roastty discovery_fallback` — 5 tests passed
+- `cargo test -p roastty codepoint_override` — 3 tests passed
+- `cargo test -p roastty shared_grid` — 5 tests passed
+- `cargo test -p roastty renderer::cell` — 93 tests passed
+- `cargo test -p roastty` — 3482 unit tests passed, plus the ABI harness
+- `cargo fmt -p roastty -- --check`
+- `rg -n "Deferred-face loading.*later|deferred entries are deferred|get_face\\(&self|Codepoint overrides are deferred|scoped to \\*\\*eagerly loaded\\*\\*" roastty/src/font`
+  — no matches
+- `git diff --check`
+
+## Conclusion
+
+This lands the upstream collection lazy-loading model in Roastty: fallback
+entries can now remain descriptor-backed for coverage searches and become real
+faces only when shaping, glyph lookup, or rendering needs them. The remaining
+font checklist work can move outward to the shared grid/grid-set and lower-level
+font support modules instead of treating `DeferredFace`/`Collection` as missing
+building blocks.
+
+## Completion Review
+
+**Reviewer:** Codex (gpt-5.5, medium) · resumed session
+`019e8f83-9029-7d43-8e82-f4c5754e14ba`
+
+**Verdict:** APPROVED.
+
+Initial completion review found that the deferred fallback path could bypass the
+locale-aware CJK `font_for_codepoint` fallback. The resolver now routes CJK
+codepoints through the loaded fallback path first, and
+`discovery_fallback_cjk_uses_loaded_codepoint_search` covers the behavior.
+
+Follow-up review found that loading a deferred primary entry could recurse while
+computing its pending scale factor. `load_deferred_entry` now treats a deferred
+primary load as scale `1.0`, caches its primary metrics, and
+`collection_deferred_primary_loads_without_recursing` covers the behavior.
+
+Second follow-up review approved the corrected staged result with no findings.

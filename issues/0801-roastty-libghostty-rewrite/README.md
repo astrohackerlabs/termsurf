@@ -1712,7 +1712,7 @@ are past the correctness-critical foundation.
 - [Experiment 632: CoreText DeferredFace](632-deferred-face-coretext.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 633: Collection Deferred Entries](633-collection-deferred-entries.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

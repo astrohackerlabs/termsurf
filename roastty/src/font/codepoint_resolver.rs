@@ -18,6 +18,7 @@ use crate::font::codepoint_map::CodepointMap;
 use crate::font::collection::{
     Collection, EntryError, Index, PresentationMode, SizeAdjustment, Special,
 };
+use crate::font::deferred_face::DeferredFace;
 use crate::font::discovery::Descriptor;
 use crate::font::face::coretext::{Face, RenderGlyphError, RenderOptions};
 use crate::font::glyph::Glyph;
@@ -183,6 +184,35 @@ impl CodepointResolver {
         }
     }
 
+    /// Add the first loaded discovery fallback that covers `cp`.
+    ///
+    /// This preserves the CoreText `font_for_codepoint` path used by CJK and by
+    /// descriptor searches that cannot be represented as deferred descriptors.
+    fn add_loaded_discovery_fallback(
+        &mut self,
+        req: &Descriptor,
+        cp: u32,
+        p_mode: PresentationMode,
+    ) -> Option<Index> {
+        let faces = match self.collection.get_face(Index::new(Style::Regular, 0)) {
+            Ok(original) => req.discover_fallback_faces(original),
+            Err(_) => Vec::new(),
+        };
+        for face in faces {
+            if fallback_face_has_codepoint(&face, cp, p_mode) {
+                if let Ok(idx) = self.collection.add_with_adjustment(
+                    face,
+                    Style::Regular,
+                    true,
+                    SizeAdjustment::IcWidth,
+                ) {
+                    return Some(idx);
+                }
+            }
+        }
+        None
+    }
+
     /// Resolve `cp` (in `style`, with optional explicit presentation `p`) to a
     /// face [`Index`], or `None`. Faithful port of upstream `getIndex`'s core
     /// chain (codepoint overrides, the sprite check, the UCD presentation
@@ -233,23 +263,24 @@ impl CodepointResolver {
         // codepoint search included) for a font that has this codepoint, add the
         // first match (in the requested presentation) to the collection as a
         // fallback, and return it. Faithful port of upstream's regular-style
-        // discovery fallback. (Codepoint overrides are deferred.)
+        // discovery fallback; codepoint overrides already ran earlier.
         if style == Style::Regular && self.discover_enabled {
             let req = Descriptor {
                 codepoint: cp,
                 monospace: false,
                 ..Default::default()
             };
-            // The codepoint search starts from the regular primary face; compute
-            // the candidate list before mutating the collection (ending the
-            // immutable borrow of `original`).
-            let faces = match self.collection.get_face(Index::new(Style::Regular, 0)) {
-                Ok(original) => req.discover_fallback_faces(original),
-                Err(_) => Vec::new(),
-            };
-            for face in faces {
-                if fallback_face_has_codepoint(&face, cp, p_mode) {
-                    if let Ok(idx) = self.collection.add_with_adjustment(
+            if (0x4E00..=0x9FFF).contains(&cp) {
+                if let Some(idx) = self.add_loaded_discovery_fallback(&req, cp, p_mode) {
+                    return Some(idx);
+                }
+            }
+
+            let mut tried_deferred = false;
+            for face in req.discover_fallback_deferred_faces() {
+                tried_deferred = true;
+                if fallback_deferred_face_has_codepoint(&face, cp, p_mode) {
+                    if let Ok(idx) = self.collection.add_deferred_with_adjustment(
                         face,
                         Style::Regular,
                         true,
@@ -257,6 +288,11 @@ impl CodepointResolver {
                     ) {
                         return Some(idx);
                     }
+                }
+            }
+            if !tried_deferred {
+                if let Some(idx) = self.add_loaded_discovery_fallback(&req, cp, p_mode) {
+                    return Some(idx);
                 }
             }
         }
@@ -277,7 +313,7 @@ impl CodepointResolver {
     /// Faithful port of upstream `getPresentation`: a sprite index is text; a
     /// real face's glyph is emoji if it's a color glyph, else text.
     pub(crate) fn get_presentation(
-        &self,
+        &mut self,
         index: Index,
         glyph: u16,
     ) -> Result<Presentation, EntryError> {
@@ -296,7 +332,7 @@ impl CodepointResolver {
     /// The glyph id for codepoint `cp` in the face at `index` (its cmap lookup),
     /// or `None` if the face lacks the codepoint. Upstream `face.glyphIndex(cp)`,
     /// used by [`crate::font::shared_grid::SharedGrid::render_codepoint`].
-    pub(crate) fn glyph_index(&self, index: Index, cp: u32) -> Result<Option<u16>, EntryError> {
+    pub(crate) fn glyph_index(&mut self, index: Index, cp: u32) -> Result<Option<u16>, EntryError> {
         let face = self.collection.get_face(index)?;
         Ok(face.glyph_index(cp))
     }
@@ -308,7 +344,7 @@ impl CodepointResolver {
     /// [`ResolverRenderError::SpriteUnavailable`]. Faithful port of upstream
     /// `renderGlyph`.
     pub(crate) fn render_glyph(
-        &self,
+        &mut self,
         atlas: &mut Atlas,
         index: Index,
         glyph_index: u32,
@@ -439,6 +475,20 @@ fn fallback_face_has_codepoint(face: &Face, cp: u32, p_mode: PresentationMode) -
     }
 }
 
+/// Deferred variant of [`fallback_face_has_codepoint`].
+fn fallback_deferred_face_has_codepoint(
+    face: &DeferredFace,
+    cp: u32,
+    p_mode: PresentationMode,
+) -> bool {
+    match p_mode {
+        PresentationMode::Any => face.has_codepoint(cp, None),
+        PresentationMode::Explicit(p) | PresentationMode::Default(p) => {
+            face.has_codepoint(cp, Some(p))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,7 +614,8 @@ mod tests {
     #[test]
     fn resolve_missing() {
         let mut r = menlo_resolver();
-        // A Private-Use codepoint Menlo lacks; discovery is deferred -> None.
+        // A Private-Use codepoint Menlo lacks; with discovery disabled, no
+        // fallback is added.
         assert_eq!(
             r.get_index(0xE000, Style::Regular, Some(Presentation::Text)),
             None
@@ -617,9 +668,9 @@ mod tests {
 
     #[test]
     fn get_presentation_text() {
-        let r = menlo_resolver();
+        let mut r = menlo_resolver();
         let glyph = r
-            .collection()
+            .collection_mut()
             .get_face(Index::new(Style::Regular, 0))
             .unwrap()
             .glyph_index('M' as u32)
@@ -635,9 +686,9 @@ mod tests {
         let mut c = Collection::new();
         c.add(Face::new("Apple Color Emoji", 32.0), Style::Regular, false)
             .unwrap();
-        let r = CodepointResolver::new(c);
+        let mut r = CodepointResolver::new(c);
         let glyph = r
-            .collection()
+            .collection_mut()
             .get_face(Index::new(Style::Regular, 0))
             .unwrap()
             .glyph_index(0x1F600)
@@ -650,7 +701,7 @@ mod tests {
 
     #[test]
     fn get_presentation_sprite() {
-        let r = menlo_resolver();
+        let mut r = menlo_resolver();
         // A sprite index is text presentation and never loads a face.
         assert_eq!(
             r.get_presentation(Index::special(crate::font::collection::Special::Sprite), 0),
@@ -661,12 +712,12 @@ mod tests {
     #[test]
     fn render_glyph_via_resolver() {
         use crate::font::atlas::Format;
-        let r = menlo_resolver();
+        let mut r = menlo_resolver();
         let mut atlas = Atlas::new(512, Format::Grayscale);
         let idx = Index::new(Style::Regular, 0);
-        let face_glyph = r.collection().get_face(idx).unwrap();
+        let face_glyph = r.collection_mut().get_face(idx).unwrap();
         let glyph = face_glyph.glyph_index('M' as u32).unwrap();
-        let opts = none_opts(r.collection().get_face(idx).unwrap());
+        let opts = none_opts(r.collection_mut().get_face(idx).unwrap());
         let g = r
             .render_glyph(&mut atlas, idx, glyph as u32, &opts)
             .expect("render");
@@ -676,10 +727,10 @@ mod tests {
     #[test]
     fn render_glyph_sprite_unavailable() {
         use crate::font::atlas::Format;
-        let r = menlo_resolver();
+        let mut r = menlo_resolver();
         let mut atlas = Atlas::new(512, Format::Grayscale);
         let opts = none_opts(
-            r.collection()
+            r.collection_mut()
                 .get_face(Index::new(Style::Regular, 0))
                 .unwrap(),
         );
@@ -730,10 +781,10 @@ mod tests {
     #[test]
     fn render_glyph_sprite_enabled() {
         use crate::font::atlas::Format;
-        let r = menlo_resolver_sprites();
+        let mut r = menlo_resolver_sprites();
         let mut atlas = Atlas::new(512, Format::Grayscale);
         let opts = none_opts(
-            r.collection()
+            r.collection_mut()
                 .get_face(Index::new(Style::Regular, 0))
                 .unwrap(),
         );
@@ -749,7 +800,7 @@ mod tests {
         let mut r = menlo_resolver_sprites();
         let mut atlas = Atlas::new(512, Format::Grayscale);
         let opts = none_opts(
-            r.collection()
+            r.collection_mut()
                 .get_face(Index::new(Style::Regular, 0))
                 .unwrap(),
         );
@@ -781,7 +832,7 @@ mod tests {
             before + 1,
             "the discovered fallback was added"
         );
-        // A second lookup is satisfied by the now-loaded fallback — no new face.
+        // A second lookup is satisfied by the fallback entry — no new face.
         let idx2 = r
             .get_index(grin, Style::Regular, Some(Presentation::Emoji))
             .expect("the fallback now resolves");
@@ -790,6 +841,43 @@ mod tests {
             r.collection().face_count(Style::Regular),
             before + 1,
             "no second fallback was added"
+        );
+    }
+
+    #[test]
+    fn discovery_fallback_stays_deferred_until_glyph_lookup() {
+        let mut r = menlo_resolver();
+        r.set_discover_enabled(true);
+        let grin = 0x1F600;
+        let idx = r
+            .get_index(grin, Style::Regular, Some(Presentation::Emoji))
+            .expect("discovery resolves the emoji");
+        assert!(
+            r.collection().get_entry(idx).unwrap().is_deferred(),
+            "index resolution and coverage checks leave the fallback deferred"
+        );
+
+        let glyph = r
+            .glyph_index(idx, grin)
+            .expect("fallback index remains valid")
+            .expect("emoji glyph exists");
+        assert!(glyph > 0);
+        assert!(
+            !r.collection().get_entry(idx).unwrap().is_deferred(),
+            "glyph lookup loads the deferred fallback in place"
+        );
+    }
+
+    #[test]
+    fn discovery_fallback_cjk_uses_loaded_codepoint_search() {
+        let mut r = menlo_resolver();
+        r.set_discover_enabled(true);
+        let idx = r
+            .get_index(0x4E00, Style::Regular, Some(Presentation::Text))
+            .expect("discovery resolves a CJK ideograph");
+        assert!(
+            !r.collection().get_entry(idx).unwrap().is_deferred(),
+            "the locale-aware CJK codepoint-search fallback is loaded"
         );
     }
 

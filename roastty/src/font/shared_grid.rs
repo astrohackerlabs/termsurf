@@ -135,7 +135,7 @@ impl SharedGrid {
                 };
                 render_into(
                     &mut self.atlas_color,
-                    &self.resolver,
+                    &mut self.resolver,
                     index,
                     glyph_index,
                     &render_opts,
@@ -143,7 +143,7 @@ impl SharedGrid {
             }
             Presentation::Text => render_into(
                 &mut self.atlas_grayscale,
-                &self.resolver,
+                &mut self.resolver,
                 index,
                 glyph_index,
                 opts,
@@ -190,7 +190,7 @@ impl SharedGrid {
 /// disjoint [`SharedGrid`] fields can be borrowed at once.
 fn render_into(
     atlas: &mut Atlas,
-    resolver: &CodepointResolver,
+    resolver: &mut CodepointResolver,
     index: Index,
     glyph_index: u32,
     opts: &RenderOptions,
