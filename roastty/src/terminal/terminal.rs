@@ -1678,6 +1678,10 @@ impl Terminal {
         self.screens.active_mut().scroll_active();
     }
 
+    pub(crate) fn scroll_viewport_to_row(&mut self, row: usize) {
+        self.screens.active_mut().scroll_to_row(row);
+    }
+
     pub(crate) fn drag_select_cells(
         &self,
         click_pin: Pin,

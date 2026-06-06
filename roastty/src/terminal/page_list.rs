@@ -4946,7 +4946,7 @@ impl PageList {
         }
     }
 
-    fn scroll_to_row(&mut self, row: usize) {
+    pub(super) fn scroll_to_row(&mut self, row: usize) {
         if row == 0 {
             self.viewport = Viewport::Top;
             return;

@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 711: Binding Action Scroll Row
@@ -113,3 +118,78 @@ design-review frontmatter, recording this review section, and updating the
 README provenance tuple to `Codex/Codex/-`. The review also suggested including
 negative or overflow rejection in the C ABI smoke coverage if convenient, so the
 plan now includes both.
+
+## Result
+
+**Result:** Pass
+
+Implemented `scroll_to_row:<usize>` binding-action support for attached
+surfaces. `parse_binding_action` now accepts absolute row parameters with
+optional leading `+`, rejects missing, empty, whitespace, negative, malformed,
+extra-colon, and overflow values, and stores the parsed row as
+`ScrollToRow(usize)`.
+
+The terminal stack now exposes the existing page-list absolute row-scroll
+primitive through `Screen::scroll_to_row` and
+`Terminal::scroll_viewport_to_row`. The surface helper locks the active termio
+worker, moves the viewport to the parsed absolute row, and requests a render.
+Attached surfaces consume parsed row-scroll actions even when no worker exists;
+null and detached surfaces still return `false`.
+
+Verification covered parser false paths, attached no-worker consumption,
+null/detached rejection, top-row movement, intermediate absolute row movement,
+active-boundary and beyond-active clamping, explicit-plus syntax, C ABI smoke
+coverage, and previous binding-action behavior. A parallel
+`cargo test -p roastty binding_action -- --nocapture` run hit an unrelated
+PTY-backed text-test race and poisoned the shared test lock after all new
+`scroll_to_row` tests had already passed; the same binding-action subset passed
+serially with `--test-threads=1`.
+
+Successful commands run:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty scroll_to_row -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+Also run:
+
+- `cargo test -p roastty binding_action -- --nocapture` — failed in
+  `surface_binding_action_text_decoded_escapes_reach_child_pty` and then
+  poisoned the shared PTY test lock for later PTY-backed tests. All new
+  `scroll_to_row` tests passed in that run, and the same subset passed serially
+  with `--test-threads=1`.
+
+## Conclusion
+
+`scroll_to_row:<usize>` can use the local page-list row-scroll primitive without
+new terminal state. The binding-action scroll family now covers top, bottom,
+absolute row, page up/down, signed lines, and finite fractional pages. The next
+small binding-action slice can move to another finite action such as
+`scroll_to_selection`, while prompt jumping and clear-screen behavior remain
+higher risk because they depend on selection or terminal/shell-integration
+semantics.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 711 diff and found no code correctness
+blockers. The review approved the `parse_usize_ascii` behavior as matching the
+documented upstream semantics: optional leading `+`, at least one digit, checked
+overflow, and rejection of negative, whitespace, malformed, and extra-colon
+forms.
+
+The review also approved the dispatcher and viewport path: null and detached
+surfaces return `false`, attached no-worker surfaces consume the action without
+side effects, and worker-backed surfaces route through narrow screen/terminal
+wrappers to the existing page-list row-scroll primitive. Test coverage was
+accepted for parser false paths, ABI smoke coverage, no-worker/null/detached
+behavior, exact top/intermediate rows, active-boundary clamping, beyond-active
+clamping, and prior binding-action behavior.
+
+The only required fix before result commit was workflow provenance: adding the
+`[review.result]` frontmatter, recording this completion-review section,
+updating the README provenance tuple to `Codex/Codex/Codex`, and making the
+failed parallel binding-action verification attempt explicit in the result
+record.

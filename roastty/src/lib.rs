@@ -1896,6 +1896,17 @@ impl Surface {
         self.request_render();
     }
 
+    fn scroll_viewport_to_row(&mut self, row: usize) {
+        if self.app.is_null() {
+            return;
+        }
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return;
+        };
+        worker.with_termio_mut(|termio| termio.terminal_mut().scroll_viewport_to_row(row));
+        self.request_render();
+    }
+
     fn scroll_viewport_page(&mut self, up: bool) {
         if self.app.is_null() {
             return;
@@ -2517,6 +2528,7 @@ enum ParsedBindingAction {
     Reset,
     ScrollToTop,
     ScrollToBottom,
+    ScrollToRow(usize),
     ScrollPageUp,
     ScrollPageDown,
     ScrollPageLines(i16),
@@ -2607,6 +2619,9 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
             }
             Some(ParsedBindingAction::ScrollToBottom)
         }
+        b"scroll_to_row" => Some(ParsedBindingAction::ScrollToRow(parse_usize_ascii(
+            parameter?,
+        )?)),
         b"scroll_page_up" => {
             if parameter.is_some() {
                 return None;
@@ -2646,6 +2661,26 @@ fn parse_u16_ascii(bytes: &[u8]) -> Option<u16> {
         }
     }
     Some(value as u16)
+}
+
+fn parse_usize_ascii(bytes: &[u8]) -> Option<usize> {
+    let digits = match bytes.first()? {
+        b'+' => &bytes[1..],
+        _ => bytes,
+    };
+    if digits.is_empty() {
+        return None;
+    }
+
+    let mut value: usize = 0;
+    for byte in digits {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?;
+        value = value.checked_add(usize::from(byte - b'0'))?;
+    }
+    Some(value)
 }
 
 fn parse_i16_ascii(bytes: &[u8]) -> Option<i16> {
@@ -10639,6 +10674,13 @@ pub extern "C" fn roastty_surface_binding_action(
             surface.scroll_viewport_to_bottom();
             true
         }
+        ParsedBindingAction::ScrollToRow(row) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.scroll_viewport_to_row(row);
+            true
+        }
         ParsedBindingAction::ScrollPageUp => {
             if surface.app.is_null() {
                 return false;
@@ -12483,6 +12525,16 @@ mod tests {
             "scroll_to_top:now",
             "scroll_to_bottom:",
             "scroll_to_bottom:now",
+            "scroll_to_row",
+            "scroll_to_row:",
+            "scroll_to_row:+",
+            "scroll_to_row:-1",
+            "scroll_to_row: ",
+            "scroll_to_row: 1",
+            "scroll_to_row:1 ",
+            "scroll_to_row:1:2",
+            "scroll_to_row:abc",
+            "scroll_to_row:999999999999999999999999999999999999999",
             "scroll_page_up:",
             "scroll_page_up:now",
             "scroll_page_down:",
@@ -12992,6 +13044,79 @@ mod tests {
         );
 
         assert!(binding_action(surface, "scroll_to_bottom"));
+        assert_eq!(
+            surface_worker_viewport_top_left_screen(surface),
+            active_top_left
+        );
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_scroll_to_row_no_worker_consumes_action() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(binding_action(surface, "scroll_to_row:0"));
+        assert!(binding_action(surface, "scroll_to_row:+1"));
+        assert!(binding_action(surface, "scroll_to_row:2"));
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.last_termio_error.is_none());
+        assert!(!surface_ref.dirty);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_scroll_to_row_false_for_null_and_detached() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "scroll_to_row:1"));
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "scroll_to_row:1"));
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_scroll_to_row_moves_to_absolute_rows() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command =
+            CString::new("printf 'l0\\nl1\\nl2\\nl3\\nl4\\nl5\\nl6\\nl7\\nl8\\n'; sleep 5")
+                .unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+
+        assert!(surface_snapshot_text_after_start(app, surface).contains("l8"));
+        let active_top_left = surface_worker_active_viewport_top_left_screen(surface);
+        assert!(active_top_left.y > 3);
+
+        assert!(binding_action(surface, "scroll_to_row:0"));
+        assert_eq!(
+            surface_worker_viewport_top_left_screen(surface),
+            point::Coordinate::new(0, 0)
+        );
+
+        assert!(binding_action(surface, "scroll_to_row:+2"));
+        assert_eq!(
+            surface_worker_viewport_top_left_screen(surface),
+            point::Coordinate::new(0, 2)
+        );
+
+        assert!(binding_action(
+            surface,
+            &format!("scroll_to_row:{}", active_top_left.y)
+        ));
+        assert_eq!(
+            surface_worker_viewport_top_left_screen(surface),
+            active_top_left
+        );
+
+        assert!(binding_action(surface, "scroll_to_row:999999"));
         assert_eq!(
             surface_worker_viewport_top_left_screen(surface),
             active_top_left
