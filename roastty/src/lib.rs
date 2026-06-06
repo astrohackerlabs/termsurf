@@ -1895,7 +1895,18 @@ impl Surface {
             return false;
         }
         self.last_key_event = Some(event.event.clone());
-        false
+        let encoded = key_encode::encode(&event.event, self.key_encode_options());
+        if encoded.is_empty() {
+            return false;
+        }
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return false;
+        };
+        if let Err(err) = worker.queue_write(&encoded) {
+            self.apply_termio_event(termio::TermioWorkerEvent::Error(format!("{err:?}")));
+            return false;
+        }
+        true
     }
 
     fn key_is_binding(&self, event: Option<&KeyEvent>, flags: *mut u8) -> bool {
@@ -1908,6 +1919,10 @@ impl Surface {
             return false;
         }
         false
+    }
+
+    fn key_encode_options(&self) -> key_encode::Options {
+        key_encode::Options::default()
     }
 
     fn tick_termio(&mut self) {
@@ -10545,6 +10560,100 @@ mod tests {
                 .unwrap()
                 .key,
             key::Key::KeyC
+        );
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_printable_utf8_reaches_child_pty() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command =
+            CString::new("stty -echo -icanon min 1 time 0; dd bs=1 count=1 2>/dev/null").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        let event = new_key_event();
+        assert_eq!(
+            roastty_key_event_set_key(event, key::Key::KeyA as c_int),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_key_event_set_utf8(event, b"a".as_ptr(), 1),
+            ROASTTY_SUCCESS
+        );
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        assert!(roastty_surface_key(surface, event));
+        let text = surface_snapshot_text(app, surface);
+        assert!(text.contains('a'), "{text:?}");
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_release_empty_encoding_stores_event_and_returns_false() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let event = new_key_event();
+        assert_eq!(
+            roastty_key_event_set_action(event, key::KeyAction::Release as c_int),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_key_event_set_key(event, key::Key::KeyA as c_int),
+            ROASTTY_SUCCESS
+        );
+
+        assert!(!roastty_surface_key(surface, event));
+        let stored = surface_from_handle(surface)
+            .unwrap()
+            .last_key_event
+            .as_ref()
+            .unwrap();
+        assert_eq!(stored.action, key::KeyAction::Release);
+        assert_eq!(stored.key, key::Key::KeyA);
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_worker_write_failure_records_error() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        let event = new_key_event();
+        assert_eq!(
+            roastty_key_event_set_key(event, key::Key::KeyA as c_int),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_key_event_set_utf8(event, b"a".as_ptr(), 1),
+            ROASTTY_SUCCESS
+        );
+        surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_mut()
+            .unwrap()
+            .shutdown()
+            .expect("shutdown worker");
+
+        assert!(!roastty_surface_key(surface, event));
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.process_exited);
+        assert!(surface_ref.dirty);
+        assert_eq!(
+            surface_ref.last_termio_error.as_deref(),
+            Some("CommandDisconnected")
         );
 
         roastty_key_event_free(event);

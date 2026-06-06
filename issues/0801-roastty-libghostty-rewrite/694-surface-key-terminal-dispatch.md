@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 694: Surface Key Terminal Dispatch
@@ -79,3 +84,40 @@ Codex approved the design as a correct incremental slice after Experiment 690:
 surface key events will keep storing `last_key_event`, encode with default key
 encoder options, queue only nonempty bytes, and leave bindings/actions and
 terminal-derived encoder options for later experiments.
+
+## Result
+
+**Result:** Pass.
+
+`roastty_surface_key` now stores a cloned key event, encodes it with
+`key_encode::Options::default()`, queues nonempty encoded bytes to the attached
+termio worker, and returns `true` only when the write is queued successfully.
+Printable UTF-8 key events now reach a child PTY through the surface callback.
+
+The implementation preserves false/no-op behavior for null surfaces, detached
+surfaces, invalid key-event handles, missing workers, empty encodings such as
+default release events, and worker write failures. Worker write failures record
+the existing termio error. `roastty_surface_key_is_binding` remains state-only:
+it zeroes non-null flags and returns `false`.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_key -- --nocapture`
+- `cargo test -p roastty key -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Surface key callbacks now have a working default terminal-write path. The next
+key slices should derive encoder options from terminal/runtime state and then
+add the keybinding/action-dispatch behavior that upstream runs before terminal
+encoding.
+
+## Completion Review
+
+Codex reviewed the staged result and found no code correctness blockers. It
+approved the default terminal key dispatch path, the retained `key_is_binding`
+false/zero behavior, the deferred scope, and the verification results.
