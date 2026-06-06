@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+use super::terminal::Terminal;
+
 const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,14 +154,14 @@ pub(crate) enum TmuxCommand {
     User(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct TmuxViewer {
     state: TmuxViewerState,
     session_id: usize,
     tmux_version: String,
     command_queue: VecDeque<TmuxCommand>,
     windows: Vec<TmuxWindow>,
-    pane_ids: Vec<usize>,
+    panes: Vec<TmuxPane>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +170,19 @@ pub(crate) struct TmuxWindow {
     pub(crate) width: usize,
     pub(crate) height: usize,
     pub(crate) layout: Layout,
+}
+
+#[derive(Debug)]
+pub(crate) struct TmuxPane {
+    id: usize,
+    terminal: Terminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TmuxPaneSpec {
+    id: usize,
+    width: usize,
+    height: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -620,7 +635,7 @@ impl TmuxViewer {
             tmux_version: String::new(),
             command_queue: VecDeque::new(),
             windows: Vec::new(),
-            pane_ids: Vec::new(),
+            panes: Vec::new(),
         }
     }
 
@@ -710,7 +725,7 @@ impl TmuxViewer {
     fn session_changed(&mut self, session_id: usize) -> Vec<TmuxViewerAction> {
         self.session_id = session_id;
         self.windows.clear();
-        self.pane_ids.clear();
+        self.panes.clear();
         self.command_queue.clear();
 
         let mut actions = vec![TmuxViewerAction::Windows(Vec::new())];
@@ -734,7 +749,9 @@ impl TmuxViewer {
         self.windows[index].layout = layout;
         let mut actions = vec![TmuxViewerAction::Windows(self.windows.clone())];
         let was_empty = self.command_queue.is_empty();
-        self.sync_layouts();
+        if !self.sync_layouts() {
+            return self.defunct();
+        }
         if was_empty {
             actions.extend(self.emit_next_queued_command());
         }
@@ -757,7 +774,9 @@ impl TmuxViewer {
                 let Some(windows) = self.received_list_windows(&content) else {
                     return self.defunct();
                 };
-                self.sync_layouts();
+                if !self.sync_layouts() {
+                    return self.defunct();
+                }
                 vec![TmuxViewerAction::Windows(windows)]
             }
             TmuxCommand::PaneHistory(_)
@@ -786,38 +805,51 @@ impl TmuxViewer {
         Some(self.windows.clone())
     }
 
-    fn sync_layouts(&mut self) {
-        let mut pane_ids = Vec::new();
+    fn sync_layouts(&mut self) -> bool {
+        let mut pane_specs = Vec::new();
         for window in &self.windows {
-            collect_layout_pane_ids(&window.layout, &mut pane_ids);
+            collect_layout_panes(&window.layout, &mut pane_specs);
         }
 
-        let added: Vec<usize> = pane_ids
+        let added: Vec<TmuxPaneSpec> = pane_specs
             .iter()
             .copied()
-            .filter(|pane_id| !self.pane_ids.contains(pane_id))
+            .filter(|pane| !self.panes.iter().any(|existing| existing.id == pane.id))
             .collect();
 
-        self.pane_ids = pane_ids;
+        let mut old_panes = std::mem::take(&mut self.panes);
+        let mut panes = Vec::with_capacity(pane_specs.len());
+        for pane_spec in pane_specs {
+            if let Some(index) = old_panes.iter().position(|pane| pane.id == pane_spec.id) {
+                panes.push(old_panes.remove(index));
+            } else {
+                let Some(pane) = TmuxPane::new(pane_spec) else {
+                    return false;
+                };
+                panes.push(pane);
+            }
+        }
+        self.panes = panes;
+
         for pane_id in &added {
             self.command_queue
                 .push_back(TmuxCommand::PaneHistory(TmuxCapturePane {
-                    id: *pane_id,
+                    id: pane_id.id,
                     screen_key: TmuxScreenKey::Primary,
                 }));
             self.command_queue
                 .push_back(TmuxCommand::PaneVisible(TmuxCapturePane {
-                    id: *pane_id,
+                    id: pane_id.id,
                     screen_key: TmuxScreenKey::Primary,
                 }));
             self.command_queue
                 .push_back(TmuxCommand::PaneHistory(TmuxCapturePane {
-                    id: *pane_id,
+                    id: pane_id.id,
                     screen_key: TmuxScreenKey::Alternate,
                 }));
             self.command_queue
                 .push_back(TmuxCommand::PaneVisible(TmuxCapturePane {
-                    id: *pane_id,
+                    id: pane_id.id,
                     screen_key: TmuxScreenKey::Alternate,
                 }));
         }
@@ -825,6 +857,8 @@ impl TmuxViewer {
         if !added.is_empty() {
             self.command_queue.push_back(TmuxCommand::PaneState);
         }
+
+        true
     }
 
     fn received_tmux_version(&mut self, content: &[u8]) -> bool {
@@ -886,8 +920,27 @@ impl TmuxViewer {
     }
 
     #[cfg(test)]
-    fn pane_ids(&self) -> &[usize] {
-        &self.pane_ids
+    fn pane_ids(&self) -> Vec<usize> {
+        self.panes.iter().map(|pane| pane.id).collect()
+    }
+
+    #[cfg(test)]
+    fn pane_dimensions(&self, id: usize) -> Option<(u16, u16)> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == id)
+            .map(|pane| (pane.terminal.columns(), pane.terminal.rows()))
+    }
+
+    #[cfg(test)]
+    fn set_panes_for_tests(&mut self, pane_specs: &[(usize, u16, u16)]) {
+        self.panes = pane_specs
+            .iter()
+            .map(|(id, cols, rows)| TmuxPane {
+                id: *id,
+                terminal: Terminal::init(*cols, *rows, None).unwrap(),
+            })
+            .collect();
     }
 
     #[cfg(test)]
@@ -900,6 +953,18 @@ impl TmuxViewer {
 impl Default for TmuxViewer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl TmuxPane {
+    fn new(spec: TmuxPaneSpec) -> Option<Self> {
+        let cols = u16::try_from(spec.width).ok()?;
+        let rows = u16::try_from(spec.height).ok()?;
+        let terminal = Terminal::init(cols, rows, None).ok()?;
+        Some(Self {
+            id: spec.id,
+            terminal,
+        })
     }
 }
 
@@ -1008,16 +1073,20 @@ fn parse_list_window(line: &str) -> Option<TmuxWindow> {
     })
 }
 
-fn collect_layout_pane_ids(layout: &Layout, pane_ids: &mut Vec<usize>) {
+fn collect_layout_panes(layout: &Layout, panes: &mut Vec<TmuxPaneSpec>) {
     match &layout.content {
         LayoutContent::Pane(id) => {
-            if !pane_ids.contains(id) {
-                pane_ids.push(*id);
+            if !panes.iter().any(|pane| pane.id == *id) {
+                panes.push(TmuxPaneSpec {
+                    id: *id,
+                    width: layout.width,
+                    height: layout.height,
+                });
             }
         }
         LayoutContent::Horizontal(children) | LayoutContent::Vertical(children) => {
             for child in children {
-                collect_layout_pane_ids(child, pane_ids);
+                collect_layout_panes(child, panes);
             }
         }
     }
@@ -1940,6 +2009,8 @@ mod tests {
         assert_eq!(viewer.queue_len(), 9);
         assert_eq!(viewer.windows(), expected.as_slice());
         assert_eq!(viewer.pane_ids(), &[1, 2]);
+        assert_eq!(viewer.pane_dimensions(1), Some((40, 24)));
+        assert_eq!(viewer.pane_dimensions(2), Some((40, 24)));
         assert_eq!(viewer.state(), TmuxViewerState::CommandQueue);
     }
 
@@ -2016,6 +2087,8 @@ mod tests {
         );
         assert_eq!(viewer.windows(), expected.as_slice());
         assert_eq!(viewer.pane_ids(), &[42, 43]);
+        assert_eq!(viewer.pane_dimensions(42), Some((80, 24)));
+        assert_eq!(viewer.pane_dimensions(43), Some((100, 30)));
     }
 
     #[test]
@@ -2065,6 +2138,21 @@ mod tests {
     }
 
     #[test]
+    fn tmux_viewer_oversized_pane_dimensions_defunct() {
+        let mut viewer = TmuxViewer::new();
+        let layout = checked_layout("70000x24,0,0,42");
+
+        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                format!("$1 @2 70000 24 {layout}").into_bytes()
+            )),
+            vec![TmuxViewerAction::Exit]
+        );
+        assert_eq!(viewer.state(), TmuxViewerState::Defunct);
+    }
+
+    #[test]
     fn tmux_viewer_list_windows_output_emits_next_queued_command() {
         let mut viewer = TmuxViewer::new();
         let layout = checked_layout("80x24,0,0,42");
@@ -2103,6 +2191,9 @@ mod tests {
         ));
 
         assert_eq!(viewer.pane_ids(), &[10, 11, 12]);
+        assert_eq!(viewer.pane_dimensions(10), Some((40, 24)));
+        assert_eq!(viewer.pane_dimensions(11), Some((80, 12)));
+        assert_eq!(viewer.pane_dimensions(12), Some((80, 12)));
         assert_eq!(
             viewer.command_queue.iter().collect::<Vec<_>>(),
             expected_new_pane_commands(&[10, 11, 12])
@@ -2115,7 +2206,7 @@ mod tests {
     fn tmux_viewer_existing_panes_do_not_queue_duplicate_captures() {
         let mut viewer = TmuxViewer::new();
         let layout = checked_layout("80x24,0,0{40x24,0,0,42,40x24,40,0,43}");
-        viewer.pane_ids = vec![42, 43];
+        viewer.set_panes_for_tests(&[(42, 40, 24), (43, 40, 24)]);
 
         viewer.queue_command_for_tests(TmuxCommand::ListWindows);
         assert_eq!(
@@ -2130,6 +2221,8 @@ mod tests {
             )])]
         );
         assert_eq!(viewer.pane_ids(), &[42, 43]);
+        assert_eq!(viewer.pane_dimensions(42), Some((40, 24)));
+        assert_eq!(viewer.pane_dimensions(43), Some((40, 24)));
         assert!(viewer.command_queue.is_empty());
     }
 
@@ -2137,7 +2230,7 @@ mod tests {
     fn tmux_viewer_removed_panes_are_pruned() {
         let mut viewer = TmuxViewer::new();
         let layout = checked_layout("80x24,0,0,42");
-        viewer.pane_ids = vec![42, 43];
+        viewer.set_panes_for_tests(&[(42, 80, 24), (43, 40, 24)]);
 
         viewer.queue_command_for_tests(TmuxCommand::ListWindows);
         viewer.next(ControlNotification::BlockEnd(
@@ -2145,6 +2238,7 @@ mod tests {
         ));
 
         assert_eq!(viewer.pane_ids(), &[42]);
+        assert_eq!(viewer.pane_dimensions(42), Some((80, 24)));
         assert!(viewer.command_queue.is_empty());
     }
 
@@ -2159,6 +2253,7 @@ mod tests {
         ));
 
         assert_eq!(viewer.pane_ids(), &[42]);
+        assert_eq!(viewer.pane_dimensions(42), Some((40, 24)));
         assert_eq!(
             viewer.command_queue.iter().collect::<Vec<_>>(),
             expected_new_pane_commands(&[42]).iter().collect::<Vec<_>>()
@@ -2172,6 +2267,7 @@ mod tests {
         viewer.session_id = 7;
         viewer.tmux_version = "3.5a".to_owned();
         viewer.windows = vec![test_window(2, 80, 24, "80x24,0,0,42")];
+        viewer.set_panes_for_tests(&[(42, 80, 24)]);
 
         assert_eq!(
             viewer.next(ControlNotification::SessionChanged {
@@ -2186,6 +2282,7 @@ mod tests {
         assert_eq!(viewer.session_id(), 9);
         assert_eq!(viewer.tmux_version(), "3.5a");
         assert!(viewer.windows().is_empty());
+        assert!(viewer.pane_ids().is_empty());
         assert_eq!(viewer.queue_len(), 1);
     }
 
@@ -2307,7 +2404,7 @@ mod tests {
         ];
         viewer.state = TmuxViewerState::CommandQueue;
         viewer.windows = vec![old_window, unchanged_window];
-        viewer.pane_ids = vec![42, 43, 44];
+        viewer.set_panes_for_tests(&[(42, 80, 24), (43, 100, 30), (44, 40, 24)]);
 
         assert_eq!(
             viewer.next(ControlNotification::LayoutChange {
@@ -2320,6 +2417,9 @@ mod tests {
         );
         assert_eq!(viewer.windows(), expected.as_slice());
         assert_eq!(viewer.pane_ids(), &[42, 44, 43]);
+        assert_eq!(viewer.pane_dimensions(42), Some((80, 24)));
+        assert_eq!(viewer.pane_dimensions(43), Some((100, 30)));
+        assert_eq!(viewer.pane_dimensions(44), Some((40, 24)));
     }
 
     #[test]
@@ -2365,7 +2465,7 @@ mod tests {
         let new_layout = checked_layout("80x24,0,0,43");
         viewer.queue_command_for_tests(TmuxCommand::ListWindows);
         viewer.windows = vec![test_window(2, 80, 24, "80x24,0,0,42")];
-        viewer.pane_ids = vec![42];
+        viewer.set_panes_for_tests(&[(42, 80, 24)]);
 
         assert!(matches!(
             viewer
@@ -2399,7 +2499,7 @@ mod tests {
         };
         viewer.state = TmuxViewerState::CommandQueue;
         viewer.windows = vec![test_window(2, 80, 24, "80x24,0,0,42")];
-        viewer.pane_ids = vec![42];
+        viewer.set_panes_for_tests(&[(42, 80, 24)]);
 
         assert_eq!(
             viewer.next(ControlNotification::LayoutChange {
@@ -2420,6 +2520,7 @@ mod tests {
             ]
         );
         assert_eq!(viewer.pane_ids(), &[42, 43]);
+        assert_eq!(viewer.pane_dimensions(43), Some((40, 24)));
         assert_eq!(viewer.queue_len(), 5);
     }
 

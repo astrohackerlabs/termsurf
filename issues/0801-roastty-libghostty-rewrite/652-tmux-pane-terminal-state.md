@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 session = "019e9ad7-04a6-7b20-823a-fa6e3d24129f"
 verdict = "approved"
+
+[review.result]
+agent = "codex"
+session = "019e9ad7-04a6-7b20-823a-fa6e3d24129f"
+verdict = "approved"
 +++
 
 # Experiment 652: Tmux Pane Terminal State
@@ -111,3 +116,63 @@ Follow-up review in the same session found no blocking issues and approved the
 revised design. The reviewer confirmed that checked dimension conversion,
 defunct-on-overflow behavior, oversized-dimension testing, `TmuxViewer` derive
 changes, and the intended pane-terminal-state scope are now specified.
+
+## Result
+
+**Result:** Pass
+
+Implemented ordered `TmuxPane` records in `roastty/src/terminal/tmux.rs`.
+`TmuxViewer` now owns per-pane `Terminal` state instead of a bare pane ID list.
+Layout traversal collects pane leaf IDs with their leaf width/height, preserves
+first-seen order, and ignores duplicate pane IDs after the first occurrence.
+
+`sync_layouts` now preserves existing pane records, creates `Terminal` instances
+for newly discovered panes with checked `usize` to `u16` dimension conversion,
+prunes removed panes, and keeps the new-pane capture/state command queueing from
+Experiment 651. Oversized pane dimensions or terminal initialization failure
+defunct the viewer and emit `Exit` from the caller path.
+
+`TmuxViewer` no longer derives `Clone`, `PartialEq`, or `Eq` because it owns
+`Terminal` values. Tests inspect pane IDs and terminal dimensions through
+accessors instead of comparing whole viewers.
+
+The intended upstream boundary remains intact. This experiment does not apply
+`PaneHistory`, `PaneVisible`, or `PaneState` output, does not handle live pane
+output, does not resize existing pane terminals, and does not integrate with
+PTY, App, or Surface runtime code.
+
+Verification performed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty terminal::tmux` — 101 passed, 0 failed
+
+Source comparison was against `vendor/ghostty/src/terminal/tmux/viewer.zig`
+`initLayout` and `syncLayouts`, plus `roastty/src/terminal/terminal.rs`
+`Terminal::init`.
+
+## Completion Review
+
+Codex completion review session `019e9ad7-04a6-7b20-823a-fa6e3d24129f` found no
+blocking issues and approved the completed experiment. The reviewer confirmed
+that `TmuxViewer` now owns ordered `TmuxPane` records with Roastty `Terminal`
+state, bare pane ID storage is replaced, layout traversal collects first-seen
+pane `id`/`width`/`height`, existing pane terminals are preserved, removed panes
+are pruned, new panes use checked `u16` conversion before `Terminal::init`,
+oversized dimensions defunct the viewer, new-pane command queueing and
+sequencing remain intact, `TmuxViewer` clone/equality derives were removed, and
+pane command output, live pane output, resize, PTY, App, and Surface integration
+remain out of scope.
+
+The reviewer also ran:
+
+- `cargo test -p roastty terminal::tmux` — 101 passed
+- `cargo fmt -p roastty -- --check`
+- `prettier --check ... README.md ... 652-tmux-pane-terminal-state.md`
+- `git diff --check`
+
+## Conclusion
+
+Roastty's standalone tmux viewer now owns initialized terminal state for tracked
+panes. The next tmux experiment should consume pane capture output into those
+terminals, starting with `PaneHistory` / `PaneVisible` before `PaneState` and
+live `%output`.
