@@ -2414,6 +2414,8 @@ enum ParsedBindingAction {
     RuntimeAction(c_int, [usize; 8]),
     CloseSurface,
     Text(Vec<u8>),
+    Csi(Vec<u8>),
+    Esc(Vec<u8>),
 }
 
 fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindingAction> {
@@ -2480,6 +2482,8 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
             Some(ParsedBindingAction::CloseSurface)
         }
         b"text" => Some(ParsedBindingAction::Text(parameter?.to_vec())),
+        b"csi" => Some(ParsedBindingAction::Csi(parameter?.to_vec())),
+        b"esc" => Some(ParsedBindingAction::Esc(parameter?.to_vec())),
         _ => None,
     }
 }
@@ -10408,6 +10412,26 @@ pub extern "C" fn roastty_surface_binding_action(
             }
             true
         }
+        ParsedBindingAction::Csi(data) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            let mut text = Vec::with_capacity(data.len().saturating_add(2));
+            text.extend_from_slice(b"\x1b[");
+            text.extend_from_slice(&data);
+            surface.raw_text(&text);
+            true
+        }
+        ParsedBindingAction::Esc(data) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            let mut text = Vec::with_capacity(data.len().saturating_add(1));
+            text.push(0x1b);
+            text.extend_from_slice(&data);
+            surface.raw_text(&text);
+            true
+        }
     }
 }
 
@@ -12216,6 +12240,8 @@ mod tests {
             "equalize_splits:now",
             "close_surface:now",
             "text",
+            "csi",
+            "esc",
         ] {
             assert!(!binding_action(surface, action), "{action}");
         }
@@ -12462,6 +12488,81 @@ mod tests {
 
         roastty_surface_free(surface);
         roastty_app_free(app);
+    }
+
+    fn raw_reader_command(byte_count: usize) -> CString {
+        CString::new(format!(
+            "python3 -c 'import sys, tty; sys.stdout.write(\"ready\\n\"); sys.stdout.flush(); tty.setraw(sys.stdin.fileno()); b = sys.stdin.buffer.read({byte_count}); sys.stdout.write(\"\\n\" + b.hex())'"
+        ))
+        .unwrap()
+    }
+
+    fn assert_binding_action_raw_bytes(action: &[u8], byte_count: usize, expected_hex: &str) {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = raw_reader_command(byte_count);
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        assert!(binding_action_bytes(surface, action));
+        let text = surface_snapshot_text(app, surface);
+
+        assert!(text.contains(expected_hex), "{text:?}");
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_csi_esc_no_worker_consumes_action() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(binding_action(surface, "csi:"));
+        assert!(binding_action(surface, "csi:A"));
+        assert!(binding_action(surface, "esc:"));
+        assert!(binding_action(surface, "esc:d"));
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.last_termio_error.is_none());
+        assert!(!surface_ref.dirty);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_csi_esc_false_for_null_and_detached() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "csi:A"));
+        assert!(!binding_action(ptr::null_mut(), "esc:d"));
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "csi:A"));
+        assert!(!binding_action(surface, "esc:d"));
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_csi_reaches_child_pty() {
+        assert_binding_action_raw_bytes(b"csi:A", 3, "1b5b41");
+    }
+
+    #[test]
+    fn surface_binding_action_esc_reaches_child_pty() {
+        assert_binding_action_raw_bytes(b"esc:d", 2, "1b64");
+    }
+
+    #[test]
+    fn surface_binding_action_csi_esc_empty_parameters_write_prefixes() {
+        assert_binding_action_raw_bytes(b"csi:", 2, "1b5b");
+        assert_binding_action_raw_bytes(b"esc:", 1, "1b");
+    }
+
+    #[test]
+    fn surface_binding_action_csi_parameters_are_not_decoded() {
+        assert_binding_action_raw_bytes(b"csi:\\x15", 6, "1b5b5c783135");
     }
 
     #[test]

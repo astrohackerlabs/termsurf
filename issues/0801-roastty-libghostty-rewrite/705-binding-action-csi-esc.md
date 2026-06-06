@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 705: Binding Action CSI and ESC
@@ -92,3 +97,52 @@ fixed local buffer for formatting CSI/ESC writes; this design records that
 Roastty will use an owned `Vec<u8>` and not preserve that fixed-buffer limit in
 this slice. The review also required updating the README provenance tuple before
 the plan commit.
+
+## Result
+
+**Result:** Pass
+
+Implemented `csi:` and `esc:` support in the binding-action ABI:
+
+- Extended parsed binding actions with `Csi` and `Esc`.
+- Parsed `csi:<bytes>` and `esc:<bytes>` as raw byte parameters without
+  string-literal decoding.
+- Rejected missing `csi` / `esc` parameters while accepting empty parameters
+  after the colon.
+- Dispatched `csi:<bytes>` as `ESC [` plus the parameter bytes through the raw
+  termio write helper.
+- Dispatched `esc:<bytes>` as `ESC` plus the parameter bytes through the raw
+  termio write helper.
+- Kept null and detached surfaces returning `false`.
+- Added Rust tests for no-worker behavior, null/detached behavior, CSI and ESC
+  child-PTY byte delivery, empty-parameter prefix writes, and the no-decode
+  `csi:\x15` case.
+- Added C ABI harness smoke coverage for missing and empty CSI/ESC parameters.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty binding_action -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Roastty binding-action invocation now supports split actions, `close_surface`,
+raw `text:`, raw `csi:`, and raw `esc:` input. Remaining binding-action parity
+still requires cursor-key actions, terminal reset and scrolling actions,
+clipboard actions, complete keybind storage/lookup, app-scoped actions, and
+frontend split/tab/window mutation.
+
+## Completion Review
+
+Codex reviewed the staged completed Experiment 705 result. The review found no
+implementation blockers: `csi:` and `esc:` parse as raw byte parameters, reject
+missing parameters, accept empty parameters after the colon, dispatch `ESC [` /
+`ESC` plus raw bytes, and preserve split, close, and `text:` semantics.
+
+The review accepted the PTY tests, including the no-decode `csi:\x15` case. It
+initially blocked the result commit only because result-review provenance had
+not yet been recorded. This section, the `[review.result]` frontmatter, and the
+README tuple update resolve that workflow finding.

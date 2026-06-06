@@ -4297,8 +4297,12 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "unknown", 7));
   assert(!roastty_surface_binding_action(surface, "close_surface:now", 17));
   assert(!roastty_surface_binding_action(surface, "text", 4));
+  assert(!roastty_surface_binding_action(surface, "csi", 3));
+  assert(!roastty_surface_binding_action(surface, "esc", 3));
   assert(!roastty_surface_binding_action(surface, "new_split:right", 15));
   assert(roastty_surface_binding_action(surface, "text:hello", 10));
+  assert(roastty_surface_binding_action(surface, "csi:", 4));
+  assert(roastty_surface_binding_action(surface, "esc:", 4));
   assert(roastty_surface_binding_action(surface, "close_surface", 13));
   roastty_surface_preedit(surface, NULL, 3);
   roastty_surface_preedit(surface, NULL, 0);
