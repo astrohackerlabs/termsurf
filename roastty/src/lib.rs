@@ -1438,6 +1438,7 @@ struct Config {
     confirm_close_surface: config::ConfirmCloseSurface,
     has_global_keybinds: bool,
     keybind_triggers: Vec<ConfigKeybind>,
+    diagnostics: Vec<CString>,
 }
 
 #[derive(Clone)]
@@ -1455,6 +1456,17 @@ impl Config {
         self.keybind_triggers
             .iter()
             .any(|binding| config_trigger_matches_key_event(binding.trigger, event))
+    }
+
+    fn push_diagnostic(&mut self, message: impl Into<Vec<u8>>) {
+        if let Ok(message) = CString::new(message) {
+            self.diagnostics.push(message);
+        }
+    }
+
+    fn push_keybind_diagnostic(&mut self, value: &[u8], error: ConfigKeybindParseError) {
+        let value = String::from_utf8_lossy(value);
+        self.push_diagnostic(format!("invalid keybind `{value}`: {}", error.message()));
     }
 }
 
@@ -3527,6 +3539,17 @@ fn copy_to_clipboard_format_from_str(parameter: Option<&[u8]>) -> Option<CopyToC
 }
 
 fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindingAction> {
+    parse_binding_action_with_auto_split(action, auto_split_direction(surface))
+}
+
+fn parse_config_binding_action(action: &[u8]) -> Option<ParsedBindingAction> {
+    parse_binding_action_with_auto_split(action, ROASTTY_SPLIT_DIRECTION_RIGHT)
+}
+
+fn parse_binding_action_with_auto_split(
+    action: &[u8],
+    auto_direction: c_int,
+) -> Option<ParsedBindingAction> {
     let (name, parameter) = action
         .iter()
         .position(|byte| *byte == b':')
@@ -3762,7 +3785,7 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
         }
         b"new_split" => {
             let direction = match parameter {
-                None | Some(b"auto") => auto_split_direction(surface),
+                None | Some(b"auto") => auto_direction,
                 Some(parameter) => split_direction_from_str(parameter)?,
             };
             let mut storage = [0usize; 8];
@@ -4663,16 +4686,48 @@ fn unicode_trigger(codepoint: u32, mods: c_int) -> RoasttyInputTrigger {
     }
 }
 
-fn parse_config_keybind(value: &[u8]) -> Option<ConfigKeybind> {
-    let separator = value.iter().position(|byte| *byte == b'=')?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfigKeybindParseError {
+    MissingSeparator,
+    MissingTrigger,
+    MissingAction,
+    InvalidTrigger,
+    InvalidAction,
+}
+
+impl ConfigKeybindParseError {
+    fn message(self) -> &'static str {
+        match self {
+            ConfigKeybindParseError::MissingSeparator => "missing `=` separator",
+            ConfigKeybindParseError::MissingTrigger => "missing trigger",
+            ConfigKeybindParseError::MissingAction => "missing action",
+            ConfigKeybindParseError::InvalidTrigger => "invalid trigger",
+            ConfigKeybindParseError::InvalidAction => "invalid action",
+        }
+    }
+}
+
+fn parse_config_keybind(value: &[u8]) -> Result<ConfigKeybind, ConfigKeybindParseError> {
+    let separator = value
+        .iter()
+        .position(|byte| *byte == b'=')
+        .ok_or(ConfigKeybindParseError::MissingSeparator)?;
     let trigger = &value[..separator];
     let action = &value[separator + 1..];
-    if trigger.is_empty() || action.is_empty() {
-        return None;
+    if trigger.is_empty() {
+        return Err(ConfigKeybindParseError::MissingTrigger);
     }
-    Some(ConfigKeybind {
+    if action.is_empty() {
+        return Err(ConfigKeybindParseError::MissingAction);
+    }
+    let trigger =
+        parse_config_keybind_trigger(trigger).ok_or(ConfigKeybindParseError::InvalidTrigger)?;
+    if parse_config_binding_action(action).is_none() {
+        return Err(ConfigKeybindParseError::InvalidAction);
+    }
+    Ok(ConfigKeybind {
         action: action.to_vec(),
-        trigger: parse_config_keybind_trigger(trigger)?,
+        trigger,
     })
 }
 
@@ -8503,6 +8558,7 @@ pub extern "C" fn roastty_config_new() -> RoasttyConfig {
         confirm_close_surface: config::ConfirmCloseSurface::True,
         has_global_keybinds: false,
         keybind_triggers: Vec::new(),
+        diagnostics: Vec::new(),
     }))
     .cast()
 }
@@ -8518,7 +8574,7 @@ pub extern "C" fn roastty_config_free(config: RoasttyConfig) {
 
 #[no_mangle]
 pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
-    let (finalized, confirm_close_surface, has_global_keybinds, keybind_triggers) =
+    let (finalized, confirm_close_surface, has_global_keybinds, keybind_triggers, diagnostics) =
         config_from_handle(config)
             .map(|config| {
                 (
@@ -8526,14 +8582,22 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
                     config.confirm_close_surface,
                     config.has_global_keybinds,
                     config.keybind_triggers.clone(),
+                    config.diagnostics.clone(),
                 )
             })
-            .unwrap_or((false, config::ConfirmCloseSurface::True, false, Vec::new()));
+            .unwrap_or((
+                false,
+                config::ConfirmCloseSurface::True,
+                false,
+                Vec::new(),
+                Vec::new(),
+            ));
     Box::into_raw(Box::new(Config {
         finalized,
         confirm_close_surface,
         has_global_keybinds,
         keybind_triggers,
+        diagnostics,
     }))
     .cast()
 }
@@ -8548,8 +8612,9 @@ pub extern "C" fn roastty_config_load_cli_args(config: RoasttyConfig) {
     while index < argv.len() {
         let arg = &argv[index];
         if let Some(value) = arg.strip_prefix(b"--keybind=") {
-            if let Some(binding) = parse_config_keybind(value) {
-                config.store_keybind(binding);
+            match parse_config_keybind(value) {
+                Ok(binding) => config.store_keybind(binding),
+                Err(error) => config.push_keybind_diagnostic(value, error),
             }
             index += 1;
             continue;
@@ -8559,11 +8624,13 @@ pub extern "C" fn roastty_config_load_cli_args(config: RoasttyConfig) {
                 .get(index + 1)
                 .filter(|value| !value.starts_with(b"--"))
             {
-                if let Some(binding) = parse_config_keybind(value) {
-                    config.store_keybind(binding);
+                match parse_config_keybind(value) {
+                    Ok(binding) => config.store_keybind(binding),
+                    Err(error) => config.push_keybind_diagnostic(value, error),
                 }
                 index += 2;
             } else {
+                config.push_diagnostic("invalid keybind: value required");
                 index += 1;
             }
             continue;
@@ -8692,15 +8759,27 @@ pub extern "C" fn roastty_config_key_is_binding(
 }
 
 #[no_mangle]
-pub extern "C" fn roastty_config_diagnostics_count(_config: RoasttyConfig) -> u32 {
-    0
+pub extern "C" fn roastty_config_diagnostics_count(config: RoasttyConfig) -> u32 {
+    config_from_handle(config)
+        .map(|config| config.diagnostics.len().min(u32::MAX as usize) as u32)
+        .unwrap_or(0)
 }
 
 #[no_mangle]
 pub extern "C" fn roastty_config_get_diagnostic(
-    _config: RoasttyConfig,
-    _index: u32,
+    config: RoasttyConfig,
+    index: u32,
 ) -> RoasttyDiagnostic {
+    let Some(config) = config_from_handle(config) else {
+        return RoasttyDiagnostic {
+            message: EMPTY_DIAGNOSTIC.as_ptr().cast::<c_char>(),
+        };
+    };
+    if let Some(message) = config.diagnostics.get(index as usize) {
+        return RoasttyDiagnostic {
+            message: message.as_ptr(),
+        };
+    }
     RoasttyDiagnostic {
         message: EMPTY_DIAGNOSTIC.as_ptr().cast::<c_char>(),
     }
@@ -15165,7 +15244,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_key_configured_unsupported_falls_through_and_clears_stale_release() {
+    fn surface_key_invalid_configured_action_does_not_store_and_clears_stale_release() {
         let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         with_init_args(
             &[
@@ -15176,6 +15255,8 @@ mod tests {
             || {
                 let config = roastty_config_new();
                 roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 1);
+                assert!(config_diagnostic_message(config, 0).contains("invalid action"));
                 let app = roastty_app_new(ptr::null(), config);
                 let command = CString::new(
                     "stty -echo -icanon min 1 time 0; dd bs=1 count=1 2>/dev/null | od -An -tx1 -v",
@@ -15228,11 +15309,12 @@ mod tests {
     }
 
     #[test]
-    fn surface_key_configured_unsupported_shadows_static_default() {
-        with_init_args(&["roastty", "--keybind=cmd+c=unknown_action"], || {
+    fn surface_key_invalid_configured_action_does_not_shadow_static_default() {
+        with_init_args(&["roastty", "--keybind=cmd+n=unknown_action"], || {
             let config = roastty_config_new();
             roastty_config_load_cli_args(config);
-            let app = new_test_app_with_clipboard_write(0xCAFE);
+            assert_eq!(roastty_config_diagnostics_count(config), 1);
+            let app = new_test_app_with_action(true);
             roastty_app_update_config(app, config);
             let surface = new_test_surface(app);
             let event = new_key_event();
@@ -15242,11 +15324,13 @@ mod tests {
                 key::KeyAction::Press,
                 key::Key::Unidentified,
                 ROASTTY_MODS_SUPER,
-                b"c",
+                b"n",
                 0,
             );
-            assert!(!roastty_surface_key(surface, event));
-            assert!(clipboard_write_records().is_empty());
+            assert!(roastty_surface_key(surface, event));
+            let records = action_records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].action_tag, ROASTTY_ACTION_NEW_WINDOW);
 
             roastty_key_event_free(event);
             roastty_surface_free(surface);
@@ -15710,6 +15794,14 @@ mod tests {
         assert_eq!(trigger.tag, ROASTTY_TRIGGER_UNICODE);
         assert_eq!(unsafe { trigger.key.unicode }, codepoint);
         assert_eq!(trigger.mods, mods);
+    }
+
+    fn config_diagnostic_message(config: RoasttyConfig, index: u32) -> String {
+        let diagnostic = roastty_config_get_diagnostic(config, index);
+        assert!(!diagnostic.message.is_null());
+        unsafe { CStr::from_ptr(diagnostic.message) }
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn with_init_args(args: &[&str], f: impl FnOnce()) {
@@ -16307,6 +16399,101 @@ mod tests {
                 roastty_config_free(config);
             },
         );
+    }
+
+    #[test]
+    fn config_diagnostic_reports_cli_keybind_failures_in_order_and_clones() {
+        assert_eq!(roastty_config_diagnostics_count(ptr::null_mut()), 0);
+        assert_eq!(config_diagnostic_message(ptr::null_mut(), 0), "");
+
+        with_init_args(
+            &[
+                "roastty",
+                "--keybind",
+                "--window-theme=dark",
+                "--keybind=F1=reload_config",
+                "--keybind=ctrl+a=unknown_action",
+                "--keybind=ctrl+b=goto_tab:not-a-number",
+                "--keybind=ctrl+c=text:ok",
+                "--keybind=ctrl+d=",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 5);
+
+                let messages = (0..5)
+                    .map(|index| config_diagnostic_message(config, index))
+                    .collect::<Vec<_>>();
+                assert!(messages[0].contains("value required"), "{messages:?}");
+                assert!(messages[1].contains("F1=reload_config"), "{messages:?}");
+                assert!(messages[1].contains("invalid trigger"), "{messages:?}");
+                assert!(
+                    messages[2].contains("ctrl+a=unknown_action"),
+                    "{messages:?}"
+                );
+                assert!(messages[2].contains("invalid action"), "{messages:?}");
+                assert!(
+                    messages[3].contains("ctrl+b=goto_tab:not-a-number"),
+                    "{messages:?}"
+                );
+                assert!(messages[3].contains("invalid action"), "{messages:?}");
+                assert!(messages[4].contains("ctrl+d="), "{messages:?}");
+                assert!(messages[4].contains("missing action"), "{messages:?}");
+                assert_eq!(config_diagnostic_message(config, 5), "");
+
+                let clone = roastty_config_clone(config);
+                assert_eq!(roastty_config_diagnostics_count(clone), 5);
+                assert_eq!(
+                    config_diagnostic_message(clone, 2),
+                    config_diagnostic_message(config, 2)
+                );
+
+                let text = CString::new("text:ok").unwrap();
+                assert_unicode_config_trigger(
+                    roastty_config_trigger(config, text.as_ptr(), text.as_bytes().len()),
+                    u32::from(b'c'),
+                    ROASTTY_MODS_CTRL,
+                );
+
+                roastty_config_free(clone);
+                roastty_config_free(config);
+            },
+        );
+    }
+
+    #[test]
+    fn config_cli_keybind_validates_supported_and_unsupported_actions() {
+        for value in [
+            b"ctrl+a=text:hello".as_slice(),
+            b"ctrl+b=new_split",
+            b"ctrl+c=new_split:right",
+            b"ctrl+d=goto_tab:1",
+            b"ctrl+e=resize_split:right,10",
+            b"ctrl+f=copy_to_clipboard:plain",
+            b"ctrl+g=set_font_size:14",
+            b"ctrl+h=navigate_search:next",
+        ] {
+            assert!(parse_config_keybind(value).is_ok(), "{value:?}");
+        }
+
+        for value in [
+            b"ctrl+a=unknown_action".as_slice(),
+            b"ctrl+b=goto_tab:not-a-number",
+            b"ctrl+c=resize_split:right",
+            b"ctrl+d=copy_to_clipboard:bad",
+            b"ctrl+e=new_window:bad",
+        ] {
+            let Err(error) = parse_config_keybind(value) else {
+                panic!("expected invalid action for {value:?}");
+            };
+            assert_eq!(error, ConfigKeybindParseError::InvalidAction, "{value:?}");
+        }
+
+        let Err(error) = parse_config_keybind(b"ctrl+i=") else {
+            panic!("expected missing action");
+        };
+        assert_eq!(error, ConfigKeybindParseError::MissingAction);
     }
 
     #[test]

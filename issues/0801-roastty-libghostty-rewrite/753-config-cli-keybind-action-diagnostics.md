@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 753: Config CLI Keybind Action Diagnostics
@@ -111,3 +116,62 @@ messages, and null or out-of-range diagnostic access returns the existing empty
 diagnostic. It found no must-fix verification gaps. As a non-blocking note, it
 suggested pinning diagnostic ordering for multiple CLI failures in a future or
 opportunistic test.
+
+## Result
+
+**Result:** Pass
+
+Roastty now rejects invalid CLI keybind actions during config loading instead of
+storing them for later dispatch. CLI keybind parsing reports diagnostics for
+missing values, malformed trigger/action syntax, unsupported triggers, and
+unsupported action strings. Diagnostics are stored on the config, cloned by
+`roastty_config_clone`, counted by `roastty_config_diagnostics_count`, and
+returned through `roastty_config_get_diagnostic` with the existing empty
+diagnostic for null or out-of-range access.
+
+The binding-action parser now has a surface-independent validation path, using a
+deterministic placeholder direction for `new_split` auto validation while
+runtime dispatch still computes the direction from the live surface. Valid CLI
+keybinds keep their previous configured query and dispatch behavior. Invalid
+configured actions are not stored, so they do not appear in config/surface
+keybind queries and do not shadow static defaults.
+
+Verification passed:
+
+- `cargo test -p roastty config_cli_keybind -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_diagnostic -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_key_is_binding -- --nocapture --test-threads=1`
+- `cargo test -p roastty surface_key_is_binding -- --nocapture --test-threads=1`
+- `cargo test -p roastty surface_key_default -- --nocapture --test-threads=1`
+- `cargo test -p roastty surface_key -- --nocapture --test-threads=1`
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1` (130
+  passed)
+- `cargo test -p roastty --test abi_harness -- --nocapture`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+After the completion review, the non-blocking coverage suggestions were also
+addressed with direct tests for missing-action diagnostics and empty
+null/out-of-range diagnostic messages.
+
+## Completion Review
+
+Codex reviewed the completed implementation and found no blocking issues. The
+review agreed that action validation now happens before storage, invalid
+keybinds produce config diagnostics, diagnostics are config-owned and cloned,
+and invalid configured actions fall back to static defaults instead of shadowing
+them.
+
+The review considered the verification sufficient for the result commit. It
+noted two non-blocking coverage suggestions: direct C ABI assertions for
+null/out-of-range empty diagnostics and a direct missing-action diagnostic pin.
+Both were added before recording this result.
+
+## Conclusion
+
+Experiment 753 closes the unsafe gap left by Experiment 752's temporary
+unsupported-action behavior. The simple CLI root-table keybind path now has
+config-time action validation and real diagnostics, matching the direction of
+Ghostty's parser while keeping richer config-file and key-table semantics out of
+scope.

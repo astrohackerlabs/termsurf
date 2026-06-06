@@ -4139,6 +4139,7 @@ int main(int argc, char **argv) {
   roastty_config_finalize(NULL);
   assert(roastty_config_diagnostics_count(NULL) == 0);
   assert(roastty_config_get_diagnostic(NULL, 0).message != NULL);
+  assert(strcmp(roastty_config_get_diagnostic(NULL, 0).message, "") == 0);
   roastty_input_trigger_s null_trigger =
       roastty_config_trigger(NULL, "new_window", 10);
   assert(null_trigger.tag == ROASTTY_TRIGGER_PHYSICAL);
@@ -4273,6 +4274,7 @@ int main(int argc, char **argv) {
   assert(roastty_config_diagnostics_count(config) == 0);
   roastty_diagnostic_s diagnostic = roastty_config_get_diagnostic(config, 0);
   assert(diagnostic.message != NULL);
+  assert(strcmp(diagnostic.message, "") == 0);
 
   bool bool_value = false;
   assert(!roastty_config_get(NULL,
@@ -4565,15 +4567,37 @@ int main(int argc, char **argv) {
   char malformed1[] = "--keybind=shift+shift+a=new_window";
   char malformed2[] = "--keybind=a+b=new_window";
   char unsupported_physical[] = "--keybind=F1=reload_config";
+  char missing_action[] = "--keybind=ctrl+m=";
   char valid1[] = "--keybind=ctrl+n=new_window";
   char valid2[] = "--keybind=cmd+n=new_window";
   char *malformed_argv[] = {cli_arg0, malformed_flag, next_option,
                             empty_keybind, malformed1, malformed2,
-                            unsupported_physical, valid1, valid2};
-  assert(roastty_init(9, malformed_argv) == ROASTTY_SUCCESS);
+                            unsupported_physical, missing_action, valid1,
+                            valid2};
+  assert(roastty_init(10, malformed_argv) == ROASTTY_SUCCESS);
   cli_config = roastty_config_new();
   assert(cli_config != NULL);
   roastty_config_load_cli_args(cli_config);
+  assert(roastty_config_diagnostics_count(cli_config) == 6);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 0).message,
+                "value required") != NULL);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 1).message,
+                "missing `=` separator") != NULL);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 2).message,
+                "invalid trigger") != NULL);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 3).message,
+                "invalid trigger") != NULL);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 4).message,
+                "invalid trigger") != NULL);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 5).message,
+                "missing action") != NULL);
+  assert(strcmp(roastty_config_get_diagnostic(cli_config, 6).message, "") == 0);
+  cli_clone = roastty_config_clone(cli_config);
+  assert(cli_clone != NULL);
+  assert(roastty_config_diagnostics_count(cli_clone) == 6);
+  assert(strstr(roastty_config_get_diagnostic(cli_clone, 4).message,
+                "F1=reload_config") != NULL);
+  roastty_config_free(cli_clone);
   trigger = roastty_config_trigger(cli_config, "new_window",
                                    strlen("new_window"));
   assert(trigger.tag == ROASTTY_TRIGGER_UNICODE);
@@ -4624,22 +4648,38 @@ int main(int argc, char **argv) {
   roastty_app_free(cli_app);
   roastty_config_free(cli_config);
 
-  char unknown_override_keybind[] = "--keybind=cmd+c=unknown_action";
+  char unknown_override_keybind[] = "--keybind=cmd+n=unknown_action";
   char *unknown_override_argv[] = {cli_arg0, unknown_override_keybind};
   assert(roastty_init(2, unknown_override_argv) == ROASTTY_SUCCESS);
   cli_config = roastty_config_new();
   assert(cli_config != NULL);
   roastty_config_load_cli_args(cli_config);
-  cli_app = roastty_app_new(NULL, cli_config);
+  assert(roastty_config_diagnostics_count(cli_config) == 1);
+  assert(strstr(roastty_config_get_diagnostic(cli_config, 0).message,
+                "invalid action") != NULL);
+  trigger = roastty_config_trigger(cli_config, "unknown_action",
+                                   strlen("unknown_action"));
+  assert(trigger.tag == ROASTTY_TRIGGER_PHYSICAL);
+  assert(trigger.key.physical == ROASTTY_KEY_UNIDENTIFIED);
+  assert(trigger.mods == ROASTTY_MODS_NONE);
+  cli_app = roastty_app_new(&runtime, cli_config);
   assert(cli_app != NULL);
   cli_surface_config = roastty_surface_config_new();
   cli_surface = roastty_surface_new(cli_app, &cli_surface_config);
   assert(cli_surface != NULL);
   assert(roastty_key_event_new(&cli_binding_event) == ROASTTY_SUCCESS);
   set_config_binding_event(cli_binding_event, ROASTTY_KEY_ACTION_PRESS,
-                           ROASTTY_KEY_UNIDENTIFIED, ROASTTY_MODS_SUPER, "c",
+                           ROASTTY_KEY_UNIDENTIFIED, ROASTTY_MODS_SUPER, "n",
                            0);
-  assert(!roastty_surface_key(cli_surface, cli_binding_event));
+  cli_binding_flags = 0xff;
+  assert(roastty_surface_key_is_binding(cli_surface, cli_binding_event,
+                                        &cli_binding_flags));
+  assert(cli_binding_flags == 0x01);
+  action_cb_result = true;
+  action_cb_count = 0;
+  assert(roastty_surface_key(cli_surface, cli_binding_event));
+  assert(action_cb_count == 1);
+  assert(action_last_action.tag == ROASTTY_ACTION_NEW_WINDOW);
   roastty_key_event_free(cli_binding_event);
   roastty_surface_free(cli_surface);
   roastty_app_free(cli_app);

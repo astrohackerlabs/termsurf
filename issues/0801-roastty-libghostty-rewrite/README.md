@@ -2020,7 +2020,7 @@ are past the correctness-critical foundation.
 - [Experiment 752: Surface CLI Keybind Dispatch](752-surface-cli-keybind-dispatch.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 753: Config CLI Keybind Action Diagnostics](753-config-cli-keybind-action-diagnostics.md)
-  — **Designed** · Codex/Codex/Codex
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
