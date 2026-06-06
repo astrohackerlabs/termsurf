@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 session = "019e9ad7-04a6-7b20-823a-fa6e3d24129f"
 verdict = "approved"
+
+[review.result]
+agent = "codex"
+session = "019e9ad7-04a6-7b20-823a-fa6e3d24129f"
+verdict = "approved"
 +++
 
 # Experiment 649: Tmux Window Refresh Notifications
@@ -111,3 +116,54 @@ confirmed that the plan matches upstream's usable notification slice:
 queues a full refresh with correct in-flight command behavior, ignored
 notifications remain no-ops, `LayoutChange` is intentionally out of scope, and
 `syncLayouts`, panes, PTY writes, and App/Surface integration remain open.
+
+## Result
+
+**Result:** Pass
+
+Implemented command-queue notification handling in
+`roastty/src/terminal/tmux.rs`. `SessionChanged` now records the new session ID,
+clears stored windows, clears pending commands, preserves the stored tmux
+version, emits an empty `Windows` action, and queues/emits a fresh `ListWindows`
+command. `WindowAdd` queues a full `ListWindows` refresh and emits it
+immediately only when no command is already in flight.
+
+The intended no-op notifications now stay explicit at the viewer boundary:
+`WindowRenamed`, `WindowPaneChanged`, `SessionsChanged`, `ClientDetached`,
+`ClientSessionChanged`, `Output`, and `LayoutChange` do not alter command-queue
+state in this experiment. `LayoutChange` remains a deliberate future slice
+because upstream's handler crosses into layout synchronization and pane
+management.
+
+Verification performed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty terminal::tmux` — 91 passed, 0 failed
+
+Source comparison was against `vendor/ghostty/src/terminal/tmux/viewer.zig`
+`nextCommand`, `sessionChanged`, and `windowAdd`.
+
+## Completion Review
+
+Codex completion review session `019e9ad7-04a6-7b20-823a-fa6e3d24129f` found no
+blocking issues and approved the completed experiment. The reviewer confirmed
+that command-queue `SessionChanged` records the new session, clears windows and
+pending commands, preserves `tmux_version`, emits empty `Windows`, then emits
+`ListWindows`; `WindowAdd` queues `ListWindows` and emits immediately only when
+the queue was empty; ignored notifications remain no-ops; and `LayoutChange`,
+`syncLayouts`, pane management, PTY, App, and Surface integration remain out of
+scope.
+
+The reviewer also ran:
+
+- `cargo test -p roastty terminal::tmux` — 91 passed
+- `cargo fmt -p roastty -- --check`
+- `prettier --check ... README.md ... 649-tmux-window-refresh-notifications.md`
+- `git diff --check`
+
+## Conclusion
+
+Roastty's standalone tmux viewer now refreshes window snapshots on session
+changes and new-window notifications without starting pane synchronization. The
+next tmux experiment should port either `layoutChanged` as a window-layout-only
+update or begin the `syncLayouts` pane-state boundary.

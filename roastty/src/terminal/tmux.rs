@@ -660,8 +660,18 @@ impl TmuxViewer {
             ControlNotification::Exit => self.defunct(),
             ControlNotification::BlockEnd(content) => self.received_command_output(content),
             ControlNotification::BlockErr(content) => self.received_command_output(content),
+            ControlNotification::SessionChanged { id, .. } => self.session_changed(id),
+            ControlNotification::WindowAdd { .. } => {
+                self.queue_commands([TmuxCommand::ListWindows])
+            }
             ControlNotification::Enter => Vec::new(),
-            _ => Vec::new(),
+            ControlNotification::Output { .. }
+            | ControlNotification::LayoutChange { .. }
+            | ControlNotification::WindowRenamed { .. }
+            | ControlNotification::WindowPaneChanged { .. }
+            | ControlNotification::SessionsChanged
+            | ControlNotification::ClientDetached { .. }
+            | ControlNotification::ClientSessionChanged { .. } => Vec::new(),
         }
     }
 
@@ -676,6 +686,31 @@ impl TmuxViewer {
         self.command_queue.extend(commands);
         self.state = TmuxViewerState::CommandQueue;
         vec![TmuxViewerAction::Command(first)]
+    }
+
+    fn queue_commands<const N: usize>(
+        &mut self,
+        commands: [TmuxCommand; N],
+    ) -> Vec<TmuxViewerAction> {
+        debug_assert!(self.state == TmuxViewerState::CommandQueue);
+
+        let was_empty = self.command_queue.is_empty();
+        self.command_queue.extend(commands);
+        if was_empty {
+            self.emit_next_queued_command()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn session_changed(&mut self, session_id: usize) -> Vec<TmuxViewerAction> {
+        self.session_id = session_id;
+        self.windows.clear();
+        self.command_queue.clear();
+
+        let mut actions = vec![TmuxViewerAction::Windows(Vec::new())];
+        actions.extend(self.queue_commands([TmuxCommand::ListWindows]));
+        actions
     }
 
     fn received_command_output(&mut self, content: Vec<u8>) -> Vec<TmuxViewerAction> {
@@ -1943,6 +1978,139 @@ mod tests {
     }
 
     #[test]
+    fn tmux_viewer_session_changed_refreshes_windows_and_preserves_version() {
+        let mut viewer = TmuxViewer::new();
+        viewer.state = TmuxViewerState::CommandQueue;
+        viewer.session_id = 7;
+        viewer.tmux_version = "3.5a".to_owned();
+        viewer.windows = vec![test_window(2, 80, 24, "80x24,0,0,42")];
+
+        assert_eq!(
+            viewer.next(ControlNotification::SessionChanged {
+                id: 9,
+                name: "other".to_owned(),
+            }),
+            vec![
+                TmuxViewerAction::Windows(Vec::new()),
+                TmuxViewerAction::Command(TmuxCommand::ListWindows.format_command()),
+            ]
+        );
+        assert_eq!(viewer.session_id(), 9);
+        assert_eq!(viewer.tmux_version(), "3.5a");
+        assert!(viewer.windows().is_empty());
+        assert_eq!(viewer.queue_len(), 1);
+    }
+
+    #[test]
+    fn tmux_viewer_session_changed_clears_pending_commands() {
+        let mut viewer = TmuxViewer::new();
+        viewer.queue_command_for_tests(TmuxCommand::TmuxVersion);
+        viewer
+            .command_queue
+            .push_back(TmuxCommand::User("send-prefix\n".to_owned()));
+
+        assert_eq!(
+            viewer.next(ControlNotification::SessionChanged {
+                id: 9,
+                name: "other".to_owned(),
+            }),
+            vec![
+                TmuxViewerAction::Windows(Vec::new()),
+                TmuxViewerAction::Command(TmuxCommand::ListWindows.format_command()),
+            ]
+        );
+        assert_eq!(viewer.queue_len(), 1);
+        assert_eq!(
+            viewer.command_queue.front(),
+            Some(&TmuxCommand::ListWindows)
+        );
+    }
+
+    #[test]
+    fn tmux_viewer_window_add_with_empty_queue_emits_list_windows() {
+        let mut viewer = TmuxViewer::new();
+        viewer.state = TmuxViewerState::CommandQueue;
+
+        assert_eq!(
+            viewer.next(ControlNotification::WindowAdd { id: 2 }),
+            vec![TmuxViewerAction::Command(
+                TmuxCommand::ListWindows.format_command()
+            )]
+        );
+        assert_eq!(viewer.queue_len(), 1);
+    }
+
+    #[test]
+    fn tmux_viewer_window_add_with_in_flight_command_waits_to_emit() {
+        let mut viewer = TmuxViewer::new();
+
+        viewer.queue_command_for_tests(TmuxCommand::TmuxVersion);
+        assert_eq!(
+            viewer.next(ControlNotification::WindowAdd { id: 2 }),
+            Vec::new()
+        );
+        assert_eq!(viewer.queue_len(), 2);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(b"3.5a".to_vec())),
+            vec![TmuxViewerAction::Command(
+                TmuxCommand::ListWindows.format_command()
+            )]
+        );
+        assert_eq!(viewer.queue_len(), 1);
+    }
+
+    #[test]
+    fn tmux_viewer_ignored_command_queue_notifications_do_not_change_state() {
+        let ignored = vec![
+            ControlNotification::WindowRenamed {
+                id: 2,
+                name: "renamed".to_owned(),
+            },
+            ControlNotification::WindowPaneChanged {
+                window_id: 2,
+                pane_id: 42,
+            },
+            ControlNotification::SessionsChanged,
+            ControlNotification::ClientDetached {
+                client: "client".to_owned(),
+            },
+            ControlNotification::ClientSessionChanged {
+                client: "client".to_owned(),
+                session_id: 9,
+                name: "other".to_owned(),
+            },
+            ControlNotification::Output {
+                pane_id: 42,
+                data: "output".to_owned(),
+            },
+            ControlNotification::LayoutChange {
+                window_id: 2,
+                layout: checked_layout("80x24,0,0,42"),
+                visible_layout: checked_layout("80x24,0,0,42"),
+                raw_flags: "flags".to_owned(),
+            },
+        ];
+
+        for notification in ignored {
+            let mut viewer = TmuxViewer::new();
+            let windows = vec![test_window(2, 80, 24, "80x24,0,0,42")];
+            viewer.state = TmuxViewerState::CommandQueue;
+            viewer.session_id = 7;
+            viewer.tmux_version = "3.5a".to_owned();
+            viewer.windows = windows.clone();
+            viewer.command_queue.push_back(TmuxCommand::ListWindows);
+
+            assert_eq!(viewer.next(notification), Vec::new());
+            assert_eq!(viewer.state(), TmuxViewerState::CommandQueue);
+            assert_eq!(viewer.session_id(), 7);
+            assert_eq!(viewer.tmux_version(), "3.5a");
+            assert_eq!(viewer.windows(), windows.as_slice());
+            assert_eq!(viewer.queue_len(), 1);
+        }
+    }
+
+    #[test]
     fn tmux_viewer_command_output_with_empty_queue_is_ignored() {
         let mut viewer = TmuxViewer::new();
 
@@ -1983,6 +2151,16 @@ mod tests {
         );
         assert_eq!(viewer.queue_len(), 0);
         assert_eq!(viewer.tmux_version(), "");
+    }
+
+    fn test_window(id: usize, width: usize, height: usize, layout: &str) -> TmuxWindow {
+        let layout = checked_layout(layout);
+        TmuxWindow {
+            id,
+            width,
+            height,
+            layout: Layout::parse_with_checksum(&layout).unwrap(),
+        }
     }
 
     fn checked_layout(layout: &str) -> String {
