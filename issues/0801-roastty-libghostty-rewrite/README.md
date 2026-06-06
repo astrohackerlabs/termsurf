@@ -1897,6 +1897,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 699: Confirm Close Policy](699-confirm-close-policy.md) — **Pass**
   · Codex/Codex/Codex
+- [Experiment 700: Keybind Trigger ABI Foundation](700-keybind-trigger-abi-foundation.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
