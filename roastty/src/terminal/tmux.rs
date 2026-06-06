@@ -158,6 +158,15 @@ pub(crate) struct TmuxViewer {
     session_id: usize,
     tmux_version: String,
     command_queue: VecDeque<TmuxCommand>,
+    windows: Vec<TmuxWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TmuxWindow {
+    pub(crate) id: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) layout: Layout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +181,7 @@ pub(crate) enum TmuxViewerState {
 pub(crate) enum TmuxViewerAction {
     Exit,
     Command(String),
+    Windows(Vec<TmuxWindow>),
 }
 
 pub(crate) const LIST_PANES_DELIMITER: u8 = b';';
@@ -608,6 +618,7 @@ impl TmuxViewer {
             session_id: 0,
             tmux_version: String::new(),
             command_queue: VecDeque::new(),
+            windows: Vec::new(),
         }
     }
 
@@ -672,13 +683,43 @@ impl TmuxViewer {
             return Vec::new();
         };
 
-        if let TmuxCommand::TmuxVersion = command {
-            if !self.received_tmux_version(&content) {
-                return self.defunct();
+        let mut actions = match command {
+            TmuxCommand::TmuxVersion => {
+                if !self.received_tmux_version(&content) {
+                    return self.defunct();
+                }
+                Vec::new()
             }
+            TmuxCommand::ListWindows => {
+                let Some(windows) = self.received_list_windows(&content) else {
+                    return self.defunct();
+                };
+                vec![TmuxViewerAction::Windows(windows)]
+            }
+            TmuxCommand::PaneHistory(_)
+            | TmuxCommand::PaneVisible(_)
+            | TmuxCommand::PaneState
+            | TmuxCommand::User(_) => Vec::new(),
+        };
+
+        actions.extend(self.emit_next_queued_command());
+        actions
+    }
+
+    fn received_list_windows(&mut self, content: &[u8]) -> Option<Vec<TmuxWindow>> {
+        let content = std::str::from_utf8(content).ok()?;
+        let mut windows = Vec::new();
+
+        for line in content.split('\n') {
+            let line = line.trim_matches([' ', '\t', '\r']);
+            if line.is_empty() {
+                continue;
+            }
+            windows.push(parse_list_window(line)?);
         }
 
-        self.emit_next_queued_command()
+        self.windows = windows;
+        Some(self.windows.clone())
     }
 
     fn received_tmux_version(&mut self, content: &[u8]) -> bool {
@@ -732,6 +773,11 @@ impl TmuxViewer {
     #[cfg(test)]
     fn queue_len(&self) -> usize {
         self.command_queue.len()
+    }
+
+    #[cfg(test)]
+    fn windows(&self) -> &[TmuxWindow] {
+        &self.windows
     }
 
     #[cfg(test)]
@@ -818,6 +864,38 @@ fn parse_notification_line(line: &str) -> Option<ControlNotification> {
         }
         _ => None,
     }
+}
+
+fn parse_list_window(line: &str) -> Option<TmuxWindow> {
+    let mut values =
+        parse_output_values(LIST_WINDOWS_VARIABLES, line, LIST_WINDOWS_DELIMITER).ok()?;
+
+    if values.len() != LIST_WINDOWS_VARIABLES.len() {
+        return None;
+    }
+
+    let OutputValue::Text(layout) = values.pop()? else {
+        return None;
+    };
+    let OutputValue::Number(height) = values.pop()? else {
+        return None;
+    };
+    let OutputValue::Number(width) = values.pop()? else {
+        return None;
+    };
+    let OutputValue::Number(id) = values.pop()? else {
+        return None;
+    };
+    let OutputValue::Number(_session_id) = values.pop()? else {
+        return None;
+    };
+
+    Some(TmuxWindow {
+        id,
+        width,
+        height,
+        layout: Layout::parse_with_checksum(&layout).ok()?,
+    })
 }
 
 fn parse_block_terminator(mut line: &[u8]) -> Option<BlockTerminator> {
@@ -1702,17 +1780,31 @@ mod tests {
     }
 
     #[test]
-    fn tmux_viewer_list_windows_output_consumed_without_parsing() {
+    fn tmux_viewer_startup_flow_parses_single_window_output() {
         let mut viewer = TmuxViewer::new();
+        let layout = checked_layout("80x24,0,0{40x24,0,0,1,40x24,40,0,2}");
+        let expected = vec![TmuxWindow {
+            id: 2,
+            width: 80,
+            height: 24,
+            layout: Layout::parse_with_checksum(&layout).unwrap(),
+        }];
 
-        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        viewer.next(ControlNotification::BlockEnd(Vec::new()));
+        viewer.next(ControlNotification::SessionChanged {
+            id: 42,
+            name: "main".to_owned(),
+        });
+        viewer.next(ControlNotification::BlockEnd(b"3.5a".to_vec()));
+
         assert_eq!(
             viewer.next(ControlNotification::BlockEnd(
-                b"$1 @2 80 24 f8f9,80x24,0,0{40x24,0,0,1,40x24,40,0,2}".to_vec()
+                format!("$1 @2 80 24 {layout}").into_bytes()
             )),
-            Vec::new()
+            vec![TmuxViewerAction::Windows(expected.clone())]
         );
         assert_eq!(viewer.queue_len(), 0);
+        assert_eq!(viewer.windows(), expected.as_slice());
         assert_eq!(viewer.state(), TmuxViewerState::CommandQueue);
     }
 
@@ -1747,6 +1839,107 @@ mod tests {
         );
         assert_eq!(viewer.state(), TmuxViewerState::Defunct);
         assert_eq!(viewer.tmux_version(), "");
+    }
+
+    #[test]
+    fn tmux_viewer_list_windows_parses_multiple_windows_and_blank_lines() {
+        let mut viewer = TmuxViewer::new();
+        let layout_one = checked_layout("80x24,0,0,42");
+        let layout_two = checked_layout("100x30,0,0,43");
+        let expected = vec![
+            TmuxWindow {
+                id: 2,
+                width: 80,
+                height: 24,
+                layout: Layout::parse_with_checksum(&layout_one).unwrap(),
+            },
+            TmuxWindow {
+                id: 3,
+                width: 100,
+                height: 30,
+                layout: Layout::parse_with_checksum(&layout_two).unwrap(),
+            },
+        ];
+
+        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        let actions = viewer.next(ControlNotification::BlockEnd(
+            format!("$1 @2 80 24 {layout_one}\n\t$1 @3 100 30 {layout_two}\r\n\n").into_bytes(),
+        ));
+
+        assert_eq!(actions, vec![TmuxViewerAction::Windows(expected.clone())]);
+        assert_eq!(viewer.windows(), expected.as_slice());
+    }
+
+    #[test]
+    fn tmux_viewer_empty_list_windows_output_clears_windows() {
+        let mut viewer = TmuxViewer::new();
+        let layout = checked_layout("80x24,0,0,42");
+        viewer.windows = vec![TmuxWindow {
+            id: 2,
+            width: 80,
+            height: 24,
+            layout: Layout::parse_with_checksum(&layout).unwrap(),
+        }];
+
+        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(b" \t\r\n\n".to_vec())),
+            vec![TmuxViewerAction::Windows(Vec::new())]
+        );
+        assert!(viewer.windows().is_empty());
+    }
+
+    #[test]
+    fn tmux_viewer_malformed_list_windows_output_defuncts() {
+        let mut viewer = TmuxViewer::new();
+
+        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(b"$1 @2 80".to_vec())),
+            vec![TmuxViewerAction::Exit]
+        );
+        assert_eq!(viewer.state(), TmuxViewerState::Defunct);
+    }
+
+    #[test]
+    fn tmux_viewer_invalid_list_windows_layout_defuncts() {
+        let mut viewer = TmuxViewer::new();
+
+        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                b"$1 @2 80 24 0000,80x24,0,0,42".to_vec()
+            )),
+            vec![TmuxViewerAction::Exit]
+        );
+        assert_eq!(viewer.state(), TmuxViewerState::Defunct);
+    }
+
+    #[test]
+    fn tmux_viewer_list_windows_output_emits_next_queued_command() {
+        let mut viewer = TmuxViewer::new();
+        let layout = checked_layout("80x24,0,0,42");
+        let expected_window = TmuxWindow {
+            id: 2,
+            width: 80,
+            height: 24,
+            layout: Layout::parse_with_checksum(&layout).unwrap(),
+        };
+
+        viewer.queue_command_for_tests(TmuxCommand::ListWindows);
+        viewer
+            .command_queue
+            .push_back(TmuxCommand::User("send-prefix\n".to_owned()));
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                format!("$1 @2 80 24 {layout}").into_bytes()
+            )),
+            vec![
+                TmuxViewerAction::Windows(vec![expected_window]),
+                TmuxViewerAction::Command("send-prefix\n".to_owned()),
+            ]
+        );
     }
 
     #[test]
@@ -1790,6 +1983,12 @@ mod tests {
         );
         assert_eq!(viewer.queue_len(), 0);
         assert_eq!(viewer.tmux_version(), "");
+    }
+
+    fn checked_layout(layout: &str) -> String {
+        let checksum = LayoutChecksum::calculate(layout.as_bytes()).as_string();
+        let checksum = std::str::from_utf8(&checksum).unwrap();
+        format!("{checksum},{layout}")
     }
 
     #[test]

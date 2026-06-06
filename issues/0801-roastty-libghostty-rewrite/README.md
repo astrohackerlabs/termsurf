@@ -196,8 +196,8 @@ Experiment 246).
       and StringMap complete using Rust `regex` byte matching instead of
       Oniguruma
 - [ ] `tmux` control mode — control/layout/output helpers, command formatting,
-      DCS entry, and viewer startup done; full viewer state, PTY, and App
-      integration missing
+      DCS entry, viewer startup, and list-windows parsing done; full viewer
+      state, PTY, and App integration missing
 - [x] `sys` (PNG-decode abstraction) — implemented and tested via C ABI
 
 ### Renderer — data + Metal primitives only; no live render loop
@@ -1755,7 +1755,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 647: Tmux Viewer Startup](647-tmux-viewer-startup.md) — **Pass** ·
   Codex/Codex/Codex
-- [Experiment 648: Tmux List Windows](648-tmux-list-windows.md) — **Designed**
+- [Experiment 648: Tmux List Windows](648-tmux-list-windows.md) — **Pass** ·
+  Codex/Codex/Codex
 
 ## Non-Goals
 

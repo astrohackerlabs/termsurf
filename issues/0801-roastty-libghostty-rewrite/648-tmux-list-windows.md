@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 session = "019e9ad7-04a6-7b20-823a-fa6e3d24129f"
 verdict = "approved"
+
+[review.result]
+agent = "codex"
+session = "019e9ad7-04a6-7b20-823a-fa6e3d24129f"
+verdict = "approved"
 +++
 
 # Experiment 648: Tmux List Windows
@@ -106,3 +111,59 @@ confirmed that the plan ports typed window snapshots, `Windows` actions,
 `LIST_WINDOWS_VARIABLES` parsing, `Layout::parse_with_checksum`, malformed
 output defunct behavior, and empty-output clearing while keeping `syncLayouts`,
 pane state, PTY writes, and App/Surface integration out of scope.
+
+## Result
+
+**Result:** Pass
+
+Implemented `TmuxWindow` snapshots and `TmuxViewerAction::Windows` in
+`roastty/src/terminal/tmux.rs`. `TmuxViewer` now stores the current window
+snapshot and handles `TmuxCommand::ListWindows` output by parsing each non-empty
+line with `LIST_WINDOWS_VARIABLES`, validating the checked layout with
+`Layout::parse_with_checksum`, replacing the stored snapshot, and emitting a
+`Windows` action.
+
+Successful list-windows output preserves command queue sequencing: any command
+queued after `ListWindows` is emitted after the `Windows` action. Empty
+list-windows output clears existing windows and emits an empty snapshot.
+Malformed output, invalid UTF-8, invalid field shapes, and invalid layout
+checksums defunct the viewer and emit `Exit`, matching upstream command-output
+error handling.
+
+The intended upstream boundary remains intact. This experiment does not call or
+port `syncLayouts`, does not create/prune pane state, does not queue pane
+history/visible/state commands from layouts, and does not integrate with PTY,
+App, or Surface runtime code.
+
+Verification performed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty terminal::tmux` — 86 passed, 0 failed
+
+Source comparison was against `vendor/ghostty/src/terminal/tmux/viewer.zig`
+`receivedListWindows` and the `syncLayouts` boundary, plus
+`vendor/ghostty/src/terminal/tmux/output.zig`.
+
+## Completion Review
+
+Codex completion review session `019e9ad7-04a6-7b20-823a-fa6e3d24129f` found no
+blocking issues and approved the completed experiment. The reviewer confirmed
+that `TmuxWindow`, `TmuxViewerAction::Windows`, `LIST_WINDOWS_VARIABLES`
+parsing, `Layout::parse_with_checksum`, snapshot storage/emission, empty-output
+clearing, malformed-output defunct behavior, and command sequencing all match
+the plan while `syncLayouts`, panes, PTY, App, and Surface integration remain
+out of scope.
+
+The reviewer also ran:
+
+- `cargo test -p roastty terminal::tmux` — 86 passed
+- `cargo fmt -p roastty -- --check`
+- `prettier --check ... README.md ... 648-tmux-list-windows.md`
+- `git diff --check`
+
+## Conclusion
+
+Roastty's standalone tmux viewer can now parse and publish the initial window
+list snapshot. The next tmux experiment should decide whether to port the
+`syncLayouts` pane-state boundary or first handle window/session notifications
+that refresh the window list.
