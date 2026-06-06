@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 695: Surface Key Terminal Options
@@ -76,3 +81,41 @@ Run:
 Codex approved the design: the requested encoder options map to existing
 terminal modes, runtime flags, and active Kitty keyboard state, and the scope
 correctly leaves Option-as-Alt policy and keybinding/action behavior for later.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now derives surface key encoder options from the attached worker
+terminal. `roastty_surface_key` still stores `last_key_event`, encodes nonempty
+key events, queues them to the worker, and returns `true` only on successful
+queueing, but the encoding now reflects terminal cursor-key application mode,
+keypad application mode, backarrow key mode, ignore-keypad-with-numlock, Alt-Esc
+prefix mode, modify-other-keys state 2, and active Kitty keyboard flags.
+
+No-worker surfaces still fall back to default key encoder options. Option-as-Alt
+policy, keybinding/action dispatch, key remaps, trigger sequences, consumed
+event tracking, and `roastty_surface_key_is_binding` remain out of scope for
+this experiment.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_key -- --nocapture`
+- `cargo test -p roastty key -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Surface key dispatch now honors the terminal keyboard modes that Roastty already
+tracks. The remaining key work is the higher-level behavior upstream runs before
+encoding: keybindings, action dispatch, trigger sequences, remaps, and consumed
+event state.
+
+## Completion Review
+
+Codex reviewed the staged result and found no code correctness blockers. It
+approved the terminal-derived key encoder options, the surface fallback
+behavior, the deferred scope, and the verification results.

@@ -1922,7 +1922,10 @@ impl Surface {
     }
 
     fn key_encode_options(&self) -> key_encode::Options {
-        key_encode::Options::default()
+        self.termio_worker
+            .as_ref()
+            .map(|worker| worker.with_termio(|termio| termio.terminal().key_encode_options()))
+            .unwrap_or_default()
     }
 
     fn tick_termio(&mut self) {
@@ -10102,6 +10105,10 @@ mod tests {
     }
 
     fn set_surface_worker_mouse_mode(surface: RoasttySurface, mode: u16, enabled: bool) {
+        set_surface_worker_dec_mode(surface, mode, enabled);
+    }
+
+    fn set_surface_worker_dec_mode(surface: RoasttySurface, mode: u16, enabled: bool) {
         let surface = surface_from_handle(surface).unwrap();
         surface
             .termio_worker
@@ -10113,6 +10120,34 @@ mod tests {
                     .terminal_mut()
                     .next_slice(command.as_bytes())
                     .expect("set mouse mode through terminal stream");
+            });
+    }
+
+    fn set_surface_worker_kitty_keyboard(surface: RoasttySurface, flags: u8) {
+        let surface = surface_from_handle(surface).unwrap();
+        surface
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio_mut(|termio| {
+                let command = format!("\x1b[={flags}u");
+                termio
+                    .terminal_mut()
+                    .next_slice(command.as_bytes())
+                    .expect("set Kitty keyboard flags through terminal stream");
+            });
+    }
+
+    fn set_surface_worker_modify_other_keys_2(surface: RoasttySurface, enabled: bool) {
+        let surface = surface_from_handle(surface).unwrap();
+        surface
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio_mut(|termio| {
+                termio
+                    .terminal_mut()
+                    .set_modify_other_keys_2_for_tests(enabled);
             });
     }
 
@@ -10592,6 +10627,148 @@ mod tests {
         assert!(text.contains('a'), "{text:?}");
 
         roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_uses_terminal_cursor_key_application_mode() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new(
+            "stty -echo -icanon min 3 time 0; dd bs=1 count=3 2>/dev/null | od -An -tx1 -v",
+        )
+        .unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        let event = new_key_event();
+        assert_eq!(
+            roastty_key_event_set_key(event, key::Key::ArrowUp as c_int),
+            ROASTTY_SUCCESS
+        );
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        set_surface_worker_dec_mode(surface, 1, true);
+        assert!(roastty_surface_key(surface, event));
+        let text = surface_snapshot_text(app, surface);
+        assert!(text.contains("^[OA"), "{text:?}");
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_options_reflect_attached_terminal_modes() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+
+        set_surface_worker_dec_mode(surface, 1, true);
+        set_surface_worker_dec_mode(surface, 66, true);
+        set_surface_worker_dec_mode(surface, 67, true);
+        set_surface_worker_dec_mode(surface, 1036, false);
+        set_surface_worker_modify_other_keys_2(surface, true);
+        set_surface_worker_kitty_keyboard(surface, KeyFlags::TRUE.int());
+
+        let options = surface_from_handle(surface).unwrap().key_encode_options();
+        assert!(options.cursor_key_application);
+        assert!(options.keypad_key_application);
+        assert!(options.backarrow_key_mode);
+        assert!(options.ignore_keypad_with_numlock);
+        assert!(!options.alt_esc_prefix);
+        assert!(options.modify_other_keys_state_2);
+        assert_eq!(options.kitty_flags, KeyFlags::TRUE);
+        assert_eq!(options.macos_option_as_alt, key_mods::OptionAsAlt::False);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_options_change_representative_encodings() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+
+        let arrow = key::KeyEvent {
+            key: key::Key::ArrowUp,
+            ..key::KeyEvent::default()
+        };
+        assert_eq!(
+            key_encode::encode(
+                &arrow,
+                surface_from_handle(surface).unwrap().key_encode_options()
+            ),
+            b"\x1b[A"
+        );
+        set_surface_worker_dec_mode(surface, 1, true);
+        assert_eq!(
+            key_encode::encode(
+                &arrow,
+                surface_from_handle(surface).unwrap().key_encode_options()
+            ),
+            b"\x1bOA"
+        );
+
+        let keypad = key::KeyEvent {
+            key: key::Key::NumpadEnter,
+            ..key::KeyEvent::default()
+        };
+        set_surface_worker_dec_mode(surface, 1035, false);
+        set_surface_worker_dec_mode(surface, 66, true);
+        assert_eq!(
+            key_encode::encode(
+                &keypad,
+                surface_from_handle(surface).unwrap().key_encode_options()
+            ),
+            b"\x1bOM"
+        );
+
+        let backspace = key::KeyEvent {
+            key: key::Key::Backspace,
+            ..key::KeyEvent::default()
+        };
+        set_surface_worker_dec_mode(surface, 67, true);
+        assert_eq!(
+            key_encode::encode(
+                &backspace,
+                surface_from_handle(surface).unwrap().key_encode_options()
+            ),
+            b"\x08"
+        );
+
+        let modified = key::KeyEvent {
+            key: key::Key::KeyH,
+            mods: key_mods::Mods {
+                ctrl: true,
+                shift: true,
+                ..key_mods::Mods::new()
+            },
+            utf8: b"H".to_vec(),
+            ..key::KeyEvent::default()
+        };
+        set_surface_worker_modify_other_keys_2(surface, true);
+        assert_eq!(
+            key_encode::encode(
+                &modified,
+                surface_from_handle(surface).unwrap().key_encode_options()
+            ),
+            b"\x1b[27;6;72~"
+        );
+
+        set_surface_worker_kitty_keyboard(surface, KeyFlags::TRUE.int());
+        assert_ne!(
+            key_encode::encode(
+                &arrow,
+                surface_from_handle(surface).unwrap().key_encode_options()
+            ),
+            b"\x1bOA"
+        );
+
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

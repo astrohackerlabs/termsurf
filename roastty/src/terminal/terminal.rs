@@ -3,6 +3,8 @@
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
 
+use crate::input::key_encode;
+
 use super::charsets;
 use super::color;
 use super::cursor;
@@ -1376,6 +1378,19 @@ impl Terminal {
         self.screens.active().kitty_keyboard_flags().int()
     }
 
+    pub(crate) fn key_encode_options(&self) -> key_encode::Options {
+        key_encode::Options {
+            cursor_key_application: self.modes.get(modes::Mode::CursorKeys),
+            keypad_key_application: self.modes.get(modes::Mode::KeypadKeys),
+            backarrow_key_mode: self.modes.get(modes::Mode::BackarrowKeyMode),
+            ignore_keypad_with_numlock: self.modes.get(modes::Mode::IgnoreKeypadWithNumlock),
+            alt_esc_prefix: self.modes.get(modes::Mode::AltEscPrefix),
+            modify_other_keys_state_2: self.flags.modify_other_keys_2,
+            kitty_flags: self.screens.active().kitty_keyboard_flags(),
+            ..key_encode::Options::default()
+        }
+    }
+
     pub(crate) fn kitty_images(&self) -> &super::kitty::graphics_storage::ImageStorage {
         self.screens.active().kitty_images()
     }
@@ -2156,12 +2171,12 @@ impl Terminal {
     }
 
     #[cfg(test)]
-    pub(super) fn set_modify_other_keys_2_for_tests(&mut self, modify_other_keys_2: bool) {
+    pub(crate) fn set_modify_other_keys_2_for_tests(&mut self, modify_other_keys_2: bool) {
         self.flags.modify_other_keys_2 = modify_other_keys_2;
     }
 
     #[cfg(test)]
-    pub(super) fn modify_other_keys_2_for_tests(&self) -> bool {
+    pub(crate) fn modify_other_keys_2_for_tests(&self) -> bool {
         self.flags.modify_other_keys_2
     }
 

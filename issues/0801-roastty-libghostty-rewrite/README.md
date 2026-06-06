@@ -278,9 +278,9 @@ Experiment 246).
       surface mouse callback state foundation done; surface mouse
       button/position dispatch done; surface mouse scroll reporting done; split
       action callback forwarding done; surface key default terminal dispatch
-      done; keybinding/action dispatch, terminal-derived key encoder options,
-      frontend selection routing/metadata, and split tree/frontend mutations
-      missing
+      done; terminal-derived key encoder options done; keybinding/action
+      dispatch, frontend selection routing/metadata, and split tree/frontend
+      mutations missing
 - [ ] Inspector ABI — missing
 
 ### App / Surface / IO — partial
@@ -1883,7 +1883,7 @@ are past the correctness-critical foundation.
 - [Experiment 694: Surface Key Terminal Dispatch](694-surface-key-terminal-dispatch.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 695: Surface Key Terminal Options](695-surface-key-terminal-options.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
