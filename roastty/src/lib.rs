@@ -13390,7 +13390,7 @@ mod tests {
         TerminalDeviceAttributesSecondary, TerminalDeviceAttributesTertiary,
     };
     use std::cell::RefCell;
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -16618,6 +16618,27 @@ mod tests {
         assert!(message.contains("missing.roastty"), "{message}");
 
         roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_load_file_accepts_non_utf8_c_path_bytes() {
+        let dir = unique_config_abi_test_dir("load-file-non-utf8");
+        std::fs::create_dir_all(&dir).unwrap();
+        let filename = OsString::from_vec(b"config-\xFF.roastty".to_vec());
+        let path = dir.join(filename);
+        let path = c_path(&path);
+
+        let config = roastty_config_new();
+        roastty_config_load_file(config, path.as_ptr());
+        assert_eq!(roastty_config_diagnostics_count(config), 1);
+        let message = config_diagnostic_message(config, 0);
+        assert!(
+            message.contains("error loading config from file"),
+            "{message}"
+        );
+
+        roastty_config_free(config);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

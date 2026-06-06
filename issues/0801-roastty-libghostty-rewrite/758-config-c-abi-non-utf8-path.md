@@ -48,3 +48,43 @@ test-only, Unix-only in practice, and directly covers the Experiment 757
 follow-up: create a config file with invalid UTF-8 bytes in the filename, pass
 its raw bytes through the C path helper, call `roastty_config_load_file`, and
 verify the parsed setting is applied with no diagnostics.
+
+## Result
+
+**Result:** Partial
+
+The planned successful-load test is not possible on this macOS filesystem:
+creating `config-\xFF.roastty` fails with `Illegal byte sequence`. The test was
+narrowed to the platform behavior Roastty can prove on macOS. It passes invalid
+UTF-8 path bytes through the C ABI path helper, calls
+`roastty_config_load_file`, and verifies that Roastty records the resulting OS
+file-load error through ABI diagnostics instead of requiring UTF-8 or panicking.
+
+Verification passed:
+
+- `cargo test -p roastty non_utf8 -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_load_file -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Completion Review
+
+Codex reviewed the completed partial result and found no blocking findings. The
+review confirmed that the Partial status is justified because the macOS
+filesystem rejects the invalid UTF-8 filename before Roastty can read it. The
+review also confirmed that the replacement test still covers the important ABI
+boundary regression: invalid path bytes reach `roastty_config_load_file` and are
+handled as an OS file-load error through diagnostics rather than causing UTF-8
+conversion failure or a panic.
+
+Non-blocking follow-up from the review: a Linux-only test on a filesystem that
+permits arbitrary non-NUL bytes could still prove the original successful
+non-UTF-8 filename load case.
+
+## Conclusion
+
+The test pins the ABI boundary against UTF-8 assumptions for invalid path bytes,
+but it does not prove successful non-UTF-8 filename loading because macOS
+rejects that filename before Roastty can read it. No implementation change was
+needed after Experiment 757.
