@@ -1221,6 +1221,7 @@ typedef enum {
   ROASTTY_ACTION_SECURE_INPUT = 43,
   ROASTTY_ACTION_CLOSE_WINDOW = 49,
   ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD = 57,
+  ROASTTY_ACTION_READONLY = 63,
 } roastty_action_tag_e;
 
 typedef enum {
@@ -1270,6 +1271,11 @@ typedef enum {
   ROASTTY_PROMPT_TITLE_TAB = 1,
 } roastty_prompt_title_e;
 
+typedef enum {
+  ROASTTY_READONLY_ON = 0,
+  ROASTTY_READONLY_OFF = 1,
+} roastty_readonly_e;
+
 typedef struct {
   int tag;
   /*
@@ -1281,6 +1287,7 @@ typedef struct {
    *   ROASTTY_ACTION_TOGGLE_SPLIT_ZOOM / ROASTTY_ACTION_RESET_WINDOW_SIZE /
    *   ROASTTY_ACTION_CLOSE_WINDOW / ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD:
    *   storage is zeroed
+   * - ROASTTY_ACTION_READONLY: storage[0] = roastty_readonly_e
    * - ROASTTY_ACTION_INSPECTOR: storage[0] = roastty_inspector_mode_e
    * - ROASTTY_ACTION_FLOAT_WINDOW: storage[0] = roastty_float_window_e
    * - ROASTTY_ACTION_SECURE_INPUT: storage[0] = roastty_secure_input_e

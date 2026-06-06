@@ -1788,8 +1788,11 @@ static void assert_support_abi(void) {
   assert(ROASTTY_ACTION_RESET_WINDOW_SIZE == 23);
   assert(ROASTTY_ACTION_INSPECTOR == 28);
   assert(ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD == 57);
+  assert(ROASTTY_ACTION_READONLY == 63);
   assert(ROASTTY_ACTION_FLOAT_WINDOW == 42);
   assert(ROASTTY_ACTION_SECURE_INPUT == 43);
+  assert(ROASTTY_READONLY_ON == 0);
+  assert(ROASTTY_READONLY_OFF == 1);
   assert(ROASTTY_ACTION_CLOSE_WINDOW == 49);
   assert(ROASTTY_INSPECTOR_TOGGLE == 0);
   assert(ROASTTY_INSPECTOR_SHOW == 1);
@@ -4424,6 +4427,8 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "show_on_screen_keyboard:now", 27));
   assert(!roastty_surface_binding_action(surface, "toggle_mouse_reporting:", 23));
   assert(!roastty_surface_binding_action(surface, "toggle_mouse_reporting:now", 26));
+  assert(!roastty_surface_binding_action(surface, "toggle_readonly:", 16));
+  assert(!roastty_surface_binding_action(surface, "toggle_readonly:now", 19));
   assert(!roastty_surface_binding_action(surface, "toggle_window_float_on_top:", 27));
   assert(!roastty_surface_binding_action(
       surface, "toggle_window_float_on_top:now", 30));
@@ -4543,6 +4548,7 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "toggle_background_opacity", 25));
   assert(!roastty_surface_binding_action(surface, "show_on_screen_keyboard", 23));
   assert(roastty_surface_binding_action(surface, "toggle_mouse_reporting", 22));
+  assert(roastty_surface_binding_action(surface, "toggle_readonly", 15));
   assert(!roastty_surface_binding_action(surface, "toggle_window_float_on_top", 26));
   assert(!roastty_surface_binding_action(surface, "toggle_secure_input", 20));
   assert(!roastty_surface_binding_action(surface, "inspector:toggle", 16));
