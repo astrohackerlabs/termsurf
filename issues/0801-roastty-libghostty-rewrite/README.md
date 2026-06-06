@@ -1748,6 +1748,7 @@ are past the correctness-critical foundation.
   Codex/Codex/Codex
 - [Experiment 644: Tmux Output Format Helpers](644-tmux-output-format.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 645: Tmux DCS Entry](645-tmux-dcs-entry.md) — **Designed**
 
 ## Non-Goals
 
