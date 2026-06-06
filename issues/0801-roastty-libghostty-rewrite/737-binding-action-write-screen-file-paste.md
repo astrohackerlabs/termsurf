@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 737: Binding Action Write Screen File Paste
@@ -79,3 +84,57 @@ temp-file lifetime, and write-file regressions.
 The review required recording `[review.design]` frontmatter, this review
 section, and the README tuple before the plan commit. Those workflow records are
 now present.
+
+## Result
+
+**Result:** Pass
+
+Experiment 737 added `write_screen_file:paste` support. The screen-file parser
+now accepts `paste`, `paste,plain`, `paste,vt`, and `paste,html` alongside the
+existing screen-copy forms. Malformed paste forms, unsupported formats,
+`write_screen_file:open`, `write_selection_file:open`, and scrollback-file
+actions remain out of scope.
+
+Screen paste reuses the target-aware write-file helper and paste branch: Roastty
+formats the active screen with no active selection required, writes `screen.txt`
+or `screen.html` in a retained temporary directory, and queues exactly the
+canonical file path bytes to the terminal worker with no trailing newline or
+NUL. Readonly mode returns `false` before creating or retaining a temp file, and
+worker queue failure returns `false`.
+
+Existing `write_screen_file:copy` and `write_selection_file` copy/paste behavior
+passed regression coverage after the parser scope change.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty write_screen_file -- --nocapture --test-threads=1`
+  - 4 passed
+- `cargo test -p roastty write_selection_file -- --nocapture --test-threads=1`
+  - 5 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+  - 121 passed
+- `cargo test -p roastty --test abi_harness`
+  - 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+The screen-file target now supports both copy and paste actions with the same
+temp-file lifetime and exact path semantics as the selection-file target. The
+remaining write-file surface is the OS open action and scrollback target
+support; open still needs a runtime URL/open integration decision before it can
+be implemented faithfully.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 737 result and implementation diff. It
+found no implementation blockers.
+
+The review confirmed that the parser accepts the intended screen paste forms and
+keeps malformed/open forms rejected, readonly returns `false` before retaining
+temp directories or queueing, queue failure returns `false`, the implementation
+queues `path.as_bytes()` with no newline or NUL, and tests cover formatter
+contents, no-selection behavior, retained readable paths, and existing
+screen/selection write-file regressions.
