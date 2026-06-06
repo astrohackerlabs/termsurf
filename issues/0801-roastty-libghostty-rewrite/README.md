@@ -1979,6 +1979,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 732: Binding Action Search Selection](732-binding-action-search-selection.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 733: Binding Action Copy URL To Clipboard](733-binding-action-copy-url-to-clipboard.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
