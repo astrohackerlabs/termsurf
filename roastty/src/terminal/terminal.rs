@@ -1303,6 +1303,18 @@ impl Terminal {
         }
     }
 
+    pub(in crate::terminal) fn apply_tmux_tabstops_state(&mut self, pane_tabs: &str) {
+        self.tabstops.reset(0);
+        for tab in pane_tabs.split(',') {
+            let Ok(col) = tab.parse::<usize>() else {
+                continue;
+            };
+            if col < self.tabstops.cols() {
+                self.tabstops.set(col);
+            }
+        }
+    }
+
     pub(crate) fn cursor_visible(&self) -> bool {
         self.modes.get(modes::Mode::CursorVisible)
     }

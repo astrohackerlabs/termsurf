@@ -1011,6 +1011,7 @@ impl TmuxViewer {
                 state.scroll_region_upper,
                 state.scroll_region_lower,
             );
+            pane.terminal.apply_tmux_tabstops_state(&state.pane_tabs);
         }
 
         true
@@ -1194,6 +1195,23 @@ impl TmuxViewer {
         pane.terminal
             .set_scrolling_region_for_tests(top, bottom, left, right);
         true
+    }
+
+    #[cfg(test)]
+    fn set_pane_tabstop_for_tests(&mut self, id: usize, col: usize) -> bool {
+        let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id) else {
+            return false;
+        };
+        pane.terminal.set_tabstop_for_tests(col);
+        true
+    }
+
+    #[cfg(test)]
+    fn pane_tabstop_for_tests(&self, id: usize, col: usize) -> Option<bool> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == id)
+            .map(|pane| pane.terminal.get_tabstop_for_tests(col))
     }
 
     #[cfg(test)]
@@ -3773,6 +3791,121 @@ mod tests {
     }
 
     #[test]
+    fn tmux_viewer_pane_state_applies_tabstops() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 6)]);
+        assert!(viewer.set_pane_tabstop_for_tests(42, 8));
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line_with_tabs(42, false, "1,3,7").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        for col in [1, 3, 7] {
+            assert_eq!(viewer.pane_tabstop_for_tests(42, col), Some(true));
+        }
+        for col in [2, 4, 8] {
+            assert_eq!(viewer.pane_tabstop_for_tests(42, col), Some(false));
+        }
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_empty_tabs_clear_all_tabstops() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 6)]);
+        assert!(viewer.set_pane_tabstop_for_tests(42, 1));
+        assert!(viewer.set_pane_tabstop_for_tests(42, 8));
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line_with_tabs(42, false, "").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        for col in [1, 4, 8] {
+            assert_eq!(viewer.pane_tabstop_for_tests(42, col), Some(false));
+        }
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_tabs_ignore_invalid_entries() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 6)]);
+        assert!(viewer.set_pane_tabstop_for_tests(42, 8));
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line_with_tabs(
+                    42,
+                    false,
+                    "2,bad,999999999999999999999999999999999999999,10,9",
+                )
+                .into_bytes()
+            )),
+            Vec::new()
+        );
+
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 2), Some(true));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 9), Some(true));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 8), Some(false));
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_tabs_are_terminal_wide_with_alternate_on() {
+        let mut viewer = TmuxViewer::new();
+        let capture = TmuxCapturePane {
+            id: 42,
+            screen_key: TmuxScreenKey::Alternate,
+        };
+        viewer.set_panes_for_tests(&[(42, 10, 6)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneVisible(capture));
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(b"alternate".to_vec())),
+            Vec::new()
+        );
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line_with_tabs(42, true, "2,6").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 2), Some(true));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 6), Some(true));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 4), Some(false));
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_stale_panes_do_not_apply_tabstops() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 6)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        let output = format!(
+            "{}\n{}",
+            pane_state_line_with_tabs(99, false, "1,3,7"),
+            pane_state_line_with_tabs(42, false, "2")
+        );
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(output.into_bytes())),
+            Vec::new()
+        );
+
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 1), Some(false));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 2), Some(true));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 3), Some(false));
+        assert_eq!(viewer.pane_tabstop_for_tests(42, 7), Some(false));
+    }
+
+    #[test]
     fn tmux_viewer_pane_visible_primary_clears_homes_and_replays() {
         let mut viewer = TmuxViewer::new();
         let capture = TmuxCapturePane {
@@ -4074,7 +4207,7 @@ mod tests {
         scroll_region_upper: usize,
         scroll_region_lower: usize,
     ) -> String {
-        pane_state_line_with_modes_and_scroll_region(
+        pane_state_line_with_modes_scroll_region_and_tabs(
             pane_id,
             1,
             1,
@@ -4092,6 +4225,30 @@ mod tests {
             TmuxPaneMouseFlags::default(),
             scroll_region_upper,
             scroll_region_lower,
+            "0,4,8",
+        )
+    }
+
+    fn pane_state_line_with_tabs(pane_id: usize, alternate_on: bool, pane_tabs: &str) -> String {
+        pane_state_line_with_modes_scroll_region_and_tabs(
+            pane_id,
+            1,
+            1,
+            alternate_on,
+            "block",
+            true,
+            false,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+            true,
+            TmuxPaneMouseFlags::default(),
+            0,
+            1,
+            pane_tabs,
         )
     }
 
@@ -4126,7 +4283,7 @@ mod tests {
         bracketed_paste: bool,
         mouse_flags: TmuxPaneMouseFlags,
     ) -> String {
-        pane_state_line_with_modes_and_scroll_region(
+        pane_state_line_with_modes_scroll_region_and_tabs(
             pane_id,
             cursor_x,
             cursor_y,
@@ -4144,6 +4301,7 @@ mod tests {
             mouse_flags,
             0,
             1,
+            "0,4,8",
         )
     }
 
@@ -4151,7 +4309,7 @@ mod tests {
         clippy::too_many_arguments,
         reason = "tmux pane-state fixtures mirror fields"
     )]
-    fn pane_state_line_with_modes_and_scroll_region(
+    fn pane_state_line_with_modes_scroll_region_and_tabs(
         pane_id: usize,
         cursor_x: usize,
         cursor_y: usize,
@@ -4169,9 +4327,10 @@ mod tests {
         mouse_flags: TmuxPaneMouseFlags,
         scroll_region_upper: usize,
         scroll_region_lower: usize,
+        pane_tabs: &str,
     ) -> String {
         format!(
-            "%{pane_id};{cursor_x};{cursor_y};{};{cursor_shape};colour255;{};{};5;6;{};{};{};{};{};{};{};{};{};{};{};{};{};{scroll_region_upper};{scroll_region_lower};0,4,8",
+            "%{pane_id};{cursor_x};{cursor_y};{};{cursor_shape};colour255;{};{};5;6;{};{};{};{};{};{};{};{};{};{};{};{};{};{scroll_region_upper};{scroll_region_lower};{pane_tabs}",
             usize::from(cursor_flag),
             usize::from(cursor_blinking),
             usize::from(alternate_on),

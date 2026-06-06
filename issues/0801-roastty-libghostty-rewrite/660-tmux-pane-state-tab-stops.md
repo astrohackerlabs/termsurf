@@ -84,3 +84,52 @@ but the design now requires a test to guard that boundary.
 - `cargo fmt -p roastty -- --check`
 - `cargo test -p roastty terminal::tmux`
 - `git diff --check`
+
+## Result
+
+**Result:** Pass.
+
+Roastty now restores tmux pane-state tab stops after cursor, mode, mouse, and
+scroll-region restoration. The new terminal helper clears all current tab stops
+first, then parses the comma-separated `pane_tabs` string and sets valid 0-based
+columns. Empty `pane_tabs` clears all stops, and invalid tokens, overflowing
+numeric values, and columns outside the pane width are ignored without
+defuncting the viewer.
+
+The tmux tests use pane-level test helpers to seed and inspect tab stops without
+exposing the private `Tabstops` type. Coverage proves valid restore, clear-all
+behavior, invalid/out-of-range entry skipping, stale pane handling with a later
+valid line, and the design-review-requested `alternate_on = true` case showing
+tab stops remain terminal-wide rather than screen-local.
+
+Verification passed:
+
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/660-tmux-pane-state-tab-stops.md`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `cargo test -p roastty terminal::tmux` — 136 passed, 0 failed
+- `git diff --check`
+
+## Conclusion
+
+Pane-state restoration now covers cursor state, non-mouse modes, mouse modes,
+vertical scroll regions, and tab stops. The remaining parsed pane-state field
+from upstream's current restore block is alternate saved cursor position; after
+that, tmux work can move toward live pane output, PTY writes, and App
+integration.
+
+## Completion Review
+
+**Result:** Approved.
+
+Codex found no issues. It confirmed that `Terminal::apply_tmux_tabstops_state`
+clears all tab stops first, parses comma-separated `usize` values, ignores
+invalid or overflowing tokens, and sets only columns inside the pane width. It
+also confirmed that `TmuxViewer` calls the helper after scroll-region
+restoration, matching upstream ordering and terminal-wide tab-stop handling.
+
+Codex judged the tests sufficient for this slice: valid restore, empty
+`pane_tabs` clear-all behavior, invalid/overflowing/out-of-range entries, stale
+pane isolation with later valid application, and the `alternate_on = true`
+terminal-wide regression case. It also confirmed the recorded result and
+conclusion accurately describe the implementation and remaining pane-state work.
