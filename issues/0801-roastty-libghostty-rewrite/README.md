@@ -216,11 +216,13 @@ Experiment 246).
       — missing
 - [x] CoreText `Face` (rasterization + face-metric extraction)
 - [x] Shaper (CoreText shaping, run, cache, feature)
-- [ ] `Collection` / `CodepointResolver` / `CodepointMap` / `DeferredFace` /
-      `discovery` — ported foundations; final parity audit pending
-- [ ] `SharedGrid` / `SharedGridSet` — missing
-- [ ] `opentype/` (SFNT table parsing), `embedded`, `nerd_font_attributes` —
-      missing
+- [x] `Collection` / `CodepointResolver` / `CodepointMap` / `DeferredFace` /
+      `discovery` (CoreText/macOS scope complete)
+- [ ] `SharedGrid` / `SharedGridSet` — `SharedGrid` render and codepoint-cache
+      paths complete; `SharedGridSet` ownership/refcount/locking missing
+- [ ] `opentype/`, `embedded`, `nerd_font_attributes` — `head`/`hhea`/`os2`/
+      `post`/`svg` parsers and Nerd Font attributes complete; `glyf`, embedded
+      fonts, and full OpenType helpers missing
 
 ### Input — encoding only
 

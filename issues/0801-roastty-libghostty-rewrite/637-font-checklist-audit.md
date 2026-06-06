@@ -113,3 +113,59 @@ file comparison steps; add a no-code-change check; and call out upstream
 `opentype.zig` plus `opentype/glyf.zig` so the audit does not imply full
 OpenType parity. The plan now includes those constraints and verification steps.
 Follow-up review approved the revised design.
+
+## Result
+
+**Result:** Pass
+
+The README checklist now marks the
+`Collection`/`CodepointResolver`/`CodepointMap`/`DeferredFace`/`discovery` line
+complete for the current CoreText/macOS scope. The audited Rust modules cover
+eager and deferred collection entries, aliases, style completion, size
+adjustment, point-size loading, codepoint overrides, presentation defaults,
+sprite resolution, discovery fallback, descriptor scoring, fallback discovery,
+and deferred descriptor loading.
+
+The `SharedGrid` line remains open but no longer says `SharedGrid` is missing:
+its render path and codepoint-cache path are present and tested, while
+`SharedGridSet` ownership/refcount/locking remains absent. The OpenType line
+also remains open: `sfnt`, `head`, `hhea`, `post`, `os2`, `svg`, and generated
+Nerd Font attributes are present and tested, while upstream `glyf`, embedded
+fonts, and full OpenType helper coverage are still missing.
+
+Verification passed:
+
+- `cargo test -p roastty font::collection` — 49 passed, 3450 filtered
+- `cargo test -p roastty font::codepoint_resolver` — 28 passed, 3471 filtered
+- `cargo test -p roastty font::codepoint_map` — 3 passed, 3496 filtered
+- `cargo test -p roastty font::deferred_face` — 5 passed, 3494 filtered
+- `cargo test -p roastty font::discovery` — 34 passed, 3465 filtered
+- `cargo test -p roastty shared_grid` — 11 passed, 3488 filtered
+- `cargo test -p roastty font::opentype` — 21 passed, 3478 filtered
+- `cargo test -p roastty nerd_font` — 6 passed, 3493 filtered
+- vendored file audit covered `Collection.zig`, `CodepointResolver.zig`,
+  `CodepointMap.zig`, `DeferredFace.zig`, `discovery.zig`, `SharedGrid.zig`,
+  `SharedGridSet.zig`, `opentype.zig`, `opentype/glyf.zig`, `embedded.zig`, and
+  `nerd_font_attributes.zig`
+- `git diff --name-only` was empty before the checklist/result docs edits,
+  confirming no Rust code changed during the audit
+- `prettier --write --prose-wrap always --print-width 80` — pass
+
+## Conclusion
+
+The font checklist is now more precise: the CoreText collection/resolver/
+discovery foundation is complete, `SharedGrid` itself has crossed from missing
+to partial-complete, and the remaining font work is explicitly `SharedGridSet`,
+sprite draw/table coverage, OpenType `glyf`/full helpers, embedded fonts, and
+other renderer-facing integration.
+
+## Completion Review
+
+**Reviewer:** Codex (gpt-5.5) · session `019e9a8f-0d37-70d0-8f87-76d4b33910d5`
+
+**Verdict:** APPROVED.
+
+The reviewer found no blocking issues. The staged diff was documentation-only,
+kept the appropriate checklist items open, scoped the completed font foundations
+to CoreText/macOS, and distinguished completed OpenType/Nerd Font pieces from
+remaining `glyf`, embedded font, and helper work.
