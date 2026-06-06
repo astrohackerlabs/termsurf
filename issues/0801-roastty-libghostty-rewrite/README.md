@@ -281,13 +281,14 @@ Experiment 246).
       button/position dispatch done; surface mouse scroll reporting done; split
       action callback forwarding, tab/window runtime action forwarding, and tab
       navigation runtime action forwarding, and runtime UI toggle forwarding
-      done; surface key default terminal dispatch done; terminal-derived key
-      encoder options done; surface text viewport metadata done; config/surface
-      key-is-binding false-path foundation done; split, close, text, CSI, ESC,
-      reset, clear-screen, scroll-to-top, scroll-to-bottom, scroll-to-row,
-      scroll-to-selection, scroll-page-up, scroll-page-down, scroll-page-lines,
-      and scroll-page-fractional binding-action string invocation foundations
-      done; keybinding/action dispatch, frontend selection routing, full
+      done; runtime control forwarding done; surface key default terminal
+      dispatch done; terminal-derived key encoder options done; surface text
+      viewport metadata done; config/surface key-is-binding false-path
+      foundation done; split, close, text, CSI, ESC, reset, clear-screen,
+      scroll-to-top, scroll-to-bottom, scroll-to-row, scroll-to-selection,
+      scroll-page-up, scroll-page-down, scroll-page-lines, and
+      scroll-page-fractional binding-action string invocation foundations done;
+      keybinding/action dispatch, frontend selection routing, full
       binding-action parsing, and split tree/frontend mutations missing
 - [ ] Inspector ABI — non-Metal handle lifecycle and input forwarding foundation
       done; Metal renderer integration, inspector UI rendering, and core
@@ -315,10 +316,10 @@ Experiment 246).
       scroll-page-down, scroll-page-lines, and scroll-page-fractional
       binding-action string invocation foundations, tab/window runtime action
       forwarding, tab navigation runtime action forwarding, and runtime UI
-      toggle forwarding done; splits, frontend selection routing, renderer
-      display-ID delivery, full binding-action parsing, Quicklook UI/font
-      integration, clipboard request allocation/handling, and full frontend
-      presentation missing
+      toggle forwarding done; runtime control forwarding done; splits, frontend
+      selection routing, renderer display-ID delivery, full binding-action
+      parsing, Quicklook UI/font integration, clipboard request
+      allocation/handling, and full frontend presentation missing
 - [ ] `pty` + `termio` (shell spawn, read/write loops, resize, fg pid, tty name,
       exit) — PTY open/resize, subprocess spawn, child IO, synchronous pump,
       background worker, worker shutdown/drop, and surface process-exit state
@@ -1961,7 +1962,7 @@ are past the correctness-critical foundation.
 - [Experiment 723: Binding Action Runtime UI Toggles](723-binding-action-runtime-ui-toggles.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 724: Binding Action Runtime Control Forwarding](724-binding-action-runtime-control-forwarding.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

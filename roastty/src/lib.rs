@@ -131,10 +131,30 @@ const ROASTTY_ACTION_RESIZE_SPLIT: c_int = 18;
 const ROASTTY_ACTION_EQUALIZE_SPLITS: c_int = 19;
 const ROASTTY_ACTION_TOGGLE_SPLIT_ZOOM: c_int = 20;
 const ROASTTY_ACTION_RESET_WINDOW_SIZE: c_int = 23;
+const ROASTTY_ACTION_INSPECTOR: c_int = 28;
 const ROASTTY_ACTION_SET_TITLE: c_int = 32;
 const ROASTTY_ACTION_SET_TAB_TITLE: c_int = 33;
 const ROASTTY_ACTION_PROMPT_TITLE: c_int = 34;
+const ROASTTY_ACTION_FLOAT_WINDOW: c_int = 42;
+const ROASTTY_ACTION_SECURE_INPUT: c_int = 43;
+const ROASTTY_ACTION_CLOSE_WINDOW: c_int = 49;
 const ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD: c_int = 57;
+
+const ROASTTY_INSPECTOR_TOGGLE: c_int = 0;
+const ROASTTY_INSPECTOR_SHOW: c_int = 1;
+const ROASTTY_INSPECTOR_HIDE: c_int = 2;
+
+#[allow(dead_code)]
+const ROASTTY_FLOAT_WINDOW_ON: c_int = 0;
+#[allow(dead_code)]
+const ROASTTY_FLOAT_WINDOW_OFF: c_int = 1;
+const ROASTTY_FLOAT_WINDOW_TOGGLE: c_int = 2;
+
+#[allow(dead_code)]
+const ROASTTY_SECURE_INPUT_ON: c_int = 0;
+#[allow(dead_code)]
+const ROASTTY_SECURE_INPUT_OFF: c_int = 1;
+const ROASTTY_SECURE_INPUT_TOGGLE: c_int = 2;
 
 const ROASTTY_CLOSE_TAB_THIS: c_int = 0;
 const ROASTTY_CLOSE_TAB_OTHER: c_int = 1;
@@ -2854,6 +2874,15 @@ fn goto_window_from_str(value: &[u8]) -> Option<c_int> {
     }
 }
 
+fn inspector_mode_from_str(value: &[u8]) -> Option<c_int> {
+    match value {
+        b"toggle" => Some(ROASTTY_INSPECTOR_TOGGLE),
+        b"show" => Some(ROASTTY_INSPECTOR_SHOW),
+        b"hide" => Some(ROASTTY_INSPECTOR_HIDE),
+        _ => None,
+    }
+}
+
 fn signed_storage(value: isize) -> usize {
     value as usize
 }
@@ -3018,6 +3047,45 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
             }
             Some(ParsedBindingAction::RuntimeAction(
                 ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD,
+                [0usize; 8],
+            ))
+        }
+        b"toggle_window_float_on_top" => {
+            if parameter.is_some() {
+                return None;
+            }
+            let mut storage = [0usize; 8];
+            storage[0] = ROASTTY_FLOAT_WINDOW_TOGGLE as usize;
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_FLOAT_WINDOW,
+                storage,
+            ))
+        }
+        b"toggle_secure_input" => {
+            if parameter.is_some() {
+                return None;
+            }
+            let mut storage = [0usize; 8];
+            storage[0] = ROASTTY_SECURE_INPUT_TOGGLE as usize;
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_SECURE_INPUT,
+                storage,
+            ))
+        }
+        b"inspector" => {
+            let mut storage = [0usize; 8];
+            storage[0] = inspector_mode_from_str(parameter?)? as usize;
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_INSPECTOR,
+                storage,
+            ))
+        }
+        b"close_window" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_CLOSE_WINDOW,
                 [0usize; 8],
             ))
         }
@@ -13287,10 +13355,23 @@ mod tests {
         assert_eq!(ROASTTY_ACTION_EQUALIZE_SPLITS, 19);
         assert_eq!(ROASTTY_ACTION_TOGGLE_SPLIT_ZOOM, 20);
         assert_eq!(ROASTTY_ACTION_RESET_WINDOW_SIZE, 23);
+        assert_eq!(ROASTTY_ACTION_INSPECTOR, 28);
         assert_eq!(ROASTTY_ACTION_SET_TITLE, 32);
         assert_eq!(ROASTTY_ACTION_SET_TAB_TITLE, 33);
         assert_eq!(ROASTTY_ACTION_PROMPT_TITLE, 34);
+        assert_eq!(ROASTTY_ACTION_FLOAT_WINDOW, 42);
+        assert_eq!(ROASTTY_ACTION_SECURE_INPUT, 43);
+        assert_eq!(ROASTTY_ACTION_CLOSE_WINDOW, 49);
         assert_eq!(ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD, 57);
+        assert_eq!(ROASTTY_INSPECTOR_TOGGLE, 0);
+        assert_eq!(ROASTTY_INSPECTOR_SHOW, 1);
+        assert_eq!(ROASTTY_INSPECTOR_HIDE, 2);
+        assert_eq!(ROASTTY_FLOAT_WINDOW_ON, 0);
+        assert_eq!(ROASTTY_FLOAT_WINDOW_OFF, 1);
+        assert_eq!(ROASTTY_FLOAT_WINDOW_TOGGLE, 2);
+        assert_eq!(ROASTTY_SECURE_INPUT_ON, 0);
+        assert_eq!(ROASTTY_SECURE_INPUT_OFF, 1);
+        assert_eq!(ROASTTY_SECURE_INPUT_TOGGLE, 2);
         assert_eq!(ROASTTY_CLOSE_TAB_THIS, 0);
         assert_eq!(ROASTTY_CLOSE_TAB_OTHER, 1);
         assert_eq!(ROASTTY_CLOSE_TAB_RIGHT, 2);
@@ -13458,6 +13539,18 @@ mod tests {
             "toggle_background_opacity:now",
             "show_on_screen_keyboard:",
             "show_on_screen_keyboard:now",
+            "toggle_window_float_on_top:",
+            "toggle_window_float_on_top:now",
+            "toggle_secure_input:",
+            "toggle_secure_input:now",
+            "inspector",
+            "inspector:",
+            "inspector:open",
+            "inspector:toggle:extra",
+            "inspector: toggle",
+            "inspector:toggle ",
+            "close_window:",
+            "close_window:now",
             "new_split:",
             "new_split:diagonal",
             "goto_split",
@@ -15916,6 +16009,93 @@ mod tests {
         assert!(!binding_action(surface, "toggle_background_opacity"));
         assert!(!binding_action(surface, "show_on_screen_keyboard"));
         assert_eq!(action_records().len(), 4);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_runtime_control_false_for_null_detached_and_no_callback() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        for action in [
+            "toggle_window_float_on_top",
+            "toggle_secure_input",
+            "inspector:toggle",
+            "inspector:show",
+            "inspector:hide",
+            "close_window",
+        ] {
+            assert!(!binding_action(ptr::null_mut(), action), "{action}");
+            assert!(!binding_action(surface, action), "{action}");
+        }
+
+        roastty_app_free(app);
+        for action in [
+            "toggle_window_float_on_top",
+            "toggle_secure_input",
+            "inspector:toggle",
+            "close_window",
+        ] {
+            assert!(!binding_action(surface, action), "{action}");
+        }
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_forwards_supported_runtime_control_actions() {
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+
+        for action in [
+            "toggle_window_float_on_top",
+            "toggle_secure_input",
+            "inspector:toggle",
+            "inspector:show",
+            "inspector:hide",
+            "close_window",
+        ] {
+            assert!(binding_action(surface, action), "{action}");
+        }
+
+        let records = action_records();
+        assert_eq!(records.len(), 6);
+        for record in &records {
+            assert_eq!(record.app, app);
+            assert_eq!(record.target_tag, ROASTTY_TARGET_SURFACE);
+            assert_eq!(record.surface, surface);
+            assert!(record.storage[1..].iter().all(|value| *value == 0));
+        }
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_FLOAT_WINDOW);
+        assert_eq!(records[0].storage[0], ROASTTY_FLOAT_WINDOW_TOGGLE as usize);
+        assert_eq!(records[1].action_tag, ROASTTY_ACTION_SECURE_INPUT);
+        assert_eq!(records[1].storage[0], ROASTTY_SECURE_INPUT_TOGGLE as usize);
+        assert_eq!(records[2].action_tag, ROASTTY_ACTION_INSPECTOR);
+        assert_eq!(records[2].storage[0], ROASTTY_INSPECTOR_TOGGLE as usize);
+        assert_eq!(records[3].action_tag, ROASTTY_ACTION_INSPECTOR);
+        assert_eq!(records[3].storage[0], ROASTTY_INSPECTOR_SHOW as usize);
+        assert_eq!(records[4].action_tag, ROASTTY_ACTION_INSPECTOR);
+        assert_eq!(records[4].storage[0], ROASTTY_INSPECTOR_HIDE as usize);
+        assert_eq!(records[5].action_tag, ROASTTY_ACTION_CLOSE_WINDOW);
+        assert!(records[5].storage.iter().all(|value| *value == 0));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_runtime_control_returns_callback_result() {
+        let app = new_test_app_with_action(false);
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(surface, "toggle_window_float_on_top"));
+        assert!(!binding_action(surface, "toggle_secure_input"));
+        assert!(!binding_action(surface, "inspector:toggle"));
+        assert!(!binding_action(surface, "inspector:show"));
+        assert!(!binding_action(surface, "inspector:hide"));
+        assert!(!binding_action(surface, "close_window"));
+        assert_eq!(action_records().len(), 6);
 
         roastty_surface_free(surface);
         roastty_app_free(app);

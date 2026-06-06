@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 724: Binding Action Runtime Control Forwarding
@@ -116,3 +121,63 @@ behavior, and test plan.
 The review found one workflow blocker: this design-review section still said
 `Pending.` This section now records the review outcome, and the README tuple is
 `Codex/Codex/-`.
+
+## Result
+
+**Result:** Pass
+
+Implemented runtime-control binding-action forwarding through the existing
+runtime action callback path. Roastty now exposes upstream-matching action tags
+for inspector, float-window, secure-input, and close-window actions, plus
+inspector, float-window, and secure-input payload enums in
+`roastty/include/roastty.h`.
+
+`parse_binding_action` now accepts:
+
+- `toggle_window_float_on_top`
+- `toggle_secure_input`
+- `inspector:toggle`
+- `inspector:show`
+- `inspector:hide`
+- `close_window`
+
+`toggle_window_float_on_top` forwards `ROASTTY_ACTION_FLOAT_WINDOW` with
+`ROASTTY_FLOAT_WINDOW_TOGGLE`. `toggle_secure_input` forwards
+`ROASTTY_ACTION_SECURE_INPUT` with `ROASTTY_SECURE_INPUT_TOGGLE`. Inspector
+actions forward `ROASTTY_ACTION_INSPECTOR` with the selected inspector mode.
+`close_window` forwards `ROASTTY_ACTION_CLOSE_WINDOW` with zeroed storage.
+
+Invalid missing, empty, whitespace-padded, unknown, and extra-colon inspector
+forms are rejected, and no-parameter actions reject empty-colon and non-empty
+parameters.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty runtime_control -- --nocapture --test-threads=1`
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Runtime-control binding actions now reach the app runtime with stable
+upstream-shaped action tags and storage. The remaining nearby binding-action
+work includes local surface state such as `toggle_mouse_reporting`, app-scoped
+actions that need app/runtime dispatch semantics, and larger subsystems such as
+real keybinding storage/dispatch.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 724 result and found no implementation
+blockers. The review approved the action constants, enum payload storage,
+`close_window` zero-storage forwarding, parser false paths, callback-result
+behavior, and Rust/C ABI coverage.
+
+The review found one workflow blocker: result-review provenance was missing from
+the experiment frontmatter and README tuple. This section, the `[review.result]`
+frontmatter, and the README tuple now record the completion review.
+
+Codex re-reviewed the revised result and found no remaining findings. The
+completion review approved the result for commit.
