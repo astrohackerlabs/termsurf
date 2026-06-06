@@ -1876,6 +1876,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 692: Surface Mouse Button Position Dispatch](692-surface-mouse-button-position-dispatch.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 693: Surface Mouse Scroll Reporting](693-surface-mouse-scroll-reporting.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
