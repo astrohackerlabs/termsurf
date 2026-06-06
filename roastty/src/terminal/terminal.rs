@@ -1483,6 +1483,14 @@ impl Terminal {
             || self.modes.get(modes::Mode::MouseEventAny)
     }
 
+    pub(crate) fn mouse_event_mode(&self) -> mouse::MouseEventMode {
+        self.flags.mouse_event
+    }
+
+    pub(crate) fn mouse_format(&self) -> mouse::MouseFormat {
+        self.flags.mouse_format
+    }
+
     pub(crate) fn total_rows(&self) -> usize {
         self.screens.active().total_rows()
     }

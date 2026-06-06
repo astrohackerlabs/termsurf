@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 692: Surface Mouse Button Position Dispatch
@@ -102,3 +107,45 @@ Codex approved the revised design after two fixes: motion dispatch now preserves
 the first pressed button for Button-mode drag reports, and geometry derivation
 no longer depends only on surface grid/cell fields populated by the frontend.
 The test plan now covers both cases.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now dispatches surface mouse button press/release callbacks and finite
+pointer-position callbacks through the terminal mouse encoder when an attached
+worker terminal has mouse reporting enabled. Button callbacks return `true` only
+when a report is encoded and queued successfully; disabled reporting,
+unsupported events, missing workers, detached surfaces, invalid values, and
+worker queue failures remain safe no-ops from the ABI caller's perspective.
+
+The implementation derives encoder geometry from the surface pixel size and
+stored cell dimensions when available, with a fallback to the attached terminal
+grid or `Surface::pty_size()` defaults. Button-mode drag motion carries the
+first currently pressed button, and motion deduplication uses a per-surface
+last-reported-cell cache.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_mouse -- --nocapture`
+- `cargo test -p roastty mouse -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Surface mouse button and pointer-position callbacks now reach terminal mouse
+reporting instead of only updating stored frontend state. The next mouse slice
+should handle scroll dispatch, including upstream's scroll normalization,
+alternate-scroll cursor-key behavior, and the selection side effects that were
+left out of this focused experiment.
+
+## Completion Review
+
+Codex reviewed the staged result and found one correctness issue in geometry
+fallback ordering. The implementation now prefers the attached terminal grid
+when surface cell dimensions are unset and falls back to `Surface::pty_size()`
+only after that; a smaller-grid regression covers this case. No other
+correctness issues were found.
