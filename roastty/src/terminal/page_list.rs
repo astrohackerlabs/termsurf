@@ -2242,6 +2242,12 @@ impl PageList {
         nodes
     }
 
+    pub(in crate::terminal) fn viewport_bounds(&self) -> Option<(GridRef, GridRef)> {
+        let top = self.get_top_left(point::Tag::Viewport);
+        let bottom = self.get_bottom_right(point::Tag::Viewport)?;
+        Some((GridRef::from(top), GridRef::from(bottom)))
+    }
+
     /// The active area's bottom-right page node (upstream `getBottomRight(.active).?.node`). The
     /// top-left counterpart is `active_area_top_left().node()`.
     pub(in crate::terminal) fn active_area_bottom_right_node(&self) -> Option<NonNull<Node>> {

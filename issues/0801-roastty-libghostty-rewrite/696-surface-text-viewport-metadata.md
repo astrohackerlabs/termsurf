@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 696: Surface Text Viewport Metadata
@@ -112,3 +117,51 @@ padding as zero, and document that Roastty reports the cell top until renderer
 font baseline metrics exist on the surface.
 
 Codex then approved the revised design for the plan commit.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now fills the existing `roastty_text_s` viewport metadata fields for
+surface text reads when the selection overlaps the visible viewport and surface
+cell metrics are available. Active selection reads and explicit selection reads
+share the same path: the selected text allocation/free behavior is unchanged,
+while `tl_px_x`, `tl_px_y`, `offset_start`, and `offset_len` are populated from
+the attached worker terminal's ordered selection endpoints and current viewport.
+
+Selections wholly outside the viewport keep Ghostty's empty/default metadata.
+Partially visible selections clamp the reported metadata to the viewport bounds.
+Pixel coordinates use the current Roastty surface geometry contract: zero
+padding and cell-top Y coordinates, scaled by content scale. Baseline
+positioning remains deferred until renderer font baseline metrics exist on the
+surface.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_read -- --nocapture`
+- `cargo test -p roastty surface_text -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+One parallel verification attempt ran `surface_text`, `abi_harness`, and
+`cargo fmt --check` at the same time. `surface_text` hit a PTY timing assertion
+and then poisoned its process-local test lock; rerunning
+`cargo test -p roastty surface_text -- --nocapture` by itself passed.
+
+## Conclusion
+
+The surface text ABI now exposes the viewport correlation data its struct
+already reserved. The remaining selection work is frontend behavior around
+routing, clipboard/copy policy, and full presentation integration rather than
+text metadata storage.
+
+## Completion Review
+
+Codex reviewed the staged result and found no implementation blockers. It
+approved the metadata path's ownership behavior, terminal helper scope,
+zero-padding and cell-top geometry contract, viewport overlap/clamping logic,
+focused tests, and recorded verification. The only review finding was missing
+result-review provenance; this section, the `[review.result]` frontmatter, and
+the README reviewer tuple address that workflow issue.

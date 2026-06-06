@@ -1466,6 +1466,83 @@ impl Surface {
         }
     }
 
+    fn selection_text_metadata(
+        &self,
+        terminal: &InnerTerminal,
+        selection: TerminalSelection,
+    ) -> RoasttyText {
+        if self.size.cell_width_px == 0 || self.size.cell_height_px == 0 {
+            return empty_text();
+        }
+
+        let Ok(Some(selection)) =
+            terminal.selection_ordered(selection, TerminalSelectionOrder::Forward)
+        else {
+            return empty_text();
+        };
+        let Some((viewport_top_left, viewport_bottom_right)) = terminal.viewport_bounds() else {
+            return empty_text();
+        };
+        let Ok(selection_before_viewport) =
+            terminal.grid_ref_before(selection.end, viewport_top_left)
+        else {
+            return empty_text();
+        };
+        if selection_before_viewport {
+            return empty_text();
+        }
+        let Ok(viewport_before_selection) =
+            terminal.grid_ref_before(viewport_bottom_right, selection.start)
+        else {
+            return empty_text();
+        };
+        if viewport_before_selection {
+            return empty_text();
+        }
+
+        let top_left =
+            match terminal.point_from_grid_ref(selection.start, TerminalPointTag::Viewport) {
+                Ok(coord) => coord,
+                Err(_) => match terminal.grid_ref_before(selection.start, viewport_top_left) {
+                    Ok(true) => point::Coordinate::new(0, 0),
+                    _ => return empty_text(),
+                },
+            };
+        let bottom_right =
+            match terminal.point_from_grid_ref(selection.end, TerminalPointTag::Viewport) {
+                Ok(coord) => coord,
+                Err(_) => match terminal.grid_ref_before(viewport_bottom_right, selection.end) {
+                    Ok(true) => match terminal
+                        .point_from_grid_ref(viewport_bottom_right, TerminalPointTag::Viewport)
+                    {
+                        Ok(coord) => coord,
+                        Err(_) => return empty_text(),
+                    },
+                    _ => return empty_text(),
+                },
+            };
+        let columns = terminal.columns();
+        if columns == 0 {
+            return empty_text();
+        }
+
+        let offset_start = viewport_text_offset(top_left, columns);
+        let offset_end = viewport_text_offset(bottom_right, columns);
+        let scale_x = Self::sanitized_scale(self.scale_factor_x);
+        let scale_y = Self::sanitized_scale(self.scale_factor_y);
+
+        RoasttyText {
+            tl_px_x: f64::from(u32::from(top_left.x).saturating_mul(self.size.cell_width_px))
+                / scale_x,
+            tl_px_y: f64::from(u32::from(top_left.y).saturating_mul(self.size.cell_height_px))
+                / scale_y,
+            offset_start,
+            offset_len: offset_end.saturating_sub(offset_start),
+            text: ptr::null(),
+            text_len: 0,
+        }
+    }
+
     fn pty_size(&self) -> os::pty::PtySize {
         os::pty::PtySize {
             rows: if self.size.rows == 0 {
@@ -2665,6 +2742,12 @@ fn try_allocated_text(bytes: &[u8]) -> Result<RoasttyText, c_int> {
     })
 }
 
+fn viewport_text_offset(coord: point::Coordinate, columns: u16) -> u32 {
+    u32::from(coord.y)
+        .saturating_mul(u32::from(columns))
+        .saturating_add(u32::from(coord.x))
+}
+
 fn free_text_allocation(value: *mut RoasttyText) {
     if value.is_null() {
         return;
@@ -2684,18 +2767,30 @@ fn free_text_allocation(value: *mut RoasttyText) {
 }
 
 fn try_surface_selection_text(
+    surface: &Surface,
     worker: &termio::TermioWorker,
     selection: Option<TerminalSelection>,
 ) -> Result<RoasttyText, c_int> {
-    let text = worker.with_termio(|termio| {
-        termio
-            .terminal()
-            .selection_format(TerminalSelectionFormat::Plain, true, false, selection)
+    let (text, metadata) = worker.with_termio(|termio| {
+        let terminal = termio.terminal();
+        let metadata_selection = selection.or_else(|| terminal.active_selection());
+        let metadata = metadata_selection
+            .map(|selection| surface.selection_text_metadata(terminal, selection))
+            .unwrap_or_else(empty_text);
+        (
+            terminal.selection_format(TerminalSelectionFormat::Plain, true, false, selection),
+            metadata,
+        )
     });
     let Ok(text) = text else {
         return Err(ROASTTY_INVALID_VALUE);
     };
-    try_allocated_text(text.as_bytes())
+    let mut text = try_allocated_text(text.as_bytes())?;
+    text.tl_px_x = metadata.tl_px_x;
+    text.tl_px_y = metadata.tl_px_y;
+    text.offset_start = metadata.offset_start;
+    text.offset_len = metadata.offset_len;
+    Ok(text)
 }
 
 fn try_allocated_string(bytes: &[u8]) -> Result<RoasttyString, c_int> {
@@ -9615,7 +9710,7 @@ pub extern "C" fn roastty_surface_read_selection(
     let Some(worker) = surface.termio_worker.as_ref() else {
         return false;
     };
-    let Ok(text) = try_surface_selection_text(worker, None) else {
+    let Ok(text) = try_surface_selection_text(surface, worker, None) else {
         return false;
     };
     unsafe {
@@ -9646,7 +9741,7 @@ pub extern "C" fn roastty_surface_read_text(
     let Some(worker) = surface.termio_worker.as_ref() else {
         return false;
     };
-    let Ok(text) = try_surface_selection_text(worker, Some(selection)) else {
+    let Ok(text) = try_surface_selection_text(surface, worker, Some(selection)) else {
         return false;
     };
     unsafe {
@@ -10091,6 +10186,24 @@ mod tests {
             .as_ref()
             .unwrap()
             .with_termio_mut(|termio| termio.terminal_mut().set_selection(selection).unwrap());
+    }
+
+    fn set_surface_test_geometry(
+        surface: RoasttySurface,
+        columns: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) {
+        let surface = surface_from_handle(surface).unwrap();
+        surface.size = RoasttySurfaceSize {
+            columns,
+            rows,
+            width_px: u32::from(columns).saturating_mul(cell_width_px),
+            height_px: u32::from(rows).saturating_mul(cell_height_px),
+            cell_width_px,
+            cell_height_px,
+        };
     }
 
     fn set_surface_worker_mouse_tracking(surface: RoasttySurface, enabled: bool) {
@@ -12054,6 +12167,7 @@ mod tests {
         let mut config = roastty_surface_config_new();
         config.command = command.as_ptr();
         let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 80, 24, 10, 20);
         assert!(surface_snapshot_text_after_start(app, surface).contains("Hello World"));
         let selection = surface_worker_selection(surface, (6, 0), (10, 0));
         set_surface_worker_active_selection(surface, Some(selection));
@@ -12061,10 +12175,10 @@ mod tests {
 
         assert!(roastty_surface_read_selection(surface, &mut text));
 
-        assert_eq!(text.tl_px_x, -1.0);
-        assert_eq!(text.tl_px_y, -1.0);
-        assert_eq!(text.offset_start, 0);
-        assert_eq!(text.offset_len, 0);
+        assert_eq!(text.tl_px_x, 60.0);
+        assert_eq!(text.tl_px_y, 0.0);
+        assert_eq!(text.offset_start, 6);
+        assert_eq!(text.offset_len, 4);
         assert_eq!(take_roastty_text(text), b"World");
         roastty_surface_free(surface);
         roastty_app_free(app);
@@ -12137,8 +12251,62 @@ mod tests {
         let mut config = roastty_surface_config_new();
         config.command = command.as_ptr();
         let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 80, 24, 10, 20);
         assert!(surface_snapshot_text_after_start(app, surface).contains("Hello World"));
         let selection = surface_worker_selection(surface, (6, 0), (10, 0));
+        let mut text = empty_text();
+
+        assert!(roastty_surface_read_text(surface, selection, &mut text));
+
+        assert_eq!(text.tl_px_x, 60.0);
+        assert_eq!(text.tl_px_y, 0.0);
+        assert_eq!(text.offset_start, 6);
+        assert_eq!(text.offset_len, 4);
+        assert_eq!(take_roastty_text(text), b"World");
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_read_text_metadata_uses_content_scale() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf 'Line0\\nHello World'").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 80, 24, 10, 20);
+        {
+            let surface = surface_from_handle(surface).unwrap();
+            surface.scale_factor_x = 2.0;
+            surface.scale_factor_y = 4.0;
+        }
+        assert!(surface_snapshot_text_after_start(app, surface).contains("Hello World"));
+        let selection = surface_worker_selection(surface, (6, 1), (10, 1));
+        let mut text = empty_text();
+
+        assert!(roastty_surface_read_text(surface, selection, &mut text));
+
+        assert_eq!(text.tl_px_x, 30.0);
+        assert_eq!(text.tl_px_y, 5.0);
+        assert_eq!(text.offset_start, 86);
+        assert_eq!(text.offset_len, 4);
+        assert_eq!(take_roastty_text(text), b"World");
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_read_text_metadata_defaults_for_off_viewport_selection() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf 'aaa\\nbbb\\nccc\\nddd\\neee\\nfff\\nggg'").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 80, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ggg"));
+        let selection = surface_worker_selection(surface, (0, 0), (2, 0));
         let mut text = empty_text();
 
         assert!(roastty_surface_read_text(surface, selection, &mut text));
@@ -12147,7 +12315,31 @@ mod tests {
         assert_eq!(text.tl_px_y, -1.0);
         assert_eq!(text.offset_start, 0);
         assert_eq!(text.offset_len, 0);
-        assert_eq!(take_roastty_text(text), b"World");
+        assert_eq!(take_roastty_text(text), b"aaa");
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_read_text_metadata_clamps_partially_visible_selection() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf 'aaa\\nbbb\\nccc\\nddd\\neee\\nfff\\nggg'").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 80, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ggg"));
+        let selection = surface_worker_selection(surface, (0, 0), (2, 6));
+        let mut text = empty_text();
+
+        assert!(roastty_surface_read_text(surface, selection, &mut text));
+
+        assert_eq!(text.tl_px_x, 0.0);
+        assert_eq!(text.tl_px_y, 0.0);
+        assert_eq!(text.offset_start, 0);
+        assert_eq!(text.offset_len, 162);
+        assert!(take_roastty_text(text).starts_with(b"aaa"));
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

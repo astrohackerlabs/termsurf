@@ -1787,6 +1787,24 @@ impl Terminal {
             .map_err(Into::into)
     }
 
+    pub(crate) fn viewport_bounds(&self) -> Option<(TerminalGridRef, TerminalGridRef)> {
+        self.screens
+            .active()
+            .viewport_bounds()
+            .map(|(top_left, bottom_right)| (top_left.into(), bottom_right.into()))
+    }
+
+    pub(crate) fn grid_ref_before(
+        &self,
+        a: TerminalGridRef,
+        b: TerminalGridRef,
+    ) -> Result<bool, TerminalGridRefPointError> {
+        self.screens
+            .active()
+            .grid_ref_before(a.into(), b.into())
+            .ok_or(TerminalGridRefPointError::NoValue)
+    }
+
     fn selection_from_tuple(
         selection: Option<(GridRef, GridRef, bool)>,
     ) -> Option<TerminalSelection> {

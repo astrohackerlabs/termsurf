@@ -1550,6 +1550,10 @@ impl Screen {
         self.pages.grid_ref(point)
     }
 
+    pub(super) fn viewport_bounds(&self) -> Option<(GridRef, GridRef)> {
+        self.pages.viewport_bounds()
+    }
+
     pub(super) fn pin(&self, point: point::Point) -> Option<Pin> {
         self.pages.pin(point)
     }
@@ -1612,6 +1616,12 @@ impl Screen {
 
     pub(super) fn pin_before(&self, pin: Pin, other: Pin) -> Option<bool> {
         self.pages.pin_before(pin, other)
+    }
+
+    pub(super) fn grid_ref_before(&self, a: GridRef, b: GridRef) -> Option<bool> {
+        let a = self.pages.pin_from_grid_ref(a.node, a.x, a.y).ok()?;
+        let b = self.pages.pin_from_grid_ref(b.node, b.x, b.y).ok()?;
+        self.pages.pin_before(a, b)
     }
 
     pub(super) fn point_from_grid_ref(
