@@ -4523,6 +4523,8 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "copy_to_clipboard:", 18));
   assert(!roastty_surface_binding_action(surface, "copy_to_clipboard:rtf", 21));
   assert(!roastty_surface_binding_action(surface, "copy_to_clipboard:plain:extra", 29));
+  assert(!roastty_surface_binding_action(surface, "copy_url_to_clipboard:", 22));
+  assert(!roastty_surface_binding_action(surface, "copy_url_to_clipboard:now", 25));
   assert(!roastty_surface_binding_action(surface, "copy_title_to_clipboard:", 24));
   assert(!roastty_surface_binding_action(surface, "copy_title_to_clipboard:now", 27));
   assert(!roastty_surface_binding_action(surface, "paste_from_clipboard:", 21));
@@ -4638,6 +4640,7 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "copy_to_clipboard:vt", 20));
   assert(!roastty_surface_binding_action(surface, "copy_to_clipboard:html", 22));
   assert(!roastty_surface_binding_action(surface, "copy_to_clipboard:mixed", 23));
+  assert(!roastty_surface_binding_action(surface, "copy_url_to_clipboard", 21));
   assert(!roastty_surface_binding_action(surface, "copy_title_to_clipboard", 23));
   assert(!roastty_surface_binding_action(surface, "paste_from_clipboard", 20));
   assert(!roastty_surface_binding_action(surface, "paste_from_selection", 20));

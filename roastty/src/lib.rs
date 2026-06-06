@@ -2175,6 +2175,69 @@ impl Surface {
         true
     }
 
+    fn copy_url_to_clipboard(&mut self) -> bool {
+        if self.app.is_null() {
+            return false;
+        }
+        let Some(app) = app_from_handle(self.app) else {
+            return false;
+        };
+        let Some(write_clipboard) = app.runtime.write_clipboard_cb else {
+            return false;
+        };
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return false;
+        };
+        let Some((x, y)) = self.mouse.position else {
+            return false;
+        };
+        if !x.is_finite() || !y.is_finite() || x > f64::from(f32::MAX) || y > f64::from(f32::MAX) {
+            return false;
+        }
+
+        let uri = worker.with_termio(|termio| {
+            let terminal = termio.terminal();
+            let geometry = self.mouse_report_geometry(terminal)?;
+            let pos = mouse_encode::Position {
+                x: x as f32,
+                y: y as f32,
+            };
+            if geometry.pos_out_of_viewport(pos) {
+                return None;
+            }
+            let cell = geometry.pos_to_cell(pos);
+            let ref_ = terminal.grid_ref(TerminalPointTag::Viewport, cell)?;
+            match ref_.hyperlink_uri() {
+                Ok(uri) if !uri.is_empty() => Some(uri),
+                _ => None,
+            }
+        });
+        let Some(uri) = uri else {
+            return false;
+        };
+
+        let Ok(mime) = CString::new("text/plain") else {
+            return false;
+        };
+        let Ok(data) = CString::new(uri) else {
+            return false;
+        };
+        let content = RoasttyClipboardContent {
+            mime: mime.as_ptr(),
+            data: data.as_ptr(),
+        };
+        unsafe {
+            write_clipboard(
+                app.runtime.userdata,
+                ROASTTY_CLIPBOARD_STANDARD,
+                ptr::addr_of!(content),
+                1,
+                false,
+            );
+        }
+        true
+    }
+
     fn search_selection(&mut self) -> bool {
         if self.app.is_null() {
             return false;
@@ -3007,6 +3070,7 @@ enum ParsedBindingAction {
     AppRuntimeAction(c_int, [usize; 8]),
     StartSearch,
     SearchSelection,
+    CopyUrlToClipboard,
     CloseSurface,
     Text(Vec<u8>),
     Csi(Vec<u8>),
@@ -3435,6 +3499,12 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
         b"copy_to_clipboard" => Some(ParsedBindingAction::CopyToClipboard(
             copy_to_clipboard_format_from_str(parameter)?,
         )),
+        b"copy_url_to_clipboard" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::CopyUrlToClipboard)
+        }
         b"copy_title_to_clipboard" => {
             if parameter.is_some() {
                 return None;
@@ -11643,6 +11713,12 @@ pub extern "C" fn roastty_surface_binding_action(
             }
             surface.copy_to_clipboard(format)
         }
+        ParsedBindingAction::CopyUrlToClipboard => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.copy_url_to_clipboard()
+        }
         ParsedBindingAction::PasteFromClipboard(clipboard) => {
             if surface.app.is_null() {
                 return false;
@@ -13894,6 +13970,8 @@ mod tests {
             "copy_to_clipboard: plain",
             "copy_to_clipboard:plain ",
             "copy_to_clipboard:rtf",
+            "copy_url_to_clipboard:",
+            "copy_url_to_clipboard:now",
             "copy_title_to_clipboard:",
             "copy_title_to_clipboard:now",
             "paste_from_clipboard:",
@@ -15109,6 +15187,108 @@ mod tests {
                         ("text/plain".to_owned(), expected_plain),
                         ("text/html".to_owned(), expected_html),
                     ],
+                    confirm: false,
+                }]
+            );
+        }
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    fn write_surface_worker_osc8_link(surface: RoasttySurface) {
+        let surface_ref = surface_from_handle(surface).unwrap();
+        let worker = surface_ref.termio_worker.as_ref().unwrap();
+        worker.with_termio_mut(|termio| {
+            termio.terminal_mut().reset();
+            termio
+                .terminal_mut()
+                .next_slice(b"\x1b]8;;https://example.test/path?q=1\x1b\\LINK\x1b]8;;\x1b\\ plain")
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn surface_binding_action_copy_url_to_clipboard_false_paths() {
+        let app = new_test_app_with_clipboard_write(0xC017);
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "copy_url_to_clipboard"));
+        assert!(!binding_action(surface, "copy_url_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "copy_url_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+        roastty_surface_free(surface);
+
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_clipboard_write(0xC017);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        write_surface_worker_osc8_link(surface);
+
+        assert!(!binding_action(surface, "copy_url_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+
+        roastty_surface_mouse_pos(surface, 500.0, 5.0, ROASTTY_MODS_NONE);
+        assert!(!binding_action(surface, "copy_url_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+
+        roastty_surface_mouse_pos(surface, 65.0, 5.0, ROASTTY_MODS_NONE);
+        assert!(!binding_action(surface, "copy_url_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+
+        let app = new_test_app();
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        write_surface_worker_osc8_link(surface);
+        roastty_surface_mouse_pos(surface, 5.0, 5.0, ROASTTY_MODS_NONE);
+
+        reset_clipboard_write_records();
+        assert!(!binding_action(surface, "copy_url_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_copy_url_to_clipboard_writes_osc8_uri() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_clipboard_write(0xC017);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        write_surface_worker_osc8_link(surface);
+
+        for x in [5.0, 15.0, 25.0, 35.0] {
+            reset_clipboard_write_records();
+            roastty_surface_mouse_pos(surface, x, 5.0, ROASTTY_MODS_NONE);
+
+            assert!(binding_action(surface, "copy_url_to_clipboard"));
+
+            assert_eq!(
+                clipboard_write_records(),
+                vec![ClipboardWriteRecord {
+                    userdata: 0xC017,
+                    clipboard: ROASTTY_CLIPBOARD_STANDARD,
+                    contents: vec![(
+                        "text/plain".to_owned(),
+                        "https://example.test/path?q=1".to_owned(),
+                    )],
                     confirm: false,
                 }]
             );
