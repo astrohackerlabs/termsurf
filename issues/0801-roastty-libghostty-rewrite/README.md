@@ -1998,7 +1998,7 @@ are past the correctness-critical foundation.
 - [Experiment 741: Binding Action Write File Open](741-binding-action-write-file-open.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 742: Config Default Trigger Foundation](742-config-default-trigger-foundation.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

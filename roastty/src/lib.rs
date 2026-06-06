@@ -4475,6 +4475,26 @@ fn empty_trigger() -> RoasttyInputTrigger {
     }
 }
 
+fn default_config_trigger(action: &[u8]) -> RoasttyInputTrigger {
+    match action {
+        b"open_config" => RoasttyInputTrigger {
+            tag: ROASTTY_TRIGGER_UNICODE,
+            key: RoasttyInputTriggerKey {
+                unicode: u32::from(b','),
+            },
+            mods: ROASTTY_MODS_SUPER,
+        },
+        b"reload_config" => RoasttyInputTrigger {
+            tag: ROASTTY_TRIGGER_UNICODE,
+            key: RoasttyInputTriggerKey {
+                unicode: u32::from(b','),
+            },
+            mods: ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+        },
+        _ => empty_trigger(),
+    }
+}
+
 fn empty_text() -> RoasttyText {
     RoasttyText {
         tl_px_x: -1.0,
@@ -7733,8 +7753,8 @@ pub extern "C" fn roastty_config_trigger(
     if config_from_handle(config).is_none() || action.is_null() {
         return empty_trigger();
     }
-    let _action = unsafe { slice::from_raw_parts(action.cast::<u8>(), action_len) };
-    empty_trigger()
+    let action = unsafe { slice::from_raw_parts(action.cast::<u8>(), action_len) };
+    default_config_trigger(action)
 }
 
 #[no_mangle]
@@ -13587,8 +13607,44 @@ mod tests {
         assert_eq!(trigger.mods, ROASTTY_MODS_NONE);
     }
 
+    fn assert_empty_config_trigger(trigger: RoasttyInputTrigger) {
+        assert_eq!(trigger.tag, ROASTTY_TRIGGER_PHYSICAL);
+        assert_eq!(
+            unsafe { trigger.key.physical },
+            key::Key::Unidentified as c_int
+        );
+        assert_eq!(trigger.mods, ROASTTY_MODS_NONE);
+    }
+
+    fn assert_unicode_config_trigger(trigger: RoasttyInputTrigger, codepoint: u32, mods: c_int) {
+        assert_eq!(trigger.tag, ROASTTY_TRIGGER_UNICODE);
+        assert_eq!(unsafe { trigger.key.unicode }, codepoint);
+        assert_eq!(trigger.mods, mods);
+    }
+
     #[test]
-    fn config_trigger_returns_empty_trigger_until_keybind_parser_exists() {
+    fn config_trigger_returns_default_open_reload_triggers() {
+        let config = roastty_config_new();
+
+        let open_config = CString::new("open_config").unwrap();
+        assert_unicode_config_trigger(
+            roastty_config_trigger(config, open_config.as_ptr(), 11),
+            u32::from(b','),
+            ROASTTY_MODS_SUPER,
+        );
+
+        let reload_config = CString::new("reload_config").unwrap();
+        assert_unicode_config_trigger(
+            roastty_config_trigger(config, reload_config.as_ptr(), 13),
+            u32::from(b','),
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+        );
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_trigger_returns_empty_trigger_for_missing_malformed_and_performable_actions() {
         let config = roastty_config_new();
         let action = CString::new("new_window").unwrap();
 
@@ -13598,12 +13654,23 @@ mod tests {
             roastty_config_trigger(config, action.as_ptr(), 10),
             roastty_config_trigger(config, action.as_ptr(), 0),
         ] {
-            assert_eq!(trigger.tag, ROASTTY_TRIGGER_PHYSICAL);
-            assert_eq!(
-                unsafe { trigger.key.physical },
-                key::Key::Unidentified as c_int
-            );
-            assert_eq!(trigger.mods, ROASTTY_MODS_NONE);
+            assert_empty_config_trigger(trigger);
+        }
+
+        for action in [
+            "unknown_action",
+            "open_config:",
+            "open_config:now",
+            "reload_config:",
+            "reload_config:now",
+            "adjust_selection:left",
+        ] {
+            let action = CString::new(action).unwrap();
+            assert_empty_config_trigger(roastty_config_trigger(
+                config,
+                action.as_ptr(),
+                action.as_bytes().len(),
+            ));
         }
 
         roastty_config_free(config);

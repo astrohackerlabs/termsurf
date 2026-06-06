@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 742: Config Default Trigger Foundation
@@ -89,3 +94,61 @@ Experiment 741 has both required commits:
 The remaining workflow requirement from the review was to record
 `[review.design]`, this review section, and the README tuple before the
 Experiment 742 plan commit; those records are now present.
+
+## Result
+
+**Result:** Pass
+
+Experiment 742 moved `roastty_config_trigger` from a pure empty-trigger stub to
+a small default-trigger lookup matching upstream Ghostty's C API regression
+slice. `open_config` now returns a unicode comma trigger with
+`ROASTTY_MODS_SUPER`, and `reload_config` returns unicode comma with
+`ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER`. This preserves Roastty's macOS-only
+default modifier behavior.
+
+Missing inputs, empty action strings, unknown action names, malformed
+parameterized forms (`open_config:`, `open_config:now`, `reload_config:`,
+`reload_config:now`), and performable `adjust_selection:left` continue to return
+the empty physical-unidentified trigger. `roastty_config_key_is_binding` remains
+unchanged and still returns `false` until real keybind storage exists.
+
+The C ABI harness now checks the visible default triggers and the malformed /
+performable empty-trigger fallbacks at the public C boundary.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty config_trigger -- --nocapture --test-threads=1`
+  - 2 passed
+- `cargo test -p roastty config_key_is_binding -- --nocapture --test-threads=1`
+  - 1 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+  - 129 passed
+- `cargo test -p roastty --test abi_harness`
+  - 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Roastty now exposes the first upstream-compatible default config triggers
+through the C ABI. The next keybind experiments can build from this foundation
+toward default trigger tables, user keybind parsing/storage, and real key-event
+lookup without changing the empty-trigger ABI shape.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 742 implementation and result diff. It
+found no implementation blockers.
+
+The review confirmed that exact `open_config` returns a unicode comma trigger
+with `ROASTTY_MODS_SUPER`, exact `reload_config` returns a unicode comma trigger
+with `ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER`, and null, missing, empty,
+unknown, malformed, and performable actions return the empty
+physical-unidentified trigger. It also confirmed that the ABI harness and Rust
+tests cover the new visible defaults plus parameterized malformed forms, and
+that `roastty_config_key_is_binding` remains unchanged as planned.
+
+The review's only blocker was missing workflow metadata: `[review.result]`, this
+completion-review section, and the README tuple update. Those records are now
+present.
