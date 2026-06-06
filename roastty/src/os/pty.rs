@@ -1,7 +1,11 @@
 //! POSIX PTY ownership and sizing.
 
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::ptr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +30,7 @@ impl PtySize {
 #[derive(Debug)]
 pub(crate) struct Pty {
     master: OwnedFd,
-    slave: OwnedFd,
+    slave: Option<OwnedFd>,
 }
 
 impl Pty {
@@ -54,7 +58,10 @@ impl Pty {
         set_cloexec(master.as_raw_fd())?;
         set_cloexec(slave.as_raw_fd())?;
 
-        Ok(Self { master, slave })
+        Ok(Self {
+            master,
+            slave: Some(slave),
+        })
     }
 
     pub(crate) fn set_size(&self, size: PtySize) -> io::Result<()> {
@@ -69,8 +76,113 @@ impl Pty {
         self.master.as_raw_fd()
     }
 
-    pub(crate) fn slave_fd(&self) -> RawFd {
-        self.slave.as_raw_fd()
+    pub(crate) fn slave_fd(&self) -> Option<RawFd> {
+        self.slave.as_ref().map(AsRawFd::as_raw_fd)
+    }
+
+    pub(crate) fn close_slave(&mut self) {
+        self.slave = None;
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PtyCommand {
+    program: OsString,
+    args: Vec<OsString>,
+    cwd: Option<PathBuf>,
+    size: PtySize,
+}
+
+impl PtyCommand {
+    pub(crate) fn new(program: impl Into<OsString>, size: PtySize) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            cwd: None,
+            size,
+        }
+    }
+
+    pub(crate) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.args.push(arg.as_ref().to_os_string());
+        self
+    }
+
+    pub(crate) fn cwd(&mut self, cwd: impl AsRef<Path>) -> &mut Self {
+        self.cwd = Some(cwd.as_ref().to_path_buf());
+        self
+    }
+
+    pub(crate) fn spawn(&self) -> io::Result<PtyChild> {
+        let mut pty = Pty::open(self.size)?;
+        let slave_fd = pty
+            .slave_fd()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "pty slave is closed"))?;
+
+        let stdin = dup_owned(slave_fd)?;
+        let stdout = dup_owned(slave_fd)?;
+        let stderr = dup_owned(slave_fd)?;
+
+        let mut command = Command::new(&self.program);
+        command.args(&self.args);
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
+        command.stdin(Stdio::from(stdin));
+        command.stdout(Stdio::from(stdout));
+        command.stderr(Stdio::from(stderr));
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = command.spawn()?;
+        pty.close_slave();
+        Ok(PtyChild { pty, child })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PtyChild {
+    pty: Pty,
+    child: Child,
+}
+
+impl PtyChild {
+    pub(crate) fn master_fd(&self) -> RawFd {
+        self.pty.master_fd()
+    }
+
+    pub(crate) fn slave_fd(&self) -> Option<RawFd> {
+        self.pty.slave_fd()
+    }
+
+    pub(crate) fn child_id(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub(crate) fn wait(&mut self) -> io::Result<ExitStatus> {
+        self.child.wait()
+    }
+}
+
+impl Drop for PtyChild {
+    fn drop(&mut self) {
+        match self.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+            Err(_) => {}
+        }
     }
 }
 
@@ -83,6 +195,14 @@ fn set_cloexec(fd: RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+fn dup_owned(fd: RawFd) -> io::Result<OwnedFd> {
+    let duplicated = unsafe { libc::dup(fd) };
+    if duplicated < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
 }
 
 #[cfg(test)]
@@ -122,6 +242,28 @@ mod tests {
         flags & libc::FD_CLOEXEC != 0
     }
 
+    fn read_master_with_timeout(fd: RawFd, len: usize) -> io::Result<Vec<u8>> {
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut pollfd, 1, 500) };
+        if ready < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        assert_eq!(ready, 1, "pty master did not become readable");
+        assert_ne!(pollfd.revents & (libc::POLLIN | libc::POLLHUP), 0);
+
+        let mut buf = vec![0u8; len];
+        let got = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if got < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buf.truncate(got as usize);
+        Ok(buf)
+    }
+
     struct RawModeGuard {
         fd: RawFd,
         original: libc::termios,
@@ -157,8 +299,8 @@ mod tests {
         let pty = Pty::open(test_size()).expect("open pty");
 
         assert!(pty.master_fd() >= 0);
-        assert!(pty.slave_fd() >= 0);
-        assert_ne!(pty.master_fd(), pty.slave_fd());
+        assert!(pty.slave_fd().unwrap() >= 0);
+        assert_ne!(pty.master_fd(), pty.slave_fd().unwrap());
     }
 
     #[test]
@@ -166,7 +308,7 @@ mod tests {
         let pty = Pty::open(test_size()).expect("open pty");
 
         assert!(fd_cloexec(pty.master_fd()));
-        assert!(fd_cloexec(pty.slave_fd()));
+        assert!(fd_cloexec(pty.slave_fd().unwrap()));
     }
 
     #[test]
@@ -197,12 +339,12 @@ mod tests {
     #[test]
     fn pty_transfers_bytes_without_blocking() {
         let pty = Pty::open(test_size()).expect("open pty");
-        let _raw_mode = RawModeGuard::new(pty.slave_fd()).expect("raw mode");
+        let _raw_mode = RawModeGuard::new(pty.slave_fd().unwrap()).expect("raw mode");
         let msg = b"hi";
 
         let written = unsafe {
             libc::write(
-                pty.slave_fd(),
+                pty.slave_fd().unwrap(),
                 msg.as_ptr() as *const libc::c_void,
                 msg.len(),
             )
@@ -228,5 +370,48 @@ mod tests {
         };
         assert_eq!(got, 2);
         assert_eq!(&buf, msg);
+    }
+
+    #[test]
+    fn pty_command_reads_child_output_from_master() {
+        let mut command = PtyCommand::new("/bin/sh", test_size());
+        command.arg("-c").arg("printf hello");
+
+        let mut child = command.spawn().expect("spawn child");
+        assert!(child.slave_fd().is_none());
+
+        let output = read_master_with_timeout(child.master_fd(), 5).expect("read master");
+        assert_eq!(output, b"hello");
+        assert!(child.wait().expect("wait child").success());
+    }
+
+    #[test]
+    fn pty_command_attaches_stdio_to_tty() {
+        let mut command = PtyCommand::new("/bin/sh", test_size());
+        command
+            .arg("-c")
+            .arg("test -t 0 && test -t 1 && test -t 2 && printf tty");
+
+        let mut child = command.spawn().expect("spawn child");
+
+        let output = read_master_with_timeout(child.master_fd(), 3).expect("read master");
+        assert_eq!(output, b"tty");
+        assert!(child.wait().expect("wait child").success());
+    }
+
+    #[test]
+    fn pty_child_drop_kills_and_reaps_running_child() {
+        let pid = {
+            let mut command = PtyCommand::new("/bin/sleep", test_size());
+            command.arg("5");
+            let child = command.spawn().expect("spawn child");
+            let pid = child.child_id();
+            drop(child);
+            pid
+        };
+
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_eq!(result, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 }

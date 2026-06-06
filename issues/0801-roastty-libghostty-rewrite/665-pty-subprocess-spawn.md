@@ -104,3 +104,43 @@ and performs only `setsid`/`ioctl` error conversion, and tests that poll with a
 timeout, handle readable/hangup readiness, wait for successful child exit, and
 cover drop cleanup. Codex re-reviewed the amended design and approved it for
 plan commit and implementation with no remaining blockers.
+
+## Result
+
+**Result:** Pass.
+
+`Pty` now models post-spawn slave ownership with `Option<OwnedFd>` and optional
+`slave_fd()` access. `PtyCommand` opens a PTY, duplicates the slave for child
+stdin/stdout/stderr, runs a pre-exec closure that calls `setsid()` and
+`TIOCSCTTY`, spawns the configured command, and closes the parent-owned slave
+after successful spawn. `PtyChild` owns the PTY master and child process,
+provides `wait`, and performs best-effort kill/wait cleanup on drop.
+
+Focused tests verify existing PTY open/resize behavior plus child output through
+the master fd, stdio TTY attachment, parent-side slave closure after spawn, and
+drop cleanup for a long-running child.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty os::pty` — 8 passed, 0 failed
+
+## Conclusion
+
+Roastty can now spawn a subprocess attached to a PTY with controlling-terminal
+setup and safe parent-side descriptor ownership. The remaining termio work is
+the persistent nonblocking read/write loop, resize message flow, process wait
+integration, and higher-level App/surface wiring.
+
+## Completion Review
+
+**Result:** Approved after test fix.
+
+Codex found no fd ownership, stale-fd, or pre-exec implementation bugs. It did
+find one test issue: the drop-cleanup test originally spawned
+`/bin/sh -c "sleep 5"`, which could leave a grandchild `sleep` process behind
+when `PtyChild::Drop` killed and waited only the immediate shell child.
+
+The test now spawns `/bin/sleep 5` directly, so the drop cleanup test covers the
+immediate child that `PtyChild` owns. Codex re-reviewed the corrected diff and
+approved it for result commit with no remaining findings.
