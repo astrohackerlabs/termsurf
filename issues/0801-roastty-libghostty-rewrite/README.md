@@ -2013,6 +2013,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 749: Config CLI Keybind Triggers](749-config-cli-keybind-triggers.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 750: Config CLI Keybind Is Binding](750-config-cli-keybind-is-binding.md)
+  — **Designed** · Codex/Codex/Codex
 
 ## Non-Goals
 
