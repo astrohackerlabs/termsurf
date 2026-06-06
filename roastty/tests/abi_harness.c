@@ -4295,7 +4295,9 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, NULL, 1));
   assert(!roastty_surface_binding_action(surface, NULL, 0));
   assert(!roastty_surface_binding_action(surface, "unknown", 7));
+  assert(!roastty_surface_binding_action(surface, "close_surface:now", 17));
   assert(!roastty_surface_binding_action(surface, "new_split:right", 15));
+  assert(roastty_surface_binding_action(surface, "close_surface", 13));
   roastty_surface_preedit(surface, NULL, 3);
   roastty_surface_preedit(surface, NULL, 0);
   roastty_text_s read_text = {0};

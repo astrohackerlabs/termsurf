@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 703: Binding Action Close Surface
@@ -99,3 +104,55 @@ optional runtime callback behavior, so returning `true` for an attached parsed
 upstream action-performed semantics. The only initial findings were workflow
 items: record this design-review section and update the README provenance tuple
 before the plan commit.
+
+## Result
+
+**Result:** Pass
+
+Implemented `close_surface` support in the binding-action ABI:
+
+- Introduced an internal parsed binding-action enum so parsed strings can route
+  either to runtime action callback forwarding or to surface close requests.
+- Extended `parse_binding_action` to accept `close_surface` with no parameter.
+- Kept `close_surface:*` malformed and unsupported, matching upstream void
+  action parsing.
+- Made `roastty_surface_binding_action(surface, "close_surface", 13)` call
+  `Surface::request_close` and return `true` for attached surfaces.
+- Preserved false return behavior for null and detached surfaces.
+- Preserved split binding-action callback return semantics.
+- Added Rust tests for close callback invocation, confirm-close policy,
+  no-callback true behavior, null/detached false behavior, and malformed
+  `close_surface:*`.
+- Added C ABI harness smoke coverage for `close_surface` and
+  `close_surface:now`.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty binding_action -- --nocapture`
+- `cargo test -p roastty request_close -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Roastty binding-action invocation now covers both split actions and
+`close_surface`, using existing surface close policy and runtime callback
+plumbing. Remaining binding-action parity still requires complete
+`Binding.Action` parsing, app-scoped actions, terminal text/CSI/ESC actions,
+clipboard actions, close tab/window actions, key tables, and frontend
+split/tab/window mutation.
+
+## Completion Review
+
+Codex reviewed the staged completed Experiment 703 result. The review found no
+implementation blockers: `parse_binding_action` now accepts only parameterless
+`close_surface`, malformed `close_surface:*` is rejected, the dispatch path
+calls `Surface::request_close`, attached surfaces return `true`, detached
+surfaces return `false`, and split action callback-return behavior is preserved.
+
+The review accepted the Rust tests and C harness coverage for this slice. It
+initially blocked the result commit only because the README provenance tuple
+still showed the result review as pending. This section and the README tuple
+update resolve that workflow finding.

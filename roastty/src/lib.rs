@@ -2393,7 +2393,12 @@ fn resize_split_from_str(value: &str) -> Option<c_int> {
     }
 }
 
-fn parse_binding_action(surface: &Surface, action: &str) -> Option<(c_int, [usize; 8])> {
+enum ParsedBindingAction {
+    RuntimeAction(c_int, [usize; 8]),
+    CloseSurface,
+}
+
+fn parse_binding_action(surface: &Surface, action: &str) -> Option<ParsedBindingAction> {
     let (name, parameter) = action
         .split_once(':')
         .map_or((action, None), |(name, parameter)| (name, Some(parameter)));
@@ -2409,13 +2414,19 @@ fn parse_binding_action(surface: &Surface, action: &str) -> Option<(c_int, [usiz
             };
             let mut storage = [0usize; 8];
             storage[0] = direction as usize;
-            Some((ROASTTY_ACTION_NEW_SPLIT, storage))
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_NEW_SPLIT,
+                storage,
+            ))
         }
         "goto_split" => {
             let direction = goto_split_from_str(parameter?)?;
             let mut storage = [0usize; 8];
             storage[0] = direction as usize;
-            Some((ROASTTY_ACTION_GOTO_SPLIT, storage))
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_GOTO_SPLIT,
+                storage,
+            ))
         }
         "resize_split" => {
             let mut parts = parameter?.split(',');
@@ -2427,13 +2438,25 @@ fn parse_binding_action(surface: &Surface, action: &str) -> Option<(c_int, [usiz
             let mut storage = [0usize; 8];
             storage[0] = usize::from(amount);
             storage[1] = direction as usize;
-            Some((ROASTTY_ACTION_RESIZE_SPLIT, storage))
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_RESIZE_SPLIT,
+                storage,
+            ))
         }
         "equalize_splits" => {
             if parameter.is_some() {
                 return None;
             }
-            Some((ROASTTY_ACTION_EQUALIZE_SPLITS, [0usize; 8]))
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_EQUALIZE_SPLITS,
+                [0usize; 8],
+            ))
+        }
+        "close_surface" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::CloseSurface)
         }
         _ => None,
     }
@@ -10324,10 +10347,21 @@ pub extern "C" fn roastty_surface_binding_action(
     let Ok(action) = std::str::from_utf8(action_bytes) else {
         return false;
     };
-    let Some((tag, storage)) = parse_binding_action(surface, action) else {
+    let Some(action) = parse_binding_action(surface, action) else {
         return false;
     };
-    surface.perform_action_result(tag, storage)
+    match action {
+        ParsedBindingAction::RuntimeAction(tag, storage) => {
+            surface.perform_action_result(tag, storage)
+        }
+        ParsedBindingAction::CloseSurface => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.request_close();
+            true
+        }
+    }
 }
 
 #[cfg(test)]
@@ -12129,6 +12163,7 @@ mod tests {
             "resize_split:up,four",
             "resize_split:forward,10",
             "equalize_splits:now",
+            "close_surface:now",
         ] {
             assert!(!binding_action(surface, action), "{action}");
         }
@@ -12199,6 +12234,82 @@ mod tests {
 
         roastty_surface_free(surface);
         roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_close_surface_invokes_runtime_callback() {
+        let _guard = CLOSE_LOCK.lock().unwrap();
+        let app = new_test_app_with_close_surface();
+        let mut config = roastty_surface_config_new();
+        config.userdata = 0xC105E as *mut c_void;
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert!(binding_action(surface, "close_surface"));
+
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(CLOSE_USERDATA.load(Ordering::SeqCst), 0xC105E);
+        assert!(!CLOSE_NEEDS_CONFIRM.load(Ordering::SeqCst));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_close_surface_passes_confirm_policy() {
+        let _guard = CLOSE_LOCK.lock().unwrap();
+        let config = new_test_config_with_confirm_close(config::ConfirmCloseSurface::Always);
+        let runtime = RoasttyRuntimeConfig {
+            userdata: ptr::null_mut(),
+            supports_selection_clipboard: false,
+            wakeup_cb: None,
+            action_cb: None,
+            read_clipboard_cb: None,
+            confirm_read_clipboard_cb: None,
+            write_clipboard_cb: None,
+            close_surface_cb: Some(close_surface_cb),
+        };
+        CLOSE_COUNT.store(0, Ordering::SeqCst);
+        CLOSE_USERDATA.store(0, Ordering::SeqCst);
+        CLOSE_NEEDS_CONFIRM.store(false, Ordering::SeqCst);
+        let app = roastty_app_new(&runtime, config);
+        let surface = new_test_surface(app);
+
+        assert!(binding_action(surface, "close_surface"));
+
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 1);
+        assert!(CLOSE_NEEDS_CONFIRM.load(Ordering::SeqCst));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_binding_action_close_surface_true_without_runtime_callback() {
+        let _guard = CLOSE_LOCK.lock().unwrap();
+        CLOSE_COUNT.store(0, Ordering::SeqCst);
+        CLOSE_USERDATA.store(0, Ordering::SeqCst);
+        CLOSE_NEEDS_CONFIRM.store(false, Ordering::SeqCst);
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(binding_action(surface, "close_surface"));
+
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 0);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_close_surface_false_for_null_and_detached() {
+        let _guard = CLOSE_LOCK.lock().unwrap();
+        let app = new_test_app_with_close_surface();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "close_surface"));
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "close_surface"));
+
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 0);
+        roastty_surface_free(surface);
     }
 
     #[test]
