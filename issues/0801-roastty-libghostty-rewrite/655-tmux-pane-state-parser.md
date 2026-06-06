@@ -53,3 +53,44 @@ as a no-op is coherent as long as command-queue continuation is preserved.
 The review suggested two additional tests: assert `cursor_colour` in the
 representative parser fixture and add a blank-only output case. Both suggestions
 were added to the design.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now has a typed `TmuxPaneState` parser for `PaneState`/`list-panes`
+output. The parser uses the existing `LIST_PANES_VARIABLES` order and
+`parse_output_values` helper, trims blank lines and carriage returns, preserves
+text fields such as cursor shape, cursor colour, and pane tab stops, and fails
+the full parse if any non-empty line is malformed.
+
+Viewer dispatch intentionally still treats `TmuxCommand::PaneState` as a no-op
+for terminal state application. The new dispatch test locks down the intended
+intermediate behavior: the command output is consumed, the next queued command
+is emitted, and tracked pane terminal content is not mutated yet.
+
+Verification passed:
+
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/655-tmux-pane-state-parser.md`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `cargo test -p roastty terminal::tmux` — 114 passed, 0 failed
+- `git diff --check`
+
+## Conclusion
+
+Pane state output now has a tested typed parser. The next tmux experiment should
+route `TmuxCommand::PaneState` through this parser and apply a first safe subset
+of state to tracked pane terminals, likely cursor position and cursor visibility
+before broader mode, mouse, scroll-region, and tab-stop restoration.
+
+## Completion Review
+
+**Result:** Approved.
+
+Codex found no blocking or non-blocking issues. It confirmed `TmuxPaneState`
+covers every value in `LIST_PANES_VARIABLES`, `parse_pane_state` consumes fields
+in command-format order, full-output parsing trims blank lines and carriage
+returns consistently with upstream, malformed non-empty lines fail the parse,
+and viewer dispatch remains intentionally parser-only/no-op while preserving
+command queue continuation.

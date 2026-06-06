@@ -185,6 +185,36 @@ struct TmuxPaneSpec {
     height: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TmuxPaneState {
+    pane_id: usize,
+    cursor_x: usize,
+    cursor_y: usize,
+    cursor_flag: bool,
+    cursor_shape: String,
+    cursor_colour: String,
+    cursor_blinking: bool,
+    alternate_on: bool,
+    alternate_saved_x: usize,
+    alternate_saved_y: usize,
+    insert_flag: bool,
+    wrap_flag: bool,
+    keypad_flag: bool,
+    keypad_cursor_flag: bool,
+    origin_flag: bool,
+    mouse_all_flag: bool,
+    mouse_any_flag: bool,
+    mouse_button_flag: bool,
+    mouse_standard_flag: bool,
+    mouse_utf8_flag: bool,
+    mouse_sgr_flag: bool,
+    focus_flag: bool,
+    bracketed_paste: bool,
+    scroll_region_upper: usize,
+    scroll_region_lower: usize,
+    pane_tabs: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TmuxViewerState {
     StartupBlock,
@@ -1157,6 +1187,138 @@ fn parse_list_window(line: &str) -> Option<TmuxWindow> {
     })
 }
 
+fn parse_pane_states(content: &[u8]) -> Option<Vec<TmuxPaneState>> {
+    let content = std::str::from_utf8(content).ok()?;
+    let mut states = Vec::new();
+    for line in content.split('\n') {
+        let line = line.trim_matches([' ', '\t', '\r']);
+        if line.is_empty() {
+            continue;
+        }
+        states.push(parse_pane_state(line)?);
+    }
+    Some(states)
+}
+
+fn parse_pane_state(line: &str) -> Option<TmuxPaneState> {
+    let values = parse_output_values(LIST_PANES_VARIABLES, line, LIST_PANES_DELIMITER).ok()?;
+    if values.len() != LIST_PANES_VARIABLES.len() {
+        return None;
+    }
+
+    let mut values = values.into_iter();
+    let OutputValue::Number(pane_id) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Number(cursor_x) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Number(cursor_y) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(cursor_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Text(cursor_shape) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Text(cursor_colour) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(cursor_blinking) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(alternate_on) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Number(alternate_saved_x) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Number(alternate_saved_y) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(insert_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(wrap_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(keypad_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(keypad_cursor_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(origin_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(mouse_all_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(mouse_any_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(mouse_button_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(mouse_standard_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(mouse_utf8_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(mouse_sgr_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(focus_flag) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Bool(bracketed_paste) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Number(scroll_region_upper) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Number(scroll_region_lower) = values.next()? else {
+        return None;
+    };
+    let OutputValue::Text(pane_tabs) = values.next()? else {
+        return None;
+    };
+    if values.next().is_some() {
+        return None;
+    }
+
+    Some(TmuxPaneState {
+        pane_id,
+        cursor_x,
+        cursor_y,
+        cursor_flag,
+        cursor_shape,
+        cursor_colour,
+        cursor_blinking,
+        alternate_on,
+        alternate_saved_x,
+        alternate_saved_y,
+        insert_flag,
+        wrap_flag,
+        keypad_flag,
+        keypad_cursor_flag,
+        origin_flag,
+        mouse_all_flag,
+        mouse_any_flag,
+        mouse_button_flag,
+        mouse_standard_flag,
+        mouse_utf8_flag,
+        mouse_sgr_flag,
+        focus_flag,
+        bracketed_paste,
+        scroll_region_upper,
+        scroll_region_lower,
+        pane_tabs,
+    })
+}
+
 fn collect_layout_panes(layout: &Layout, panes: &mut Vec<TmuxPaneSpec>) {
     match &layout.content {
         LayoutContent::Pane(id) => {
@@ -1770,6 +1932,72 @@ mod tests {
                 OutputValue::Number(1),
                 OutputValue::Text(String::new())
             ])
+        );
+    }
+
+    #[test]
+    fn tmux_parse_pane_state_representative_line() {
+        assert_eq!(
+            parse_pane_state(
+                "%42;3;4;1;block;colour255;0;1;5;6;1;1;0;1;0;1;0;1;0;1;1;0;1;2;20;0,4,8"
+            ),
+            Some(TmuxPaneState {
+                pane_id: 42,
+                cursor_x: 3,
+                cursor_y: 4,
+                cursor_flag: true,
+                cursor_shape: "block".to_owned(),
+                cursor_colour: "colour255".to_owned(),
+                cursor_blinking: false,
+                alternate_on: true,
+                alternate_saved_x: 5,
+                alternate_saved_y: 6,
+                insert_flag: true,
+                wrap_flag: true,
+                keypad_flag: false,
+                keypad_cursor_flag: true,
+                origin_flag: false,
+                mouse_all_flag: true,
+                mouse_any_flag: false,
+                mouse_button_flag: true,
+                mouse_standard_flag: false,
+                mouse_utf8_flag: true,
+                mouse_sgr_flag: true,
+                focus_flag: false,
+                bracketed_paste: true,
+                scroll_region_upper: 2,
+                scroll_region_lower: 20,
+                pane_tabs: "0,4,8".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn tmux_parse_pane_states_trims_blank_lines_and_carriage_returns() {
+        let output = b"\n\t\r\n %42;3;4;1;block;colour255;0;1;5;6;1;1;0;1;0;1;0;1;0;1;1;0;1;2;20;0,4,8\r\n%43;0;1;0;bar;default;1;0;0;0;0;1;1;0;1;0;1;0;1;0;0;1;0;0;23;\n";
+
+        let states = parse_pane_states(output).unwrap();
+
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[0].pane_id, 42);
+        assert_eq!(states[1].pane_id, 43);
+        assert_eq!(states[1].cursor_shape, "bar");
+        assert_eq!(states[1].cursor_colour, "default");
+        assert_eq!(states[1].pane_tabs, "");
+    }
+
+    #[test]
+    fn tmux_parse_pane_states_blank_only_is_empty() {
+        assert_eq!(parse_pane_states(b"\n \t\r\n"), Some(Vec::new()));
+    }
+
+    #[test]
+    fn tmux_parse_pane_states_malformed_line_fails_without_partial_success() {
+        assert_eq!(
+            parse_pane_states(
+                b"%42;3;4;1;block;colour255;0;1;5;6;1;1;0;1;0;1;0;1;0;1;1;0;1;2;20;0,4,8\nmalformed"
+            ),
+            None
         );
     }
 
@@ -2649,6 +2877,33 @@ mod tests {
         );
         assert_eq!(viewer.queue_len(), 0);
         assert_eq!(viewer.tmux_version(), "");
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_output_consumes_and_emits_next_without_applying() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneVisible(TmuxCapturePane {
+            id: 42,
+            screen_key: TmuxScreenKey::Primary,
+        }));
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(b"keep".to_vec())),
+            Vec::new()
+        );
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        viewer.queue_command_for_tests(TmuxCommand::User("next-command\n".to_owned()));
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                b"%42;3;4;1;block;colour255;0;1;5;6;1;1;0;1;0;1;0;1;0;1;1;0;1;2;20;0,4,8".to_vec()
+            )),
+            vec![TmuxViewerAction::Command("next-command\n".to_owned())]
+        );
+        assert_eq!(
+            viewer.pane_active_plain_for_tests(42, TmuxScreenKey::Primary),
+            Some("keep".to_owned())
+        );
     }
 
     #[test]
