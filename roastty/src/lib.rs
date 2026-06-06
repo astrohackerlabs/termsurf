@@ -1440,6 +1440,37 @@ impl Surface {
         }
     }
 
+    fn text(&mut self, text: &[u8]) {
+        if text.is_empty() || self.app.is_null() {
+            return;
+        }
+
+        let error = {
+            let Some(worker) = self.termio_worker.as_ref() else {
+                return;
+            };
+            let bracketed =
+                worker.with_termio(|termio| termio.terminal().bracketed_paste_enabled());
+            let mut data = text.to_vec();
+            let segments = paste::encode(&mut data, paste::PasteOptions { bracketed });
+            let mut error = None;
+            for segment in segments {
+                if segment.is_empty() {
+                    continue;
+                }
+                if let Err(err) = worker.queue_write(segment) {
+                    error = Some(format!("{err:?}"));
+                    break;
+                }
+            }
+            error
+        };
+
+        if let Some(error) = error {
+            self.apply_termio_event(termio::TermioWorkerEvent::Error(error));
+        }
+    }
+
     fn tick_termio(&mut self) {
         #[cfg(test)]
         while let Some(event) = self.test_termio_events.pop_front() {
@@ -8724,6 +8755,20 @@ pub extern "C" fn roastty_surface_set_color_scheme(surface: RoasttySurface, colo
 }
 
 #[no_mangle]
+pub extern "C" fn roastty_surface_text(surface: RoasttySurface, text: *const c_char, len: usize) {
+    if len == 0 {
+        return;
+    }
+    if text.is_null() {
+        return;
+    }
+    if let Some(surface) = surface_from_handle(surface) {
+        let bytes = unsafe { slice::from_raw_parts(text.cast::<u8>(), len) };
+        surface.text(bytes);
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn roastty_surface_request_close(surface: RoasttySurface) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.request_close();
@@ -9006,6 +9051,10 @@ mod tests {
 
     fn surface_snapshot_text_after_start(app: RoasttyApp, surface: RoasttySurface) -> String {
         assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        surface_snapshot_text(app, surface)
+    }
+
+    fn surface_snapshot_text(app: RoasttyApp, surface: RoasttySurface) -> String {
         wait_until(|| {
             roastty_app_tick(app);
             roastty_surface_needs_render(surface)
@@ -9280,6 +9329,142 @@ mod tests {
 
         assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 0);
         assert_eq!(roastty_surface_app(surface), ptr::null_mut());
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_text_null_inputs_are_noop() {
+        roastty_surface_text(ptr::null_mut(), b"hello".as_ptr().cast(), 5);
+
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        roastty_surface_text(surface, ptr::null(), 5);
+        roastty_surface_text(surface, ptr::null(), 0);
+
+        assert!(!roastty_surface_needs_render(surface));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_text_without_worker_is_noop() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        roastty_surface_text(surface, b"hello".as_ptr().cast(), 5);
+
+        assert!(!roastty_surface_needs_render(surface));
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .last_termio_error
+            .is_none());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_text_unbracketed_reaches_child_pty() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command =
+            CString::new("stty -echo; IFS= read line; printf 'out:%s' \"$line\"").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        roastty_surface_text(surface, b"hello\n".as_ptr().cast(), 6);
+        let text = surface_snapshot_text(app, surface);
+
+        assert!(text.contains("out:hello"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_text_unbracketed_maps_newline_to_carriage_return() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command =
+            CString::new("stty -echo; IFS= read line; printf 'line:%s' \"$line\"").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        roastty_surface_text(surface, b"hello\nignored".as_ptr().cast(), 13);
+        let text = surface_snapshot_text(app, surface);
+
+        assert!(text.contains("line:hello"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_text_replaces_unsafe_control_bytes_with_spaces() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command =
+            CString::new("stty -echo; IFS= read line; printf 'line:%s' \"$line\"").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        roastty_surface_text(surface, b"a\x03b\n".as_ptr().cast(), 4);
+        let text = surface_snapshot_text(app, surface);
+
+        assert!(text.contains("line:a b"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_text_bracketed_mode_wraps_paste_markers() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new(
+            "printf '\\033[?2004h'; stty -echo -icanon min 1 time 0; dd bs=1 count=18 2>/dev/null | cat -v",
+        )
+        .unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        wait_until(|| {
+            roastty_app_tick(app);
+            surface_from_handle(surface)
+                .unwrap()
+                .termio_worker
+                .as_ref()
+                .unwrap()
+                .with_termio(|termio| termio.terminal().bracketed_paste_enabled())
+        });
+        roastty_surface_text(surface, b"hello\n".as_ptr().cast(), 6);
+        let text = surface_snapshot_text(app, surface);
+
+        assert!(text.contains("^[[200~hello"), "{text:?}");
+        assert!(text.contains("^[[201~"), "{text:?}");
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_text_after_app_detach_is_noop() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("cat"));
+        roastty_app_free(app);
+
+        roastty_surface_text(surface, b"hello\n".as_ptr().cast(), 6);
+
+        assert_eq!(roastty_surface_app(surface), ptr::null_mut());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .is_none());
         roastty_surface_free(surface);
     }
 

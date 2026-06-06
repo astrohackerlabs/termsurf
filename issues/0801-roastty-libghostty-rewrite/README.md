@@ -271,7 +271,8 @@ Experiment 246).
 - [ ] `config_get` (12 defaults only) + keybind triggers — partial
 - [ ] App/surface key dispatch, surface draw/refresh, IME/text/preedit, surface
       mouse dispatch, selection read, splits — surface draw and refresh wakeups
-      done; the remaining dispatch/read/split paths missing
+      and surface text paste input done; key dispatch, IME/preedit, mouse
+      dispatch, selection read, and splits missing
 - [ ] Inspector ABI — missing
 
 ### App / Surface / IO — partial
@@ -1843,8 +1844,8 @@ are past the correctness-critical foundation.
   Codex/Codex/Codex
 - [Experiment 680: Surface Request Close](680-surface-request-close.md) —
   **Pass** · Codex/Codex/Codex
-- [Experiment 681: Surface Text Paste](681-surface-text-paste.md) — **Designed**
-  · Codex/Codex/-
+- [Experiment 681: Surface Text Paste](681-surface-text-paste.md) — **Pass** ·
+  Codex/Codex/Codex
 
 ## Non-Goals
 

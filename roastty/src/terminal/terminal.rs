@@ -2034,6 +2034,10 @@ impl Terminal {
         true
     }
 
+    pub(crate) fn bracketed_paste_enabled(&self) -> bool {
+        self.modes.get(modes::Mode::BracketedPaste)
+    }
+
     pub(crate) fn plain_screen(&self, unwrap: bool) -> String {
         TerminalFormatter::init(
             self,
