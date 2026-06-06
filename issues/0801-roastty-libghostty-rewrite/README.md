@@ -1759,6 +1759,7 @@ are past the correctness-critical foundation.
   Codex/Codex/Codex
 - [Experiment 649: Tmux Window Refresh Notifications](649-tmux-window-refresh-notifications.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 650: Tmux Layout Change](650-tmux-layout-change.md) — **Designed**
 
 ## Non-Goals
 
