@@ -205,7 +205,7 @@ Experiment 246).
       done; pane state alternate saved cursor application done; remaining pane
       state application, live output, terminal DCS bridge, PTY foundation, and
       PTY subprocess spawn, PTY child IO, and synchronous termio pump done;
-      background PTY loop and App/surface presentation missing
+      background PTY worker done; App/surface presentation missing
 - [x] `sys` (PNG-decode abstraction) — implemented and tested via C ABI
 
 ### Renderer — data + Metal primitives only; no live render loop
@@ -1804,7 +1804,7 @@ are past the correctness-critical foundation.
 - [Experiment 667: Synchronous Termio Pump](667-synchronous-termio-pump.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 668: Background Termio Worker](668-background-termio-worker.md) —
-  **Designed** · Codex/Codex/-
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

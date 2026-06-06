@@ -1098,6 +1098,17 @@ impl Terminal {
         self.effects.device_attributes = callback;
     }
 
+    pub(crate) fn has_effect_callbacks(&self) -> bool {
+        self.effects.write_pty.is_some()
+            || self.effects.bell.is_some()
+            || self.effects.enquiry.is_some()
+            || self.effects.xtversion.is_some()
+            || self.effects.title_changed.is_some()
+            || self.effects.size.is_some()
+            || self.effects.color_scheme.is_some()
+            || self.effects.device_attributes.is_some()
+    }
+
     pub(crate) fn color_effective(&self, kind: TerminalColorKind) -> Option<(u8, u8, u8)> {
         self.dynamic_color_by_kind(kind).get().map(rgb_tuple)
     }

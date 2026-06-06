@@ -3,6 +3,16 @@
 agent = "codex"
 model = "gpt-5"
 reasoning = "high"
+
+[review.design]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 668: Background Termio Worker
@@ -125,3 +135,70 @@ drop-without-shutdown cleanup test.
 - `cargo test -p roastty termio`
 - `cargo test -p roastty os::pty`
 - `git diff --check`
+
+## Result
+
+**Result:** Pass.
+
+Roastty now has an internal background `TermioWorker` that wraps the synchronous
+`Termio` pump. The worker drains queued write, PTY resize, and shutdown
+commands, calls `pump_once` with a bounded timeout, emits pump events for
+output, writes, pending writes, EOF, and child exit, and emits stringified error
+events before stopping on pump or resize failures.
+
+The worker handle exposes fallible command sends, event polling, read-only
+`with_termio` inspection, and idempotent `shutdown(&mut self)`. Command sends
+fail with `CommandDisconnected` after the worker has stopped. `Drop` calls
+shutdown so forgetting to stop the worker does not leave its thread or child
+process running.
+
+Because the current terminal type owns raw internal pointers, `Termio` has a
+narrow `unsafe impl Send` with the invariant that worker access is serialized
+through the worker mutex and Termio does not create aliases to the terminal's
+raw pointers. `TermioWorker::spawn` rejects terminals with installed callbacks,
+because callback userdata may be thread-affine and `Terminal::next_slice` can
+invoke callbacks from the worker thread.
+
+This experiment does not add a wake pipe. Write, resize, and shutdown command
+latency is bounded by `pump_timeout_ms`, matching the approved design for this
+internal slice. App/surface presentation, renderer wakeup, mailbox integration,
+and terminal grid resize remain out of scope.
+
+Focused tests cover worker-delivered child output, command-driven input/output,
+command-driven PTY resize, final pump event delivery before child exit, stopped
+command-send failures, callback-bearing terminal rejection, explicit shutdown
+idempotence, implicit `Drop` cleanup of a long-lived child, and the existing
+synchronous termio behavior. PTY subprocess tests continue to share the
+`os::pty::PTY_COMMAND_LOCK`.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `cargo test -p roastty termio` — 14 passed, 0 failed
+- `cargo test -p roastty os::pty` — 13 passed, 0 failed
+- `git diff --check`
+
+## Conclusion
+
+The PTY path now has both a synchronous pump and a persistent internal worker
+loop. The remaining user-visible gap is App/surface presentation: connecting
+worker events to application state, renderer wakeups, surface invalidation, and
+terminal snapshots suitable for the macOS frontend.
+
+## Completion Review
+
+**Result:** Approved after fixes.
+
+Codex found three result-commit issues. First, the initial
+`unsafe impl Send for Termio` did not account for terminal callbacks and
+callback userdata that may be thread-affine. Second, stopped-channel command
+send behavior was implemented but not tested. Third, the issue record still
+lacked result-review provenance.
+
+The worker now rejects callback-bearing terminals before moving `Termio` to the
+worker thread, and the `unsafe impl Send` comment documents that invariant.
+Tests now cover callback rejection and `CommandDisconnected` after worker stop.
+The experiment frontmatter and README agent tuple now record the result review.
+Codex re-reviewed the code fixes and confirmed the unsafe `Send` finding and
+stopped-channel test finding are resolved.
