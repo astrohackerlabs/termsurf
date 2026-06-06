@@ -1725,6 +1725,8 @@ are past the correctness-critical foundation.
   · Codex/Codex/Codex
 - [Experiment 638: OpenType Glyf Parser](638-opentype-glyf-parser.md) — **Pass**
   · Codex/Codex/Codex
+- [Experiment 639: Highlight And Hyperlink Audit](639-highlight-hyperlink-audit.md)
+  — **Designed**
 
 ## Non-Goals
 
