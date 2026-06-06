@@ -192,7 +192,9 @@ Experiment 246).
       `shape_run_options`, and C ABI scalar/row/cell snapshots exist; full
       upstream `terminal/render.zig::RenderState` dirty/cache/highlight state is
       missing
-- [ ] Scrollback `search` + `StringMap` — missing (needs `oniguruma`)
+- [x] Scrollback `search` + `StringMap` — terminal-core search, Search thread,
+      and StringMap complete using Rust `regex` byte matching instead of
+      Oniguruma
 - [ ] `tmux` control mode — missing
 - [x] `sys` (PNG-decode abstraction) — implemented and tested via C ABI
 
@@ -295,7 +297,9 @@ Out of scope / tooling: `build/`, `benchmark/`, `extra/`, `simd/`, `stb/`,
 - [ ] `libxev` (event loop) — not started
 - [ ] `zf` (fuzzy match) — not started
 - [ ] `wuffs` / `libpng` / `zlib` (image decode + inflate) — not started
-- [ ] `oniguruma` (regex) — not started (also gates terminal `search`)
+- [ ] `oniguruma` (regex) — not ported; terminal-core `search`/`StringMap` uses
+      Rust `regex`, but Surface link/search UI regex integration still needs a
+      broader decision
 - [ ] `simdutf` (UTF-8 validation/transcoding) — not started
 - [ ] `highway` (SIMD) — not started
 - [ ] `sentry` (crash reporting) — not started
@@ -1736,7 +1740,7 @@ are past the correctness-critical foundation.
 - [Experiment 640: Terminal Render And Formatter Audit](640-terminal-render-formatter-audit.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 641: Search And StringMap Audit](641-search-stringmap-audit.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

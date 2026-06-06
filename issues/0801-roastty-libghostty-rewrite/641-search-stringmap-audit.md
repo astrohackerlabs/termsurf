@@ -102,3 +102,72 @@ Rust `regex` is a deliberate terminal-core substitution for Oniguruma, not
 evidence that the broader `oniguruma` dependency is implemented, and to keep
 Surface link/search UI plumbing classified outside terminal core unless direct
 local evidence says otherwise.
+
+## Result
+
+**Result:** Pass
+
+The audit found that the README's "missing (needs `oniguruma`)" terminal-core
+search wording was stale. No Rust code changes were needed.
+
+`StringMap` is present and tested. Roastty maps one output byte to one screen
+pin, converts regex matches back into selections, preserves multibyte byte-map
+invariants, and covers URL-like matching. The local implementation deliberately
+uses the Rust `regex` byte engine instead of upstream Oniguruma. That is a
+terminal-core substitution only: it does not mean the broader `oniguruma`
+dependency is ported for Surface link detection or other regex-driven UI
+integration.
+
+The search subsystem is present and tested:
+
+- `SlidingWindow` covers page encoding, forward/reverse data, overlap buffers,
+  case-insensitive matching, successive matches, and highlight construction;
+- active, page-list, screen, and viewport searchers cover active-area search,
+  scrollback/history feed, selected-match indexing, next/prev wrapping,
+  search-all, pruning, viewport dirty tracking, and viewport match reporting;
+- the multi-screen `Search` aggregator covers screen reconciliation, alternate
+  removal, feed/tick/notify, selection events, totals, completion, and dropped
+  stale screens;
+- the outer search `Thread` has a std-concurrency adaptation of upstream's
+  libxev loop with message handling, spawn/stop/join, change-needle, select, and
+  quit/complete events.
+
+The remaining search-related work is Surface/App integration: start/end/navigate
+search commands, renderer/UI event plumbing, and link-detection regex behavior.
+That belongs under the existing App/Surface/IO and `oniguruma` dependency
+checklist lines, not the terminal-core search line.
+
+Verification passed:
+
+- `cargo test -p roastty terminal::string_map` — 9 passed
+- `cargo test -p roastty terminal::search` — 96 passed
+- `cargo test -p roastty page_list::tests::search_encode` — 4 passed
+- `cargo test -p roastty terminal::search::thread::tests::spawn` — 2 passed
+- `cargo test -p roastty terminal::search::thread::tests::select` — 4 passed
+- `cargo fmt -p roastty -- --check` — passed
+
+Source comparison was performed against:
+
+- `vendor/ghostty/src/terminal/StringMap.zig`
+- `vendor/ghostty/src/terminal/search.zig`
+- `vendor/ghostty/src/terminal/search/sliding_window.zig`
+- `vendor/ghostty/src/terminal/search/active.zig`
+- `vendor/ghostty/src/terminal/search/pagelist.zig`
+- `vendor/ghostty/src/terminal/search/screen.zig`
+- `vendor/ghostty/src/terminal/search/viewport.zig`
+- `vendor/ghostty/src/terminal/search/Thread.zig`
+- `vendor/ghostty/src/Surface.zig` search integration sections
+
+Completion review in Codex session `019e9a9a-ee48-7ec2-bb17-ea152a97b42d`
+approved the result with no blocking findings. The reviewer agreed that marking
+terminal-core search + `StringMap` complete is justified by the recorded test
+coverage and source comparison, and that the Oniguruma dependency note correctly
+keeps broader Surface link/search UI regex work open. The only nit was to record
+this completion review before the result commit.
+
+## Conclusion
+
+The terminal-core `search` + `StringMap` checklist item can be marked complete.
+Roastty has the core terminal search stack, StringMap, and search thread with
+direct tests. The broader Oniguruma dependency remains open for Surface/App link
+and search UI integration, but it no longer gates terminal-core search.
