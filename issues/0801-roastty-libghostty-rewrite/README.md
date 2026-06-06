@@ -1801,6 +1801,8 @@ are past the correctness-critical foundation.
   · Codex/Codex/Codex
 - [Experiment 666: PTY Child IO](666-pty-child-io.md) — **Pass** ·
   Codex/Codex/Codex
+- [Experiment 667: Synchronous Termio Pump](667-synchronous-termio-pump.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
