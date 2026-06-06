@@ -1752,6 +1752,8 @@ are past the correctness-critical foundation.
   Codex/Codex/Codex
 - [Experiment 646: Tmux Command Formatting](646-tmux-command-formatting.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 647: Tmux Viewer Startup](647-tmux-viewer-startup.md) —
+  **Designed**
 
 ## Non-Goals
 
