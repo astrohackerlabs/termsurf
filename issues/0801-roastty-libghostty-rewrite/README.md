@@ -1884,6 +1884,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 695: Surface Key Terminal Options](695-surface-key-terminal-options.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 696: Surface Text Viewport Metadata](696-surface-text-viewport-metadata.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
