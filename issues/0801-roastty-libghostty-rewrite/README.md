@@ -1886,6 +1886,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 696: Surface Text Viewport Metadata](696-surface-text-viewport-metadata.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 697: Inspector ABI Foundation](697-inspector-abi-foundation.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
