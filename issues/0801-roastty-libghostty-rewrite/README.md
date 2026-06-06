@@ -1943,6 +1943,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 716: Binding Action Adjust Selection](716-binding-action-adjust-selection.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 717: Binding Action Copy To Clipboard](717-binding-action-copy-to-clipboard.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
