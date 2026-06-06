@@ -1916,6 +1916,8 @@ are past the correctness-critical foundation.
   Codex/Codex/Codex
 - [Experiment 705: Binding Action CSI and ESC](705-binding-action-csi-esc.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 706: Binding Action Reset](706-binding-action-reset.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
