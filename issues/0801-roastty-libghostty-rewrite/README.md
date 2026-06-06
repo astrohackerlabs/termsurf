@@ -1978,7 +1978,7 @@ are past the correctness-critical foundation.
 - [Experiment 731: Binding Action Search Overlay](731-binding-action-search-overlay.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 732: Binding Action Search Selection](732-binding-action-search-selection.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 732: Binding Action Search Selection
@@ -94,3 +99,53 @@ With that test-plan fix, the review found no remaining technical design
 blockers. It approved the parser scope, borrowed C string lifetime plan, false
 paths, reuse of `ROASTTY_ACTION_START_SEARCH`, and preservation of parameterless
 `start_search`.
+
+## Result
+
+**Result:** Pass
+
+Experiment 732 added parameterless `search_selection` support. The binding now
+formats the active selection as plain text with unwrap/trim enabled, then
+forwards `ROASTTY_ACTION_START_SEARCH` through the surface-target runtime action
+callback with the selected text as a borrowed C-string needle in `storage[0]`.
+All remaining storage slots are zeroed.
+
+The action returns `false` for null surfaces, detached surfaces, missing
+workers, no active selection, missing callbacks, and false callback results. The
+parser rejects `search_selection:` and `search_selection:now`.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty search_selection -- --nocapture --test-threads=1`
+  - 3 passed
+- `cargo test -p roastty search_overlay -- --nocapture --test-threads=1`
+  - 3 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+  - 110 passed
+- `cargo test -p roastty --test abi_harness`
+  - 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Roastty can now start the search overlay from the current selection while
+preserving the same plain unwrap/trim semantics used by clipboard selection
+copying. The larger internal search actions, including `search:<needle>` and
+`navigate_search:<direction>`, remain separate future work because they require
+search worker and match-state behavior rather than only runtime notification.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 732 diff and found one workflow blocker:
+the result was recorded, but completion-review provenance had not yet been added
+to the experiment frontmatter, this section, or the README tuple. This section,
+the `[review.result]` frontmatter, and the README tuple now record that review.
+
+The review found no implementation blockers. It approved using the active
+selection, formatting it as plain text with unwrap/trim enabled, keeping the
+borrowed C-string needle alive for the synchronous callback, forwarding as
+`ROASTTY_ACTION_START_SEARCH` with surface target, rejecting parameterized
+forms, and the focused tests for false paths, callback result propagation, and
+trimmed selection behavior.

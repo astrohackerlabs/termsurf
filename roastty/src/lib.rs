@@ -1880,6 +1880,12 @@ impl Surface {
         self.perform_targeted_action_result(ROASTTY_TARGET_APP, ptr::null_mut(), tag, storage)
     }
 
+    fn perform_start_search_result(&self, needle: &CStr) -> bool {
+        let mut storage = [0usize; 8];
+        storage[0] = needle.as_ptr() as usize;
+        self.perform_action_result(ROASTTY_ACTION_START_SEARCH, storage)
+    }
+
     fn perform_targeted_action_result(
         &self,
         target_tag: c_int,
@@ -2167,6 +2173,28 @@ impl Surface {
             );
         }
         true
+    }
+
+    fn search_selection(&mut self) -> bool {
+        if self.app.is_null() {
+            return false;
+        }
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return false;
+        };
+        let Some(text) = worker.with_termio(|termio| {
+            let terminal = termio.terminal();
+            let selection = terminal.active_selection()?;
+            terminal
+                .selection_format(TerminalSelectionFormat::Plain, true, true, Some(selection))
+                .ok()
+        }) else {
+            return false;
+        };
+        let Ok(needle) = CString::new(text) else {
+            return false;
+        };
+        self.perform_start_search_result(&needle)
     }
 
     fn paste_from_clipboard(&mut self, clipboard: c_int) -> bool {
@@ -2978,6 +3006,7 @@ enum ParsedBindingAction {
     RuntimeAction(c_int, [usize; 8]),
     AppRuntimeAction(c_int, [usize; 8]),
     StartSearch,
+    SearchSelection,
     CloseSurface,
     Text(Vec<u8>),
     Csi(Vec<u8>),
@@ -3183,6 +3212,12 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
                 ROASTTY_ACTION_END_SEARCH,
                 [0usize; 8],
             ))
+        }
+        b"search_selection" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::SearchSelection)
         }
         b"toggle_mouse_reporting" => {
             if parameter.is_some() {
@@ -11521,9 +11556,13 @@ pub extern "C" fn roastty_surface_binding_action(
         }
         ParsedBindingAction::StartSearch => {
             let needle = CString::new("").expect("empty string has no interior NUL");
-            let mut storage = [0usize; 8];
-            storage[0] = needle.as_ptr() as usize;
-            surface.perform_action_result(ROASTTY_ACTION_START_SEARCH, storage)
+            surface.perform_start_search_result(&needle)
+        }
+        ParsedBindingAction::SearchSelection => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.search_selection()
         }
         ParsedBindingAction::CloseSurface => {
             if surface.app.is_null() {
@@ -13742,6 +13781,8 @@ mod tests {
             "start_search:needle",
             "end_search:",
             "end_search:now",
+            "search_selection:",
+            "search_selection:now",
             "new_tab:",
             "new_tab:now",
             "close_tab:",
@@ -16374,6 +16415,113 @@ mod tests {
         assert!(!binding_action(surface, "start_search"));
         assert!(!binding_action(surface, "end_search"));
         assert_eq!(action_records().len(), 2);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_search_selection_false_paths() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "search_selection"));
+        assert!(!binding_action(surface, "search_selection"));
+
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "search_selection"));
+        roastty_surface_free(surface);
+
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+        assert!(!binding_action(surface, "search_selection"));
+        assert!(action_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_action(true);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+
+        assert!(!binding_action(surface, "search_selection"));
+        assert!(action_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+
+        let app = new_test_app();
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        let selection = surface_worker_selection(surface, (0, 0), (4, 0));
+        set_surface_worker_active_selection(surface, Some(selection));
+
+        assert!(!binding_action(surface, "search_selection"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_search_selection_forwards_trimmed_selection() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_action(true);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 12, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        {
+            let surface_ref = surface_from_handle(surface).unwrap();
+            let worker = surface_ref.termio_worker.as_ref().unwrap();
+            worker.with_termio_mut(|termio| {
+                termio.terminal_mut().reset();
+                termio.terminal_mut().next_slice(b"find   \n").unwrap();
+            });
+        }
+        let selection = surface_worker_selection(surface, (0, 0), (6, 0));
+        set_surface_worker_active_selection(surface, Some(selection));
+        let expected = surface_worker_selection_format(surface, TerminalSelectionFormat::Plain);
+        assert_eq!(expected, "find");
+
+        assert!(binding_action(surface, "search_selection"));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].app, app);
+        assert_eq!(records[0].target_tag, ROASTTY_TARGET_SURFACE);
+        assert_eq!(records[0].surface, surface);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_START_SEARCH);
+        assert_eq!(records[0].needle.as_deref(), Some("find"));
+        assert_ne!(records[0].storage[0], 0);
+        assert!(records[0].storage[1..].iter().all(|value| *value == 0));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_search_selection_returns_callback_result() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_action(false);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        let selection = surface_worker_selection(surface, (0, 0), (4, 0));
+        set_surface_worker_active_selection(surface, Some(selection));
+
+        assert!(!binding_action(surface, "search_selection"));
+        assert_eq!(action_records().len(), 1);
 
         roastty_surface_free(surface);
         roastty_app_free(app);

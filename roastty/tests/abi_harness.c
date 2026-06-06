@@ -4419,6 +4419,8 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "start_search:needle", 19));
   assert(!roastty_surface_binding_action(surface, "end_search:", 11));
   assert(!roastty_surface_binding_action(surface, "end_search:now", 14));
+  assert(!roastty_surface_binding_action(surface, "search_selection:", 17));
+  assert(!roastty_surface_binding_action(surface, "search_selection:now", 20));
   assert(!roastty_surface_binding_action(surface, "new_tab:", 8));
   assert(!roastty_surface_binding_action(surface, "new_tab:now", 11));
   assert(!roastty_surface_binding_action(surface, "close_tab:", 10));
@@ -4584,6 +4586,7 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "new_window", 10));
   assert(!roastty_surface_binding_action(surface, "start_search", 12));
   assert(!roastty_surface_binding_action(surface, "end_search", 10));
+  assert(!roastty_surface_binding_action(surface, "search_selection", 16));
   assert(!roastty_surface_binding_action(surface, "new_tab", 7));
   assert(!roastty_surface_binding_action(surface, "close_tab", 9));
   assert(!roastty_surface_binding_action(surface, "close_tab:this", 14));
