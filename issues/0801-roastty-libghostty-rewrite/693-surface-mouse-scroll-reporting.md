@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 693: Surface Mouse Scroll Reporting
@@ -86,3 +91,44 @@ Codex approved the revised design after the scroll normalization rule was
 changed to upstream-style whole-step accumulation with truncation toward zero
 and residue preservation for both non-precision tick offsets and precision pixel
 offsets.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now dispatches `roastty_surface_mouse_scroll` to terminal mouse
+reporting when an attached worker terminal has reporting enabled and the surface
+has a last finite pointer position. Vertical scroll steps emit wheel buttons
+Four/Five, horizontal steps emit Six/Seven, and each emitted step uses the same
+mouse report encoder and worker queue path as button and motion reports.
+
+The implementation keeps the existing stored scroll state and adds per-axis
+pending residue. Non-precision offsets accumulate as whole wheel ticks;
+precision offsets accumulate as pixels and convert to steps using the current
+mouse-report cell width or height. Disabled reporting, missing position, missing
+worker, detached surface, nonfinite offsets, unsupported encoded events, and
+worker write failures remain safe no-ops from the ABI caller's perspective, with
+write failures still recorded through the existing termio error path.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_mouse -- --nocapture`
+- `cargo test -p roastty mouse -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Surface mouse scroll callbacks now reach active terminal mouse reporting. This
+still leaves non-reporting scroll behavior for a later experiment: alternate
+scroll cursor-key conversion, viewport scrolling, selection clearing, scroll
+multiplier configuration, and platform-specific minimum non-precision behavior.
+
+## Completion Review
+
+Codex reviewed the staged result and found no code correctness blockers. It
+approved the scroll reporting implementation after confirming the whole-step
+accumulation, wheel-button mapping, safe no-op cases, deferred scope, and
+verification results.

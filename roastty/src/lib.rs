@@ -1361,6 +1361,8 @@ struct SurfaceMouseState {
     mods: key_mods::Mods,
     buttons: [Option<SurfaceMouseButtonState>; 12],
     scroll: Option<(f64, f64, u8)>,
+    pending_scroll_x: f64,
+    pending_scroll_y: f64,
     pressure_stage: u32,
     pressure: f64,
     last_reported_cell: Option<point::Coordinate>,
@@ -1699,6 +1701,7 @@ impl Surface {
             return;
         }
         self.mouse.scroll = Some((x, y, scroll_mods as u8));
+        self.dispatch_scroll_reports(x, y, scroll_mods as u8);
     }
 
     fn mouse_pressure(&mut self, stage: u32, pressure: f64) {
@@ -1761,6 +1764,69 @@ impl Surface {
             return false;
         }
         true
+    }
+
+    fn dispatch_scroll_reports(&mut self, x: f64, y: f64, scroll_mods: u8) {
+        if self.mouse.position.is_none() {
+            return;
+        }
+        let precision = scroll_mods & 1 != 0;
+        let Some((_, _, geometry)) = self.mouse_report_context() else {
+            return;
+        };
+
+        let x_unit = if precision {
+            f64::from(geometry.cell.width.max(1))
+        } else {
+            1.0
+        };
+        let y_unit = if precision {
+            f64::from(geometry.cell.height.max(1))
+        } else {
+            1.0
+        };
+        let x_steps = scroll_steps(&mut self.mouse.pending_scroll_x, x, x_unit);
+        let y_steps = scroll_steps(&mut self.mouse.pending_scroll_y, y, y_unit);
+
+        self.dispatch_scroll_axis(y_steps, mouse::MouseButton::Four, mouse::MouseButton::Five);
+        self.dispatch_scroll_axis(x_steps, mouse::MouseButton::Six, mouse::MouseButton::Seven);
+    }
+
+    fn dispatch_scroll_axis(
+        &mut self,
+        steps: i64,
+        positive_button: mouse::MouseButton,
+        negative_button: mouse::MouseButton,
+    ) {
+        let button = match steps.cmp(&0) {
+            std::cmp::Ordering::Greater => positive_button,
+            std::cmp::Ordering::Less => negative_button,
+            std::cmp::Ordering::Equal => return,
+        };
+        for _ in 0..steps.unsigned_abs() {
+            if !self.dispatch_mouse_report(mouse::MouseAction::Press, Some(button)) {
+                break;
+            }
+        }
+    }
+
+    fn mouse_report_context(
+        &self,
+    ) -> Option<(
+        mouse::MouseEventMode,
+        mouse::MouseFormat,
+        mouse_encode::Geometry,
+    )> {
+        let worker = self.termio_worker.as_ref()?;
+        worker.with_termio(|termio| {
+            let terminal = termio.terminal();
+            let event_mode = terminal.mouse_event_mode();
+            if event_mode == mouse::MouseEventMode::None {
+                return None;
+            }
+            let geometry = self.mouse_report_geometry(terminal)?;
+            Some((event_mode, terminal.mouse_format(), geometry))
+        })
     }
 
     fn mouse_report_geometry(&self, terminal: &InnerTerminal) -> Option<mouse_encode::Geometry> {
@@ -2346,6 +2412,19 @@ fn mouse_mods_from_key_mods(mods: key_mods::Mods) -> mouse::MouseMods {
         alt: mods.alt,
         ctrl: mods.ctrl,
     }
+}
+
+fn scroll_steps(pending: &mut f64, offset: f64, unit: f64) -> i64 {
+    let unit = unit.max(1.0);
+    let total = *pending + offset;
+    if total.abs() < unit {
+        *pending = total;
+        return 0;
+    }
+
+    let steps = (total / unit).trunc() as i64;
+    *pending = total - (steps as f64 * unit);
+    steps
 }
 
 fn mouse_button_state_from_int(value: c_int) -> Option<SurfaceMouseButtonState> {
@@ -11251,6 +11330,7 @@ mod tests {
 
     #[test]
     fn surface_mouse_button_reports_when_tracking_accepts_event() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
@@ -11296,6 +11376,7 @@ mod tests {
 
     #[test]
     fn surface_mouse_motion_dispatch_respects_terminal_mode() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
@@ -11326,6 +11407,7 @@ mod tests {
 
     #[test]
     fn surface_mouse_geometry_prefers_attached_terminal_grid_over_fallback() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker_with_size(
@@ -11366,6 +11448,7 @@ mod tests {
 
     #[test]
     fn surface_mouse_button_mode_drag_motion_uses_pressed_button() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
@@ -11399,6 +11482,7 @@ mod tests {
 
     #[test]
     fn surface_mouse_motion_dedupes_last_reported_cell() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
@@ -11428,6 +11512,7 @@ mod tests {
 
     #[test]
     fn surface_mouse_dispatch_records_worker_write_errors() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
@@ -11476,6 +11561,123 @@ mod tests {
             surface_from_handle(surface).unwrap().mouse.scroll,
             Some((1.5, -2.0, 0xff))
         );
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_scroll_disabled_reporting_stores_without_report() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        roastty_surface_set_size(surface, 800, 480);
+        roastty_surface_mouse_pos(surface, 10.0, 10.0, ROASTTY_MODS_NONE);
+
+        roastty_surface_mouse_scroll(surface, 0.0, 1.0, 0);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.scroll, Some((0.0, 1.0, 0)));
+        assert_eq!(mouse.pending_scroll_x, 0.0);
+        assert_eq!(mouse.pending_scroll_y, 0.0);
+        assert!(mouse.last_reported_cell.is_none());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_scroll_reports_vertical_and_horizontal_wheel_steps() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        roastty_surface_set_size(surface, 800, 480);
+        roastty_surface_mouse_pos(surface, 20.0, 20.0, ROASTTY_MODS_NONE);
+        set_surface_worker_mouse_mode(surface, 1003, true);
+
+        roastty_surface_mouse_scroll(surface, 1.0, -1.0, 0);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.last_reported_cell, Some(point::Coordinate::new(2, 1)));
+        assert_eq!(mouse.pending_scroll_x, 0.0);
+        assert_eq!(mouse.pending_scroll_y, 0.0);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_scroll_accumulates_non_precision_fractional_steps() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        roastty_surface_set_size(surface, 800, 480);
+        roastty_surface_mouse_pos(surface, 20.0, 20.0, ROASTTY_MODS_NONE);
+        set_surface_worker_mouse_mode(surface, 1003, true);
+
+        roastty_surface_mouse_scroll(surface, 0.0, 0.5, 0);
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .mouse
+            .last_reported_cell
+            .is_none());
+        roastty_surface_mouse_scroll(surface, 0.0, 0.4, 0);
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .mouse
+            .last_reported_cell
+            .is_none());
+        roastty_surface_mouse_scroll(surface, 0.0, 0.2, 0);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.last_reported_cell, Some(point::Coordinate::new(2, 1)));
+        assert!((mouse.pending_scroll_y - 0.1).abs() < 0.001);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_scroll_accumulates_precision_pixels_by_cell_size() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        roastty_surface_set_size(surface, 800, 480);
+        roastty_surface_mouse_pos(surface, 20.0, 20.0, ROASTTY_MODS_NONE);
+        set_surface_worker_mouse_mode(surface, 1003, true);
+
+        roastty_surface_mouse_scroll(surface, 9.0, 19.0, 1);
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .mouse
+            .last_reported_cell
+            .is_none());
+        roastty_surface_mouse_scroll(surface, 1.0, 1.0, 1);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.last_reported_cell, Some(point::Coordinate::new(2, 1)));
+        assert_eq!(mouse.pending_scroll_x, 0.0);
+        assert_eq!(mouse.pending_scroll_y, 0.0);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_scroll_no_position_does_not_accumulate_or_report() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        roastty_surface_set_size(surface, 800, 480);
+        set_surface_worker_mouse_mode(surface, 1003, true);
+
+        roastty_surface_mouse_scroll(surface, 1.0, 1.0, 0);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.scroll, Some((1.0, 1.0, 0)));
+        assert_eq!(mouse.pending_scroll_x, 0.0);
+        assert_eq!(mouse.pending_scroll_y, 0.0);
+        assert!(mouse.last_reported_cell.is_none());
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

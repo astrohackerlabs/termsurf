@@ -276,9 +276,9 @@ Experiment 246).
       key translation-mod query done; IME point query done; surface key
       callback/keybinding query state foundation done; renderer preedit/export,
       surface mouse callback state foundation done; surface mouse
-      button/position dispatch done; split action callback forwarding done; key
-      dispatch, mouse scroll dispatch, frontend selection routing/metadata, and
-      split tree/frontend mutations missing
+      button/position dispatch done; surface mouse scroll reporting done; split
+      action callback forwarding done; key dispatch, frontend selection
+      routing/metadata, and split tree/frontend mutations missing
 - [ ] Inspector ABI — missing
 
 ### App / Surface / IO — partial
@@ -1877,7 +1877,7 @@ are past the correctness-critical foundation.
 - [Experiment 692: Surface Mouse Button Position Dispatch](692-surface-mouse-button-position-dispatch.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 693: Surface Mouse Scroll Reporting](693-surface-mouse-scroll-reporting.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
