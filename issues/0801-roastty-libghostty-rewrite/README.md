@@ -1890,6 +1890,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 697: Inspector ABI Foundation](697-inspector-abi-foundation.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 698: Surface Quicklook ABI](698-surface-quicklook-abi.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
