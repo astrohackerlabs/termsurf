@@ -337,8 +337,8 @@ impl Face {
     /// each codepoint's cluster (the terminal cell, grouping a grapheme's
     /// codepoints). Each [`shape::Cell`]'s `x` is the glyph's cluster, and
     /// `x_offset`/`y_offset` are the glyph's nudge from the cell origin. The
-    /// ligature/mark heuristic and the special-font path are deferred to the full
-    /// `Shaper`.
+    /// special/sprite fast path is handled outside CoreText by
+    /// [`shape::shape_special`] and the sprite renderer path.
     pub(crate) fn shape_run_with_features(
         &self,
         run: &[shape::Codepoint],

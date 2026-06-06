@@ -1,12 +1,13 @@
 //! The run iterator — grouping a terminal row's cells into shaping runs.
 //!
-//! Faithful (in progress) port of upstream `font/shaper/run.zig`. Provides the
+//! Faithful port of upstream `font/shaper/run.zig`. Provides the
 //! shaping input ([`RunOptions`]/[`RunCell`]) and output ([`TextRun`]/[`run_hash`]),
 //! the per-cell decision helpers ([`font_style`]/[`is_bad_ligature_break`]/
 //! [`presentation_for_grapheme`]/[`comparable_style`]), and [`RunIterator`]'s
 //! cell-walking grouping loop (with the trailing-empty trim, the invisible/spacer
-//! skips, and the selection/cursor/style/ligature breaks). The renderer code that
-//! builds [`RunCell`]s from terminal cells is a later sub-area.
+//! skips, and the selection/cursor/style/ligature breaks). The module also
+//! provides the row and viewport shaping entry points, including cached
+//! renderer-facing row shaping.
 
 use std::hash::{Hash, Hasher};
 

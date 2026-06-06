@@ -215,7 +215,7 @@ Experiment 246).
 - [ ] Sprite `draw/` glyph tables (box/block/braille/powerline/geometric/legacy)
       — missing
 - [x] CoreText `Face` (rasterization + face-metric extraction)
-- [ ] Shaper (CoreText shaping, run, cache, feature) — missing
+- [x] Shaper (CoreText shaping, run, cache, feature)
 - [ ] `Collection` / `CodepointResolver` / `CodepointMap` / `DeferredFace` /
       `discovery` / `library` / `backend` — missing
 - [ ] `SharedGrid` / `SharedGridSet` — missing
@@ -1707,7 +1707,8 @@ are past the correctness-critical foundation.
   Codex/Codex/Codex
 - [Experiment 630: integrate the shaper cache](630-shaper-cache-integration.md)
   — **Pass** · Codex/Codex/Codex
-- [Experiment 631: Shaper audit](631-shaper-audit.md) — **Designed**
+- [Experiment 631: Shaper audit](631-shaper-audit.md) — **Pass** ·
+  Codex/Codex/Codex
 
 ## Non-Goals
 

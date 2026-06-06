@@ -1,10 +1,10 @@
 //! Text shaping — the value types.
 //!
-//! Faithful port of upstream `font/shape.zig`, the shaper's output contract. The
-//! shaper turns a run of terminal cells into positioned glyphs ([`Cell`]s); this
-//! module defines that output ([`Cell`]) and the shaping [`Options`]. The
-//! run iterator, the shaping hook, and the CoreText shaping pipeline
-//! (`CFAttributedString` → `CTLine` → `CTRun` → `Cell`) are later sub-areas.
+//! Faithful port of upstream `font/shape.zig`, the shaper's output contract.
+//! The shaper turns a run of terminal cells into positioned glyphs ([`Cell`]s);
+//! this module defines that output ([`Cell`]), the clustered input
+//! ([`Codepoint`]), OpenType feature parsing and [`Options`], and the
+//! special-font fast path used by sprite/box-drawing runs.
 
 /// A single shaped glyph to render, output by the shaper. Only cells with a
 /// glyph to render are present. Faithful port of upstream `shape.Cell`.
