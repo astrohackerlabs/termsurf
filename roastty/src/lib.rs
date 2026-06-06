@@ -592,6 +592,11 @@ const ROASTTY_TRIGGER_PHYSICAL: c_int = 0;
 const ROASTTY_TRIGGER_UNICODE: c_int = 1;
 #[allow(dead_code)]
 const ROASTTY_TRIGGER_CATCH_ALL: c_int = 2;
+const ROASTTY_KEYBIND_FLAG_CONSUMED: u8 = 1 << 0;
+const ROASTTY_KEYBIND_FLAG_PERFORMABLE: u8 = 1 << 3;
+const ROASTTY_KEYBIND_FLAGS_DEFAULT: u8 = ROASTTY_KEYBIND_FLAG_CONSUMED;
+const ROASTTY_KEYBIND_FLAGS_PERFORMABLE: u8 =
+    ROASTTY_KEYBIND_FLAG_CONSUMED | ROASTTY_KEYBIND_FLAG_PERFORMABLE;
 
 #[allow(dead_code)]
 const ROASTTY_ROW_SEMANTIC_NONE: c_int = 0;
@@ -2925,7 +2930,17 @@ impl Surface {
         if self.app.is_null() || event.is_none() {
             return false;
         }
-        false
+        let Some(flags_value) =
+            event.and_then(|event| default_key_event_binding_flags(&event.event))
+        else {
+            return false;
+        };
+        if !flags.is_null() {
+            unsafe {
+                flags.write(flags_value);
+            }
+        }
+        true
     }
 
     fn key_encode_options(&self) -> key_encode::Options {
@@ -4603,85 +4618,134 @@ fn default_config_trigger(action: &[u8]) -> RoasttyInputTrigger {
     }
 }
 
-fn default_physical_key_is_binding(key: key::Key, mods: c_int) -> bool {
+fn default_physical_key_binding_flags(key: key::Key, mods: c_int) -> Option<u8> {
     match key {
-        key::Key::Copy | key::Key::Paste | key::Key::Escape => mods == ROASTTY_MODS_NONE,
-        key::Key::Insert => mods == ROASTTY_MODS_SHIFT,
-        key::Key::Tab => {
-            mods == ROASTTY_MODS_CTRL || mods == (ROASTTY_MODS_CTRL | ROASTTY_MODS_SHIFT)
+        key::Key::Escape if mods == ROASTTY_MODS_NONE => Some(ROASTTY_KEYBIND_FLAGS_PERFORMABLE),
+        key::Key::Copy | key::Key::Paste if mods == ROASTTY_MODS_NONE => {
+            Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
         }
-        key::Key::Enter => {
-            mods == ROASTTY_MODS_SUPER || mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER)
+        key::Key::Insert if mods == ROASTTY_MODS_SHIFT => Some(ROASTTY_KEYBIND_FLAGS_DEFAULT),
+        key::Key::Tab
+            if mods == ROASTTY_MODS_CTRL || mods == (ROASTTY_MODS_CTRL | ROASTTY_MODS_SHIFT) =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
         }
-        key::Key::Home | key::Key::End | key::Key::PageUp | key::Key::PageDown => {
-            mods == ROASTTY_MODS_SHIFT || mods == ROASTTY_MODS_SUPER
+        key::Key::Enter
+            if mods == ROASTTY_MODS_SUPER || mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER) =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
+        }
+        key::Key::Home | key::Key::End | key::Key::PageUp | key::Key::PageDown
+            if mods == ROASTTY_MODS_SHIFT =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_PERFORMABLE)
+        }
+        key::Key::Home | key::Key::End | key::Key::PageUp | key::Key::PageDown
+            if mods == ROASTTY_MODS_SUPER =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
         }
         key::Key::ArrowUp | key::Key::ArrowDown => {
-            mods == ROASTTY_MODS_SHIFT
-                || mods == (ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER)
+            if mods == ROASTTY_MODS_SHIFT {
+                Some(ROASTTY_KEYBIND_FLAGS_PERFORMABLE)
+            } else if mods == (ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER)
                 || mods == (ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER)
                 || mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER)
                 || mods == ROASTTY_MODS_SUPER
+            {
+                Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
+            } else {
+                None
+            }
         }
         key::Key::ArrowLeft | key::Key::ArrowRight => {
-            mods == ROASTTY_MODS_SHIFT
-                || mods == (ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER)
+            if mods == ROASTTY_MODS_SHIFT {
+                Some(ROASTTY_KEYBIND_FLAGS_PERFORMABLE)
+            } else if mods == (ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER)
                 || mods == (ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER)
                 || mods == ROASTTY_MODS_SUPER
                 || mods == ROASTTY_MODS_ALT
+            {
+                Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
+            } else {
+                None
+            }
         }
-        key::Key::Backspace => mods == ROASTTY_MODS_SUPER,
-        _ => false,
+        key::Key::Backspace if mods == ROASTTY_MODS_SUPER => Some(ROASTTY_KEYBIND_FLAGS_DEFAULT),
+        _ => None,
     }
 }
 
-fn default_unicode_key_is_binding(codepoint: u32, mods: c_int) -> bool {
+fn default_unicode_key_binding_flags(codepoint: u32, mods: c_int) -> Option<u8> {
     match mods {
-        ROASTTY_MODS_SUPER => matches!(
-            codepoint,
-            44 | 99 | 118 | 43 | 45 | 48 | 61 | 113 | 97 | 49
-                ..=57 | 110 | 119 | 116 | 100 | 91 | 93 | 122 | 107 | 102 | 101 | 103 | 106
-        ),
-        mods if mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER) => matches!(
-            codepoint,
-            44 | 106 | 119 | 91 | 93 | 100 | 116 | 122 | 102 | 103 | 118 | 112
-        ),
+        ROASTTY_MODS_SUPER if matches!(codepoint, 99 | 118 | 122 | 107 | 102 | 101 | 103 | 106) => {
+            Some(ROASTTY_KEYBIND_FLAGS_PERFORMABLE)
+        }
+        ROASTTY_MODS_SUPER
+            if matches!(
+                codepoint,
+                44 | 43 | 45 | 48 | 61 | 113 | 97 | 49..=57 | 110 | 119 | 116 | 100 | 91 | 93
+            ) =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
+        }
+        mods if mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER)
+            && matches!(codepoint, 116 | 122 | 102 | 103) =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_PERFORMABLE)
+        }
+        mods if mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER)
+            && matches!(codepoint, 44 | 106 | 119 | 91 | 93 | 100 | 118 | 112) =>
+        {
+            Some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
+        }
         mods if mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER) => {
-            codepoint == u32::from(b'j')
+            (codepoint == u32::from(b'j')).then_some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
         }
         mods if mods == (ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER) => {
-            codepoint == u32::from(b'j') || codepoint == u32::from(b'w')
+            (codepoint == u32::from(b'j') || codepoint == u32::from(b'w'))
+                .then_some(ROASTTY_KEYBIND_FLAGS_DEFAULT)
         }
-        mods if mods == (ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER) => {
-            codepoint == u32::from(b'w') || codepoint == u32::from(b'i')
-        }
-        mods if mods == (ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER) => {
-            codepoint == u32::from(b'=') || codepoint == u32::from(b'f')
-        }
-        _ => false,
+        mods if mods == (ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER) => (codepoint == u32::from(b'w')
+            || codepoint == u32::from(b'i'))
+        .then_some(ROASTTY_KEYBIND_FLAGS_DEFAULT),
+        mods if mods == (ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER) => (codepoint == u32::from(b'=')
+            || codepoint == u32::from(b'f'))
+        .then_some(ROASTTY_KEYBIND_FLAGS_DEFAULT),
+        _ => None,
     }
 }
 
-fn default_key_event_is_binding(event: &key::KeyEvent) -> bool {
+fn default_key_event_binding_flags(event: &key::KeyEvent) -> Option<u8> {
     if event.action == key::KeyAction::Release {
-        return false;
+        return None;
     }
 
     let mods = key_mods_to_raw(event.mods.binding());
-    if default_physical_key_is_binding(event.key, mods) {
-        return true;
+    if let Some(flags) = default_physical_key_binding_flags(event.key, mods) {
+        return Some(flags);
     }
 
     if let Ok(text) = std::str::from_utf8(&event.utf8) {
         let mut chars = text.chars();
         if let Some(ch) = chars.next() {
-            if chars.next().is_none() && default_unicode_key_is_binding(ch as u32, mods) {
-                return true;
+            if chars.next().is_none() {
+                if let Some(flags) = default_unicode_key_binding_flags(ch as u32, mods) {
+                    return Some(flags);
+                }
             }
         }
     }
 
-    event.unshifted_codepoint > 0 && default_unicode_key_is_binding(event.unshifted_codepoint, mods)
+    if event.unshifted_codepoint > 0 {
+        return default_unicode_key_binding_flags(event.unshifted_codepoint, mods);
+    }
+
+    None
+}
+
+fn default_key_event_is_binding(event: &key::KeyEvent) -> bool {
+    default_key_event_binding_flags(event).is_some()
 }
 
 fn empty_text() -> RoasttyText {
@@ -13765,6 +13829,146 @@ mod tests {
         flags = 0xff;
         assert!(!roastty_surface_key_is_binding(surface, event, &mut flags));
         assert_eq!(flags, 0);
+
+        set_key_event(
+            event,
+            key::KeyAction::Press,
+            key::Key::Unidentified,
+            ROASTTY_MODS_SUPER,
+            b"c",
+            0,
+        );
+        assert!(roastty_surface_key_is_binding(
+            surface,
+            event,
+            ptr::null_mut()
+        ));
+
+        set_key_event(
+            event,
+            key::KeyAction::Release,
+            key::Key::Copy,
+            ROASTTY_MODS_NONE,
+            &[],
+            0,
+        );
+        flags = 0xff;
+        assert!(!roastty_surface_key_is_binding(surface, event, &mut flags));
+        assert_eq!(flags, 0);
+
+        set_key_event(
+            event,
+            key::KeyAction::Press,
+            key::Key::Unidentified,
+            ROASTTY_MODS_CTRL,
+            b"c",
+            0,
+        );
+        flags = 0xff;
+        assert!(!roastty_surface_key_is_binding(surface, event, &mut flags));
+        assert_eq!(flags, 0);
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_is_binding_returns_default_flags_for_ordinary_defaults() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let event = new_key_event();
+        let mut flags;
+
+        for (key, mods, utf8, unshifted) in [
+            (key::Key::Home, ROASTTY_MODS_SUPER, b"".as_slice(), 0),
+            (
+                key::Key::Unidentified,
+                ROASTTY_MODS_SUPER,
+                b"d".as_slice(),
+                0,
+            ),
+            (
+                key::Key::Unidentified,
+                ROASTTY_MODS_SUPER,
+                b"=".as_slice(),
+                0,
+            ),
+            (
+                key::Key::Unidentified,
+                ROASTTY_MODS_SUPER,
+                b"".as_slice(),
+                u32::from(b'n'),
+            ),
+            (key::Key::ArrowRight, ROASTTY_MODS_SUPER, b"".as_slice(), 0),
+            (key::Key::ArrowLeft, ROASTTY_MODS_ALT, b"".as_slice(), 0),
+            (key::Key::Backspace, ROASTTY_MODS_SUPER, b"".as_slice(), 0),
+        ] {
+            flags = 0xff;
+            set_key_event(event, key::KeyAction::Press, key, mods, utf8, unshifted);
+            assert!(roastty_surface_key_is_binding(surface, event, &mut flags));
+            assert_eq!(flags, ROASTTY_KEYBIND_FLAGS_DEFAULT);
+        }
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_is_binding_returns_default_flags_for_performable_defaults() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let event = new_key_event();
+        let mut flags;
+
+        for (key, mods, utf8) in [
+            (key::Key::Unidentified, ROASTTY_MODS_SUPER, b"c".as_slice()),
+            (key::Key::Unidentified, ROASTTY_MODS_SUPER, b"k".as_slice()),
+            (key::Key::Unidentified, ROASTTY_MODS_SUPER, b"f".as_slice()),
+            (key::Key::Escape, ROASTTY_MODS_NONE, b"".as_slice()),
+            (key::Key::ArrowLeft, ROASTTY_MODS_SHIFT, b"".as_slice()),
+        ] {
+            flags = 0xff;
+            set_key_event(event, key::KeyAction::Press, key, mods, utf8, 0);
+            assert!(roastty_surface_key_is_binding(surface, event, &mut flags));
+            assert_eq!(flags, ROASTTY_KEYBIND_FLAGS_PERFORMABLE);
+        }
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_key_is_binding_matches_repeat_modifiers_and_physical_precedence() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let event = new_key_event();
+        let mut flags = 0xffu8;
+
+        set_key_event(
+            event,
+            key::KeyAction::Repeat,
+            key::Key::ArrowUp,
+            ROASTTY_MODS_SUPER | ROASTTY_MODS_CAPS | ROASTTY_MODS_NUM | ROASTTY_MODS_SUPER_RIGHT,
+            &[],
+            0,
+        );
+        assert!(roastty_surface_key_is_binding(surface, event, &mut flags));
+        assert_eq!(flags, ROASTTY_KEYBIND_FLAGS_DEFAULT);
+
+        flags = 0xff;
+        set_key_event(
+            event,
+            key::KeyAction::Press,
+            key::Key::Copy,
+            ROASTTY_MODS_NONE,
+            b"c",
+            0,
+        );
+        assert!(roastty_surface_key_is_binding(surface, event, &mut flags));
+        assert_eq!(flags, ROASTTY_KEYBIND_FLAGS_DEFAULT);
 
         roastty_key_event_free(event);
         roastty_surface_free(surface);

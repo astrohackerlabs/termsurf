@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 746: Surface Default Key Is Binding
@@ -100,3 +105,51 @@ keep `roastty_config_key_is_binding` as a bool wrapper, return `0b0001` for
 ordinary consumed defaults and `0b1001` for consumed performable defaults, and
 leave keybind storage, key tables, sequences, remaps, performability checks, and
 dispatch out of scope.
+
+## Result
+
+**Result:** Pass
+
+`roastty_surface_key_is_binding` now recognizes the same static default keybind
+set as `roastty_config_key_is_binding`, but returns upstream-style binding flags
+through the optional C ABI flags pointer. Ordinary consumed defaults return
+`0b0001`; this includes the macOS natural text-editing `text`/`esc` bindings
+because upstream defines those with ordinary `set.put` entries. Performable
+consumed defaults return `0b1001`. False paths continue to zero the flags
+pointer before returning `false`.
+
+The implementation preserves the Experiment 745 lookup rules: release events do
+not match, press and repeat events can match, physical keys take precedence over
+UTF-8, UTF-8 takes precedence over `unshifted_codepoint`, and binding-modifier
+normalization ignores lock keys and side-specific modifier bits. The
+config-level query remains a bool wrapper over the shared default matcher.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_key_is_binding -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_key_is_binding -- --nocapture --test-threads=1`
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+- `cargo test -p roastty --test abi_harness -- --nocapture`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Surface keybind queries now have a useful static default implementation and can
+report default binding flags to frontends. Full keybind storage, custom
+configuration, active key tables, sequences, remaps, performability checks, and
+actual keybinding dispatch remain for later experiments.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 746 diff and initially flagged the
+natural text-editing command/option arrow and command-backspace defaults as
+performable. Re-review with the upstream `Config.zig` context confirmed those
+bindings use ordinary `set.put` entries, not `putFlags(... performable = true)`,
+so Roastty correctly reports them as ordinary consumed flags (`0b0001`).
+Explicit Rust coverage now pins that behavior.
+
+The re-review reported no remaining blocking technical issues. It confirmed the
+static-default scope, flag values, precedence order, modifier normalization,
+false-path flag zeroing, config-level bool wrapper, and Rust/C ABI coverage.

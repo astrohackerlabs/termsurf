@@ -4564,6 +4564,51 @@ int main(int argc, char **argv) {
              (roastty_input_mods_e)(ROASTTY_MODS_SHIFT | ROASTTY_MODS_CTRL |
                                     ROASTTY_MODS_CTRL_RIGHT)) ==
          (ROASTTY_MODS_SHIFT | ROASTTY_MODS_CTRL | ROASTTY_MODS_CTRL_RIGHT));
+  roastty_key_event_t surface_binding_event = NULL;
+  assert(roastty_key_event_new(&surface_binding_event) == ROASTTY_SUCCESS);
+  roastty_keybind_flags_t keybind_flags = 0xff;
+  set_config_binding_event(surface_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_HOME, ROASTTY_MODS_SUPER, NULL, 0);
+  assert(roastty_surface_key_is_binding(surface, surface_binding_event,
+                                        &keybind_flags));
+  assert(keybind_flags == 0x01);
+  set_config_binding_event(surface_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_EQUAL, ROASTTY_MODS_SUPER, "=", 0);
+  keybind_flags = 0xff;
+  assert(roastty_surface_key_is_binding(surface, surface_binding_event,
+                                        &keybind_flags));
+  assert(keybind_flags == 0x01);
+  set_config_binding_event(surface_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_KEY_C, ROASTTY_MODS_SUPER, "c", 0);
+  keybind_flags = 0xff;
+  assert(roastty_surface_key_is_binding(surface, surface_binding_event,
+                                        &keybind_flags));
+  assert(keybind_flags == 0x09);
+  assert(roastty_surface_key_is_binding(surface, surface_binding_event, NULL));
+  set_config_binding_event(surface_binding_event, ROASTTY_KEY_ACTION_REPEAT,
+                           ROASTTY_KEY_ARROW_UP,
+                           (roastty_input_mods_e)(ROASTTY_MODS_SUPER |
+                                                  ROASTTY_MODS_CAPS |
+                                                  ROASTTY_MODS_NUM |
+                                                  ROASTTY_MODS_SUPER_RIGHT),
+                           NULL, 0);
+  keybind_flags = 0xff;
+  assert(roastty_surface_key_is_binding(surface, surface_binding_event,
+                                        &keybind_flags));
+  assert(keybind_flags == 0x01);
+  set_config_binding_event(surface_binding_event, ROASTTY_KEY_ACTION_RELEASE,
+                           ROASTTY_KEY_COPY, ROASTTY_MODS_NONE, NULL, 0);
+  keybind_flags = 0xff;
+  assert(!roastty_surface_key_is_binding(surface, surface_binding_event,
+                                         &keybind_flags));
+  assert(keybind_flags == 0x00);
+  set_config_binding_event(surface_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_KEY_C, ROASTTY_MODS_CTRL, "c", 0);
+  keybind_flags = 0xff;
+  assert(!roastty_surface_key_is_binding(surface, surface_binding_event,
+                                         &keybind_flags));
+  assert(keybind_flags == 0x00);
+  roastty_key_event_free(surface_binding_event);
   roastty_surface_config_s inherited =
       roastty_surface_inherited_config(surface, ROASTTY_SURFACE_CONTEXT_SPLIT);
   assert(inherited.context == ROASTTY_SURFACE_CONTEXT_SPLIT);
