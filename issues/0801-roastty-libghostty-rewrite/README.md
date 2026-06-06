@@ -1954,6 +1954,8 @@ are past the correctness-critical foundation.
   · Codex/Codex/Codex
 - [Experiment 721: Binding Action Tab Window Forwarding](721-binding-action-tab-window-forwarding.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 722: Binding Action Tab Navigation Forwarding](722-binding-action-tab-navigation-forwarding.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
