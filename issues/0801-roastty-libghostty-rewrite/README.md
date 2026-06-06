@@ -1957,6 +1957,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 722: Binding Action Tab Navigation Forwarding](722-binding-action-tab-navigation-forwarding.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 723: Binding Action Runtime UI Toggles](723-binding-action-runtime-ui-toggles.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
