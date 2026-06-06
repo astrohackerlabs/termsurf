@@ -1969,6 +1969,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 727: Binding Action Copy Title To Clipboard](727-binding-action-copy-title-to-clipboard.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 728: Binding Action Undo Redo](728-binding-action-undo-redo.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
