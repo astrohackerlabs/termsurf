@@ -1259,6 +1259,7 @@ struct Surface {
     userdata: *mut c_void,
     working_directory: Option<String>,
     command: Option<String>,
+    env_vars: Vec<(String, String)>,
     initial_input: Option<Vec<u8>>,
     scale_factor_x: f64,
     scale_factor_y: f64,
@@ -1307,10 +1308,24 @@ impl Surface {
             .as_deref()
             .filter(|command| !command.is_empty())
         {
-            Some(command) => termio::Termio::spawn_with_cwd("/bin/sh", ["-lc", command], cwd, size),
-            None => {
-                termio::Termio::spawn_with_cwd("/bin/sh", std::iter::empty::<&str>(), cwd, size)
-            }
+            Some(command) => termio::Termio::spawn_with_options(
+                "/bin/sh",
+                ["-lc", command],
+                termio::TermioSpawnOptions {
+                    cwd,
+                    env: self.env_vars.clone(),
+                },
+                size,
+            ),
+            None => termio::Termio::spawn_with_options(
+                "/bin/sh",
+                std::iter::empty::<&str>(),
+                termio::TermioSpawnOptions {
+                    cwd,
+                    env: self.env_vars.clone(),
+                },
+                size,
+            ),
         };
         let Ok(termio) = termio else {
             return ROASTTY_INVALID_VALUE;
@@ -1479,6 +1494,28 @@ fn copied_config_string(ptr: *const c_char) -> Option<String> {
         .to_str()
         .ok()
         .map(str::to_owned)
+}
+
+fn valid_env_key(key: &str) -> bool {
+    !key.is_empty() && !key.contains('=')
+}
+
+fn copied_env_vars(ptr: *mut RoasttyEnvVar, len: usize) -> Vec<(String, String)> {
+    if ptr.is_null() || len == 0 {
+        return Vec::new();
+    }
+
+    let vars = unsafe { slice::from_raw_parts(ptr, len) };
+    vars.iter()
+        .filter_map(|var| {
+            let key = copied_config_string(var.key)?;
+            if !valid_env_key(&key) {
+                return None;
+            }
+            let value = copied_config_string(var.value)?;
+            Some((key, value))
+        })
+        .collect()
 }
 
 fn terminal_from_handle<'a>(handle: RoasttyTerminal) -> Option<&'a mut Terminal> {
@@ -8386,6 +8423,7 @@ pub extern "C" fn roastty_surface_new(
         userdata: config.userdata,
         working_directory: copied_config_string(config.working_directory),
         command: copied_config_string(config.command),
+        env_vars: copied_env_vars(config.env_vars, config.env_var_count),
         initial_input: copied_config_string(config.initial_input).map(String::into_bytes),
         scale_factor_x: config.scale_factor,
         scale_factor_y: config.scale_factor,
@@ -9007,6 +9045,155 @@ mod tests {
         let text = surface_snapshot_text_after_start(app, surface);
 
         assert!(text.contains(current_dir.to_str().unwrap()));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_start_passes_environment_variables() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf '%s' \"$ROASTTY_SURFACE_ENV_TEST\"").unwrap();
+        let key = CString::new("ROASTTY_SURFACE_ENV_TEST").unwrap();
+        let value = CString::new("surface-env").unwrap();
+        let mut env = [RoasttyEnvVar {
+            key: key.as_ptr(),
+            value: value.as_ptr(),
+        }];
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        config.env_vars = env.as_mut_ptr();
+        config.env_var_count = env.len();
+        let surface = new_test_surface_with_config(app, &config);
+
+        let text = surface_snapshot_text_after_start(app, surface);
+
+        assert!(text.contains("surface-env"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_start_uses_copied_env_after_source_strings_drop() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = {
+            let command = CString::new("printf '%s' \"$ROASTTY_SCOPED_ENV_TEST\"").unwrap();
+            let key = CString::new("ROASTTY_SCOPED_ENV_TEST").unwrap();
+            let value = CString::new("scoped-env").unwrap();
+            let mut env = [RoasttyEnvVar {
+                key: key.as_ptr(),
+                value: value.as_ptr(),
+            }];
+            let mut config = roastty_surface_config_new();
+            config.command = command.as_ptr();
+            config.env_vars = env.as_mut_ptr();
+            config.env_var_count = env.len();
+            new_test_surface_with_config(app, &config)
+        };
+
+        let text = surface_snapshot_text_after_start(app, surface);
+
+        assert!(text.contains("scoped-env"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_start_treats_null_env_array_as_empty() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf '%s' \"${ROASTTY_NULL_ENV_TEST-unset}\"").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        config.env_vars = ptr::null_mut();
+        config.env_var_count = 3;
+        let surface = new_test_surface_with_config(app, &config);
+
+        let text = surface_snapshot_text_after_start(app, surface);
+
+        assert!(text.contains("unset"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_start_skips_invalid_env_entries_and_keeps_valid_entry() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command =
+            CString::new("printf '%s:%s' \"$ROASTTY_VALID_ENV\" \"$ROASTTY_EMPTY_ENV\"").unwrap();
+        let valid_key = CString::new("ROASTTY_VALID_ENV").unwrap();
+        let valid_value = CString::new("valid-env").unwrap();
+        let empty_key = CString::new("").unwrap();
+        let empty_value = CString::new("ignored-empty").unwrap();
+        let equals_key = CString::new("ROASTTY_BAD=ENV").unwrap();
+        let equals_value = CString::new("ignored-equals").unwrap();
+        let empty_env_key = CString::new("ROASTTY_EMPTY_ENV").unwrap();
+        let empty_env_value = CString::new("").unwrap();
+        let mut env = [
+            RoasttyEnvVar {
+                key: ptr::null(),
+                value: valid_value.as_ptr(),
+            },
+            RoasttyEnvVar {
+                key: valid_key.as_ptr(),
+                value: valid_value.as_ptr(),
+            },
+            RoasttyEnvVar {
+                key: empty_key.as_ptr(),
+                value: empty_value.as_ptr(),
+            },
+            RoasttyEnvVar {
+                key: equals_key.as_ptr(),
+                value: equals_value.as_ptr(),
+            },
+            RoasttyEnvVar {
+                key: empty_env_key.as_ptr(),
+                value: empty_env_value.as_ptr(),
+            },
+        ];
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        config.env_vars = env.as_mut_ptr();
+        config.env_var_count = env.len();
+        let surface = new_test_surface_with_config(app, &config);
+
+        let text = surface_snapshot_text_after_start(app, surface);
+
+        assert!(text.contains("valid-env:"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_start_duplicate_env_keys_last_value_wins() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf '%s' \"$ROASTTY_DUP_ENV\"").unwrap();
+        let key = CString::new("ROASTTY_DUP_ENV").unwrap();
+        let first = CString::new("first").unwrap();
+        let second = CString::new("second").unwrap();
+        let mut env = [
+            RoasttyEnvVar {
+                key: key.as_ptr(),
+                value: first.as_ptr(),
+            },
+            RoasttyEnvVar {
+                key: key.as_ptr(),
+                value: second.as_ptr(),
+            },
+        ];
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        config.env_vars = env.as_mut_ptr();
+        config.env_var_count = env.len();
+        let surface = new_test_surface_with_config(app, &config);
+
+        let text = surface_snapshot_text_after_start(app, surface);
+
+        assert!(text.contains("second"));
+        assert!(!text.contains("first"));
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

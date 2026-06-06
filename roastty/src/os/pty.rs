@@ -89,6 +89,7 @@ impl Pty {
 pub(crate) struct PtyCommand {
     program: OsString,
     args: Vec<OsString>,
+    env: Vec<(OsString, OsString)>,
     cwd: Option<PathBuf>,
     size: PtySize,
 }
@@ -98,6 +99,7 @@ impl PtyCommand {
         Self {
             program: program.into(),
             args: Vec::new(),
+            env: Vec::new(),
             cwd: None,
             size,
         }
@@ -113,6 +115,12 @@ impl PtyCommand {
         self
     }
 
+    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.env
+            .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
+        self
+    }
+
     pub(crate) fn spawn(&self) -> io::Result<PtyChild> {
         let mut pty = Pty::open(self.size)?;
         let slave_fd = pty
@@ -125,6 +133,9 @@ impl PtyCommand {
 
         let mut command = Command::new(&self.program);
         command.args(&self.args);
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
         if let Some(cwd) = &self.cwd {
             command.current_dir(cwd);
         }
@@ -517,6 +528,22 @@ mod tests {
 
         let output = read_master_with_timeout(child.master_fd(), 3).expect("read master");
         assert_eq!(output, b"tty");
+        assert!(child.wait().expect("wait child").success());
+    }
+
+    #[test]
+    fn pty_command_passes_environment_variables() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let mut command = PtyCommand::new("/bin/sh", test_size());
+        command
+            .arg("-c")
+            .arg("printf '%s' \"$ROASTTY_PTY_ENV_TEST\"")
+            .env("ROASTTY_PTY_ENV_TEST", "env-ok");
+
+        let mut child = command.spawn().expect("spawn child");
+
+        let output = read_master_with_timeout(child.master_fd(), 6).expect("read master");
+        assert_eq!(output, b"env-ok");
         assert!(child.wait().expect("wait child").success());
     }
 

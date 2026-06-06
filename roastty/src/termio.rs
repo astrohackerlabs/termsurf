@@ -18,6 +18,12 @@ pub(crate) struct Termio {
     pending_write: Vec<u8>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct TermioSpawnOptions {
+    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) env: Vec<(String, String)>,
+}
+
 // Termio is transferred to the worker thread behind a Mutex. The raw pointers
 // inside Terminal are owned terminal data structures, and worker access is
 // serialized through the mutex. TermioWorker::spawn rejects terminals with
@@ -85,12 +91,32 @@ impl Termio {
         cwd: Option<PathBuf>,
         size: PtySize,
     ) -> Result<Self, TermioError> {
+        Self::spawn_with_options(
+            program,
+            args,
+            TermioSpawnOptions {
+                cwd,
+                env: Vec::new(),
+            },
+            size,
+        )
+    }
+
+    pub(crate) fn spawn_with_options(
+        program: impl Into<OsString>,
+        args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+        options: TermioSpawnOptions,
+        size: PtySize,
+    ) -> Result<Self, TermioError> {
         let terminal = Terminal::init(size.cols, size.rows, None)?;
         let mut command = PtyCommand::new(program, size);
         for arg in args {
             command.arg(arg);
         }
-        if let Some(cwd) = cwd {
+        for (key, value) in options.env {
+            command.env(key, value);
+        }
+        if let Some(cwd) = options.cwd {
             command.cwd(cwd);
         }
         let child = command.spawn()?;
@@ -587,6 +613,30 @@ mod tests {
             test_size()
         )
         .is_err());
+    }
+
+    #[test]
+    fn spawn_with_options_passes_environment_variables() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let mut termio = Termio::spawn_with_options(
+            "/bin/sh",
+            ["-c", "printf '%s' \"$ROASTTY_TERMIO_ENV_TEST\""],
+            TermioSpawnOptions {
+                cwd: None,
+                env: vec![(
+                    "ROASTTY_TERMIO_ENV_TEST".to_string(),
+                    "termio-env".to_string(),
+                )],
+            },
+            test_size(),
+        )
+        .expect("spawn termio with env");
+
+        pump_until(&mut termio, |termio, _| {
+            termio.terminal().plain_screen(false).contains("termio-env")
+        });
+
+        assert!(termio.terminal().plain_screen(false).contains("termio-env"));
     }
 
     #[test]

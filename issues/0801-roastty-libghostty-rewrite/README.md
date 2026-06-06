@@ -288,9 +288,9 @@ Experiment 246).
 - [ ] `pty` + `termio` (shell spawn, read/write loops, resize, fg pid, tty name,
       exit) — PTY open/resize, subprocess spawn, child IO, synchronous pump,
       background worker, worker shutdown/drop, and surface process-exit state
-      done; surface command/cwd/initial-input worker launch done; env var
-      propagation, configured shell policy beyond `/bin/sh`, foreground pid, tty
-      name, renderer wakeups, and full renderer integration missing
+      done; surface command/cwd/env/initial-input worker launch done; configured
+      shell policy beyond `/bin/sh`, foreground pid, tty name, renderer wakeups,
+      and full renderer integration missing
 - [ ] `os/` utilities (tmpdir / file / env / hostname / locale) — ad hoc Rust
       stdlib; no dedicated module
 
@@ -1822,7 +1822,7 @@ are past the correctness-critical foundation.
 - [Experiment 671: Surface Worker Launch](671-surface-worker-launch.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 672: Surface Env Propagation](672-surface-env-propagation.md) —
-  **Designed** · Codex/Codex/-
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

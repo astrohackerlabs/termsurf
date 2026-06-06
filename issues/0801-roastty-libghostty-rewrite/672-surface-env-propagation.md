@@ -3,6 +3,16 @@
 agent = "codex"
 model = "gpt-5"
 reasoning = "high"
+
+[review.design]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 672: Surface Env Propagation
@@ -86,3 +96,56 @@ for each case.
 - `cargo test -p roastty termio`
 - `cargo test -p roastty surface`
 - `git diff --check`
+
+## Result
+
+**Result:** Pass.
+
+Roastty now propagates surface-configured environment variables into PTY child
+processes. `PtyCommand` owns env vars and applies them with `Command::env`.
+`Termio` has `TermioSpawnOptions` for cwd plus env while keeping its existing
+convenience spawn wrappers. Surfaces copy valid env entries from
+`RoasttySurfaceConfig` into owned state and pass them through the termio launch
+path used by `roastty_surface_start`.
+
+The env copy rules are permissive and explicit: a null env array means no env
+entries regardless of count; null/non-UTF-8 entries are skipped; keys must be
+non-empty and must not contain `=`; values may be empty; duplicate keys are
+applied in order, so the last value wins.
+
+Focused tests cover PTY-level env propagation, Termio-level env propagation,
+surface env propagation, copied env ownership after source C strings are
+dropped, null env array with nonzero count, invalid/null entries alongside valid
+entries, empty values, and duplicate-key last-wins behavior.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `cargo test -p roastty os::pty` — 14 passed, 0 failed
+- `cargo test -p roastty termio` — 17 passed, 0 failed
+- `cargo test -p roastty surface` — 25 passed, 0 failed
+- `git diff --check`
+
+## Conclusion
+
+Surface worker launch now honors command, working directory, env vars, and
+initial input from copied surface config. The remaining PTY/frontend launch gaps
+are configured shell policy beyond `/bin/sh`, foreground PID, tty-name, renderer
+wakeups, terminal grid resize, and the broader draw/refresh lifecycle.
+
+## Completion Review
+
+**Result:** Approved after provenance fix.
+
+Codex found no implementation bugs in the env propagation path. It confirmed
+that `PtyCommand` owns and applies env vars in order, `TermioSpawnOptions`
+preserves existing wrappers while adding cwd+env launch, and `Surface` copies
+env entries into owned state and passes them through `roastty_surface_start`.
+Codex also confirmed the invalid/null/duplicate semantics match the approved
+design: null env arrays are empty, invalid entries are skipped, empty and
+`=`-containing keys are rejected, empty values are allowed, and duplicate keys
+are applied in order so the last value wins.
+
+The only result-review finding was missing provenance. The experiment
+frontmatter and README agent tuple now record the result review.
