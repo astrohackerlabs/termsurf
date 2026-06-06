@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 717: Binding Action Copy To Clipboard
@@ -130,3 +135,59 @@ The review raised the normal workflow provenance requirement. Design-review
 frontmatter and this review section are now present, and the README provenance
 tuple will be updated to `Codex/Codex/-` before the plan commit. Result-review
 provenance will be added only after implementation and completion review.
+
+## Result
+
+**Result:** Pass
+
+Implemented `copy_to_clipboard` binding-action parsing and dispatch for the
+default mixed format plus explicit `plain`, `vt`, `html`, and `mixed` formats.
+The surface helper now returns `false` for null, detached, no-worker,
+no-selection, and no-callback surfaces, formats the active selection with unwrap
+and trim enabled, and writes to the standard clipboard through
+`write_clipboard_cb` with `confirm = false`.
+
+The payload behavior matches the upstream shape for this slice: plain and VT
+copy one `text/plain` item, HTML copies one `text/html` item, and mixed copy
+uses one callback containing `text/plain` followed by `text/html`. The C ABI
+harness now covers malformed copy action rejection and valid no-worker copy
+forms returning `false`.
+
+Verification:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty copy_to_clipboard -- --nocapture --test-threads=1` — 2
+  passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1` — 64
+  passed on rerun; an earlier run hit a transient existing PTY text test timing
+  failure, and the same test passed when rerun
+- `cargo test -p roastty --test abi_harness` — 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Roastty now supports Ghostty-style active-selection clipboard copying for the
+standard clipboard through the existing runtime callback ABI. The remaining
+clipboard gaps are outside this experiment's scope: selection clipboard support,
+copy-on-select behavior, clear-on-copy configuration, paste/request machinery,
+and clipboard policy prompts.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 717 implementation and result record.
+The review found one workflow blocker: result-review provenance was not yet
+recorded in the experiment frontmatter or README tuple. This file now includes
+`[review.result]`, and the README provenance tuple has been updated to
+`Codex/Codex/Codex`.
+
+The review found no implementation blockers. It approved parser behavior,
+false-path handling, callback dispatch to the standard clipboard with
+`confirm = false`, mixed-format MIME ordering as one callback with `text/plain`
+then `text/html`, and the Rust and C ABI test coverage.
+
+The review noted one non-blocking ABI lifetime risk: the implementation passes
+callback contents backed by temporary `CString`s that remain valid only for the
+duration of the synchronous callback. This matches the current callback usage;
+documenting the callback-copy lifetime contract can be handled separately if the
+public ABI docs are expanded.

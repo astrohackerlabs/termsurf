@@ -103,6 +103,7 @@ const ROASTTY_SURFACE_CONTEXT_TAB: c_int = 1;
 const ROASTTY_SURFACE_CONTEXT_SPLIT: c_int = 2;
 
 const ROASTTY_TARGET_SURFACE: c_int = 1;
+const ROASTTY_CLIPBOARD_STANDARD: c_int = 0;
 #[allow(dead_code)]
 const ROASTTY_CLIPBOARD_REQUEST_PASTE: c_int = 0;
 #[allow(dead_code)]
@@ -1957,6 +1958,91 @@ impl Surface {
         adjusted
     }
 
+    fn copy_to_clipboard(&mut self, format: CopyToClipboardFormat) -> bool {
+        if self.app.is_null() {
+            return false;
+        }
+        let Some(app) = app_from_handle(self.app) else {
+            return false;
+        };
+        let Some(write_clipboard) = app.runtime.write_clipboard_cb else {
+            return false;
+        };
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return false;
+        };
+        let Some(formatted) = worker.with_termio(|termio| {
+            let terminal = termio.terminal();
+            let selection = terminal.active_selection()?;
+            match format {
+                CopyToClipboardFormat::Plain => terminal
+                    .selection_format(TerminalSelectionFormat::Plain, true, true, Some(selection))
+                    .ok()
+                    .map(|text| vec![("text/plain", text)]),
+                CopyToClipboardFormat::Vt => terminal
+                    .selection_format(TerminalSelectionFormat::Vt, true, true, Some(selection))
+                    .ok()
+                    .map(|text| vec![("text/plain", text)]),
+                CopyToClipboardFormat::Html => terminal
+                    .selection_format(TerminalSelectionFormat::Html, true, true, Some(selection))
+                    .ok()
+                    .map(|text| vec![("text/html", text)]),
+                CopyToClipboardFormat::Mixed => {
+                    let plain = terminal
+                        .selection_format(
+                            TerminalSelectionFormat::Plain,
+                            true,
+                            true,
+                            Some(selection),
+                        )
+                        .ok()?;
+                    let html = terminal
+                        .selection_format(
+                            TerminalSelectionFormat::Html,
+                            true,
+                            true,
+                            Some(selection),
+                        )
+                        .ok()?;
+                    Some(vec![("text/plain", plain), ("text/html", html)])
+                }
+            }
+        }) else {
+            return false;
+        };
+
+        let mut mime_strings = Vec::with_capacity(formatted.len());
+        let mut data_strings = Vec::with_capacity(formatted.len());
+        for (mime, data) in formatted {
+            let Ok(mime) = CString::new(mime) else {
+                return false;
+            };
+            let Ok(data) = CString::new(data) else {
+                return false;
+            };
+            mime_strings.push(mime);
+            data_strings.push(data);
+        }
+        let contents: Vec<RoasttyClipboardContent> = mime_strings
+            .iter()
+            .zip(data_strings.iter())
+            .map(|(mime, data)| RoasttyClipboardContent {
+                mime: mime.as_ptr(),
+                data: data.as_ptr(),
+            })
+            .collect();
+        unsafe {
+            write_clipboard(
+                app.runtime.userdata,
+                ROASTTY_CLIPBOARD_STANDARD,
+                contents.as_ptr(),
+                contents.len(),
+                false,
+            );
+        }
+        true
+    }
+
     fn scroll_viewport_to_top(&mut self) {
         if self.app.is_null() {
             return;
@@ -2643,6 +2729,7 @@ enum ParsedBindingAction {
     ClearScreen,
     SelectAll,
     AdjustSelection(TerminalSelectionAdjustment),
+    CopyToClipboard(CopyToClipboardFormat),
     ScrollToTop,
     ScrollToBottom,
     ScrollToRow(usize),
@@ -2652,6 +2739,25 @@ enum ParsedBindingAction {
     ScrollPageLines(i16),
     ScrollPageFractional(f32),
     JumpToPrompt(i16),
+}
+
+#[derive(Clone, Copy)]
+enum CopyToClipboardFormat {
+    Plain,
+    Vt,
+    Html,
+    Mixed,
+}
+
+fn copy_to_clipboard_format_from_str(parameter: Option<&[u8]>) -> Option<CopyToClipboardFormat> {
+    match parameter {
+        None => Some(CopyToClipboardFormat::Mixed),
+        Some(b"plain") => Some(CopyToClipboardFormat::Plain),
+        Some(b"vt") => Some(CopyToClipboardFormat::Vt),
+        Some(b"html") => Some(CopyToClipboardFormat::Html),
+        Some(b"mixed") => Some(CopyToClipboardFormat::Mixed),
+        _ => None,
+    }
 }
 
 fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindingAction> {
@@ -2740,6 +2846,9 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
         }
         b"adjust_selection" => Some(ParsedBindingAction::AdjustSelection(
             selection_adjustment_from_str(parameter?)?,
+        )),
+        b"copy_to_clipboard" => Some(ParsedBindingAction::CopyToClipboard(
+            copy_to_clipboard_format_from_str(parameter)?,
         )),
         b"scroll_to_top" => {
             if parameter.is_some() {
@@ -10837,6 +10946,12 @@ pub extern "C" fn roastty_surface_binding_action(
             }
             surface.adjust_selection(adjustment)
         }
+        ParsedBindingAction::CopyToClipboard(format) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.copy_to_clipboard(format)
+        }
         ParsedBindingAction::ScrollToTop => {
             if surface.app.is_null() {
                 return false;
@@ -10936,6 +11051,14 @@ mod tests {
         storage: [usize; 8],
     }
 
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct ClipboardWriteRecord {
+        userdata: usize,
+        clipboard: c_int,
+        contents: Vec<(String, String)>,
+        confirm: bool,
+    }
+
     #[derive(Default)]
     struct EffectState {
         write_calls: Vec<Vec<u8>>,
@@ -10962,6 +11085,7 @@ mod tests {
         static EFFECT_STATE: RefCell<EffectState> = RefCell::new(EffectState::default());
         static ACTION_RECORDS: RefCell<Vec<ActionRecord>> = const { RefCell::new(Vec::new()) };
         static ACTION_RESULT: RefCell<bool> = const { RefCell::new(true) };
+        static CLIPBOARD_WRITE_RECORDS: RefCell<Vec<ClipboardWriteRecord>> = const { RefCell::new(Vec::new()) };
     }
 
     fn reset_effect_state() {
@@ -11073,6 +11197,58 @@ mod tests {
             read_clipboard_cb: None,
             confirm_read_clipboard_cb: None,
             write_clipboard_cb: None,
+            close_surface_cb: None,
+        };
+        roastty_app_new(&runtime, ptr::null_mut())
+    }
+
+    unsafe extern "C" fn write_clipboard_record_cb(
+        userdata: *mut c_void,
+        clipboard: c_int,
+        content: *const RoasttyClipboardContent,
+        len: usize,
+        confirm: bool,
+    ) {
+        let contents = if content.is_null() {
+            Vec::new()
+        } else {
+            slice::from_raw_parts(content, len)
+                .iter()
+                .map(|item| {
+                    let mime = CStr::from_ptr(item.mime).to_string_lossy().into_owned();
+                    let data = CStr::from_ptr(item.data).to_string_lossy().into_owned();
+                    (mime, data)
+                })
+                .collect()
+        };
+        CLIPBOARD_WRITE_RECORDS.with(|records| {
+            records.borrow_mut().push(ClipboardWriteRecord {
+                userdata: userdata as usize,
+                clipboard,
+                contents,
+                confirm,
+            });
+        });
+    }
+
+    fn reset_clipboard_write_records() {
+        CLIPBOARD_WRITE_RECORDS.with(|records| records.borrow_mut().clear());
+    }
+
+    fn clipboard_write_records() -> Vec<ClipboardWriteRecord> {
+        CLIPBOARD_WRITE_RECORDS.with(|records| records.borrow().clone())
+    }
+
+    fn new_test_app_with_clipboard_write(userdata: usize) -> RoasttyApp {
+        reset_clipboard_write_records();
+        let runtime = RoasttyRuntimeConfig {
+            userdata: userdata as *mut c_void,
+            supports_selection_clipboard: false,
+            wakeup_cb: None,
+            action_cb: None,
+            read_clipboard_cb: None,
+            confirm_read_clipboard_cb: None,
+            write_clipboard_cb: Some(write_clipboard_record_cb),
             close_surface_cb: None,
         };
         roastty_app_new(&runtime, ptr::null_mut())
@@ -12745,6 +12921,11 @@ mod tests {
             "adjust_selection: left",
             "adjust_selection:left ",
             "adjust_selection:diagonal",
+            "copy_to_clipboard:",
+            "copy_to_clipboard:plain:extra",
+            "copy_to_clipboard: plain",
+            "copy_to_clipboard:plain ",
+            "copy_to_clipboard:rtf",
             "scroll_to_top:",
             "scroll_to_top:now",
             "scroll_to_bottom:",
@@ -13650,6 +13831,158 @@ mod tests {
             TerminalSelectionAdjustment::Right,
         );
         assert_eq!(surface_worker_viewport_top_left_screen(surface), top);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    fn surface_worker_selection_format(
+        surface: RoasttySurface,
+        format: TerminalSelectionFormat,
+    ) -> String {
+        let surface_ref = surface_from_handle(surface).unwrap();
+        let worker = surface_ref.termio_worker.as_ref().unwrap();
+        worker.with_termio(|termio| {
+            let selection = termio.terminal().active_selection().unwrap();
+            termio
+                .terminal()
+                .selection_format(format, true, true, Some(selection))
+                .unwrap()
+        })
+    }
+
+    #[test]
+    fn surface_binding_action_copy_to_clipboard_false_paths() {
+        let app = new_test_app_with_clipboard_write(0xC017);
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "copy_to_clipboard"));
+        for action in [
+            "copy_to_clipboard",
+            "copy_to_clipboard:plain",
+            "copy_to_clipboard:vt",
+            "copy_to_clipboard:html",
+            "copy_to_clipboard:mixed",
+        ] {
+            assert!(!binding_action(surface, action), "{action}");
+        }
+        assert!(clipboard_write_records().is_empty());
+
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "copy_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+        roastty_surface_free(surface);
+
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_clipboard_write(0xC017);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+
+        assert!(!binding_action(surface, "copy_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+
+        let app = new_test_app();
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        let selection = surface_worker_selection(surface, (0, 0), (4, 0));
+        set_surface_worker_active_selection(surface, Some(selection));
+
+        reset_clipboard_write_records();
+        assert!(!binding_action(surface, "copy_to_clipboard"));
+        assert!(clipboard_write_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_copy_to_clipboard_writes_formats() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_clipboard_write(0xC017);
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 20, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        {
+            let surface_ref = surface_from_handle(surface).unwrap();
+            let worker = surface_ref.termio_worker.as_ref().unwrap();
+            worker.with_termio_mut(|termio| {
+                termio.terminal_mut().reset();
+                termio
+                    .terminal_mut()
+                    .next_slice(b"\x1b[31mred\x1b[0m plain\n")
+                    .unwrap();
+            });
+        }
+
+        for (action, format, expected_mime) in [
+            (
+                "copy_to_clipboard:plain",
+                TerminalSelectionFormat::Plain,
+                "text/plain",
+            ),
+            (
+                "copy_to_clipboard:vt",
+                TerminalSelectionFormat::Vt,
+                "text/plain",
+            ),
+            (
+                "copy_to_clipboard:html",
+                TerminalSelectionFormat::Html,
+                "text/html",
+            ),
+        ] {
+            let selection = surface_worker_selection(surface, (0, 0), (8, 0));
+            set_surface_worker_active_selection(surface, Some(selection));
+            let expected = surface_worker_selection_format(surface, format);
+
+            reset_clipboard_write_records();
+            assert!(binding_action(surface, action), "{action}");
+            assert_eq!(
+                clipboard_write_records(),
+                vec![ClipboardWriteRecord {
+                    userdata: 0xC017,
+                    clipboard: ROASTTY_CLIPBOARD_STANDARD,
+                    contents: vec![(expected_mime.to_owned(), expected)],
+                    confirm: false,
+                }]
+            );
+        }
+
+        for action in ["copy_to_clipboard", "copy_to_clipboard:mixed"] {
+            let selection = surface_worker_selection(surface, (0, 0), (8, 0));
+            set_surface_worker_active_selection(surface, Some(selection));
+            let expected_plain =
+                surface_worker_selection_format(surface, TerminalSelectionFormat::Plain);
+            let expected_html =
+                surface_worker_selection_format(surface, TerminalSelectionFormat::Html);
+
+            reset_clipboard_write_records();
+            assert!(binding_action(surface, action), "{action}");
+            assert_eq!(
+                clipboard_write_records(),
+                vec![ClipboardWriteRecord {
+                    userdata: 0xC017,
+                    clipboard: ROASTTY_CLIPBOARD_STANDARD,
+                    contents: vec![
+                        ("text/plain".to_owned(), expected_plain),
+                        ("text/html".to_owned(), expected_html),
+                    ],
+                    confirm: false,
+                }]
+            );
+        }
+
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

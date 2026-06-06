@@ -1944,7 +1944,7 @@ are past the correctness-critical foundation.
 - [Experiment 716: Binding Action Adjust Selection](716-binding-action-adjust-selection.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 717: Binding Action Copy To Clipboard](717-binding-action-copy-to-clipboard.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
