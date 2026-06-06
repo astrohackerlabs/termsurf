@@ -1202,6 +1202,43 @@ impl Terminal {
         Ok(())
     }
 
+    pub(in crate::terminal) fn apply_tmux_cursor_state(
+        &mut self,
+        screen: TerminalScreen,
+        cursor_x: usize,
+        cursor_y: usize,
+        cursor_shape: &str,
+    ) {
+        let target = match screen {
+            TerminalScreen::Primary => TerminalScreenKey::Primary,
+            TerminalScreen::Alternate => TerminalScreenKey::Alternate,
+        };
+        let Some(screen) = self.screens.screen_mut(target) else {
+            return;
+        };
+
+        if let (Ok(x), Ok(y)) = (
+            CellCountInt::try_from(cursor_x),
+            CellCountInt::try_from(cursor_y),
+        ) {
+            if x < self.size.cols && y < self.size.rows {
+                screen.cursor_position_basic(
+                    y.saturating_add(1),
+                    x.saturating_add(1),
+                    self.size.rows,
+                    self.size.cols,
+                );
+            }
+        }
+
+        match cursor_shape {
+            "block" => screen.set_cursor_visual_style(cursor::VisualStyle::Block),
+            "underline" => screen.set_cursor_visual_style(cursor::VisualStyle::Underline),
+            "bar" => screen.set_cursor_visual_style(cursor::VisualStyle::Bar),
+            _ => {}
+        }
+    }
+
     pub(crate) fn cursor_visible(&self) -> bool {
         self.modes.get(modes::Mode::CursorVisible)
     }
@@ -2033,6 +2070,43 @@ impl Terminal {
     #[cfg(test)]
     fn alternate_initialized_for_tests(&self) -> bool {
         self.screens.alternate_initialized_for_tests()
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_screen_for_tests(&self) -> TerminalScreen {
+        self.active_screen()
+    }
+
+    #[cfg(test)]
+    pub(super) fn tmux_screen_initialized_for_tests(&self, screen: TerminalScreen) -> bool {
+        match screen {
+            TerminalScreen::Primary => true,
+            TerminalScreen::Alternate => self.screens.alternate_initialized_for_tests(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn tmux_cursor_position_for_tests(
+        &self,
+        screen: TerminalScreen,
+    ) -> Option<(CellCountInt, CellCountInt)> {
+        let key = match screen {
+            TerminalScreen::Primary => TerminalScreenKey::Primary,
+            TerminalScreen::Alternate => TerminalScreenKey::Alternate,
+        };
+        self.screens.screen(key).map(Screen::cursor_position)
+    }
+
+    #[cfg(test)]
+    pub(super) fn tmux_cursor_visual_style_for_tests(
+        &self,
+        screen: TerminalScreen,
+    ) -> Option<cursor::VisualStyle> {
+        let key = match screen {
+            TerminalScreen::Primary => TerminalScreenKey::Primary,
+            TerminalScreen::Alternate => TerminalScreenKey::Alternate,
+        };
+        self.screens.screen(key).map(Screen::cursor_visual_style)
     }
 
     #[cfg(test)]

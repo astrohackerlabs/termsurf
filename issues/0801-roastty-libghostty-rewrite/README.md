@@ -199,9 +199,9 @@ Experiment 246).
       DCS entry, viewer startup, list-windows parsing, and window-refresh
       notifications, layout-change window updates, and pane ID sync/capture
       queueing, pane terminal state, pane visible output, and pane history
-      output, and pane state parsing done; pane state cursor application in
-      progress; remaining pane state application/live output, PTY, and App
-      integration missing
+      output, pane state parsing, and pane state cursor application done;
+      remaining pane state application/live output, PTY, and App integration
+      missing
 - [x] `sys` (PNG-decode abstraction) — implemented and tested via C ABI
 
 ### Renderer — data + Metal primitives only; no live render loop
@@ -1776,7 +1776,7 @@ are past the correctness-critical foundation.
 - [Experiment 655: Tmux Pane State Parser](655-tmux-pane-state-parser.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 656: Tmux Pane State Cursor](656-tmux-pane-state-cursor.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

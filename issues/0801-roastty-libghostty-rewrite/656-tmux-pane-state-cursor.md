@@ -77,3 +77,56 @@ Codex confirmed the previous blockers were resolved and the revised helper
 constraints now match upstream cursor behavior. It suggested, non-blockingly,
 that alternate-screen verification may be clearer as separate fixtures for an
 existing alternate screen and a missing alternate screen.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now routes `TmuxCommand::PaneState` output through the typed pane-state
+parser and applies the cursor subset to tracked pane terminals. For each parsed
+state line, stale pane IDs are ignored, `alternate_on` selects primary or
+alternate, in-bounds tmux 0-based cursor coordinates are applied, and cursor
+shape text maps `block`, `underline`, and `bar` to Roastty cursor visual styles.
+
+The terminal helper mutates the requested existing screen directly. It does not
+switch the active screen and does not allocate/initialize an alternate screen
+when pane state refers to an absent alternate screen. Out-of-bounds cursor
+coordinates are ignored without returning early, so a valid cursor shape on the
+same state line is still applied. Empty, `default`, and unknown shapes leave the
+previous cursor style unchanged.
+
+Malformed pane-state output now defuncts the viewer, while successful state
+handling preserves command-queue continuation. Cursor visibility/blinking,
+terminal modes, mouse modes, scroll region, tab stops, and alternate saved
+cursor restoration remain future pane-state work.
+
+Verification passed:
+
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/656-tmux-pane-state-cursor.md`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `cargo test -p roastty terminal::tmux` — 121 passed, 0 failed
+- `git diff --check`
+
+## Conclusion
+
+Pane state application now has the cursor-position and cursor-shape subset wired
+with the upstream no-switch/no-allocation behavior. The next tmux experiment
+should apply the next state subset, most likely cursor visibility/blinking and
+basic terminal modes, before moving on to mouse modes, scroll regions, tab
+stops, and alternate saved cursor restoration.
+
+## Completion Review
+
+**Result:** Approved.
+
+Codex found no blocking issues. It confirmed `PaneState` routes through
+`parse_pane_states`, malformed output defuncts the viewer, stale pane IDs are
+skipped, successful handling continues the queue, and the terminal helper
+mutates the requested existing screen without switching active screens or
+allocating an absent alternate screen.
+
+Codex suggested strengthening the default/unknown shape test so it starts from a
+non-default cursor style. That suggestion was applied: the test now sets
+`underline` first, then verifies `default`, unknown, and empty shapes preserve
+`Underline`.

@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+#[cfg(test)]
+use super::cursor;
 use super::terminal::{Terminal, TerminalScreen};
 
 const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
@@ -821,7 +823,13 @@ impl TmuxViewer {
                 }
                 Vec::new()
             }
-            TmuxCommand::PaneState | TmuxCommand::User(_) => Vec::new(),
+            TmuxCommand::PaneState => {
+                if !self.received_pane_state(&content) {
+                    return self.defunct();
+                }
+                Vec::new()
+            }
+            TmuxCommand::User(_) => Vec::new(),
         };
 
         actions.extend(self.emit_next_queued_command());
@@ -955,6 +963,32 @@ impl TmuxViewer {
             .is_ok()
     }
 
+    fn received_pane_state(&mut self, content: &[u8]) -> bool {
+        let Some(states) = parse_pane_states(content) else {
+            return false;
+        };
+
+        for state in states {
+            let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == state.pane_id) else {
+                continue;
+            };
+
+            let screen = if state.alternate_on {
+                TerminalScreen::Alternate
+            } else {
+                TerminalScreen::Primary
+            };
+            pane.terminal.apply_tmux_cursor_state(
+                screen,
+                state.cursor_x,
+                state.cursor_y,
+                &state.cursor_shape,
+            );
+        }
+
+        true
+    }
+
     fn emit_next_queued_command(&self) -> Vec<TmuxViewerAction> {
         self.command_queue
             .front()
@@ -1044,6 +1078,46 @@ impl TmuxViewer {
         };
         pane.terminal.switch_tmux_screen(screen).ok()?;
         Some(pane.terminal.scrollback_rows_for_tests())
+    }
+
+    #[cfg(test)]
+    fn pane_active_screen_for_tests(&self, id: usize) -> Option<TerminalScreen> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == id)
+            .map(|pane| pane.terminal.active_screen_for_tests())
+    }
+
+    #[cfg(test)]
+    fn pane_screen_initialized_for_tests(&self, id: usize, screen: TerminalScreen) -> Option<bool> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == id)
+            .map(|pane| pane.terminal.tmux_screen_initialized_for_tests(screen))
+    }
+
+    #[cfg(test)]
+    fn pane_cursor_position_for_tests(
+        &self,
+        id: usize,
+        screen: TerminalScreen,
+    ) -> Option<(u16, u16)> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == id)
+            .and_then(|pane| pane.terminal.tmux_cursor_position_for_tests(screen))
+    }
+
+    #[cfg(test)]
+    fn pane_cursor_visual_style_for_tests(
+        &self,
+        id: usize,
+        screen: TerminalScreen,
+    ) -> Option<cursor::VisualStyle> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == id)
+            .and_then(|pane| pane.terminal.tmux_cursor_visual_style_for_tests(screen))
     }
 
     #[cfg(test)]
@@ -2880,29 +2954,213 @@ mod tests {
     }
 
     #[test]
-    fn tmux_viewer_pane_state_output_consumes_and_emits_next_without_applying() {
+    fn tmux_viewer_pane_state_primary_sets_cursor_position_and_shape() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line(42, 3, 1, false, "underline").into_bytes()
+            )),
+            Vec::new()
+        );
+        assert_eq!(
+            viewer.pane_cursor_position_for_tests(42, TerminalScreen::Primary),
+            Some((3, 1))
+        );
+        assert_eq!(
+            viewer.pane_cursor_visual_style_for_tests(42, TerminalScreen::Primary),
+            Some(cursor::VisualStyle::Underline)
+        );
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_alternate_uses_existing_screen_without_switching() {
         let mut viewer = TmuxViewer::new();
         viewer.set_panes_for_tests(&[(42, 10, 2)]);
         viewer.queue_command_for_tests(TmuxCommand::PaneVisible(TmuxCapturePane {
             id: 42,
-            screen_key: TmuxScreenKey::Primary,
+            screen_key: TmuxScreenKey::Alternate,
         }));
         assert_eq!(
-            viewer.next(ControlNotification::BlockEnd(b"keep".to_vec())),
+            viewer.next(ControlNotification::BlockEnd(b"alternate".to_vec())),
             Vec::new()
         );
+        assert_eq!(
+            viewer.pane_active_screen_for_tests(42),
+            Some(TerminalScreen::Alternate)
+        );
+        viewer.pane_active_plain_for_tests(42, TmuxScreenKey::Primary);
+        assert_eq!(
+            viewer.pane_active_screen_for_tests(42),
+            Some(TerminalScreen::Primary)
+        );
+
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line(42, 4, 1, true, "bar").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        assert_eq!(
+            viewer.pane_active_screen_for_tests(42),
+            Some(TerminalScreen::Primary)
+        );
+        assert_eq!(
+            viewer.pane_cursor_position_for_tests(42, TerminalScreen::Alternate),
+            Some((4, 1))
+        );
+        assert_eq!(
+            viewer.pane_cursor_visual_style_for_tests(42, TerminalScreen::Alternate),
+            Some(cursor::VisualStyle::Bar)
+        );
+        assert_eq!(
+            viewer.pane_active_plain_for_tests(42, TmuxScreenKey::Primary),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_missing_alternate_is_not_allocated() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        assert_eq!(
+            viewer.pane_screen_initialized_for_tests(42, TerminalScreen::Alternate),
+            Some(false)
+        );
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line(42, 4, 1, true, "bar").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        assert_eq!(
+            viewer.pane_active_screen_for_tests(42),
+            Some(TerminalScreen::Primary)
+        );
+        assert_eq!(
+            viewer.pane_screen_initialized_for_tests(42, TerminalScreen::Alternate),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_ignores_stale_panes_and_applies_later_valid_lines() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        let output = format!(
+            "{}\n{}",
+            pane_state_line(99, 8, 1, false, "bar"),
+            pane_state_line(42, 2, 1, false, "block")
+        );
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(output.into_bytes())),
+            Vec::new()
+        );
+        assert_eq!(
+            viewer.pane_cursor_position_for_tests(42, TerminalScreen::Primary),
+            Some((2, 1))
+        );
+        assert_eq!(
+            viewer.pane_cursor_visual_style_for_tests(42, TerminalScreen::Primary),
+            Some(cursor::VisualStyle::Block)
+        );
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_out_of_bounds_position_still_applies_shape() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line(42, 3, 1, false, "block").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line(42, 99, 1, false, "bar").into_bytes()
+            )),
+            Vec::new()
+        );
+
+        assert_eq!(
+            viewer.pane_cursor_position_for_tests(42, TerminalScreen::Primary),
+            Some((3, 1))
+        );
+        assert_eq!(
+            viewer.pane_cursor_visual_style_for_tests(42, TerminalScreen::Primary),
+            Some(cursor::VisualStyle::Bar)
+        );
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_default_and_unknown_shapes_leave_style_unchanged() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(
+                pane_state_line(42, 1, 1, false, "underline").into_bytes()
+            )),
+            Vec::new()
+        );
+        assert_eq!(
+            viewer.pane_cursor_visual_style_for_tests(42, TerminalScreen::Primary),
+            Some(cursor::VisualStyle::Underline)
+        );
+
+        for shape in ["default", "diamond", ""] {
+            viewer.queue_command_for_tests(TmuxCommand::PaneState);
+            assert_eq!(
+                viewer.next(ControlNotification::BlockEnd(
+                    pane_state_line(42, 1, 1, false, shape).into_bytes()
+                )),
+                Vec::new()
+            );
+            assert_eq!(
+                viewer.pane_cursor_visual_style_for_tests(42, TerminalScreen::Primary),
+                Some(cursor::VisualStyle::Underline)
+            );
+        }
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_malformed_output_defuncts() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
+        viewer.queue_command_for_tests(TmuxCommand::PaneState);
+
+        assert_eq!(
+            viewer.next(ControlNotification::BlockEnd(b"malformed".to_vec())),
+            vec![TmuxViewerAction::Exit]
+        );
+        assert_eq!(viewer.state(), TmuxViewerState::Defunct);
+    }
+
+    #[test]
+    fn tmux_viewer_pane_state_output_emits_next_queued_command() {
+        let mut viewer = TmuxViewer::new();
+        viewer.set_panes_for_tests(&[(42, 10, 2)]);
         viewer.queue_command_for_tests(TmuxCommand::PaneState);
         viewer.queue_command_for_tests(TmuxCommand::User("next-command\n".to_owned()));
 
         assert_eq!(
             viewer.next(ControlNotification::BlockEnd(
-                b"%42;3;4;1;block;colour255;0;1;5;6;1;1;0;1;0;1;0;1;0;1;1;0;1;2;20;0,4,8".to_vec()
+                pane_state_line(42, 3, 1, false, "underline").into_bytes()
             )),
             vec![TmuxViewerAction::Command("next-command\n".to_owned())]
-        );
-        assert_eq!(
-            viewer.pane_active_plain_for_tests(42, TmuxScreenKey::Primary),
-            Some("keep".to_owned())
         );
     }
 
@@ -3175,6 +3433,19 @@ mod tests {
         let checksum = LayoutChecksum::calculate(layout.as_bytes()).as_string();
         let checksum = std::str::from_utf8(&checksum).unwrap();
         format!("{checksum},{layout}")
+    }
+
+    fn pane_state_line(
+        pane_id: usize,
+        cursor_x: usize,
+        cursor_y: usize,
+        alternate_on: bool,
+        cursor_shape: &str,
+    ) -> String {
+        format!(
+            "%{pane_id};{cursor_x};{cursor_y};1;{cursor_shape};colour255;0;{};5;6;1;1;0;1;0;1;0;1;0;1;1;0;1;0;1;0,4,8",
+            usize::from(alternate_on)
+        )
     }
 
     #[test]
