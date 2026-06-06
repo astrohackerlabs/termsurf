@@ -1825,6 +1825,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 673: Surface TTY Name](673-surface-tty-name.md) — **Pass** ·
   Codex/Codex/Codex
+- [Experiment 674: Surface Foreground PID](674-surface-foreground-pid.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
