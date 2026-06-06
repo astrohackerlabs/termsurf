@@ -186,8 +186,12 @@ Experiment 246).
 - [x] `highlight`, `hyperlink` — highlight lifecycle/semantic ranges and
       hyperlink OSC8 parse/state, page storage, propagation, formatting, and C
       ABI URI readout tested
-- [ ] `formatter` / terminal `render`, `ScreenSet`, `stream_terminal` — partial
-      / folded into `screen.rs`/`terminal.rs` (confirm parity)
+- [x] `formatter`, folded `ScreenSet`, folded `stream_terminal` — formatter
+      page/screen/terminal/C ABI paths and terminal stream dispatch are tested
+- [ ] terminal `render` / render-state parity — row snapshots,
+      `shape_run_options`, and C ABI scalar/row/cell snapshots exist; full
+      upstream `terminal/render.zig::RenderState` dirty/cache/highlight state is
+      missing
 - [ ] Scrollback `search` + `StringMap` — missing (needs `oniguruma`)
 - [ ] `tmux` control mode — missing
 - [x] `sys` (PNG-decode abstraction) — implemented and tested via C ABI
@@ -1730,7 +1734,7 @@ are past the correctness-critical foundation.
 - [Experiment 639: Highlight And Hyperlink Audit](639-highlight-hyperlink-audit.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 640: Terminal Render And Formatter Audit](640-terminal-render-formatter-audit.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
