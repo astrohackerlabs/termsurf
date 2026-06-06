@@ -1927,6 +1927,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 709: Binding Action Scroll Lines](709-binding-action-scroll-lines.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 710: Binding Action Scroll Fractional](710-binding-action-scroll-fractional.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
