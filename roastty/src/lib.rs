@@ -116,6 +116,7 @@ const ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ: c_int = 1;
 const ROASTTY_CLIPBOARD_REQUEST_OSC_52_WRITE: c_int = 2;
 
 const ROASTTY_ACTION_QUIT: c_int = 0;
+const ROASTTY_ACTION_NEW_WINDOW: c_int = 1;
 const ROASTTY_ACTION_NEW_TAB: c_int = 2;
 const ROASTTY_ACTION_CLOSE_TAB: c_int = 3;
 const ROASTTY_ACTION_NEW_SPLIT: c_int = 4;
@@ -3058,6 +3059,15 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
         b"reload_config" => parameterless_app_action(parameter, ROASTTY_ACTION_RELOAD_CONFIG),
         b"check_for_updates" => {
             parameterless_app_action(parameter, ROASTTY_ACTION_CHECK_FOR_UPDATES)
+        }
+        b"new_window" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_NEW_WINDOW,
+                [0usize; 8],
+            ))
         }
         b"new_tab" => {
             if parameter.is_some() {
@@ -13496,6 +13506,7 @@ mod tests {
         assert_eq!(ROASTTY_TARGET_APP, 0);
         assert_eq!(ROASTTY_TARGET_SURFACE, 1);
         assert_eq!(ROASTTY_ACTION_QUIT, 0);
+        assert_eq!(ROASTTY_ACTION_NEW_WINDOW, 1);
         assert_eq!(ROASTTY_ACTION_NEW_TAB, 2);
         assert_eq!(ROASTTY_ACTION_CLOSE_TAB, 3);
         assert_eq!(ROASTTY_ACTION_NEW_SPLIT, 4);
@@ -13687,6 +13698,8 @@ mod tests {
             "reload_config:now",
             "check_for_updates:",
             "check_for_updates:now",
+            "new_window:",
+            "new_window:now",
             "new_tab:",
             "new_tab:now",
             "close_tab:",
@@ -16219,6 +16232,50 @@ mod tests {
         assert!(!binding_action(surface, "move_tab:-1"));
         assert!(!binding_action(surface, "toggle_tab_overview"));
         assert_eq!(action_records().len(), 6);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_new_window_false_for_null_detached_and_no_callback() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "new_window"));
+        assert!(!binding_action(surface, "new_window"));
+
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "new_window"));
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_new_window_forwards_runtime_action() {
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+
+        assert!(binding_action(surface, "new_window"));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].app, app);
+        assert_eq!(records[0].target_tag, ROASTTY_TARGET_SURFACE);
+        assert_eq!(records[0].surface, surface);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_NEW_WINDOW);
+        assert!(records[0].storage.iter().all(|value| *value == 0));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_new_window_returns_callback_result() {
+        let app = new_test_app_with_action(false);
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(surface, "new_window"));
+        assert_eq!(action_records().len(), 1);
 
         roastty_surface_free(surface);
         roastty_app_free(app);

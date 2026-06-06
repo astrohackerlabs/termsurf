@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 730: Binding Action New Window
@@ -82,3 +87,48 @@ out of the app-target group, using upstream action tag `1`, forwarding from
 surface-triggered bindings with `ROASTTY_TARGET_SURFACE` and the triggering
 surface pointer, rejecting parameters, and covering the Rust parser/runtime path
 plus C ABI assertions.
+
+## Result
+
+**Result:** Pass
+
+Experiment 730 added `new_window` as upstream action tag `1` and wired the
+parameterless `new_window` binding action through the existing surface-target
+runtime action path. When triggered from a surface, the runtime callback now
+receives `target.tag = ROASTTY_TARGET_SURFACE`, `target.surface = surface`,
+`action.tag = ROASTTY_ACTION_NEW_WINDOW`, and zeroed storage.
+
+The parser rejects `new_window:` and non-empty parameters, while null surfaces,
+detached surfaces, missing callbacks, and false callback results all return
+`false`.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty new_window -- --nocapture --test-threads=1`
+  - 3 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1`
+  - 104 passed
+- `cargo test -p roastty --test abi_harness`
+  - 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Surface-triggered `new_window` bindings now match upstream's effective runtime
+target shape: they create a `new_window` runtime action against the triggering
+surface, allowing embedders to inherit parent-surface context. The app-target
+actions added in Experiment 729 remain separate and unchanged.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 730 diff and found one workflow blocker:
+the result was recorded, but completion-review provenance had not yet been added
+to the experiment frontmatter, this section, or the README tuple. This section,
+the `[review.result]` frontmatter, and the README tuple now record that review.
+
+The review found no implementation blockers. It approved the stable
+`ROASTTY_ACTION_NEW_WINDOW = 1` tag, parameter rejection, surface-target
+forwarding with the triggering surface pointer and zeroed storage, preservation
+of separate app-target actions, and focused Rust plus C ABI coverage.

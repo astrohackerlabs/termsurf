@@ -1974,7 +1974,7 @@ are past the correctness-critical foundation.
 - [Experiment 729: Binding Action App Runtime Forwarding](729-binding-action-app-runtime-forwarding.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 730: Binding Action New Window](730-binding-action-new-window.md)
-  — **Designed** · Codex/Codex/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

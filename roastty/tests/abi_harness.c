@@ -1772,6 +1772,7 @@ static void assert_support_abi(void) {
   assert(ROASTTY_TARGET_APP == 0);
   assert(ROASTTY_TARGET_SURFACE == 1);
   assert(ROASTTY_ACTION_QUIT == 0);
+  assert(ROASTTY_ACTION_NEW_WINDOW == 1);
   assert(ROASTTY_ACTION_NEW_TAB == 2);
   assert(ROASTTY_ACTION_CLOSE_TAB == 3);
   assert(ROASTTY_ACTION_NEW_SPLIT == 4);
@@ -4410,6 +4411,8 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "reload_config:now", 17));
   assert(!roastty_surface_binding_action(surface, "check_for_updates:", 18));
   assert(!roastty_surface_binding_action(surface, "check_for_updates:now", 21));
+  assert(!roastty_surface_binding_action(surface, "new_window:", 11));
+  assert(!roastty_surface_binding_action(surface, "new_window:now", 14));
   assert(!roastty_surface_binding_action(surface, "new_tab:", 8));
   assert(!roastty_surface_binding_action(surface, "new_tab:now", 11));
   assert(!roastty_surface_binding_action(surface, "close_tab:", 10));
@@ -4572,6 +4575,7 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "open_config", 11));
   assert(!roastty_surface_binding_action(surface, "reload_config", 13));
   assert(!roastty_surface_binding_action(surface, "check_for_updates", 17));
+  assert(!roastty_surface_binding_action(surface, "new_window", 10));
   assert(!roastty_surface_binding_action(surface, "new_tab", 7));
   assert(!roastty_surface_binding_action(surface, "close_tab", 9));
   assert(!roastty_surface_binding_action(surface, "close_tab:this", 14));
