@@ -1791,6 +1791,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 662: Tmux Live Pane Output](662-tmux-live-pane-output.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 663: Tmux Terminal DCS Bridge](663-tmux-terminal-dcs-bridge.md) —
+  **Designed** · Codex/Codex/Codex
 
 ## Non-Goals
 
