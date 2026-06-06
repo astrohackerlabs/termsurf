@@ -1815,6 +1815,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 669: Surface Termio Presentation](669-surface-termio-presentation.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 670: Surface Render-State Snapshot](670-surface-render-state-snapshot.md)
+  — **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
