@@ -183,7 +183,9 @@ Experiment 246).
 - [x] Selection (+ codepoints, gestures), mouse (+ encoding), focus, clipboard,
       context signal, size / size-report, semantic prompt
 - [x] Kitty graphics + Kitty keyboard
-- [ ] `highlight`, `hyperlink` — ported but untested (finish + add tests)
+- [x] `highlight`, `hyperlink` — highlight lifecycle/semantic ranges and
+      hyperlink OSC8 parse/state, page storage, propagation, formatting, and C
+      ABI URI readout tested
 - [ ] `formatter` / terminal `render`, `ScreenSet`, `stream_terminal` — partial
       / folded into `screen.rs`/`terminal.rs` (confirm parity)
 - [ ] Scrollback `search` + `StringMap` — missing (needs `oniguruma`)
@@ -1726,7 +1728,7 @@ are past the correctness-critical foundation.
 - [Experiment 638: OpenType Glyf Parser](638-opentype-glyf-parser.md) — **Pass**
   · Codex/Codex/Codex
 - [Experiment 639: Highlight And Hyperlink Audit](639-highlight-hyperlink-audit.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

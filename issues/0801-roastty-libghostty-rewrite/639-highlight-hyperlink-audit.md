@@ -61,7 +61,8 @@ precise remaining work.
 - `cargo test -p roastty terminal::highlight`
 - `cargo test -p roastty terminal::page::tests::page_hyperlink`
 - `cargo test -p roastty terminal::page_list::tests::page_list_highlight`
-- `cargo test -p roastty terminal::page_list::tests::page_list_hyperlink`
+- `cargo test -p roastty terminal::page_list::tests::page_list_increase_capacity_hyperlink_bytes_preserves_cells`
+- `cargo test -p roastty terminal::page_list::tests::page_list_split_preserves_hyperlinks`
 - `cargo test -p roastty terminal::osc::tests::osc_parser_hyperlinks`
 - `cargo test -p roastty terminal::screen::tests::screen_formatter_vt_hyperlink_extra`
 - `cargo test -p roastty terminal::screen::tests::screen_formatter_no_content_can_emit_only_hyperlink_extra`
@@ -117,3 +118,97 @@ The plan was revised again to address both process findings.
 Final follow-up review approved the design for the plan commit with no blocking
 findings. The only nit was to clean up the checklist wording about coverage
 areas, which this plan now does.
+
+## Result
+
+**Result:** Pass
+
+The audit found that the README's old "ported but untested" wording was stale.
+No Rust code changes were needed.
+
+Highlight parity is covered by the local value/lifecycle tests for
+`Untracked::track`, `Tracked::init`, rollback, and deinit, plus the semantic
+highlight coverage in `PageList`. `Flattened` differs structurally from
+Ghostty's Zig helper methods because Roastty stores the chunks in a `Vec`, but
+the start/end/untracked shape and semantic consumers are present and tested.
+
+Hyperlink parity is covered across layers:
+
+- OSC8 parsing accepts URI-only links, explicit IDs, empty IDs, and end
+  payloads, matching the upstream parser behavior;
+- page storage covers implicit/explicit IDs, deduplication, refcounts,
+  replacement, rollback, clone, move, swap, clear, capacity, and print-cell
+  propagation;
+- page-list and terminal tests cover capacity growth, page splits, alternate
+  screen reset, print-repeat propagation, pending-wrap overwrite/clear,
+  insert-mode shifts, scroll propagation, and OSC8 cursor/page state;
+- screen formatter tests cover OSC8 extra output and pin-map behavior;
+- the C ABI grid-ref accessor reads hyperlink URIs from terminal cells.
+
+The only verification adjustment was replacing the planned `page_list_hyperlink`
+prefix, which matches no tests, with the concrete page-list hyperlink filters
+that exist in `page_list.rs`.
+
+Verification passed:
+
+- `cargo test -p roastty terminal::highlight` — 3 passed
+- `cargo test -p roastty terminal::page::tests::page_hyperlink` — 9 passed
+- `cargo test -p roastty terminal::page::tests::page_print_cell_` — 6 passed
+- `cargo test -p roastty terminal::page::tests::page_clone_hyperlinks` — 1
+  passed
+- `cargo test -p roastty terminal::page::tests::page_clone_from_hyperlink` — 7
+  passed
+- `cargo test -p roastty terminal::page::tests::page_move_cells_hyperlinks` — 1
+  passed
+- `cargo test -p roastty terminal::page::tests::page_swap_cells_hyperlink` — 3
+  passed
+- `cargo test -p roastty terminal::page::tests::page_clear_cells_hyperlinks` — 1
+  passed
+- `cargo test -p roastty terminal::page::tests::page_exact_row_capacity_hyperlink`
+  — 2 passed
+- `cargo test -p roastty terminal::page_list::tests::page_list_highlight` — 30
+  passed
+- `cargo test -p roastty terminal::page_list::tests::page_list_increase_capacity_hyperlink_bytes_preserves_cells`
+  — 1 passed
+- `cargo test -p roastty terminal::page_list::tests::page_list_split_preserves_hyperlinks`
+  — 1 passed
+- `cargo test -p roastty terminal::osc::tests::osc_parser_hyperlinks` — 1 passed
+- `cargo test -p roastty terminal::screen::tests::screen_formatter_vt_hyperlink_extra`
+  — 9 passed
+- `cargo test -p roastty terminal::screen::tests::screen_formatter_no_content_can_emit_only_hyperlink_extra`
+  — 1 passed
+- `cargo test -p roastty terminal::terminal::tests::terminal_stream_osc` — 34
+  passed
+- `cargo test -p roastty terminal::terminal::tests::terminal_stream_alt_screen_switch_clears_hyperlink_and_carries_charset`
+  — 1 passed
+- `cargo test -p roastty terminal::terminal::tests::terminal_stream_print_repeat_uses_current_style_and_hyperlink`
+  — 1 passed
+- `cargo test -p roastty terminal::terminal::tests::terminal_stream_pending_wrap_overwrites_hyperlink_destination`
+  — 1 passed
+- `cargo test -p roastty terminal::terminal::tests::terminal_stream_insert_mode_shifts_existing_hyperlinks`
+  — 1 passed
+- `cargo test -p roastty terminal::terminal::tests::terminal_stream_scroll_up_preserves_printed_hyperlinks`
+  — 1 passed
+- `cargo test -p roastty grid_ref_accessor_c_abi_reads_graphemes_and_hyperlinks`
+  — 1 passed
+- `cargo fmt -p roastty -- --check` — passed
+
+Source comparison was performed against:
+
+- `vendor/ghostty/src/terminal/highlight.zig`
+- `vendor/ghostty/src/terminal/hyperlink.zig`
+- `vendor/ghostty/src/terminal/osc/parsers/hyperlink.zig`
+- the OSC8 hyperlink sections in `vendor/ghostty/src/terminal/Screen.zig`
+
+Completion review in Codex session `019e9a9a-ee48-7ec2-bb17-ea152a97b42d`
+approved the result with no blocking findings. The reviewer agreed that the
+README checklist update is justified by the recorded test matrix and source
+comparison, and that the page-list filter correction is accurate. The only nit
+was to record this completion review before the result commit.
+
+## Conclusion
+
+The `highlight`/`hyperlink` checklist item can be marked complete. The port has
+direct tests for the critical lifecycle and behavior paths; the remaining
+terminal checklist work is in formatter/render/ScreenSet parity, search, and
+tmux rather than highlight or hyperlink.
