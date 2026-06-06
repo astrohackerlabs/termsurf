@@ -1769,6 +1769,10 @@ static void assert_support_abi(void) {
   assert(ROASTTY_MODS_CTRL_RIGHT == (1 << 7));
   assert(ROASTTY_MODS_ALT_RIGHT == (1 << 8));
   assert(ROASTTY_MODS_SUPER_RIGHT == (1 << 9));
+  roastty_input_scroll_mods_t scroll_mods = 0;
+  assert(sizeof(scroll_mods) == sizeof(int));
+  assert(ROASTTY_MOUSE_BUTTON_RELEASE == 0);
+  assert(ROASTTY_MOUSE_BUTTON_PRESS == 1);
   assert(ROASTTY_SYS_LOG_LEVEL_ERROR == 0);
   assert(ROASTTY_SYS_LOG_LEVEL_WARNING == 1);
   assert(ROASTTY_SYS_LOG_LEVEL_INFO == 2);
@@ -3999,6 +4003,13 @@ int main(int argc, char **argv) {
   roastty_selection_s null_selection = {0};
   null_selection.size = sizeof(roastty_selection_s);
   assert(!roastty_surface_mouse_captured(NULL));
+  assert(!roastty_surface_mouse_button(
+      NULL, ROASTTY_MOUSE_BUTTON_PRESS, ROASTTY_MOUSE_BUTTON_LEFT,
+      ROASTTY_MODS_SHIFT));
+  roastty_surface_mouse_pos(NULL, 1.0, 2.0, ROASTTY_MODS_SHIFT);
+  roastty_surface_mouse_scroll(NULL, 1.0, 2.0,
+                               (roastty_input_scroll_mods_t)0x1ff);
+  roastty_surface_mouse_pressure(NULL, 1, 0.5);
   assert(!roastty_surface_has_selection(NULL));
   assert(!roastty_surface_read_selection(NULL, &null_read_text));
   assert(null_read_text.tl_px_x == -1.0);
@@ -4216,6 +4227,13 @@ int main(int argc, char **argv) {
   roastty_selection_s empty_selection = {0};
   empty_selection.size = sizeof(roastty_selection_s);
   assert(!roastty_surface_mouse_captured(surface));
+  assert(!roastty_surface_mouse_button(
+      surface, ROASTTY_MOUSE_BUTTON_PRESS, ROASTTY_MOUSE_BUTTON_LEFT,
+      ROASTTY_MODS_SHIFT));
+  roastty_surface_mouse_pos(surface, 1.0, 2.0, ROASTTY_MODS_SHIFT);
+  roastty_surface_mouse_scroll(surface, 1.0, 2.0,
+                               (roastty_input_scroll_mods_t)0x1ff);
+  roastty_surface_mouse_pressure(surface, 1, 0.5);
   assert(!roastty_surface_has_selection(surface));
   assert(!roastty_surface_read_selection(surface, NULL));
   assert(!roastty_surface_read_selection(surface, &read_text));

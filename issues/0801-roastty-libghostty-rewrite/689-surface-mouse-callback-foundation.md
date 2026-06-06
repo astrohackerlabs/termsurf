@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 689: Surface Mouse Callback Foundation
@@ -121,3 +126,54 @@ low 8 bits.
 Codex approved the revised state-only callback foundation as an appropriately
 incremental step before renderer hover, selection routing, terminal report
 encoding, autoscroll, and inspector routing.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now exposes the four surface mouse callback entry points in the public C
+ABI: `roastty_surface_mouse_button`, `roastty_surface_mouse_pos`,
+`roastty_surface_mouse_scroll`, and `roastty_surface_mouse_pressure`. It also
+adds the upstream-shaped `roastty_input_scroll_mods_t` typedef and
+`roastty_mouse_button_state_e` constants.
+
+The implementation stores a small `SurfaceMouseState` on each surface: latest
+finite pointer position, latest known modifier bits, per-button press/release
+state, latest finite scroll offsets plus low-8-bit scroll mods, and latest valid
+pressure stage/pressure. Null and detached surfaces are safe no-ops. Invalid
+button states/buttons, non-finite scroll offsets, invalid pressure stages, and
+non-finite pressures leave state unchanged. `roastty_surface_mouse_button`
+returns `false` even when terminal mouse capture is active, because this slice
+does not yet dispatch encoded mouse reports or update selection state.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty surface_mouse -- --nocapture`
+- `cargo test -p roastty mouse -- --nocapture`
+- `cargo test -p roastty --test abi_harness`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+The surface mouse callback ABI is now present and safe for frontends to call,
+with enough stored state for later dispatch work. Full upstream behavior remains
+future work: renderer hover/link updates, selection gestures, autoscroll,
+terminal mouse report encoding and PTY writes, `mouse-shift-capture`, and
+inspector routing.
+
+## Completion Review
+
+**Result:** Approved after provenance update.
+
+Codex found no code blockers. It confirmed the ABI uses
+`typedef int roastty_input_scroll_mods_t`, `roastty_surface_mouse_scroll` uses
+that named type, scroll state stores the low 8 bits, unknown key modifier bits
+are dropped through `key_mods_from_raw`, null and detached surfaces are no-ops,
+and `roastty_surface_mouse_button` returns `false` even when capture is active.
+The tests cover the important state-only contract points.
+
+Codex initially blocked the result commit only because result-review provenance,
+this completion-review section, and the final README agent tuple were not
+recorded yet. Those workflow records are now present.

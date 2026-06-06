@@ -274,8 +274,9 @@ Experiment 246).
       and surface text paste input done; preedit state and explicit surface text
       reads plus active surface selection reads done; mouse-captured query done;
       key translation-mod query done; IME point query done; key dispatch,
-      renderer preedit/export, mouse event dispatch, frontend selection
-      routing/metadata, and splits missing
+      renderer preedit/export, surface mouse callback state foundation done;
+      mouse event dispatch, frontend selection routing/metadata, and splits
+      missing
 - [ ] Inspector ABI — missing
 
 ### App / Surface / IO — partial
@@ -1866,7 +1867,7 @@ are past the correctness-critical foundation.
 - [Experiment 688: Surface IME Point](688-surface-ime-point.md) — **Pass** ·
   Codex/Codex/Codex
 - [Experiment 689: Surface Mouse Callback Foundation](689-surface-mouse-callback-foundation.md)
-  — **Designed** · Codex/-/-
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

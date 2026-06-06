@@ -101,6 +101,8 @@ const ROASTTY_SURFACE_CONTEXT_WINDOW: c_int = 0;
 const ROASTTY_SURFACE_CONTEXT_TAB: c_int = 1;
 const ROASTTY_SURFACE_CONTEXT_SPLIT: c_int = 2;
 
+#[cfg(test)]
+const ROASTTY_MODS_NONE: c_int = 0;
 const ROASTTY_MODS_SHIFT: c_int = 1 << 0;
 const ROASTTY_MODS_CTRL: c_int = 1 << 1;
 const ROASTTY_MODS_ALT: c_int = 1 << 2;
@@ -111,6 +113,13 @@ const ROASTTY_MODS_SHIFT_RIGHT: c_int = 1 << 6;
 const ROASTTY_MODS_CTRL_RIGHT: c_int = 1 << 7;
 const ROASTTY_MODS_ALT_RIGHT: c_int = 1 << 8;
 const ROASTTY_MODS_SUPER_RIGHT: c_int = 1 << 9;
+
+#[cfg(test)]
+const ROASTTY_MOUSE_BUTTON_RELEASE: c_int = 0;
+#[cfg(test)]
+const ROASTTY_MOUSE_BUTTON_PRESS: c_int = 1;
+#[cfg(test)]
+const ROASTTY_MOUSE_BUTTON_LEFT: c_int = 1;
 
 const ROASTTY_OPTIMIZE_DEBUG: c_int = 0;
 #[allow(dead_code)]
@@ -1299,6 +1308,7 @@ struct Surface {
     size: RoasttySurfaceSize,
     color_scheme: c_int,
     preedit: Option<String>,
+    mouse: SurfaceMouseState,
     termio_worker: Option<termio::TermioWorker>,
     process_exited: bool,
     dirty: bool,
@@ -1313,6 +1323,22 @@ struct ImePoint {
     y: f64,
     width: f64,
     height: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SurfaceMouseButtonState {
+    Release,
+    Press,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SurfaceMouseState {
+    position: Option<(f64, f64)>,
+    mods: key_mods::Mods,
+    buttons: [Option<SurfaceMouseButtonState>; 12],
+    scroll: Option<(f64, f64, u8)>,
+    pressure_stage: u32,
+    pressure: f64,
 }
 
 #[cfg(test)]
@@ -1590,6 +1616,49 @@ impl Surface {
     fn set_preedit(&mut self, preedit: Option<&str>) {
         self.preedit = preedit.map(str::to_owned);
         self.request_render();
+    }
+
+    fn mouse_pos(&mut self, x: f64, y: f64, mods: c_int) {
+        if self.app.is_null() {
+            return;
+        }
+        self.mouse.mods = key_mods_from_raw(mods);
+        self.mouse.position = if x.is_finite() && y.is_finite() {
+            Some((x, y))
+        } else {
+            None
+        };
+    }
+
+    fn mouse_button(&mut self, state: c_int, button: c_int, mods: c_int) -> bool {
+        if self.app.is_null() {
+            return false;
+        }
+        let Some(state) = mouse_button_state_from_int(state) else {
+            return false;
+        };
+        let Some(button) = mouse_button_from_int(button) else {
+            return false;
+        };
+
+        self.mouse.mods = key_mods_from_raw(mods);
+        self.mouse.buttons[mouse_button_index(button)] = Some(state);
+        false
+    }
+
+    fn mouse_scroll(&mut self, x: f64, y: f64, scroll_mods: c_int) {
+        if self.app.is_null() || !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        self.mouse.scroll = Some((x, y, scroll_mods as u8));
+    }
+
+    fn mouse_pressure(&mut self, stage: u32, pressure: f64) {
+        if self.app.is_null() || stage > 2 || !pressure.is_finite() {
+            return;
+        }
+        self.mouse.pressure_stage = stage;
+        self.mouse.pressure = pressure;
     }
 
     fn tick_termio(&mut self) {
@@ -2054,6 +2123,18 @@ fn key_mods_from_raw(value: c_int) -> key_mods::Mods {
 
 fn key_mods_to_raw(value: key_mods::Mods) -> c_int {
     c_int::from(value.int())
+}
+
+fn mouse_button_state_from_int(value: c_int) -> Option<SurfaceMouseButtonState> {
+    match value {
+        0 => Some(SurfaceMouseButtonState::Release),
+        1 => Some(SurfaceMouseButtonState::Press),
+        _ => None,
+    }
+}
+
+fn mouse_button_index(button: mouse::MouseButton) -> usize {
+    usize::try_from(mouse_button_to_int(button)).unwrap_or_default()
 }
 
 fn option_as_alt_from_int(value: c_int) -> Option<key_mods::OptionAsAlt> {
@@ -8800,6 +8881,7 @@ pub extern "C" fn roastty_surface_new(
         },
         color_scheme: 0,
         preedit: None,
+        mouse: SurfaceMouseState::default(),
         termio_worker: None,
         process_exited: false,
         dirty: false,
@@ -9089,6 +9171,48 @@ pub extern "C" fn roastty_surface_mouse_captured(surface: RoasttySurface) -> boo
         return false;
     };
     worker.with_termio(|termio| termio.terminal().mouse_tracking())
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_surface_mouse_button(
+    surface: RoasttySurface,
+    state: c_int,
+    button: c_int,
+    mods: c_int,
+) -> bool {
+    surface_from_handle(surface)
+        .map(|surface| surface.mouse_button(state, button, mods))
+        .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_surface_mouse_pos(surface: RoasttySurface, x: f64, y: f64, mods: c_int) {
+    if let Some(surface) = surface_from_handle(surface) {
+        surface.mouse_pos(x, y, mods);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_surface_mouse_scroll(
+    surface: RoasttySurface,
+    x: f64,
+    y: f64,
+    scroll_mods: c_int,
+) {
+    if let Some(surface) = surface_from_handle(surface) {
+        surface.mouse_scroll(x, y, scroll_mods);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roastty_surface_mouse_pressure(
+    surface: RoasttySurface,
+    stage: u32,
+    pressure: f64,
+) {
+    if let Some(surface) = surface_from_handle(surface) {
+        surface.mouse_pressure(stage, pressure);
+    }
 }
 
 #[no_mangle]
@@ -10417,6 +10541,183 @@ mod tests {
 
         set_surface_worker_mouse_tracking(surface, false);
         assert!(!roastty_surface_mouse_captured(surface));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_callbacks_validate_null_detached_noop() {
+        assert!(!roastty_surface_mouse_button(
+            ptr::null_mut(),
+            1,
+            ROASTTY_MOUSE_BUTTON_LEFT,
+            ROASTTY_MODS_SHIFT
+        ));
+        roastty_surface_mouse_pos(ptr::null_mut(), 1.0, 2.0, ROASTTY_MODS_SHIFT);
+        roastty_surface_mouse_scroll(ptr::null_mut(), 1.0, 2.0, 0xff);
+        roastty_surface_mouse_pressure(ptr::null_mut(), 1, 0.5);
+
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        roastty_app_free(app);
+
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            1,
+            ROASTTY_MOUSE_BUTTON_LEFT,
+            ROASTTY_MODS_SHIFT
+        ));
+        roastty_surface_mouse_pos(surface, 1.0, 2.0, ROASTTY_MODS_SHIFT);
+        roastty_surface_mouse_scroll(surface, 1.0, 2.0, 0xff);
+        roastty_surface_mouse_pressure(surface, 1, 0.5);
+
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse,
+            SurfaceMouseState::default()
+        );
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_mouse_button_state_constants_match_upstream() {
+        assert_eq!(ROASTTY_MOUSE_BUTTON_RELEASE, 0);
+        assert_eq!(ROASTTY_MOUSE_BUTTON_PRESS, 1);
+    }
+
+    #[test]
+    fn surface_mouse_pos_stores_finite_position_and_known_mods() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let mods = ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT_RIGHT | (1 << 20);
+
+        roastty_surface_mouse_pos(surface, -1.0, 12.5, mods);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.position, Some((-1.0, 12.5)));
+        assert_eq!(
+            key_mods_to_raw(mouse.mods),
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT_RIGHT
+        );
+
+        roastty_surface_mouse_pos(surface, f64::NAN, 12.5, ROASTTY_MODS_CTRL);
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(mouse.position, None);
+        assert_eq!(key_mods_to_raw(mouse.mods), ROASTTY_MODS_CTRL);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_button_validates_state_button_and_returns_false() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            99,
+            ROASTTY_MOUSE_BUTTON_LEFT,
+            ROASTTY_MODS_SHIFT
+        ));
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse,
+            SurfaceMouseState::default()
+        );
+
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            99,
+            ROASTTY_MODS_SHIFT
+        ));
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse,
+            SurfaceMouseState::default()
+        );
+
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            ROASTTY_MOUSE_BUTTON_LEFT,
+            ROASTTY_MODS_CTRL
+        ));
+
+        let mouse = surface_from_handle(surface).unwrap().mouse;
+        assert_eq!(
+            mouse.buttons[mouse_button_index(mouse::MouseButton::Left)],
+            Some(SurfaceMouseButtonState::Press)
+        );
+        assert_eq!(key_mods_to_raw(mouse.mods), ROASTTY_MODS_CTRL);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_button_returns_false_even_when_capture_active() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_worker_mouse_tracking(surface, true);
+        assert!(roastty_surface_mouse_captured(surface));
+
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            ROASTTY_MOUSE_BUTTON_LEFT,
+            ROASTTY_MODS_NONE
+        ));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_scroll_stores_finite_offsets_and_truncates_mods() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        roastty_surface_mouse_scroll(surface, 1.5, -2.0, 0x1ff);
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse.scroll,
+            Some((1.5, -2.0, 0xff))
+        );
+
+        roastty_surface_mouse_scroll(surface, f64::INFINITY, 3.0, 0);
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse.scroll,
+            Some((1.5, -2.0, 0xff))
+        );
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_mouse_pressure_validates_stage_and_finite_pressure() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        roastty_surface_mouse_pressure(surface, 1, 0.75);
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse.pressure_stage,
+            1
+        );
+        assert_eq!(surface_from_handle(surface).unwrap().mouse.pressure, 0.75);
+
+        roastty_surface_mouse_pressure(surface, 3, 0.5);
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse.pressure_stage,
+            1
+        );
+        assert_eq!(surface_from_handle(surface).unwrap().mouse.pressure, 0.75);
+
+        roastty_surface_mouse_pressure(surface, 2, f64::NAN);
+        assert_eq!(
+            surface_from_handle(surface).unwrap().mouse.pressure_stage,
+            1
+        );
+        assert_eq!(surface_from_handle(surface).unwrap().mouse.pressure, 0.75);
+
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

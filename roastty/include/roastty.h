@@ -1185,6 +1185,13 @@ typedef enum {
   ROASTTY_MOUSE_ACTION_MOTION = 2,
 } roastty_mouse_action_e;
 
+typedef int roastty_input_scroll_mods_t;
+
+typedef enum {
+  ROASTTY_MOUSE_BUTTON_RELEASE = 0,
+  ROASTTY_MOUSE_BUTTON_PRESS = 1,
+} roastty_mouse_button_state_e;
+
 typedef enum {
   ROASTTY_MOUSE_BUTTON_UNKNOWN = 0,
   ROASTTY_MOUSE_BUTTON_LEFT = 1,
@@ -1836,6 +1843,21 @@ ROASTTY_API void roastty_surface_ime_point(roastty_surface_t,
                                            double*,
                                            double*);
 ROASTTY_API bool roastty_surface_mouse_captured(roastty_surface_t);
+ROASTTY_API bool roastty_surface_mouse_button(roastty_surface_t,
+                                              roastty_mouse_button_state_e,
+                                              roastty_mouse_button_e,
+                                              roastty_input_mods_e);
+ROASTTY_API void roastty_surface_mouse_pos(roastty_surface_t,
+                                           double,
+                                           double,
+                                           roastty_input_mods_e);
+ROASTTY_API void roastty_surface_mouse_scroll(roastty_surface_t,
+                                              double,
+                                              double,
+                                              roastty_input_scroll_mods_t);
+ROASTTY_API void roastty_surface_mouse_pressure(roastty_surface_t,
+                                                uint32_t,
+                                                double);
 ROASTTY_API bool roastty_surface_has_selection(roastty_surface_t);
 ROASTTY_API bool roastty_surface_read_selection(roastty_surface_t,
                                                 roastty_text_s*);
