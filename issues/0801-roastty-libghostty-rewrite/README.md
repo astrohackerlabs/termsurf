@@ -1821,6 +1821,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 671: Surface Worker Launch](671-surface-worker-launch.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 672: Surface Env Propagation](672-surface-env-propagation.md) —
+  **Designed** · Codex/Codex/-
 
 ## Non-Goals
 
