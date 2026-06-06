@@ -4026,6 +4026,8 @@ int main(int argc, char **argv) {
   assert(ROASTTY_ACTION_FLOAT_WINDOW == 42);
   assert(ROASTTY_ACTION_SECURE_INPUT == 43);
   assert(ROASTTY_ACTION_CLOSE_WINDOW == 49);
+  assert(ROASTTY_ACTION_UNDO == 51);
+  assert(ROASTTY_ACTION_REDO == 52);
   assert(ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD == 57);
   assert(ROASTTY_INSPECTOR_TOGGLE == 0);
   assert(ROASTTY_INSPECTOR_SHOW == 1);
@@ -4443,6 +4445,10 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "inspector:toggle ", 17));
   assert(!roastty_surface_binding_action(surface, "close_window:", 13));
   assert(!roastty_surface_binding_action(surface, "close_window:now", 16));
+  assert(!roastty_surface_binding_action(surface, "undo:", 5));
+  assert(!roastty_surface_binding_action(surface, "undo:now", 8));
+  assert(!roastty_surface_binding_action(surface, "redo:", 5));
+  assert(!roastty_surface_binding_action(surface, "redo:now", 8));
   assert(!roastty_surface_binding_action(surface, "goto_window", 11));
   assert(!roastty_surface_binding_action(surface, "goto_window:", 12));
   assert(!roastty_surface_binding_action(surface, "goto_window:previous:extra", 26));
@@ -4558,6 +4564,8 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "inspector:show", 14));
   assert(!roastty_surface_binding_action(surface, "inspector:hide", 14));
   assert(!roastty_surface_binding_action(surface, "close_window", 12));
+  assert(!roastty_surface_binding_action(surface, "undo", 4));
+  assert(!roastty_surface_binding_action(surface, "redo", 4));
   assert(!roastty_surface_binding_action(surface, "goto_window:previous", 20));
   assert(!roastty_surface_binding_action(surface, "goto_window:next", 16));
   assert(!roastty_surface_binding_action(surface, "toggle_split_zoom", 17));

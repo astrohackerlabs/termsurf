@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 728: Binding Action Undo Redo
@@ -77,3 +82,51 @@ paths, and Rust/C ABI test plan.
 The review found one workflow blocker: this design-review section still said
 `Pending.` This section now records the review outcome, and the README tuple is
 `Codex/Codex/-`.
+
+## Result
+
+**Result:** Pass
+
+Roastty now exposes `ROASTTY_ACTION_UNDO = 51` and `ROASTTY_ACTION_REDO = 52`,
+matching upstream `apprt.Action.Key`, and documents both as zero-storage runtime
+actions.
+
+`undo` and `redo` now parse as strict parameterless binding actions and forward
+through the existing surface-targeted runtime action path. They return `false`
+for null surfaces, detached surfaces, missing callbacks, or false callbacks, and
+return the callback result when a runtime action callback is present.
+
+Verification passed:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty undo -- --nocapture --test-threads=1` — 3 passed
+- `cargo test -p roastty redo -- --nocapture --test-threads=1` — 3 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1` — 97
+  passed
+- `cargo test -p roastty --test abi_harness` — 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+During verification, the broad binding-action filter exposed a timing-sensitive
+existing text test that captured the first render tick before the expected child
+PTY output arrived. That test now waits for its expected `line:hello` output
+using the existing `surface_snapshot_text_until` helper, and the full
+binding-action filter passes.
+
+## Conclusion
+
+`undo` and `redo` are complete for Roastty's current surface-triggered runtime
+action model. The ABI tags, parser behavior, surface-targeted forwarding,
+callback result propagation, Rust tests, and C ABI coverage all match the
+experiment plan.
+
+## Completion Review
+
+Codex reviewed the completed experiment and found one workflow blocker: this
+completion-review section still said `Pending.` The review found no
+implementation blockers.
+
+The review approved ABI tags 51/52, the zero-storage convention, strict parser
+behavior, surface-targeted runtime forwarding, callback false/result behavior,
+Rust tests, C ABI harness coverage, verification record, and README
+status/provenance.

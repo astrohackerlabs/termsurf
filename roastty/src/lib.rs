@@ -138,6 +138,8 @@ const ROASTTY_ACTION_PROMPT_TITLE: c_int = 34;
 const ROASTTY_ACTION_FLOAT_WINDOW: c_int = 42;
 const ROASTTY_ACTION_SECURE_INPUT: c_int = 43;
 const ROASTTY_ACTION_CLOSE_WINDOW: c_int = 49;
+const ROASTTY_ACTION_UNDO: c_int = 51;
+const ROASTTY_ACTION_REDO: c_int = 52;
 const ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD: c_int = 57;
 const ROASTTY_ACTION_READONLY: c_int = 63;
 const ROASTTY_ACTION_COPY_TITLE_TO_CLIPBOARD: c_int = 64;
@@ -3148,6 +3150,24 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
             }
             Some(ParsedBindingAction::RuntimeAction(
                 ROASTTY_ACTION_CLOSE_WINDOW,
+                [0usize; 8],
+            ))
+        }
+        b"undo" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_UNDO,
+                [0usize; 8],
+            ))
+        }
+        b"redo" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::RuntimeAction(
+                ROASTTY_ACTION_REDO,
                 [0usize; 8],
             ))
         }
@@ -13440,6 +13460,8 @@ mod tests {
         assert_eq!(ROASTTY_ACTION_FLOAT_WINDOW, 42);
         assert_eq!(ROASTTY_ACTION_SECURE_INPUT, 43);
         assert_eq!(ROASTTY_ACTION_CLOSE_WINDOW, 49);
+        assert_eq!(ROASTTY_ACTION_UNDO, 51);
+        assert_eq!(ROASTTY_ACTION_REDO, 52);
         assert_eq!(ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD, 57);
         assert_eq!(ROASTTY_ACTION_READONLY, 63);
         assert_eq!(ROASTTY_ACTION_COPY_TITLE_TO_CLIPBOARD, 64);
@@ -13637,6 +13659,10 @@ mod tests {
             "inspector:toggle ",
             "close_window:",
             "close_window:now",
+            "undo:",
+            "undo:now",
+            "redo:",
+            "redo:now",
             "new_split:",
             "new_split:diagonal",
             "goto_split",
@@ -13964,7 +13990,7 @@ mod tests {
 
         assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
         assert!(binding_action(surface, "text:hello\\n"));
-        let text = surface_snapshot_text(app, surface);
+        let text = surface_snapshot_text_until(app, surface, "line:hello");
 
         assert!(text.contains("line:hello"));
         roastty_surface_free(surface);
@@ -16209,6 +16235,8 @@ mod tests {
             "inspector:show",
             "inspector:hide",
             "close_window",
+            "undo",
+            "redo",
         ] {
             assert!(!binding_action(ptr::null_mut(), action), "{action}");
             assert!(!binding_action(surface, action), "{action}");
@@ -16220,6 +16248,8 @@ mod tests {
             "toggle_secure_input",
             "inspector:toggle",
             "close_window",
+            "undo",
+            "redo",
         ] {
             assert!(!binding_action(surface, action), "{action}");
         }
@@ -16238,12 +16268,14 @@ mod tests {
             "inspector:show",
             "inspector:hide",
             "close_window",
+            "undo",
+            "redo",
         ] {
             assert!(binding_action(surface, action), "{action}");
         }
 
         let records = action_records();
-        assert_eq!(records.len(), 6);
+        assert_eq!(records.len(), 8);
         for record in &records {
             assert_eq!(record.app, app);
             assert_eq!(record.target_tag, ROASTTY_TARGET_SURFACE);
@@ -16262,6 +16294,10 @@ mod tests {
         assert_eq!(records[4].storage[0], ROASTTY_INSPECTOR_HIDE as usize);
         assert_eq!(records[5].action_tag, ROASTTY_ACTION_CLOSE_WINDOW);
         assert!(records[5].storage.iter().all(|value| *value == 0));
+        assert_eq!(records[6].action_tag, ROASTTY_ACTION_UNDO);
+        assert!(records[6].storage.iter().all(|value| *value == 0));
+        assert_eq!(records[7].action_tag, ROASTTY_ACTION_REDO);
+        assert!(records[7].storage.iter().all(|value| *value == 0));
 
         roastty_surface_free(surface);
         roastty_app_free(app);
@@ -16278,7 +16314,62 @@ mod tests {
         assert!(!binding_action(surface, "inspector:show"));
         assert!(!binding_action(surface, "inspector:hide"));
         assert!(!binding_action(surface, "close_window"));
-        assert_eq!(action_records().len(), 6);
+        assert!(!binding_action(surface, "undo"));
+        assert!(!binding_action(surface, "redo"));
+        assert_eq!(action_records().len(), 8);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_undo_redo_false_paths() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        for action in ["undo", "redo"] {
+            assert!(!binding_action(ptr::null_mut(), action), "{action}");
+            assert!(!binding_action(surface, action), "{action}");
+        }
+
+        roastty_app_free(app);
+        for action in ["undo", "redo"] {
+            assert!(!binding_action(surface, action), "{action}");
+        }
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_undo_redo_forwards_runtime_actions() {
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+
+        assert!(binding_action(surface, "undo"));
+        assert!(binding_action(surface, "redo"));
+
+        let records = action_records();
+        assert_eq!(records.len(), 2);
+        for record in &records {
+            assert_eq!(record.app, app);
+            assert_eq!(record.target_tag, ROASTTY_TARGET_SURFACE);
+            assert_eq!(record.surface, surface);
+            assert!(record.storage.iter().all(|value| *value == 0));
+        }
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_UNDO);
+        assert_eq!(records[1].action_tag, ROASTTY_ACTION_REDO);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_undo_redo_returns_callback_result() {
+        let app = new_test_app_with_action(false);
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(surface, "undo"));
+        assert!(!binding_action(surface, "redo"));
+        assert_eq!(action_records().len(), 2);
 
         roastty_surface_free(surface);
         roastty_app_free(app);
