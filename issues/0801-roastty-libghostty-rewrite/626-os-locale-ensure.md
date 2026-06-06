@@ -203,3 +203,64 @@ branch and adds a fake-driven test that `LANGUAGE` is not probed or set when the
 `real_setlocale(None)` passes a null pointer and does not mutate locale state.
 Follow-up review approved the fake boundary and branch coverage with no
 remaining Required changes.
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/os/locale.rs` now has the upstream `ensureLocale` sequence in Rust.
+The library-internal `ensure_locale()` helper uses real `std::env`, Exp 625
+Cocoa probes, and `libc::setlocale`; the internal `ensure_locale_with` helper
+accepts fake env and `setlocale` boundaries so the process-global branch
+behavior is tested deterministically.
+
+The port prepopulates `LANG` from Cocoa only when `LANG` is missing or empty,
+probes and sets `LANGUAGE` only after the Cocoa `LANG` probe succeeds, calls
+`setlocale(LC_ALL, "")`, recovers from invalid `LANG` by setting it to `""` and
+then unsetting it before retrying the system default, rejects a system-default
+`"C"` result, and falls back to `en_US.UTF-8` while setting `LANG` to the same
+fallback value. A failed final fallback returns `EnsureLocaleOutcome::Failed`.
+
+`real_setlocale` owns the unsafe C boundary: it converts string inputs to
+`CString`, passes `None` as a null pointer query, calls
+`libc::setlocale(libc::LC_ALL, ...)`, and copies any returned C string into an
+owned Rust `String`.
+
+Gates (all green):
+
+- `cargo test -p roastty os::locale::tests` — **12 passed / 0 failed** focused
+  tests on this macOS host.
+- `cargo build -p roastty` — no warnings.
+- `cargo test -p roastty` — **3461 passed / 0 failed** unit tests, plus **1
+  passed / 0 failed** ABI harness test and **0** doc tests.
+- `cargo fmt -p roastty -- --check` — clean.
+- no-ghostty grep on `roastty/src/os/locale.rs` — clean.
+- `git diff --check` — clean.
+
+## Conclusion
+
+Roastty now has the tested locale initialization sequence needed by app startup:
+Cocoa prepopulation, environment-driven locale setup, invalid-`LANG` recovery,
+`"C"` rejection, and final `en_US.UTF-8` fallback. This completes the core
+`os/locale.zig` behavior without adding gettext bindings or non-macOS locale
+policy.
+
+## Completion Review
+
+**Reviewer:** Codex (gpt-5.5, medium) · resumed session
+`019e8f83-9029-7d43-8e82-f4c5754e14ba`
+
+**Verdict:** APPROVED — no Required fixes.
+
+Codex confirmed the implementation matches the approved design and upstream
+sequence: Cocoa `LANG` prepopulation only when `LANG` is missing or empty;
+`LANGUAGE` probing only after a successful Cocoa `LANG` probe; first
+`setlocale("")`; invalid-`LANG` clear/unset plus retry; `"C"` rejection; final
+`en_US.UTF-8` fallback; and `Failed` if fallback also fails.
+
+The review also confirmed the real C boundary is thin and correctly owns the
+unsafe `setlocale` call, including null-pointer query support for
+`real_setlocale(None)`. Codex reran `cargo test -p roastty os::locale::tests`,
+`cargo fmt -p roastty -- --check`, and `git diff --check`; all were clean. The
+only note was wording: the result now calls `ensure_locale()` library-internal
+rather than public, matching its `pub(crate)` visibility.

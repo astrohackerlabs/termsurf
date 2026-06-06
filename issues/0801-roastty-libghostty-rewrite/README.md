@@ -1698,7 +1698,7 @@ are past the correctness-critical foundation.
 - [Experiment 625: os locale Cocoa probe](625-os-locale-cocoa-probe.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 626: os locale ensureLocale core](626-os-locale-ensure.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
