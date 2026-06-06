@@ -98,6 +98,8 @@ const ROASTTY_OUT_OF_SPACE: c_int = 3;
 const ROASTTY_NO_VALUE: c_int = 4;
 const ROASTTY_BUILD_MODE_DEBUG: c_int = 0;
 
+const DEFAULT_FONT_SIZE_POINTS: f32 = 13.0;
+
 const ROASTTY_SURFACE_CONTEXT_WINDOW: c_int = 0;
 const ROASTTY_SURFACE_CONTEXT_TAB: c_int = 1;
 const ROASTTY_SURFACE_CONTEXT_SPLIT: c_int = 2;
@@ -1356,6 +1358,9 @@ struct Surface {
     env_vars: Vec<(String, String)>,
     initial_input: Option<Vec<u8>>,
     context: c_int,
+    font_size_points: f32,
+    original_font_size_points: f32,
+    font_size_adjusted: bool,
     scale_factor_x: f64,
     scale_factor_y: f64,
     inherited_working_directory: Option<CString>,
@@ -2065,6 +2070,35 @@ impl Surface {
         unsafe { read_clipboard(app.runtime.userdata, clipboard, state) }
     }
 
+    fn increase_font_size(&mut self, delta: f32) -> bool {
+        self.set_font_size_points((self.font_size_points + delta.clamp(0.0, 255.0)).min(255.0));
+        self.font_size_adjusted = true;
+        true
+    }
+
+    fn decrease_font_size(&mut self, delta: f32) -> bool {
+        self.set_font_size_points((self.font_size_points - delta.clamp(0.0, 255.0)).max(1.0));
+        self.font_size_adjusted = true;
+        true
+    }
+
+    fn reset_font_size(&mut self) -> bool {
+        self.set_font_size_points(self.original_font_size_points);
+        self.font_size_adjusted = false;
+        true
+    }
+
+    fn set_font_size(&mut self, points: f32) -> bool {
+        self.set_font_size_points(points.clamp(1.0, 255.0));
+        self.font_size_adjusted = true;
+        true
+    }
+
+    fn set_font_size_points(&mut self, points: f32) {
+        self.font_size_points = points;
+        self.request_render();
+    }
+
     fn scroll_viewport_to_top(&mut self) {
         if self.app.is_null() {
             return;
@@ -2669,6 +2703,14 @@ fn valid_surface_context(context: c_int) -> Option<c_int> {
     }
 }
 
+fn sanitized_font_size_points(points: f32) -> f32 {
+    if points.is_finite() && points > 0.0 {
+        points.clamp(1.0, 255.0)
+    } else {
+        DEFAULT_FONT_SIZE_POINTS
+    }
+}
+
 fn valid_split_direction(direction: c_int) -> Option<c_int> {
     match direction {
         ROASTTY_SPLIT_DIRECTION_RIGHT
@@ -2753,6 +2795,10 @@ enum ParsedBindingAction {
     AdjustSelection(TerminalSelectionAdjustment),
     CopyToClipboard(CopyToClipboardFormat),
     PasteFromClipboard(c_int),
+    IncreaseFontSize(f32),
+    DecreaseFontSize(f32),
+    ResetFontSize,
+    SetFontSize(f32),
     ScrollToTop,
     ScrollToBottom,
     ScrollToRow(usize),
@@ -2889,6 +2935,21 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
                 ROASTTY_CLIPBOARD_SELECTION,
             ))
         }
+        b"increase_font_size" => Some(ParsedBindingAction::IncreaseFontSize(
+            parse_font_size_f32_ascii(parameter?)?,
+        )),
+        b"decrease_font_size" => Some(ParsedBindingAction::DecreaseFontSize(
+            parse_font_size_f32_ascii(parameter?)?,
+        )),
+        b"reset_font_size" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::ResetFontSize)
+        }
+        b"set_font_size" => Some(ParsedBindingAction::SetFontSize(parse_font_size_f32_ascii(
+            parameter?,
+        )?)),
         b"scroll_to_top" => {
             if parameter.is_some() {
                 return None;
@@ -3017,6 +3078,19 @@ fn parse_f32_ascii(bytes: &[u8]) -> Option<f32> {
         return None;
     }
     Some(value)
+}
+
+fn parse_font_size_f32_ascii(bytes: &[u8]) -> Option<f32> {
+    if bytes.is_empty() || bytes.iter().any(u8::is_ascii_whitespace) {
+        return None;
+    }
+    let text = std::str::from_utf8(bytes).ok()?;
+    let value: f32 = text.parse().ok()?;
+    if value.is_finite() {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn copied_env_vars(ptr: *mut RoasttyEnvVar, len: usize) -> Vec<(String, String)> {
@@ -10208,6 +10282,7 @@ pub extern "C" fn roastty_surface_new(
         .map(|app| app.confirm_close_surface)
         .unwrap_or(config::ConfirmCloseSurface::True);
 
+    let font_size_points = sanitized_font_size_points(config.font_size);
     let surface = Box::new(Surface {
         app,
         userdata: config.userdata,
@@ -10216,6 +10291,9 @@ pub extern "C" fn roastty_surface_new(
         env_vars: copied_env_vars(config.env_vars, config.env_var_count),
         initial_input: copied_config_string(config.initial_input).map(String::into_bytes),
         context: valid_surface_context(config.context).unwrap_or(0),
+        font_size_points,
+        original_font_size_points: font_size_points,
+        font_size_adjusted: false,
         scale_factor_x: config.scale_factor,
         scale_factor_y: config.scale_factor,
         inherited_working_directory: None,
@@ -11001,6 +11079,30 @@ pub extern "C" fn roastty_surface_binding_action(
                 return false;
             }
             surface.paste_from_clipboard(clipboard)
+        }
+        ParsedBindingAction::IncreaseFontSize(delta) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.increase_font_size(delta)
+        }
+        ParsedBindingAction::DecreaseFontSize(delta) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.decrease_font_size(delta)
+        }
+        ParsedBindingAction::ResetFontSize => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.reset_font_size()
+        }
+        ParsedBindingAction::SetFontSize(points) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.set_font_size(points)
         }
         ParsedBindingAction::ScrollToTop => {
             if surface.app.is_null() {
@@ -13032,6 +13134,35 @@ mod tests {
             "paste_from_clipboard:now",
             "paste_from_selection:",
             "paste_from_selection:now",
+            "increase_font_size",
+            "increase_font_size:",
+            "increase_font_size: ",
+            "increase_font_size: 1",
+            "increase_font_size:1 ",
+            "increase_font_size:1:2",
+            "increase_font_size:nan",
+            "increase_font_size:inf",
+            "increase_font_size:+inf",
+            "decrease_font_size",
+            "decrease_font_size:",
+            "decrease_font_size: ",
+            "decrease_font_size: 1",
+            "decrease_font_size:1 ",
+            "decrease_font_size:1:2",
+            "decrease_font_size:nan",
+            "decrease_font_size:inf",
+            "decrease_font_size:+inf",
+            "reset_font_size:",
+            "reset_font_size:now",
+            "set_font_size",
+            "set_font_size:",
+            "set_font_size: ",
+            "set_font_size: 1",
+            "set_font_size:1 ",
+            "set_font_size:1:2",
+            "set_font_size:nan",
+            "set_font_size:inf",
+            "set_font_size:+inf",
             "scroll_to_top:",
             "scroll_to_top:now",
             "scroll_to_bottom:",
@@ -14179,6 +14310,123 @@ mod tests {
                 state: surface as usize,
             }]
         );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    fn surface_font_state(surface: RoasttySurface) -> (f32, f32, bool) {
+        let surface = surface_from_handle(surface).unwrap();
+        (
+            surface.font_size_points,
+            surface.original_font_size_points,
+            surface.font_size_adjusted,
+        )
+    }
+
+    #[test]
+    fn surface_binding_action_font_size_initializes_default_and_configured_state() {
+        let app = new_test_app();
+        let default_surface = new_test_surface(app);
+        assert_eq!(
+            surface_font_state(default_surface),
+            (DEFAULT_FONT_SIZE_POINTS, DEFAULT_FONT_SIZE_POINTS, false)
+        );
+        roastty_surface_free(default_surface);
+
+        for (configured, expected) in [
+            (17.5, 17.5),
+            (0.0, DEFAULT_FONT_SIZE_POINTS),
+            (-2.0, DEFAULT_FONT_SIZE_POINTS),
+            (f32::NAN, DEFAULT_FONT_SIZE_POINTS),
+            (300.0, 255.0),
+        ] {
+            let mut config = roastty_surface_config_new();
+            config.font_size = configured;
+            let surface = new_test_surface_with_config(app, &config);
+            assert_eq!(surface_font_state(surface), (expected, expected, false));
+            roastty_surface_free(surface);
+        }
+
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_font_size_false_for_null_and_detached() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "increase_font_size:1"));
+        assert!(!binding_action(ptr::null_mut(), "decrease_font_size:1"));
+        assert!(!binding_action(ptr::null_mut(), "reset_font_size"));
+        assert!(!binding_action(ptr::null_mut(), "set_font_size:14"));
+
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "increase_font_size:1"));
+        assert!(!binding_action(surface, "decrease_font_size:1"));
+        assert!(!binding_action(surface, "reset_font_size"));
+        assert!(!binding_action(surface, "set_font_size:14"));
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_font_size_updates_state_and_requests_render() {
+        let app = new_test_app();
+        let mut config = roastty_surface_config_new();
+        config.font_size = 13.0;
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert!(!roastty_surface_needs_render(surface));
+        assert!(binding_action(surface, "increase_font_size:1.5"));
+        assert_eq!(surface_font_state(surface), (14.5, 13.0, true));
+        assert!(roastty_surface_needs_render(surface));
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.dirty = false;
+        assert!(binding_action(surface, "decrease_font_size:2.25"));
+        assert_eq!(surface_font_state(surface), (12.25, 13.0, true));
+        assert!(roastty_surface_needs_render(surface));
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.dirty = false;
+        assert!(binding_action(surface, "set_font_size:20"));
+        assert_eq!(surface_font_state(surface), (20.0, 13.0, true));
+        assert!(roastty_surface_needs_render(surface));
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.dirty = false;
+        assert!(binding_action(surface, "reset_font_size"));
+        assert_eq!(surface_font_state(surface), (13.0, 13.0, false));
+        assert!(roastty_surface_needs_render(surface));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_font_size_clamps_bounds_and_huge_values() {
+        let app = new_test_app();
+        let mut config = roastty_surface_config_new();
+        config.font_size = 13.0;
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert!(binding_action(surface, "increase_font_size:1e20"));
+        assert_eq!(surface_font_state(surface), (255.0, 13.0, true));
+
+        assert!(binding_action(surface, "decrease_font_size:1e20"));
+        assert_eq!(surface_font_state(surface), (1.0, 13.0, true));
+
+        assert!(binding_action(surface, "set_font_size:-5"));
+        assert_eq!(surface_font_state(surface), (1.0, 13.0, true));
+
+        assert!(binding_action(surface, "set_font_size:1e20"));
+        assert_eq!(surface_font_state(surface), (255.0, 13.0, true));
+
+        assert!(binding_action(surface, "increase_font_size:-5"));
+        assert_eq!(surface_font_state(surface), (255.0, 13.0, true));
+
+        assert!(binding_action(surface, "decrease_font_size:-5"));
+        assert_eq!(surface_font_state(surface), (255.0, 13.0, true));
 
         roastty_surface_free(surface);
         roastty_app_free(app);

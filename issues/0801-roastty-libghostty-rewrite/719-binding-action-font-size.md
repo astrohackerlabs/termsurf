@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 719: Binding Action Font Size
@@ -121,3 +126,56 @@ provenance will be added only after implementation and completion review.
 
 Codex re-reviewed the revised design and found no remaining blockers. The review
 approved the font-size-specific parser and huge finite value clamp test plan.
+
+## Result
+
+**Result:** Pass
+
+Implemented font-size binding-action parsing and dispatch for
+`increase_font_size`, `decrease_font_size`, `reset_font_size`, and
+`set_font_size`. Surfaces now store current font size, original configured font
+size, and manual-adjustment state. The action behavior matches the upstream
+state slice: deltas clamp to `0.0..=255.0`, current point size clamps to
+`1.0..=255.0`, reset restores the original configured size, and each valid
+action requests render.
+
+Roastty now initializes surface font-size state from
+`RoasttySurfaceConfig.font_size` when valid, clamps oversized configured values
+to `255.0`, and falls back to Ghostty's macOS default `13.0` for unset or
+invalid values. Actual CoreText/font stack rebuilds and renderer metric updates
+remain deferred to the font/render subsystem.
+
+The C ABI harness now covers malformed font-size action rejection and valid
+font-size actions consuming successfully without a worker or renderer.
+
+Verification:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty font_size -- --nocapture --test-threads=1` — 4 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1` — 70
+  passed
+- `cargo test -p roastty --test abi_harness` — 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Roastty now preserves the stateful behavior of Ghostty's font-size binding
+actions at the surface level. The remaining font-size work is the larger
+font/render integration: CoreText font stack rebuilds, glyph atlas and metrics
+updates, inherited-window font-size behavior, config reload preservation, and
+public app-facing notification or inspection as needed by the Swift frontend.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 719 implementation and result record.
+The review found one workflow blocker: result-review provenance was not yet
+recorded in the experiment frontmatter or README tuple. This file now includes
+`[review.result]`, and the README provenance tuple has been updated to
+`Codex/Codex/Codex`.
+
+The review found no implementation blockers. It approved the font-size-specific
+parser, finite huge-value clamping, NaN/infinity/whitespace/extra-colon/missing
+parameter rejection, configured/default initialization, state transitions,
+manual-adjustment flag behavior, render invalidation, no-worker state-only
+consumption, C ABI smoke coverage, and binding-action regression coverage.

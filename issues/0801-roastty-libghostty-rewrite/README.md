@@ -1948,7 +1948,7 @@ are past the correctness-critical foundation.
 - [Experiment 718: Binding Action Paste From Clipboard](718-binding-action-paste-from-clipboard.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 719: Binding Action Font Size](719-binding-action-font-size.md) —
-  **Designed** · Codex/Codex/-
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
