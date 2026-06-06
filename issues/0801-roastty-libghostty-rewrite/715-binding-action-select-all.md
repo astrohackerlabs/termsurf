@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 715: Binding Action Select All
@@ -79,6 +84,41 @@ Run:
 - `cargo fmt -p roastty -- --check`
 - `git diff --check`
 
+## Result
+
+**Result:** Pass
+
+Roastty now accepts bare `select_all` as a surface binding action and rejects
+parameterized forms such as `select_all:` and `select_all:now`. Null, detached,
+and no-worker surfaces return `false`.
+
+Attached worker-backed surfaces now reuse the existing terminal selection
+implementation. When selectable content exists, the action installs the trimmed
+`Terminal::select_all()` selection, requests a render, and returns `true`. When
+the active terminal has no selectable content, the action is consumed as `true`
+without installing a selection or marking the surface as needing render.
+
+The C ABI harness now smoke-tests invalid parameterized `select_all` forms and
+the valid no-worker `select_all` false path.
+
+Verification run:
+
+- `cargo fmt -p roastty`
+- `cargo test -p roastty select_all -- --nocapture --test-threads=1` — 7 passed
+- `cargo test -p roastty binding_action -- --nocapture --test-threads=1` — 56
+  passed
+- `cargo test -p roastty --test abi_harness` — 1 passed
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+Experiment 715 exposes Roastty's existing select-all terminal behavior through
+the surface binding-action entry point without changing prior binding-action
+semantics. The remaining selection-related binding-action gap is
+`adjust_selection`, which must mutate an existing active selection and scroll
+the adjusted endpoint into view.
+
 ## Design Review
 
 Codex reviewed the Experiment 715 design and found no technical blockers. The
@@ -98,3 +138,22 @@ surface as needing render, while non-empty select-all does.
 The review mentioned result-review provenance, but that belongs to the
 post-implementation result checkpoint and will be added only after completion
 review.
+
+## Completion Review
+
+Codex reviewed the completed Experiment 715 diff and found no implementation
+blockers. The review confirmed that parser behavior is correct for a void
+action, dispatch returns `false` for null, detached, and no-worker surfaces,
+worker-backed empty/whitespace terminals consume without selection or render,
+and worker-backed terminals with content install the exact
+`Terminal::select_all()` selection while requesting render.
+
+The review also confirmed that tests cover return values, selection state,
+render behavior, ABI smoke coverage, and prior binding-action regression
+coverage.
+
+The only required finding was workflow provenance: the result-review
+frontmatter, this completion-review section, and the README provenance tuple
+needed to be recorded before the result commit. Those fields are now present.
+The review noted that the result lists `cargo fmt -p roastty`; that command was
+run before the focused test command.

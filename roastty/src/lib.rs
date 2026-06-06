@@ -1909,6 +1909,32 @@ impl Surface {
         }
     }
 
+    fn select_all(&mut self) -> bool {
+        if self.app.is_null() {
+            return false;
+        }
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return false;
+        };
+        let selected = match worker.with_termio_mut(|termio| {
+            let Some(selection) = termio.terminal().select_all() else {
+                return Ok::<bool, TerminalGridRefPointError>(false);
+            };
+            termio.terminal_mut().set_selection(Some(selection))?;
+            Ok(true)
+        }) {
+            Ok(selected) => selected,
+            Err(err) => {
+                self.apply_termio_event(termio::TermioWorkerEvent::Error(format!("{err:?}")));
+                return false;
+            }
+        };
+        if selected {
+            self.request_render();
+        }
+        true
+    }
+
     fn scroll_viewport_to_top(&mut self) {
         if self.app.is_null() {
             return;
@@ -2593,6 +2619,7 @@ enum ParsedBindingAction {
     Esc(Vec<u8>),
     Reset,
     ClearScreen,
+    SelectAll,
     ScrollToTop,
     ScrollToBottom,
     ScrollToRow(usize),
@@ -2681,6 +2708,12 @@ fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindin
                 return None;
             }
             Some(ParsedBindingAction::ClearScreen)
+        }
+        b"select_all" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::SelectAll)
         }
         b"scroll_to_top" => {
             if parameter.is_some() {
@@ -10750,6 +10783,12 @@ pub extern "C" fn roastty_surface_binding_action(
             }
             surface.clear_screen()
         }
+        ParsedBindingAction::SelectAll => {
+            if surface.app.is_null() {
+                return false;
+            }
+            surface.select_all()
+        }
         ParsedBindingAction::ScrollToTop => {
             if surface.app.is_null() {
                 return false;
@@ -12650,6 +12689,8 @@ mod tests {
             "reset:now",
             "clear_screen:",
             "clear_screen:now",
+            "select_all:",
+            "select_all:now",
             "scroll_to_top:",
             "scroll_to_top:now",
             "scroll_to_bottom:",
@@ -13236,6 +13277,82 @@ mod tests {
                 .point_from_grid_ref(top_left, TerminalPointTag::Screen)
                 .unwrap()
         })
+    }
+
+    fn surface_worker_active_selection(surface: RoasttySurface) -> Option<TerminalSelection> {
+        let surface_ref = surface_from_handle(surface).unwrap();
+        let worker = surface_ref.termio_worker.as_ref().unwrap();
+        worker.with_termio(|termio| termio.terminal().active_selection())
+    }
+
+    #[test]
+    fn surface_binding_action_select_all_false_for_null_detached_and_no_worker() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        assert!(!binding_action(ptr::null_mut(), "select_all"));
+        assert!(!binding_action(surface, "select_all"));
+        roastty_app_free(app);
+        assert!(!binding_action(surface, "select_all"));
+        roastty_surface_free(surface);
+    }
+
+    #[test]
+    fn surface_binding_action_select_all_empty_worker_consumes_without_selection_or_render() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        {
+            let surface_ref = surface_from_handle(surface).unwrap();
+            let worker = surface_ref.termio_worker.as_ref().unwrap();
+            worker.with_termio_mut(|termio| {
+                termio.terminal_mut().reset();
+                termio.terminal_mut().next_slice(b"   \n  ").unwrap();
+            });
+        }
+
+        assert!(!roastty_surface_needs_render(surface));
+        assert!(binding_action(surface, "select_all"));
+        assert_eq!(surface_worker_active_selection(surface), None);
+        assert!(!roastty_surface_needs_render(surface));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_binding_action_select_all_installs_selection_and_requests_render() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let command = CString::new("printf ready; sleep 5").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 10, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        let expected = {
+            let surface_ref = surface_from_handle(surface).unwrap();
+            let worker = surface_ref.termio_worker.as_ref().unwrap();
+            worker.with_termio_mut(|termio| {
+                termio.terminal_mut().reset();
+                termio
+                    .terminal_mut()
+                    .next_slice(b"  ABC  \n  DEF\n")
+                    .unwrap();
+                termio.terminal().select_all().unwrap()
+            })
+        };
+
+        assert!(!roastty_surface_needs_render(surface));
+        assert!(binding_action(surface, "select_all"));
+        assert_eq!(surface_worker_active_selection(surface), Some(expected));
+        assert!(roastty_surface_needs_render(surface));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
     }
 
     fn surface_worker_active_viewport_top_left_screen(

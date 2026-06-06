@@ -4303,6 +4303,8 @@ int main(int argc, char **argv) {
   assert(!roastty_surface_binding_action(surface, "reset:now", 9));
   assert(!roastty_surface_binding_action(surface, "clear_screen:", 13));
   assert(!roastty_surface_binding_action(surface, "clear_screen:now", 16));
+  assert(!roastty_surface_binding_action(surface, "select_all:", 11));
+  assert(!roastty_surface_binding_action(surface, "select_all:now", 14));
   assert(!roastty_surface_binding_action(surface, "scroll_to_top:", 14));
   assert(!roastty_surface_binding_action(surface, "scroll_to_top:now", 17));
   assert(!roastty_surface_binding_action(surface, "scroll_to_bottom:", 17));
@@ -4337,6 +4339,7 @@ int main(int argc, char **argv) {
   assert(roastty_surface_binding_action(surface, "esc:", 4));
   assert(roastty_surface_binding_action(surface, "reset", 5));
   assert(!roastty_surface_binding_action(surface, "clear_screen", 12));
+  assert(!roastty_surface_binding_action(surface, "select_all", 10));
   assert(roastty_surface_binding_action(surface, "scroll_to_top", 13));
   assert(roastty_surface_binding_action(surface, "scroll_to_bottom", 16));
   assert(roastty_surface_binding_action(surface, "scroll_to_row:0", 15));
