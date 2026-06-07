@@ -320,9 +320,10 @@ Experiment 246).
       toggle forwarding done; runtime control forwarding, focused binding-action
       parsing coverage, targeted slow PTY paste-path coverage, and paste
       clipboard request state done, and render-state display ID scalar done;
-      terminal clipboard OSC event retention done; splits, frontend selection
-      routing, renderer display-ID consumption/delivery, Quicklook UI/font
-      integration, OSC 52 surface request allocation/handling, and full frontend
+      terminal clipboard OSC event retention done, and OSC 52 read surface
+      request allocation/handling done; splits, frontend selection routing,
+      renderer display-ID consumption/delivery, Quicklook UI/font integration,
+      OSC 52 write handling, Kitty clipboard handling, and full frontend
       presentation missing
 - [ ] `pty` + `termio` (shell spawn, read/write loops, resize, fg pid, tty name,
       exit) — PTY open/resize, subprocess spawn, child IO, synchronous pump,
@@ -2086,7 +2087,7 @@ are past the correctness-critical foundation.
 - [Experiment 783: Termio Clipboard OSC Worker Events](783-termio-clipboard-osc-worker-events.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 784: OSC 52 Read Clipboard Requests](784-osc52-read-clipboard-requests.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

@@ -132,3 +132,54 @@ clipboard read, store `c`/`s`/`p` only for reply generation, use the current
 `clipboard-read` config policy, and require confirm-callback reentrancy tests.
 
 Re-review approved the revised design with no findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented the OSC 52 read request path:
+
+- `App` and `Surface` now carry the parsed `clipboard-read` policy.
+- Active clipboard request state now stores the runtime clipboard source and OSC
+  52 reply kind.
+- `TermioWorkerEvent::Clipboard(TerminalClipboardEvent::Osc52 { data: "?", .. })`
+  allocates `ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ` requests.
+- OSC 52 reads always call the runtime read callback with
+  `ROASTTY_CLIPBOARD_STANDARD`, while preserving `c`, `s`, or `p` only for the
+  OSC 52 reply kind.
+- `roastty_surface_complete_clipboard_request` now handles OSC 52 read states,
+  including `clipboard-read` allow/ask/deny policy, confirmation preservation,
+  empty replies, stale/double/cross-surface protection, and reply writes to the
+  child PTY.
+- OSC 52 writes and Kitty clipboard OSC 5522 events are still intentionally not
+  handled by this experiment.
+
+Verification passed:
+
+- `cargo test -p roastty osc52_clipboard -- --nocapture --test-threads=1`
+  - 8 tests passed.
+- `cargo test -p roastty surface_complete_clipboard_request -- --nocapture --test-threads=1`
+  - 10 tests passed.
+- `cargo test -p roastty clipboard_request -- --nocapture --test-threads=1`
+  - 12 tests passed.
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/784-osc52-read-clipboard-requests.md`
+- `git diff --check`
+
+## Conclusion
+
+OSC 52 read requests now survive the full path from terminal OSC parsing to
+surface request allocation, runtime clipboard read, completion validation, and
+PTY reply. The remaining clipboard OSC work is OSC 52 write handling and Kitty
+clipboard OSC 5522 semantics.
+
+## Completion Review
+
+The first completion review found no core implementation correctness issues, but
+blocked the result commit because the README experiment index was missing the
+`Codex/Codex/Codex` provenance tag and the `clipboard-read = ask` path without a
+confirmation callback did not have an explicit no-reply/no-leak test.
+
+The README tag was added and the ask-without-confirm branch now has test
+coverage. Re-review approved the completed experiment with no findings.

@@ -31,14 +31,13 @@ use terminal::selection_gesture::{
     SelectionGestureBehavior, SelectionGestureDeepPress, SelectionGestureDrag,
     SelectionGestureGeometry, SelectionGesturePress, SelectionGestureRelease, DEFAULT_BEHAVIORS,
 };
-#[cfg(test)]
-use terminal::terminal::TerminalClipboardEvent;
 use terminal::terminal::{
     ClearScreenResult, KittyImageMedium, Terminal as InnerTerminal, TerminalBellCallback,
-    TerminalColorKind, TerminalColorSchemeCallback, TerminalDeviceAttributesCallback,
-    TerminalEnquiryCallback, TerminalFormatterExtra, TerminalGridRef, TerminalGridRefPointError,
-    TerminalPointTag, TerminalScreen, TerminalSelection, TerminalSelectionAdjustment,
-    TerminalSelectionFormat, TerminalSelectionOrder, TerminalSizeCallback, TerminalStreamError,
+    TerminalClipboardEvent, TerminalColorKind, TerminalColorSchemeCallback,
+    TerminalDeviceAttributesCallback, TerminalEnquiryCallback, TerminalFormatterExtra,
+    TerminalGridRef, TerminalGridRefPointError, TerminalPointTag, TerminalScreen,
+    TerminalSelection, TerminalSelectionAdjustment, TerminalSelectionFormat,
+    TerminalSelectionOrder, TerminalSizeCallback, TerminalStreamError,
     TerminalTitleChangedCallback, TerminalTrackedGridRef, TerminalWritePtyCallback,
     TerminalXtversionCallback,
 };
@@ -1589,6 +1588,7 @@ struct App {
     focused: bool,
     color_scheme: c_int,
     confirm_close_surface: config::ConfirmCloseSurface,
+    clipboard_read: config::ClipboardAccess,
     has_global_keybinds: bool,
     keybind_triggers: Vec<ConfigKeybind>,
     surfaces: Vec<NonNull<Surface>>,
@@ -1632,6 +1632,7 @@ struct Surface {
     size: RoasttySurfaceSize,
     color_scheme: c_int,
     confirm_close_surface: config::ConfirmCloseSurface,
+    clipboard_read: config::ClipboardAccess,
     preedit: Option<String>,
     inspector: Option<NonNull<Inspector>>,
     last_key_event: Option<key::KeyEvent>,
@@ -1652,6 +1653,8 @@ struct Surface {
 #[derive(Debug)]
 struct ClipboardRequestState {
     request: c_int,
+    clipboard: c_int,
+    osc52_kind: u8,
 }
 
 impl Drop for Surface {
@@ -2639,7 +2642,7 @@ impl Surface {
             return false;
         };
         let _ = worker;
-        let state = self.push_clipboard_request(ROASTTY_CLIPBOARD_REQUEST_PASTE);
+        let state = self.push_clipboard_request(ROASTTY_CLIPBOARD_REQUEST_PASTE, clipboard, b'c');
         let started = unsafe { read_clipboard(app.runtime.userdata, clipboard, state) };
         if !started {
             self.take_clipboard_request(state);
@@ -2647,8 +2650,51 @@ impl Surface {
         started
     }
 
-    fn push_clipboard_request(&mut self, request: c_int) -> *mut c_void {
-        let state = Box::new(ClipboardRequestState { request });
+    fn handle_terminal_clipboard_event(&mut self, event: TerminalClipboardEvent) {
+        match event {
+            TerminalClipboardEvent::Osc52 { kind, data } => {
+                self.osc52_clipboard_read(kind, &data);
+            }
+            TerminalClipboardEvent::Kitty { .. } => {}
+        }
+    }
+
+    fn osc52_clipboard_read(&mut self, kind: u8, data: &[u8]) -> bool {
+        if data != b"?" || self.app.is_null() || self.clipboard_read.denied() {
+            return false;
+        }
+        let Some(app) = app_from_handle(self.app) else {
+            return false;
+        };
+        let Some(read_clipboard) = app.runtime.read_clipboard_cb else {
+            return false;
+        };
+
+        let reply_kind = osc52_reply_kind(kind);
+        let state = self.push_clipboard_request(
+            ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+            ROASTTY_CLIPBOARD_STANDARD,
+            reply_kind,
+        );
+        let started =
+            unsafe { read_clipboard(app.runtime.userdata, ROASTTY_CLIPBOARD_STANDARD, state) };
+        if !started {
+            self.take_clipboard_request(state);
+        }
+        started
+    }
+
+    fn push_clipboard_request(
+        &mut self,
+        request: c_int,
+        clipboard: c_int,
+        osc52_kind: u8,
+    ) -> *mut c_void {
+        let state = Box::new(ClipboardRequestState {
+            request,
+            clipboard,
+            osc52_kind,
+        });
         let state = NonNull::from(Box::leak(state));
         self.active_clipboard_requests.push(state);
         state.as_ptr().cast()
@@ -3297,7 +3343,9 @@ impl Surface {
                 self.process_exited = true;
                 self.dirty = true;
             }
-            termio::TermioWorkerEvent::Clipboard(_) => {}
+            termio::TermioWorkerEvent::Clipboard(event) => {
+                self.handle_terminal_clipboard_event(event);
+            }
         }
     }
 }
@@ -4368,6 +4416,48 @@ fn copied_env_vars(ptr: *mut RoasttyEnvVar, len: usize) -> Vec<(String, String)>
             Some((key, value))
         })
         .collect()
+}
+
+fn osc52_reply_kind(kind: u8) -> u8 {
+    match kind {
+        b'c' | b's' | b'p' => kind,
+        _ => b'c',
+    }
+}
+
+fn base64_standard_encode(data: &[u8]) -> Vec<u8> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = Vec::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+
+        encoded.push(TABLE[(b0 >> 2) as usize]);
+        encoded.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize]);
+        if chunk.len() > 1 {
+            encoded.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize]);
+        } else {
+            encoded.push(b'=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(TABLE[(b2 & 0b0011_1111) as usize]);
+        } else {
+            encoded.push(b'=');
+        }
+    }
+    encoded
+}
+
+fn osc52_read_reply(kind: u8, data: &[u8]) -> Vec<u8> {
+    let encoded = base64_standard_encode(data);
+    let mut reply = Vec::with_capacity(7 + encoded.len() + 2);
+    reply.extend_from_slice(b"\x1b]52;");
+    reply.push(osc52_reply_kind(kind));
+    reply.push(b';');
+    reply.extend_from_slice(&encoded);
+    reply.extend_from_slice(b"\x1b\\");
+    reply
 }
 
 fn terminal_from_handle<'a>(handle: RoasttyTerminal) -> Option<&'a mut Terminal> {
@@ -9176,21 +9266,29 @@ pub extern "C" fn roastty_app_new(
     } else {
         unsafe { *runtime }
     };
-    let (confirm_close_surface, has_global_keybinds, keybind_triggers) = config_from_handle(config)
-        .map(|config| {
-            (
-                config.confirm_close_surface,
-                config.has_global_keybinds,
-                config.keybind_triggers.clone(),
-            )
-        })
-        .unwrap_or((config::ConfirmCloseSurface::True, false, Vec::new()));
+    let (confirm_close_surface, clipboard_read, has_global_keybinds, keybind_triggers) =
+        config_from_handle(config)
+            .map(|config| {
+                (
+                    config.confirm_close_surface,
+                    config.parsed.clipboard_read,
+                    config.has_global_keybinds,
+                    config.keybind_triggers.clone(),
+                )
+            })
+            .unwrap_or((
+                config::ConfirmCloseSurface::True,
+                config::ClipboardAccess::Ask,
+                false,
+                Vec::new(),
+            ));
 
     Box::into_raw(Box::new(App {
         runtime,
         focused: false,
         color_scheme: 0,
         confirm_close_surface,
+        clipboard_read,
         has_global_keybinds,
         keybind_triggers,
         surfaces: Vec::new(),
@@ -12543,6 +12641,9 @@ pub extern "C" fn roastty_surface_new(
     let confirm_close_surface = app_from_handle(app)
         .map(|app| app.confirm_close_surface)
         .unwrap_or(config::ConfirmCloseSurface::True);
+    let clipboard_read = app_from_handle(app)
+        .map(|app| app.clipboard_read)
+        .unwrap_or(config::ClipboardAccess::Ask);
 
     let font_size_points = sanitized_font_size_points(config.font_size);
     let surface = Box::new(Surface {
@@ -12572,6 +12673,7 @@ pub extern "C" fn roastty_surface_new(
         },
         color_scheme: 0,
         confirm_close_surface,
+        clipboard_read,
         preedit: None,
         inspector: None,
         last_key_event: None,
@@ -13059,44 +13161,87 @@ pub extern "C" fn roastty_surface_complete_clipboard_request(
     let Some(request_index) = surface.clipboard_request_index(state) else {
         return;
     };
-    let request = unsafe {
-        surface.active_clipboard_requests[request_index]
-            .as_ref()
-            .request
-    };
-    if request != ROASTTY_CLIPBOARD_REQUEST_PASTE {
-        return;
-    }
-    if surface.app.is_null() || surface.termio_worker.is_none() {
-        surface.take_clipboard_request(state);
-        return;
-    }
+    let request_state = unsafe { surface.active_clipboard_requests[request_index].as_ref() };
+    let request = request_state.request;
+    let clipboard = request_state.clipboard;
+    let osc52_kind = request_state.osc52_kind;
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
-    if bytes.is_empty() {
-        surface.take_clipboard_request(state);
-        return;
-    }
-    let unsafe_paste = bytes.iter().any(|byte| matches!(*byte, b'\n' | b'\r'));
-    if !confirmed && unsafe_paste {
-        let Some(app) = app_from_handle(surface.app) else {
-            return;
-        };
-        let Some(confirm) = app.runtime.confirm_read_clipboard_cb else {
+
+    match request {
+        ROASTTY_CLIPBOARD_REQUEST_PASTE => {
+            if surface.app.is_null() || surface.termio_worker.is_none() {
+                surface.take_clipboard_request(state);
+                return;
+            }
+            if bytes.is_empty() {
+                surface.take_clipboard_request(state);
+                return;
+            }
+            let unsafe_paste = bytes.iter().any(|byte| matches!(*byte, b'\n' | b'\r'));
+            if !confirmed && unsafe_paste {
+                let Some(app) = app_from_handle(surface.app) else {
+                    return;
+                };
+                let Some(confirm) = app.runtime.confirm_read_clipboard_cb else {
+                    surface.take_clipboard_request(state);
+                    return;
+                };
+                unsafe {
+                    confirm(
+                        app.runtime.userdata,
+                        text,
+                        state,
+                        ROASTTY_CLIPBOARD_REQUEST_PASTE,
+                    );
+                }
+                return;
+            }
             surface.take_clipboard_request(state);
-            return;
-        };
-        unsafe {
-            confirm(
-                app.runtime.userdata,
-                text,
-                state,
-                ROASTTY_CLIPBOARD_REQUEST_PASTE,
-            );
+            surface.text(bytes);
         }
-        return;
+        ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ => {
+            debug_assert_eq!(clipboard, ROASTTY_CLIPBOARD_STANDARD);
+            if surface.app.is_null() || surface.termio_worker.is_none() {
+                surface.take_clipboard_request(state);
+                return;
+            }
+            if surface.clipboard_read.denied() {
+                surface.take_clipboard_request(state);
+                return;
+            }
+            if !confirmed && surface.clipboard_read.needs_confirm() {
+                let Some(app) = app_from_handle(surface.app) else {
+                    surface.take_clipboard_request(state);
+                    return;
+                };
+                let Some(confirm) = app.runtime.confirm_read_clipboard_cb else {
+                    surface.take_clipboard_request(state);
+                    return;
+                };
+                unsafe {
+                    confirm(
+                        app.runtime.userdata,
+                        text,
+                        state,
+                        ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+                    );
+                }
+                return;
+            }
+            surface.take_clipboard_request(state);
+            let reply = osc52_read_reply(osc52_kind, bytes);
+            let Some(worker) = surface.termio_worker.as_ref() else {
+                return;
+            };
+            if let Err(err) = worker.queue_write(&reply) {
+                surface.apply_termio_event(termio::TermioWorkerEvent::Error(format!("{err:?}")));
+            }
+        }
+        ROASTTY_CLIPBOARD_REQUEST_OSC_52_WRITE => {
+            surface.take_clipboard_request(state);
+        }
+        _ => {}
     }
-    surface.take_clipboard_request(state);
-    surface.text(bytes);
 }
 
 #[no_mangle]
@@ -13813,6 +13958,7 @@ mod tests {
         static CLIPBOARD_READ_RESULT: RefCell<bool> = const { RefCell::new(true) };
         static CLIPBOARD_CONFIRM_RECORDS: RefCell<Vec<ClipboardConfirmRecord>> = const { RefCell::new(Vec::new()) };
         static CLIPBOARD_READ_SYNC_COMPLETE: RefCell<Option<(usize, String, bool)>> = const { RefCell::new(None) };
+        static CLIPBOARD_CONFIRM_SYNC_COMPLETE: RefCell<Option<usize>> = const { RefCell::new(None) };
     }
 
     fn reset_effect_state() {
@@ -13841,6 +13987,14 @@ mod tests {
     ) -> RoasttyConfig {
         let config = roastty_config_new();
         config_from_handle(config).unwrap().confirm_close_surface = confirm_close_surface;
+        config
+    }
+
+    fn new_test_config_with_clipboard_read(
+        clipboard_read: config::ClipboardAccess,
+    ) -> RoasttyConfig {
+        let config = roastty_config_new();
+        config_from_handle(config).unwrap().parsed.clipboard_read = clipboard_read;
         config
     }
 
@@ -14049,7 +14203,7 @@ mod tests {
         state: *mut c_void,
         request: c_int,
     ) {
-        let text = if text.is_null() {
+        let text_record = if text.is_null() {
             String::new()
         } else {
             CStr::from_ptr(text).to_string_lossy().into_owned()
@@ -14057,10 +14211,20 @@ mod tests {
         CLIPBOARD_CONFIRM_RECORDS.with(|records| {
             records.borrow_mut().push(ClipboardConfirmRecord {
                 userdata: userdata as usize,
-                text,
+                text: text_record,
                 state: state as usize,
                 request,
             });
+        });
+        CLIPBOARD_CONFIRM_SYNC_COMPLETE.with(|complete| {
+            if let Some(surface) = *complete.borrow() {
+                roastty_surface_complete_clipboard_request(
+                    surface as RoasttySurface,
+                    text,
+                    state,
+                    true,
+                );
+            }
         });
     }
 
@@ -14069,6 +14233,7 @@ mod tests {
         CLIPBOARD_READ_RESULT.with(|stored| *stored.borrow_mut() = result);
         CLIPBOARD_CONFIRM_RECORDS.with(|records| records.borrow_mut().clear());
         CLIPBOARD_READ_SYNC_COMPLETE.with(|complete| *complete.borrow_mut() = None);
+        CLIPBOARD_CONFIRM_SYNC_COMPLETE.with(|complete| *complete.borrow_mut() = None);
     }
 
     fn clipboard_read_records() -> Vec<ClipboardReadRecord> {
@@ -14082,6 +14247,12 @@ mod tests {
     fn set_clipboard_read_sync_completion(surface: RoasttySurface, text: &str, confirmed: bool) {
         CLIPBOARD_READ_SYNC_COMPLETE.with(|complete| {
             *complete.borrow_mut() = Some((surface as usize, text.to_owned(), confirmed));
+        });
+    }
+
+    fn set_clipboard_confirm_sync_completion(surface: RoasttySurface) {
+        CLIPBOARD_CONFIRM_SYNC_COMPLETE.with(|complete| {
+            *complete.borrow_mut() = Some(surface as usize);
         });
     }
 
@@ -24876,6 +25047,402 @@ mod tests {
     }
 
     #[test]
+    fn osc52_clipboard_base64_and_reply_encoding() {
+        assert_eq!(base64_standard_encode(b""), b"");
+        assert_eq!(base64_standard_encode(b"f"), b"Zg==");
+        assert_eq!(base64_standard_encode(b"fo"), b"Zm8=");
+        assert_eq!(base64_standard_encode(b"foo"), b"Zm9v");
+        assert_eq!(base64_standard_encode(b"clip"), b"Y2xpcA==");
+        assert_eq!(osc52_read_reply(b'p', b""), b"\x1b]52;p;\x1b\\");
+        assert_eq!(osc52_read_reply(b'x', b"f"), b"\x1b]52;c;Zg==\x1b\\");
+    }
+
+    #[test]
+    fn osc52_clipboard_read_event_allocates_standard_runtime_request() {
+        let app = new_test_app_with_clipboard_read(0xCA57, true, false);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b's',
+                    data: b"?".to_vec(),
+                },
+            ));
+
+        roastty_app_tick(app);
+
+        let records = clipboard_read_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].userdata, 0xCA57);
+        assert_eq!(records[0].clipboard, ROASTTY_CLIPBOARD_STANDARD);
+        assert_ne!(records[0].state, 0);
+        assert_ne!(records[0].state, surface as usize);
+        let request = unsafe {
+            surface_from_handle(surface)
+                .unwrap()
+                .active_clipboard_requests[0]
+                .as_ref()
+        };
+        assert_eq!(request.request, ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ);
+        assert_eq!(request.clipboard, ROASTTY_CLIPBOARD_STANDARD);
+        assert_eq!(request.osc52_kind, b's');
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn osc52_clipboard_read_event_preserves_primary_reply_kind_with_standard_read() {
+        let app = new_test_app_with_clipboard_read(0xCA57, true, false);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'p',
+                    data: b"?".to_vec(),
+                },
+            ));
+
+        roastty_app_tick(app);
+
+        let records = clipboard_read_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].clipboard, ROASTTY_CLIPBOARD_STANDARD);
+        let request = unsafe {
+            surface_from_handle(surface)
+                .unwrap()
+                .active_clipboard_requests[0]
+                .as_ref()
+        };
+        assert_eq!(request.osc52_kind, b'p');
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn osc52_clipboard_read_event_respects_deny_and_ignores_non_read_events() {
+        let config = new_test_config_with_clipboard_read(config::ClipboardAccess::Deny);
+        let app = new_test_app_with_clipboard_read(0xCA57, true, true);
+        let denied_app = {
+            let runtime = app_from_handle(app).unwrap().runtime;
+            roastty_app_free(app);
+            roastty_app_new(&runtime, config)
+        };
+        let surface = new_test_surface(denied_app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'c',
+                    data: b"?".to_vec(),
+                },
+            ));
+        surface_ref
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'c',
+                    data: b"write".to_vec(),
+                },
+            ));
+        surface_ref
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Kitty {
+                    metadata: b"type=read".to_vec(),
+                    payload: None,
+                    terminator: osc::Terminator::Bel,
+                },
+            ));
+
+        roastty_app_tick(denied_app);
+
+        assert!(clipboard_read_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(denied_app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn osc52_clipboard_read_callback_refusal_and_sync_completion_clean_request() {
+        let app = new_test_app_with_clipboard_read(0xCA57, false, false);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'c',
+                    data: b"?".to_vec(),
+                },
+            ));
+
+        roastty_app_tick(app);
+
+        assert_eq!(clipboard_read_records().len(), 1);
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_clipboard_read(0xCA57, false, false);
+        let command = CString::new(
+            "python3 -c 'import sys, tty; sys.stdout.write(\"ready\\n\"); sys.stdout.flush(); tty.setraw(sys.stdin.fileno()); data = sys.stdin.buffer.read(13); sys.stdout.write(\"\\nhex:\" + data.hex()); sys.stdout.flush()'",
+        )
+        .unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 40, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        set_clipboard_read_sync_completion(surface, "f", true);
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'c',
+                    data: b"?".to_vec(),
+                },
+            ));
+
+        roastty_app_tick(app);
+
+        let snapshot = surface_snapshot_text_until(app, surface, "hex:1b5d35323b633b5a673d3d1b5c");
+        assert!(
+            snapshot.contains("hex:1b5d35323b633b5a673d3d1b5c"),
+            "{snapshot:?}"
+        );
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn osc52_clipboard_read_completion_uses_allow_ask_and_empty_reply_policy() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let config = new_test_config_with_clipboard_read(config::ClipboardAccess::Allow);
+        let app = new_test_app_with_clipboard_read(0xCA57, true, false);
+        let runtime = app_from_handle(app).unwrap().runtime;
+        roastty_app_free(app);
+        let app = roastty_app_new(&runtime, config);
+        let command = CString::new(
+            "python3 -c 'import sys, tty; sys.stdout.write(\"ready\\n\"); sys.stdout.flush(); tty.setraw(sys.stdin.fileno()); data = sys.stdin.buffer.read(17); sys.stdout.write(\"\\nhex:\" + data.hex()); sys.stdout.flush()'",
+        )
+        .unwrap();
+        let mut surface_config = roastty_surface_config_new();
+        surface_config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &surface_config);
+        set_surface_test_geometry(surface, 48, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        let state = surface_from_handle(surface)
+            .unwrap()
+            .push_clipboard_request(
+                ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+                ROASTTY_CLIPBOARD_STANDARD,
+                b's',
+            );
+        let text = CString::new("clip").unwrap();
+
+        roastty_surface_complete_clipboard_request(surface, text.as_ptr(), state, false);
+
+        let snapshot =
+            surface_snapshot_text_until(app, surface, "hex:1b5d35323b733b5932787063413d3d1b5c");
+        assert!(
+            snapshot.contains("hex:1b5d35323b733b5932787063413d3d1b5c"),
+            "{snapshot:?}"
+        );
+        assert!(clipboard_confirm_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+
+        let app = new_test_app_with_clipboard_read_confirm(0xCA57, true, false);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        let state = surface_from_handle(surface)
+            .unwrap()
+            .push_clipboard_request(
+                ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+                ROASTTY_CLIPBOARD_STANDARD,
+                b'p',
+            );
+        let empty = CString::new("").unwrap();
+
+        roastty_surface_complete_clipboard_request(surface, empty.as_ptr(), state, false);
+
+        assert_eq!(
+            clipboard_confirm_records(),
+            vec![ClipboardConfirmRecord {
+                userdata: 0xCA57,
+                text: String::new(),
+                state: state as usize,
+                request: ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+            }]
+        );
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .active_clipboard_requests
+                .len(),
+            1
+        );
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+
+        let app = new_test_app_with_clipboard_read(0xCA57, true, false);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        let state = surface_from_handle(surface)
+            .unwrap()
+            .push_clipboard_request(
+                ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+                ROASTTY_CLIPBOARD_STANDARD,
+                b'c',
+            );
+        let text = CString::new("clip").unwrap();
+
+        roastty_surface_complete_clipboard_request(surface, text.as_ptr(), state, false);
+
+        assert!(clipboard_confirm_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        let pending = surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio(|termio| termio.pending_write_bytes());
+        assert_eq!(pending, 0);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn osc52_clipboard_read_confirm_sync_completion_consumes_once() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app_with_clipboard_read_confirm(0xCA57, true, false);
+        let command = CString::new(
+            "python3 -c 'import sys, tty; sys.stdout.write(\"ready\\n\"); sys.stdout.flush(); tty.setraw(sys.stdin.fileno()); data = sys.stdin.buffer.read(13); sys.stdout.write(\"\\nhex:\" + data.hex()); sys.stdout.flush()'",
+        )
+        .unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+        set_surface_test_geometry(surface, 40, 3, 10, 20);
+        assert!(surface_snapshot_text_after_start(app, surface).contains("ready"));
+        let state = surface_from_handle(surface)
+            .unwrap()
+            .push_clipboard_request(
+                ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+                ROASTTY_CLIPBOARD_STANDARD,
+                b'c',
+            );
+        set_clipboard_confirm_sync_completion(surface);
+        let text = CString::new("f").unwrap();
+
+        roastty_surface_complete_clipboard_request(surface, text.as_ptr(), state, false);
+
+        let snapshot = surface_snapshot_text_until(app, surface, "hex:1b5d35323b633b5a673d3d1b5c");
+        assert!(
+            snapshot.contains("hex:1b5d35323b633b5a673d3d1b5c"),
+            "{snapshot:?}"
+        );
+        assert_eq!(clipboard_confirm_records().len(), 1);
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+
+        roastty_surface_complete_clipboard_request(surface, text.as_ptr(), state, true);
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn osc52_clipboard_read_cross_surface_and_missing_runtime_consume_safely() {
+        let app = new_test_app_with_clipboard_read(0xCA57, true, false);
+        let first = new_test_surface(app);
+        let second = new_test_surface(app);
+        surface_from_handle(first).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        surface_from_handle(second).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        let state = surface_from_handle(first).unwrap().push_clipboard_request(
+            ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+            ROASTTY_CLIPBOARD_STANDARD,
+            b'c',
+        );
+        let text = CString::new("clip").unwrap();
+
+        roastty_surface_complete_clipboard_request(second, text.as_ptr(), state, true);
+        assert_eq!(
+            surface_from_handle(first)
+                .unwrap()
+                .active_clipboard_requests
+                .len(),
+            1
+        );
+        roastty_surface_complete_clipboard_request(first, text.as_ptr(), state, true);
+        assert!(surface_from_handle(first)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_complete_clipboard_request(first, text.as_ptr(), state, true);
+        assert!(surface_from_handle(first)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_free(second);
+        roastty_surface_free(first);
+
+        let detached = new_test_surface(app);
+        surface_from_handle(detached).unwrap().termio_worker = Some(test_worker("sleep 5"));
+        let state = surface_from_handle(detached)
+            .unwrap()
+            .push_clipboard_request(
+                ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+                ROASTTY_CLIPBOARD_STANDARD,
+                b'c',
+            );
+        roastty_app_free(app);
+
+        roastty_surface_complete_clipboard_request(detached, text.as_ptr(), state, true);
+        assert!(surface_from_handle(detached)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_free(detached);
+    }
+
+    #[test]
     fn surface_complete_clipboard_request_null_and_default_noop() {
         roastty_surface_complete_clipboard_request(
             ptr::null_mut(),
@@ -24974,7 +25541,14 @@ mod tests {
             worker_surface,
             false,
         );
-        let snapshot = surface_snapshot_text(app, worker_surface);
+        roastty_app_tick(app);
+        let state = new_render_state();
+        assert_eq!(
+            roastty_surface_render_state_update(worker_surface, state),
+            ROASTTY_SUCCESS
+        );
+        let snapshot = render_state_text(state);
+        roastty_render_state_free(state);
         assert!(snapshot.contains("ready"));
         assert!(!snapshot.contains("paste"));
 
