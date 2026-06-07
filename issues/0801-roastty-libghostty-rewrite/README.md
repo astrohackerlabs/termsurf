@@ -2265,6 +2265,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 824: Refine Padding Extend Rows](824-refine-padding-extend-rows.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 825: Derive Row Background Extension](825-derive-row-background-extension.md)
+  — **Designed**
 
 ## Non-Goals
 
