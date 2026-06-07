@@ -104,6 +104,10 @@ pub(crate) struct Config {
     pub window_decoration: WindowDecoration,
     /// `window-theme`.
     pub window_theme: WindowTheme,
+    /// `window-position-x`.
+    pub window_position_x: Option<i16>,
+    /// `window-position-y`.
+    pub window_position_y: Option<i16>,
     /// `window-save-state`.
     pub window_save_state: WindowSaveState,
     /// `fullscreen`.
@@ -189,6 +193,8 @@ impl Default for Config {
             window_subtitle: WindowSubtitle::False,
             window_decoration: WindowDecoration::Auto,
             window_theme: WindowTheme::Auto,
+            window_position_x: None,
+            window_position_y: None,
             window_save_state: WindowSaveState::Default,
             fullscreen: Fullscreen::False,
             title: None,
@@ -297,6 +303,10 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("window-decoration", out));
         self.window_theme
             .format_entry(&mut EntryFormatter::new("window-theme", out));
+        EntryFormatter::new("window-position-x", out)
+            .entry_optional(self.window_position_x, |v, f| f.entry_int(v));
+        EntryFormatter::new("window-position-y", out)
+            .entry_optional(self.window_position_y, |v, f| f.entry_int(v));
         self.window_save_state
             .format_entry(&mut EntryFormatter::new("window-save-state", out));
         self.window_colorspace
@@ -485,6 +495,14 @@ impl Config {
             "window-theme" => {
                 self.window_theme =
                     set_enum_field(value, default.window_theme, WindowTheme::from_keyword)?
+            }
+            "window-position-x" => {
+                self.window_position_x =
+                    set_optional_value_field(value, default.window_position_x, parse_i16_field)?
+            }
+            "window-position-y" => {
+                self.window_position_y =
+                    set_optional_value_field(value, default.window_position_y, parse_i16_field)?
             }
             "window-save-state" => {
                 self.window_save_state = set_enum_field(
@@ -2167,6 +2185,63 @@ pub(crate) fn parse_string_field(value: Option<&str>) -> Result<String, MagicPar
         None => Err(MagicParseError::ValueRequired),
         Some(v) if v.as_bytes().contains(&0) => Err(MagicParseError::InvalidValue),
         Some(v) => Ok(v.to_string()),
+    }
+}
+
+/// Parse an `i16` field (upstream `parseIntoField`'s `std.fmt.parseInt(i16, _, 0)`).
+pub(crate) fn parse_i16_field(value: Option<&str>) -> Result<i16, MagicParseError> {
+    parse_i16_base0(value.ok_or(MagicParseError::ValueRequired)?)
+        .map_err(|_| MagicParseError::InvalidValue)
+}
+
+fn parse_i16_base0(buf: &str) -> Result<i16, IntParseError> {
+    let (neg, rest): (bool, &str) = match buf.as_bytes().first() {
+        Some(b'+') => (false, &buf[1..]),
+        Some(b'-') => (true, &buf[1..]),
+        _ => (false, buf),
+    };
+
+    let mut radix = 10;
+    let mut bytes = rest.as_bytes();
+    if bytes.len() > 2 && bytes[0] == b'0' {
+        match bytes[1].to_ascii_lowercase() {
+            b'b' => (radix, bytes) = (2, &bytes[2..]),
+            b'o' => (radix, bytes) = (8, &bytes[2..]),
+            b'x' => (radix, bytes) = (16, &bytes[2..]),
+            _ => {}
+        }
+    }
+
+    if bytes.is_empty() || bytes[0] == b'_' || bytes[bytes.len() - 1] == b'_' {
+        return Err(IntParseError::Invalid);
+    }
+
+    let limit: i64 = if neg {
+        i16::MAX as i64 + 1
+    } else {
+        i16::MAX as i64
+    };
+    let mut acc: i64 = 0;
+    for &c in bytes {
+        if c == b'_' {
+            continue;
+        }
+        let digit = (c as char).to_digit(radix).ok_or(IntParseError::Invalid)? as i64;
+        acc = acc
+            .checked_mul(radix as i64)
+            .and_then(|v| v.checked_add(digit))
+            .filter(|&v| v <= limit)
+            .ok_or(IntParseError::Overflow)?;
+    }
+
+    if neg {
+        if acc == i16::MAX as i64 + 1 {
+            Ok(i16::MIN)
+        } else {
+            Ok(-(acc as i16))
+        }
+    } else {
+        Ok(acc as i16)
     }
 }
 
@@ -4015,7 +4090,7 @@ impl OscColorReportFormat {
 #[cfg(test)]
 mod tests {
     use super::EntryFormatter;
-    use super::{parse_bool_field, parse_string_field};
+    use super::{parse_bool_field, parse_i16_field, parse_string_field};
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
         BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
@@ -4254,6 +4329,8 @@ mod tests {
         assert_eq!(d.window_subtitle, WindowSubtitle::False);
         assert_eq!(d.window_decoration, WindowDecoration::Auto);
         assert_eq!(d.window_theme, WindowTheme::Auto);
+        assert_eq!(d.window_position_x, None);
+        assert_eq!(d.window_position_y, None);
         assert_eq!(d.window_save_state, WindowSaveState::Default);
         // macOS-window group (Experiment 469).
         assert_eq!(d.fullscreen, Fullscreen::False);
@@ -7578,6 +7655,8 @@ mod tests {
                 "window-subtitle",
                 "window-decoration",
                 "window-theme",
+                "window-position-x",
+                "window-position-y",
                 "window-save-state",
                 "window-colorspace",
                 "clipboard-read",
@@ -7612,6 +7691,8 @@ mod tests {
         assert!(out.contains("cursor-color = \n"));
         assert!(out.contains("theme = \n"));
         assert!(out.contains("title = \n"));
+        assert!(out.contains("window-position-x = \n"));
+        assert!(out.contains("window-position-y = \n"));
     }
 
     #[test]
@@ -8111,6 +8192,57 @@ mod tests {
                 key: "title".to_string(),
                 error: ConfigSetError::InvalidValue,
             }]
+        );
+    }
+
+    #[test]
+    fn config_window_position_routes_optional_i16_fields() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        cfg.set("window-position-x", Some("-0x10")).unwrap();
+        cfg.set("window-position-y", Some("+0b101")).unwrap();
+        assert_eq!(cfg.window_position_x, Some(-16));
+        assert_eq!(cfg.window_position_y, Some(5));
+        assert_eq!(line(&cfg, "window-position-x"), "window-position-x = -16");
+        assert_eq!(line(&cfg, "window-position-y"), "window-position-y = 5");
+
+        cfg.set("window-position-x", Some("-32768")).unwrap();
+        cfg.set("window-position-y", Some("32767")).unwrap();
+        assert_eq!(cfg.window_position_x, Some(i16::MIN));
+        assert_eq!(cfg.window_position_y, Some(i16::MAX));
+
+        cfg.set("window-position-x", Some("")).unwrap();
+        cfg.set("window-position-y", Some("")).unwrap();
+        assert_eq!(cfg.window_position_x, None);
+        assert_eq!(cfg.window_position_y, None);
+        assert_eq!(line(&cfg, "window-position-x"), "window-position-x = ");
+        assert_eq!(line(&cfg, "window-position-y"), "window-position-y = ");
+
+        for (key, value) in [("window-position-x", None), ("window-position-y", None)] {
+            assert_eq!(cfg.set(key, value), Err(ConfigSetError::ValueRequired));
+        }
+        for value in ["-32769", "32768", "-", "+", "0x", "_1", "1_", "0x_1"] {
+            assert_eq!(
+                parse_i16_field(Some(value)),
+                Err(MagicParseError::InvalidValue),
+                "{value:?}"
+            );
+        }
+
+        assert_eq!(
+            cfg.set("window-position-x", Some("123")).map(|_| {
+                let cloned = cfg.clone();
+                cloned == cfg && cloned.window_position_x == Some(123)
+            }),
+            Ok(true)
         );
     }
 

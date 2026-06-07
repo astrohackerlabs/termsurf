@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::io::Write;
-use std::os::raw::{c_char, c_int, c_void};
+use std::os::raw::{c_char, c_int, c_short, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -8973,7 +8973,27 @@ pub extern "C" fn roastty_config_get(
                 output.cast::<*const c_char>().write(value);
                 true
             }
-            b"window-position-x" | b"window-position-y" | b"bell-audio-path" => false,
+            b"window-position-x" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                let Some(value) = config.parsed.window_position_x else {
+                    return false;
+                };
+                output.cast::<c_short>().write(value as c_short);
+                true
+            }
+            b"window-position-y" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                let Some(value) = config.parsed.window_position_y else {
+                    return false;
+                };
+                output.cast::<c_short>().write(value as c_short);
+                true
+            }
+            b"bell-audio-path" => false,
             _ => false,
         }
     }
@@ -16144,6 +16164,17 @@ mod tests {
         ok.then_some(value)
     }
 
+    fn config_get_c_short(config: RoasttyConfig, key: &str, initial: c_short) -> (bool, c_short) {
+        let mut value = initial;
+        let ok = roastty_config_get(
+            config,
+            (&mut value as *mut c_short).cast::<c_void>(),
+            key.as_ptr().cast(),
+            key.len(),
+        );
+        (ok, value)
+    }
+
     fn unique_config_abi_test_dir(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -17788,6 +17819,140 @@ mod tests {
         assert_eq!(config_get_optional_string(config, "title"), Some(None));
         roastty_config_free(config);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_get_window_position_returns_false_for_unset_without_writing() {
+        let config = roastty_config_new();
+        assert_eq!(
+            config_get_c_short(config, "window-position-x", 1234),
+            (false, 1234)
+        );
+        assert_eq!(
+            config_get_c_short(config, "window-position-y", -1234),
+            (false, -1234)
+        );
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_get_window_position_returns_file_and_clone_values() {
+        let dir = unique_config_abi_test_dir("get-window-position-file");
+        let path = dir.join("config.roastty");
+        write_config_file(
+            &path,
+            "window-position-x = -0x10\nwindow-position-y = 32767\n",
+        );
+        let path = c_path(&path);
+
+        let config = roastty_config_new();
+        roastty_config_load_file(config, path.as_ptr());
+        assert_eq!(roastty_config_diagnostics_count(config), 0);
+        let clone = roastty_config_clone(config);
+        roastty_config_free(config);
+
+        assert_eq!(
+            config_get_c_short(clone, "window-position-x", 0),
+            (true, -16)
+        );
+        assert_eq!(
+            config_get_c_short(clone, "window-position-y", 0),
+            (true, 32767)
+        );
+
+        roastty_config_free(clone);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_get_window_position_returns_cli_and_reset_values() {
+        with_init_args(
+            &[
+                "roastty",
+                "--window-position-x=-32768",
+                "--window-position-y=+0b101",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 0);
+                assert_eq!(
+                    config_get_c_short(config, "window-position-x", 0),
+                    (true, -32768)
+                );
+                assert_eq!(
+                    config_get_c_short(config, "window-position-y", 0),
+                    (true, 5)
+                );
+                roastty_config_free(config);
+            },
+        );
+
+        with_init_args(
+            &[
+                "roastty",
+                "--window-position-x=123",
+                "--window-position-x=",
+                "--window-position-y=-456",
+                "--window-position-y=",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 0);
+                assert_eq!(
+                    config_get_c_short(config, "window-position-x", 111),
+                    (false, 111)
+                );
+                assert_eq!(
+                    config_get_c_short(config, "window-position-y", -111),
+                    (false, -111)
+                );
+                roastty_config_free(config);
+            },
+        );
+    }
+
+    #[test]
+    fn config_get_window_position_reports_missing_and_invalid_values() {
+        with_init_args(
+            &[
+                "roastty",
+                "--window-position-x",
+                "--window-position-y=32768",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 2);
+                let messages = (0..2)
+                    .map(|index| config_diagnostic_message(config, index))
+                    .collect::<Vec<_>>();
+                assert!(
+                    messages
+                        .iter()
+                        .any(|message| message.contains("window-position-x")
+                            && message.contains("ValueRequired")),
+                    "{messages:?}"
+                );
+                assert!(
+                    messages
+                        .iter()
+                        .any(|message| message.contains("window-position-y")
+                            && message.contains("InvalidValue")),
+                    "{messages:?}"
+                );
+                assert_eq!(
+                    config_get_c_short(config, "window-position-x", 77),
+                    (false, 77)
+                );
+                assert_eq!(
+                    config_get_c_short(config, "window-position-y", -77),
+                    (false, -77)
+                );
+                roastty_config_free(config);
+            },
+        );
     }
 
     #[test]

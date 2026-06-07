@@ -3,6 +3,16 @@
 agent = "codex"
 model = "gpt-5"
 reasoning = "high"
+
+[review.design]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "gpt-5"
+reasoning = "medium"
 +++
 
 # Experiment 773: Config Get Window Position
@@ -84,3 +94,47 @@ out-of-range boundaries, malformed signs/prefixes, and bad underscores.
 The review confirmed the scope is otherwise correct: config
 storage/parsing/formatting and C ABI lookup only, with runtime window placement
 left out of scope.
+
+## Result
+
+**Result:** Pass
+
+Implemented aggregate config storage for `window-position-x` and
+`window-position-y`. `config::Config` now stores both fields as `Option<i16>`,
+defaults them to `None`, formats them between `window-theme` and
+`window-save-state`, and routes both keys through optional reset semantics and a
+signed base-0 `i16` parser.
+
+`roastty_config_get("window-position-x")` and
+`roastty_config_get("window-position-y")` now return `false` without writing to
+the caller's output slot when unset, or write the parsed value as C `short` and
+return `true` when set.
+
+Verification passed:
+
+- `cargo test -p roastty window_position -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_get_window_position -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_ -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+`window-position-x` and `window-position-y` now report parsed optional signed
+coordinate config state through the C ABI. Runtime window placement behavior
+remains follow-up work.
+
+## Completion Review
+
+Codex reviewed the completed implementation and found no blocking code
+correctness issues. The review confirmed that optional fields default to `None`,
+format between `window-theme` and `window-save-state`, parse signed base-0 `i16`
+values, reset on empty values, and return `false` without writing to the
+caller's output slot when unset.
+
+The review also confirmed the focused tests cover default-null no-write
+behavior, file and CLI values, clone, CLI reset-to-null, missing and invalid
+diagnostics, signed base-0 values, i16 boundaries, malformed signs/prefixes, bad
+underscore cases, and C `short` output for negative values. A required
+provenance frontmatter update was applied before the result commit.

@@ -2060,7 +2060,7 @@ are past the correctness-critical foundation.
 - [Experiment 772: Config Get Title](772-config-get-title.md) — **Pass** ·
   Codex/Codex/Codex
 - [Experiment 773: Config Get Window Position](773-config-get-window-position.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
