@@ -109,3 +109,45 @@ The design was updated to require
 previous nonzero surface snapshot, and constrain checklist updates to
 render-state display ID scalar delivery while leaving broader renderer and
 frontend work missing.
+
+## Result
+
+**Result:** Pass
+
+Render-state snapshots now carry a `display_id` scalar. The C ABI appends
+`ROASTTY_RENDER_STATE_DATA_DISPLAY_ID = 19`, the Rust render-state snapshot
+stores a `u32` display ID defaulting to zero, direct `roastty_render_state_get`
+and batched `roastty_render_state_get_multi` expose it, and
+`roastty_surface_render_state_update` copies the latest `surface.display_id`
+into the snapshot after reading the worker terminal.
+
+Terminal-only snapshots still expose zero, including after a render state
+previously received a nonzero surface display ID. Surface snapshots expose zero
+before a display ID is assigned and the latest nonzero display ID after
+`roastty_surface_set_display_id`.
+
+The C ABI harness also now runs with isolated `HOME` and `XDG_CONFIG_HOME`
+directories, and its zero-diagnostic config sanity load uses `/dev/null` rather
+than a missing `/tmp` path. This keeps the harness deterministic and exercises
+the render-state ABI assertions without changing product config behavior.
+
+Verification passed:
+
+- `cargo test -p roastty render_state_c_abi -- --nocapture --test-threads=1` — 8
+  passed
+- `cargo test -p roastty surface_render_state_update -- --nocapture --test-threads=1`
+  — 6 passed
+- `cargo test -p roastty surface_set_display_id -- --nocapture --test-threads=1`
+  — 5 passed
+- `cargo test -p roastty --test abi_harness -- --nocapture` — 1 passed
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/781-render-state-display-id.md`
+- `git diff --check`
+
+## Conclusion
+
+Roastty now has a tested ABI scalar for renderer-facing display ID snapshots.
+This closes the data handoff from `Surface` storage into render state, while
+leaving actual renderer consumption, frontend routing, and presentation work for
+later experiments.

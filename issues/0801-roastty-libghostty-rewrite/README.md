@@ -319,8 +319,9 @@ Experiment 246).
       forwarding, tab navigation runtime action forwarding, and runtime UI
       toggle forwarding done; runtime control forwarding, focused binding-action
       parsing coverage, targeted slow PTY paste-path coverage, and paste
-      clipboard request state done; splits, frontend selection routing, renderer
-      display-ID delivery, Quicklook UI/font integration, OSC 52 request
+      clipboard request state done, and render-state display ID scalar done;
+      splits, frontend selection routing, renderer display-ID
+      consumption/delivery, Quicklook UI/font integration, OSC 52 request
       allocation/handling, and full frontend presentation missing
 - [ ] `pty` + `termio` (shell spawn, read/write loops, resize, fg pid, tty name,
       exit) — PTY open/resize, subprocess spawn, child IO, synchronous pump,
@@ -2078,7 +2079,7 @@ are past the correctness-critical foundation.
 - [Experiment 780: Clipboard Paste Request State](780-clipboard-paste-request-state.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 781: Render State Display ID](781-render-state-display-id.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

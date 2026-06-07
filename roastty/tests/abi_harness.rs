@@ -24,6 +24,10 @@ fn c_harness_links_against_roastty_header_and_roastty_dylib() {
 
     let out_dir = target_dir.join("roastty-abi-harness");
     std::fs::create_dir_all(&out_dir).expect("failed to create ABI harness output dir");
+    let home_dir = out_dir.join("home");
+    let xdg_config_dir = out_dir.join("xdg-config");
+    std::fs::create_dir_all(&home_dir).expect("failed to create ABI harness HOME");
+    std::fs::create_dir_all(&xdg_config_dir).expect("failed to create ABI harness XDG config dir");
     let binary = out_dir.join("abi_harness");
     let source = manifest_dir.join("tests").join("abi_harness.c");
     let include_dir = manifest_dir.join("include");
@@ -43,6 +47,8 @@ fn c_harness_links_against_roastty_header_and_roastty_dylib() {
     assert!(status.success(), "ABI harness compile/link failed");
 
     let status = Command::new(&binary)
+        .env("HOME", &home_dir)
+        .env("XDG_CONFIG_HOME", &xdg_config_dir)
         .status()
         .expect("failed to run ABI harness");
     assert!(status.success(), "ABI harness failed");

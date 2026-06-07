@@ -532,6 +532,7 @@ const ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X: c_int = 15;
 const ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y: c_int = 16;
 const ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL: c_int = 17;
 const ROASTTY_RENDER_STATE_DATA_KITTY_RENDER_PLACEMENT_ITERATOR: c_int = 18;
+const ROASTTY_RENDER_STATE_DATA_DISPLAY_ID: c_int = 19;
 
 const ROASTTY_RENDER_STATE_OPTION_DIRTY: c_int = 0;
 
@@ -881,6 +882,7 @@ pub struct RoasttyRenderStateRowSelection {
 struct RenderStateScalar {
     cols: u16,
     rows: u16,
+    display_id: u32,
     background: RoasttyRgb,
     foreground: RoasttyRgb,
     cursor: Option<RoasttyRgb>,
@@ -5879,6 +5881,7 @@ fn render_state_default() -> RenderStateScalar {
     RenderStateScalar {
         cols: 0,
         rows: 0,
+        display_id: 0,
         background: RoasttyRgb { r: 0, g: 0, b: 0 },
         foreground: RoasttyRgb {
             r: 0xff,
@@ -5935,6 +5938,7 @@ fn render_state_from_terminal(terminal: &InnerTerminal) -> RenderStateScalar {
     RenderStateScalar {
         cols: terminal.columns(),
         rows: terminal.rows(),
+        display_id: 0,
         background,
         foreground,
         cursor,
@@ -6504,8 +6508,7 @@ fn render_dirty_from_raw(value: c_int) -> Option<c_int> {
 fn valid_render_state_data(data: c_int) -> bool {
     matches!(
         data,
-        ROASTTY_RENDER_STATE_DATA_INVALID
-            ..=ROASTTY_RENDER_STATE_DATA_KITTY_RENDER_PLACEMENT_ITERATOR
+        ROASTTY_RENDER_STATE_DATA_INVALID..=ROASTTY_RENDER_STATE_DATA_DISPLAY_ID
     )
 }
 
@@ -6686,6 +6689,7 @@ unsafe fn render_state_get_write(
     match data {
         ROASTTY_RENDER_STATE_DATA_COLS => out.cast::<u16>().write(state.cols),
         ROASTTY_RENDER_STATE_DATA_ROWS => out.cast::<u16>().write(state.rows),
+        ROASTTY_RENDER_STATE_DATA_DISPLAY_ID => out.cast::<u32>().write(state.display_id),
         ROASTTY_RENDER_STATE_DATA_DIRTY => out.cast::<c_int>().write(state.dirty),
         ROASTTY_RENDER_STATE_DATA_ROW_ITERATOR => {
             let iterator_handle = out.cast::<RoasttyRenderStateRowIterator>().read();
@@ -12700,6 +12704,7 @@ pub extern "C" fn roastty_surface_render_state_update(
     };
 
     *state = worker.with_termio(|termio| render_state_from_terminal(termio.terminal()));
+    state.display_id = surface.display_id;
     surface.dirty = false;
     ROASTTY_SUCCESS
 }
@@ -26579,6 +26584,10 @@ mod tests {
         );
 
         assert!(!roastty_surface_needs_render(surface));
+        assert_eq!(
+            render_state_get_u32(state, ROASTTY_RENDER_STATE_DATA_DISPLAY_ID),
+            0
+        );
         roastty_render_state_free(state);
         roastty_surface_free(surface);
         roastty_app_free(app);
@@ -26611,6 +26620,7 @@ mod tests {
         let app = new_test_app();
         let surface = new_test_surface(app);
         surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("printf hello"));
+        roastty_surface_set_display_id(surface, 37);
 
         wait_until(|| {
             roastty_app_tick(app);
@@ -26625,7 +26635,44 @@ mod tests {
 
         assert!(!roastty_surface_needs_render(surface));
         assert!(render_state_text(state).contains("hello"));
+        assert_eq!(
+            render_state_get_u32(state, ROASTTY_RENDER_STATE_DATA_DISPLAY_ID),
+            37
+        );
 
+        roastty_render_state_free(state);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_render_state_update_display_id_resets_on_terminal_update() {
+        let _guard = PTY_COMMAND_LOCK.lock().unwrap();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        roastty_surface_set_display_id(surface, 77);
+        let state = new_render_state();
+        assert_eq!(
+            roastty_surface_render_state_update(surface, state),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            render_state_get_u32(state, ROASTTY_RENDER_STATE_DATA_DISPLAY_ID),
+            77
+        );
+
+        let terminal = new_terminal(80, 24);
+        assert_eq!(
+            roastty_render_state_update(state, terminal),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            render_state_get_u32(state, ROASTTY_RENDER_STATE_DATA_DISPLAY_ID),
+            0
+        );
+
+        roastty_terminal_free(terminal);
         roastty_render_state_free(state);
         roastty_surface_free(surface);
         roastty_app_free(app);
@@ -27988,6 +28035,15 @@ mod tests {
 
     fn render_state_get_i32(state: RoasttyRenderStateHandle, data: c_int) -> c_int {
         let mut out = -1;
+        assert_eq!(
+            roastty_render_state_get(state, data, &mut out as *mut _ as *mut c_void),
+            ROASTTY_SUCCESS
+        );
+        out
+    }
+
+    fn render_state_get_u32(state: RoasttyRenderStateHandle, data: c_int) -> u32 {
+        let mut out = u32::MAX;
         assert_eq!(
             roastty_render_state_get(state, data, &mut out as *mut _ as *mut c_void),
             ROASTTY_SUCCESS
@@ -30103,6 +30159,7 @@ mod tests {
             ROASTTY_RENDER_STATE_DATA_KITTY_RENDER_PLACEMENT_ITERATOR,
             18
         );
+        assert_eq!(ROASTTY_RENDER_STATE_DATA_DISPLAY_ID, 19);
         assert_eq!(ROASTTY_RENDER_STATE_OPTION_DIRTY, 0);
         assert_eq!(ROASTTY_RENDER_STATE_ROW_DATA_INVALID, 0);
         assert_eq!(ROASTTY_RENDER_STATE_ROW_DATA_DIRTY, 1);
@@ -30172,6 +30229,10 @@ mod tests {
         assert_eq!(
             render_state_get_i32(state, ROASTTY_RENDER_STATE_DATA_DIRTY),
             ROASTTY_RENDER_STATE_DIRTY_FALSE
+        );
+        assert_eq!(
+            render_state_get_u32(state, ROASTTY_RENDER_STATE_DATA_DISPLAY_ID),
+            0
         );
         assert_eq!(
             render_state_get_rgb(state, ROASTTY_RENDER_STATE_DATA_COLOR_BACKGROUND),
@@ -30294,6 +30355,10 @@ mod tests {
         assert_eq!(
             render_state_get_i32(state, ROASTTY_RENDER_STATE_DATA_DIRTY),
             ROASTTY_RENDER_STATE_DIRTY_FULL
+        );
+        assert_eq!(
+            render_state_get_u32(state, ROASTTY_RENDER_STATE_DATA_DISPLAY_ID),
+            0
         );
         assert_eq!(
             render_state_get_rgb(state, ROASTTY_RENDER_STATE_DATA_COLOR_FOREGROUND),
@@ -31796,6 +31861,30 @@ mod tests {
         assert_eq!(written, 2);
         assert_eq!(cols, 0);
         assert_eq!(rows, 0);
+        let keys_with_display = [
+            ROASTTY_RENDER_STATE_DATA_COLS,
+            ROASTTY_RENDER_STATE_DATA_DISPLAY_ID,
+        ];
+        let mut cols = 7u16;
+        let mut display_id = 11u32;
+        let mut values_with_display = [
+            &mut cols as *mut _ as *mut c_void,
+            &mut display_id as *mut _ as *mut c_void,
+        ];
+        written = usize::MAX;
+        assert_eq!(
+            roastty_render_state_get_multi(
+                state,
+                keys_with_display.len(),
+                keys_with_display.as_ptr(),
+                values_with_display.as_mut_ptr(),
+                &mut written,
+            ),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(written, 2);
+        assert_eq!(cols, 0);
+        assert_eq!(display_id, 0);
         written = usize::MAX;
         assert_eq!(
             roastty_render_state_get_multi(

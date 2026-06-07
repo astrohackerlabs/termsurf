@@ -733,6 +733,7 @@ static void assert_render_state_abi(void) {
   assert(ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y == 16);
   assert(ROASTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL == 17);
   assert(ROASTTY_RENDER_STATE_DATA_KITTY_RENDER_PLACEMENT_ITERATOR == 18);
+  assert(ROASTTY_RENDER_STATE_DATA_DISPLAY_ID == 19);
   assert(ROASTTY_RENDER_STATE_OPTION_DIRTY == 0);
   assert(ROASTTY_RENDER_STATE_ROW_DATA_INVALID == 0);
   assert(ROASTTY_RENDER_STATE_ROW_DATA_DIRTY == 1);
@@ -845,6 +846,11 @@ static void assert_render_state_abi(void) {
   assert(roastty_render_state_get(state, ROASTTY_RENDER_STATE_DATA_DIRTY, &dirty) ==
          ROASTTY_SUCCESS);
   assert(dirty == ROASTTY_RENDER_STATE_DIRTY_FALSE);
+  uint32_t display_id = UINT32_MAX;
+  assert(roastty_render_state_get(state,
+                                  ROASTTY_RENDER_STATE_DATA_DISPLAY_ID,
+                                  &display_id) == ROASTTY_SUCCESS);
+  assert(display_id == 0);
 
   roastty_rgb_s rgb = {9, 9, 9};
   assert(roastty_render_state_get(state,
@@ -983,6 +989,22 @@ static void assert_render_state_abi(void) {
   assert(written == 2);
   assert(cols == 0);
   assert(rows == 0);
+  roastty_render_state_data_e keys_with_display[] = {
+      ROASTTY_RENDER_STATE_DATA_COLS,
+      ROASTTY_RENDER_STATE_DATA_DISPLAY_ID,
+  };
+  cols = 7;
+  display_id = 11;
+  void *values_with_display[] = {&cols, &display_id};
+  written = 999;
+  assert(roastty_render_state_get_multi(state,
+                                        2,
+                                        keys_with_display,
+                                        values_with_display,
+                                        &written) == ROASTTY_SUCCESS);
+  assert(written == 2);
+  assert(cols == 0);
+  assert(display_id == 0);
   written = 999;
   assert(roastty_render_state_get_multi(state,
                                         3,
@@ -4269,7 +4291,7 @@ int main(int argc, char **argv) {
   roastty_config_load_cli_args(config);
   roastty_config_load_default_files(config);
   roastty_config_load_recursive_files(config);
-  roastty_config_load_file(config, "/tmp/nonexistent-roastty-config");
+  roastty_config_load_file(config, "/dev/null");
   roastty_config_finalize(config);
   assert(roastty_config_diagnostics_count(config) == 0);
   roastty_diagnostic_s diagnostic = roastty_config_get_diagnostic(config, 0);
