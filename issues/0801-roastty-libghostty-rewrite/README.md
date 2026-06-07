@@ -2063,6 +2063,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 774: Config Get Bell Audio Path](774-config-get-bell-audio-path.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 775: C ABI Config Checklist Sync](775-c-abi-config-checklist-sync.md)
+  — **Designed**
 
 ## Non-Goals
 
