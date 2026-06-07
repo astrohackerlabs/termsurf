@@ -45,6 +45,10 @@ pub(crate) struct Config {
     pub right_click_action: RightClickAction,
     /// `middle-click-action`.
     pub middle_click_action: MiddleClickAction,
+    /// `config-file`.
+    pub config_file: RepeatableConfigPath,
+    /// `config-default-files`.
+    pub config_default_files: bool,
     /// `shell-integration`.
     pub shell_integration: ShellIntegration,
     /// `shell-integration-features`.
@@ -135,6 +139,8 @@ impl Default for Config {
             mouse_shift_capture: MouseShiftCapture::False,
             right_click_action: RightClickAction::ContextMenu,
             middle_click_action: MiddleClickAction::PrimaryPaste,
+            config_file: RepeatableConfigPath::default(),
+            config_default_files: true,
             shell_integration: ShellIntegration::Detect,
             shell_integration_features: ShellIntegrationFeatures::default(),
             notify_on_command_finish: NotifyOnCommandFinish::Never,
@@ -257,6 +263,9 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("right-click-action", out));
         self.middle_click_action
             .format_entry(&mut EntryFormatter::new("middle-click-action", out));
+        self.config_file
+            .format_entry(&mut EntryFormatter::new("config-file", out));
+        EntryFormatter::new("config-default-files", out).entry_bool(self.config_default_files);
         self.confirm_close_surface
             .format_entry(&mut EntryFormatter::new("confirm-close-surface", out));
         self.shell_integration
@@ -286,6 +295,19 @@ impl Config {
     /// experiments; this slice routes the enum fields. A non-enum key currently
     /// returns `UnknownField` (wired in later experiments).
     pub(crate) fn set(&mut self, key: &str, value: Option<&str>) -> Result<(), ConfigSetError> {
+        self.set_from_source(key, value, ConfigSetSource::File)
+    }
+
+    fn set_cli(&mut self, key: &str, value: Option<&str>) -> Result<(), ConfigSetError> {
+        self.set_from_source(key, value, ConfigSetSource::Cli)
+    }
+
+    fn set_from_source(
+        &mut self,
+        key: &str,
+        value: Option<&str>,
+        source: ConfigSetSource,
+    ) -> Result<(), ConfigSetError> {
         let default = Config::default();
         match key {
             "copy-on-select" => {
@@ -323,6 +345,13 @@ impl Config {
                     default.middle_click_action,
                     MiddleClickAction::from_keyword,
                 )?
+            }
+            "config-file" => self.config_file.parse_cli(value)?,
+            "config-default-files" => {
+                if source == ConfigSetSource::Cli {
+                    self.config_default_files =
+                        set_bool_field(value, default.config_default_files)?;
+                }
             }
             "shell-integration" => {
                 self.shell_integration = set_enum_field(
@@ -671,7 +700,7 @@ impl Config {
         for (i, arg) in args.into_iter().enumerate() {
             match loader::parse_cli_arg(arg) {
                 Some((key, value)) => {
-                    if let Err(error) = self.set(key, value) {
+                    if let Err(error) = self.set_cli(key, value) {
                         diagnostics.push(ConfigDiagnostic {
                             line: i + 1,
                             key: key.to_string(),
@@ -769,6 +798,103 @@ pub(crate) struct ConfigDiagnostic {
     pub line: usize,
     pub key: String,
     pub error: ConfigSetError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigSetSource {
+    File,
+    Cli,
+}
+
+/// An error parsing a `RepeatableConfigPath` (upstream `error.ValueRequired`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepeatableConfigPathParseError {
+    /// No value was supplied (upstream `error.ValueRequired`).
+    ValueRequired,
+}
+
+impl From<RepeatableConfigPathParseError> for ConfigSetError {
+    fn from(error: RepeatableConfigPathParseError) -> Self {
+        match error {
+            RepeatableConfigPathParseError::ValueRequired => ConfigSetError::ValueRequired,
+        }
+    }
+}
+
+/// A `config-file` path (upstream `config.path.Path`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfigFilePath {
+    Optional(String),
+    Required(String),
+}
+
+impl ConfigFilePath {
+    fn path(&self) -> &str {
+        match self {
+            Self::Optional(path) | Self::Required(path) => path,
+        }
+    }
+
+    fn format_entry(&self, formatter: &mut EntryFormatter) {
+        match self {
+            Self::Optional(path) => formatter.entry_str(&format!("?{path}")),
+            Self::Required(path) => formatter.entry_str(path),
+        }
+    }
+}
+
+/// An accumulating `config-file` list (upstream `RepeatablePath`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RepeatableConfigPath {
+    pub list: Vec<ConfigFilePath>,
+}
+
+impl RepeatableConfigPath {
+    /// Parse one repeatable path value. A raw empty value clears the list; a
+    /// parsed-empty path such as `?`, `""`, or `?""` is ignored.
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), RepeatableConfigPathParseError> {
+        let mut value = input.ok_or(RepeatableConfigPathParseError::ValueRequired)?;
+        if value.is_empty() {
+            self.list.clear();
+            return Ok(());
+        }
+
+        let optional = if let Some(rest) = value.strip_prefix('?') {
+            value = rest;
+            true
+        } else {
+            false
+        };
+
+        if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+            value = &value[1..value.len() - 1];
+        }
+
+        if value.is_empty() {
+            return Ok(());
+        }
+
+        let path = value.to_string();
+        if optional {
+            self.list.push(ConfigFilePath::Optional(path));
+        } else {
+            self.list.push(ConfigFilePath::Required(path));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        if self.list.is_empty() {
+            formatter.entry_void();
+            return;
+        }
+        for path in &self.list {
+            path.format_entry(formatter);
+        }
+    }
 }
 
 /// Resolve an enum field value (upstream's empty-reset + `stringToEnum` magic): a
@@ -3519,13 +3645,14 @@ mod tests {
         AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
         BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
         ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
-        Config, ConfigDiagnostic, ConfigSetError, ConfirmCloseSurface, CopyOnSelect,
-        CustomShaderAnimation, DefaultConfigPaths, Duration, DurationParseError, FlagsParseError,
-        FontShapingBreak, FontStyle, FontStyleParseError, Fullscreen, GraphemeWidthMethod,
-        LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons,
-        MagicParseError, MiddleClickAction, MouseShiftCapture, NonNativeFullscreen,
-        NotifyOnCommandFinish, NotifyOnCommandFinishAction, OptionalFileAction,
-        OscColorReportFormat, Palette, PaletteParseError, RepeatableClipboardCodepointMap,
+        Config, ConfigDiagnostic, ConfigFilePath, ConfigSetError, ConfirmCloseSurface,
+        CopyOnSelect, CustomShaderAnimation, DefaultConfigPaths, Duration, DurationParseError,
+        FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError, Fullscreen,
+        GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle,
+        MacWindowButtons, MagicParseError, MiddleClickAction, MouseShiftCapture,
+        NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
+        OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
+        RepeatableClipboardCodepointMap, RepeatableConfigPath, RepeatableConfigPathParseError,
         RepeatableString, RepeatableStringParseError, RightClickAction, ScrollToBottom,
         SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
         ShellIntegrationFeatures, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
@@ -4704,6 +4831,130 @@ mod tests {
         y.list.push("z".to_string());
         y.overwrite_next = true;
         assert_eq!(x, y);
+    }
+
+    #[test]
+    fn config_file_repeatable_path_parse_cli_matches_upstream() {
+        let mut paths = RepeatableConfigPath::default();
+        assert_eq!(paths.parse_cli(Some("config.1")), Ok(()));
+        assert_eq!(paths.parse_cli(Some("?config.2")), Ok(()));
+        assert_eq!(paths.parse_cli(Some("\"?config.3\"")), Ok(()));
+        assert_eq!(paths.parse_cli(Some("?\"config.4\"")), Ok(()));
+        assert_eq!(
+            paths.list,
+            vec![
+                ConfigFilePath::Required("config.1".to_string()),
+                ConfigFilePath::Optional("config.2".to_string()),
+                ConfigFilePath::Required("?config.3".to_string()),
+                ConfigFilePath::Optional("config.4".to_string()),
+            ]
+        );
+
+        // Parsed-empty paths are ignored, not reset.
+        assert_eq!(paths.parse_cli(Some("?")), Ok(()));
+        assert_eq!(paths.parse_cli(Some("\"\"")), Ok(()));
+        assert_eq!(paths.parse_cli(Some("?\"\"")), Ok(()));
+        assert_eq!(paths.list.len(), 4);
+
+        assert_eq!(
+            paths.parse_cli(None),
+            Err(RepeatableConfigPathParseError::ValueRequired)
+        );
+
+        // A raw empty value resets the repeatable list.
+        assert_eq!(paths.parse_cli(Some("")), Ok(()));
+        assert!(paths.list.is_empty());
+    }
+
+    #[test]
+    fn config_file_accumulates_resets_and_formats() {
+        let mut cfg = Config::default();
+        cfg.set("config-file", Some("a")).unwrap();
+        cfg.set("config-file", Some("?b")).unwrap();
+        cfg.set("config-file", Some("\"?c\"")).unwrap();
+        assert_eq!(
+            cfg.config_file.list,
+            vec![
+                ConfigFilePath::Required("a".to_string()),
+                ConfigFilePath::Optional("b".to_string()),
+                ConfigFilePath::Required("?c".to_string()),
+            ]
+        );
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out.lines().any(|line| line == "config-file = a"));
+        assert!(out.lines().any(|line| line == "config-file = ?b"));
+        assert!(out.lines().any(|line| line == "config-file = ?c"));
+
+        cfg.set("config-file", Some("?")).unwrap();
+        assert_eq!(cfg.config_file.list.len(), 3);
+        cfg.set("config-file", Some("")).unwrap();
+        assert!(cfg.config_file.list.is_empty());
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out.lines().any(|line| line == "config-file = "));
+
+        cfg.set("config-file", Some("again")).unwrap();
+        let mut out = String::new();
+        Config::default().format_config(&mut out);
+        let diagnostics = cfg.load_str(
+            out.lines()
+                .find(|line| line.starts_with("config-file = "))
+                .unwrap(),
+        );
+        assert!(diagnostics.is_empty());
+        assert!(cfg.config_file.list.is_empty());
+    }
+
+    #[test]
+    fn config_file_clone_and_eq_match_upstream_storage() {
+        let mut paths = RepeatableConfigPath::default();
+        paths.parse_cli(Some("a")).unwrap();
+        paths.parse_cli(Some("?b")).unwrap();
+
+        let cloned = paths.clone();
+        assert_eq!(cloned, paths);
+        assert_eq!(
+            cloned.list,
+            vec![
+                ConfigFilePath::Required("a".to_string()),
+                ConfigFilePath::Optional("b".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn config_default_files_is_cli_only() {
+        let mut cfg = Config::default();
+        assert!(cfg.config_default_files);
+
+        assert_eq!(cfg.set("config-default-files", Some("false")), Ok(()));
+        assert!(cfg.config_default_files);
+
+        let diagnostics = cfg.load_str("config-default-files = false\n");
+        assert!(diagnostics.is_empty());
+        assert!(cfg.config_default_files);
+
+        let diagnostics = cfg.set_cli_args(["--config-default-files=false"]);
+        assert!(diagnostics.is_empty());
+        assert!(!cfg.config_default_files);
+
+        let diagnostics = cfg.set_cli_args(["--config-default-files="]);
+        assert!(diagnostics.is_empty());
+        assert!(cfg.config_default_files);
+
+        let diagnostics = cfg.set_cli_args(["--config-default-files=nope"]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "config-default-files".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+        assert!(cfg.config_default_files);
     }
 
     #[test]
@@ -6508,6 +6759,8 @@ mod tests {
                 "copy-on-select",
                 "right-click-action",
                 "middle-click-action",
+                "config-file",
+                "config-default-files",
                 "confirm-close-surface",
                 "shell-integration",
                 "shell-integration-features",

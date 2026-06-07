@@ -96,3 +96,45 @@ blocking findings. The follow-up review confirmed that the design now covers the
 key upstream `RepeatablePath` distinction and keeps `config-default-files`
 correctly scoped as CLI-only, with recursive loading and C ABI exposure
 deferred.
+
+## Result
+
+**Result:** Pass
+
+Implemented typed storage and parsing for `config-file` and
+`config-default-files` in `roastty/src/config/mod.rs`.
+
+`config-file` now stores required and optional paths in a
+`RepeatableConfigPath`, preserves upstream parsing order for leading `?` and
+quote stripping, ignores parsed-empty path values, and clears accumulated paths
+on raw empty `config-file =`. `format_config` now emits `config-file` entries in
+the current config order, including an empty entry when the list is empty.
+
+`config-default-files` now defaults to `true` and is source-aware: file-source
+setting and `load_str` accept but ignore it, while CLI argument loading mutates
+the stored bool.
+
+Verification passed:
+
+- `cargo test -p roastty config_file -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_default_files -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_ -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Completion Review
+
+Codex reviewed the completed implementation and found no blocking findings. The
+review confirmed that the implementation matches the approved `RepeatablePath`
+semantics, keeps `config-default-files` CLI-only, and stays within the approved
+foundation scope: storage, parsing, source-aware setting, and formatting only.
+No recursive loading, path expansion, C ABI exposure, or default-file behavior
+wiring was introduced.
+
+## Conclusion
+
+Roastty can now remember `config-file` entries and the CLI-only
+`config-default-files` switch in the typed Rust config model. This gives the
+next recursive-loading slice the field storage it needs without implementing
+recursive file traversal yet.
