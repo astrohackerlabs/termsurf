@@ -5,7 +5,7 @@ mod ansi;
 mod array_list_collection;
 
 #[allow(dead_code)]
-mod base64;
+pub(crate) mod base64;
 
 #[allow(dead_code)]
 mod base64_scalar;

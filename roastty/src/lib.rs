@@ -1589,6 +1589,7 @@ struct App {
     color_scheme: c_int,
     confirm_close_surface: config::ConfirmCloseSurface,
     clipboard_read: config::ClipboardAccess,
+    clipboard_write: config::ClipboardAccess,
     has_global_keybinds: bool,
     keybind_triggers: Vec<ConfigKeybind>,
     surfaces: Vec<NonNull<Surface>>,
@@ -1633,6 +1634,7 @@ struct Surface {
     color_scheme: c_int,
     confirm_close_surface: config::ConfirmCloseSurface,
     clipboard_read: config::ClipboardAccess,
+    clipboard_write: config::ClipboardAccess,
     preedit: Option<String>,
     inspector: Option<NonNull<Inspector>>,
     last_key_event: Option<key::KeyEvent>,
@@ -2653,7 +2655,11 @@ impl Surface {
     fn handle_terminal_clipboard_event(&mut self, event: TerminalClipboardEvent) {
         match event {
             TerminalClipboardEvent::Osc52 { kind, data } => {
-                self.osc52_clipboard_read(kind, &data);
+                if data == b"?" {
+                    self.osc52_clipboard_read(kind, &data);
+                } else {
+                    self.osc52_clipboard_write(kind, &data);
+                }
             }
             TerminalClipboardEvent::Kitty { .. } => {}
         }
@@ -2682,6 +2688,45 @@ impl Surface {
             self.take_clipboard_request(state);
         }
         started
+    }
+
+    fn osc52_clipboard_write(&mut self, kind: u8, data: &[u8]) -> bool {
+        if self.app.is_null() || self.clipboard_write.denied() {
+            return false;
+        }
+        let Some(app) = app_from_handle(self.app) else {
+            return false;
+        };
+        let Some(write_clipboard) = app.runtime.write_clipboard_cb else {
+            return false;
+        };
+        let Some(clipboard) = osc52_write_clipboard(kind, app.runtime.supports_selection_clipboard)
+        else {
+            return false;
+        };
+        let Some(decoded) = osc52_decode_clipboard_write(data) else {
+            return false;
+        };
+        let Ok(mime) = CString::new("text/plain") else {
+            return false;
+        };
+        let Ok(text) = CString::new(decoded) else {
+            return false;
+        };
+        let content = RoasttyClipboardContent {
+            mime: mime.as_ptr(),
+            data: text.as_ptr(),
+        };
+        unsafe {
+            write_clipboard(
+                app.runtime.userdata,
+                clipboard,
+                ptr::addr_of!(content),
+                1,
+                self.clipboard_write.needs_confirm(),
+            );
+        }
+        true
     }
 
     fn push_clipboard_request(
@@ -4423,6 +4468,44 @@ fn osc52_reply_kind(kind: u8) -> u8 {
         b'c' | b's' | b'p' => kind,
         _ => b'c',
     }
+}
+
+fn osc52_write_clipboard(kind: u8, supports_selection: bool) -> Option<c_int> {
+    match kind {
+        b's' if supports_selection => Some(ROASTTY_CLIPBOARD_SELECTION),
+        b's' => None,
+        b'c' | b'p' => Some(ROASTTY_CLIPBOARD_STANDARD),
+        _ => Some(ROASTTY_CLIPBOARD_STANDARD),
+    }
+}
+
+fn base64_decoded_len(input: &[u8]) -> Option<usize> {
+    if input.is_empty() {
+        return Some(0);
+    }
+    if input.len() % 4 != 0 {
+        return None;
+    }
+    let trailing_padding = input.iter().rev().take_while(|byte| **byte == b'=').count();
+    if trailing_padding > 2 || trailing_padding == input.len() {
+        return None;
+    }
+    let unpadded_len = input.len() - trailing_padding;
+    if input[..unpadded_len].contains(&b'=') {
+        return None;
+    }
+    let remainder = unpadded_len % 4;
+    if matches!(remainder, 1) {
+        return None;
+    }
+    Some(terminal::base64::max_len(input))
+}
+
+fn osc52_decode_clipboard_write(data: &[u8]) -> Option<Vec<u8>> {
+    let size = base64_decoded_len(data)?;
+    let mut decoded = vec![0u8; size];
+    let decoded = terminal::base64::decode(data, &mut decoded).ok()?;
+    Some(decoded.to_vec())
 }
 
 fn base64_standard_encode(data: &[u8]) -> Vec<u8> {
@@ -9266,22 +9349,29 @@ pub extern "C" fn roastty_app_new(
     } else {
         unsafe { *runtime }
     };
-    let (confirm_close_surface, clipboard_read, has_global_keybinds, keybind_triggers) =
-        config_from_handle(config)
-            .map(|config| {
-                (
-                    config.confirm_close_surface,
-                    config.parsed.clipboard_read,
-                    config.has_global_keybinds,
-                    config.keybind_triggers.clone(),
-                )
-            })
-            .unwrap_or((
-                config::ConfirmCloseSurface::True,
-                config::ClipboardAccess::Ask,
-                false,
-                Vec::new(),
-            ));
+    let (
+        confirm_close_surface,
+        clipboard_read,
+        clipboard_write,
+        has_global_keybinds,
+        keybind_triggers,
+    ) = config_from_handle(config)
+        .map(|config| {
+            (
+                config.confirm_close_surface,
+                config.parsed.clipboard_read,
+                config.parsed.clipboard_write,
+                config.has_global_keybinds,
+                config.keybind_triggers.clone(),
+            )
+        })
+        .unwrap_or((
+            config::ConfirmCloseSurface::True,
+            config::ClipboardAccess::Ask,
+            config::ClipboardAccess::Allow,
+            false,
+            Vec::new(),
+        ));
 
     Box::into_raw(Box::new(App {
         runtime,
@@ -9289,6 +9379,7 @@ pub extern "C" fn roastty_app_new(
         color_scheme: 0,
         confirm_close_surface,
         clipboard_read,
+        clipboard_write,
         has_global_keybinds,
         keybind_triggers,
         surfaces: Vec::new(),
@@ -12644,6 +12735,9 @@ pub extern "C" fn roastty_surface_new(
     let clipboard_read = app_from_handle(app)
         .map(|app| app.clipboard_read)
         .unwrap_or(config::ClipboardAccess::Ask);
+    let clipboard_write = app_from_handle(app)
+        .map(|app| app.clipboard_write)
+        .unwrap_or(config::ClipboardAccess::Allow);
 
     let font_size_points = sanitized_font_size_points(config.font_size);
     let surface = Box::new(Surface {
@@ -12674,6 +12768,7 @@ pub extern "C" fn roastty_surface_new(
         color_scheme: 0,
         confirm_close_surface,
         clipboard_read,
+        clipboard_write,
         preedit: None,
         inspector: None,
         last_key_event: None,
@@ -13998,6 +14093,14 @@ mod tests {
         config
     }
 
+    fn new_test_config_with_clipboard_write(
+        clipboard_write: config::ClipboardAccess,
+    ) -> RoasttyConfig {
+        let config = roastty_config_new();
+        config_from_handle(config).unwrap().parsed.clipboard_write = clipboard_write;
+        config
+    }
+
     unsafe extern "C" fn wakeup_cb(userdata: *mut c_void) {
         WAKEUP_COUNT.fetch_add(1, Ordering::SeqCst);
         WAKEUP_USERDATA.store(userdata as usize, Ordering::SeqCst);
@@ -14169,6 +14272,26 @@ mod tests {
             close_surface_cb: None,
         };
         roastty_app_new(&runtime, ptr::null_mut())
+    }
+
+    fn new_test_app_with_clipboard_write_config(
+        userdata: usize,
+        supports_selection_clipboard: bool,
+        clipboard_write: config::ClipboardAccess,
+    ) -> (RoasttyApp, RoasttyConfig) {
+        reset_clipboard_write_records();
+        let config = new_test_config_with_clipboard_write(clipboard_write);
+        let runtime = RoasttyRuntimeConfig {
+            userdata: userdata as *mut c_void,
+            supports_selection_clipboard,
+            wakeup_cb: None,
+            action_cb: None,
+            read_clipboard_cb: None,
+            confirm_read_clipboard_cb: None,
+            write_clipboard_cb: Some(write_clipboard_record_cb),
+            close_surface_cb: None,
+        };
+        (roastty_app_new(&runtime, config), config)
     }
 
     unsafe extern "C" fn read_clipboard_record_cb(
@@ -25393,8 +25516,6 @@ mod tests {
         let app = new_test_app_with_clipboard_read(0xCA57, true, false);
         let first = new_test_surface(app);
         let second = new_test_surface(app);
-        surface_from_handle(first).unwrap().termio_worker = Some(test_worker("sleep 5"));
-        surface_from_handle(second).unwrap().termio_worker = Some(test_worker("sleep 5"));
         let state = surface_from_handle(first).unwrap().push_clipboard_request(
             ROASTTY_CLIPBOARD_REQUEST_OSC_52_READ,
             ROASTTY_CLIPBOARD_STANDARD,
@@ -25424,7 +25545,6 @@ mod tests {
         roastty_surface_free(first);
 
         let detached = new_test_surface(app);
-        surface_from_handle(detached).unwrap().termio_worker = Some(test_worker("sleep 5"));
         let state = surface_from_handle(detached)
             .unwrap()
             .push_clipboard_request(
@@ -25440,6 +25560,200 @@ mod tests {
             .active_clipboard_requests
             .is_empty());
         roastty_surface_free(detached);
+    }
+
+    fn push_osc52_write(surface: RoasttySurface, kind: u8, data: &[u8]) {
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind,
+                    data: data.to_vec(),
+                },
+            ));
+    }
+
+    #[test]
+    fn osc52_clipboard_write_forwards_standard_selection_primary_and_unknown_targets() {
+        let (app, config) =
+            new_test_app_with_clipboard_write_config(0xC017, true, config::ClipboardAccess::Allow);
+        let surface = new_test_surface(app);
+
+        for (kind, data, clipboard, text) in [
+            (
+                b'c',
+                b"Y2xpcA==".as_slice(),
+                ROASTTY_CLIPBOARD_STANDARD,
+                "clip",
+            ),
+            (b's', b"c2Vs".as_slice(), ROASTTY_CLIPBOARD_SELECTION, "sel"),
+            (
+                b'p',
+                b"cHJpbQ==".as_slice(),
+                ROASTTY_CLIPBOARD_STANDARD,
+                "prim",
+            ),
+            (b'x', b"dW5r".as_slice(), ROASTTY_CLIPBOARD_STANDARD, "unk"),
+        ] {
+            reset_clipboard_write_records();
+            push_osc52_write(surface, kind, data);
+
+            roastty_app_tick(app);
+
+            assert_eq!(
+                clipboard_write_records(),
+                vec![ClipboardWriteRecord {
+                    userdata: 0xC017,
+                    clipboard,
+                    contents: vec![("text/plain".to_string(), text.to_string())],
+                    confirm: false,
+                }]
+            );
+            assert!(surface_from_handle(surface)
+                .unwrap()
+                .active_clipboard_requests
+                .is_empty());
+        }
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn osc52_clipboard_write_ignores_unsupported_selection_and_denied_policy() {
+        let (app, config) =
+            new_test_app_with_clipboard_write_config(0xC017, false, config::ClipboardAccess::Allow);
+        let surface = new_test_surface(app);
+
+        push_osc52_write(surface, b's', b"c2Vs");
+        roastty_app_tick(app);
+
+        assert!(clipboard_write_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+
+        let (app, config) =
+            new_test_app_with_clipboard_write_config(0xC017, true, config::ClipboardAccess::Deny);
+        let surface = new_test_surface(app);
+
+        push_osc52_write(surface, b'c', b"Y2xpcA==");
+        roastty_app_tick(app);
+
+        assert!(clipboard_write_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_clipboard_requests
+            .is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn osc52_clipboard_write_ask_sets_confirmation_flag_and_empty_writes() {
+        let (app, config) =
+            new_test_app_with_clipboard_write_config(0xC017, true, config::ClipboardAccess::Ask);
+        let surface = new_test_surface(app);
+
+        for (data, text) in [(b"YQ==".as_slice(), "a"), (b"".as_slice(), "")] {
+            reset_clipboard_write_records();
+            push_osc52_write(surface, b'c', data);
+
+            roastty_app_tick(app);
+
+            assert_eq!(
+                clipboard_write_records(),
+                vec![ClipboardWriteRecord {
+                    userdata: 0xC017,
+                    clipboard: ROASTTY_CLIPBOARD_STANDARD,
+                    contents: vec![("text/plain".to_string(), text.to_string())],
+                    confirm: true,
+                }]
+            );
+        }
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn osc52_clipboard_write_ignores_invalid_base64_and_decoded_nul_payloads() {
+        let (app, config) =
+            new_test_app_with_clipboard_write_config(0xC017, true, config::ClipboardAccess::Allow);
+        let surface = new_test_surface(app);
+
+        for data in [
+            b"A".as_slice(),
+            b"A===".as_slice(),
+            b"====".as_slice(),
+            b"TQ===".as_slice(),
+            b"TWE==".as_slice(),
+            b"TW*u".as_slice(),
+            b"AA==".as_slice(),
+            b"YQBj".as_slice(),
+        ] {
+            reset_clipboard_write_records();
+            push_osc52_write(surface, b'c', data);
+
+            roastty_app_tick(app);
+
+            assert!(clipboard_write_records().is_empty(), "{data:?}");
+            assert!(surface_from_handle(surface)
+                .unwrap()
+                .active_clipboard_requests
+                .is_empty());
+        }
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn osc52_clipboard_write_preserves_read_and_kitty_event_behavior() {
+        let app = new_test_app_with_clipboard_read(0xCA57, true, false);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'c',
+                    data: b"?".to_vec(),
+                },
+            ));
+        surface_from_handle(surface)
+            .unwrap()
+            .test_termio_events
+            .push_back(termio::TermioWorkerEvent::Clipboard(
+                TerminalClipboardEvent::Kitty {
+                    metadata: b"type=read".to_vec(),
+                    payload: None,
+                    terminator: osc::Terminator::Bel,
+                },
+            ));
+
+        roastty_app_tick(app);
+
+        assert_eq!(clipboard_read_records().len(), 1);
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .active_clipboard_requests
+                .len(),
+            1
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
     }
 
     #[test]

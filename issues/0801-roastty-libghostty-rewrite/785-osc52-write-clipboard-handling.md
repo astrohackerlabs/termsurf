@@ -123,3 +123,55 @@ change, explicit NUL/invalid-base64 tests, explicit `c`/`s`/`p`/unknown target
 and deny/allow/ask policy coverage, and upstream-matching empty write behavior.
 
 Re-review approved the revised design with no findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented OSC 52 write handling:
+
+- `App` and `Surface` now carry the parsed `clipboard-write` policy.
+- `Surface::handle_terminal_clipboard_event` routes OSC 52 non-read payloads to
+  a write handler while preserving OSC 52 reads and ignoring Kitty clipboard
+  events.
+- The surface layer reuses the ported `terminal::base64` decoder, with an
+  invalid-sizing guard so malformed payloads do not become empty writes.
+- Valid decoded text and empty decoded payloads are forwarded through
+  `write_clipboard_cb` as one `text/plain` item.
+- `clipboard-write = ask` sets the runtime confirm flag, `allow` does not, and
+  `deny` ignores the write.
+- Kind `c`, supported `s`, unsupported `s`, `p`, and unknown target mapping are
+  covered, with `p` using the standard clipboard in the current macOS ABI
+  subset.
+- Invalid base64 and decoded NUL-containing payloads are ignored because the
+  current C clipboard content ABI is C-string based.
+
+Verification passed:
+
+- `cargo test -p roastty osc52_clipboard -- --nocapture --test-threads=1`
+  - 13 tests passed.
+- `cargo test -p roastty surface_binding_action_copy_to_clipboard -- --nocapture --test-threads=1`
+  - 2 tests passed.
+- `cargo test -p roastty clipboard_write -- --nocapture --test-threads=1`
+  - 7 tests passed.
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/785-osc52-write-clipboard-handling.md`
+- `git diff --check`
+
+## Conclusion
+
+OSC 52 read and write handling now both reach the surface/runtime boundary with
+tested config policy and target behavior. The remaining terminal clipboard OSC
+gap is Kitty clipboard OSC 5522 semantics.
+
+## Completion Review
+
+The first completion review found no core OSC 52 write correctness issues, but
+blocked the result commit because the README experiment index was missing the
+`Codex/Codex/Codex` provenance tag and the base64 sizing guard still accepted
+excessive trailing padding such as `TQ===` and `TWE==`.
+
+The README tag was added, the base64 guard now rejects excessive padding, and
+tests cover those cases. Re-review approved the completed experiment with no
+findings.
