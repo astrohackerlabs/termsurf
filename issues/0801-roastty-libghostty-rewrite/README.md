@@ -261,13 +261,26 @@ Experiment 246).
       keymaps/layouts, frontend integration, and full input policy remain
       incomplete
 
-### Configuration — skeleton only
+### Configuration — partial
 
-- [ ] `Config` struct (full field set) — only a `finalized` flag exists
-- [ ] Option parsing, CLI args, file / default / recursive loading — stubbed
-- [ ] Validation / finalization / diagnostics — stubbed
+- [ ] `Config` struct (full field set) — partial: real field groups exist for
+      app/window lifecycle, clipboard, mouse, config files/defaults, shell
+      integration, notify/bell, window/color/background, font/style, terminal
+      rendering, title/theme, and macOS options; full Ghostty key set still
+      incomplete
+- [ ] Option parsing, CLI args, file / default / recursive loading — partial:
+      config line parsing, CLI config args, default-file candidates, optional
+      file loads, recursive config-file loading, cycle detection, and C ABI load
+      plumbing exist; full CLI/list tooling remains elsewhere
+- [ ] Validation / finalization / diagnostics — partial: per-field parse
+      diagnostics, file/recursive/default-file diagnostics, path expansion,
+      numeric/string/enum/flag validation, and focused finalizers exist; full
+      Ghostty finalization pass remains incomplete
 - [ ] Keybind parsing, theme loading, conditionals, key-remap, clipboard maps,
-      `formatter`/export — missing
+      `formatter`/export — partial: keybind parsing/storage/diagnostics, theme
+      parsing, conditionals, comma/string/unicode-range helpers, clipboard
+      codepoint maps, and config formatter/export foundations exist; key-remap
+      and full formatter/export completeness remain open
 
 ### C ABI (`libroastty` boundary)
 
@@ -2123,6 +2136,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 793: z2d Dependency Checklist Sync](793-z2d-dependency-checklist-sync.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 794: Config Checklist Sync](794-config-checklist-sync.md) —
+  **Designed**
 
 ## Non-Goals
 
