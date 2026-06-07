@@ -110,6 +110,54 @@ Two findings, adopted: the unsaved `min6/count6` instrumentation is softened to
 corroboration (not the basis), and `od`'s block-buffering is noted alongside the
 count barrier.
 
+## Result
+
+**Result:** Pass
+
+The one-line child swap landed (`dd count=8 | od` → `cat -v`, with `min 1`).
+Build clean (no warnings), fmt clean, no-ghostty clean, `git diff --check`
+clean; isolation pass.
+
+| run (default) | STATUS                | `performable_action` | other failures         |
+| ------------- | --------------------- | -------------------- | ---------------------- |
+| #1            | COMPLETED rc=101 341s | **ok**               | bell_audio_path        |
+| #2            | COMPLETED rc=0 266s   | **ok**               | — (fully green 4360/0) |
+| #3            | COMPLETED rc=0 220s   | **ok**               | — (fully green 4360/0) |
+
+- **`performable_action` is `... ok` 3/3 at default parallelism** — the setting
+  where it failed in Exp 834/835. `cat -v` renders `"^[[1;2D"` as the child's
+  own output, so the assert no longer depends on the racy echo. All runs
+  `START`/`END`/`CMD` stamped, none hit `HARD_TIMEOUT`/`IDLE_KILL`.
+- **Two of the three runs were fully green (4360 passed / 0 failed).** The
+  single failure (run 1, `bell_audio_path`) is the config `$HOME`/cwd flake
+  class — the last remaining default-parallelism flake, deferred to Exp 837.
+
 ## Conclusion
 
-_(to be written after the run)_
+Every `surface_*` render/echo flake is now fixed (831 cascade, 832 race, 834
+surface_start echo-KEY, 835 natural_text byte, 836 performable_action child).
+The suite is green at default parallelism **except** for the intermittent config
+`$HOME`/cwd class.
+
+- **Exp 837 (next, the last flake):** `config::tests::config_path_cli_…` and
+  `config::tests::bell_audio_path_…` — non-PTY tests that manipulate `$HOME`/cwd
+  and flake when run concurrently with each other or other env-touching tests.
+  Diagnose first (capture the failing assert), then fix (likely a shared
+  env/cwd-mutation race needing serialization or per-test isolation).
+
+Once 837 lands, `cargo test -p roastty` is green at **default** parallelism
+across the 3× gate, the gate drops `--test-threads=4` (back to default), and
+feature work (URI/regex, remaining `os/`) finally resumes.
+
+## Completion Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). Confirmed the diff is exactly the one-line child swap
+(`dd count=8 | od` → `cat -v`, `min 1`) + comment, test-only, fmt clean;
+`performable_action ... ok` 3/3 at default (no `--test-threads`, no timeout),
+runs 2&3 fully green (4360/0), run 1's only failure `bell_audio_path` (distinct
+config flake, can't be caused by this test-child change); never-exiting `cat`
+shows no leak/hang across 220–341 s. **Verdict: CHANGES REQUIRED → fixed.**
+
+- **Required — stale README index status.** The 836 index line still read
+  `Designed`. **Fixed:** flipped to `Pass`.

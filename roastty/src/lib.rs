@@ -16291,10 +16291,11 @@ mod tests {
     fn surface_key_default_performable_action_falls_through_when_unperformed() {
         let _guard = pty_command_lock();
         let app = new_test_app_with_action(true);
-        let command = CString::new(
-            "stty -echo -icanon min 8 time 0; dd bs=1 count=8 2>/dev/null | od -An -tx1 -v",
-        )
-        .unwrap();
+        // `cat -v` renders each received byte (here ESC[1;2D -> "^[[1;2D") as the
+        // child's own deterministic output, so the assert no longer depends on the
+        // racy pre-`stty -echo` terminal echo that the old `dd count=8 | od` child
+        // forced (count=8 blocked on the 6-byte sequence; Issue 801, Exp 836).
+        let command = CString::new("stty -echo -icanon min 1 time 0; cat -v").unwrap();
         let mut config = roastty_surface_config_new();
         config.command = command.as_ptr();
         let surface = new_test_surface_with_config(app, &config);
