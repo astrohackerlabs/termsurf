@@ -2098,7 +2098,7 @@ are past the correctness-critical foundation.
 - [Experiment 787: Kitty Clipboard Text Writes](787-kitty-clipboard-text-writes.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 788: OS Utilities Checklist Sync](788-os-utilities-checklist-sync.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
