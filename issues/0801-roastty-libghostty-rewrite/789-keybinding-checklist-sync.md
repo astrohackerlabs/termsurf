@@ -75,3 +75,52 @@ Codex reviewed the design and found no blocking findings. The review approved
 the docs-only scope, the unchecked partial README row, the explicit open work
 for the full Ghostty `Binding` model and adjacent integrations, and the
 non-empty focused test filters.
+
+## Result
+
+**Result:** Pass
+
+The existing keybinding foundation is present and the focused configured/default
+binding checks passed:
+
+- `cargo test -p roastty keybind -- --nocapture --test-threads=1`: 16 passed
+- `cargo test -p roastty key_is_binding -- --nocapture --test-threads=1`: 17
+  passed
+
+Representative action-dispatch checks also passed:
+
+- `cargo test -p roastty surface_binding_action_app_runtime -- --nocapture --test-threads=1`:
+  4 passed
+- `cargo test -p roastty surface_binding_action_text -- --nocapture --test-threads=1`:
+  6 passed
+- `cargo test -p roastty surface_binding_action_forwards_supported_split_actions -- --nocapture --test-threads=1`:
+  1 passed
+- `cargo test -p roastty surface_binding_action_forwards_supported_runtime_ui_actions -- --nocapture --test-threads=1`:
+  1 passed
+
+Formatting and diff hygiene checks passed:
+
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/789-keybinding-checklist-sync.md`
+- `git diff --check`
+
+The README row now describes the keybinding system as partial rather than
+missing. It remains unchecked and explicitly leaves the full Ghostty `Binding`
+type model, config export/remap completeness, keymaps/layouts, and
+frontend/global menu integration open.
+
+## Conclusion
+
+The original "missing" wording was stale for the binding/action foundation:
+Roastty already has configured keybind parsing/storage/query, default binding
+lookup/flags, release consumption, action string parsing, and surface/app
+runtime dispatch coverage. This experiment only corrected the checklist state to
+a scoped partial row; it did not complete the broader Ghostty keybinding,
+keymap, config, or frontend integration work.
+
+## Completion Review
+
+Codex reviewed the completed experiment and found no blocking findings. The
+review approved the docs-only scope, unchecked partial README row, open-work
+wording for the full Ghostty `Binding`, keymap/layout, config export/remap, and
+frontend/global menu work, and the recorded verification counts plus Prettier
+and `git diff --check`.

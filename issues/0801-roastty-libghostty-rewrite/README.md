@@ -2105,7 +2105,7 @@ are past the correctness-critical foundation.
 - [Experiment 788: OS Utilities Checklist Sync](788-os-utilities-checklist-sync.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 789: Keybinding Checklist Sync](789-keybinding-checklist-sync.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
