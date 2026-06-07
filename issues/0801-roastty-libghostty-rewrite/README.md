@@ -2092,6 +2092,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 786: Kitty Clipboard Read Replies](786-kitty-clipboard-read-replies.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 787: Kitty Clipboard Text Writes](787-kitty-clipboard-text-writes.md)
+  — **Designed**
 
 ## Non-Goals
 
