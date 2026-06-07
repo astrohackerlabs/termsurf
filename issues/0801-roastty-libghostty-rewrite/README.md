@@ -2031,6 +2031,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 758: Config C ABI Non-UTF-8 Path](758-config-c-abi-non-utf8-path.md)
   — **Partial** · Codex/Codex/Codex
+- [Experiment 759: Config File Key Storage](759-config-file-key-storage.md) —
+  **Designed** · Codex/Codex/Codex
 
 ## Non-Goals
 
