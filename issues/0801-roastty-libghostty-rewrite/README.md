@@ -2210,6 +2210,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 807: Renderer State Mouse Foundation](807-renderer-state-mouse-foundation.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 808: Metal Sampler Wrapper](808-metal-sampler-wrapper.md) —
+  **Designed**
 
 ## Non-Goals
 
