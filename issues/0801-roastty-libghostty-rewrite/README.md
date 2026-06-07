@@ -2244,6 +2244,8 @@ are past the correctness-critical foundation.
   **Pass** · Codex/Codex/Codex
 - [Experiment 818: Drive Row Formatting](818-drive-row-formatting.md) — **Pass**
   · Codex/Codex/Codex
+- [Experiment 819: Drive Cursor and Preedit Overlays](819-drive-cursor-preedit-overlays.md)
+  — **Designed** · Codex/Codex
 
 ## Non-Goals
 
