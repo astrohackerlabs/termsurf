@@ -66,9 +66,9 @@ permission passwords remain later work.
   - When completion succeeds, forward one `text/plain` clipboard content item to
     `write_clipboard_cb` and queue `type=write:status=DONE` with the transaction
     id and terminator.
-  - If the app, termio worker, or write callback is unavailable at completion,
-    consume the transaction and reply `type=write:status=EIO` when a termio
-    worker is available.
+- If the app, termio worker, or write callback is unavailable at completion,
+  consume the transaction and reply `type=write:status=EIO` when a termio worker
+  is available.
   - After any write error, ignore further `wdata`/`walias` packets until the
     next `type=write`, matching the Kitty protocol's recovery rule.
   - Keep Kitty read behavior from Experiment 786 and OSC 52 read/write behavior
@@ -141,3 +141,65 @@ C-string clipboard ABI cannot safely support even the text/plain subset.
 Codex reviewed the design and found no blocking findings. The review approved
 the text-only write transaction scope as coherent with the current C-string
 runtime clipboard ABI and the planned verification coverage.
+
+## Result
+
+**Result:** Pass
+
+Implemented Kitty clipboard text write transactions:
+
+- `type=write` now starts a per-surface write transaction instead of replying
+  `ENOSYS`.
+- `type=wdata:mime=<base64 text/plain>;<base64 chunk>` decodes and appends text
+  chunks to the active transaction.
+- Final `type=wdata` completes the transaction, forwards one `text/plain`
+  clipboard content item through `write_clipboard_cb`, and replies
+  `type=write:status=DONE`.
+- `clipboard-write = allow` forwards with `confirm = false`, `ask` forwards with
+  `confirm = true`, and `deny` replies `EPERM` without calling the runtime write
+  callback.
+- `loc=primary` routes to the selection clipboard when supported and replies
+  `ENOSYS` when unsupported.
+- Write status replies preserve sanitized `id` metadata and the original request
+  terminator.
+- Invalid base64, orphan `wdata`, decoded NUL bytes, unsupported MIME, and
+  `walias` produce explicit Kitty write errors.
+- Missing app or missing write callback at completion produces `EIO` when a
+  termio worker is available to receive the status reply.
+- After a write error, further write-data packets are ignored until a new
+  `type=write` starts the next transaction.
+- Existing Kitty read and OSC 52 read/write behavior remains unchanged.
+
+Verification passed:
+
+- `cargo test -p roastty kitty_clipboard -- --nocapture --test-threads=1`
+  - 16 tests passed.
+- `cargo test -p roastty osc52_clipboard -- --nocapture --test-threads=1`
+  - 13 tests passed.
+- `cargo test -p roastty clipboard_write -- --nocapture --test-threads=1`
+  - 7 tests passed.
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/787-kitty-clipboard-text-writes.md`
+- `git diff --check`
+
+## Conclusion
+
+Kitty clipboard writes now support the `text/plain` transaction subset over the
+existing runtime clipboard ABI. The remaining Kitty clipboard write work is
+arbitrary MIME data, aliases, passwords, and any future runtime ABI extension
+needed for non-text or NUL-containing clipboard data.
+
+## Completion Review
+
+The first completion review found two blocking issues:
+
+- the result documentation omitted the required prettier verification command;
+- app-unavailable completion silently returned even when a termio worker was
+  available to receive the planned `EIO` reply.
+
+The result documentation now records prettier verification, the app-null
+completion path now emits `type=write:status=EIO` when the worker is available,
+and a focused PTY test covers that reply.
+
+Re-review approved the completed experiment with no blocking findings.

@@ -323,8 +323,8 @@ Experiment 246).
       terminal clipboard OSC event retention done, and OSC 52 read/write surface
       handling done; Kitty clipboard read replies done; splits, frontend
       selection routing, renderer display-ID consumption/delivery, Quicklook
-      UI/font integration, Kitty clipboard write/multipart handling, and full
-      frontend presentation missing
+      UI/font integration, Kitty clipboard arbitrary MIME/alias/password write
+      handling, and full frontend presentation missing
 - [ ] `pty` + `termio` (shell spawn, read/write loops, resize, fg pid, tty name,
       exit) — PTY open/resize, subprocess spawn, child IO, synchronous pump,
       background worker, worker shutdown/drop, and surface process-exit state
@@ -2093,7 +2093,7 @@ are past the correctness-critical foundation.
 - [Experiment 786: Kitty Clipboard Read Replies](786-kitty-clipboard-read-replies.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 787: Kitty Clipboard Text Writes](787-kitty-clipboard-text-writes.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
