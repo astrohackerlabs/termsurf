@@ -49,6 +49,11 @@ objc2-io-surface = { version = "0.3", default-features = false, features = [
     "IOSurfaceRef",
     "IOSurfaceTypes",
     "libc",
+    "objc2",
+    "objc2-core-foundation",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "CALayer",
     "objc2-core-foundation",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [

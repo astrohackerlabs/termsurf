@@ -226,8 +226,9 @@ Experiment 246).
       library/pipelines, texture upload/render-target helpers, `FrameState`
       uniform/cell/atlas sync, offscreen render passes, and a Metal sampler
       wrapper plus render-pass sampler binding and IOSurface-backed target
-      wrapper exist; `IOSurfaceLayer` and full live frame orchestration remain
-      missing
+      wrapper plus synchronous IOSurfaceLayer presentation wrapper exist;
+      IOSurfaceLayer subclass/display callback/async presentation and full live
+      frame orchestration remain missing
 - [ ] Main render loop (`generic.zig`: frame build, dirty tracking, glyph
       upload, draw calls, pacing) — missing (critical)
 - [ ] z2d debug `Overlay`, link highlighting, render `Thread`, custom shaders —
@@ -2218,7 +2219,7 @@ are past the correctness-critical foundation.
 - [Experiment 810: Metal IOSurface Target](810-metal-iosurface-target.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 811: IOSurfaceLayer Sync Presentation](811-iosurface-layer-sync.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
