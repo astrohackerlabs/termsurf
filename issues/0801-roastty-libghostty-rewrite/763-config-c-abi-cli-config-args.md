@@ -99,3 +99,45 @@ The review confirmed that the two original blockers were resolved. The remaining
 non-blocking suggestion is to include a regression where `--keybind` is missing
 its value and the following valid config flag is still parsed by the config
 path.
+
+## Result
+
+**Result:** Pass
+
+Implemented parsed config CLI argument loading through
+`roastty_config_load_cli_args`. The ABI loader now preserves the existing
+`--keybind=value` and `--keybind value` handling, collects other config-looking
+`--...` argv entries, applies valid UTF-8 entries through
+`config::Config::set_cli_args`, reports invalid UTF-8 config-looking entries
+through ABI diagnostics, records parsed config diagnostics through the existing
+diagnostic channel, and syncs ABI-visible parsed state afterward.
+
+Verification passed:
+
+- `cargo test -p roastty config_c_abi_cli_config -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_cli_keybind -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_ -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Completion Review
+
+Codex reviewed the completed implementation and found no blocking findings. The
+review confirmed that the implementation matches the approved design: valid
+UTF-8 non-keybind `--...` args are forwarded into `config.parsed.set_cli_args`,
+positional/action-looking args are ignored by this config layer, invalid UTF-8
+config-looking args are diagnosed without lossy parsing, keybind parsing is
+preserved, diagnostics are surfaced, and parsed state is synced afterward.
+
+Non-blocking notes from the review: the cwd-changing recursive config-file test
+could use a small panic-safe guard as future test hygiene, and future structured
+diagnostics should preserve argv-order fidelity if diagnostic ordering becomes
+user-visible.
+
+## Conclusion
+
+The public config CLI ABI now reaches the same parsed config layer used by
+internal config tests while keeping keybind parsing and outer positional argv
+separate. This enables CLI-set config fields and CLI-provided recursive config
+files to affect ABI-visible app and surface state.

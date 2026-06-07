@@ -1479,6 +1479,11 @@ impl Config {
         self.push_diagnostic(format!("config-file {source}: cycle detected"));
     }
 
+    fn push_cli_config_arg_utf8_diagnostic(&mut self, arg: &[u8]) {
+        let arg = String::from_utf8_lossy(arg);
+        self.push_diagnostic(format!("cli: invalid UTF-8 config argument `{arg}`"));
+    }
+
     fn store_keybind(&mut self, binding: ConfigKeybind) {
         self.keybind_triggers.push(binding);
     }
@@ -8649,6 +8654,7 @@ pub extern "C" fn roastty_config_load_cli_args(config: RoasttyConfig) {
         return;
     };
     let argv = INIT_ARGV.lock().unwrap().clone();
+    let mut config_args = Vec::new();
     let mut index = 1;
     while index < argv.len() {
         let arg = &argv[index];
@@ -8676,8 +8682,21 @@ pub extern "C" fn roastty_config_load_cli_args(config: RoasttyConfig) {
             }
             continue;
         }
+        if arg.starts_with(b"--") {
+            match std::str::from_utf8(arg) {
+                Ok(arg) => config_args.push(arg.to_string()),
+                Err(_) => config.push_cli_config_arg_utf8_diagnostic(arg),
+            }
+        }
         index += 1;
     }
+    let diagnostics = config
+        .parsed
+        .set_cli_args(config_args.iter().map(String::as_str));
+    for diagnostic in &diagnostics {
+        config.push_config_diagnostic("cli", diagnostic);
+    }
+    config.sync_from_parsed_config();
 }
 
 #[no_mangle]
@@ -15942,6 +15961,21 @@ mod tests {
         assert_eq!(roastty_init(0, ptr::null_mut()), ROASTTY_SUCCESS);
     }
 
+    fn with_init_arg_bytes(args: &[&[u8]], f: impl FnOnce()) {
+        let _guard = CLI_ARGS_LOCK.lock().unwrap();
+        let strings = args
+            .iter()
+            .map(|arg| CString::new(*arg).unwrap())
+            .collect::<Vec<_>>();
+        let mut ptrs = strings
+            .iter()
+            .map(|arg| arg.as_ptr().cast_mut())
+            .collect::<Vec<_>>();
+        assert_eq!(roastty_init(ptrs.len(), ptrs.as_mut_ptr()), ROASTTY_SUCCESS);
+        f();
+        assert_eq!(roastty_init(0, ptr::null_mut()), ROASTTY_SUCCESS);
+    }
+
     #[test]
     fn config_trigger_returns_default_open_reload_triggers() {
         let config = roastty_config_new();
@@ -16533,7 +16567,7 @@ mod tests {
             &[
                 "roastty",
                 "--keybind",
-                "--window-theme=dark",
+                "--confirm-close-surface=always",
                 "--keybind=F1=reload_config",
                 "--keybind=ctrl+a=unknown_action",
                 "--keybind=ctrl+b=goto_tab:not-a-number",
@@ -16580,6 +16614,173 @@ mod tests {
                 );
 
                 roastty_config_free(clone);
+                roastty_config_free(config);
+            },
+        );
+    }
+
+    #[test]
+    fn config_c_abi_cli_config_args_apply_state_and_ignore_positional_args() {
+        with_init_args(
+            &[
+                "roastty",
+                "open",
+                "--confirm-close-surface=always",
+                "+new-window",
+                "https://example.com",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+                let app = roastty_app_new(ptr::null(), config);
+                let surface = roastty_surface_new(app, ptr::null());
+                assert!(roastty_surface_needs_confirm_quit(surface));
+
+                roastty_surface_free(surface);
+                roastty_app_free(app);
+                roastty_config_free(config);
+            },
+        );
+    }
+
+    #[test]
+    fn config_c_abi_cli_config_file_args_feed_recursive_loader() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let dir = unique_config_abi_test_dir("cli-config-file");
+        let file = dir.join("child.roastty");
+        write_config_file(&file, "confirm-close-surface = always\n");
+        let canonical_file = std::fs::canonicalize(&file).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        with_init_args(&["roastty", "--config-file=child.roastty"], || {
+            let config = roastty_config_new();
+            roastty_config_load_cli_args(config);
+            roastty_config_load_recursive_files(config);
+            assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+            let parsed = config_from_handle(config).unwrap();
+            assert_eq!(parsed.parsed.config_file.list.len(), 1);
+            assert_eq!(
+                parsed.parsed.config_file.list[0],
+                config::ConfigFilePath::Required(canonical_file.to_string_lossy().into_owned())
+            );
+
+            let app = roastty_app_new(ptr::null(), config);
+            let surface = roastty_surface_new(app, ptr::null());
+            assert!(roastty_surface_needs_confirm_quit(surface));
+
+            roastty_surface_free(surface);
+            roastty_app_free(app);
+            roastty_config_free(config);
+        });
+
+        std::env::set_current_dir(cwd).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_c_abi_cli_config_diagnostics_and_invalid_utf8_are_reported() {
+        with_init_arg_bytes(
+            &[
+                b"roastty",
+                b"--badkey=x",
+                b"--fullscreen=nope",
+                b"--theme=\xFF",
+                b"plain-ignored",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 3);
+                let messages = (0..3)
+                    .map(|index| config_diagnostic_message(config, index))
+                    .collect::<Vec<_>>();
+                assert!(
+                    messages
+                        .iter()
+                        .any(|message| message.contains("invalid UTF-8 config argument")),
+                    "{messages:?}"
+                );
+                assert!(
+                    messages.iter().any(|message| message.contains("badkey")),
+                    "{messages:?}"
+                );
+                assert!(
+                    messages
+                        .iter()
+                        .any(|message| message.contains("fullscreen")),
+                    "{messages:?}"
+                );
+
+                roastty_config_free(config);
+            },
+        );
+    }
+
+    #[test]
+    fn config_c_abi_cli_config_args_preserve_keybind_parsing() {
+        with_init_args(
+            &[
+                "roastty",
+                "--confirm-close-surface=false",
+                "--keybind=ctrl+a=copy_to_clipboard",
+                "--confirm-close-surface=always",
+                "--keybind",
+                "cmd+KeyN=new_window",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+                let copy = CString::new("copy_to_clipboard").unwrap();
+                assert_unicode_config_trigger(
+                    roastty_config_trigger(config, copy.as_ptr(), copy.as_bytes().len()),
+                    u32::from(b'a'),
+                    ROASTTY_MODS_CTRL,
+                );
+                let new_window = CString::new("new_window").unwrap();
+                assert_physical_config_trigger(
+                    roastty_config_trigger(
+                        config,
+                        new_window.as_ptr(),
+                        new_window.as_bytes().len(),
+                    ),
+                    key::Key::KeyN,
+                    ROASTTY_MODS_SUPER,
+                );
+
+                let app = roastty_app_new(ptr::null(), config);
+                let surface = roastty_surface_new(app, ptr::null());
+                assert!(roastty_surface_needs_confirm_quit(surface));
+
+                roastty_surface_free(surface);
+                roastty_app_free(app);
+                roastty_config_free(config);
+            },
+        );
+    }
+
+    #[test]
+    fn config_c_abi_cli_missing_keybind_value_still_parses_following_config_arg() {
+        with_init_args(
+            &["roastty", "--keybind", "--confirm-close-surface=always"],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 1);
+                let message = config_diagnostic_message(config, 0);
+                assert!(message.contains("value required"), "{message}");
+
+                let app = roastty_app_new(ptr::null(), config);
+                let surface = roastty_surface_new(app, ptr::null());
+                assert!(roastty_surface_needs_confirm_quit(surface));
+
+                roastty_surface_free(surface);
+                roastty_app_free(app);
                 roastty_config_free(config);
             },
         );
