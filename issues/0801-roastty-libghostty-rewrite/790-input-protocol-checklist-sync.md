@@ -79,3 +79,61 @@ the unchecked partial checklist update, scoped wording for the existing
 Link/mouse/Kitty keyboard pieces, explicit open work for dedicated
 `input/kitty`, keymaps/layouts, frontend integration, and full input policy, and
 the non-empty focused test filters.
+
+## Result
+
+**Result:** Partial
+
+The existing Kitty keyboard protocol state, Link structs, input mouse structs,
+and mouse encoder coverage verified:
+
+- `cargo test -p roastty kitty_keyboard -- --nocapture --test-threads=1`: 20
+  passed
+- `cargo test -p roastty input::link -- --nocapture --test-threads=1`: 4 passed
+- `cargo test -p roastty input::mouse -- --nocapture --test-threads=1`: 2 passed
+- `cargo test -p roastty mouse_encode -- --nocapture --test-threads=1`: 28
+  passed
+
+Some surface mouse dispatch subsets also passed:
+
+- `cargo test -p roastty surface_mouse_button -- --nocapture --test-threads=1`:
+  7 passed
+- `cargo test -p roastty surface_mouse_captured -- --nocapture --test-threads=1`:
+  3 passed
+
+The broader surface mouse verification did not complete:
+
+- `cargo test -p roastty surface_mouse -- --nocapture --test-threads=1` hung
+  after printing 22 of 24 tests and was terminated.
+- `cargo test -p roastty surface_mouse_motion -- --nocapture --test-threads=1`
+  hung on `surface_mouse_motion_dedupes_last_reported_cell` and was terminated.
+- `cargo test -p roastty surface_mouse_scroll_reports_vertical_and_horizontal_wheel_steps -- --nocapture --test-threads=1`
+  hung on its single test and was terminated.
+
+Formatting and diff hygiene checks passed:
+
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/790-input-protocol-checklist-sync.md`
+- `git diff --check`
+
+The README row now describes the input protocol pieces as partial rather than
+missing. It remains unchecked and explicitly leaves dedicated `input/kitty`,
+keymaps/layouts, frontend integration, and full input policy incomplete.
+
+## Conclusion
+
+The original "missing" wording was stale for Link, mouse input structs, mouse
+encoding, and Kitty keyboard protocol state. The broader surface mouse reporting
+verification exposed timing-heavy tests that did not complete in this run, so
+the experiment result is Partial instead of Pass. The checklist row still
+benefits from the scoped wording correction, but surface mouse reporting should
+remain an open verification/reliability concern.
+
+## Completion Review
+
+Codex initially found one blocking process issue: the README experiment index
+line recorded `Partial` but omitted the `Codex/Codex/Codex` provenance tag.
+After the provenance tag was added, Codex re-reviewed the result and found no
+blocking findings. The follow-up review approved the unchecked README row, the
+Partial result, the explicit hung surface-mouse verification notes, and the
+scoped wording that avoids claiming full input policy or frontend/keymap
+completion.

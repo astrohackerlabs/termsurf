@@ -2110,7 +2110,8 @@ are past the correctness-critical foundation.
 - [Experiment 789: Keybinding Checklist Sync](789-keybinding-checklist-sync.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 790: Input Protocol Checklist Sync](790-input-protocol-checklist-sync.md)
-  — **Designed**
+  — **Partial** (surface mouse reporting filters hung during verification) ·
+  Codex/Codex/Codex
 
 ## Non-Goals
 
