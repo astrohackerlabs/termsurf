@@ -84,3 +84,58 @@ meaningful as a Metal encoder/API check, not proof of changed shader sampling
 semantics, because current Roastty shaders use constexpr samplers. The scoped
 README update keeps `Target`, `IOSurfaceLayer`, and full live frame
 orchestration open.
+
+## Result
+
+**Result:** Pass
+
+`roastty/src/renderer/metal/render_pass.rs` now wires Metal samplers into render
+pass steps:
+
+- `MetalRenderPassStep` has a `samplers: &[Option<&MetalSampler>]` field.
+- `bind_step_samplers` binds each present sampler to its fragment sampler slot
+  with `setFragmentSamplerState_atIndex`.
+- `MetalRenderPass::step` binds samplers after textures and before the draw
+  call.
+- Existing render-pass call sites pass `samplers: &[]`.
+- The image render-pass smoke test now creates a real `MetalSampler`, passes it
+  through a texture-sampling step, completes the command frame, and verifies the
+  rendered pixels remain correct.
+
+The current Metal shaders still use constexpr samplers, so this proves the
+encoder binding path is valid and non-regressive. It does not claim changed
+shader sampling semantics.
+
+The Issue 801 Metal checklist now records render-pass sampler binding as present
+while keeping window `Target`, `IOSurfaceLayer`, and full live frame
+orchestration open.
+
+Verification:
+
+- Inspected `vendor/ghostty/src/renderer/metal/RenderPass.zig`.
+- Inspected `roastty/src/renderer/metal/render_pass.rs`.
+- Inspected `roastty/src/renderer/metal/sampler.rs`.
+- Inspected `roastty/src/renderer/metal/shaders.metal`.
+- `cargo fmt -p roastty` — passed.
+- `cargo test -p roastty metal::render_pass -- --nocapture --test-threads=1` —
+  passed, 28 tests.
+- `cargo test -p roastty metal::sampler -- --nocapture --test-threads=1` —
+  passed, 4 tests.
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/809-render-pass-sampler-binding.md`
+  — passed.
+- `git diff --check` — passed.
+
+## Conclusion
+
+Experiment 809 completes the render-pass sampler binding path needed by future
+shader and image work. The Metal renderer row remains partial because window
+`Target`, `IOSurfaceLayer`, and full live frame orchestration are still missing.
+
+## Completion Review
+
+Codex reviewed the staged result and approved it with no findings. The approval
+confirmed that `MetalRenderPassStep` and `bind_step_samplers` match upstream's
+fragment-only sampler loop, `MetalSampler` ownership is sound for borrowed
+encoding, the smoke test honestly verifies encoder/API plumbing without claiming
+changed shader sampler semantics, and the docs keep `Target`, `IOSurfaceLayer`,
+and live frame orchestration scoped out.

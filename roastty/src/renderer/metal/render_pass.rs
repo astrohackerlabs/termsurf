@@ -12,6 +12,7 @@ use crate::renderer::metal::api::{
 use crate::renderer::metal::buffer::FrameCells;
 use crate::renderer::metal::frame::FrameState;
 use crate::renderer::metal::pipeline::MetalPipeline;
+use crate::renderer::metal::sampler::MetalSampler;
 use crate::renderer::metal::shaders::MetalStandardPipelines;
 use crate::renderer::metal::texture::MetalTexture;
 
@@ -103,6 +104,7 @@ impl MetalRenderPass {
         self.encoder.setRenderPipelineState(step.pipeline.state());
         bind_step_buffers(&self.encoder, step.buffers);
         bind_step_textures(&self.encoder, step.textures);
+        bind_step_samplers(&self.encoder, step.samplers);
         if let Some(uniforms) = step.uniforms {
             unsafe {
                 self.encoder
@@ -149,6 +151,7 @@ impl MetalRenderPass {
             pipeline: &pipelines.bg_color,
             buffers: &[None, Some(cells.bg_buffer())],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -161,6 +164,7 @@ impl MetalRenderPass {
             pipeline: &pipelines.cell_bg,
             buffers: &[None, Some(cells.bg_buffer())],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -173,6 +177,7 @@ impl MetalRenderPass {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(cells.text_buffer()), Some(cells.bg_buffer())],
             textures: &[Some(grayscale), Some(color)],
+            samplers: &[],
             uniforms: Some(uniforms),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -245,6 +250,19 @@ fn bind_step_textures(
     }
 }
 
+fn bind_step_samplers(
+    encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    samplers: &[Option<&MetalSampler>],
+) {
+    for (index, sampler) in samplers.iter().enumerate() {
+        if let Some(sampler) = sampler {
+            unsafe {
+                encoder.setFragmentSamplerState_atIndex(Some(sampler.state()), index);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MetalRenderPassError {
     EncoderCreationFailed,
@@ -259,6 +277,7 @@ pub(crate) struct MetalRenderPassStep<'a> {
     pub(crate) pipeline: &'a MetalPipeline,
     pub(crate) buffers: &'a [Option<&'a ProtocolObject<dyn objc2_metal::MTLBuffer>>],
     pub(crate) textures: &'a [Option<&'a MetalTexture>],
+    pub(crate) samplers: &'a [Option<&'a MetalSampler>],
     pub(crate) uniforms: Option<&'a ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     pub(crate) draw: MetalDraw,
 }
@@ -276,8 +295,14 @@ mod tests {
     use objc2_metal::{MTLCommandBufferStatus, MTLCreateSystemDefaultDevice, MTLDevice};
 
     use super::*;
-    use crate::renderer::metal::api::{MetalPixelFormat, MetalResourceOptions, MetalStorageMode};
+    use crate::renderer::metal::api::{
+        MetalPixelFormat, MetalResourceOptions, MetalSamplerAddressMode, MetalSamplerMinMagFilter,
+        MetalStorageMode,
+    };
     use crate::renderer::metal::buffer::{MetalBuffer, MetalBufferOptions};
+    use crate::renderer::metal::sampler::{
+        MetalSampler, MetalSamplerDescriptorOptions, MetalSamplerOptions,
+    };
     use crate::renderer::metal::shaders::{MetalStandardPipelines, MetalUniforms};
     use crate::renderer::metal::texture::{
         image_texture_options, render_target_texture_options, ImageTextureFormat,
@@ -645,6 +670,7 @@ mod tests {
             pipeline: &pipelines.bg_color,
             buffers: &[],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -691,6 +717,7 @@ mod tests {
             pipeline: &pipelines.cell_bg,
             buffers: &[None, Some(cells.buffer())],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -755,6 +782,7 @@ mod tests {
             pipeline: &pipelines.cell_bg,
             buffers: &[None, Some(cells.buffer())],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -829,6 +857,7 @@ mod tests {
             pipeline: &pipelines.cell_bg,
             buffers: &[None, Some(cells.buffer())],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -1236,6 +1265,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1294,6 +1324,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1376,6 +1407,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1444,6 +1476,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1496,6 +1529,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1547,6 +1581,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1599,6 +1634,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1651,6 +1687,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1703,6 +1740,7 @@ mod tests {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(vertices.buffer()), Some(cells.buffer())],
             textures: &[Some(&grayscale_atlas), Some(&color_atlas)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1739,6 +1777,16 @@ mod tests {
                 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
             ],
         );
+        let sampler = MetalSampler::new(MetalSamplerOptions {
+            device: &device,
+            descriptor: MetalSamplerDescriptorOptions {
+                min_filter: MetalSamplerMinMagFilter::Nearest,
+                mag_filter: MetalSamplerMinMagFilter::Nearest,
+                s_address_mode: MetalSamplerAddressMode::ClampToEdge,
+                t_address_mode: MetalSamplerAddressMode::ClampToEdge,
+            },
+        })
+        .expect("sampler should be created");
         let target = render_target(&device, 2, 2);
         let frame = MetalCommandFrame::begin(&queue).expect("command frame should begin");
         let pass = frame
@@ -1757,6 +1805,7 @@ mod tests {
             pipeline: &pipelines.image,
             buffers: &[Some(vertices.buffer())],
             textures: &[Some(&image)],
+            samplers: &[Some(&sampler)],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1813,6 +1862,7 @@ mod tests {
             pipeline: &pipelines.image,
             buffers: &[Some(vertices.buffer())],
             textures: &[Some(&image)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1883,6 +1933,7 @@ mod tests {
             pipeline: &pipelines.image,
             buffers: &[Some(vertices.buffer())],
             textures: &[Some(&image)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
@@ -1937,6 +1988,7 @@ mod tests {
             pipeline: &pipelines.bg_image,
             buffers: &[Some(vertices.buffer())],
             textures: &[Some(&image)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -2000,6 +2052,7 @@ mod tests {
             pipeline: &pipelines.bg_image,
             buffers: &[Some(vertices.buffer())],
             textures: &[Some(&image)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -2056,6 +2109,7 @@ mod tests {
             pipeline: &pipelines.bg_image,
             buffers: &[Some(vertices.buffer())],
             textures: &[Some(&image)],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,
@@ -2106,6 +2160,7 @@ mod tests {
             pipeline: &pipelines.bg_color,
             buffers: &[],
             textures: &[],
+            samplers: &[],
             uniforms: Some(uniforms.buffer()),
             draw: MetalDraw {
                 primitive_type: MetalPrimitiveType::Triangle,

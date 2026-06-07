@@ -225,7 +225,7 @@ Experiment 246).
       — partial: pipeline descriptors/state builder, standard shader
       library/pipelines, texture upload/render-target helpers, `FrameState`
       uniform/cell/atlas sync, offscreen render passes, and a Metal sampler
-      wrapper exist; render-pass sampler binding, window `Target`,
+      wrapper plus render-pass sampler binding exist; window `Target`,
       `IOSurfaceLayer`, and full live frame orchestration remain missing
 - [ ] Main render loop (`generic.zig`: frame build, dirty tracking, glyph
       upload, draw calls, pacing) — missing (critical)
@@ -2213,7 +2213,7 @@ are past the correctness-critical foundation.
 - [Experiment 808: Metal Sampler Wrapper](808-metal-sampler-wrapper.md) —
   **Pass** · Codex/Codex/Codex
 - [Experiment 809: Render Pass Sampler Binding](809-render-pass-sampler-binding.md)
-  — **Designed**
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
