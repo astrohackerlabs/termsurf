@@ -84,3 +84,70 @@ Codex reviewed the design and found no blocking findings. The review confirmed
 that the README rows remain unchecked, the wording is scoped to partial
 coverage, the open Ghostty parity gaps stay explicit, and the proposed test
 filters are non-empty and relevant.
+
+## Result
+
+**Result:** Pass
+
+The Issue 801 configuration checklist no longer describes the current Roastty
+config layer as only a skeleton. The README now records the existing scoped
+coverage while keeping every config row unchecked:
+
+- `Config` has real grouped fields for app/window lifecycle, clipboard, mouse,
+  config files/defaults, shell integration, notify/bell,
+  window/color/background, font/style, terminal rendering, title/theme, and
+  macOS options.
+- Config parsing and loading cover config-file lines, CLI config arguments,
+  default-file candidates, optional files, recursive `config-file` loading,
+  cycle diagnostics, and C ABI load plumbing.
+- Validation and diagnostics cover per-field parse errors,
+  recursive/default-file load errors, path expansion, numeric/string/enum/flag
+  validation, and focused finalizers.
+- Keybind parsing/storage/diagnostics, theme parsing, conditionals,
+  comma/string/unicode-range helpers, clipboard codepoint maps, and formatter
+  foundations exist.
+
+The rows intentionally remain incomplete because full Ghostty config key
+coverage, full finalization parity, key-remap, and full formatter/export
+coverage are still open.
+
+Verification:
+
+- Inspected:
+  - `roastty/src/config/mod.rs`
+  - `roastty/src/config/loader.rs`
+  - `roastty/src/config/formatter.rs`
+  - `roastty/src/config/comma_splitter.rs`
+  - `roastty/src/config/conditional.rs`
+  - `roastty/src/config/edit.rs`
+  - `roastty/src/config/string.rs`
+  - `roastty/src/config/unicode_range.rs`
+- `cargo test -p roastty config_load -- --nocapture --test-threads=1` — 13
+  passed
+- `cargo test -p roastty config_set -- --nocapture --test-threads=1` — 9 passed
+- `cargo test -p roastty config_format -- --nocapture --test-threads=1` — 1
+  passed
+- `cargo test -p roastty config_cli_keybind -- --nocapture --test-threads=1` — 9
+  passed
+- `cargo test -p roastty theme -- --nocapture --test-threads=1` — 9 passed
+- `cargo test -p roastty config_get -- --nocapture --test-threads=1` — 33 passed
+- `cargo test -p roastty config -- --nocapture --test-threads=1` — 253 passed
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/794-config-checklist-sync.md`
+  — passed
+- `git diff --check` — passed
+
+## Conclusion
+
+The config checklist was stale rather than wrong about remaining work. Roastty
+now has a substantial config foundation, so the issue should track the remaining
+Ghostty parity gaps instead of implying the whole config layer is absent. The
+next experiment can continue syncing another stale unchecked section or pick one
+open config parity row for implementation.
+
+## Completion Review
+
+Codex reviewed the completed experiment and found no blocking findings. The
+review approved the Pass result because the README rows remain unchecked and
+scoped as partial, the remaining Ghostty parity gaps are explicit, and the
+recorded verification evidence covers the config filters, Prettier, and
+`git diff --check`.

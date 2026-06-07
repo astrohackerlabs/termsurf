@@ -2137,7 +2137,7 @@ are past the correctness-critical foundation.
 - [Experiment 793: z2d Dependency Checklist Sync](793-z2d-dependency-checklist-sync.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 794: Config Checklist Sync](794-config-checklist-sync.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 
