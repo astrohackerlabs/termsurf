@@ -2036,7 +2036,7 @@ are past the correctness-critical foundation.
 - [Experiment 760: Config File Path Expansion](760-config-file-path-expansion.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 761: Config Recursive File Loading](761-config-recursive-file-loading.md)
-  — **Designed** · Codex/Codex/Codex
+  — **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

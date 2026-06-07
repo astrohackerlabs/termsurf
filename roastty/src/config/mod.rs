@@ -24,6 +24,7 @@ use crate::os::homedir::expand_home;
 use crate::terminal::color::{Palette as TerminalPalette, PaletteMask, Rgb, DEFAULT_PALETTE};
 use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
 use crate::terminal::style::BoldColor as TerminalBoldColor;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
@@ -741,6 +742,49 @@ impl Config {
     fn expand_config_file_paths_from_base(&mut self, base: &std::path::Path) {
         self.config_file.expand_from_base(base);
     }
+
+    pub(crate) fn load_recursive_files_from_config(&mut self) -> ConfigRecursiveLoadReport {
+        let mut report = ConfigRecursiveLoadReport::default();
+        let mut loaded = HashSet::new();
+        let mut index = 0;
+        while index < self.config_file.list.len() {
+            let path = self.config_file.list[index].path().to_string();
+            let optional = self.config_file.list[index].optional();
+            index += 1;
+
+            if path.is_empty() {
+                continue;
+            }
+
+            let path = PathBuf::from(path);
+            if !path.is_absolute() {
+                report.errors.push(ConfigRecursiveFileError {
+                    path,
+                    error: ConfigRecursiveFileErrorKind::RelativePath,
+                });
+                continue;
+            }
+
+            if !loaded.insert(path.clone()) {
+                report.cycles.push(path);
+                continue;
+            }
+
+            match self.load_file(&path) {
+                Ok(diagnostics) => {
+                    report
+                        .loaded
+                        .push(ConfigRecursiveFileLoad { path, diagnostics });
+                }
+                Err(error) if optional && error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => report.errors.push(ConfigRecursiveFileError {
+                    path,
+                    error: ConfigRecursiveFileErrorKind::Io(error),
+                }),
+            }
+        }
+        report
+    }
 }
 
 /// The result of `Config::load_optional_file` (upstream `OptionalFileAction`).
@@ -802,6 +846,31 @@ pub(crate) struct DefaultConfigLoadReport {
     pub duplicate_app_support: Option<(PathBuf, PathBuf)>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct ConfigRecursiveLoadReport {
+    pub loaded: Vec<ConfigRecursiveFileLoad>,
+    pub errors: Vec<ConfigRecursiveFileError>,
+    pub cycles: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfigRecursiveFileLoad {
+    pub path: PathBuf,
+    pub diagnostics: Vec<ConfigDiagnostic>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ConfigRecursiveFileError {
+    pub path: PathBuf,
+    pub error: ConfigRecursiveFileErrorKind,
+}
+
+#[derive(Debug)]
+pub(crate) enum ConfigRecursiveFileErrorKind {
+    RelativePath,
+    Io(std::io::Error),
+}
+
 /// An error from `Config::set` (upstream `parseIntoField`'s
 /// `error.{InvalidField,InvalidValue,ValueRequired}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -856,6 +925,10 @@ impl ConfigFilePath {
         match self {
             Self::Optional(path) | Self::Required(path) => path,
         }
+    }
+
+    fn optional(&self) -> bool {
+        matches!(self, Self::Optional(_))
     }
 
     fn format_entry(&self, formatter: &mut EntryFormatter) {
@@ -3739,11 +3812,11 @@ mod tests {
         AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
         BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
         ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
-        Config, ConfigDiagnostic, ConfigFilePath, ConfigSetError, ConfirmCloseSurface,
-        CopyOnSelect, CustomShaderAnimation, DefaultConfigPaths, Duration, DurationParseError,
-        FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError, Fullscreen,
-        GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle,
-        MacWindowButtons, MagicParseError, MiddleClickAction, MouseShiftCapture,
+        Config, ConfigDiagnostic, ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError,
+        ConfirmCloseSurface, CopyOnSelect, CustomShaderAnimation, DefaultConfigPaths, Duration,
+        DurationParseError, FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError,
+        Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon,
+        MacTitlebarStyle, MacWindowButtons, MagicParseError, MiddleClickAction, MouseShiftCapture,
         NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         RepeatableClipboardCodepointMap, RepeatableConfigPath, RepeatableConfigPathParseError,
@@ -5171,6 +5244,187 @@ mod tests {
             cfg.config_file.list,
             vec![ConfigFilePath::Required(String::new())]
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_recursive_no_entries_returns_empty_report() {
+        let mut cfg = Config::default();
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert!(report.cycles.is_empty());
+    }
+
+    #[test]
+    fn config_recursive_loads_children_after_parent_and_grandchildren_in_order() {
+        let dir = unique_config_test_dir("recursive-order");
+        let parent = dir.join("parent.conf");
+        let child = dir.join("child.conf");
+        let grandchild = dir.join("grandchild.conf");
+        write_config_file(&parent, "fullscreen = false\nconfig-file = child.conf\n");
+        write_config_file(
+            &child,
+            "fullscreen = always\nconfig-file = grandchild.conf\n",
+        );
+        write_config_file(&grandchild, "fullscreen = non-native-visible-menu\n");
+
+        let mut cfg = Config::default();
+        let diagnostics = cfg.load_file(&parent).unwrap();
+        assert!(diagnostics.is_empty());
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.errors.is_empty());
+        assert!(report.cycles.is_empty());
+        assert_eq!(
+            report
+                .loaded
+                .iter()
+                .map(|load| load.path.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                std::fs::canonicalize(&child).unwrap(),
+                std::fs::canonicalize(&grandchild).unwrap(),
+            ]
+        );
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out
+            .lines()
+            .any(|line| line == "fullscreen = non-native-visible-menu"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_recursive_suppresses_optional_missing_and_reports_required_missing() {
+        let dir = unique_config_test_dir("recursive-missing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let optional = dir.join("optional-missing.conf");
+        let required = dir.join("required-missing.conf");
+
+        let mut cfg = Config::default();
+        let optional_arg = format!("--config-file=?{}", optional.display());
+        let required_arg = format!("--config-file={}", required.display());
+        let diagnostics =
+            cfg.set_cli_args_from_base([optional_arg.as_str(), required_arg.as_str()], &dir);
+        assert!(diagnostics.is_empty());
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.loaded.is_empty());
+        assert!(report.cycles.is_empty());
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].path, required);
+        assert!(matches!(
+            report.errors[0].error,
+            ConfigRecursiveFileErrorKind::Io(ref error)
+                if error.kind() == std::io::ErrorKind::NotFound
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_recursive_reports_relative_and_non_file_errors() {
+        let dir = unique_config_test_dir("recursive-errors");
+        let required_dir = dir.join("required-dir");
+        let optional_dir = dir.join("optional-dir");
+        std::fs::create_dir_all(&required_dir).unwrap();
+        std::fs::create_dir_all(&optional_dir).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.config_file
+            .list
+            .push(ConfigFilePath::Required("relative.conf".to_string()));
+        cfg.config_file.list.push(ConfigFilePath::Required(
+            required_dir.to_string_lossy().into_owned(),
+        ));
+        cfg.config_file.list.push(ConfigFilePath::Optional(
+            optional_dir.to_string_lossy().into_owned(),
+        ));
+
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.loaded.is_empty());
+        assert!(report.cycles.is_empty());
+        assert_eq!(report.errors.len(), 3);
+        assert!(matches!(
+            report.errors[0].error,
+            ConfigRecursiveFileErrorKind::RelativePath
+        ));
+        assert_eq!(report.errors[0].path, PathBuf::from("relative.conf"));
+        assert_eq!(report.errors[1].path, required_dir);
+        assert!(matches!(
+            report.errors[1].error,
+            ConfigRecursiveFileErrorKind::Io(_)
+        ));
+        assert_eq!(report.errors[2].path, optional_dir);
+        assert!(matches!(
+            report.errors[2].error,
+            ConfigRecursiveFileErrorKind::Io(_)
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_recursive_reports_cycles_and_loads_once() {
+        let dir = unique_config_test_dir("recursive-cycle");
+        let child = dir.join("child.conf");
+        write_config_file(&child, "fullscreen = always\n");
+        let child = std::fs::canonicalize(&child).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.config_file.list.push(ConfigFilePath::Required(
+            child.to_string_lossy().into_owned(),
+        ));
+        cfg.config_file.list.push(ConfigFilePath::Required(
+            child.to_string_lossy().into_owned(),
+        ));
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.errors.is_empty());
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(report.loaded[0].path, child);
+        assert_eq!(report.cycles, vec![child]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_recursive_records_line_diagnostics_and_keeps_loading() {
+        let dir = unique_config_test_dir("recursive-diagnostics");
+        let child = dir.join("child.conf");
+        write_config_file(&child, "badkey = x\nconfirm-close-surface = always\n");
+        let child = std::fs::canonicalize(&child).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.config_file.list.push(ConfigFilePath::Required(
+            child.to_string_lossy().into_owned(),
+        ));
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.errors.is_empty());
+        assert!(report.cycles.is_empty());
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(report.loaded[0].path, child);
+        assert_eq!(
+            report.loaded[0].diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "badkey".to_string(),
+                error: ConfigSetError::UnknownField,
+            }]
+        );
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out
+            .lines()
+            .any(|line| line == "confirm-close-surface = always"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

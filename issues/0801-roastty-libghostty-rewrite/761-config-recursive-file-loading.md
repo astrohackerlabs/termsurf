@@ -98,3 +98,46 @@ Codex reviewed the updated design and approved it with no remaining blocking
 findings. The follow-up review confirmed that the scope covers the prior
 relative-path and optional non-file blockers while keeping replay and C ABI work
 deferred.
+
+## Result
+
+**Result:** Pass
+
+Implemented internal recursive `config-file` loading in
+`roastty/src/config/mod.rs`.
+
+`Config::load_recursive_files_from_config` now walks the expanded `config_file`
+list by index so files loaded during recursion can append more entries and have
+them visited in the same pass. The loader skips empty paths, reports unexpanded
+relative paths instead of resolving them against cwd, tracks loaded paths for
+cycle detection, suppresses optional `NotFound`, records required missing and
+other IO errors, and uses `Config::load_file` for child loads so child settings
+apply normally and child `config-file` entries expand relative to the child
+file.
+
+Verification passed:
+
+- `cargo test -p roastty recursive -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_file -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_ -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Completion Review
+
+Codex reviewed the completed implementation and found no blocking findings. The
+review confirmed that index-based iteration handles appended recursive entries,
+relative stored paths are reported rather than resolved from cwd, cycles are
+detected before loading, optional `NotFound` is suppressed, optional non-file
+errors are retained, and C ABI/replay wiring remains deferred.
+
+Non-blocking follow-ups from the review: strengthen the non-file test to assert
+directory errors are not `NotFound`, and add a regression test documenting that
+repeated optional missing paths become cycles on the second occurrence.
+
+## Conclusion
+
+Roastty now has the internal recursive `config-file` loader needed before the C
+ABI recursive entry point can be wired. Replay-step behavior and public ABI
+diagnostic surfacing remain deferred to later slices.
