@@ -2321,6 +2321,8 @@ are past the correctness-critical foundation.
   — **Partial** · Claude/Claude/Claude
 - [Experiment 831: Poison-resilient PTY_COMMAND_LOCK (kill the cascade amplifier)](831-poison-resilient-pty-lock.md)
   — **Pass** · Claude/Claude/Claude
+- [Experiment 832: Eliminate the surface snapshot first-render race](832-surface-snapshot-race.md)
+  — **Designed** · Claude/Claude/Claude
 
 ## Non-Goals
 
