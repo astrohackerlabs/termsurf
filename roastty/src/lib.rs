@@ -633,6 +633,7 @@ pub struct RoasttyDiagnostic {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct RoasttyConfigPath {
     path: *const c_char,
     optional: bool,
@@ -1443,7 +1444,13 @@ struct Config {
     has_global_keybinds: bool,
     keybind_triggers: Vec<ConfigKeybind>,
     cached_title: Option<CString>,
+    cached_bell_audio_path: Option<CachedConfigPath>,
     diagnostics: Vec<CString>,
+}
+
+struct CachedConfigPath {
+    path: CString,
+    optional: bool,
 }
 
 #[derive(Clone)]
@@ -1456,6 +1463,7 @@ impl Config {
     fn sync_from_parsed_config(&mut self) {
         self.confirm_close_surface = self.parsed.confirm_close_surface;
         self.rebuild_cached_title();
+        self.rebuild_cached_bell_audio_path();
     }
 
     fn rebuild_cached_title(&mut self) {
@@ -1463,6 +1471,17 @@ impl Config {
             self.parsed.title.as_ref().map(|title| {
                 CString::new(title.as_str()).expect("config title parser rejects NUL")
             });
+    }
+
+    fn rebuild_cached_bell_audio_path(&mut self) {
+        self.cached_bell_audio_path =
+            self.parsed
+                .bell_audio_path
+                .as_ref()
+                .map(|path| CachedConfigPath {
+                    path: CString::new(path.path()).expect("config path parser rejects NUL"),
+                    optional: path.optional(),
+                });
     }
 
     fn snapshot_default_files_boundary(&mut self) {
@@ -8689,6 +8708,7 @@ pub extern "C" fn roastty_config_new() -> RoasttyConfig {
         has_global_keybinds: false,
         keybind_triggers: Vec::new(),
         cached_title: None,
+        cached_bell_audio_path: None,
         diagnostics: Vec::new(),
     }))
     .cast()
@@ -8746,9 +8766,11 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
         has_global_keybinds,
         keybind_triggers,
         cached_title: None,
+        cached_bell_audio_path: None,
         diagnostics,
     };
     cloned.rebuild_cached_title();
+    cloned.rebuild_cached_bell_audio_path();
     Box::into_raw(Box::new(cloned)).cast()
 }
 
@@ -8993,7 +9015,19 @@ pub extern "C" fn roastty_config_get(
                 output.cast::<c_short>().write(value as c_short);
                 true
             }
-            b"bell-audio-path" => false,
+            b"bell-audio-path" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                let Some(path) = config.cached_bell_audio_path.as_ref() else {
+                    return false;
+                };
+                output.cast::<RoasttyConfigPath>().write(RoasttyConfigPath {
+                    path: path.path.as_ptr(),
+                    optional: path.optional,
+                });
+                true
+            }
             _ => false,
         }
     }
@@ -14008,6 +14042,24 @@ mod tests {
         }
     }
 
+    struct CurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().unwrap();
+            std::env::set_current_dir(path).unwrap();
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).unwrap();
+        }
+    }
+
     struct TempScript {
         path: PathBuf,
     }
@@ -16175,6 +16227,21 @@ mod tests {
         (ok, value)
     }
 
+    fn config_get_path(
+        config: RoasttyConfig,
+        key: &str,
+        initial: RoasttyConfigPath,
+    ) -> (bool, RoasttyConfigPath) {
+        let mut value = initial;
+        let ok = roastty_config_get(
+            config,
+            (&mut value as *mut RoasttyConfigPath).cast::<c_void>(),
+            key.as_ptr().cast(),
+            key.len(),
+        );
+        (ok, value)
+    }
+
     fn unique_config_abi_test_dir(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -17588,6 +17655,219 @@ mod tests {
                 roastty_config_free(config);
             });
         }
+    }
+
+    #[test]
+    fn config_get_bell_audio_path_returns_false_for_unset_without_writing() {
+        let config = roastty_config_new();
+        let initial = RoasttyConfigPath {
+            path: 0x1234usize as *const c_char,
+            optional: true,
+        };
+        let (ok, value) = config_get_path(config, "bell-audio-path", initial);
+
+        assert!(!ok);
+        assert_eq!(value.path, initial.path);
+        assert_eq!(value.optional, initial.optional);
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_get_bell_audio_path_returns_file_clone_and_stable_pointer_values() {
+        let dir = unique_config_abi_test_dir("get-bell-audio-path-file");
+        let config_path = dir.join("config.roastty");
+        let sound_path = dir.join("bell.wav");
+        write_config_file(&config_path, "bell-audio-path = ./bell.wav\n");
+        write_config_file(&sound_path, "");
+        let config_path = c_path(&config_path);
+        let expected = std::fs::canonicalize(&sound_path)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let config = roastty_config_new();
+        roastty_config_load_file(config, config_path.as_ptr());
+        assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+        let initial = RoasttyConfigPath {
+            path: ptr::null(),
+            optional: true,
+        };
+        let (ok, first) = config_get_path(config, "bell-audio-path", initial);
+        assert!(ok);
+        assert!(!first.path.is_null());
+        assert!(!first.optional);
+        assert_eq!(
+            unsafe { CStr::from_ptr(first.path) }
+                .to_string_lossy()
+                .as_ref(),
+            expected
+        );
+
+        let (ok, second) = config_get_path(config, "bell-audio-path", initial);
+        assert!(ok);
+        assert_eq!(first.path, second.path);
+        assert_eq!(first.optional, second.optional);
+
+        let clone = roastty_config_clone(config);
+        roastty_config_free(config);
+        let (ok, cloned) = config_get_path(clone, "bell-audio-path", initial);
+        assert!(ok);
+        assert!(!cloned.path.is_null());
+        assert!(!cloned.optional);
+        assert_eq!(
+            unsafe { CStr::from_ptr(cloned.path) }
+                .to_string_lossy()
+                .as_ref(),
+            expected
+        );
+
+        roastty_config_free(clone);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_get_bell_audio_path_returns_cli_optional_and_reset_values() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let dir = unique_config_abi_test_dir("get-bell-audio-path-cli");
+        let sound_path = dir.join("bell.wav");
+        write_config_file(&sound_path, "");
+        let _cwd = CurrentDirGuard::set(&dir);
+        let expected = std::fs::canonicalize(&sound_path)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        with_init_args(&["roastty", "--bell-audio-path=?bell.wav"], || {
+            let config = roastty_config_new();
+            roastty_config_load_cli_args(config);
+            assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+            let initial = RoasttyConfigPath {
+                path: ptr::null(),
+                optional: false,
+            };
+            let (ok, value) = config_get_path(config, "bell-audio-path", initial);
+            assert!(ok);
+            assert!(!value.path.is_null());
+            assert!(value.optional);
+            assert_eq!(
+                unsafe { CStr::from_ptr(value.path) }
+                    .to_string_lossy()
+                    .as_ref(),
+                expected
+            );
+
+            roastty_config_free(config);
+        });
+
+        with_init_args(
+            &[
+                "roastty",
+                "--bell-audio-path=bell.wav",
+                "--bell-audio-path=",
+            ],
+            || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+                let initial = RoasttyConfigPath {
+                    path: 0x5678usize as *const c_char,
+                    optional: true,
+                };
+                let (ok, value) = config_get_path(config, "bell-audio-path", initial);
+                assert!(!ok);
+                assert_eq!(value.path, initial.path);
+                assert_eq!(value.optional, initial.optional);
+
+                roastty_config_free(config);
+            },
+        );
+
+        drop(_cwd);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_get_bell_audio_path_returns_parsed_empty_values() {
+        for (arg, optional) in [
+            ("--bell-audio-path=?", true),
+            ("--bell-audio-path=\"\"", false),
+            ("--bell-audio-path=?\"\"", true),
+        ] {
+            with_init_args(&["roastty", arg], || {
+                let config = roastty_config_new();
+                roastty_config_load_cli_args(config);
+                assert_eq!(roastty_config_diagnostics_count(config), 0);
+
+                let initial = RoasttyConfigPath {
+                    path: 0x9abcusize as *const c_char,
+                    optional: !optional,
+                };
+                let (ok, value) = config_get_path(config, "bell-audio-path", initial);
+                assert!(ok, "{arg}");
+                assert!(!value.path.is_null(), "{arg}");
+                assert_eq!(value.optional, optional, "{arg}");
+                assert_eq!(
+                    unsafe { CStr::from_ptr(value.path) }
+                        .to_string_lossy()
+                        .as_ref(),
+                    "",
+                    "{arg}"
+                );
+
+                roastty_config_free(config);
+            });
+        }
+    }
+
+    #[test]
+    fn config_get_bell_audio_path_reports_missing_and_invalid_values() {
+        with_init_args(&["roastty", "--bell-audio-path"], || {
+            let config = roastty_config_new();
+            roastty_config_load_cli_args(config);
+            assert_eq!(roastty_config_diagnostics_count(config), 1);
+            let message = config_diagnostic_message(config, 0);
+            assert!(message.contains("bell-audio-path"), "{message}");
+            assert!(message.contains("ValueRequired"), "{message}");
+
+            let initial = RoasttyConfigPath {
+                path: ptr::null(),
+                optional: false,
+            };
+            let (ok, value) = config_get_path(config, "bell-audio-path", initial);
+            assert!(!ok);
+            assert_eq!(value.path, initial.path);
+            assert_eq!(value.optional, initial.optional);
+
+            roastty_config_free(config);
+        });
+
+        let dir = unique_config_abi_test_dir("get-bell-audio-path-nul-file");
+        let path = dir.join("config.roastty");
+        write_config_file(&path, "bell-audio-path = bad\0path\n");
+        let path = c_path(&path);
+
+        let config = roastty_config_new();
+        roastty_config_load_file(config, path.as_ptr());
+        assert_eq!(roastty_config_diagnostics_count(config), 1);
+        let message = config_diagnostic_message(config, 0);
+        assert!(message.contains("bell-audio-path"), "{message}");
+        assert!(message.contains("InvalidValue"), "{message}");
+
+        let initial = RoasttyConfigPath {
+            path: ptr::null(),
+            optional: false,
+        };
+        let (ok, value) = config_get_path(config, "bell-audio-path", initial);
+        assert!(!ok);
+        assert_eq!(value.path, initial.path);
+        assert_eq!(value.optional, initial.optional);
+
+        roastty_config_free(config);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -8,6 +8,11 @@ reasoning = "high"
 agent = "codex"
 model = "gpt-5"
 reasoning = "medium"
+
+[review.result]
+agent = "codex"
+model = "default"
+reasoning = "medium"
 +++
 
 # Experiment 774: Config Get Bell Audio Path
@@ -102,3 +107,46 @@ rejection, cached `CString` storage rebuilt from parsed state, parsed-empty edge
 tests, and path expansion through all existing parsed-config load paths. The
 review confirmed the formatter placement before `bell-audio-volume` and the
 narrow scope.
+
+## Result
+
+**Result:** Pass
+
+`bell-audio-path` is now represented in aggregate config as
+`Option<ConfigFilePath>`, defaults to `None`, formats before
+`bell-audio-volume`, and routes through dedicated single-path semantics. Raw
+empty values reset the optional field to `None`, while parsed-empty forms
+preserve upstream single-`Path` behavior at the field parser level.
+
+The shared path-expansion hook now expands `bell-audio-path` alongside
+`config-file` for direct file loads, default file loads, recursive file loads,
+and CLI config arguments. The C ABI now caches a NUL-terminated copy of the path
+in the config handle, rebuilds it after parsed config changes and cloning, and
+returns `roastty_config_path_s` with the optional marker when set. Unset and
+reset values return `false` without writing to the caller's output slot.
+
+Verification passed:
+
+- `cargo test -p roastty bell_audio_path -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_get_bell_audio_path -- --nocapture --test-threads=1`
+- `cargo test -p roastty config_ -- --nocapture --test-threads=1`
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `git diff --check`
+
+## Conclusion
+
+The generic config getter can now return the optional path-shaped
+`bell-audio-path` key through the same parsed-state and cached-pointer model
+used for other C ABI config values. The remaining work in this area is the next
+unimplemented `roastty_config_get` key.
+
+## Completion Review
+
+Codex reviewed the completed diff and first found two test coverage gaps: the C
+ABI tests did not exercise parsed-empty `bell-audio-path` values, and aggregate
+tests did not cover non-empty quoted path forms. Those tests were added.
+
+The follow-up Codex review found no blocking issues, confirmed the single-path
+parsing, cached `CString` lifetime model, clone cache rebuild, docs, and README
+status, and approved the Experiment 774 result commit.

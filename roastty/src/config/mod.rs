@@ -64,6 +64,8 @@ pub(crate) struct Config {
     pub notify_on_command_finish_action: NotifyOnCommandFinishAction,
     /// `bell-audio-volume`.
     pub bell_audio_volume: f64,
+    /// `bell-audio-path`.
+    pub bell_audio_path: Option<ConfigFilePath>,
     /// `notify-on-command-finish-after`.
     pub notify_on_command_finish_after: Duration,
     /// `window-colorspace`.
@@ -171,6 +173,7 @@ impl Default for Config {
             notify_on_command_finish: NotifyOnCommandFinish::Never,
             notify_on_command_finish_action: NotifyOnCommandFinishAction::default(),
             bell_audio_volume: 0.5,
+            bell_audio_path: None,
             notify_on_command_finish_after: Duration {
                 duration: 5 * NS_PER_S,
             },
@@ -276,6 +279,8 @@ impl Config {
         self.background_blur
             .format_entry(&mut EntryFormatter::new("background-blur", out));
         EntryFormatter::new("background-opacity", out).entry_float(self.background_opacity);
+        EntryFormatter::new("bell-audio-path", out)
+            .entry_optional(self.bell_audio_path.clone(), |v, f| v.format_entry(f));
         EntryFormatter::new("bell-audio-volume", out).entry_float(self.bell_audio_volume);
         self.notify_on_command_finish_after
             .format_entry(&mut EntryFormatter::new(
@@ -434,6 +439,13 @@ impl Config {
             }
             "bell-audio-volume" => {
                 self.bell_audio_volume = set_f64_field(value, default.bell_audio_volume)?
+            }
+            "bell-audio-path" => {
+                self.bell_audio_path = set_optional_value_field(
+                    value,
+                    default.bell_audio_path,
+                    ConfigFilePath::parse_single,
+                )?
             }
             "notify-on-command-finish-after" => {
                 self.notify_on_command_finish_after = set_value_field(
@@ -843,6 +855,9 @@ impl Config {
 
     fn expand_config_file_paths_from_base(&mut self, base: &std::path::Path) {
         self.config_file.expand_from_base(base);
+        if let Some(path) = self.bell_audio_path.as_mut() {
+            path.expand_from_base(base);
+        }
     }
 
     pub(crate) fn load_recursive_files_from_config(&mut self) -> ConfigRecursiveLoadReport {
@@ -1023,13 +1038,13 @@ pub(crate) enum ConfigFilePath {
 }
 
 impl ConfigFilePath {
-    fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         match self {
             Self::Optional(path) | Self::Required(path) => path,
         }
     }
 
-    fn optional(&self) -> bool {
+    pub(crate) fn optional(&self) -> bool {
         matches!(self, Self::Optional(_))
     }
 
@@ -1087,6 +1102,30 @@ impl ConfigFilePath {
             }
             Err(_) => self.set_required_empty(),
         }
+    }
+
+    pub(crate) fn parse_single(input: Option<&str>) -> Result<Self, MagicParseError> {
+        let mut value = input.ok_or(MagicParseError::ValueRequired)?;
+        let optional = if let Some(rest) = value.strip_prefix('?') {
+            value = rest;
+            true
+        } else {
+            false
+        };
+
+        if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+            value = &value[1..value.len() - 1];
+        }
+        if value.as_bytes().contains(&0) {
+            return Err(MagicParseError::InvalidValue);
+        }
+
+        let path = value.to_string();
+        Ok(if optional {
+            ConfigFilePath::Optional(path)
+        } else {
+            ConfigFilePath::Required(path)
+        })
     }
 }
 
@@ -5333,6 +5372,94 @@ mod tests {
     }
 
     #[test]
+    fn bell_audio_path_parses_single_path_empty_optional_and_nul_values() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.bell_audio_path, None);
+
+        cfg.set("bell-audio-path", Some("sound.wav")).unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required("sound.wav".to_string()))
+        );
+
+        cfg.set("bell-audio-path", Some("?optional.wav")).unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Optional("optional.wav".to_string()))
+        );
+
+        cfg.set("bell-audio-path", Some("\"?required-literal.wav\""))
+            .unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required(
+                "?required-literal.wav".to_string()
+            ))
+        );
+
+        cfg.set("bell-audio-path", Some("?\"optional-quoted.wav\""))
+            .unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Optional("optional-quoted.wav".to_string()))
+        );
+
+        cfg.set("bell-audio-path", Some("?")).unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Optional(String::new()))
+        );
+
+        cfg.set("bell-audio-path", Some("\"\"")).unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required(String::new()))
+        );
+
+        cfg.set("bell-audio-path", Some("?\"\"")).unwrap();
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Optional(String::new()))
+        );
+
+        cfg.set("bell-audio-path", Some("")).unwrap();
+        assert_eq!(cfg.bell_audio_path, None);
+
+        assert_eq!(
+            cfg.set("bell-audio-path", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("bell-audio-path", Some("bad\0path")),
+            Err(ConfigSetError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn bell_audio_path_formats_and_resets_as_optional_single_path() {
+        let line = |cfg: &Config| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with("bell-audio-path = "))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(line(&cfg), "bell-audio-path = ");
+
+        cfg.set("bell-audio-path", Some("sound.wav")).unwrap();
+        assert_eq!(line(&cfg), "bell-audio-path = sound.wav");
+
+        cfg.set("bell-audio-path", Some("?optional.wav")).unwrap();
+        assert_eq!(line(&cfg), "bell-audio-path = ?optional.wav");
+
+        cfg.set("bell-audio-path", Some("")).unwrap();
+        assert_eq!(line(&cfg), "bell-audio-path = ");
+    }
+
+    #[test]
     fn config_file_accumulates_resets_and_formats() {
         let mut cfg = Config::default();
         cfg.set("config-file", Some("a")).unwrap();
@@ -5527,6 +5654,137 @@ mod tests {
                 "config-file = ?{}",
                 canonical_base.join("missing.conf").display()
             )));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bell_audio_path_expands_from_file_cli_home_and_missing_bases() {
+        let dir = unique_config_test_dir("bell-path-base");
+        let file_base = dir.join("file-base");
+        let cli_base = dir.join("cli-base");
+        let home = dir.join("home");
+        let config_file = file_base.join("config.roastty");
+        let file_sound = file_base.join("file-sound.wav");
+        let cli_sound = cli_base.join("cli-sound.wav");
+        let home_sound = home.join("home-sound.wav");
+        write_config_file(&config_file, "bell-audio-path = ./file-sound.wav\n");
+        write_config_file(&file_sound, "");
+        write_config_file(&cli_sound, "");
+        write_config_file(&home_sound, "");
+        let _home = EnvGuard::set("HOME", &home);
+
+        let mut cfg = Config::default();
+        let diagnostics = cfg.load_file(&config_file).unwrap();
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required(
+                std::fs::canonicalize(&file_sound)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            ))
+        );
+
+        let mut cfg = Config::default();
+        let diagnostics =
+            cfg.set_cli_args_from_base(["--bell-audio-path=?./cli-sound.wav"], &cli_base);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Optional(
+                std::fs::canonicalize(&cli_sound)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            ))
+        );
+
+        let mut cfg = Config::default();
+        let diagnostics =
+            cfg.set_cli_args_from_base(["--bell-audio-path=~/home-sound.wav"], &cli_base);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required(
+                home_sound.to_string_lossy().into_owned()
+            ))
+        );
+
+        let mut cfg = Config::default();
+        let diagnostics =
+            cfg.set_cli_args_from_base(["--bell-audio-path=?sub/../missing.wav"], &cli_base);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Optional(
+                std::fs::canonicalize(&cli_base)
+                    .unwrap()
+                    .join("missing.wav")
+                    .to_string_lossy()
+                    .into_owned()
+            ))
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bell_audio_path_expands_from_default_and_recursive_file_bases() {
+        let dir = unique_config_test_dir("bell-path-default-recursive");
+        let default_dir = dir.join("default");
+        let parent_dir = dir.join("parent");
+        let child_dir = parent_dir.join("child-dir");
+        let default_config = default_dir.join("config.roastty");
+        let default_sound = default_dir.join("default.wav");
+        let parent_config = parent_dir.join("parent.roastty");
+        let child_config = child_dir.join("child.roastty");
+        let child_sound = child_dir.join("child.wav");
+        write_config_file(&default_config, "bell-audio-path = default.wav\n");
+        write_config_file(&default_sound, "");
+        write_config_file(
+            &parent_config,
+            "config-file = child-dir/child.roastty\nbell-audio-path = parent.wav\n",
+        );
+        write_config_file(&child_config, "bell-audio-path = child.wav\n");
+        write_config_file(&child_sound, "");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(default_config),
+            preferred_xdg: None,
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+        assert!(report.errors.is_empty());
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required(
+                std::fs::canonicalize(&default_sound)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            ))
+        );
+
+        let mut cfg = Config::default();
+        let diagnostics = cfg.load_file(&parent_config).unwrap();
+        assert!(diagnostics.is_empty());
+        let report = cfg.load_recursive_files_from_config();
+        assert!(report.errors.is_empty());
+        assert!(report.cycles.is_empty());
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(
+            cfg.bell_audio_path,
+            Some(ConfigFilePath::Required(
+                std::fs::canonicalize(&child_sound)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            ))
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -7644,6 +7902,7 @@ mod tests {
                 "mouse-shift-capture",
                 "background-blur",
                 "background-opacity",
+                "bell-audio-path",
                 "bell-audio-volume",
                 "notify-on-command-finish-after",
                 "notify-on-command-finish",
@@ -7689,6 +7948,7 @@ mod tests {
         // The default optionals (all `None`) format as the void line, and `theme`
         // (default `None`) too.
         assert!(out.contains("cursor-color = \n"));
+        assert!(out.contains("bell-audio-path = \n"));
         assert!(out.contains("theme = \n"));
         assert!(out.contains("title = \n"));
         assert!(out.contains("window-position-x = \n"));
