@@ -2080,6 +2080,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 781: Render State Display ID](781-render-state-display-id.md) —
   **Pass** · Codex/Codex/Codex
+- [Experiment 782: Terminal Clipboard OSC Events](782-terminal-clipboard-osc-events.md)
+  — **Designed**
 
 ## Non-Goals
 
