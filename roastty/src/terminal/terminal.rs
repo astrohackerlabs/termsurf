@@ -64,6 +64,7 @@ pub(crate) struct Terminal {
     mouse_shape: mouse::MouseShape,
     next_implicit_hyperlink_id: u32,
     previous_char: Option<char>,
+    pending_clipboard_events: Vec<TerminalClipboardEvent>,
 }
 
 #[derive(Debug)]
@@ -149,6 +150,19 @@ pub(crate) struct TerminalTrackedGridRef {
     screen_key: TerminalScreenKey,
     screen_generation: u64,
     screen_owner_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TerminalClipboardEvent {
+    Osc52 {
+        kind: u8,
+        data: Vec<u8>,
+    },
+    Kitty {
+        metadata: Vec<u8>,
+        payload: Option<Vec<u8>>,
+        terminator: osc::Terminator,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -757,6 +771,7 @@ struct TerminalStreamHandler<'a> {
     kitty_graphics: &'a mut KittyGraphicsApc,
     kitty_config: &'a mut KittyGraphicsConfig,
     flags: &'a mut TerminalFlags,
+    pending_clipboard_events: &'a mut Vec<TerminalClipboardEvent>,
 }
 
 #[derive(Debug)]
@@ -976,6 +991,7 @@ impl Terminal {
             mouse_shape: mouse::MouseShape::Text,
             next_implicit_hyperlink_id: 0,
             previous_char: None,
+            pending_clipboard_events: Vec::new(),
         })
     }
 
@@ -1000,6 +1016,7 @@ impl Terminal {
             mouse_shape,
             next_implicit_hyperlink_id,
             previous_char,
+            pending_clipboard_events,
             flags,
             ..
         } = self;
@@ -1023,6 +1040,7 @@ impl Terminal {
             kitty_graphics,
             kitty_config,
             flags,
+            pending_clipboard_events,
         };
         stream.next_slice(input, &mut handler)
     }
@@ -1040,6 +1058,11 @@ impl Terminal {
         self.kitty_graphics.reset();
         self.flags = TerminalFlags::default();
         self.previous_char = None;
+        self.pending_clipboard_events.clear();
+    }
+
+    pub(crate) fn drain_clipboard_events(&mut self) -> Vec<TerminalClipboardEvent> {
+        std::mem::take(&mut self.pending_clipboard_events)
     }
 
     pub(crate) fn title(&self) -> &str {
@@ -2913,7 +2936,13 @@ impl Handler for TerminalStreamHandler<'_> {
             stream::OscAction::ReportPwd { url } => {
                 self.pwd.set(url);
             }
-            stream::OscAction::ClipboardContents { .. } => {}
+            stream::OscAction::ClipboardContents { value } => {
+                self.pending_clipboard_events
+                    .push(TerminalClipboardEvent::Osc52 {
+                        kind: value.kind,
+                        data: value.data.to_vec(),
+                    });
+            }
             stream::OscAction::ContextSignal { .. } => {}
             stream::OscAction::DesktopNotification { .. } => {}
             stream::OscAction::MouseShape { shape } => {
@@ -2946,7 +2975,14 @@ impl Handler for TerminalStreamHandler<'_> {
             stream::OscAction::SemanticPrompt { value } => {
                 self.semantic_prompt(value)?;
             }
-            stream::OscAction::KittyClipboard { .. } => {}
+            stream::OscAction::KittyClipboard { value } => {
+                self.pending_clipboard_events
+                    .push(TerminalClipboardEvent::Kitty {
+                        metadata: value.metadata.to_vec(),
+                        payload: value.payload.map(Vec::from),
+                        terminator: value.terminator,
+                    });
+            }
         }
         Ok(())
     }
@@ -3423,6 +3459,7 @@ impl TerminalStreamHandler<'_> {
         self.kitty_graphics.reset();
         *self.flags = TerminalFlags::default();
         *self.previous_char = None;
+        self.pending_clipboard_events.clear();
         Ok(())
     }
 
@@ -8919,7 +8956,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_stream_clipboard_protocols_are_ignored() {
+    fn terminal_stream_clipboard_protocols_are_retained_without_terminal_side_effects() {
         let mut terminal = Terminal::init(10, 3, None).unwrap();
 
         terminal.next_slice(b"abc").unwrap();
@@ -8939,6 +8976,22 @@ mod tests {
             .next_slice(b"\x1b]52;s;?\x07\x1b]5522;type=read;payload\x1b\\")
             .unwrap();
 
+        assert_eq!(
+            terminal.drain_clipboard_events(),
+            vec![
+                TerminalClipboardEvent::Osc52 {
+                    kind: b's',
+                    data: b"?".to_vec(),
+                },
+                TerminalClipboardEvent::Kitty {
+                    metadata: b"type=read".to_vec(),
+                    payload: Some(b"payload".to_vec()),
+                    terminator: osc::Terminator::St,
+                },
+            ]
+        );
+        assert!(terminal.drain_clipboard_events().is_empty());
+
         assert_eq!(plain_with_unwrap(&terminal, false), "abc");
         assert_eq!(terminal.title_for_tests(), "title");
         assert_eq!(terminal.pwd_for_tests(), Some("file://host/home"));
@@ -8955,6 +9008,60 @@ mod tests {
         assert!(terminal.pty_response_for_tests().is_empty());
         assert!(!terminal.is_dirty_for_tests(0, 0));
         assert!(!terminal.is_dirty_for_tests(9, 0));
+    }
+
+    #[test]
+    fn terminal_clipboard_events_preserve_parse_order_and_kitty_empty_payload() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]52;c;raw\x07\x1b]5522;type=read\x07\x1b]52;p;?\x1b\\")
+            .unwrap();
+
+        assert_eq!(
+            terminal.drain_clipboard_events(),
+            vec![
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'c',
+                    data: b"raw".to_vec(),
+                },
+                TerminalClipboardEvent::Kitty {
+                    metadata: b"type=read".to_vec(),
+                    payload: None,
+                    terminator: osc::Terminator::Bel,
+                },
+                TerminalClipboardEvent::Osc52 {
+                    kind: b'p',
+                    data: b"?".to_vec(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_clipboard_events_clear_on_direct_reset() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"\x1b]52;c;raw\x07").unwrap();
+        assert!(!terminal.drain_clipboard_events().is_empty());
+        terminal.next_slice(b"\x1b]52;c;raw\x07").unwrap();
+
+        terminal.reset();
+
+        assert!(terminal.drain_clipboard_events().is_empty());
+    }
+
+    #[test]
+    fn terminal_clipboard_events_clear_on_ris_full_reset() {
+        let mut terminal = Terminal::init(10, 3, None).unwrap();
+
+        terminal.next_slice(b"\x1b]52;c;raw\x07").unwrap();
+        assert!(!terminal.drain_clipboard_events().is_empty());
+        terminal.next_slice(b"\x1b]52;c;raw\x07").unwrap();
+
+        terminal.next_slice(b"\x1bc").unwrap();
+
+        assert!(terminal.drain_clipboard_events().is_empty());
     }
 
     #[test]

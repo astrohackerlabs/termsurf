@@ -92,3 +92,41 @@ did not explicitly include the full-reset/RIS path (`ESC c`) dispatched as
 
 The design was updated to require both direct reset and RIS/full reset to clear
 pending clipboard OSC events, with explicit verification coverage for each.
+
+## Result
+
+**Result:** Pass
+
+The terminal now owns a pending clipboard OSC event queue. `Terminal::osc`
+retains OSC 52 clipboard actions as `TerminalClipboardEvent::Osc52` values with
+the kind byte and raw data bytes, and retains Kitty clipboard OSC 5522 actions
+as `TerminalClipboardEvent::Kitty` values with metadata bytes, optional payload
+bytes, and the OSC terminator.
+
+`Terminal::drain_clipboard_events` returns pending events in parse order and
+clears the queue. Direct terminal reset and RIS/full reset (`ESC c`) both clear
+pending clipboard OSC events. The retained events do not mutate normal terminal
+screen text, title, pwd, hyperlink, cursor, modes, colors, dirty rows, or PTY
+response.
+
+This experiment intentionally stops at the terminal bridge. Termio worker event
+emission, surface request allocation, runtime clipboard callbacks, OSC replies,
+and Kitty clipboard semantics remain later work.
+
+Verification passed:
+
+- `cargo test -p roastty terminal_clipboard -- --nocapture --test-threads=1` — 3
+  passed
+- `cargo test -p roastty terminal_stream_clipboard -- --nocapture --test-threads=1`
+  — 1 passed
+- `cargo fmt -p roastty`
+- `cargo fmt -p roastty -- --check`
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/782-terminal-clipboard-osc-events.md`
+- `git diff --check`
+
+## Conclusion
+
+Roastty no longer drops parsed terminal clipboard OSC actions inside
+`Terminal::osc`. There is now a tested, drainable terminal-side event stream
+that later termio/surface experiments can use to allocate OSC 52 read/write
+requests and route runtime clipboard callbacks.
