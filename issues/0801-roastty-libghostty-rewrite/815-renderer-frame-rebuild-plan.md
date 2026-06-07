@@ -149,3 +149,62 @@ findings. The follow-up review confirmed the post-resize row semantics,
 clean-plus-dirty-row behavior, side-effect metadata, and input invariants. The
 only non-blocking suggestion was to make the planned tests explicitly assert the
 side-effect metadata, which was added before the plan commit.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has a value-level renderer frame rebuild planner:
+
+- `roastty/src/renderer/frame_rebuild.rs` adds `RenderDirty`,
+  `FrameRebuildInput`, `FrameRebuildPlan`, `FramePreeditRange`, and
+  `FrameRebuildPlanError`.
+- `FrameRebuildPlan::build` plans the same front-half rebuild decisions as
+  upstream `rebuildCells`: grid change detection, resize-to-terminal-grid
+  semantics, post-resize row selection, full rebuild versus row-dirty rebuild,
+  reset/clear/mark-clean metadata, and optional preedit range planning.
+- Non-full frames process dirty rows even when the outer dirty enum is `Clean`,
+  matching upstream's row-dirty gate after terminal/search/link state updates.
+- Short row-dirty slices return `DirtyRowsTooShort`; extra dirty flags are
+  ignored; zero-row/zero-column grids and out-of-viewport cursors produce no
+  preedit range rather than underflowing.
+- `roastty/src/renderer/mod.rs` exposes the new `frame_rebuild` module.
+
+Verification:
+
+- Inspected `vendor/ghostty/src/renderer/generic.zig` `updateFrame`.
+- Inspected `vendor/ghostty/src/renderer/generic.zig` `rebuildCells`.
+- Inspected `roastty/src/renderer/cell.rs`.
+- Inspected `roastty/src/renderer/state.rs`.
+- Inspected `roastty/src/renderer/size.rs`.
+- `cargo fmt -p roastty` — passed.
+- `cargo test -p roastty renderer::frame_rebuild -- --nocapture` — passed, 13
+  tests.
+- `cargo test -p roastty renderer::state -- --nocapture` — passed, 8 tests.
+- `cargo test -p roastty renderer::cell::tests::resize -- --nocapture` — matched
+  0 tests, so it was replaced with the actual resize test filter.
+- `cargo test -p roastty renderer::cell::tests::contents_resize -- --nocapture`
+  — passed, 4 tests.
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/815-renderer-frame-rebuild-plan.md`
+  — passed.
+- `git diff --check` — passed.
+
+## Conclusion
+
+Experiment 815 completes the tested decision boundary between future terminal
+render-state updates and `Contents` row rebuilding. The next renderer slices can
+apply this plan to real `Contents` mutation and row formatting, then connect the
+prepared contents into the existing Metal frame compositor. This does not yet
+implement the live render loop, renderer thread, glyph upload orchestration,
+images, custom shaders, overlays, or pacing.
+
+## Completion Review
+
+Codex reviewed the completed implementation and approved it with no blocking
+code findings. The review confirmed that `FrameRebuildPlan::build` matches the
+approved scope and upstream front-half behavior: resize before row selection,
+full rebuild on dirty full/grid change, row-dirty rebuild in non-full frames,
+reset versus clear metadata, mark-clean rows, and preedit gating against rebuilt
+cursor rows. The only finding was that the result verification record initially
+omitted the successful Prettier and `git diff --check` commands; those bullets
+were added before the result commit.

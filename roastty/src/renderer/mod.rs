@@ -1,5 +1,6 @@
 pub(crate) mod cell;
 pub(crate) mod cursor;
+pub(crate) mod frame_rebuild;
 pub(crate) mod image;
 pub(crate) mod metal;
 pub(crate) mod shader;
