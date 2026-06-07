@@ -2085,6 +2085,8 @@ are past the correctness-critical foundation.
   — **Pass** · Codex/Codex/Codex
 - [Experiment 783: Termio Clipboard OSC Worker Events](783-termio-clipboard-osc-worker-events.md)
   — **Pass** · Codex/Codex/Codex
+- [Experiment 784: OSC 52 Read Clipboard Requests](784-osc52-read-clipboard-requests.md)
+  — **Designed**
 
 ## Non-Goals
 
