@@ -88,3 +88,56 @@ that the planned options and descriptor creation map directly to upstream
 enabling the `MTLSampler` feature is required for the local `objc2-metal`
 bindings, the planned tests cover enum values and device-conditional sampler
 creation, and render-pass sampler binding remains properly scoped out.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has a focused Metal sampler wrapper:
+
+- `roastty/Cargo.toml` enables the `MTLSampler` feature for `objc2-metal`.
+- `roastty/src/renderer/metal/api.rs` defines `MetalSamplerMinMagFilter` and
+  `MetalSamplerAddressMode` with upstream raw values and `objc2-metal`
+  conversions.
+- `roastty/src/renderer/metal/sampler.rs` defines descriptor options,
+  `MetalSamplerOptions`, `MetalSampler`, and `MetalSamplerError`.
+- `MetalSampler::new` creates an `MTLSamplerDescriptor`, applies min/mag filter
+  and S/T address mode values, calls `newSamplerStateWithDescriptor`, and owns
+  the retained sampler state for later render-pass binding.
+
+The implementation does not bind samplers in `render_pass.rs` yet and does not
+claim `Target`, `IOSurfaceLayer`, or live frame orchestration.
+
+The Issue 801 Metal checklist now records the sampler wrapper as present while
+keeping render-pass sampler binding, window `Target`, `IOSurfaceLayer`, and full
+live frame orchestration open.
+
+Verification:
+
+- Inspected `vendor/ghostty/src/renderer/metal/Sampler.zig`.
+- Inspected `vendor/ghostty/src/renderer/metal/api.zig`.
+- Inspected `roastty/src/renderer/metal/api.rs`.
+- Inspected `roastty/src/renderer/metal/render_pass.rs`.
+- `cargo fmt -p roastty` — passed.
+- `cargo test -p roastty metal::sampler -- --nocapture --test-threads=1` —
+  passed, 4 tests.
+- `cargo test -p roastty metal::api -- --nocapture --test-threads=1` — passed,
+  22 tests.
+- `prettier --write --prose-wrap always --print-width 80 issues/0801-roastty-libghostty-rewrite/README.md issues/0801-roastty-libghostty-rewrite/808-metal-sampler-wrapper.md`
+  — passed.
+- `git diff --check` — passed.
+
+## Conclusion
+
+Experiment 808 fills the missing Metal sampler wrapper layer and leaves the next
+Metal work focused on render-pass sampler binding, window `Target`,
+`IOSurfaceLayer`, and live frame orchestration.
+
+## Completion Review
+
+Codex reviewed the staged result and approved it with no findings. The approval
+confirmed that the wrapper maps faithfully to upstream `Sampler.zig`, sampler
+enum raw values match upstream `api.zig`, `objc2-metal` has the required
+`MTLSampler` feature enabled, `Retained` owns the `MTLSamplerState`, the device
+smoke test skips cleanly when no Metal device is available, render-pass sampler
+binding remains scoped out, and the docs keep the Metal row partial.

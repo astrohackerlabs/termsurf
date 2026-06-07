@@ -224,9 +224,9 @@ Experiment 246).
 - [ ] Metal `pipeline` (partial), `Sampler`, `Frame`, `Target`, `IOSurfaceLayer`
       — partial: pipeline descriptors/state builder, standard shader
       library/pipelines, texture upload/render-target helpers, `FrameState`
-      uniform/cell/atlas sync, and offscreen render passes exist; `Sampler`,
-      window `Target`, `IOSurfaceLayer`, and full live frame orchestration
-      remain missing
+      uniform/cell/atlas sync, offscreen render passes, and a Metal sampler
+      wrapper exist; render-pass sampler binding, window `Target`,
+      `IOSurfaceLayer`, and full live frame orchestration remain missing
 - [ ] Main render loop (`generic.zig`: frame build, dirty tracking, glyph
       upload, draw calls, pacing) — missing (critical)
 - [ ] z2d debug `Overlay`, link highlighting, render `Thread`, custom shaders —
@@ -2211,7 +2211,7 @@ are past the correctness-critical foundation.
 - [Experiment 807: Renderer State Mouse Foundation](807-renderer-state-mouse-foundation.md)
   — **Pass** · Codex/Codex/Codex
 - [Experiment 808: Metal Sampler Wrapper](808-metal-sampler-wrapper.md) —
-  **Designed**
+  **Pass** · Codex/Codex/Codex
 
 ## Non-Goals
 

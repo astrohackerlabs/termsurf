@@ -103,6 +103,60 @@ impl MetalStoreAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
+pub(crate) enum MetalSamplerMinMagFilter {
+    Nearest = 0,
+    Linear = 1,
+}
+
+impl MetalSamplerMinMagFilter {
+    pub(crate) fn raw(self) -> u64 {
+        self as u64
+    }
+
+    pub(crate) fn to_objc(self) -> objc2_metal::MTLSamplerMinMagFilter {
+        match self {
+            MetalSamplerMinMagFilter::Nearest => objc2_metal::MTLSamplerMinMagFilter::Nearest,
+            MetalSamplerMinMagFilter::Linear => objc2_metal::MTLSamplerMinMagFilter::Linear,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub(crate) enum MetalSamplerAddressMode {
+    ClampToEdge = 0,
+    MirrorClampToEdge = 1,
+    Repeat = 2,
+    MirrorRepeat = 3,
+    ClampToZero = 4,
+    ClampToBorderColor = 5,
+}
+
+impl MetalSamplerAddressMode {
+    pub(crate) fn raw(self) -> u64 {
+        self as u64
+    }
+
+    pub(crate) fn to_objc(self) -> objc2_metal::MTLSamplerAddressMode {
+        match self {
+            MetalSamplerAddressMode::ClampToEdge => objc2_metal::MTLSamplerAddressMode::ClampToEdge,
+            MetalSamplerAddressMode::MirrorClampToEdge => {
+                objc2_metal::MTLSamplerAddressMode::MirrorClampToEdge
+            }
+            MetalSamplerAddressMode::Repeat => objc2_metal::MTLSamplerAddressMode::Repeat,
+            MetalSamplerAddressMode::MirrorRepeat => {
+                objc2_metal::MTLSamplerAddressMode::MirrorRepeat
+            }
+            MetalSamplerAddressMode::ClampToZero => objc2_metal::MTLSamplerAddressMode::ClampToZero,
+            MetalSamplerAddressMode::ClampToBorderColor => {
+                objc2_metal::MTLSamplerAddressMode::ClampToBorderColor
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
 pub(crate) enum MetalPrimitiveType {
     Triangle = 3,
     TriangleStrip = 4,
@@ -496,6 +550,41 @@ mod tests {
             MetalStoreAction::Store.to_objc().0 as u64,
             MetalStoreAction::Store.raw()
         );
+    }
+
+    #[test]
+    fn metal_sampler_filter_values_match_upstream() {
+        assert_eq!(MetalSamplerMinMagFilter::Nearest.raw(), 0);
+        assert_eq!(MetalSamplerMinMagFilter::Linear.raw(), 1);
+        assert_eq!(
+            MetalSamplerMinMagFilter::Nearest.to_objc().0 as u64,
+            MetalSamplerMinMagFilter::Nearest.raw()
+        );
+        assert_eq!(
+            MetalSamplerMinMagFilter::Linear.to_objc().0 as u64,
+            MetalSamplerMinMagFilter::Linear.raw()
+        );
+    }
+
+    #[test]
+    fn metal_sampler_address_mode_values_match_upstream() {
+        assert_eq!(MetalSamplerAddressMode::ClampToEdge.raw(), 0);
+        assert_eq!(MetalSamplerAddressMode::MirrorClampToEdge.raw(), 1);
+        assert_eq!(MetalSamplerAddressMode::Repeat.raw(), 2);
+        assert_eq!(MetalSamplerAddressMode::MirrorRepeat.raw(), 3);
+        assert_eq!(MetalSamplerAddressMode::ClampToZero.raw(), 4);
+        assert_eq!(MetalSamplerAddressMode::ClampToBorderColor.raw(), 5);
+
+        for mode in [
+            MetalSamplerAddressMode::ClampToEdge,
+            MetalSamplerAddressMode::MirrorClampToEdge,
+            MetalSamplerAddressMode::Repeat,
+            MetalSamplerAddressMode::MirrorRepeat,
+            MetalSamplerAddressMode::ClampToZero,
+            MetalSamplerAddressMode::ClampToBorderColor,
+        ] {
+            assert_eq!(mode.to_objc().0 as u64, mode.raw());
+        }
     }
 
     #[test]
