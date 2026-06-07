@@ -2069,6 +2069,8 @@ are past the correctness-critical foundation.
   — **Partial** (broad binding-action filter did not complete)
 - [Experiment 777: Binding Action Paste Test Reliability](777-binding-action-paste-test-reliability.md)
   — **Partial** (PTY paste tests pass but remain timing-heavy)
+- [Experiment 778: Narrow Surface Binding Checklist Sync](778-narrow-surface-binding-checklist-sync.md)
+  — **Designed**
 
 ## Non-Goals
 
