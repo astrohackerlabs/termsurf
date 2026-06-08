@@ -210,8 +210,8 @@ const ROASTTY_FULLSCREEN_MACOS_NON_NATIVE_PADDED_NOTCH: c_int = 3;
 const ROASTTY_PROMPT_TITLE_SURFACE: c_int = 0;
 const ROASTTY_PROMPT_TITLE_TAB: c_int = 1;
 
-const ROASTTY_READONLY_ON: c_int = 0;
-const ROASTTY_READONLY_OFF: c_int = 1;
+const ROASTTY_READONLY_ON: c_int = 1;
+const ROASTTY_READONLY_OFF: c_int = 0;
 
 #[allow(dead_code)]
 const ROASTTY_ACTION_OPEN_URL_KIND_UNKNOWN: c_int = 0;
@@ -20632,8 +20632,8 @@ mod tests {
         assert_eq!(ROASTTY_FULLSCREEN_MACOS_NON_NATIVE_PADDED_NOTCH, 3);
         assert_eq!(ROASTTY_PROMPT_TITLE_SURFACE, 0);
         assert_eq!(ROASTTY_PROMPT_TITLE_TAB, 1);
-        assert_eq!(ROASTTY_READONLY_ON, 0);
-        assert_eq!(ROASTTY_READONLY_OFF, 1);
+        assert_eq!(ROASTTY_READONLY_ON, 1);
+        assert_eq!(ROASTTY_READONLY_OFF, 0);
         assert_eq!(ROASTTY_ACTION_OPEN_URL_KIND_UNKNOWN, 0);
         assert_eq!(ROASTTY_ACTION_OPEN_URL_KIND_TEXT, 1);
         assert_eq!(ROASTTY_ACTION_OPEN_URL_KIND_HTML, 2);

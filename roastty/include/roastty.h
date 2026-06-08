@@ -1362,8 +1362,8 @@ typedef enum {
 } roastty_prompt_title_e;
 
 typedef enum {
-  ROASTTY_READONLY_ON = 0,
-  ROASTTY_READONLY_OFF = 1,
+  ROASTTY_READONLY_OFF = 0,
+  ROASTTY_READONLY_ON = 1,
 } roastty_readonly_e;
 
 typedef enum {

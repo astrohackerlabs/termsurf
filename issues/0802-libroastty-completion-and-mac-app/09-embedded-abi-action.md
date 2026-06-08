@@ -174,6 +174,45 @@ shrinks from the old 72. Findings, addressed:
   `resize_split_e`, `close_tab_e`, …); only genuinely-new types are defined
   fresh.
 
+## Implementation notes (analysis done — ready to execute)
+
+Pre-implementation analysis is complete, so a cold-resume starts here without re-deriving:
+
+- **Of the 36 missing `action_*` types: 25 are defined fresh, 11 collide → alias** to an
+  existing roastty enum (the constants already exist, so re-defining = C "redefinition of
+  enumerator"). The alias map (all verified):
+  | new name | alias to existing |
+  | --- | --- |
+  | `action_float_window_e` | `roastty_float_window_e` |
+  | `action_fullscreen_e` | `roastty_fullscreen_e` |
+  | `action_goto_split_e` | `roastty_goto_split_e` |
+  | `action_goto_tab_e` | `roastty_goto_tab_e` |
+  | `action_goto_window_e` | `roastty_goto_window_e` |
+  | `action_inspector_e` | `roastty_inspector_mode_e` |
+  | `action_prompt_title_e` | `roastty_prompt_title_e` |
+  | `action_readonly_e` | `roastty_readonly_e` (after the swap fix) |
+  | `action_resize_split_direction_e` | `roastty_resize_split_e` |
+  | `action_secure_input_e` | `roastty_secure_input_e` |
+  | `action_split_direction_e` | `roastty_split_direction_e` |
+  The 25 fresh blocks (structs + the genuinely-new enums like `mouse_shape_e`,
+  `color_kind_e`, `open_url_kind_e`, `progress_report_state_e`, …) are extracted/renamed in
+  `/tmp/action_defs.h` (regenerable from `ghostty.h`).
+- **`readonly` swap fix (localized — 4 lines):** `lib.rs:213-214` has
+  `ROASTTY_READONLY_ON=0, OFF=1` (inverted from upstream `OFF=0, ON=1`); flip to `ON=1,
+  OFF=0` and update the two value asserts (`lib.rs:20635-36`). The firing site
+  (`lib.rs:3590-3594`) uses the **named** constants (readonly→ON, not-readonly→OFF), so its
+  logic is unchanged — only the integer values flip, becoming upstream-correct.
+- **Central conversion point:** `perform_targeted_action_result` (`lib.rs:~2150`) builds
+  `RoasttyAction { tag, storage }` today → replace with
+  `RoasttyAction { tag, action: action_u_from_storage(tag, storage) }`. The storage→member
+  layout for each tag is documented in `roastty.h`'s current `roastty_action_s` comment
+  (e.g. `SET_TITLE`: storage[0]=title ptr; `OPEN_URL`: storage[0]=kind, [1]=ptr, [2]=len; …).
+- **Test migration:** `ActionRecord` (`lib.rs:14628`) `storage:[usize;8]` field + **82
+  `.storage[N]` assertions** read the C callback → capture the typed union and read
+  `action.<member>` (the harness's test `action_cb` records the new struct).
+- **Union/struct layout (review-confirmed):** `action_s` 32 bytes/align 8, `action_u` 24.
+  Add Rust `offset_of` tests + C `_Static_assert`s on both sides.
+
 ## Result
 
 _(to be added after the run.)_
