@@ -461,6 +461,9 @@ stays unaltered except for the rename).
   — **Pass** (embedded `point_s`/`selection_s`/`point_coord_e` byte-faithful +
   the `(tag,coord)`→pin resolver in `read_text`; 4399 tests green; app compiles
   past selection → `target_s`/`action_tag_e` next) · Claude/Claude
+- [Experiment 12: Embedded ABI — the target union + the action-tag completion](12-embedded-abi-target-tags.md)
+  — **Designed** (`target_s` `target_u` union + 24 missing `ROASTTY_ACTION_*`
+  tags) · Claude
 
 ## Process
 
