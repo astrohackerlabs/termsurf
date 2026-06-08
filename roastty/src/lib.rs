@@ -1142,11 +1142,157 @@ pub struct RoasttyTarget {
     surface: RoasttySurface,
 }
 
+// Embedded action payloads (Issue 802 / Exp 9) — byte-faithful to upstream action_*.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyActionSetTitle {
+    title: *const c_char,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyActionStartSearch {
+    needle: *const c_char,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyActionOpenUrl {
+    kind: c_int,
+    url: *const c_char,
+    len: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyActionMoveTab {
+    amount: isize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyActionResizeSplit {
+    amount: u16,
+    direction: c_int,
+}
+
+/// The embedded `roastty_action_u` — a tagged-union payload (24 bytes / align 8,
+/// matching the upstream `action_u`). Only the data-carrying members are named; `raw`
+/// forces the size/align and carries roastty-only tags (e.g. NAVIGATE_SEARCH).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union RoasttyActionU {
+    raw: [usize; 3],
+    new_split: c_int,
+    toggle_fullscreen: c_int,
+    move_tab: RoasttyActionMoveTab,
+    goto_tab: c_int,
+    goto_split: c_int,
+    goto_window: c_int,
+    resize_split: RoasttyActionResizeSplit,
+    inspector: c_int,
+    set_title: RoasttyActionSetTitle,
+    prompt_title: c_int,
+    float_window: c_int,
+    secure_input: c_int,
+    close_tab_mode: c_int,
+    open_url: RoasttyActionOpenUrl,
+    readonly: c_int,
+    start_search: RoasttyActionStartSearch,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RoasttyAction {
     tag: c_int,
-    storage: [usize; 8],
+    action: RoasttyActionU,
+}
+
+/// Convert the internal `(tag, storage)` carrier into the typed `roastty_action_u`
+/// the app reads. The per-tag storage layout is documented on `roastty_action_s`
+/// in `roastty.h`.
+fn action_u_from_storage(tag: c_int, storage: [usize; 8]) -> RoasttyActionU {
+    let mut u = RoasttyActionU { raw: [0; 3] };
+    match tag {
+        ROASTTY_ACTION_SET_TITLE | ROASTTY_ACTION_SET_TAB_TITLE => {
+            u.set_title = RoasttyActionSetTitle {
+                title: storage[0] as *const c_char,
+            }
+        }
+        ROASTTY_ACTION_START_SEARCH => {
+            u.start_search = RoasttyActionStartSearch {
+                needle: storage[0] as *const c_char,
+            }
+        }
+        ROASTTY_ACTION_OPEN_URL => {
+            u.open_url = RoasttyActionOpenUrl {
+                kind: storage[0] as c_int,
+                url: storage[1] as *const c_char,
+                len: storage[2],
+            }
+        }
+        ROASTTY_ACTION_READONLY => u.readonly = storage[0] as c_int,
+        ROASTTY_ACTION_INSPECTOR => u.inspector = storage[0] as c_int,
+        ROASTTY_ACTION_FLOAT_WINDOW => u.float_window = storage[0] as c_int,
+        ROASTTY_ACTION_SECURE_INPUT => u.secure_input = storage[0] as c_int,
+        ROASTTY_ACTION_CLOSE_TAB => u.close_tab_mode = storage[0] as c_int,
+        ROASTTY_ACTION_NEW_SPLIT => u.new_split = storage[0] as c_int,
+        ROASTTY_ACTION_GOTO_TAB => u.goto_tab = storage[0] as c_int,
+        ROASTTY_ACTION_MOVE_TAB => {
+            u.move_tab = RoasttyActionMoveTab {
+                amount: storage[0] as isize,
+            }
+        }
+        ROASTTY_ACTION_GOTO_SPLIT => u.goto_split = storage[0] as c_int,
+        ROASTTY_ACTION_GOTO_WINDOW => u.goto_window = storage[0] as c_int,
+        ROASTTY_ACTION_RESIZE_SPLIT => {
+            u.resize_split = RoasttyActionResizeSplit {
+                amount: storage[0] as u16,
+                direction: storage[1] as c_int,
+            }
+        }
+        ROASTTY_ACTION_TOGGLE_FULLSCREEN => u.toggle_fullscreen = storage[0] as c_int,
+        ROASTTY_ACTION_PROMPT_TITLE => u.prompt_title = storage[0] as c_int,
+        ROASTTY_ACTION_NAVIGATE_SEARCH => u.raw = [storage[0], 0, 0],
+        _ => {}
+    }
+    u
+}
+
+/// Test-only inverse of [`action_u_from_storage`]: reconstruct the `storage`
+/// carrier from the typed union so the existing `storage`-based assertions still
+/// exercise the real `storage → union` conversion (round-trip).
+#[cfg(test)]
+fn action_u_to_storage(tag: c_int, u: &RoasttyActionU) -> [usize; 8] {
+    let mut s = [0usize; 8];
+    unsafe {
+        match tag {
+            ROASTTY_ACTION_SET_TITLE | ROASTTY_ACTION_SET_TAB_TITLE => {
+                s[0] = u.set_title.title as usize
+            }
+            ROASTTY_ACTION_START_SEARCH => s[0] = u.start_search.needle as usize,
+            ROASTTY_ACTION_OPEN_URL => {
+                s[0] = u.open_url.kind as usize;
+                s[1] = u.open_url.url as usize;
+                s[2] = u.open_url.len;
+            }
+            ROASTTY_ACTION_READONLY => s[0] = u.readonly as usize,
+            ROASTTY_ACTION_INSPECTOR => s[0] = u.inspector as usize,
+            ROASTTY_ACTION_FLOAT_WINDOW => s[0] = u.float_window as usize,
+            ROASTTY_ACTION_SECURE_INPUT => s[0] = u.secure_input as usize,
+            ROASTTY_ACTION_CLOSE_TAB => s[0] = u.close_tab_mode as usize,
+            ROASTTY_ACTION_NEW_SPLIT => s[0] = u.new_split as usize,
+            ROASTTY_ACTION_GOTO_TAB => s[0] = u.goto_tab as usize,
+            ROASTTY_ACTION_MOVE_TAB => s[0] = u.move_tab.amount as usize,
+            ROASTTY_ACTION_GOTO_SPLIT => s[0] = u.goto_split as usize,
+            ROASTTY_ACTION_GOTO_WINDOW => s[0] = u.goto_window as usize,
+            ROASTTY_ACTION_RESIZE_SPLIT => {
+                s[0] = u.resize_split.amount as usize;
+                s[1] = u.resize_split.direction as usize;
+            }
+            ROASTTY_ACTION_TOGGLE_FULLSCREEN => s[0] = u.toggle_fullscreen as usize,
+            ROASTTY_ACTION_PROMPT_TITLE => s[0] = u.prompt_title as usize,
+            ROASTTY_ACTION_NAVIGATE_SEARCH => s[0] = u.raw[0],
+            _ => {}
+        }
+    }
+    s
 }
 
 #[repr(C)]
@@ -2152,7 +2298,10 @@ impl Surface {
                 tag: target_tag,
                 surface: target_surface,
             };
-            let action_value = RoasttyAction { tag, storage };
+            let action_value = RoasttyAction {
+                tag,
+                action: action_u_from_storage(tag, storage),
+            };
             return unsafe { action(self.app, target, action_value) };
         }
         false
@@ -14783,11 +14932,14 @@ mod tests {
         action: RoasttyAction,
     ) -> bool {
         ACTION_RECORDS.with(|records| {
+            // Reconstruct the storage carrier from the typed union (round-trips the
+            // real storage→union conversion) so these assertions stay storage-based.
+            let storage = action_u_to_storage(action.tag, &action.action);
             let title = if matches!(
                 action.tag,
                 ROASTTY_ACTION_SET_TITLE | ROASTTY_ACTION_SET_TAB_TITLE
             ) {
-                let ptr = action.storage[0] as *const c_char;
+                let ptr = storage[0] as *const c_char;
                 (!ptr.is_null()).then(|| {
                     unsafe { CStr::from_ptr(ptr) }
                         .to_string_lossy()
@@ -14797,7 +14949,7 @@ mod tests {
                 None
             };
             let needle = if action.tag == ROASTTY_ACTION_START_SEARCH {
-                let ptr = action.storage[0] as *const c_char;
+                let ptr = storage[0] as *const c_char;
                 (!ptr.is_null()).then(|| {
                     unsafe { CStr::from_ptr(ptr) }
                         .to_string_lossy()
@@ -14807,11 +14959,11 @@ mod tests {
                 None
             };
             let open_url = if action.tag == ROASTTY_ACTION_OPEN_URL {
-                let ptr = action.storage[1] as *const u8;
-                let len = action.storage[2];
+                let ptr = storage[1] as *const u8;
+                let len = storage[2];
                 (!ptr.is_null()).then(|| {
                     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-                    (action.storage[0] as c_int, bytes.to_vec())
+                    (storage[0] as c_int, bytes.to_vec())
                 })
             } else {
                 None
@@ -14821,7 +14973,7 @@ mod tests {
                 target_tag: target.tag,
                 surface: target.surface,
                 action_tag: action.tag,
-                storage: action.storage,
+                storage,
                 title,
                 needle,
                 open_url,
@@ -15990,6 +16142,43 @@ mod tests {
         roastty_key_event_free(event);
         roastty_surface_free(surface);
         roastty_app_free(app);
+    }
+
+    #[test]
+    fn action_abi_layout_and_roundtrip() {
+        use core::mem::{align_of, offset_of, size_of};
+        // roastty_action_s / _u byte-faithful to upstream (s=32/align 8, u=24).
+        assert_eq!(size_of::<RoasttyAction>(), 32);
+        assert_eq!(align_of::<RoasttyAction>(), 8);
+        assert_eq!(offset_of!(RoasttyAction, tag), 0);
+        assert_eq!(offset_of!(RoasttyAction, action), 8);
+        assert_eq!(size_of::<RoasttyActionU>(), 24);
+        assert_eq!(align_of::<RoasttyActionU>(), 8);
+        // open_url_s { c_int kind; const char* url; uintptr_t len } = 24, padded.
+        assert_eq!(size_of::<RoasttyActionOpenUrl>(), 24);
+        assert_eq!(offset_of!(RoasttyActionOpenUrl, kind), 0);
+        assert_eq!(offset_of!(RoasttyActionOpenUrl, url), 8);
+        assert_eq!(offset_of!(RoasttyActionOpenUrl, len), 16);
+        // resize_split_s { uint16_t amount; e direction } = 8 (2 + 2 pad + 4).
+        assert_eq!(size_of::<RoasttyActionResizeSplit>(), 8);
+        assert_eq!(offset_of!(RoasttyActionResizeSplit, direction), 4);
+        // storage -> union -> storage round-trips per tag (exercises the conversion).
+        let rt = |tag, slots: &[usize]| {
+            let mut s = [0usize; 8];
+            s[..slots.len()].copy_from_slice(slots);
+            action_u_to_storage(tag, &action_u_from_storage(tag, s))
+        };
+        assert_eq!(rt(ROASTTY_ACTION_READONLY, &[1])[0], 1);
+        assert_eq!(
+            &rt(ROASTTY_ACTION_OPEN_URL, &[2, 0xABCD, 7])[..3],
+            &[2, 0xABCD, 7]
+        );
+        assert_eq!(
+            rt(ROASTTY_ACTION_MOVE_TAB, &[(-3isize) as usize])[0],
+            (-3isize) as usize
+        );
+        assert_eq!(&rt(ROASTTY_ACTION_RESIZE_SPLIT, &[5, 1])[..2], &[5, 1]);
+        assert_eq!(rt(ROASTTY_ACTION_SET_TITLE, &[0x9999])[0], 0x9999);
     }
 
     #[test]

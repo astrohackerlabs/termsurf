@@ -326,13 +326,14 @@ the live app, verified by a Phase-D UI test.)
       `RoasttyKit.xcframework`; first build reaches Swift compile (Exp 7,
       `scripts/roastty-app/rename-app.sh`)
 - [~] **Make it compile/link — the embedded ABI type surface (Exp 8+):** Exp 8
-  done (input: 8 symbols, byte-faithful, 4395 tests green; gap 56→48).
-  Remaining: 36 `action_*` (Exp 9), config+misc (Exp 10). the build exposed the
-  real gap = **56 missing `roastty_*` symbols**, dominated by the **~36
-  `action_*` payload types/enums** (the `action_s` tagged-union members) + 6
-  input types/enums (`input_key_s`, `input_action_e`, …) + 4 config types + the
-  6 functions. Implement byte-faithful in `libroastty`/`roastty.h`, drive the
-  app's error list to zero. (Spans several gated experiments.)
+  (input: 8 symbols) + Exp 9 (action: 36 types + typed `action_u` union, central
+  storage→union conversion, 4396 tests green) done; gap 56→11. Remaining: config
+  value types + misc/functions (Exp 10). the build exposed the real gap = **56
+  missing `roastty_*` symbols**, dominated by the **~36 `action_*` payload
+  types/enums** (the `action_s` tagged-union members) + 6 input types/enums
+  (`input_key_s`, `input_action_e`, …) + 4 config types + the 6 functions.
+  Implement byte-faithful in `libroastty`/`roastty.h`, drive the app's error
+  list to zero. (Spans several gated experiments.)
 
 **Phase C — Live render path (the crux)**
 
@@ -436,8 +437,9 @@ stays unaltered except for the rename).
   `input_key_s`/`surface_key`/`app_key`; 4395 tests green; gap 56→48) ·
   Claude/Claude
 - [Experiment 9: Embedded ABI — the action-dispatch type surface (tranche 2)](09-embedded-abi-action.md)
-  — **Designed** (36 `action_*` payload types + typed `action_u` union + rewire
-  the 20 firing sites; the single largest item) · Claude
+  — **Pass** (36 action types + typed `action_u` union byte-faithful, central
+  storage→union conversion, readonly swap fixed; 4396 tests green; gap 48→11) ·
+  Claude/Claude
 
 ## Process
 

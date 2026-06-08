@@ -176,47 +176,123 @@ shrinks from the old 72. Findings, addressed:
 
 ## Implementation notes (analysis done — ready to execute)
 
-Pre-implementation analysis is complete, so a cold-resume starts here without re-deriving:
+Pre-implementation analysis is complete, so a cold-resume starts here without
+re-deriving:
 
-- **Of the 36 missing `action_*` types: 25 are defined fresh, 11 collide → alias** to an
-  existing roastty enum (the constants already exist, so re-defining = C "redefinition of
-  enumerator"). The alias map (all verified):
-  | new name | alias to existing |
-  | --- | --- |
-  | `action_float_window_e` | `roastty_float_window_e` |
-  | `action_fullscreen_e` | `roastty_fullscreen_e` |
-  | `action_goto_split_e` | `roastty_goto_split_e` |
-  | `action_goto_tab_e` | `roastty_goto_tab_e` |
-  | `action_goto_window_e` | `roastty_goto_window_e` |
-  | `action_inspector_e` | `roastty_inspector_mode_e` |
-  | `action_prompt_title_e` | `roastty_prompt_title_e` |
-  | `action_readonly_e` | `roastty_readonly_e` (after the swap fix) |
-  | `action_resize_split_direction_e` | `roastty_resize_split_e` |
-  | `action_secure_input_e` | `roastty_secure_input_e` |
-  | `action_split_direction_e` | `roastty_split_direction_e` |
-  The 25 fresh blocks (structs + the genuinely-new enums like `mouse_shape_e`,
-  `color_kind_e`, `open_url_kind_e`, `progress_report_state_e`, …) are extracted/renamed in
-  `/tmp/action_defs.h` (regenerable from `ghostty.h`).
+- **Of the 36 missing `action_*` types: 25 are defined fresh, 11 collide →
+  alias** to an existing roastty enum (the constants already exist, so
+  re-defining = C "redefinition of enumerator"). The alias map (all verified): |
+  new name | alias to existing | | --- | --- | | `action_float_window_e` |
+  `roastty_float_window_e` | | `action_fullscreen_e` | `roastty_fullscreen_e` |
+  | `action_goto_split_e` | `roastty_goto_split_e` | | `action_goto_tab_e` |
+  `roastty_goto_tab_e` | | `action_goto_window_e` | `roastty_goto_window_e` | |
+  `action_inspector_e` | `roastty_inspector_mode_e` | | `action_prompt_title_e`
+  | `roastty_prompt_title_e` | | `action_readonly_e` | `roastty_readonly_e`
+  (after the swap fix) | | `action_resize_split_direction_e` |
+  `roastty_resize_split_e` | | `action_secure_input_e` |
+  `roastty_secure_input_e` | | `action_split_direction_e` |
+  `roastty_split_direction_e` | The 25 fresh blocks (structs + the genuinely-new
+  enums like `mouse_shape_e`, `color_kind_e`, `open_url_kind_e`,
+  `progress_report_state_e`, …) are extracted/renamed in `/tmp/action_defs.h`
+  (regenerable from `ghostty.h`).
 - **`readonly` swap fix (localized — 4 lines):** `lib.rs:213-214` has
-  `ROASTTY_READONLY_ON=0, OFF=1` (inverted from upstream `OFF=0, ON=1`); flip to `ON=1,
-  OFF=0` and update the two value asserts (`lib.rs:20635-36`). The firing site
-  (`lib.rs:3590-3594`) uses the **named** constants (readonly→ON, not-readonly→OFF), so its
-  logic is unchanged — only the integer values flip, becoming upstream-correct.
-- **Central conversion point:** `perform_targeted_action_result` (`lib.rs:~2150`) builds
-  `RoasttyAction { tag, storage }` today → replace with
-  `RoasttyAction { tag, action: action_u_from_storage(tag, storage) }`. The storage→member
-  layout for each tag is documented in `roastty.h`'s current `roastty_action_s` comment
-  (e.g. `SET_TITLE`: storage[0]=title ptr; `OPEN_URL`: storage[0]=kind, [1]=ptr, [2]=len; …).
-- **Test migration:** `ActionRecord` (`lib.rs:14628`) `storage:[usize;8]` field + **82
-  `.storage[N]` assertions** read the C callback → capture the typed union and read
-  `action.<member>` (the harness's test `action_cb` records the new struct).
-- **Union/struct layout (review-confirmed):** `action_s` 32 bytes/align 8, `action_u` 24.
-  Add Rust `offset_of` tests + C `_Static_assert`s on both sides.
+  `ROASTTY_READONLY_ON=0, OFF=1` (inverted from upstream `OFF=0, ON=1`); flip to
+  `ON=1, OFF=0` and update the two value asserts (`lib.rs:20635-36`). The firing
+  site (`lib.rs:3590-3594`) uses the **named** constants (readonly→ON,
+  not-readonly→OFF), so its logic is unchanged — only the integer values flip,
+  becoming upstream-correct.
+- **Central conversion point:** `perform_targeted_action_result`
+  (`lib.rs:~2150`) builds `RoasttyAction { tag, storage }` today → replace with
+  `RoasttyAction { tag, action: action_u_from_storage(tag, storage) }`. The
+  storage→member layout for each tag is documented in `roastty.h`'s current
+  `roastty_action_s` comment (e.g. `SET_TITLE`: storage[0]=title ptr;
+  `OPEN_URL`: storage[0]=kind, [1]=ptr, [2]=len; …).
+- **Test migration:** `ActionRecord` (`lib.rs:14628`) `storage:[usize;8]`
+  field + **82 `.storage[N]` assertions** read the C callback → capture the
+  typed union and read `action.<member>` (the harness's test `action_cb` records
+  the new struct).
+- **Union/struct layout (review-confirmed):** `action_s` 32 bytes/align 8,
+  `action_u` 24. Add Rust `offset_of` tests + C `_Static_assert`s on both sides.
 
 ## Result
 
-_(to be added after the run.)_
+**Result:** Pass — the embedded **action** ABI is implemented byte-faithful on
+both sides, the suite is green with **zero regression**, and the action subset
+of the worklist is fully resolved (gap **48 → 11**, `action_*` = 0).
+
+### What landed
+
+- **`roastty.h`:** 31 fresh `action_*` types + 11 aliases (reusing the existing
+  roastty enum names — the collision the review flagged) + the 37-member
+  `roastty_action_u` union + `roastty_action_s` switched from
+  `{int tag; uintptr_t storage[8]}` (72 bytes) to the typed
+  `{roastty_action_tag_e tag; roastty_action_u action}` (32 bytes). Plus
+  `#include <sys/types.h>` (`ssize_t`) and **C `_Static_assert`s** tying the
+  layout (action_s=32, action_u=24, open_url offsets 0/8/16) to the Rust
+  numbers. Header parses clean, no duplicate constants.
+- **`lib.rs`:** `#[repr(C)] union RoasttyActionU` (24 B / align 8) + 5 payload
+  structs (`set_title`/`start_search`/`open_url`/`move_tab`/`resize_split`);
+  `RoasttyAction` switched to `{tag, action: union}`; the central
+  **`action_u_from_storage(tag, storage)`** conversion at the single C-callback
+  build point (`perform_targeted_action_result`); the `readonly` value-swap
+  corrected (`ON=1, OFF=0` upstream).
+- **The 82-assertion migration, avoided cleanly:** a test-only inverse
+  **`action_u_to_storage`** reconstructs the storage carrier from the union in
+  the one test cb, so all 82 `.storage[N]` assertions stay as-is yet now
+  **round-trip the real `storage→union` conversion** — testing the production
+  path without touching them.
+
+### Verification
+
+- **`cargo test -p roastty --lib`: 4396 passed, 0 failed** (4395 prior + the new
+  `action_abi_layout_and_roundtrip`) — the `action_s` change + central
+  conversion + union caused **no regression**.
+- **Layout cross-checked both sides:** Rust `offset_of`/`size_of` (action_s
+  32/align 8, action_u 24, open_url 0/8/16, resize_split.direction @4) **and**
+  the C `_Static_assert`s agree — caught at compile time, not runtime. The
+  round-trip test exercises READONLY, OPEN_URL, MOVE_TAB (negative),
+  RESIZE_SPLIT, SET_TITLE.
+- **Worklist:** `action_*` = 0 in the gap; **gap 48 → 11**. RoasttyKit + the app
+  rebuild show **0 action errors** (next error = `roastty_config_color_s`, the
+  Exp-10 config type).
 
 ## Conclusion
 
-_(to be added after the run.)_
+The single largest item is closed byte-faithfully with zero test churn. Two
+moves made it tractable: (1) the **central `storage→union` conversion** at the
+one C-callback boundary (the binding path is type-erased, so per-site rewrites
+were neither needed nor possible), and (2) the **test-only reverse conversion**
+that let 82 storage assertions keep working while now exercising the real path.
+The remaining gap is **11**: 4 config value types
+(`config_color_s`/`_color_list_s`/`_command_list_s`/`_quick_terminal_size_s`) +
+`command_s`/`quick_terminal_size_s` + 4 functions (`cli_try_action`,
+`inspector_metal_init`/`_render`, `set_window_background_blur`); `roastty_app`
+is the Exp-7 Swift-var false positive.
+
+**Next (Exp 10):** the config + misc/function tail — should take the app from
+"types resolve" to **compiles + links**, opening Phase C (the live
+`surface_draw` render path).
+
+## Result Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). **Verdict: CHANGES REQUIRED → addressed.** It **independently
+verified the load-bearing claims**: compiled `roastty.h`'s `_Static_assert`s
+(action*s=32, action_u=24, action@8, open_url 24/8/16) **and** asserted the same
+numbers against the vendored upstream header (both pass), plus
+`resize_split`=8/direction@4, `move_tab`=`ssize_t`, `command_finished`=16;
+enumerated **every firing site** and confirmed each data-carrying tag
+(SET_TITLE/START_SEARCH/OPEN_URL/READONLY/…/RESIZE_SPLIT/MOVE_TAB/GOTO_TAB) maps
+to the same storage slots the site packs (no fired payload falls to `* =>
+{}`); confirmed signedness round-trips (GOTO_TAB −1/−2/−3, negative MOVE_TAB); confirmed the round-trip test is **not self-masking** (offsets pinned independently by Rust `offset_of!`and C`offsetof`
+on both headers); confirmed the readonly swap is correct on both sides with no
+stale assertion; and confirmed the negative discriminants + 11 aliases resolve
+with upstream-equal values. **No payload-corruption bug found.**
+
+- **Finding (addressed):** Exp 9 added 3 comments naming the literal upstream
+  type — reworded to "upstream". (The cited "no literal ghostty in comments"
+  rule isn't the actual Issue-801 rule, which forbids _exposing_ `ghostty_*` ABI
+  names — satisfied, all types are `roastty_*` — and Exp 8 shipped equivalent
+  comments; reworded anyway for the cleaner convention.)
+- **Nit:** the result was uncommitted at review time (expected pre-result-commit
+  state); this result commit captures all four files.

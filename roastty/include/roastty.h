@@ -1378,60 +1378,7 @@ typedef enum {
   ROASTTY_ACTION_OPEN_URL_KIND_HTML = 2,
 } roastty_action_open_url_kind_e;
 
-typedef struct {
-  int tag;
-  /*
-   * Tag-specific storage:
-   * - ROASTTY_ACTION_QUIT / ROASTTY_ACTION_NEW_WINDOW /
-   *   ROASTTY_ACTION_NEW_TAB / ROASTTY_ACTION_CLOSE_ALL_WINDOWS /
-   *   ROASTTY_ACTION_TOGGLE_MAXIMIZE /
-   *   ROASTTY_ACTION_TOGGLE_WINDOW_DECORATIONS /
-   *   ROASTTY_ACTION_TOGGLE_QUICK_TERMINAL /
-   *   ROASTTY_ACTION_TOGGLE_COMMAND_PALETTE /
-   *   ROASTTY_ACTION_TOGGLE_VISIBILITY /
-   *   ROASTTY_ACTION_TOGGLE_BACKGROUND_OPACITY /
-   *   ROASTTY_ACTION_TOGGLE_SPLIT_ZOOM / ROASTTY_ACTION_RESET_WINDOW_SIZE /
-   *   ROASTTY_ACTION_SHOW_GTK_INSPECTOR /
-   *   ROASTTY_ACTION_OPEN_CONFIG / ROASTTY_ACTION_RELOAD_CONFIG /
-   *   ROASTTY_ACTION_CLOSE_WINDOW / ROASTTY_ACTION_UNDO /
-   *   ROASTTY_ACTION_REDO / ROASTTY_ACTION_CHECK_FOR_UPDATES /
-   *   ROASTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD /
-   *   ROASTTY_ACTION_END_SEARCH /
-   *   ROASTTY_ACTION_COPY_TITLE_TO_CLIPBOARD: storage is zeroed
-   * - ROASTTY_ACTION_START_SEARCH:
-   *   storage[0] = borrowed const char* valid only during action_cb.
-   *   Parameterless start_search bindings pass an empty string.
-   * - ROASTTY_ACTION_READONLY: storage[0] = roastty_readonly_e
-   * - ROASTTY_ACTION_NAVIGATE_SEARCH:
-   *   storage[0] = roastty_navigate_search_e
-   *   storage[1..7] = 0
-   * - ROASTTY_ACTION_OPEN_URL:
-   *   storage[0] = roastty_action_open_url_kind_e
-   *   storage[1] = borrowed const char* URL pointer valid only during action_cb
-   *   storage[2] = URL byte length
-   *   storage[3..7] = 0
-   * - ROASTTY_ACTION_INSPECTOR: storage[0] = roastty_inspector_mode_e
-   * - ROASTTY_ACTION_FLOAT_WINDOW: storage[0] = roastty_float_window_e
-   * - ROASTTY_ACTION_SECURE_INPUT: storage[0] = roastty_secure_input_e
-   * - ROASTTY_ACTION_CLOSE_TAB: storage[0] = roastty_close_tab_e
-   * - ROASTTY_ACTION_NEW_SPLIT: storage[0] = roastty_split_direction_e
-   * - ROASTTY_ACTION_GOTO_TAB:
-   *   storage[0] = tab index, or roastty_goto_tab_e cast from intptr_t to
-   *   uintptr_t for special negative values
-   * - ROASTTY_ACTION_MOVE_TAB:
-   *   storage[0] = signed intptr_t offset cast to uintptr_t
-   * - ROASTTY_ACTION_TOGGLE_TAB_OVERVIEW: storage is zeroed
-   * - ROASTTY_ACTION_GOTO_SPLIT: storage[0] = roastty_goto_split_e
-   * - ROASTTY_ACTION_GOTO_WINDOW: storage[0] = roastty_goto_window_e
-   * - ROASTTY_ACTION_RESIZE_SPLIT:
-   *   storage[0] = amount, storage[1] = roastty_resize_split_e
-   * - ROASTTY_ACTION_TOGGLE_FULLSCREEN: storage[0] = roastty_fullscreen_e
-   * - ROASTTY_ACTION_PROMPT_TITLE: storage[0] = roastty_prompt_title_e
-   * - ROASTTY_ACTION_SET_TITLE / ROASTTY_ACTION_SET_TAB_TITLE:
-   *   storage[0] = borrowed const char* valid only during action_cb
-   */
-  uintptr_t storage[8];
-} roastty_action_s;
+
 
 typedef enum {
   ROASTTY_SPLIT_DIRECTION_RIGHT = 0,
@@ -1717,6 +1664,19 @@ typedef union {
   roastty_action_search_selected_s search_selected;
   roastty_action_readonly_e readonly;
 } roastty_action_u;
+
+typedef struct {
+  roastty_action_tag_e tag;
+  roastty_action_u action;
+} roastty_action_s;
+
+/* Exp 9 ABI cross-check: these must match the Rust `offset_of`/`size_of` tests. */
+_Static_assert(sizeof(roastty_action_s) == 32, "roastty_action_s size");
+_Static_assert(sizeof(roastty_action_u) == 24, "roastty_action_u size");
+_Static_assert(offsetof(roastty_action_s, action) == 8, "roastty_action_s.action offset");
+_Static_assert(sizeof(roastty_action_open_url_s) == 24, "roastty_action_open_url_s size");
+_Static_assert(offsetof(roastty_action_open_url_s, url) == 8, "open_url.url offset");
+_Static_assert(offsetof(roastty_action_open_url_s, len) == 16, "open_url.len offset");
 
 
 typedef enum {
