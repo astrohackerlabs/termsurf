@@ -1,0 +1,49 @@
+{
+  "configurations" : [
+    {
+      "id" : "22895D97-CB9E-4452-A6AA-702CC0152032",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "commandLineArgumentEntries" : [
+      {
+        "argument" : "-NS🐞 YES"
+      }
+    ],
+    "environmentVariableEntries" : [
+      {
+        "key" : "ROASTTY_CONFIG_PATH",
+        "value" : "\/tmp\/Roastty\/testing_config.roastty"
+      }
+    ],
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:Roastty.xcodeproj",
+      "identifier" : "A5B30530299BEAAA0047F10C",
+      "name" : "Roastty"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Roastty.xcodeproj",
+        "identifier" : "A54F45F22E1F047A0046BD5C",
+        "name" : "RoasttyTests"
+      }
+    },
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Roastty.xcodeproj",
+        "identifier" : "810ACC9E2E9D3301004F8F92",
+        "name" : "RoasttyUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

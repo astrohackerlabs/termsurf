@@ -151,8 +151,89 @@ addressed:
 
 ## Result
 
-_(to be added after the run — the first-build error list.)_
+**Result:** Partial — the renamed app is in `roastty/macos`, the build **reaches
+Swift compilation cleanly of non-ABI causes** (the `Roastty` project + scheme
+resolve, RoasttyKit links, resources stripped — no missing-input/scheme/link
+errors), and it fails **only on missing `roastty_*` ABI symbols**. But the gap
+is **far larger than Exp 6's function-level audit found** — so Partial, not
+Pass: the app references **56** `roastty_*` symbols that `roastty.h` lacks,
+dominated by the embedded **type surface** Exp 6 didn't enumerate.
+
+### What worked
+
+- `rename-app.sh` (copy + strip 23 out-of-tree resource refs + content-replace +
+  file-rename) → `roastty/macos/` with **0 residual `ghostty` tokens**, the
+  `Roastty` scheme at `xcshareddata/xcschemes/Roastty.xcscheme`, 187 Swift
+  files.
+- `build.nu --configuration Debug` resolves `-project Roastty -scheme Roastty`,
+  links `RoasttyKit.xcframework`, runs SwiftLint (no-op locally), and **reaches
+  Swift compilation** — confirming the project surgery + the xcframework are
+  correct.
+
+### The complete ABI gap (56 missing `roastty_*` symbols — the real Exp-8+ worklist)
+
+The build fails fast at the first missing type (`roastty_config_color_s`), so
+the full set was computed **statically** (all `roastty_*` the app references
+minus what `roastty.h` defines):
+
+| Category                           | Count   | Examples                                                                                                                                                                                                       |
+| ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`action_*` payload types/enums** | **~36** | `action_set_title_s`, `action_color_change_s`, `action_mouse_shape_e`, `action_goto_tab_e`, `action_open_url_s`, `action_desktop_notification_s`, … (the members of the `action_s` tagged union the app reads) |
+| **input types/enums**              | 6       | `input_key_s`, `input_action_e`, `input_key_e`, `input_mouse_button_e`/`_momentum_e`/`_state_e`                                                                                                                |
+| **config types**                   | 4       | `config_color_s`, `config_color_list_s`, `config_command_list_s`, `config_quick_terminal_size_s`                                                                                                               |
+| **missing functions** (Exp 6)      | 6       | `app_key`, `app_keyboard_changed`, `cli_try_action`, `inspector_metal_init`/`_render`, `set_window_background_blur`                                                                                            |
+| **misc**                           | 4       | `binding_flags_e`, `command_s`, `quick_terminal_size_s`, `surface_message_childexited_s`                                                                                                                       |
+
+**Why Exp 6 undercounted:** it diffed function _signatures_ + the structs _in_
+those signatures, but the **`action_s` tagged union's member types** (each
+`action_*_s`/`_e`) are accessed by the app _directly_ (it switches on
+`action.tag` and reads `action.value.*`), and those nested payload types weren't
+enumerated. They are the bulk of the embedded ABI.
 
 ## Conclusion
 
-_(to be added after the run.)_
+The renamed conformance app exists, builds to Swift compilation, and links
+RoasttyKit — the app-shell half of Phase B is done. The other half (the
+link/compile fixes) is **bigger and more concentrated than the function audit
+implied**: it is essentially **the entire embedded **action-dispatch** type
+family + the input/config value types** — exactly the "embedded app-runtime ABI
+… the single largest item" 801 flagged. The faithful core (config struct,
+runtime callback table, 78/84 functions) still holds; the work is the ~36
+`action_*` payloads + input + config types, with byte-faithful layouts.
+
+**Next (Exp 8):** implement the embedded type surface in `libroastty` +
+`roastty.h` — the `action_*` family (tagged union `action_s` + `action_u` + each
+payload), the by-value `input_key_s` + input enums, and the config value types —
+then rebuild the app and drive the error list to zero. This is the core of
+workstream 1 and will likely span several experiments (action types, input,
+config), each gated.
+
+## Result Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). **Verdict: CHANGES REQUIRED → addressed.** It re-derived every
+static claim and confirmed: zero residual `ghostty` tokens in tracked
+`roastty/macos` files; the `.pbxproj` parses (braces 120/120, parens 109/109; 0
+residual `zig-out/share`/`.icon` refs — the 23-ref strip worked);
+`/tmp/roastty-build.log` shows the build resolved
+`-project Roastty -scheme Roastty`, reached `SwiftCompile`, and emitted only
+`cannot find type 'roastty_config_color_s'` (no scheme/link/resource errors) —
+so "builds to Swift compilation cleanly of non-ABI causes" is honest; build
+artifacts gitignored; plan/result commits separate.
+
+Findings, addressed:
+
+- **Required — count was 57, should be 56.** `roastty_app` is a **Swift
+  `@StateObject` var** (mechanically renamed from upstream's `ghostty_app`
+  SwiftUI property; 13 Swift call sites, zero C call sites), **not** a missing C
+  ABI symbol. **Fixed:** dropped from the gap (misc 4, not 5); count corrected
+  to **56** here and in the README — so Exp 8 doesn't add a phantom
+  `roastty_app` to `roastty.h`.
+- **Optional — name-presence ≠ ABI-correct.** The 56 is a name set-difference;
+  it cannot catch divergences in symbols `roastty.h` **already** defines (the
+  Exp-6 by-value shape drifts: `input_key_s`/`selection_s`/`action_s` layouts,
+  enum _values_). **Fixed (caveat):** fixing the 56 names is **necessary but not
+  sufficient** — Exp 8 must also reconcile field/enum-value layout for
+  already-defined symbols, or the app will compile-then-misbehave. The Exp-8
+  worklist = the 56 missing **plus** the Exp-6 layout divergences.MD echo "added
+  Result Review"

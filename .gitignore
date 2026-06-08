@@ -122,3 +122,4 @@ __screenshots__/
 
 # Issue 802: RoasttyKit build artifact (libroastty + headers), not committed
 roastty/macos/RoasttyKit.xcframework/
+roastty/macos/build/

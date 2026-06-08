@@ -246,6 +246,15 @@ before re-reading experiments.
   added (`surface_key`/`app_key`/…).
 - **Rust `staticlib` native deps** (for the app link):
   `-framework AppKit QuartzCore Metal IOSurface Foundation CoreText CoreGraphics CoreFoundation -lobjc -liconv -lSystem -lc -lm`.
+- **The real ABI gap is the TYPE surface, not functions (Exp 7).**
+  `scripts/roastty-app/rename-app.sh` copies+renames the app into
+  `roastty/macos/` (build via `build.nu`; build/ + RoasttyKit.xcframework
+  gitignored). Building it revealed **56 missing `roastty_*` symbols** —
+  dominated by **~36 `action_*` payload types/enums** (the `action_s`
+  tagged-union members the app reads directly) + input enums + config types. The
+  Exp-6 function-signature audit missed these (nested in the union); to scope
+  the embedded ABI, diff **all `roastty_*` idents the app references**
+  (`grep -rhoE 'roastty_[a-z0-9_]+' roastty/macos/Sources`) vs `roastty.h`.
 
 ### Where things live
 
@@ -303,11 +312,16 @@ the live app, verified by a Phase-D UI test.)
       layouts match; **key-event ABI diverges** (opaque handle vs by-value
       `input_key_s`)
 - [x] Build `RoasttyKit.xcframework` — the link artifact (Exp 6)
-- [ ] Copy the macOS app into `roastty/macos/` as-is (Exp 7)
-- [ ] Find/replace `ghostty`→`roastty` (+ `GhosttyKit`→`RoasttyKit`, bundle IDs,
-      linked library + header); point at `RoasttyKit.xcframework` (Exp 7)
-- [ ] Make it link — add the 6 missing exports + the by-value `input_key_s`
-      ABI + the `binding_flags_e` enum name; pull the native link deps (Exp 8)
+- [x] Copy + rename the macOS app into `roastty/macos/`; point at
+      `RoasttyKit.xcframework`; first build reaches Swift compile (Exp 7,
+      `scripts/roastty-app/rename-app.sh`)
+- [ ] **Make it compile/link — the embedded ABI type surface (Exp 8+):** the
+      build exposed the real gap = **56 missing `roastty_*` symbols**, dominated
+      by the **~36 `action_*` payload types/enums** (the `action_s` tagged-union
+      members) + 6 input types/enums (`input_key_s`, `input_action_e`, …) + 4
+      config types + the 6 functions. Implement byte-faithful in
+      `libroastty`/`roastty.h`, drive the app's error list to zero. (Spans
+      several gated experiments.)
 
 **Phase C — Live render path (the crux)**
 
@@ -403,8 +417,9 @@ stays unaltered except for the rename).
   configs + callback table layout-match; key event diverges — opaque vs
   by-value) · Claude/Claude
 - [Experiment 7: Phase B — copy + rename the Ghostty macOS app; first build against RoasttyKit](07-copy-rename-app.md)
-  — **Designed** (copy app source, mechanical ghostty→roastty rename, first
-  build to confirm the ABI worklist against the real app) · Claude
+  — **Partial** (renamed app builds to Swift compile, links RoasttyKit; the real
+  ABI gap is **56 missing symbols** — ~36 `action_*` payload types +
+  input/config types — far larger than Exp 6's function audit) · Claude/Claude
 
 ## Process
 
