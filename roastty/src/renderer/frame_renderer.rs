@@ -170,12 +170,11 @@ impl FrameRenderer {
     }
 }
 
-/// The render knobs (Issue 801, Exp 842/846). `from_config` sources most from a
-/// `Config`: `bold`, `background_opacity`, `padding_color`, and (Exp 845)
-/// `thicken`/`thicken_strength`. Four fields have no `Config` option: `alpha` and
-/// `overlay_alpha` are the faithful opaque `255`; `faint_opacity` and
-/// `background_opacity_cells` are upstream-default placeholders awaiting their
-/// config ports (`faint-opacity`, `background-opacity-cells`).
+/// The render knobs (Issue 801, Exp 842/846/848). `from_config` sources most from
+/// a `Config`: `bold`, `background_opacity`, `padding_color`, `thicken`/
+/// `thicken_strength` (Exp 845), and `faint_opacity`/`background_opacity_cells`
+/// (Exp 848). Only `alpha` and `overlay_alpha` have no `Config` option — they are
+/// the faithful opaque `255` (upstream hardcodes non-faint text alpha to 255).
 pub(crate) struct FrameRenderKnobs {
     pub(crate) bold: Option<BoldColor>,
     pub(crate) alpha: u8,
@@ -189,19 +188,19 @@ pub(crate) struct FrameRenderKnobs {
 }
 
 impl FrameRenderKnobs {
-    /// Source the render knobs from a `Config`. Knobs without a config option yet
-    /// take upstream-faithful default constants (Exp 846): `alpha`/`overlay_alpha`
-    /// are opaque `255` (upstream hardcodes non-faint text alpha to 255);
-    /// `faint_opacity` is `ceil(0.5 × 255) = 128` (the `faint-opacity` 0.5 default);
-    /// `background_opacity_cells` is `false` (the `background-opacity-cells` default).
+    /// Source the render knobs from a `Config`. `faint_opacity` converts the f64
+    /// `faint-opacity` to the `u8` knob — clamped to `[0, 1]` at this use site
+    /// (roastty has no config finalize step) and `ceil(x × 255)` (matching upstream
+    /// `generic.zig`). Only `alpha`/`overlay_alpha` are constants: the faithful
+    /// opaque `255` (upstream hardcodes non-faint text alpha to 255).
     pub(crate) fn from_config(config: &Config) -> Self {
         Self {
             bold: config.bold_color.map(|c| c.to_terminal()),
             alpha: 255,
-            faint_opacity: 128,
+            faint_opacity: (config.faint_opacity.clamp(0.0, 1.0) * 255.0).ceil() as u8,
             thicken: config.font_thicken,
             thicken_strength: config.font_thicken_strength,
-            background_opacity_cells: false,
+            background_opacity_cells: config.background_opacity_cells,
             background_opacity: config.background_opacity,
             padding_color: config.window_padding_color,
             overlay_alpha: 255,
@@ -987,6 +986,22 @@ mod tests {
         assert_eq!(knobs.thicken_strength, 200);
         assert_eq!(knobs.background_opacity, 0.7);
         assert!(matches!(knobs.bold, Some(BoldColor::Bright)));
+    }
+
+    #[test]
+    fn from_config_sources_opacity_options() {
+        let mut cfg = Config::default();
+        cfg.set("background-opacity-cells", Some("true")).unwrap();
+        cfg.set("faint-opacity", Some("0.0")).unwrap();
+        let knobs = FrameRenderKnobs::from_config(&cfg);
+        assert!(knobs.background_opacity_cells);
+        assert_eq!(knobs.faint_opacity, 0);
+
+        // 1.0 → 255 (ceil), and an out-of-range raw value is clamped at this use site.
+        cfg.set("faint-opacity", Some("1.0")).unwrap();
+        assert_eq!(FrameRenderKnobs::from_config(&cfg).faint_opacity, 255);
+        cfg.set("faint-opacity", Some("2.0")).unwrap();
+        assert_eq!(FrameRenderKnobs::from_config(&cfg).faint_opacity, 255);
     }
 
     #[test]

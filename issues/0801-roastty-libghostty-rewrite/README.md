@@ -2421,7 +2421,7 @@ are past the correctness-critical foundation.
 - [Experiment 847: FrameRenderer::render_frame from (terminal, config)](847-render-frame-from-terminal-config.md)
   — **Pass** · Claude/Claude/Claude
 - [Experiment 848: Port faint-opacity and background-opacity-cells](848-port-faint-and-bg-opacity-cells.md)
-  — **Designed** · Claude/Claude/Claude
+  — **Pass** · Claude/Claude/Claude
 
 ## Non-Goals
 

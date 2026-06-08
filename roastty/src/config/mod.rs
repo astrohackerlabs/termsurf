@@ -78,6 +78,8 @@ pub(crate) struct Config {
     pub window_padding_color: WindowPaddingColor,
     /// `background-opacity`.
     pub background_opacity: f64,
+    /// `background-opacity-cells`.
+    pub background_opacity_cells: bool,
     /// `background-image-opacity`.
     pub bg_image_opacity: f32,
     /// `background-image-position`.
@@ -96,6 +98,8 @@ pub(crate) struct Config {
     pub selection_background: Option<TerminalColor>,
     /// `bold-color`.
     pub bold_color: Option<BoldColor>,
+    /// `faint-opacity`.
+    pub faint_opacity: f64,
     /// `confirm-close-surface`.
     pub confirm_close_surface: ConfirmCloseSurface,
     /// `link-previews`.
@@ -186,6 +190,7 @@ impl Default for Config {
             background_blur: BackgroundBlur::False,
             window_padding_color: WindowPaddingColor::Background,
             background_opacity: 1.0,
+            background_opacity_cells: false,
             bg_image_opacity: 1.0,
             bg_image_position: BackgroundImagePosition::Center,
             bg_image_fit: BackgroundImageFit::Contain,
@@ -195,6 +200,7 @@ impl Default for Config {
             selection_foreground: None,
             selection_background: None,
             bold_color: None,
+            faint_opacity: 0.5,
             confirm_close_surface: ConfirmCloseSurface::True,
             link_previews: LinkPreviews::True,
             window_subtitle: WindowSubtitle::False,
@@ -287,6 +293,8 @@ impl Config {
         self.background_blur
             .format_entry(&mut EntryFormatter::new("background-blur", out));
         EntryFormatter::new("background-opacity", out).entry_float(self.background_opacity);
+        EntryFormatter::new("background-opacity-cells", out)
+            .entry_bool(self.background_opacity_cells);
         EntryFormatter::new("bell-audio-path", out)
             .entry_optional(self.bell_audio_path.clone(), |v, f| v.format_entry(f));
         EntryFormatter::new("bell-audio-volume", out).entry_float(self.bell_audio_volume);
@@ -359,6 +367,7 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("macos-hidden", out));
         EntryFormatter::new("bold-color", out)
             .entry_optional(self.bold_color, |v, f| v.format_entry(f));
+        EntryFormatter::new("faint-opacity", out).entry_float(self.faint_opacity);
     }
 
     /// Set one config field from a `key = value` pair (upstream
@@ -627,6 +636,10 @@ impl Config {
             "background-opacity" => {
                 self.background_opacity = set_f64_field(value, default.background_opacity)?
             }
+            "background-opacity-cells" => {
+                self.background_opacity_cells =
+                    set_bool_field(value, default.background_opacity_cells)?
+            }
             "background" => {
                 self.background = set_value_field(value, default.background, Color::parse_cli)?
             }
@@ -659,6 +672,7 @@ impl Config {
                 self.bold_color =
                     set_optional_value_field(value, default.bold_color, BoldColor::parse_cli)?
             }
+            "faint-opacity" => self.faint_opacity = set_f64_field(value, default.faint_opacity)?,
             "font-style" => {
                 self.font_style = set_value_field(value, default.font_style, FontStyle::parse_cli)?
             }
@@ -4371,6 +4385,9 @@ mod tests {
         assert_eq!(d.background_blur, BackgroundBlur::False);
         assert_eq!(d.window_padding_color, WindowPaddingColor::Background);
         assert_eq!(d.background_opacity, 1.0);
+        // Opacity options (Experiment 848): upstream defaults false / 0.5.
+        assert!(!d.background_opacity_cells);
+        assert_eq!(d.faint_opacity, 0.5);
         // Background-image group (Experiment 466).
         assert_eq!(d.bg_image_opacity, 1.0);
         assert_eq!(d.bg_image_position, BackgroundImagePosition::Center);
@@ -7909,6 +7926,25 @@ mod tests {
     }
 
     #[test]
+    fn config_opacity_options_parse_and_round_trip() {
+        let mut cfg = Config::default();
+
+        cfg.set("background-opacity-cells", Some("true")).unwrap();
+        assert!(cfg.background_opacity_cells);
+        cfg.set("faint-opacity", Some("0.25")).unwrap();
+        assert_eq!(cfg.faint_opacity, 0.25);
+        // Out-of-range faint-opacity is stored raw (clamped at the use site, not here).
+        cfg.set("faint-opacity", Some("2.0")).unwrap();
+        assert_eq!(cfg.faint_opacity, 2.0);
+
+        cfg.faint_opacity = 0.25;
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out.contains("background-opacity-cells = true"));
+        assert!(out.contains("faint-opacity = 0.25"));
+    }
+
+    #[test]
     fn config_font_thicken_parses_and_round_trips() {
         let mut cfg = Config::default();
 
@@ -7977,6 +8013,7 @@ mod tests {
                 "mouse-shift-capture",
                 "background-blur",
                 "background-opacity",
+                "background-opacity-cells",
                 "bell-audio-path",
                 "bell-audio-volume",
                 "notify-on-command-finish-after",
@@ -8011,6 +8048,7 @@ mod tests {
                 "macos-titlebar-proxy-icon",
                 "macos-hidden",
                 "bold-color",
+                "faint-opacity",
             ]
         );
 

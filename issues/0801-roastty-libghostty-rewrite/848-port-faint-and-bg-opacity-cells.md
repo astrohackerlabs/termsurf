@@ -119,6 +119,63 @@ preserved; NaN faint-opacity casts to 0 gracefully (no panic); scope is coherent
   change already rewrites it to say only `alpha`/`overlay_alpha` remain
   constants (using "upstream", never the forbidden literal).
 
+## Result
+
+**Result:** Pass
+
+`faint-opacity` (f64, default 0.5) and `background-opacity-cells` (bool, default
+false) are ported into `Config` (struct/default/parse/format, placed in upstream
+order — cells after `background-opacity`, faint after `bold-color`), and
+`from_config` now sources both:
+`background_opacity_cells = config.background_opacity_cells` and
+`faint_opacity = (config.faint_opacity.clamp(0,1) * 255).ceil() as u8`. The
+`FrameRenderKnobs` docs were rewritten (only `alpha`/`overlay_alpha` remain
+constants). Production `cargo build -p roastty` and `--tests` both clean (no
+warnings); fmt clean, no-ghostty clean, `git diff --check` clean.
+
+Tests (all passing):
+
+- **`config_default_clipboard_group`** gained
+  `background_opacity_cells == false` / `faint_opacity == 0.5` asserts.
+- **`config_opacity_options_parse_and_round_trip`** (new) — parses
+  `background-opacity-cells true` and `faint-opacity 0.25`; an out-of-range
+  `2.0` is stored raw; the formatter round-trips both.
+- **`config_format_config_emits_fields_in_upstream_order`** — the ordered-keys
+  test passes with the two new keys at their upstream positions.
+- **`from_config_sources_opacity_options`** (new) — `from_config` gives
+  `background_opacity_cells == true`, `faint-opacity 0.0 → 0`, `1.0 → 255`, and
+  the out-of-range `2.0 → 255` (clamped at use).
+- **`from_config_defaults_flow_through`** (846) still passes — defaults
+  preserved (`faint_opacity == 128`, `background_opacity_cells == false`).
+
+**Full suite (default parallelism, `scripts/bounded-run.sh`):**
+`4393 passed; 0 failed` (4391 + 2 new), 0 panics, 0 `PoisonError`,
+`STATUS=COMPLETED rc=0`, 201 s — green.
+
 ## Conclusion
 
-_(to be written after the run)_
+`FrameRenderKnobs::from_config` is now **fully config-faithful**: every knob is
+sourced from `Config` except `alpha`/`overlay_alpha`, which are the correct
+opaque `255` (upstream has no text-alpha option). The render input is now
+entirely derived from `(terminal, config)` with no placeholder constants.
+
+Continuing the library surface (all in-scope, no app):
+
+- **`minimum-contrast`** (f64, default 1.0, clamped [1,21]) → the
+  `MetalUniforms` contrast uniform (a separate path from the knobs; the last
+  renderer-adjacent config option).
+- Other libghostty subsystems on the 801 checklist (font/text, input encoding,
+  supporting subsystems, dependencies) — none of which need the app.
+
+## Completion Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). Independently verified: upstream defaults match (`Config.zig:1019`
+false / `:3716` 0.5); the finalize clamp + `generic.zig:623` `@ceil(x*255)` are
+reproduced faithfully by `(faint_opacity.clamp(0,1)*255).ceil() as u8` (0.5→128,
+0→0, 1→255, 2→255); the diff is complete and scoped to the two files
+(struct/default/parse/formatter/keys-test both slots + `from_config` + doc
+rewrite + 2 non-vacuous tests); fmt clean, build no warnings, `config::` 154
+passed, `renderer::frame_renderer::tests` 24 passed (846 default-flow green); no
+new `ghostty` literal. **Verdict: CHANGES REQUIRED → fixed.** The lone Required
+was the stale README index status — flipped 848 `Designed → Pass`.
