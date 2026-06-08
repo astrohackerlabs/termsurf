@@ -44,9 +44,9 @@ gate that link, and this experiment delivers both:
   `set_window_background_blur`, `cli_try_action`. (`app_open_config`,
   `inspector_metal_shutdown`, and `translate` are exported by upstream but have
   **no call site** in this app — recorded, not a link blocker.)
-- `roastty.h` is **hand-written** (2134 lines, 237 decls — _not_ cbindgen), so
-  **name-presence ≠ ABI-presence**: C linkage resolves by symbol name only, so a
-  wrong arg type/count or a divergent by-value struct layout links fine and
+- `roastty.h` is **hand-written** (~2130 lines, 239 fn decls — _not_ cbindgen),
+  so **name-presence ≠ ABI-presence**: C linkage resolves by symbol name only,
+  so a wrong arg type/count or a divergent by-value struct layout links fine and
   corrupts at runtime. Signatures (all present symbols) and by-value struct
   layouts must be **diffed**, not assumed.
 
@@ -168,8 +168,139 @@ directions:
 
 ## Result
 
-_(to be added after the run — the ABI worklist.)_
+**Result:** Partial — `RoasttyKit.xcframework` builds as a structural drop-in
+for GhosttyKit, and the audit produced the complete, app-reference-derived ABI
+worklist below. Partial (not Pass) per this experiment's own rubric: the full
+diff **found divergences that widen the worklist** — most notably **three
+by-value ABI-shape divergences** (key event, selection, action), caught only
+after a first pass under-counted to one. The core app/config/callback ABI is
+faithful; the by-value structs are the real Phase-B/C work.
+
+### RoasttyKit.xcframework
+
+Built via `scripts/roastty-app/build-roastty-kit.sh` →
+`roastty/macos/RoasttyKit.xcframework/{Info.plist, macos-arm64/{Headers/{roastty.h, module.modulemap}, libroastty.a}}`
+— mirrors GhosttyKit exactly. Gitignored (build artifact). Module name
+`RoasttyKit` (app will `import RoasttyKit`).
+
+### The link worklist
+
+The app calls **84** `ghostty_*` functions (across `embedded.zig` +
+`config/CApi.zig` + `main_c.zig`); **78 are present** in `libroastty`, **6 are
+missing**.
+
+**A. Missing functions (6) — implement in `libroastty`:**
+
+| Symbol                       | Signature (from `embedded.zig`/`main_c.zig`)           |
+| ---------------------------- | ------------------------------------------------------ |
+| `app_key`                    | `(app, ghostty_input_key_s) bool` — by-value key event |
+| `app_keyboard_changed`       | `(app) void`                                           |
+| `cli_try_action`             | `() void` (`main_c.zig`)                               |
+| `inspector_metal_init`       | `(inspector, objc id device) bool`                     |
+| `inspector_metal_render`     | `(inspector, …) ` Metal draw into the inspector view   |
+| `set_window_background_blur` | `(surface, …) ` window blur                            |
+
+(`app_open_config`, `inspector_metal_shutdown`, `translate` are
+upstream-exported but have **no call site** in this app — recorded, not link
+blockers.)
+
+**B. By-value ABI-shape divergences (the headline work — a complete diff of all
+29 structs crossing the app-called ABI found _three_).** `libroastty`
+represented these as interim opaque/handle/grid shapes; the unaltered app passes
+the embedded **by-value** structs, so each links-or-compiles wrong and corrupts
+at the boundary. All three must be reconciled to the embedded by-value layout:
+
+1. **`input_key_s` (missing).** Upstream
+   `surface_key`/`surface_key_is_binding`/`app_key`/ `inspector_key` take a
+   by-value 7-field struct
+   (`input_action_e action; input_mods_e mods; input_mods_e consumed_mods; uint32 keycode; const char* text; uint32 unshifted_codepoint; bool composing`).
+   `roastty.h` has **no `roastty_input_key_s`** — it uses an opaque handle
+   `roastty_key_event_t` (`= void*`) + a builder API
+   (`key_event_new`/`set_action`/…).
+2. **`selection_s` (different layout).** Upstream:
+   `point_s top_left; point_s bottom_right; bool rectangle` (point-based; the
+   app builds it from coords and passes it by value to `surface_read_text`).
+   roastty: `size_t size; grid_ref_s start; grid_ref_s end; bool rectangle` —
+   and `grid_ref_s` holds a `void* node` the app cannot supply.
+3. **`action_s` (different representation).** Upstream: a tagged union
+   (`action_tag_e tag; action_u value`) the app reads in its runtime-config
+   `action` callback. roastty: `int tag; uintptr_t storage[8]` (opaque) — the
+   app can't interpret the payload.
+
+Adding the embedded by-value `input_key_s` / `selection_s` (point-based) /
+`action_s` (tagged union, with the full `action_tag_e` + `action_u`) — plus the
+`input_action_e` / `input_mods_e` enums — is the core embedded-ABI work
+(consistent with 801's "the embedded ABI is the faithful target; the
+render-state path is interim scaffolding").
+
+**C. Enum drifts (compile-time, must align):**
+
+- `surface_key_is_binding`: flags out-param is `roastty_keybind_flags_t*`
+  (`= uint8_t`, **1 byte**) vs upstream `binding_flags_e*` (a C `enum`, **4
+  bytes**) — a **size** divergence (the lib would write 1 byte where the app
+  allocates 4), not just a name. No `roastty_binding_flags_e` exists; align name
+  **and** width (a 4-value enum).
+- Enum-stem name drifts in `inspector_key` / `input_trigger_s`: upstream
+  `input_action_e` / `input_key_e` are named `key_action_e` / `key_e` in
+  `roastty.h` (no `roastty_input_action_e` / `roastty_input_key_e`), so the
+  renamed app won't resolve under a pure `ghostty_`→`roastty_` rename. Values
+  match (`RELEASE=0`/`PRESS=1`), so it's a compile-time, not runtime, item.
+- `config_new`, `surface_config_new`: `()` vs `(void)` — **benign** (identical
+  ABI).
+
+**D. Verified faithful (no action):** of the 29 structs crossing the app-called
+ABI, **26 match** field-for-field modulo the rename — notably `surface_config_s`
+(12 fields) and `runtime_config_s` (the 8-entry callback table: `set_title`,
+clipboard, …), so the app↔lib callback contract is correct. The diverging three
+are §B. At the function level, the 78 present signatures match except the §C
+enum-name drifts.
+
+**E. Native link deps (for Exp 8's app link)** — the Rust `staticlib` pulls in:
+`-framework AppKit -framework QuartzCore -framework Metal -framework IOSurface -framework Foundation -framework CoreText -framework CoreGraphics -framework CoreFoundation -lobjc -liconv -lSystem -lc -lm`.
 
 ## Conclusion
 
-_(to be added after the run.)_
+The Phase-B link gap is now precisely mapped, and it's smaller than 801 feared
+on the function-count axis (78/84 present, only 6 missing) but has **three
+by-value shape divergences** — `input_key_s`, `selection_s`, `action_s` — that
+must be reconciled to the embedded by-value ABI (roastty used interim
+opaque/handle/grid shapes). The faithful core (the
+`surface_config_s`/`runtime_config_s` callback contract + 26/29 structs + 78/84
+functions) already matches, which de-risks the app shell.
+**RoasttyKit.xcframework** exists as the link artifact.
+
+**Next (Exp 7):** copy the Ghostty macOS app into `roastty/macos/`, find/replace
+`ghostty→roastty` / `GhosttyKit→RoasttyKit`, point it at
+`RoasttyKit.xcframework`, and attempt the first build — surfacing the real
+Swift-compile + linker errors (expected: the 6 missing symbols + the
+`input_key_s` by-value type the app constructs + the `binding_flags_e` enum
+name). **Exp 8** then closes them in `libroastty`.
+
+## Result Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). **Verdict: CHANGES REQUIRED → addressed.** It independently
+confirmed the 6-missing set, the RoasttyKit artifact (structure, gitignore,
+module name), the key-event divergence, and that
+`surface_config_s`/`runtime_config_s` match field-for-field — but showed the
+worklist was **incomplete**, which is why this is now **Partial**:
+
+- **Required — missed `selection_s`** (a second by-value divergence): the app
+  builds a point-based `selection_s` and passes it by value to
+  `surface_read_text`, but roastty's is grid-ref-based with a `void* node` the
+  app can't supply. **Fixed:** a complete diff of **all 29** structs crossing
+  the app-called ABI was run — it found **three** divergences (`input_key_s`,
+  `selection_s`, **`action_s`** — the latter also missed by the first pass:
+  tagged union vs opaque `int + uintptr_t[8]`). §B rewritten; the "one
+  divergence / 76 match" claims corrected to "three / 26 of 29 structs match."
+- **Required — enum-stem name drifts** (`input_action_e`→`key_action_e`,
+  `input_key_e`→`key_e` in `inspector_key`/`input_trigger_s`): compile-time
+  worklist items omitted. **Fixed:** added to §C (values match, so
+  runtime-safe).
+- **Optional — `binding_flags` is a size divergence** (4-byte enum vs 1-byte
+  `uint8_t`), not just a name. **Fixed:** §C now notes the width.
+- **Nit — decl count** (237→239). **Fixed.**
+
+The lesson: a by-value ABI audit must enumerate **every** struct in the call
+surface, not a hand-picked few — the first pass's 3-struct sample is exactly how
+`selection_s`/ `action_s` slipped through.

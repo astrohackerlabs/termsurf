@@ -225,6 +225,28 @@ before re-reading experiments.
   exact `vendor/ghostty/macos/build/…` PID, so nothing you didn't spawn is
   touched.
 
+### ABI / RoasttyKit (Exp 6)
+
+- **The link artifact:** `scripts/roastty-app/build-roastty-kit.sh` → builds
+  `libroastty.a` + assembles `roastty/macos/RoasttyKit.xcframework`
+  (gitignored), a structural drop-in for GhosttyKit (module `RoasttyKit`,
+  umbrella `roastty.h`).
+- **The link surface spans 3 export modules** — `apprt/embedded.zig` +
+  `config/CApi.zig`
+  - `main_c.zig`; derive the worklist from what the app **calls**
+    (`grep -roE 'ghostty_[a-z0-9_]+' macos/Sources`), not one file.
+- **The gap is small: 78/84 app-called functions present; 6 missing**
+  (`app_key`, `app_keyboard_changed`, `cli_try_action`, `inspector_metal_init`,
+  `inspector_metal_render`, `set_window_background_blur`).
+- **`roastty.h` is hand-written → name-presence ≠ ABI-presence.** Diff
+  signatures + by-value struct layouts. Verified faithful: `surface_config_s`,
+  `runtime_config_s` (callback table). **Divergent (the real work):** the **key
+  event** — roastty uses an opaque `roastty_key_event_t` handle, but the app
+  passes a **by-value `input_key_s` struct**; that embedded by-value ABI must be
+  added (`surface_key`/`app_key`/…).
+- **Rust `staticlib` native deps** (for the app link):
+  `-framework AppKit QuartzCore Metal IOSurface Foundation CoreText CoreGraphics CoreFoundation -lobjc -liconv -lSystem -lc -lm`.
+
 ### Where things live
 
 - Harness + recipes: `scripts/ghostty-app/` (`build-macos-app.sh`,
@@ -273,16 +295,19 @@ the live app, verified by a Phase-D UI test.)
 
 **Phase B — App shell + ABI link**
 
-- [ ] Pin the Ghostty version (app + ABI must match — 1.3.2-dev)
-- [ ] Copy the macOS app into the project as-is
+- [x] Pin the Ghostty version (app + ABI must match — 1.3.2-dev, `2c62d18`)
+- [x] **Record the exact missing/mismatched ABI symbol worklist** (Exp 6): 78/84
+      app-called fns present; 6 missing (`app_key`, `app_keyboard_changed`,
+      `cli_try_action`, `inspector_metal_init`, `inspector_metal_render`,
+      `set_window_background_blur`); `surface_config_s`/`runtime_config_s`
+      layouts match; **key-event ABI diverges** (opaque handle vs by-value
+      `input_key_s`)
+- [x] Build `RoasttyKit.xcframework` — the link artifact (Exp 6)
+- [ ] Copy the macOS app into `roastty/macos/` as-is (Exp 7)
 - [ ] Find/replace `ghostty`→`roastty` (+ `GhosttyKit`→`RoasttyKit`, bundle IDs,
-      linked library + header)
-- [ ] Make it link — add the missing embedded exports (`app_key`,
-      `app_keyboard_changed`, `app_open_config`,
-      `inspector_metal_init/render/shutdown`, `set_window_background_blur`,
-      `ghostty_translate`, `cli_try_action`), match struct layouts to the pinned
-      version
-- [ ] Record the exact missing/mismatched ABI symbol worklist
+      linked library + header); point at `RoasttyKit.xcframework` (Exp 7)
+- [ ] Make it link — add the 6 missing exports + the by-value `input_key_s`
+      ABI + the `binding_flags_e` enum name; pull the native link deps (Exp 8)
 
 **Phase C — Live render path (the crux)**
 
@@ -374,8 +399,9 @@ stays unaltered except for the rename).
   **scroll** works; 4 known failures: F11, Ctrl-K/L, dead-key compose, synthetic
   double-click) · Claude/Claude
 - [Experiment 6: Phase B — RoasttyKit.xcframework + the embedded-ABI link worklist](06-roastty-kit-and-abi-worklist.md)
-  — **Designed** (package libroastty as RoasttyKit; 6 app-needed embedded
-  symbols missing; full signature + struct-layout audit) · Claude
+  — **Pass** (RoasttyKit builds; 78/84 app-called fns present, 6 missing;
+  configs + callback table layout-match; key event diverges — opaque vs
+  by-value) · Claude/Claude
 
 ## Process
 
