@@ -2418,6 +2418,8 @@ are past the correctness-critical foundation.
   — **Pass** · Claude/Claude/Claude
 - [Experiment 846: FrameRenderKnobs::from_config](846-render-knobs-from-config.md)
   — **Pass** · Claude/Claude/Claude
+- [Experiment 847: FrameRenderer::render_frame from (terminal, config)](847-render-frame-from-terminal-config.md)
+  — **Designed** · Claude/Claude/Claude
 
 ## Non-Goals
 
