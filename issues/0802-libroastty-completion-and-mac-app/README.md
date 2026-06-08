@@ -465,6 +465,9 @@ stays unaltered except for the rename).
   — **Pass** (`target_s` `target_u` union + 24 `ROASTTY_ACTION_*` tags
   byte-faithful; 4400 tests green; app build 80→1 errors →
   `config_key_is_binding` by-value next) · Claude/Claude
+- [Experiment 13: Embedded ABI — `config_key_is_binding` by-value (the last compile error)](13-embedded-abi-config-key.md)
+  — **Designed** (Exp-8 by-value-key pattern applied to `config_key_is_binding`;
+  the app's final compile error) · Claude
 
 ## Process
 
