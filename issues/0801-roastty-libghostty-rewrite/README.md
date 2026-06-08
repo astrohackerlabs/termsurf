@@ -2415,7 +2415,7 @@ are past the correctness-critical foundation.
 - [Experiment 844: Derive row_never_extend from the terminal rows](844-derive-row-never-extend.md)
   — **Pass** · Claude/Claude/Claude
 - [Experiment 845: Port the font-thicken config options](845-port-font-thicken-config.md)
-  — **Designed** · Claude/Claude/Claude
+  — **Pass** · Claude/Claude/Claude
 
 ## Non-Goals
 

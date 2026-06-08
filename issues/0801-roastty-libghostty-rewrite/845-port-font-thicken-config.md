@@ -132,6 +132,79 @@ Optionals/Nit, all adopted:
   implementation).
 - **Nit — base-0 fidelity.** **Fixed:** added a `"0xff"` → 255 parse case.
 
+## Result
+
+**Result:** Pass
+
+`font-thicken` (bool, default `false`) and `font-thicken-strength` (u8, default
+`255`) are ported into roastty's `Config`: struct fields, `Default` values,
+parse arms (`set_bool_field`; `set_value_field(..., parse_u8_field)`), and
+formatter entries (`entry_bool`/`entry_int`) — all placed consistently after
+`grapheme-width-method`. A new `parse_u8_field` reuses the base-0
+`parse_i16_field`
+
+- `u8::try_from` (base-0 fidelity, range-checked). Production
+  `cargo build -p roastty` and `--tests` both clean (no warnings); fmt clean,
+  no-ghostty clean (the `Config.zig` citation lives in the experiment doc, not
+  the code), `git diff --check` clean.
+
+Tests (config module, all passing):
+
+- **`config_default_clipboard_group`** gained `font_thicken == false` /
+  `font_thicken_strength == 255` default assertions.
+- **`config_font_thicken_parses_and_round_trips`** (new) — `font-thicken` parses
+  `"true"` and a bare key (`None`) ⇒ true; `font-thicken-strength` parses `128`,
+  base-0 `0xff` → 255, and rejects `256`/`-1`; the formatter round-trips
+  `font-thicken = true` / `font-thicken-strength = 200`.
+- **`config_format_config_emits_fields_in_upstream_order`** — the exact-ordered
+  keys vector gained the two new keys at the formatter position (no regression).
+
+**Full suite (default parallelism, `scripts/bounded-run.sh`):**
+`4385 passed; 0 failed` (4384 + 1 new), 0 panics, 0 `PoisonError`,
+`STATUS=COMPLETED rc=0` — green. Re-verified after the completion-review fix
+(the upstream-order re-placement): `logs/exp845/v2.log` =
+`4385 passed; 0 failed`, rc=0, 264 s.
+
 ## Conclusion
 
-_(to be written after the run)_
+The configuration sub-arc has its first slice: `font-thicken` /
+`font-thicken-strength` are now first-class `Config` options (parse + default +
+format + base-0 fidelity), the config sources for `FrameRenderKnobs::thicken` /
+`thicken_strength`. The reusable `parse_u8_field` also unblocks future u8
+options.
+
+Continuing the configuration sub-arc, in order:
+
+- **Exp 846:** port the remaining knob sources that roastty's `Config` lacks —
+  `minimum-contrast` (f64) and the faint/text-alpha source for
+  `FrameRenderKnobs::alpha` / `faint_opacity` — confirming each against upstream
+  `Config.zig`.
+- **Exp 847:** add `FrameRenderKnobs::from_config(&Config)` sourcing **all**
+  knobs (`bold_color`, `background_opacity`, `window_padding_color`,
+  `font-thicken*`, and the 846 additions) from `Config`, replacing the
+  caller-supplied defaults.
+- **Later:** have `FrameRenderer::update_frame` take `&FrameRenderState` +
+  `&FrameRenderKnobs`; then build both from live surface state in
+  `surface.draw()`; then wire the search/hyperlink subsystems for the
+  `highlights`/`link_ranges` buffers — at which point the live draw path renders
+  through the new pipeline.
+
+## Completion Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). Confirmed the mechanics (build/fmt clean, config slice 153/0,
+`parse_u8_field` sound — base-0 `0xff`→255, `256`/`-1`/`0x1ff` rejected,
+defaults false/255 matching `Config.zig:337,347`, no `ghostty` literal added).
+**Verdict: CHANGES REQUIRED → fixed.** Two Required:
+
+- **Required — wrong key order.** The keys appeared after
+  `grapheme-width-method`, but the ordered-keys test asserts **upstream
+  declaration order**, and upstream declares `font-thicken` (337) /
+  `font-thicken-strength` (347) **before** `font-shaping-break` (374) /
+  `alpha-blending` (400) / `grapheme-width-method` (507). The test only passed
+  because the hardcoded vector had been edited to match the wrong slot,
+  defeating its invariant. **Fixed:** moved the struct fields, `Default`
+  entries, the two `EntryFormatter` lines, and the two keys-vector entries to
+  between `font-style-bold-italic` and `font-shaping-break` (matching upstream
+  order); re-ran the full suite (`v2.log`, 4385/0) to confirm.
+- **Required — stale README index status.** Flipped 845 `Designed → Pass`.

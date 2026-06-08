@@ -134,6 +134,10 @@ pub(crate) struct Config {
     pub font_style_italic: FontStyle,
     /// `font-style-bold-italic`.
     pub font_style_bold_italic: FontStyle,
+    /// `font-thicken`.
+    pub font_thicken: bool,
+    /// `font-thicken-strength`.
+    pub font_thicken_strength: u8,
     /// `font-shaping-break`.
     pub font_shaping_break: FontShapingBreak,
     /// `grapheme-width-method`.
@@ -210,6 +214,8 @@ impl Default for Config {
             font_style_bold: FontStyle::Default,
             font_style_italic: FontStyle::Default,
             font_style_bold_italic: FontStyle::Default,
+            font_thicken: false,
+            font_thicken_strength: 255,
             font_shaping_break: FontShapingBreak::default(),
             grapheme_width_method: GraphemeWidthMethod::Unicode,
             osc_color_report_format: OscColorReportFormat::Bits16,
@@ -246,6 +252,8 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("font-style-italic", out));
         self.font_style_bold_italic
             .format_entry(&mut EntryFormatter::new("font-style-bold-italic", out));
+        EntryFormatter::new("font-thicken", out).entry_bool(self.font_thicken);
+        EntryFormatter::new("font-thicken-strength", out).entry_int(self.font_thicken_strength);
         self.font_shaping_break
             .format_entry(&mut EntryFormatter::new("font-shaping-break", out));
         self.alpha_blending
@@ -589,6 +597,11 @@ impl Config {
                     default.font_shaping_break,
                     FontShapingBreak::parse_cli,
                 )?
+            }
+            "font-thicken" => self.font_thicken = set_bool_field(value, default.font_thicken)?,
+            "font-thicken-strength" => {
+                self.font_thicken_strength =
+                    set_value_field(value, default.font_thicken_strength, parse_u8_field)?
             }
             "scroll-to-bottom" => {
                 self.scroll_to_bottom =
@@ -2231,6 +2244,13 @@ pub(crate) fn parse_string_field(value: Option<&str>) -> Result<String, MagicPar
 pub(crate) fn parse_i16_field(value: Option<&str>) -> Result<i16, MagicParseError> {
     parse_i16_base0(value.ok_or(MagicParseError::ValueRequired)?)
         .map_err(|_| MagicParseError::InvalidValue)
+}
+
+/// Parse a `u8` config field with base-0 fidelity (mirrors upstream
+/// `parseInt(u8, _, 0)`). Reuses the base-0 `i16` parser, then range-checks to
+/// `u8` — so `0xff` → 255, while `256`/`-1`/`0x1ff` are rejected as `InvalidValue`.
+pub(crate) fn parse_u8_field(value: Option<&str>) -> Result<u8, MagicParseError> {
+    u8::try_from(parse_i16_field(value)?).map_err(|_| MagicParseError::InvalidValue)
 }
 
 fn parse_i16_base0(buf: &str) -> Result<i16, IntParseError> {
@@ -4356,6 +4376,9 @@ mod tests {
         assert_eq!(d.bg_image_position, BackgroundImagePosition::Center);
         assert_eq!(d.bg_image_fit, BackgroundImageFit::Contain);
         assert!(!d.bg_image_repeat);
+        // Font-thicken group (Experiment 845): upstream defaults false / 255.
+        assert!(!d.font_thicken);
+        assert_eq!(d.font_thicken_strength, 255);
         // Optional-colors group (Experiment 467).
         assert_eq!(d.cursor_color, None);
         assert_eq!(d.cursor_text, None);
@@ -7886,6 +7909,34 @@ mod tests {
     }
 
     #[test]
+    fn config_font_thicken_parses_and_round_trips() {
+        let mut cfg = Config::default();
+
+        // Bool: explicit true, and a bare key (no value) ⇒ true.
+        cfg.set("font-thicken", Some("true")).unwrap();
+        assert!(cfg.font_thicken);
+        let mut bare = Config::default();
+        bare.set("font-thicken", None).unwrap();
+        assert!(bare.font_thicken);
+
+        // u8 strength: decimal, base-0 hex fidelity, and out-of-range rejection.
+        cfg.set("font-thicken-strength", Some("128")).unwrap();
+        assert_eq!(cfg.font_thicken_strength, 128);
+        cfg.set("font-thicken-strength", Some("0xff")).unwrap();
+        assert_eq!(cfg.font_thicken_strength, 255);
+        assert!(cfg.set("font-thicken-strength", Some("256")).is_err());
+        assert!(cfg.set("font-thicken-strength", Some("-1")).is_err());
+
+        // Round-trip through the formatter.
+        let mut out = String::new();
+        cfg.font_thicken = true;
+        cfg.font_thicken_strength = 200;
+        cfg.format_config(&mut out);
+        assert!(out.contains("font-thicken = true"));
+        assert!(out.contains("font-thicken-strength = 200"));
+    }
+
+    #[test]
     fn config_format_config_emits_fields_in_upstream_order() {
         let cfg = Config::default();
         let mut out = String::new();
@@ -7906,6 +7957,8 @@ mod tests {
                 "font-style-bold",
                 "font-style-italic",
                 "font-style-bold-italic",
+                "font-thicken",
+                "font-thicken-strength",
                 "font-shaping-break",
                 "alpha-blending",
                 "grapheme-width-method",
