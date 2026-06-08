@@ -127,6 +127,101 @@ Three workstreams, in rough dependency order.
   drive and screenshot the app headlessly/CI-ably; (d) version pinning so the
   app and ABI never skew.
 
+## Roadmap
+
+The ordered plan to 100%, derived from
+[Experiment 1's audit](01-architecture-audit.md). Phases run roughly in order
+(later phases depend on earlier ones); the strategy front-loads a **launchable,
+drawing app** (Phases A–B) so the rest is finished behind the running
+conformance oracle. This checklist is the big-picture progress tracker — check
+each item off as it lands; the `## Experiments` index below is the fine-grained
+record. (A subsystem is "done" only when it works in the live app, verified by a
+Phase-C UI test.)
+
+**Phase 0 — Audit**
+
+- [x] Architecture audit: what's done / partial / missing + the order (Exp 1)
+
+**Phase A — App shell + ABI link**
+
+- [ ] Pin a Ghostty version (app + ABI must match)
+- [ ] Copy the macOS app into the project as-is
+- [ ] Find/replace `ghostty`→`roastty` (+ `GhosttyKit`→`RoasttyKit`, bundle IDs,
+      linked library + header)
+- [ ] Make it link — add the missing embedded exports (`app_key`,
+      `app_keyboard_changed`, `app_open_config`,
+      `inspector_metal_init/render/shutdown`, `set_window_background_blur`,
+      `ghostty_translate`, `cli_try_action`), match struct layouts to the pinned
+      version
+- [ ] Record the exact missing/mismatched ABI symbol worklist
+
+**Phase B — Live render path (the crux)**
+
+- [ ] `surface_draw` owns a Metal renderer bound to the app `NSView`/`CALayer`;
+      attach the layer and present on-screen
+- [ ] Render thread (frame pacing + cursor-blink timer)
+- [ ] Renderer mailbox / `Options` (focus / visible / occlusion / change-config)
+- [ ] Retire the interim `render_state` pull divergence
+- [ ] **Milestone: the app launches and shows a working ASCII terminal**
+
+**Phase C — Automated UI-test harness**
+
+- [ ] macOS UI automation (XCUITest / Accessibility / `osascript`)
+- [ ] Screenshot capture + golden/visual verification
+- [ ] CI-able / repeatable run; wired so every later phase is regression-tested
+
+**Phase D — Terminal correctness**
+
+- [ ] Port `unicode/` tables (grapheme-break, codepoint-width, symbol/Nerd-Font
+      width)
+- [ ] Rewrite `Terminal::print()` (width lookup + grapheme accumulation;
+      mode 2027)
+
+**Phase E — Config completeness**
+
+- [ ] The remaining ~140 config options (font, palette, link, command,
+      cursor/mouse, scrollback, `macos-*`, …)
+- [ ] `finalize()` — cross-field validation / derivation / clamping
+- [ ] Theme loading (themes-dir locator + file read + palette/option
+      application)
+- [ ] Conditional state wiring (`changeConditionalState` + conditional reload)
+- [ ] `font-codepoint-map` + `clipboard-codepoint-map` as config fields
+- [ ] `SharedGridSet` config→font assembly (`Key`/`DerivedConfig` → discovery →
+      populated `Collection`), replacing the hardcoded-"Menlo" test path
+
+**Phase F — Input / keybindings**
+
+- [ ] Multi-key sequences / chords (the trie), leader keys, key tables
+- [ ] Trigger-prefix flags (`global:` / `all:` / `unconsumed:` / `performable:`)
+- [ ] The full action set + the default-bindings data table + reverse
+      action→trigger mapping
+- [ ] Command-palette catalog (`command.zig`)
+- [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + `RemapSet`/`Mask` — if the
+      app expects roastty-side translation
+
+**Phase G — Renderer feature-completion (in the live pass)**
+
+- [ ] Invoke image draws (Kitty graphics + background image) in the live draw
+      pass
+- [ ] Custom-shader screen pass (ping-pong target + post-process apply)
+- [ ] Link-highlight matcher (`renderer/link.zig` `renderCellMap`) + feed
+      `link_ranges`
+- [ ] Debug `Overlay` (optional)
+
+**Phase H — Polish / remaining**
+
+- [ ] Shell-integration injection (`termio/shell_integration.zig`)
+- [ ] Sprite legacy-computing coverage (Smooth Mosaics U+1FB3C–1FBEF) + branch
+      glyphs (U+F5D0–F5E3)
+- [ ] Sentry crash capture (the init/capture half of `crash/`)
+- [ ] SIMD fast paths (perf — base64 / VT / index-of / width)
+- [ ] `os/cf_release_thread` (perf), terminfo resource
+
+**Workstream 3 (continuous, from Phase C):** every app feature gets an automated
+UI test — typing, rendering, selection, clipboard, scrollback, search,
+splits/tabs, config, key bindings, resize, color schemes, … — and anything
+broken is fixed in `libroastty` (the app stays unaltered except for the rename).
+
 ## Experiments
 
 - [Experiment 1: Architecture audit — what's done, what remains, and the order to finish](01-architecture-audit.md)
