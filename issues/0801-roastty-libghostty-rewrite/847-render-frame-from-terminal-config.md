@@ -137,6 +137,65 @@ is honestly disclosed and pre-existing (Exp 844). Two minors, both adopted:
   comment says "Exp 846+". **Fixed:** the note now states the double-shaping was
   introduced by Exp 844 and the refactor is deferred to Exp 846+.
 
+## Result
+
+**Result:** Pass
+
+`FrameRenderer::render_frame(terminal, …, config)` and
+`render_and_present_frame(…, config, presentation)` landed — each composes
+`FrameRenderState::from_terminal` + `FrameRenderKnobs::from_config` +
+`rebuild_input` and drives the existing `update_frame` /
+`update_and_present_frame`. Additive (the input-taking methods are untouched).
+Production `cargo build -p roastty` and `--tests` both clean (no warnings); fmt
+clean, no-ghostty clean, `git diff --check` clean.
+
+Three new tests, all passing (and the input-taking 840–846 tests untouched):
+
+- **`render_frame_rebuilds_from_terminal_and_config`** — a fresh renderer +
+  `Config::default()` rebuilds the full frame (`reset_contents`, rows `[0,1,2]`,
+  `current_grid` → 4×3) in one call.
+- **`render_frame_equals_hand_wired_path`** — `render_frame` produces the same
+  application (`reset_contents`, `rebuilt_rows`, `current_grid`) as the explicit
+  four-step `update_frame(from_terminal.rebuild_input(from_config))` path on an
+  equivalent renderer — the composition is exactly the hand-wired steps.
+- **`render_and_present_frame_presents`** (Metal, ran on this GPU) — composes
+  and presents at 8×6, reporting both halves; `current_grid` → 4×3.
+
+**Full suite (default parallelism, `scripts/bounded-run.sh`):**
+`4391 passed; 0 failed` (4388 + 3 new), 0 panics, 0 `PoisonError`,
+`STATUS=COMPLETED rc=0`, 185 s — green.
+
 ## Conclusion
 
-_(to be written after the run)_
+The renderer now has a **single `(terminal, config) → frame` entry point**
+(`render_frame` / `render_and_present_frame`) — the signature the live draw path
+calls. The renderer-integration pipeline is complete end to end in isolation:
+derive state from the terminal (842–844), source knobs from config (845–846),
+compose and rebuild/present (838–841, 847), all owned by `FrameRenderer`.
+
+Remaining toward the live draw path actually rendering:
+
+- **Surface wiring:** call `render_and_present_frame` from the live draw path
+  (`roastty_surface_draw` → `surface.draw()` / the C ABI) — the Surface must own
+  a `FrameRenderer` + the `MetalFrameCompositor` + atlases + a `Config`, and
+  supply the drawable size/scale. This is the larger integration slice.
+- **Remaining config ports:** `faint-opacity`, `background-opacity-cells`,
+  `minimum-contrast` (the last placeholder/uniform sources).
+- **Search/hyperlink subsystems** for the `highlights`/`link_ranges` buffers.
+- **Terminal dirty-clearing** after a frame (so a persistently-dirty terminal
+  stops re-rebuilding every frame), and the **shared-shaping** perf refactor.
+
+## Completion Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). Independently confirmed: all 23 frame_renderer tests pass including
+the 3 new ones (the present test ran on this GPU, not a no-op); fmt clean, build
+no warnings, no `ghostty` literal in the diff; scope is exactly
+`frame_renderer.rs` + the experiment doc,
+`update_frame`/`update_and_present_frame` untouched (additive); the equivalence
+test is genuine (a separate fresh renderer runs the explicit four-step path;
+asserts `reset_contents`/`rebuilt_rows`/`current_grid` all match — a real
+param-order/config-source regression guard); v1.log shows 4391 passed / 0
+failed, rc=0, default parallelism, no timeout. **Verdict: CHANGES REQUIRED →
+fixed.** The lone Required was the stale README index status — flipped 847
+`Designed → Pass`.

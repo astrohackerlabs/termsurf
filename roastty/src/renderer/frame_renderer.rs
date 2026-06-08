@@ -121,6 +121,42 @@ impl FrameRenderer {
         Ok(app)
     }
 
+    /// Compose the full render input from `(terminal, config)` and rebuild a frame
+    /// — the single entry point the live draw path uses (Issue 801, Exp 847).
+    /// Builds the `FrameRenderState`, `FrameRenderKnobs`, and input internally and
+    /// drives `update_frame`.
+    pub(crate) fn render_frame(
+        &mut self,
+        terminal: &Terminal,
+        grid: &mut SharedGrid,
+        dirty: RenderDirty,
+        preedit: Option<Preedit>,
+        config: &Config,
+    ) -> Result<FramePreparedRebuildApplication, FramePreparedRebuildError> {
+        let state = FrameRenderState::from_terminal(terminal);
+        let knobs = FrameRenderKnobs::from_config(config);
+        let input = state.rebuild_input(&knobs);
+        self.update_frame(terminal, grid, dirty, preedit, input)
+    }
+
+    /// The Metal-presenting variant of `render_frame` (Issue 801, Exp 847):
+    /// compose the input from `(terminal, config)` and drive
+    /// `update_and_present_frame`.
+    pub(crate) fn render_and_present_frame(
+        &mut self,
+        terminal: &Terminal,
+        grid: &mut SharedGrid,
+        dirty: RenderDirty,
+        preedit: Option<Preedit>,
+        config: &Config,
+        presentation: FramePreparedPresentationInput<'_>,
+    ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        let state = FrameRenderState::from_terminal(terminal);
+        let knobs = FrameRenderKnobs::from_config(config);
+        let input = state.rebuild_input(&knobs);
+        self.update_and_present_frame(terminal, grid, dirty, preedit, input, presentation)
+    }
+
     pub(crate) fn contents(&self) -> &Contents {
         &self.contents
     }
@@ -974,5 +1010,93 @@ mod tests {
         assert!(app.rows.reset_contents);
         assert_eq!(app.rows.rebuilt_rows, vec![0, 1, 2]);
         assert_eq!(renderer.current_grid(), grid(4, 3));
+    }
+
+    #[test]
+    fn render_frame_rebuilds_from_terminal_and_config() {
+        let term = terminal(4, 3);
+        let mut shared = menlo_grid();
+        let mut renderer = FrameRenderer::new(uniforms());
+
+        let app = renderer
+            .render_frame(
+                &term,
+                &mut shared,
+                RenderDirty::Partial,
+                None,
+                &Config::default(),
+            )
+            .expect("render frame from terminal+config");
+
+        assert!(app.rows.reset_contents);
+        assert_eq!(app.rows.rebuilt_rows, vec![0, 1, 2]);
+        assert_eq!(renderer.current_grid(), grid(4, 3));
+    }
+
+    #[test]
+    fn render_frame_equals_hand_wired_path() {
+        let term = terminal(4, 3);
+        let config = Config::default();
+
+        // Composed path.
+        let mut shared_a = menlo_grid();
+        let mut renderer_a = FrameRenderer::new(uniforms());
+        let app_a = renderer_a
+            .render_frame(&term, &mut shared_a, RenderDirty::Partial, None, &config)
+            .expect("render_frame");
+
+        // The explicit four-step hand-wired path on an equivalent fresh renderer.
+        let mut shared_b = menlo_grid();
+        let mut renderer_b = FrameRenderer::new(uniforms());
+        let state = FrameRenderState::from_terminal(&term);
+        let knobs = FrameRenderKnobs::from_config(&config);
+        let app_b = renderer_b
+            .update_frame(
+                &term,
+                &mut shared_b,
+                RenderDirty::Partial,
+                None,
+                state.rebuild_input(&knobs),
+            )
+            .expect("update_frame");
+
+        assert_eq!(app_a.rows.reset_contents, app_b.rows.reset_contents);
+        assert_eq!(app_a.rows.rebuilt_rows, app_b.rows.rebuilt_rows);
+        assert_eq!(renderer_a.current_grid(), renderer_b.current_grid());
+    }
+
+    #[test]
+    fn render_and_present_frame_presents() {
+        let Some(device) = metal_device() else {
+            return;
+        };
+        let term = terminal(4, 3);
+        let mut shared = menlo_grid();
+        let grayscale = Atlas::new(8, Format::Grayscale);
+        let color = Atlas::new(8, Format::Bgra);
+        let mut compositor = metal_compositor(device, 8, 6, &grayscale, &color);
+        let mut renderer = FrameRenderer::new(uniforms());
+
+        let app = renderer
+            .render_and_present_frame(
+                &term,
+                &mut shared,
+                RenderDirty::Partial,
+                None,
+                &Config::default(),
+                FramePreparedPresentationInput {
+                    compositor: &mut compositor,
+                    width: 8,
+                    height: 6,
+                    contents_scale: 1.0,
+                    grayscale_atlas: &grayscale,
+                    color_atlas: &color,
+                },
+            )
+            .expect("render and present from terminal+config");
+
+        assert_eq!(app.rebuild.rows.rebuilt_rows, vec![0, 1, 2]);
+        assert_eq!(renderer.current_grid(), grid(4, 3));
+        assert_eq!(app.present.presentation.width, 8);
     }
 }
