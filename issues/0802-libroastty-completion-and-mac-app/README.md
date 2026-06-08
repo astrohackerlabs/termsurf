@@ -130,21 +130,34 @@ Three workstreams, in rough dependency order.
 ## Roadmap
 
 The ordered plan to 100%, derived from
-[Experiment 1's audit](01-architecture-audit.md). Phases run roughly in order
-(later phases depend on earlier ones); the strategy front-loads a **launchable,
-drawing app** (Phases A–B) so the rest is finished behind the running
-conformance oracle. This checklist is the big-picture progress tracker — check
-each item off as it lands; the `## Experiments` index below is the fine-grained
-record. (A subsystem is "done" only when it works in the live app, verified by a
-Phase-C UI test.)
+[Experiment 1's audit](01-architecture-audit.md) (whose own phase lettering
+predates inserting Phase A — this Roadmap is the authority). Phases run roughly
+in order (later phases depend on earlier ones); the strategy front-loads a
+**running, automatable app** — the real Ghostty in Phase A (baseline + reusable
+harness) and the roastty-backed app drawing by Phase C — so the rest is finished
+behind the running conformance oracle. This checklist is the big-picture
+progress tracker — check each item off as it lands; the `## Experiments` index
+below is the fine-grained record. (A subsystem is "done" only when it works in
+the live app, verified by a Phase-D UI test.)
 
 **Phase 0 — Audit**
 
 - [x] Architecture audit: what's done / partial / missing + the order (Exp 1)
 
-**Phase A — App shell + ABI link**
+**Phase A — Baseline & feasibility: build/run/automate the real Ghostty app**
 
-- [ ] Pin a Ghostty version (app + ABI must match)
+- [ ] Resolve the toolchain (zig 0.15.x for ghostty 1.3.2-dev; nushell for
+      `macos/build.nu`)
+- [ ] Build the real, unmodified Ghostty macOS app from `vendor/ghostty/macos`
+- [ ] Launch it; confirm a working terminal (screenshot)
+- [ ] Drive it programmatically (input + screenshot) from this environment;
+      document the required permissions (Accessibility / Screen Recording)
+- [ ] Capture the golden baseline (reference screenshots) + a reusable
+      build/run/automate harness (Exp 2)
+
+**Phase B — App shell + ABI link**
+
+- [ ] Pin the Ghostty version (app + ABI must match — 1.3.2-dev)
 - [ ] Copy the macOS app into the project as-is
 - [ ] Find/replace `ghostty`→`roastty` (+ `GhosttyKit`→`RoasttyKit`, bundle IDs,
       linked library + header)
@@ -155,7 +168,7 @@ Phase-C UI test.)
       version
 - [ ] Record the exact missing/mismatched ABI symbol worklist
 
-**Phase B — Live render path (the crux)**
+**Phase C — Live render path (the crux)**
 
 - [ ] `surface_draw` owns a Metal renderer bound to the app `NSView`/`CALayer`;
       attach the layer and present on-screen
@@ -164,20 +177,22 @@ Phase-C UI test.)
 - [ ] Retire the interim `render_state` pull divergence
 - [ ] **Milestone: the app launches and shows a working ASCII terminal**
 
-**Phase C — Automated UI-test harness**
+**Phase D — Automated UI tests for the roastty-backed app**
 
-- [ ] macOS UI automation (XCUITest / Accessibility / `osascript`)
-- [ ] Screenshot capture + golden/visual verification
-- [ ] CI-able / repeatable run; wired so every later phase is regression-tested
+- [ ] Point the Phase-A harness at the renamed roastty-backed app
+- [ ] Golden-diff its screenshots/behavior against the Phase-A real-Ghostty
+      baseline
+- [ ] Repeatable in-session run, wired so every later phase is regression-tested
+      (headless/CI automation is a separate, later concern — see Exp 2's caveat)
 
-**Phase D — Terminal correctness**
+**Phase E — Terminal correctness**
 
 - [ ] Port `unicode/` tables (grapheme-break, codepoint-width, symbol/Nerd-Font
       width)
 - [ ] Rewrite `Terminal::print()` (width lookup + grapheme accumulation;
       mode 2027)
 
-**Phase E — Config completeness**
+**Phase F — Config completeness**
 
 - [ ] The remaining ~140 config options (font, palette, link, command,
       cursor/mouse, scrollback, `macos-*`, …)
@@ -189,7 +204,7 @@ Phase-C UI test.)
 - [ ] `SharedGridSet` config→font assembly (`Key`/`DerivedConfig` → discovery →
       populated `Collection`), replacing the hardcoded-"Menlo" test path
 
-**Phase F — Input / keybindings**
+**Phase G — Input / keybindings**
 
 - [ ] Multi-key sequences / chords (the trie), leader keys, key tables
 - [ ] Trigger-prefix flags (`global:` / `all:` / `unconsumed:` / `performable:`)
@@ -199,7 +214,7 @@ Phase-C UI test.)
 - [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + `RemapSet`/`Mask` — if the
       app expects roastty-side translation
 
-**Phase G — Renderer feature-completion (in the live pass)**
+**Phase H — Renderer feature-completion (in the live pass)**
 
 - [ ] Invoke image draws (Kitty graphics + background image) in the live draw
       pass
@@ -208,7 +223,7 @@ Phase-C UI test.)
       `link_ranges`
 - [ ] Debug `Overlay` (optional)
 
-**Phase H — Polish / remaining**
+**Phase I — Polish / remaining**
 
 - [ ] Shell-integration injection (`termio/shell_integration.zig`)
 - [ ] Sprite legacy-computing coverage (Smooth Mosaics U+1FB3C–1FBEF) + branch
@@ -217,15 +232,18 @@ Phase-C UI test.)
 - [ ] SIMD fast paths (perf — base64 / VT / index-of / width)
 - [ ] `os/cf_release_thread` (perf), terminfo resource
 
-**Workstream 3 (continuous, from Phase C):** every app feature gets an automated
-UI test — typing, rendering, selection, clipboard, scrollback, search,
-splits/tabs, config, key bindings, resize, color schemes, … — and anything
-broken is fixed in `libroastty` (the app stays unaltered except for the rename).
+**Workstream 3 (continuous — the harness from Phase A, the roastty app from
+Phase D):** every app feature gets an automated UI test — typing, rendering,
+selection, clipboard, scrollback, search, splits/tabs, config, key bindings,
+resize, color schemes, … — and anything broken is fixed in `libroastty` (the app
+stays unaltered except for the rename).
 
 ## Experiments
 
 - [Experiment 1: Architecture audit — what's done, what remains, and the order to finish](01-architecture-audit.md)
   — **Pass** · Claude (7 parallel subsystem audits)
+- [Experiment 2: Baseline & feasibility — build, run, and automate the real Ghostty app](02-ghostty-app-baseline.md)
+  — **Designed** · Claude/Claude/Claude
 
 ## Process
 
