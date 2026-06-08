@@ -402,6 +402,9 @@ stays unaltered except for the rename).
   — **Pass** (RoasttyKit builds; 78/84 app-called fns present, 6 missing;
   configs + callback table layout-match; key event diverges — opaque vs
   by-value) · Claude/Claude
+- [Experiment 7: Phase B — copy + rename the Ghostty macOS app; first build against RoasttyKit](07-copy-rename-app.md)
+  — **Designed** (copy app source, mechanical ghostty→roastty rename, first
+  build to confirm the ABI worklist against the real app) · Claude
 
 ## Process
 
