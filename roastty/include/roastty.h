@@ -1290,11 +1290,18 @@ typedef enum {
   ROASTTY_TARGET_SURFACE = 1,
 } roastty_target_tag_e;
 
-typedef struct {
-  roastty_target_tag_e tag;
+typedef union {
   /* NULL when tag is ROASTTY_TARGET_APP. */
   roastty_surface_t surface;
+} roastty_target_u;
+
+typedef struct {
+  roastty_target_tag_e tag;
+  roastty_target_u target;
 } roastty_target_s;
+
+_Static_assert(sizeof(roastty_target_s) == 16, "roastty_target_s size");
+_Static_assert(offsetof(roastty_target_s, target) == 8, "roastty_target_s.target offset");
 
 typedef enum {
   ROASTTY_ACTION_QUIT = 0,
@@ -1343,6 +1350,31 @@ typedef enum {
    * upstream Ghostty C action tags.
    */
   ROASTTY_ACTION_NAVIGATE_SEARCH = 1000,
+  /* Upstream action tags filled in (Issue 802 / Exp 12). */
+  ROASTTY_ACTION_PRESENT_TERMINAL = 21,
+  ROASTTY_ACTION_SIZE_LIMIT = 22,
+  ROASTTY_ACTION_INITIAL_SIZE = 24,
+  ROASTTY_ACTION_CELL_SIZE = 25,
+  ROASTTY_ACTION_SCROLLBAR = 26,
+  ROASTTY_ACTION_RENDER = 27,
+  ROASTTY_ACTION_RENDER_INSPECTOR = 30,
+  ROASTTY_ACTION_DESKTOP_NOTIFICATION = 31,
+  ROASTTY_ACTION_PWD = 35,
+  ROASTTY_ACTION_MOUSE_SHAPE = 36,
+  ROASTTY_ACTION_MOUSE_VISIBILITY = 37,
+  ROASTTY_ACTION_MOUSE_OVER_LINK = 38,
+  ROASTTY_ACTION_RENDERER_HEALTH = 39,
+  ROASTTY_ACTION_QUIT_TIMER = 41,
+  ROASTTY_ACTION_KEY_SEQUENCE = 44,
+  ROASTTY_ACTION_KEY_TABLE = 45,
+  ROASTTY_ACTION_COLOR_CHANGE = 46,
+  ROASTTY_ACTION_CONFIG_CHANGE = 48,
+  ROASTTY_ACTION_RING_BELL = 50,
+  ROASTTY_ACTION_SHOW_CHILD_EXITED = 55,
+  ROASTTY_ACTION_PROGRESS_REPORT = 56,
+  ROASTTY_ACTION_COMMAND_FINISHED = 58,
+  ROASTTY_ACTION_SEARCH_TOTAL = 61,
+  ROASTTY_ACTION_SEARCH_SELECTED = 62,
 } roastty_action_tag_e;
 
 typedef enum {

@@ -462,8 +462,9 @@ stays unaltered except for the rename).
   the `(tag,coord)`→pin resolver in `read_text`; 4399 tests green; app compiles
   past selection → `target_s`/`action_tag_e` next) · Claude/Claude
 - [Experiment 12: Embedded ABI — the target union + the action-tag completion](12-embedded-abi-target-tags.md)
-  — **Designed** (`target_s` `target_u` union + 24 missing `ROASTTY_ACTION_*`
-  tags) · Claude
+  — **Pass** (`target_s` `target_u` union + 24 `ROASTTY_ACTION_*` tags
+  byte-faithful; 4400 tests green; app build 80→1 errors →
+  `config_key_is_binding` by-value next) · Claude/Claude
 
 ## Process
 

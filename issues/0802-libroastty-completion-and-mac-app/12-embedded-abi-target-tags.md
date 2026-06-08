@@ -106,8 +106,63 @@ union member.
 
 ## Result
 
-_(to be added after the run.)_
+**Result:** Pass — `target_u`/`target_s` byte-faithful, the 24 tags present at
+correct values, `cargo test` green, and the app build **drops from 80 errors to
+1** (both target clusters + the action-tag cluster cleared — and the cascading
+`floating`/`normal`/`DispatchWorkItem` errors, which were downstream of the
+broken action `switch`, cleared with them).
+
+### What landed
+
+- **`target_s` union:** `roastty_target_u { surface }` +
+  `roastty_target_s { tag, target_u target }` (byte-identical 16 B); Rust
+  `#[repr(C)] union RoasttyTargetU` + `RoasttyTarget { tag, target }`; the one
+  firing site (`perform_targeted_action_result`) and the one harness reader
+  (`unsafe { target.target.surface }`) updated. C `_Static_assert`s (size 16,
+  `target` @8) + a Rust layout test.
+- **`action_tag_e` completion:** the 24 missing constants added at their exact
+  upstream values (21–62 gaps) to the C enum + Rust consts
+  (`#[allow(dead_code)]`, reserved for Phase-C emission). A value-parity test
+  asserts **all 24** against upstream positions.
+
+### Verification
+
+- **`cargo test -p roastty --lib`: 4400 passed, 0 failed** (4399 + the new
+  `target_abi_layout_and_action_tags_match_upstream`) — no regression from the
+  union change + the harness reader migration.
+- **App rebuild: `target` errors 0, missing-`ROASTTY_ACTION_*` errors 0, total
+  errors 1** — the two clusters (and their cascades) are gone.
 
 ## Conclusion
 
-_(to be added after the run.)_
+The action/target glue is reconciled, and the app build is **one error from
+compiling**. The sole remaining error is `AppDelegate.swift:579`:
+`roastty_config_key_is_binding(config, roasttyEvent)` passes a by-value
+`roastty_input_key_s`, but the function still takes the opaque
+`roastty_key_event_t` handle. This is the **same by-value-key pattern as Exp 8**
+(`surface_key`/`app_key`/`surface_key_is_binding`), now applied to
+`roastty_config_key_is_binding` (upstream `ghostty_config_key_is_binding` takes
+`ghostty_input_key_s` by value).
+
+**Next (Exp 13):** change `roastty_config_key_is_binding` to take
+`roastty_input_key_s` by value (+ migrate its test call sites, as in Exp 8),
+then re-attempt the build — which should take the renamed app to a **clean
+compile + link** (Phase B exit), opening Phase C (the live `surface_draw` render
+path).
+
+## Result Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). **Verdict: APPROVED** (no findings). It re-derived all of
+`ghostty_action_tag_e` and confirmed **every one of the 24 C constants AND its
+hand-synced Rust `const` equals its upstream position (0 C↔Rust mismatch)**, the
+enum has 0–64 each exactly once (no duplicate, no `NAVIGATE_SEARCH=1000` clash),
+and the test asserts all 24; confirmed `target_s`/`target_u` are structurally
+identical to upstream with the C `_Static_assert`s compiling and the Rust layout
+test asserting size 16 / align 8 / `target`@8; confirmed a regex sweep finds
+**exactly two `RoasttyTarget {` literals** (both the new shape — no stale
+`{tag, surface}`) and the only field read is the migrated
+`unsafe { target.target.surface }`; and confirmed the `#[allow(dead_code)]`
+masks no production use (the new consts are referenced only under
+`#[cfg(test)]`, reserved for Phase-C emission). "Pass" / "80→1" judged honest,
+layout + value tested on both sides.

@@ -168,6 +168,55 @@ const ROASTTY_ACTION_END_SEARCH: c_int = 60;
 const ROASTTY_ACTION_READONLY: c_int = 63;
 const ROASTTY_ACTION_COPY_TITLE_TO_CLIPBOARD: c_int = 64;
 const ROASTTY_ACTION_NAVIGATE_SEARCH: c_int = 1000;
+// Upstream action tags filled in (Issue 802 / Exp 12).
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_PRESENT_TERMINAL: c_int = 21;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_SIZE_LIMIT: c_int = 22;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_INITIAL_SIZE: c_int = 24;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_CELL_SIZE: c_int = 25;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_SCROLLBAR: c_int = 26;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_RENDER: c_int = 27;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_RENDER_INSPECTOR: c_int = 30;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_DESKTOP_NOTIFICATION: c_int = 31;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_PWD: c_int = 35;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_MOUSE_SHAPE: c_int = 36;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_MOUSE_VISIBILITY: c_int = 37;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_MOUSE_OVER_LINK: c_int = 38;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_RENDERER_HEALTH: c_int = 39;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_QUIT_TIMER: c_int = 41;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_KEY_SEQUENCE: c_int = 44;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_KEY_TABLE: c_int = 45;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_COLOR_CHANGE: c_int = 46;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_CONFIG_CHANGE: c_int = 48;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_RING_BELL: c_int = 50;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_SHOW_CHILD_EXITED: c_int = 55;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_PROGRESS_REPORT: c_int = 56;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_COMMAND_FINISHED: c_int = 58;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_SEARCH_TOTAL: c_int = 61;
+#[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
+const ROASTTY_ACTION_SEARCH_SELECTED: c_int = 62;
 
 const ROASTTY_INSPECTOR_TOGGLE: c_int = 0;
 const ROASTTY_INSPECTOR_SHOW: c_int = 1;
@@ -1135,11 +1184,19 @@ pub struct RoasttyClipboardContent {
     data: *const c_char,
 }
 
+/// Embedded `roastty_target_u` (Issue 802 / Exp 12) — single-member union (`surface` is
+/// NULL when the tag is `ROASTTY_TARGET_APP`). Byte-identical to a bare pointer.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union RoasttyTargetU {
+    surface: RoasttySurface,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RoasttyTarget {
     tag: c_int,
-    surface: RoasttySurface,
+    target: RoasttyTargetU,
 }
 
 // Embedded action payloads (Issue 802 / Exp 9) — byte-faithful to upstream action_*.
@@ -2329,7 +2386,9 @@ impl Surface {
         if let Some(action) = app.runtime.action_cb {
             let target = RoasttyTarget {
                 tag: target_tag,
-                surface: target_surface,
+                target: RoasttyTargetU {
+                    surface: target_surface,
+                },
             };
             let action_value = RoasttyAction {
                 tag,
@@ -15082,7 +15141,7 @@ mod tests {
             records.borrow_mut().push(ActionRecord {
                 app,
                 target_tag: target.tag,
-                surface: target.surface,
+                surface: unsafe { target.target.surface },
                 action_tag: action.tag,
                 storage,
                 title,
@@ -16269,6 +16328,42 @@ mod tests {
         roastty_key_event_free(event);
         roastty_surface_free(surface);
         roastty_app_free(app);
+    }
+
+    #[test]
+    fn target_abi_layout_and_action_tags_match_upstream() {
+        use core::mem::{align_of, offset_of, size_of};
+        // roastty_target_s {tag, target_u target} — byte-identical to the old flat {tag, surface}.
+        assert_eq!(size_of::<RoasttyTarget>(), 16);
+        assert_eq!(align_of::<RoasttyTarget>(), 8);
+        assert_eq!(offset_of!(RoasttyTarget, tag), 0);
+        assert_eq!(offset_of!(RoasttyTarget, target), 8);
+        assert_eq!(size_of::<RoasttyTargetU>(), 8);
+        // All 24 filled-in action tags equal their upstream positions.
+        assert_eq!(ROASTTY_ACTION_PRESENT_TERMINAL, 21);
+        assert_eq!(ROASTTY_ACTION_SIZE_LIMIT, 22);
+        assert_eq!(ROASTTY_ACTION_INITIAL_SIZE, 24);
+        assert_eq!(ROASTTY_ACTION_CELL_SIZE, 25);
+        assert_eq!(ROASTTY_ACTION_SCROLLBAR, 26);
+        assert_eq!(ROASTTY_ACTION_RENDER, 27);
+        assert_eq!(ROASTTY_ACTION_RENDER_INSPECTOR, 30);
+        assert_eq!(ROASTTY_ACTION_DESKTOP_NOTIFICATION, 31);
+        assert_eq!(ROASTTY_ACTION_PWD, 35);
+        assert_eq!(ROASTTY_ACTION_MOUSE_SHAPE, 36);
+        assert_eq!(ROASTTY_ACTION_MOUSE_VISIBILITY, 37);
+        assert_eq!(ROASTTY_ACTION_MOUSE_OVER_LINK, 38);
+        assert_eq!(ROASTTY_ACTION_RENDERER_HEALTH, 39);
+        assert_eq!(ROASTTY_ACTION_QUIT_TIMER, 41);
+        assert_eq!(ROASTTY_ACTION_KEY_SEQUENCE, 44);
+        assert_eq!(ROASTTY_ACTION_KEY_TABLE, 45);
+        assert_eq!(ROASTTY_ACTION_COLOR_CHANGE, 46);
+        assert_eq!(ROASTTY_ACTION_CONFIG_CHANGE, 48);
+        assert_eq!(ROASTTY_ACTION_RING_BELL, 50);
+        assert_eq!(ROASTTY_ACTION_SHOW_CHILD_EXITED, 55);
+        assert_eq!(ROASTTY_ACTION_PROGRESS_REPORT, 56);
+        assert_eq!(ROASTTY_ACTION_COMMAND_FINISHED, 58);
+        assert_eq!(ROASTTY_ACTION_SEARCH_TOTAL, 61);
+        assert_eq!(ROASTTY_ACTION_SEARCH_SELECTED, 62);
     }
 
     #[test]
