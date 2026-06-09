@@ -523,6 +523,10 @@ stays unaltered except for the rename).
   scrolled the viewport, the reporting-gate used a coarse always-true flag, and
   the render read-path read the active bottom not the viewport
   (`Point::active`→`viewport`); 4405 green + CGEvent scroll driver) · Claude
+- [Experiment 24: Phase C — suppress the cursor when scrolled into scrollback](24-cursor-in-scrollback.md)
+  — **Designed** (Exp-23 follow-up: a stray cursor renders in history because
+  `cursor_x` compares the active row to the viewport row; fix to compare pins) ·
+  Claude
 
 ## Process
 
