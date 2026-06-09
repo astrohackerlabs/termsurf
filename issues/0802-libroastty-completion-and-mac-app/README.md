@@ -480,6 +480,9 @@ stays unaltered except for the rename).
   the app NSView — window white→black, build -> Some(1600x1136); but no frame
   yet: surface_new doesn't auto-start the shell → Exp 16; 4401 tests green) ·
   Claude/Claude
+- [Experiment 16: Phase C — `surface_new` auto-starts the IO (the shell-start divergence)](16-surface-new-autostart.md)
+  — **Designed** (`surface_new` calls `start_termio()` `#[cfg(not(test))]`,
+  matching ghostty; unblocks the wired present) · Claude
 
 ## Process
 
