@@ -512,8 +512,10 @@ stays unaltered except for the rename).
 - [Experiment 21: Phase C — enable font-fallback discovery (CJK + emoji)](21-font-fallback.md)
   — **Pass** (enabled the resolver's discovery fallback in `build_live_renderer`
   — CJK `日本語` renders + `🎉` in COLOR vs `?` before; 4403+1 green; CJK
-  wide-pitch fine-tune a noted follow-up) ·
-  Claude
+  wide-pitch fine-tune a noted follow-up) · Claude
+- [Experiment 22: Phase C — diagnose + fix the `clear` gap](22-clear-screen.md)
+  — **Designed** (clear=`\033[3J\033[H\033[2J` drops post-clear content; narrow
+  2J/3J/full via probes + a headless test, then fix the root cause) · Claude
 
 ## Process
 
