@@ -501,8 +501,9 @@ stays unaltered except for the rename).
   Retina-correct — the launched app renders the live **shell prompt as text**;
   first real terminal frame from libroastty) · Claude
 - [Experiment 19: Phase C — a continuous present driver (live updates)](19-present-driver.md)
-  — **Designed** (main-thread ~60fps dispatch2 timer presenting on dirty; start
-  in surface_new, stop in surface_free — so typing/output render live) · Claude
+  — **Pass** (main-thread ~60fps driver drains tick_termio + presents on dirty —
+  the terminal is LIVE: typed `echo TERMSURF_LIVE` + its output render live;
+  suite 4403+1 green, idle-efficient, clean shutdown) · Claude
 
 ## Process
 

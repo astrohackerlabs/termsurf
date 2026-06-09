@@ -143,8 +143,87 @@ in:
 
 ## Result
 
-_(to be added after the run.)_
+**Result:** Pass — **the terminal is now live and interactive.** Typed input and
+command output render live after the first frame: the driver drains the worker
+each tick and presents on dirty.
+
+### Changes (only `libroastty`)
+
+- **`start_present_driver`** (+ the `SendSurfacePtr` `unsafe impl Send`
+  newtype): a dedicated thread sleeps ~16 ms and dispatches a present tick to
+  the **main** queue via `DispatchQueue::main().exec_async`. Each tick (main
+  thread): `self.tick_termio()` **drains the worker** (applies shell output to
+  the terminal, sets `dirty`, processes clipboard events — the event pump the
+  app's empty `wakeup` doesn't provide), then presents on `dirty` and clears it.
+  (Rust-2021 disjoint capture would grab the `!Send` `*mut Surface` field
+  directly, so the closure re-binds the whole `SendSurfacePtr`.)
+- **Started** in `surface_new` (gated `platform_tag == MACOS`, after the Exp-16
+  auto-start); **stopped** in `surface_free` (+ `Drop` as a safety net) by
+  flipping the `running: Arc<AtomicBool>` false before the box drops —
+  lifetime-safe because the main queue is serial.
+
+### Evidence (live launch, captured out-of-repo, app + children killed — 0 dangling PIDs)
+
+- **Live interaction:** typing `echo TERMSURF_LIVE` into the window rendered the
+  **command as typed** (with zsh syntax highlighting), its **output
+  `TERMSURF_LIVE`**, and a fresh prompt — all appearing live, which only a
+  continuous re-present can produce. The full path works: keystroke → app
+  `keyDown` → `roastty_surface_key` → `write_encoded_key_event` → PTY → shell →
+  output → `tick_termio` drains → `dirty` → driver presents.
+- **Driver behaviour (temporary instrumentation, since removed):** the driver
+  ticks continuously (`tick=60,90,120,…` ≈ 60 fps) and presents **only on
+  dirty** (`presents` stayed at 1 while idle after the prompt — no
+  busy-present), and the prompt itself was a _driver_-presented frame (the tick
+  drained the shell's prompt output and presented it).
+
+### Verification
+
+- **Full `cargo test -p roastty`:** lib **4403 passed** + `abi_harness` **1
+  passed**, 0 failures. The driver is inert in tests (`platform_tag == 0` → not
+  started), so no timer/thread runs in the suite.
+- **No idle busy-spin** (presents only on dirty); **clean shutdown** (driver
+  stopped before free; no UAF across repeated launches).
+- (Capture lesson: type **before** moving/raising the window — an `osascript`
+  window move steals first-responder focus, which is why an earlier attempt
+  showed a blank prompt.)
 
 ## Conclusion
 
-_(to be added after the run.)_
+**Issue 802's core is achieved: the unaltered, renamed Ghostty app runs on
+libroastty as a live, interactive terminal** — it boots, starts a shell, renders
+text Retina-correctly, accepts keyboard input, executes commands, and updates
+the screen live, all through the reconciled embedded ABI + the Rust renderer +
+this present driver. The conformance oracle is fully operational.
+
+**What remains is feature-by-feature conformance** (workstream 3): drive the app
+and verify each feature against the real app — selection + clipboard,
+scrollback, search, splits/tabs, resize, color schemes, mouse reporting,
+config/keybindings — fixing each gap in libroastty. A vsync-locked
+`CVDisplayLink` (replacing the timer) and DPI-change handling are noted
+refinements. Those are the next experiments; the render+interaction foundation
+they build on is now done.
+
+## Result Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). **Verdict: APPROVED.** It independently verified (not on faith):
+compiles clean (0 warnings); 4403 lib tests (4 surface-lifecycle tests pass with
+`4399 filtered out`); the driver is **inert in tests** (`start_present_driver`
+is behind `platform_tag == 1`; tests use 0 → no thread spawns). **UAF safety
+holds:** `surface_free` flips `running=false` (`lib.rs:13820`) **before**
+`Box::from_raw` (`:13825`); the driver thread never derefs the pointer (only
+sleeps/reads the atomic/dispatches); the dispatched closure rechecks `running`
+before any deref; the main queue is serial so `free` cannot run concurrently
+with a tick, and a queued closure runs after free, observes `running==false`,
+and returns before deref; the `Arc` outlives the box; `Drop` only re-flips the
+flag (no deref) — all on the same main-thread contract the pre-existing
+`register_surface`/`present_live`/`MainQueueSurfacePresentation` code already
+relies on. **No `dirty` race** (every read/write is main-thread; the worker
+communicates only via `mpsc` and never touches `Surface`; the `dirty=false`
+clear doesn't drain the channel, so mid-present output is re-dirtied next tick).
+The tick **drains before** the dirty check (the event pump). The `Send` wrapper
+is sound and the `let tick_ptr = tick_ptr;` re-bind forces whole-struct capture.
+Scope clean (diff is only `lib.rs` + the two docs; no app edits; instrumentation
+removed). One Optional (note the thread-vs-`exec_after` deviation — **folded
+into Changes above**) and one Nit (one thread per surface @16ms — superseded by
+the noted CVDisplayLink refinement; no action).

@@ -1899,6 +1899,9 @@ struct Surface {
     /// The lazily-created live Metal present state (compositor + frame renderer + the
     /// IOSurface layer attached to `nsview`). `None` until the first present on the main thread.
     renderer: Option<SurfaceLiveRenderer>,
+    /// The continuous present driver's stop flag (Issue 802 / Exp 19). `surface_free`/`Drop`
+    /// flip it false to stop the driver thread + its main-queue ticks before the box is dropped.
+    present_driver_running: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     #[cfg(test)]
     test_termio_events: VecDeque<termio::TermioWorkerEvent>,
 }
@@ -1931,6 +1934,54 @@ struct SurfaceLiveRenderer {
     compositor: renderer::metal::compositor::MetalFrameCompositor,
     frame_renderer: renderer::frame_renderer::FrameRenderer,
     shared_grid: font::shared_grid::SharedGrid,
+}
+
+/// A `*mut Surface` that can cross into a dispatch closure (Issue 802 / Exp 19). SAFETY:
+/// dereferenced ONLY on the main thread, guarded by the driver's `running` flag — the surface
+/// outlives every deref because `surface_free`/`Drop` flip `running` false before the box is
+/// dropped, and the main queue is serial so no tick interleaves with the free.
+#[derive(Clone, Copy)]
+struct SendSurfacePtr(*mut Surface);
+// SAFETY: see the type doc — the pointer is only dereferenced on the main thread while `running`.
+unsafe impl Send for SendSurfacePtr {}
+
+/// Start the continuous present driver for a surface (Issue 802 / Exp 19). A dedicated thread
+/// sleeps ~16 ms and dispatches a present tick to the **main** queue; each tick drains the termio
+/// worker (`tick_termio` — the event-loop pump the app's empty `wakeup` stub does not provide,
+/// which applies output to the terminal and sets `dirty`) and presents when dirty. Returns the
+/// `running` flag; `surface_free`/`Drop` flip it false to stop.
+fn start_present_driver(surface: *mut Surface) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::Ordering;
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let ptr = SendSurfacePtr(surface);
+    let thread_running = running.clone();
+    std::thread::spawn(move || {
+        while thread_running.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            if !thread_running.load(Ordering::SeqCst) {
+                break;
+            }
+            let tick_running = thread_running.clone();
+            let tick_ptr = ptr;
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                // Re-bind the whole `SendSurfacePtr` (Rust 2021 disjoint capture would otherwise
+                // grab the `!Send` `*mut Surface` field directly, bypassing the Send wrapper).
+                let tick_ptr = tick_ptr;
+                if !tick_running.load(Ordering::SeqCst) {
+                    return;
+                }
+                // SAFETY: main thread + running == true → the surface is alive (free flips
+                // running false before dropping the box, serialized on this same queue).
+                let surface = unsafe { &mut *tick_ptr.0 };
+                surface.tick_termio();
+                if surface.dirty {
+                    surface.present_live();
+                    surface.dirty = false;
+                }
+            });
+        }
+    });
+    running
 }
 
 /// Build the live Metal present state for a surface on the main thread (Issue 802 / Exp 15,
@@ -1998,6 +2049,10 @@ fn build_live_renderer(
 
 impl Drop for Surface {
     fn drop(&mut self) {
+        // Stop the present driver (Exp 19) so no tick dereferences this surface after it drops.
+        if let Some(running) = &self.present_driver_running {
+            running.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         self.clear_clipboard_requests();
     }
 }
@@ -13723,6 +13778,7 @@ pub extern "C" fn roastty_surface_new(
             ptr::null_mut()
         },
         renderer: None,
+        present_driver_running: None,
         #[cfg(test)]
         test_termio_events: VecDeque::new(),
     });
@@ -13736,8 +13792,11 @@ pub extern "C" fn roastty_surface_new(
     // exclude the harness, which links the cdylib).
     if config.platform_tag == 1 {
         // 1 == ROASTTY_PLATFORM_MACOS
-        if let Some(surface) = unsafe { surface.as_ptr().as_mut() } {
-            let _ = surface.start_termio();
+        let surface_ptr = surface.as_ptr();
+        if let Some(s) = unsafe { surface_ptr.as_mut() } {
+            let _ = s.start_termio();
+            // Start the continuous present driver (Exp 19) so the terminal updates live.
+            s.present_driver_running = Some(start_present_driver(surface_ptr));
         }
     }
     surface.as_ptr().cast()
@@ -13754,6 +13813,13 @@ pub extern "C" fn roastty_surface_start(surface: RoasttySurface) -> c_int {
 #[no_mangle]
 pub extern "C" fn roastty_surface_free(surface: RoasttySurface) {
     if !surface.is_null() {
+        // Stop the present driver (Exp 19) before freeing — the flag its thread + main-queue
+        // ticks check before touching the surface. (`Drop` repeats this as a safety net.)
+        if let Some(s) = surface_from_handle(surface) {
+            if let Some(running) = &s.present_driver_running {
+                running.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
         unsafe {
             let surface_ptr = NonNull::new_unchecked(surface.cast::<Surface>());
             let mut surface_box = Box::from_raw(surface.cast::<Surface>());
