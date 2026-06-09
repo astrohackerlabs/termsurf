@@ -2374,7 +2374,10 @@ impl PageList {
         let last_col = self.cols.saturating_sub(1);
 
         for y in 0..self.rows {
-            let Some(pin) = self.pin(point::Point::active(Coordinate::new(0, y.into()))) else {
+            // Read the VIEWPORT (scroll position), not always the active bottom (Issue 802 /
+            // Exp 23) — so scrolling into scrollback renders history. When not scrolled the
+            // viewport == active, so the normal case is unchanged.
+            let Some(pin) = self.pin(point::Point::viewport(Coordinate::new(0, y.into()))) else {
                 continue;
             };
             let Some(node) = self.node_for_pin(&pin) else {
@@ -2431,7 +2434,10 @@ impl PageList {
         let last_col = self.cols.saturating_sub(1);
 
         for y in 0..self.rows {
-            let Some(pin) = self.pin(point::Point::active(Coordinate::new(0, y.into()))) else {
+            // Read the VIEWPORT (scroll position), not always the active bottom (Issue 802 /
+            // Exp 23) — so scrolling into scrollback renders history. When not scrolled the
+            // viewport == active, so the normal case is unchanged.
+            let Some(pin) = self.pin(point::Point::viewport(Coordinate::new(0, y.into()))) else {
                 continue;
             };
             let Some(node) = self.node_for_pin(&pin) else {

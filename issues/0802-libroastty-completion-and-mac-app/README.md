@@ -519,8 +519,10 @@ stays unaltered except for the rename).
   (upstream-faithful) + regression test, 4404 green; live re-probe CONFIRMS
   post-clear content renders) · Claude
 - [Experiment 23: Phase C — scrollback navigation (deferred Exp-20 probe)](23-scrollback.md)
-  — **Designed** (build a CGEvent scroll driver; probe scroll-up shows history
-  after seq 1 200; fix any gap — diagnostic-led) · Claude
+  — **Pass** (wheel scrollback works live — fixed 3 bugs: mouse_scroll never
+  scrolled the viewport, the reporting-gate used a coarse always-true flag, and
+  the render read-path read the active bottom not the viewport
+  (`Point::active`→`viewport`); 4405 green + CGEvent scroll driver) · Claude
 
 ## Process
 

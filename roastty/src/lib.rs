@@ -3791,7 +3791,62 @@ impl Surface {
             return;
         }
         self.mouse.scroll = Some((x, y, scroll_mods as u8));
-        self.dispatch_scroll_reports(x, y, scroll_mods as u8);
+        // Branch (2): the terminal is ACTUALLY mouse-reporting (a coarse `self.mouse_reporting`
+        // flag is not enough — it defaults true; `mouse_report_context` also checks the terminal's
+        // mouse-event mode) → button-4/5/6/7 reports.
+        if self.mouse_report_context().is_some() {
+            self.dispatch_scroll_reports(x, y, scroll_mods as u8);
+            return;
+        }
+        // Not mouse-reporting (Issue 802 / Exp 23, porting upstream `scrollCallback`):
+        // branch (1) alt-screen + alt-scroll → cursor keys; branch (3) → viewport scrollback.
+        if self.readonly {
+            return;
+        }
+        // Line-mode steps from the wheel y (positive = up/toward history, button-Four sign).
+        let y_steps = scroll_steps(&mut self.mouse.pending_scroll_y, y, 1.0);
+        if y_steps == 0 {
+            return;
+        }
+        let Some(worker) = self.termio_worker.as_ref() else {
+            return;
+        };
+        let (alt_scroll, cursor_keys) = worker.with_termio(|termio| {
+            let terminal = termio.terminal();
+            (
+                terminal.is_alternate_screen() && terminal.mouse_alternate_scroll_enabled(),
+                terminal.cursor_keys_enabled(),
+            )
+        });
+        if alt_scroll {
+            // Branch (1): translate the wheel to cursor keys written to the PTY (the program,
+            // e.g. a pager in the alt screen, scrolls). App-mode (`\x1bO…`) vs normal (`\x1b[…`).
+            // Upstream clears the selection when sending wheel-as-cursor-keys.
+            worker.with_termio_mut(|termio| {
+                let _ = termio.terminal_mut().set_selection(None);
+            });
+            let seq: &[u8] = match (y_steps > 0, cursor_keys) {
+                (true, true) => b"\x1bOA",
+                (true, false) => b"\x1b[A",
+                (false, true) => b"\x1bOB",
+                (false, false) => b"\x1b[B",
+            };
+            for _ in 0..y_steps.unsigned_abs() {
+                if worker.queue_write(seq).is_err() {
+                    break;
+                }
+            }
+        } else {
+            // Branch (3): scroll the viewport (scrollback navigation). Viewport delta = -y_steps
+            // (up/toward history is a negative row delta). This is a direct terminal mutation, so
+            // mark dirty for the present driver to re-render.
+            worker.with_termio_mut(|termio| {
+                termio
+                    .terminal_mut()
+                    .scroll_viewport_delta_row(-(y_steps as isize));
+            });
+            self.dirty = true;
+        }
     }
 
     fn mouse_pressure(&mut self, stage: u32, pressure: f64) {
@@ -16363,6 +16418,96 @@ mod tests {
         });
 
         assert!(surface_from_handle(surface).unwrap().dirty);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    /// Issue 802 / Exp 23: the mouse wheel must navigate scrollback in a plain (non-mouse-
+    /// reporting) shell. Two bugs were fixed:  never touched the viewport (only
+    /// emitted mouse reports), and the render read-path read the active bottom, not the viewport.
+    /// Asserts through  (what  feeds): scroll-up reveals history.
+    #[test]
+    fn mouse_scroll_navigates_scrollback() {
+        let _guard = pty_command_lock();
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 5"));
+
+        let mut content = String::from(
+            "TOPMARKER
+",
+        );
+        for _ in 0..200 {
+            content.push_str(
+                "filler
+",
+            );
+        }
+        content.push_str(
+            "BOTMARKER
+",
+        );
+        surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio_mut(|termio| {
+                termio
+                    .terminal_mut()
+                    .next_slice(content.as_bytes())
+                    .unwrap();
+            });
+
+        let rendered = |surface: RoasttySurface| -> String {
+            surface_from_handle(surface)
+                .unwrap()
+                .termio_worker
+                .as_ref()
+                .unwrap()
+                .with_termio(|termio| {
+                    termio
+                        .terminal()
+                        .shape_run_options()
+                        .iter()
+                        .flat_map(|row| row.cells.iter())
+                        .filter_map(|cell| char::from_u32(cell.codepoint))
+                        .filter(|&ch| ch != ' ')
+                        .collect()
+                })
+        };
+
+        // Active viewport shows the tail; TOPMARKER is in scrollback.
+        let bottom = rendered(surface);
+        assert!(
+            bottom.contains("BOTMARKER"),
+            "tail should show BOTMARKER; got {bottom:?}"
+        );
+        assert!(
+            !bottom.contains("TOPMARKER"),
+            "TOPMARKER should be off-screen in scrollback; got {bottom:?}"
+        );
+
+        // Wheel scroll up (positive y → toward history) reveals the top of scrollback.
+        surface_from_handle(surface)
+            .unwrap()
+            .mouse_scroll(0.0, 1000.0, 0);
+        let scrolled = rendered(surface);
+        assert!(
+            scrolled.contains("TOPMARKER"),
+            "scroll-up must reveal scrollback history (Exp 23); got {scrolled:?}"
+        );
+
+        // Wheel scroll down returns toward the tail (BOTMARKER on-screen again).
+        surface_from_handle(surface)
+            .unwrap()
+            .mouse_scroll(0.0, -1000.0, 0);
+        let back = rendered(surface);
+        assert!(
+            back.contains("BOTMARKER"),
+            "scroll-down should return to the tail; got {back:?}"
+        );
+
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

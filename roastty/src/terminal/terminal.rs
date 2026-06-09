@@ -1807,6 +1807,29 @@ impl Terminal {
         self.screens.active_mut().scroll_delta_row(delta);
     }
 
+    /// Scroll the viewport by a relative row `delta` (Issue 802 / Exp 23) — the wheel
+    /// scrollback-navigation path. Negative scrolls toward history (older rows), matching
+    /// `screen.scroll_delta_row`.
+    pub(crate) fn scroll_viewport_delta_row(&mut self, delta: isize) {
+        self.screens.active_mut().scroll_delta_row(delta);
+    }
+
+    /// Whether the alternate screen is active (Issue 802 / Exp 23 — wheel alt-scroll branch).
+    pub(crate) fn is_alternate_screen(&self) -> bool {
+        matches!(self.screens.active_key(), TerminalScreenKey::Alternate)
+    }
+
+    /// Whether DEC mode `1007` (alternate-scroll) is enabled (Issue 802 / Exp 23).
+    pub(crate) fn mouse_alternate_scroll_enabled(&self) -> bool {
+        self.modes.get(modes::Mode::MouseAlternateScroll)
+    }
+
+    /// Whether DECCKM (application cursor keys) is enabled (Issue 802 / Exp 23 — alt-scroll
+    /// emits `\x1bO…` vs `\x1b[…`).
+    pub(crate) fn cursor_keys_enabled(&self) -> bool {
+        self.modes.get(modes::Mode::CursorKeys)
+    }
+
     pub(crate) fn scroll_viewport_to_top(&mut self) {
         self.screens.active_mut().scroll_top();
     }

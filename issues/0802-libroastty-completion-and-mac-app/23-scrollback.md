@@ -128,8 +128,82 @@ the driver itself is sound, unlike the frontmost-keystroke path).
 
 ## Result
 
-_(to be added after the run.)_
+**Result:** Pass — wheel scrollback navigation now works in the live app.
+Implementing it uncovered and fixed **three** bugs (the design + review had
+pinned the first; the other two were found during the headless test).
+
+### Three bugs fixed (only `libroastty`)
+
+1. **`mouse_scroll` never touched the viewport** — it only called
+   `dispatch_scroll_reports` (mouse-reports). **Ported** upstream
+   `scrollCallback`'s missing branches: (1) alt-screen +
+   `mouse_alternate_scroll` → cursor keys to the PTY; (3) otherwise →
+   `scroll_viewport_delta_row`.
+2. **The mouse-reporting gate used the coarse `self.mouse_reporting` flag**
+   (which `surface_new` defaults to **`true`**), so the wheel always took the
+   reports branch and returned. Fixed to check
+   `mouse_report_context().is_some()` — the _actual_ reporting state (flag
+   **and** the terminal's mouse-event mode), matching upstream
+   `isMouseReporting()`.
+3. **The render read-path read the active bottom, not the viewport** —
+   `render_rows_snapshot` / `shape_run_options` iterated `Point::active(...)`,
+   so a viewport scroll never changed what was rendered. Fixed to
+   `Point::viewport(...)` (when not scrolled, viewport == active, so the normal
+   case is unchanged — confirmed by the 4405-green suite). This is the deepest
+   fix and was invisible until the headless test scrolled and saw no change.
+
+Plus four `pub(crate)` `Terminal` accessors (`scroll_viewport_delta_row`,
+`is_alternate_screen`, `mouse_alternate_scroll_enabled`, `cursor_keys_enabled`)
+and a test-only `scripts/roastty-app/scroll.swift` (CGEvent scroll driver).
+
+### Verification
+
+- **Headless regression test** `mouse_scroll_navigates_scrollback` (asserts
+  through `shape_run_options` — the render read-path): drives
+  `Surface::mouse_scroll` on a non-mouse-reporting surface filled past the
+  screen; scroll-up reveals TOPMARKER (history), scroll-down returns to
+  BOTMARKER (tail). Fails pre-fix, passes after.
+- **Full `cargo test -p roastty`:** lib **4405 passed**, 0 failures — the
+  `Point::viewport` change is safe (the normal unscrolled case is identical).
+- **Live confirmation** (screen unlocked; app + descendant tree killed, 0
+  dangling): `seq 1 200`, then the CGEvent scroll driver scrolls the wheel up —
+  the window scrolls into **scrollback history** (lines 118–141 shown, up from
+  the ~177–200 tail). Output + crop out-of-repo.
+
+(Branch 1 — alt-screen alt-scroll → cursor keys — is ported faithfully from
+upstream; the headless test + live probe cover the user-visible viewport branch
+(3). A dedicated alt-scroll test is a small follow-up.)
 
 ## Conclusion
 
-_(to be added after the run.)_
+Wheel scrollback navigation works, after fixing a chain of three bugs — the most
+consequential being that the **render read-path was not viewport-aware** (it
+always rendered the active bottom), which would have blocked _any_
+scroll-to-history regardless of input wiring. One of the two Exp-20-deferred
+probes is now closed. **Next: mouse selection + clipboard** (the other deferred
+probe), then the noted refinements (CJK wide-pitch, CVDisplayLink vsync,
+DPI-change).
+
+## Result Review
+
+**Reviewer:** `adversarial-reviewer` subagent (Claude Opus, fresh context,
+read-only). **Verdict: CHANGES REQUIRED → addressed.** It independently reran
+the gates (full lib **4405 passed, 0 failed**;
+`mouse_scroll_navigates_scrollback` passes and **discriminates all three fixes**
+— default `mouse_reporting=true` makes fix 2 load-bearing, `Point::active`
+render makes fix 3 load-bearing, reports-only `mouse_scroll` makes fix 1
+load-bearing), confirmed **fix 3 is upstream-faithful** (upstream
+`render.zig:269` renders from `getTopLeft(.viewport)`), the `scrollCallback`
+branches/sequences/signs match, and the live PNGs substantiate
+(`e23-scrolled_up` = history 118–141; `e23-tail` = tail 178–200 + prompt). Scope
+clean (libroastty + test-only `scroll.swift`), no "ghostty" literals,
+`fmt --check` clean. Findings:
+
+- **Required — README index still said `Designed`.** Fixed (→ Pass).
+- **Optional — branch 1 omitted upstream's selection-clear** before emitting
+  cursor keys. **Fixed:** `set_selection(None)` added to the alt-scroll branch.
+- **Optional — a stray cursor block renders in scrollback** (the render path
+  emits `cursor_x` without viewport-gating; upstream gates on
+  `cursor.viewport`). Cosmetic, scrolled-state-only (unscrolled is unchanged).
+  **Noted as a follow-up** in the Conclusion (a small render fix, separate from
+  the scroll wiring).
