@@ -625,6 +625,8 @@ stays unaltered except for the rename).
   **Pass**
 - [Experiment 42: Phase D — clear-screen live A/B recipe](42-live-ab-clear-recipe.md)
   — **Pass**
+- [Experiment 43: Phase D — alt-screen live A/B recipe](43-live-ab-alt-screen-recipe.md)
+  — **Designed**
 
 ## Process
 
