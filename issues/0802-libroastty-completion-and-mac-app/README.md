@@ -605,6 +605,8 @@ stays unaltered except for the rename).
   — **Pass** · Codex/Codex/Codex
 - [Experiment 39: Phase D — live A/B smoke harness](39-live-ab-smoke-harness.md)
   — **Pass**
+- [Experiment 40: Phase D — named live A/B recipes](40-live-ab-recipes.md) —
+  **Designed**
 
 ## Process
 
