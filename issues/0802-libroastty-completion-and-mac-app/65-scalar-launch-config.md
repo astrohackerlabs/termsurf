@@ -112,3 +112,61 @@ prefix coverage for both `abnormal-command-exit-runtime` and `scrollback-limit`.
 
 Re-review returned **Approved** with no findings after confirming the design now
 requires base-0 integer parsing and concrete `0x`/`0o`/`0b` verification.
+
+## Result
+
+**Result:** Pass
+
+Experiment 65 added the config-only scalar launch/runtime fields to
+`roastty/src/config/mod.rs`:
+
+- `wait-after-command`
+- `abnormal-command-exit-runtime`
+- `scrollback-limit`
+
+`Config` now carries their upstream defaults (`false`, `250`, and `10_000_000`),
+routes all three through `Config::set`, and emits them in `format_config` after
+`env` and before the later scroll/link/window fields.
+
+The boolean field uses the existing bool config helper, so a bare
+`wait-after-command` value sets true and an empty value resets to false. The two
+integer fields use base-0 unsigned scalar parsing, matching upstream's
+`std.fmt.parseInt(Int, value, 0)` behavior for decimal plus `0x`, `0o`, and `0b`
+prefixes, with missing values, invalid values, negatives, and overflow reported
+as config errors.
+
+Runtime application remains out of scope; this experiment does not apply these
+fields to surface-exit handling, early-exit diagnostics, scrollback allocation,
+launch snapshots, or inherited config.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/config/mod.rs`
+- `cargo test -p roastty scalar_launch_config`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`
+- `cargo fmt --check`
+- `git diff --check`
+
+`cargo test -p roastty` passed with 4,500 unit tests, the C ABI harness, and doc
+tests. The C ABI harness still emits existing enum-conversion warnings unrelated
+to this config change.
+
+## Conclusion
+
+`wait-after-command`, `abnormal-command-exit-runtime`, and `scrollback-limit`
+now have faithful config surfaces with defaults, formatting, base-0 scalar
+integer parsing, reset behavior, diagnostics, format-order coverage, and
+clone/equality coverage. The next config-surface experiment can continue with
+the larger `input` / `RepeatableReadableIO` field or the following scroll/link
+fields.
+
+## Completion Review
+
+Codex-native adversarial reviewer `019eb3c0-3098-7a21-b042-9b3d66ac8b24`
+returned **Approved** with no findings.
+
+The reviewer checked the completed experiment with fresh context, including the
+workflow contract, issue README, experiment file, implementation diff since the
+plan commit, `roastty/src/config/mod.rs`, and upstream
+`vendor/ghostty/src/config/Config.zig` / `vendor/ghostty/src/cli/args.zig`.

@@ -774,7 +774,7 @@ stays unaltered except for the rename).
 - [Experiment 64: Phase F — env config surface](64-env-config-surface.md) —
   **Pass**
 - [Experiment 65: Phase F — scalar launch config](65-scalar-launch-config.md) —
-  **Designed**
+  **Pass**
 
 ## Process
 

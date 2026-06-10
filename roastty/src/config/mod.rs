@@ -90,6 +90,12 @@ pub(crate) struct Config {
     pub notify_on_command_finish_after: Duration,
     /// `env`.
     pub env: RepeatableStringMap,
+    /// `wait-after-command`.
+    pub wait_after_command: bool,
+    /// `abnormal-command-exit-runtime`.
+    pub abnormal_command_exit_runtime: u32,
+    /// `scrollback-limit`.
+    pub scrollback_limit: usize,
     /// `window-colorspace`.
     pub window_colorspace: WindowColorspace,
     /// `alpha-blending`.
@@ -262,6 +268,9 @@ impl Default for Config {
                 duration: 5 * NS_PER_S,
             },
             env: RepeatableStringMap::default(),
+            wait_after_command: false,
+            abnormal_command_exit_runtime: 250,
+            scrollback_limit: 10_000_000,
             window_colorspace: WindowColorspace::Srgb,
             alpha_blending: AlphaBlending::Native,
             background_blur: BackgroundBlur::False,
@@ -471,6 +480,10 @@ impl Config {
                 out,
             ));
         self.env.format_entry(&mut EntryFormatter::new("env", out));
+        EntryFormatter::new("wait-after-command", out).entry_bool(self.wait_after_command);
+        EntryFormatter::new("abnormal-command-exit-runtime", out)
+            .entry_int(self.abnormal_command_exit_runtime);
+        EntryFormatter::new("scrollback-limit", out).entry_int(self.scrollback_limit);
         self.link_previews
             .format_entry(&mut EntryFormatter::new("link-previews", out));
         self.fullscreen
@@ -670,6 +683,20 @@ impl Config {
                 )?
             }
             "env" => self.env.parse_cli(value)?,
+            "wait-after-command" => {
+                self.wait_after_command = set_bool_field(value, default.wait_after_command)?
+            }
+            "abnormal-command-exit-runtime" => {
+                self.abnormal_command_exit_runtime = set_value_field(
+                    value,
+                    default.abnormal_command_exit_runtime,
+                    parse_u32_scalar_field,
+                )?
+            }
+            "scrollback-limit" => {
+                self.scrollback_limit =
+                    set_value_field(value, default.scrollback_limit, parse_usize_scalar_field)?
+            }
             "window-colorspace" => {
                 self.window_colorspace = set_enum_field(
                     value,
@@ -2611,6 +2638,20 @@ fn parse_u32_dec(buf: &str) -> Option<u32> {
 fn parse_u32_field(value: Option<&str>) -> Result<u32, MagicParseError> {
     let value = value.ok_or(MagicParseError::ValueRequired)?;
     parse_u32_dec(value).ok_or(MagicParseError::InvalidValue)
+}
+
+fn parse_u32_scalar_field(value: Option<&str>) -> Result<u32, MagicParseError> {
+    let value = value.ok_or(MagicParseError::ValueRequired)?;
+    parse_uint(value, 0, u32::MAX as u64)
+        .map(|v| v as u32)
+        .map_err(|_| MagicParseError::InvalidValue)
+}
+
+fn parse_usize_scalar_field(value: Option<&str>) -> Result<usize, MagicParseError> {
+    let value = value.ok_or(MagicParseError::ValueRequired)?;
+    parse_uint(value, 0, usize::MAX as u64)
+        .map(|v| v as usize)
+        .map_err(|_| MagicParseError::InvalidValue)
 }
 
 /// An error parsing `WindowDecoration` (upstream `error.InvalidValue`).
@@ -5245,6 +5286,9 @@ mod tests {
             }
         );
         assert_eq!(d.env.count(), 0);
+        assert!(!d.wait_after_command);
+        assert_eq!(d.abnormal_command_exit_runtime, 250);
+        assert_eq!(d.scrollback_limit, 10_000_000);
         // Renderer-appearance group (Experiment 465).
         assert_eq!(d.window_colorspace, WindowColorspace::Srgb);
         assert_eq!(d.alpha_blending, AlphaBlending::Native);
@@ -9171,6 +9215,9 @@ mod tests {
                 "notify-on-command-finish",
                 "notify-on-command-finish-action",
                 "env",
+                "wait-after-command",
+                "abnormal-command-exit-runtime",
+                "scrollback-limit",
                 "link-previews",
                 "fullscreen",
                 "title",
@@ -10595,6 +10642,138 @@ mod tests {
         assert_eq!(same.env, different_order.env);
         let cloned = different_order.clone();
         assert_eq!(cloned, different_order);
+    }
+
+    #[test]
+    fn scalar_launch_config_parse_format_reset_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert!(!cfg.wait_after_command);
+        assert_eq!(cfg.abnormal_command_exit_runtime, 250);
+        assert_eq!(cfg.scrollback_limit, 10_000_000);
+        assert_eq!(
+            line(&cfg, "wait-after-command"),
+            "wait-after-command = false"
+        );
+        assert_eq!(
+            line(&cfg, "abnormal-command-exit-runtime"),
+            "abnormal-command-exit-runtime = 250"
+        );
+        assert_eq!(
+            line(&cfg, "scrollback-limit"),
+            "scrollback-limit = 10000000"
+        );
+
+        cfg.set("wait-after-command", Some("true")).unwrap();
+        assert!(cfg.wait_after_command);
+        assert_eq!(
+            line(&cfg, "wait-after-command"),
+            "wait-after-command = true"
+        );
+        cfg.set("wait-after-command", Some("false")).unwrap();
+        assert!(!cfg.wait_after_command);
+        cfg.set("wait-after-command", None).unwrap();
+        assert!(cfg.wait_after_command);
+        cfg.set("wait-after-command", Some("")).unwrap();
+        assert!(!cfg.wait_after_command);
+
+        cfg.set("abnormal-command-exit-runtime", Some("1234"))
+            .unwrap();
+        assert_eq!(cfg.abnormal_command_exit_runtime, 1234);
+        cfg.set("abnormal-command-exit-runtime", Some("0x10"))
+            .unwrap();
+        assert_eq!(cfg.abnormal_command_exit_runtime, 16);
+        cfg.set("abnormal-command-exit-runtime", Some("0o10"))
+            .unwrap();
+        assert_eq!(cfg.abnormal_command_exit_runtime, 8);
+        cfg.set("abnormal-command-exit-runtime", Some("0b10"))
+            .unwrap();
+        assert_eq!(cfg.abnormal_command_exit_runtime, 2);
+        assert_eq!(
+            cfg.set("abnormal-command-exit-runtime", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("abnormal-command-exit-runtime", Some("nope")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("abnormal-command-exit-runtime", Some("-1")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("abnormal-command-exit-runtime", Some("4294967296")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        cfg.set("abnormal-command-exit-runtime", Some("")).unwrap();
+        assert_eq!(cfg.abnormal_command_exit_runtime, 250);
+
+        cfg.set("scrollback-limit", Some("123456")).unwrap();
+        assert_eq!(cfg.scrollback_limit, 123456);
+        cfg.set("scrollback-limit", Some("0x20")).unwrap();
+        assert_eq!(cfg.scrollback_limit, 32);
+        cfg.set("scrollback-limit", Some("0o20")).unwrap();
+        assert_eq!(cfg.scrollback_limit, 16);
+        cfg.set("scrollback-limit", Some("0b100")).unwrap();
+        assert_eq!(cfg.scrollback_limit, 4);
+        assert_eq!(
+            cfg.set("scrollback-limit", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("scrollback-limit", Some("not-a-number")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("scrollback-limit", Some("-1")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        let usize_overflow = format!("{}0", usize::MAX);
+        assert_eq!(
+            cfg.set("scrollback-limit", Some(&usize_overflow)),
+            Err(ConfigSetError::InvalidValue)
+        );
+        cfg.set("scrollback-limit", Some("")).unwrap();
+        assert_eq!(cfg.scrollback_limit, 10_000_000);
+
+        let diagnostics = cfg.load_str(
+            "wait-after-command = true\n\
+             abnormal-command-exit-runtime = -1\n\
+             scrollback-limit = nope\n",
+        );
+        assert!(cfg.wait_after_command);
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "abnormal-command-exit-runtime".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "scrollback-limit".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+            ]
+        );
+
+        cfg.set("abnormal-command-exit-runtime", Some("0x2A"))
+            .unwrap();
+        cfg.set("scrollback-limit", Some("0x100")).unwrap();
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert!(cloned.wait_after_command);
+        assert_eq!(cloned.abnormal_command_exit_runtime, 42);
+        assert_eq!(cloned.scrollback_limit, 256);
     }
 
     #[test]
