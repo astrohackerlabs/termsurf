@@ -705,6 +705,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 52: Phase E — Terminal print Unicode width](52-terminal-print-unicode-width.md)
   — **Pass**
+- [Experiment 53: Phase E — Unicode table and grapheme parity](53-unicode-table-parity.md)
+  — **Designed**
 
 ## Process
 
