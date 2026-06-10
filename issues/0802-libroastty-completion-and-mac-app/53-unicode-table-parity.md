@@ -30,12 +30,11 @@ present.
 
 - Add a Unicode table generator/verifier script:
   `scripts/roastty-app/generate-unicode-tables.py`.
-  - Source property data from Ghostty's generated LUT output when available
-    (`vendor/ghostty/.zig-cache/.../props.zig`) or from a deterministic Zig
-    invocation of `props_uucode.zig`.
+  - Source property data from Ghostty's generated LUT output
+    (`vendor/ghostty/.zig-cache/.../props.zig`).
   - Source grapheme transition data from Ghostty's
-    `vendor/ghostty/src/unicode/grapheme.zig` precompute logic by generating the
-    same full key space:
+    `uucode.x.grapheme.computeGraphemeBreakNoControl` precompute logic by
+    generating the same full key space:
     `BreakState × GraphemeBreakNoControl × GraphemeBreakNoControl`.
   - Translate Ghostty property values into Rust arrays without hand-editing the
     generated data.
@@ -165,3 +164,75 @@ by naming the committed output files. The reviewer also noted an Optional
 over-attribution of regional/Hangul/Indic cases to Ghostty's `grapheme.zig`
 tests; fixed by separating the actual Ghostty tests from additional transition
 table parity cases. Re-review approved with no remaining Required findings.
+
+## Result
+
+**Result:** Pass
+
+Roastty now uses committed generated Unicode artifacts at the existing
+`unicode::get` and `unicode::grapheme_break` call sites:
+
+- `scripts/roastty-app/generate-unicode-tables.py` reads Ghostty's generated
+  `vendor/ghostty/.zig-cache/.../props.zig`, translates the three-stage property
+  LUT into Rust, runs a temporary Zig 0.15 package that calls Ghostty's vendored
+  `uucode.x.grapheme.computeGraphemeBreakNoControl` for the full
+  `BreakState × GraphemeBreakNoControl × GraphemeBreakNoControl` matrix, and
+  rustfmt-normalizes both outputs.
+- `roastty/src/unicode/tables.rs` commits the generated `STAGE1`, `STAGE2`, and
+  `STAGE3` property arrays.
+- `roastty/src/unicode/grapheme_table.rs` commits the generated break/next-state
+  transition array.
+- `roastty/src/unicode/mod.rs` performs table lookup for codepoint properties
+  and table-driven grapheme transitions, while preserving the `Properties`,
+  `BreakState`, `get`, and `grapheme_break` API used by `Terminal::print()`.
+
+The generated Ghostty property data intentionally differs from the temporary
+Exp51 facade for combining marks and Hangul V/T codepoints: the committed table
+reports standalone width `0` with `width_zero_in_grapheme = true`, rather than
+the representative facade's width `1`. The terminal print behavior remains
+covered by the Exp52 print tests and the live A/B oracle.
+
+Verification run:
+
+- `scripts/roastty-app/generate-unicode-tables.py --generate`
+- `cargo fmt -- roastty/src/unicode/mod.rs roastty/src/unicode/tables.rs roastty/src/unicode/grapheme_table.rs`
+- `python3 -m py_compile scripts/roastty-app/generate-unicode-tables.py`
+- `scripts/roastty-app/generate-unicode-tables.py --check` — verifies property
+  data against Ghostty's generated `props.zig` cache and grapheme transitions
+  against vendored uucode via Zig 0.15.
+- `cargo test -p roastty unicode` — 29 passed, 0 failed.
+- `cargo test -p roastty terminal_stream_print` — 21 passed, 0 failed.
+- `cargo test -p roastty` — 4,447 unit tests passed, ABI harness passed, doc
+  tests passed.
+- `bash -n scripts/roastty-app/live-ab-smoke.sh`
+- `bash -n scripts/roastty-app/live-ab-matrix.sh`
+- `scripts/roastty-app/live-ab-smoke.sh --recipe unicode-width --max-mismatch-ratio 1 --max-mean-channel-delta 255`
+  — Pass, content `mean_channel_delta=3.8097902777777777`,
+  `mismatch_ratio=0.04077847222222222`.
+- `git diff --check`
+
+## Conclusion
+
+The Phase-E Unicode implementation no longer depends on representative
+hand-written ranges for the property path or the grapheme state machine. The
+normal Roastty build and test path consumes committed Rust artifacts only, while
+`scripts/roastty-app/generate-unicode-tables.py --check` provides the durable
+vendor-parity gate when the pinned Ghostty checkout is present.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial subagent (`multi_agent_v1.spawn_agent`,
+fresh context, read-only). **Initial verdict: CHANGES REQUIRED. Final verdict:
+APPROVED.**
+
+The reviewer found one Required issue: the first generator implementation built
+the grapheme transition table from a Python hand-port of Ghostty's no-control
+grapheme rules, so `--check` did not independently prove parity with vendored
+Ghostty/uucode. Fixed by removing the Python rule port and making the generator
+create a temporary Zig 0.15 package that depends on vendored `uucode` and calls
+`uucode.x.grapheme.computeGraphemeBreakNoControl` for every
+`BreakState × GraphemeBreakNoControl × GraphemeBreakNoControl` tuple. The
+reviewer also raised an Optional concern that the property generator did not
+implement the planned deterministic fallback; fixed by narrowing the experiment
+and README text to state that property generation requires Ghostty's generated
+`props.zig` cache. Re-review approved with no remaining Required findings.

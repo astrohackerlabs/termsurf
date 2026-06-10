@@ -294,6 +294,19 @@ before re-reading experiments.
   remains passing (`mean_channel_delta=3.8088447916666666`,
   `mismatch_ratio=0.04076041666666667`); the remaining Phase-E gap is the full
   generated Unicode table/state-machine parity.
+- **Generated Unicode table parity:** Exp 53 replaces the representative Unicode
+  facade with committed Rust tables generated from Ghostty's pinned Unicode LUT
+  and a generated no-control grapheme transition table. Regenerate and verify
+  with `scripts/roastty-app/generate-unicode-tables.py --generate` and
+  `scripts/roastty-app/generate-unicode-tables.py --check`; the property path
+  requires Ghostty's generated `props.zig` cache, and the grapheme path runs the
+  vendored uucode transition function through Zig 0.15. Normal
+  `cargo test -p roastty` uses only committed Rust artifacts and does not
+  require `vendor/ghostty`. Ghostty's table intentionally reports width `0` for
+  combining marks and Hangul V/T codepoints, replacing the temporary Exp51
+  standalone-width facade. The live `unicode-width` content metric remains
+  passing (`mean_channel_delta=3.8097902777777777`,
+  `mismatch_ratio=0.04077847222222222`).
 
 ### Input injection (Exp 5)
 
@@ -706,7 +719,7 @@ stays unaltered except for the rename).
 - [Experiment 52: Phase E — Terminal print Unicode width](52-terminal-print-unicode-width.md)
   — **Pass**
 - [Experiment 53: Phase E — Unicode table and grapheme parity](53-unicode-table-parity.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

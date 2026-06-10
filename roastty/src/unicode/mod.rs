@@ -7,6 +7,9 @@
 
 use unicode_width::UnicodeWidthChar;
 
+mod grapheme_table;
+mod tables;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Properties {
     /// Terminal cell width clamped to Ghostty's `[0, 2]` range.
@@ -19,87 +22,74 @@ pub(crate) struct Properties {
     pub(crate) emoji_vs_base: bool,
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GraphemeBreak {
     Other,
     Prepend,
+    RegionalIndicator,
     SpacingMark,
     L,
     V,
     T,
     Lv,
     Lvt,
-    Extend,
     Zwj,
-    RegionalIndicator,
+    Zwnj,
     ExtendedPictographic,
+    EmojiModifierBase,
+    EmojiModifier,
+    IndicConjunctBreakExtend,
+    IndicConjunctBreakLinker,
+    IndicConjunctBreakConsonant,
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct BreakState {
-    regional_indicator_count: u8,
-    extended_pictographic_zwj: bool,
+pub(crate) enum BreakState {
+    #[default]
+    Default,
+    RegionalIndicator,
+    ExtendedPictographic,
+    IndicConjunctBreakConsonant,
+    IndicConjunctBreakLinker,
 }
 
 pub(crate) fn get(codepoint: u32) -> Properties {
-    let Some(ch) = char::from_u32(codepoint) else {
+    let high = (codepoint >> 8) as usize;
+    if high >= tables::STAGE1.len() {
         return fallback();
-    };
-
-    let width = standalone_width(ch, codepoint);
-    let grapheme_break = grapheme_break_property(codepoint);
-
-    Properties {
-        width,
-        width_zero_in_grapheme: width_zero_in_grapheme(codepoint),
-        grapheme_break,
-        emoji_vs_base: emoji_vs_base(codepoint),
     }
+
+    let low = (codepoint & 0xff) as usize;
+    let stage2_index = usize::from(tables::STAGE1[high]) + low;
+    let stage3_index = usize::from(tables::STAGE2[stage2_index]);
+    tables::STAGE3[stage3_index]
 }
 
 pub(crate) fn grapheme_break(previous: u32, current: u32, state: &mut BreakState) -> bool {
     let previous_break = get(previous).grapheme_break;
     let current_break = get(current).grapheme_break;
+    let index = (*state as usize * GRAPHEME_BREAK_COUNT * GRAPHEME_BREAK_COUNT)
+        + (previous_break as usize * GRAPHEME_BREAK_COUNT)
+        + current_break as usize;
+    let transition = grapheme_table::BREAK_TRANSITIONS[index];
+    *state = break_state_from_index(transition >> 1);
+    transition & 1 == 1
+}
 
-    if previous_break == GraphemeBreak::ExtendedPictographic && current_break == GraphemeBreak::Zwj
-    {
-        state.extended_pictographic_zwj = true;
-        return false;
-    }
+const GRAPHEME_BREAK_COUNT: usize = 17;
+const BREAK_STATE_COUNT: usize = 5;
 
-    if state.extended_pictographic_zwj && current_break == GraphemeBreak::ExtendedPictographic {
-        state.extended_pictographic_zwj = false;
-        return false;
+const fn break_state_from_index(index: u8) -> BreakState {
+    match index {
+        0 => BreakState::Default,
+        1 => BreakState::RegionalIndicator,
+        2 => BreakState::ExtendedPictographic,
+        3 => BreakState::IndicConjunctBreakConsonant,
+        4 => BreakState::IndicConjunctBreakLinker,
+        _ => BreakState::Default,
     }
-    if current_break != GraphemeBreak::Extend && current_break != GraphemeBreak::Zwj {
-        state.extended_pictographic_zwj = false;
-    }
-
-    match (previous_break, current_break) {
-        (GraphemeBreak::L, GraphemeBreak::L)
-        | (GraphemeBreak::L, GraphemeBreak::V)
-        | (GraphemeBreak::L, GraphemeBreak::Lv)
-        | (GraphemeBreak::L, GraphemeBreak::Lvt)
-        | (GraphemeBreak::Lv, GraphemeBreak::V)
-        | (GraphemeBreak::Lv, GraphemeBreak::T)
-        | (GraphemeBreak::V, GraphemeBreak::V)
-        | (GraphemeBreak::V, GraphemeBreak::T)
-        | (GraphemeBreak::Lvt, GraphemeBreak::T)
-        | (GraphemeBreak::T, GraphemeBreak::T)
-        | (_, GraphemeBreak::Extend)
-        | (_, GraphemeBreak::Zwj)
-        | (_, GraphemeBreak::SpacingMark)
-        | (GraphemeBreak::Prepend, _) => return false,
-        (GraphemeBreak::RegionalIndicator, GraphemeBreak::RegionalIndicator) => {
-            let should_break = state.regional_indicator_count % 2 == 1;
-            state.regional_indicator_count = state.regional_indicator_count.saturating_add(1);
-            return should_break;
-        }
-        _ => {}
-    }
-
-    state.regional_indicator_count = u8::from(current_break == GraphemeBreak::RegionalIndicator);
-    true
 }
 
 fn standalone_width(ch: char, codepoint: u32) -> u8 {
@@ -855,7 +845,7 @@ const fn grapheme_break_property(codepoint: u32) -> GraphemeBreak {
     }
 
     if width_zero_in_grapheme(codepoint) {
-        return GraphemeBreak::Extend;
+        return GraphemeBreak::IndicConjunctBreakExtend;
     }
 
     if is_extended_pictographic(codepoint) {
@@ -1180,6 +1170,26 @@ mod tests {
         get(codepoint)
     }
 
+    fn breaks(previous: u32, current: u32, state: &mut BreakState) -> bool {
+        grapheme_break(previous, current, state)
+    }
+
+    #[test]
+    fn unicode_generated_tables_have_expected_shape() {
+        assert!(!tables::STAGE1.is_empty());
+        assert!(!tables::STAGE2.is_empty());
+        assert!(!tables::STAGE3.is_empty());
+        assert_eq!(
+            grapheme_table::BREAK_TRANSITIONS.len(),
+            BREAK_STATE_COUNT * GRAPHEME_BREAK_COUNT * GRAPHEME_BREAK_COUNT
+        );
+
+        for codepoint in [0x0000, 0x00FF, 0x0100, 0x10FFFF] {
+            let _ = props(codepoint);
+        }
+        assert_eq!(props(0x11_0000), fallback());
+    }
+
     #[test]
     fn unicode_properties_ascii_fast_path_width() {
         assert_eq!(
@@ -1197,9 +1207,12 @@ mod tests {
     fn unicode_properties_combining_marks_are_extend_zero_width() {
         for codepoint in [0x0301, 0x0308, 0x0303, 0x0302] {
             let props = props(codepoint);
-            assert_eq!(props.width, 1);
+            assert_eq!(props.width, 0);
             assert!(props.width_zero_in_grapheme);
-            assert_eq!(props.grapheme_break, GraphemeBreak::Extend);
+            assert_eq!(
+                props.grapheme_break,
+                GraphemeBreak::IndicConjunctBreakExtend
+            );
             assert!(!props.emoji_vs_base);
         }
     }
@@ -1232,7 +1245,10 @@ mod tests {
             let props = props(codepoint);
             assert_eq!(props.width, 0);
             assert!(props.width_zero_in_grapheme);
-            assert_eq!(props.grapheme_break, GraphemeBreak::Extend);
+            assert_eq!(
+                props.grapheme_break,
+                GraphemeBreak::IndicConjunctBreakExtend
+            );
             assert!(!props.emoji_vs_base);
         }
     }
@@ -1258,13 +1274,21 @@ mod tests {
         assert_eq!(props(0x0903).grapheme_break, GraphemeBreak::SpacingMark);
         assert_eq!(props(0x1100).grapheme_break, GraphemeBreak::L);
         assert_eq!(props(0x1161).grapheme_break, GraphemeBreak::V);
-        assert_eq!(props(0x1161).width, 1);
+        assert_eq!(props(0x1161).width, 0);
         assert!(props(0x1161).width_zero_in_grapheme);
         assert_eq!(props(0x11A8).grapheme_break, GraphemeBreak::T);
-        assert_eq!(props(0x11A8).width, 1);
+        assert_eq!(props(0x11A8).width, 0);
         assert!(props(0x11A8).width_zero_in_grapheme);
         assert_eq!(props(0xAC00).grapheme_break, GraphemeBreak::Lv);
         assert_eq!(props(0xAC01).grapheme_break, GraphemeBreak::Lvt);
+        assert_eq!(
+            props(0x0915).grapheme_break,
+            GraphemeBreak::IndicConjunctBreakConsonant
+        );
+        assert_eq!(
+            props(0x094D).grapheme_break,
+            GraphemeBreak::IndicConjunctBreakLinker
+        );
     }
 
     #[test]
@@ -1289,5 +1313,54 @@ mod tests {
                 emoji_vs_base: false,
             }
         );
+    }
+
+    #[test]
+    fn unicode_grapheme_breaks_emoji_modifier_and_zwj_family() {
+        let mut state = BreakState::default();
+        assert!(!breaks(0x261D, 0x1F3FF, &mut state));
+
+        let mut state = BreakState::default();
+        assert!(breaks(0x22, 0x1F3FF, &mut state));
+
+        let family = [0x1F469, 0x200D, 0x1F469, 0x200D, 0x1F467, 0x200D, 0x1F466];
+        let mut state = BreakState::default();
+        for pair in family.windows(2) {
+            assert!(
+                !breaks(pair[0], pair[1], &mut state),
+                "unexpected break between U+{:04X} and U+{:04X}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(breaks(*family.last().unwrap(), u32::from(b'_'), &mut state));
+    }
+
+    #[test]
+    fn unicode_grapheme_breaks_regional_indicator_pairs() {
+        let mut state = BreakState::default();
+        assert!(!breaks(0x1F1E8, 0x1F1ED, &mut state));
+        assert!(breaks(0x1F1ED, 0x1F1E6, &mut state));
+        assert!(!breaks(0x1F1E6, 0x1F1E7, &mut state));
+    }
+
+    #[test]
+    fn unicode_grapheme_breaks_hangul_clusters() {
+        let mut state = BreakState::default();
+        assert!(!breaks(0x1100, 0x1161, &mut state));
+        assert!(!breaks(0x1161, 0x11A8, &mut state));
+        assert!(breaks(0x11A8, u32::from(b'a'), &mut state));
+
+        let mut state = BreakState::default();
+        assert!(!breaks(0xAC00, 0x11A8, &mut state));
+        assert!(breaks(0xAC01, u32::from(b'a'), &mut state));
+    }
+
+    #[test]
+    fn unicode_grapheme_breaks_indic_conjunct_sequence() {
+        let mut state = BreakState::default();
+        assert!(!breaks(0x0915, 0x094D, &mut state));
+        assert!(!breaks(0x094D, 0x0915, &mut state));
+        assert!(breaks(0x0915, u32::from(b'a'), &mut state));
     }
 }
