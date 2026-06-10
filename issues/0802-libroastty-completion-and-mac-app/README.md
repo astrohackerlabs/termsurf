@@ -662,6 +662,8 @@ stays unaltered except for the rename).
   — **Partial**
 - [Experiment 47: Phase D — launch-time live A/B recipe bootstrap](47-live-ab-launch-bootstrap.md)
   — **Pass**
+- [Experiment 48: Phase D — hold live A/B recipe frames through capture](48-live-ab-held-recipe-frame.md)
+  — **Designed**
 
 ## Process
 
