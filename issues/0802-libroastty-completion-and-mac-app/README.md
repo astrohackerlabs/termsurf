@@ -579,6 +579,10 @@ stays unaltered except for the rename).
   present_live rebuilds at the new scale — no more stale-DPI blur after a
   monitor move; headless change-detection test + 4418 green; live re-sharpen
   pending — screen locked) · Claude
+- [Experiment 36: Phase C — report color-scheme changes live (DECSET 2031)](36-color-scheme-change-report.md)
+  — **Designed** (the query half of mode 2031 exists, but `set_color_scheme`
+  never emits the proactive `997` report on an OS theme change; wire the change
+  path, gated on 2031, change-only; fully headless) · Claude
 
 ## Process
 
