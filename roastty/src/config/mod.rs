@@ -110,6 +110,10 @@ pub(crate) struct Config {
     pub search_selected_foreground: TerminalColor,
     /// `search-selected-background`.
     pub search_selected_background: TerminalColor,
+    /// `command`.
+    pub command: Option<Command>,
+    /// `initial-command`.
+    pub initial_command: Option<Command>,
     /// `window-padding-color`.
     pub window_padding_color: WindowPaddingColor,
     /// `background-opacity`.
@@ -274,6 +278,8 @@ impl Default for Config {
                 g: 0xa5,
                 b: 0x7e,
             }),
+            command: None,
+            initial_command: None,
             window_padding_color: WindowPaddingColor::Background,
             background_opacity: 1.0,
             background_opacity_cells: false,
@@ -439,6 +445,10 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("search-selected-foreground", out));
         self.search_selected_background
             .format_entry(&mut EntryFormatter::new("search-selected-background", out));
+        EntryFormatter::new("command", out)
+            .entry_optional(self.command.clone(), |v, f| v.format_entry(f));
+        EntryFormatter::new("initial-command", out)
+            .entry_optional(self.initial_command.clone(), |v, f| v.format_entry(f));
         EntryFormatter::new("background-opacity", out).entry_float(self.background_opacity);
         EntryFormatter::new("background-opacity-cells", out)
             .entry_bool(self.background_opacity_cells);
@@ -854,6 +864,13 @@ impl Config {
                     default.search_selected_background,
                     TerminalColor::parse_cli,
                 )?
+            }
+            "command" => {
+                self.command = set_optional_value_field(value, default.command, Command::parse_cli)?
+            }
+            "initial-command" => {
+                self.initial_command =
+                    set_optional_value_field(value, default.initial_command, Command::parse_cli)?
             }
             "background-image-repeat" => {
                 self.bg_image_repeat = set_bool_field(value, default.bg_image_repeat)?
@@ -1708,6 +1725,14 @@ impl From<MagicParseError> for ConfigSetError {
     }
 }
 
+impl From<CommandParseError> for ConfigSetError {
+    fn from(e: CommandParseError) -> Self {
+        match e {
+            CommandParseError::ValueRequired => ConfigSetError::ValueRequired,
+        }
+    }
+}
+
 impl From<WindowDecorationParseError> for ConfigSetError {
     fn from(e: WindowDecorationParseError) -> Self {
         match e {
@@ -2259,6 +2284,68 @@ impl Duration {
     pub(crate) fn as_milliseconds(self) -> usize {
         let ms = self.duration / NS_PER_MS;
         ms.min(u32::MAX as u64) as usize
+    }
+}
+
+/// An error parsing `Command` (upstream `error.ValueRequired`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandParseError {
+    /// No value, or an empty/all-space value.
+    ValueRequired,
+}
+
+/// The `command` / `initial-command` config (upstream `config.Command`): either
+/// a shell-expanded command string or a directly executed argv vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Command {
+    /// Execute through shell expansion, usually `/bin/sh -c`.
+    Shell(String),
+    /// Execute directly as argv.
+    Direct(Vec<String>),
+}
+
+impl Command {
+    /// Parse a command (upstream `Command.parseCLI`): trim edge spaces, recognize
+    /// exact `shell:` / `direct:` prefixes, otherwise default to shell mode.
+    /// `direct:` payloads are trimmed and naively split on ASCII spaces.
+    pub(crate) fn parse_cli(input: Option<&str>) -> Result<Command, CommandParseError> {
+        let input = input.ok_or(CommandParseError::ValueRequired)?;
+        let trimmed = input.trim_matches(' ');
+        if trimmed.is_empty() {
+            return Err(CommandParseError::ValueRequired);
+        }
+
+        let (direct, payload) = match trimmed.find(':') {
+            Some(idx) if &trimmed[..idx] == "direct" => (true, &trimmed[idx + 1..]),
+            Some(idx) if &trimmed[..idx] == "shell" => (false, &trimmed[idx + 1..]),
+            _ => (false, trimmed),
+        };
+
+        let payload = payload.trim_matches(' ');
+        if direct {
+            Ok(Command::Direct(
+                payload.split(' ').map(|arg| arg.to_string()).collect(),
+            ))
+        } else {
+            Ok(Command::Shell(payload.to_string()))
+        }
+    }
+
+    /// Creates a human-readable command string (upstream `Command.string`).
+    pub(crate) fn string(&self) -> String {
+        match self {
+            Command::Shell(command) => command.clone(),
+            Command::Direct(args) => args.join(" "),
+        }
+    }
+
+    /// Format as a config entry (upstream `Command.formatEntry`): shell emits the
+    /// command string, direct emits `direct:` plus single-space-joined args.
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        match self {
+            Command::Shell(command) => formatter.entry_str(command),
+            Command::Direct(args) => formatter.entry_str(&format!("direct:{}", args.join(" "))),
+        }
     }
 }
 
@@ -4823,12 +4910,12 @@ mod tests {
         AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
         BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
         ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
-        Config, ConfigDiagnostic, ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError,
-        ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths,
-        Duration, DurationParseError, FlagsParseError, FontShapingBreak, FontStyle,
-        FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews,
-        MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
-        MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
+        Command, Config, ConfigDiagnostic, ConfigFilePath, ConfigRecursiveFileErrorKind,
+        ConfigSetError, ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation,
+        DefaultConfigPaths, Duration, DurationParseError, FlagsParseError, FontShapingBreak,
+        FontStyle, FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod,
+        LinkPreviews, MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons,
+        MagicParseError, MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
         MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
@@ -5083,6 +5170,8 @@ mod tests {
                 b: 0x7e,
             })
         );
+        assert_eq!(d.command, None);
+        assert_eq!(d.initial_command, None);
         assert_eq!(d.window_padding_color, WindowPaddingColor::Background);
         assert_eq!(d.background_opacity, 1.0);
         // Opacity options (Experiment 848): upstream defaults false / 0.5.
@@ -8965,6 +9054,8 @@ mod tests {
                 "search-background",
                 "search-selected-foreground",
                 "search-selected-background",
+                "command",
+                "initial-command",
                 "background-opacity",
                 "background-opacity-cells",
                 "bell-audio-path",
@@ -10191,6 +10282,117 @@ mod tests {
                     cloned == cfg
                         && cloned.search_selected_background
                             == TerminalColor::Color(Color { r: 4, g: 5, b: 6 })
+                }),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn command_config_parse_format_reset_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.command, None);
+        assert_eq!(cfg.initial_command, None);
+        assert_eq!(line(&cfg, "command"), "command = ");
+        assert_eq!(line(&cfg, "initial-command"), "initial-command = ");
+
+        cfg.set("command", Some(" echo hello ")).unwrap();
+        assert_eq!(cfg.command, Some(Command::Shell("echo hello".to_string())));
+        assert_eq!(line(&cfg, "command"), "command = echo hello");
+
+        cfg.set("command", Some(" shell:  echo hello ")).unwrap();
+        assert_eq!(cfg.command, Some(Command::Shell("echo hello".to_string())));
+        assert_eq!(line(&cfg, "command"), "command = echo hello");
+
+        cfg.set("initial-command", Some("direct:echo hello"))
+            .unwrap();
+        assert_eq!(
+            cfg.initial_command,
+            Some(Command::Direct(vec![
+                "echo".to_string(),
+                "hello".to_string()
+            ]))
+        );
+        assert_eq!(
+            line(&cfg, "initial-command"),
+            "initial-command = direct:echo hello"
+        );
+
+        cfg.set("initial-command", Some(" direct:  echo hello"))
+            .unwrap();
+        assert_eq!(
+            cfg.initial_command,
+            Some(Command::Direct(vec![
+                "echo".to_string(),
+                "hello".to_string()
+            ]))
+        );
+        assert_eq!(
+            line(&cfg, "initial-command"),
+            "initial-command = direct:echo hello"
+        );
+
+        cfg.set("initial-command", Some("direct:")).unwrap();
+        assert_eq!(
+            cfg.initial_command,
+            Some(Command::Direct(vec![String::new()]))
+        );
+        assert_eq!(line(&cfg, "initial-command"), "initial-command = direct:");
+
+        cfg.set("command", Some("foo:bar")).unwrap();
+        assert_eq!(cfg.command, Some(Command::Shell("foo:bar".to_string())));
+        assert_eq!(line(&cfg, "command"), "command = foo:bar");
+        assert_eq!(
+            cfg.command.as_ref().map(Command::string),
+            Some("foo:bar".to_string())
+        );
+        assert_eq!(
+            cfg.initial_command.as_ref().map(Command::string),
+            Some(String::new())
+        );
+
+        cfg.set("command", Some("")).unwrap();
+        cfg.set("initial-command", Some("")).unwrap();
+        assert_eq!(cfg.command, None);
+        assert_eq!(cfg.initial_command, None);
+        assert_eq!(line(&cfg, "command"), "command = ");
+        assert_eq!(line(&cfg, "initial-command"), "initial-command = ");
+
+        assert_eq!(cfg.set("command", None), Err(ConfigSetError::ValueRequired));
+        assert_eq!(
+            cfg.set("initial-command", Some(" ")),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        let diagnostics = cfg.load_str("command = fish\ninitial-command\n");
+        assert_eq!(cfg.command, Some(Command::Shell("fish".to_string())));
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "initial-command".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }]
+        );
+
+        assert_eq!(
+            cfg.set("initial-command", Some("direct:nvim main.rs"))
+                .map(|_| {
+                    let cloned = cfg.clone();
+                    cloned == cfg
+                        && cloned.initial_command
+                            == Some(Command::Direct(vec![
+                                "nvim".to_string(),
+                                "main.rs".to_string(),
+                            ]))
                 }),
             Ok(true)
         );

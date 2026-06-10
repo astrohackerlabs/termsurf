@@ -122,3 +122,55 @@ design level, deferring runtime launch behavior is acceptable because faithful
 runtime/defaulting behavior involves `Config.finalize`, CLI `-e`, and surface
 launch state beyond the parser, and Exp62's result commit exists before this
 design.
+
+## Result
+
+**Result:** Pass
+
+Experiment 63 added the config-only `command` / `initial-command` surface to
+`roastty/src/config/mod.rs`. Both fields are optional, default to `None`, format
+as empty entries when unset, and route through `Config::set` using a ported
+`Command` parser/formatter.
+
+The parser follows upstream `vendor/ghostty/src/config/command.zig` semantics:
+edge spaces are trimmed, unprefixed and `shell:` values become shell strings,
+`direct:` values trim the payload and split on ASCII spaces, unknown prefixes
+remain shell commands, all-space values report `ValueRequired`, and `direct:`
+parses as a direct command with one empty argument before formatting back to
+`direct:`.
+
+The experiment intentionally did not wire these fields into surface launch,
+first-surface `initial-command` behavior, CLI `-e`, default shell lookup, or
+shell integration wrapping. Those runtime behaviors remain out of scope for a
+later experiment.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/config/mod.rs`
+- `cargo test -p roastty command_config`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`
+- `cargo fmt --check`
+- `git diff --check`
+
+`cargo test -p roastty` passed with 4,498 unit tests, the C ABI harness, and doc
+tests. The C ABI harness still emits existing enum-conversion warnings unrelated
+to this config change.
+
+## Conclusion
+
+`command` and `initial-command` now have a faithful parser/formatter config
+surface with defaults, reset behavior, diagnostics, format order, clone/equality
+coverage, and focused tests. The next experiment can move to the following Phase
+F config gap or separately design the larger runtime launch semantics if command
+application becomes the priority.
+
+## Completion Review
+
+Codex-native adversarial reviewer `019eb3a7-3bb4-7632-a2f6-013f85fb0738`
+returned **Approved** with no findings.
+
+The reviewer checked the completed experiment with fresh context, including the
+workflow contract, issue README, experiment file, implementation diff since the
+plan commit, `roastty/src/config/mod.rs`, and upstream
+`vendor/ghostty/src/config/command.zig` / `Config.zig`.
