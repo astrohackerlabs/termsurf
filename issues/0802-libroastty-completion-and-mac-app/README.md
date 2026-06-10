@@ -776,6 +776,8 @@ stays unaltered except for the rename).
 - [Experiment 65: Phase F — scalar launch config](65-scalar-launch-config.md) —
   **Pass**
 - [Experiment 66: Phase F — scrollbar config](66-scrollbar-config.md) — **Pass**
+- [Experiment 67: Phase F — link URL and maximize config](67-link-url-maximize-config.md)
+  — **Designed**
 
 ## Process
 
