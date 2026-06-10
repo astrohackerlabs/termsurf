@@ -792,6 +792,8 @@ stays unaltered except for the rename).
 - [Experiment 68: Phase F — class config](68-class-config.md) — **Pass**
 - [Experiment 69: Phase F — working-directory config](69-working-directory-config.md)
   — **Pass**
+- [Experiment 70: Phase F — window padding config](70-window-padding-config.md)
+  — **Designed**
 
 ## Process
 
