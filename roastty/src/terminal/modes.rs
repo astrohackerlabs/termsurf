@@ -99,7 +99,7 @@ const ENTRIES: [ModeEntry; MODE_COUNT] = [
     ModeEntry::dec(Mode::Wraparound, "wraparound", 7, true),
     ModeEntry::dec(Mode::Autorepeat, "autorepeat", 8, false),
     ModeEntry::dec(Mode::MouseEventX10, "mouse_event_x10", 9, false),
-    ModeEntry::dec(Mode::CursorBlinking, "cursor_blinking", 12, false),
+    ModeEntry::dec(Mode::CursorBlinking, "cursor_blinking", 12, true),
     ModeEntry::dec(Mode::CursorVisible, "cursor_visible", 25, true),
     ModeEntry::dec(Mode::EnableMode3, "enable_mode_3", 40, false),
     ModeEntry::dec(Mode::ReverseWrap, "reverse_wrap", 45, false),

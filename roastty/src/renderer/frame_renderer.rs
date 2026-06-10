@@ -187,8 +187,9 @@ impl FrameRenderer {
 /// The render knobs (Issue 801, Exp 842/846/848). `from_config` sources most from
 /// a `Config`: `bold`, `background_opacity`, `padding_color`, `thicken`/
 /// `thicken_strength` (Exp 845), and `faint_opacity`/`background_opacity_cells`
-/// (Exp 848). Only `alpha` and `overlay_alpha` have no `Config` option — they are
-/// the faithful opaque `255` (upstream hardcodes non-faint text alpha to 255).
+/// (Exp 848), and `cursor_opacity` (Exp 60). Only `alpha` and `overlay_alpha`
+/// have no `Config` option — they are the faithful opaque `255` (upstream
+/// hardcodes non-faint text alpha to 255).
 pub(crate) struct FrameRenderKnobs {
     pub(crate) bold: Option<BoldColor>,
     pub(crate) alpha: u8,
@@ -199,14 +200,16 @@ pub(crate) struct FrameRenderKnobs {
     pub(crate) background_opacity: f64,
     pub(crate) padding_color: WindowPaddingColor,
     pub(crate) overlay_alpha: u8,
+    pub(crate) cursor_overlay_alpha: u8,
 }
 
 impl FrameRenderKnobs {
     /// Source the render knobs from a `Config`. `faint_opacity` converts the f64
     /// `faint-opacity` to the `u8` knob — clamped to `[0, 1]` at this use site
     /// (roastty has no config finalize step) and `ceil(x × 255)` (matching upstream
-    /// `generic.zig`). Only `alpha`/`overlay_alpha` are constants: the faithful
-    /// opaque `255` (upstream hardcodes non-faint text alpha to 255).
+    /// `generic.zig`). `cursor_opacity` uses the same clamp-and-ceil conversion
+    /// for the cursor overlay. Only `alpha`/`overlay_alpha` are constants: the
+    /// faithful opaque `255` (upstream hardcodes non-faint text alpha to 255).
     pub(crate) fn from_config(config: &Config) -> Self {
         Self {
             bold: config.bold_color.map(|c| c.to_terminal()),
@@ -218,6 +221,7 @@ impl FrameRenderKnobs {
             background_opacity: config.background_opacity,
             padding_color: config.window_padding_color,
             overlay_alpha: 255,
+            cursor_overlay_alpha: (config.cursor_opacity.clamp(0.0, 1.0) * 255.0).ceil() as u8,
         }
     }
 }
@@ -319,6 +323,7 @@ impl FrameRenderState {
                         style,
                         wide: false,
                         color,
+                        alpha: knobs.cursor_overlay_alpha,
                     }),
                 screen_fg: self.screen_fg,
                 alpha: knobs.overlay_alpha,
@@ -450,6 +455,7 @@ mod tests {
                     style: CursorStyle::Underline,
                     wide: true,
                     color: Rgb::new(3, 4, 5),
+                    alpha: 211,
                 }),
                 screen_fg: Rgb::new(40, 41, 42),
                 alpha: 219,
@@ -803,6 +809,7 @@ mod tests {
             background_opacity: 0.42,
             padding_color: WindowPaddingColor::Extend,
             overlay_alpha: 219,
+            cursor_overlay_alpha: 211,
         }
     }
 
@@ -868,7 +875,9 @@ mod tests {
         let overlay = input.text_overlay.cursor.expect("overlay cursor");
         assert!(matches!(overlay.style, CursorStyle::Block));
         assert_eq!(overlay.color, state.default_fg);
+        assert_eq!(overlay.alpha, knobs.cursor_overlay_alpha);
         assert_eq!(input.text_overlay.screen_fg, state.default_fg);
+        assert_eq!(input.text_overlay.alpha, knobs.overlay_alpha);
     }
 
     #[test]
@@ -971,6 +980,7 @@ mod tests {
         // Upstream-faithful constants (no config option yet).
         assert_eq!(knobs.alpha, 255);
         assert_eq!(knobs.overlay_alpha, 255);
+        assert_eq!(knobs.cursor_overlay_alpha, 255);
         assert_eq!(knobs.faint_opacity, 128);
         assert!(!knobs.background_opacity_cells);
     }
@@ -1004,6 +1014,24 @@ mod tests {
         assert_eq!(FrameRenderKnobs::from_config(&cfg).faint_opacity, 255);
         cfg.set("faint-opacity", Some("2.0")).unwrap();
         assert_eq!(FrameRenderKnobs::from_config(&cfg).faint_opacity, 255);
+    }
+
+    #[test]
+    fn cursor_opacity_clamps_to_cursor_overlay_alpha_only() {
+        let mut cfg = Config::default();
+        cfg.set("cursor-opacity", Some("0.5")).unwrap();
+        let knobs = FrameRenderKnobs::from_config(&cfg);
+        assert_eq!(knobs.cursor_overlay_alpha, 128);
+        assert_eq!(knobs.overlay_alpha, 255);
+        assert_eq!(knobs.alpha, 255);
+
+        cfg.set("cursor-opacity", Some("-1.0")).unwrap();
+        assert_eq!(FrameRenderKnobs::from_config(&cfg).cursor_overlay_alpha, 0);
+        cfg.set("cursor-opacity", Some("2.0")).unwrap();
+        assert_eq!(
+            FrameRenderKnobs::from_config(&cfg).cursor_overlay_alpha,
+            255
+        );
     }
 
     #[test]

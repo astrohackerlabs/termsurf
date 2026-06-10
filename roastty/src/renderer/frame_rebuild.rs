@@ -148,6 +148,7 @@ impl FrameTerminalSnapshot {
                 style: cursor.style,
                 wide: cursor.wide,
                 color: cursor.color,
+                alpha: cursor.alpha,
             })
         });
 
@@ -552,6 +553,7 @@ pub(crate) struct FrameCursorOverlay {
     pub(crate) style: CursorStyle,
     pub(crate) wide: bool,
     pub(crate) color: Rgb,
+    pub(crate) alpha: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -559,6 +561,7 @@ pub(crate) struct FrameSnapshotCursorOverlayInput {
     pub(crate) style: CursorStyle,
     pub(crate) wide: bool,
     pub(crate) color: Rgb,
+    pub(crate) alpha: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1042,7 +1045,7 @@ impl FrameRebuildPlan {
                 cursor.style,
                 cursor.wide,
                 rgb_array(cursor.color),
-                input.alpha,
+                cursor.alpha,
             )
             .map_err(FrameTextOverlayRenderError::from)?;
             if contents.get_cursor_glyph().is_some() {
@@ -2988,6 +2991,7 @@ mod tests {
             style,
             wide: false,
             color: Rgb::new(7, 8, 9),
+            alpha: 255,
         }
     }
 
@@ -2996,6 +3000,7 @@ mod tests {
             style: CursorStyle::Underline,
             wide: true,
             color: Rgb::new(3, 4, 5),
+            alpha: 219,
         }
     }
 
@@ -3035,6 +3040,7 @@ mod tests {
         assert_eq!(cursor.style, CursorStyle::Underline);
         assert_eq!(cursor.wide, true);
         assert_eq!(cursor.color, Rgb::new(3, 4, 5));
+        assert_eq!(cursor.alpha, 219);
     }
 
     #[test]
@@ -3072,6 +3078,7 @@ mod tests {
                         style: CursorStyle::Block,
                         wide: false,
                         color: Rgb::new(7, 8, 9),
+                        alpha: 203,
                     },
                 ))),
             )

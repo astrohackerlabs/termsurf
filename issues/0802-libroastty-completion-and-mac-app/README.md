@@ -162,6 +162,10 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   validated with `--lib` only, so the harness silently failed to compile from
   Exp 8 onward (141 errors) — not caught until Exp 16. The harness is the C-side
   ABI conformance oracle; keep it compiling every experiment.
+- **Cursor blinking is default-on at the terminal mode layer.** Exp 60 changed
+  DEC mode 12 (`cursor_blinking`) to default true so formatter/mode reports do
+  not emit `?12h` for a fresh terminal; configured `cursor-style-blink = true`
+  or `false` still gates later in-band DEC mode 12 mutations.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -760,7 +764,7 @@ stays unaltered except for the rename).
 - [Experiment 59: Phase F — mouse behavior config](59-mouse-behavior-config.md)
   — **Pass**
 - [Experiment 60: Phase F — cursor default config](60-cursor-default-config.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

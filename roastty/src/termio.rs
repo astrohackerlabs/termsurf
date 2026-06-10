@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crate::os::pty::{PtyChild, PtyCommand, PtyReadiness, PtySize};
+use crate::terminal::cursor;
 use crate::terminal::terminal::{
-    Terminal, TerminalClipboardEvent, TerminalInitError, TerminalStreamError,
+    Terminal, TerminalClipboardEvent, TerminalInitError, TerminalInitOptions, TerminalStreamError,
 };
 
 #[derive(Debug)]
@@ -24,6 +25,8 @@ pub(crate) struct Termio {
 pub(crate) struct TermioSpawnOptions {
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) env: Vec<(String, String)>,
+    pub(crate) cursor_visual_style: cursor::VisualStyle,
+    pub(crate) cursor_blink: Option<bool>,
 }
 
 // Termio is transferred to the worker thread behind a Mutex. The raw pointers
@@ -100,6 +103,7 @@ impl Termio {
             TermioSpawnOptions {
                 cwd,
                 env: Vec::new(),
+                ..TermioSpawnOptions::default()
             },
             size,
         )
@@ -111,7 +115,15 @@ impl Termio {
         options: TermioSpawnOptions,
         size: PtySize,
     ) -> Result<Self, TermioError> {
-        let terminal = Terminal::init(size.cols, size.rows, None)?;
+        let terminal = Terminal::init_with_options(
+            size.cols,
+            size.rows,
+            None,
+            TerminalInitOptions {
+                cursor_visual_style: options.cursor_visual_style,
+                cursor_blink: options.cursor_blink,
+            },
+        )?;
         let mut command = PtyCommand::new(program, size);
         for arg in args {
             command.arg(arg);
@@ -662,6 +674,7 @@ mod tests {
                     "ROASTTY_TERMIO_ENV_TEST".to_string(),
                     "termio-env".to_string(),
                 )],
+                ..TermioSpawnOptions::default()
             },
             test_size(),
         )
@@ -672,6 +685,28 @@ mod tests {
         });
 
         assert!(termio.terminal().plain_screen(false).contains("termio-env"));
+    }
+
+    #[test]
+    fn spawn_with_options_initializes_cursor_defaults() {
+        let _guard = pty_command_lock();
+        let termio = Termio::spawn_with_options(
+            "/bin/sleep",
+            ["1"],
+            TermioSpawnOptions {
+                cursor_visual_style: cursor::VisualStyle::Underline,
+                cursor_blink: Some(false),
+                ..TermioSpawnOptions::default()
+            },
+            test_size(),
+        )
+        .expect("spawn termio with cursor defaults");
+
+        assert_eq!(
+            termio.terminal().cursor_visual_style(),
+            cursor::VisualStyle::Underline
+        );
+        assert!(!termio.terminal().cursor_blinking());
     }
 
     #[test]

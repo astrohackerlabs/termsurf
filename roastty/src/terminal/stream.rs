@@ -125,7 +125,7 @@ pub(super) enum Action {
         single: bool,
     },
     CursorVisualStyle {
-        style: cursor::VisualStyle,
+        style: Option<cursor::VisualStyle>,
         blinking: bool,
     },
     DcsHook {
@@ -1305,13 +1305,13 @@ impl CsiState {
         }
 
         let (style, blinking) = match (params.len == 1).then_some(params.values[0]).unwrap_or(0) {
-            0 => (cursor::VisualStyle::Block, false),
-            1 => (cursor::VisualStyle::Block, true),
-            2 => (cursor::VisualStyle::Block, false),
-            3 => (cursor::VisualStyle::Underline, true),
-            4 => (cursor::VisualStyle::Underline, false),
-            5 => (cursor::VisualStyle::Bar, true),
-            6 => (cursor::VisualStyle::Bar, false),
+            0 => (None, false),
+            1 => (Some(cursor::VisualStyle::Block), true),
+            2 => (Some(cursor::VisualStyle::Block), false),
+            3 => (Some(cursor::VisualStyle::Underline), true),
+            4 => (Some(cursor::VisualStyle::Underline), false),
+            5 => (Some(cursor::VisualStyle::Bar), true),
+            6 => (Some(cursor::VisualStyle::Bar), false),
             _ => return None,
         };
 
@@ -2958,56 +2958,56 @@ mod tests {
             (
                 b"\x1b[ qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Block,
+                    style: None,
                     blinking: false,
                 },
             ),
             (
                 b"\x1b[0 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Block,
+                    style: None,
                     blinking: false,
                 },
             ),
             (
                 b"\x1b[1 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Block,
+                    style: Some(cursor::VisualStyle::Block),
                     blinking: true,
                 },
             ),
             (
                 b"\x1b[2 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Block,
+                    style: Some(cursor::VisualStyle::Block),
                     blinking: false,
                 },
             ),
             (
                 b"\x1b[3 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Underline,
+                    style: Some(cursor::VisualStyle::Underline),
                     blinking: true,
                 },
             ),
             (
                 b"\x1b[4 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Underline,
+                    style: Some(cursor::VisualStyle::Underline),
                     blinking: false,
                 },
             ),
             (
                 b"\x1b[5 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Bar,
+                    style: Some(cursor::VisualStyle::Bar),
                     blinking: true,
                 },
             ),
             (
                 b"\x1b[6 qA".as_slice(),
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Bar,
+                    style: Some(cursor::VisualStyle::Bar),
                     blinking: false,
                 },
             ),
@@ -3057,7 +3057,7 @@ mod tests {
             actions(&handler),
             &[
                 Action::CursorVisualStyle {
-                    style: cursor::VisualStyle::Bar,
+                    style: Some(cursor::VisualStyle::Bar),
                     blinking: true,
                 },
                 Action::Print { cp: 'A' },

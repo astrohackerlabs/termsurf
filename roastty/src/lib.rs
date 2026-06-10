@@ -2056,7 +2056,7 @@ fn build_live_renderer(
         .set_bounds_pixels(width as f64 / scale, height as f64 / scale, scale);
     compositor.layer().attach_to_nsview(nsview, scale);
     let frame_renderer = renderer::frame_renderer::FrameRenderer::new(
-        renderer::metal::shaders::MetalUniforms::from_config(&config::Config::default()),
+        renderer::metal::shaders::MetalUniforms::from_config(config),
     );
     Some(SurfaceLiveRenderer {
         compositor,
@@ -2413,6 +2413,9 @@ impl Surface {
 
         let cwd = self.working_directory.as_ref().map(PathBuf::from);
         let size = self.pty_size();
+        let config = app_from_handle(self.app)
+            .map(|app| app.parsed_config.clone())
+            .unwrap_or_default();
         let termio = match self
             .command
             .as_deref()
@@ -2424,6 +2427,8 @@ impl Surface {
                 termio::TermioSpawnOptions {
                     cwd,
                     env: self.env_vars.clone(),
+                    cursor_visual_style: config.cursor_style.to_terminal(),
+                    cursor_blink: config.cursor_style_blink,
                 },
                 size,
             ),
@@ -2433,6 +2438,8 @@ impl Surface {
                 termio::TermioSpawnOptions {
                     cwd,
                     env: self.env_vars.clone(),
+                    cursor_visual_style: config.cursor_style.to_terminal(),
+                    cursor_blink: config.cursor_style_blink,
                 },
                 size,
             ),
@@ -2549,7 +2556,9 @@ impl Surface {
             renderer::size::GridSize { columns, rows },
             &shared_grid.metrics,
         );
-        let config = config::Config::default();
+        let config = app_from_handle(self.app)
+            .map(|app| app.parsed_config.clone())
+            .unwrap_or_default();
         worker.with_termio(|termio| {
             let terminal = termio.terminal();
             if let Err(e) = frame_renderer.render_and_present_frame(
@@ -32523,6 +32532,40 @@ mod tests {
         let text = surface_snapshot_text_after_start_until(app, surface, "unset");
 
         assert!(text.contains("unset"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_start_passes_cursor_default_config() {
+        let _guard = pty_command_lock();
+        let app = new_test_app();
+        {
+            let app_ref = app_from_handle(app).unwrap();
+            app_ref.parsed_config.cursor_style = crate::config::CursorStyle::Underline;
+            app_ref.parsed_config.cursor_style_blink = Some(false);
+        }
+        let command = CString::new("sleep 1").unwrap();
+        let mut config = roastty_surface_config_new();
+        config.command = command.as_ptr();
+        let surface = new_test_surface_with_config(app, &config);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+
+        let (style, blinking) = surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio(|termio| {
+                (
+                    termio.terminal().cursor_visual_style(),
+                    termio.terminal().cursor_blinking(),
+                )
+            });
+        assert_eq!(style, crate::terminal::cursor::VisualStyle::Underline);
+        assert!(!blinking);
+
         roastty_surface_free(surface);
         roastty_app_free(app);
     }

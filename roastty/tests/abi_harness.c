@@ -1065,7 +1065,7 @@ static void assert_render_state_abi(void) {
   assert(roastty_render_state_get(state,
                                   ROASTTY_RENDER_STATE_DATA_CURSOR_BLINKING,
                                   &flag) == ROASTTY_SUCCESS);
-  assert(!flag);
+  assert(flag);
   assert(roastty_render_state_get(
              NULL,
              ROASTTY_RENDER_STATE_DATA_KITTY_RENDER_PLACEMENT_ITERATOR,

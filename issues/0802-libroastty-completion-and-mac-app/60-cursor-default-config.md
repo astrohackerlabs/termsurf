@@ -168,3 +168,66 @@ Fix:
 **Final verdict:** Approved.
 
 No findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented the cursor default config slice:
+
+- Added `cursor-opacity`, `cursor-style`, and `cursor-style-blink` to aggregate
+  config, formatting, parsing, defaults, and diagnostics. `cursor-style` maps
+  the upstream keywords `block`, `bar`, `underline`, and `block_hollow` to the
+  terminal cursor visual styles; `cursor-style-blink` remains unset by default.
+- Routed cursor style/blink defaults into terminal initialization through
+  `TermioSpawnOptions` and `TerminalInitOptions`.
+- Preserved upstream's DEC mode 12 behavior: when `cursor-style-blink` is
+  explicitly configured, in-band `DECSET 12` / `DECRST 12` do not mutate cursor
+  blinking; when unset, DEC mode 12 remains honored.
+- Changed `DECSCUSR` default reset (`CSI q` / `CSI 0 q`) to restore the
+  configured default style and `cursor-style-blink.unwrap_or(true)`, while
+  keeping explicit `DECSCUSR 1..6` behavior intact.
+- Threaded app parsed config into live renderer frame rendering, and used
+  `cursor-opacity` for cursor overlay alpha only. Non-cursor overlay/text alpha
+  remains opaque.
+- Updated the terminal mode default for DEC mode 12 to default-on, matching the
+  configured default blinking semantics and avoiding spurious `?12h` mode
+  formatter output for fresh terminals.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/config/mod.rs roastty/src/terminal/terminal.rs roastty/src/terminal/stream.rs roastty/src/terminal/modes.rs roastty/src/termio.rs roastty/src/lib.rs roastty/src/renderer/frame_renderer.rs roastty/src/renderer/frame_rebuild.rs`
+- `cargo test -p roastty cursor_default_config`
+- `cargo test -p roastty cursor_style_config`
+- `cargo test -p roastty cursor_opacity`
+- `cargo test -p roastty cursor_style_blink`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty terminal_stream_decscusr`
+- `cargo test -p roastty surface_start`
+- `cargo test -p roastty render_frame`
+- `cargo test -p roastty --test abi_harness`
+- `cargo test -p roastty`
+- `git diff --check`
+
+Final full result:
+
+- `cargo test -p roastty`: 4492 Rust tests passed, ABI harness passed, doc-tests
+  passed.
+- The ABI harness emitted its existing enum-conversion warnings in
+  `abi_harness.c`; they did not fail the harness.
+
+## Conclusion
+
+The cursor default config group is now represented on `Config`, routed into new
+terminal sessions, respected by `DECSCUSR` default resets and DEC mode 12, and
+visible in renderer cursor opacity. The next Phase-F slice can continue with the
+remaining config groups rather than revisiting cursor style/blink plumbing.
+
+## Completion Review
+
+Reviewed by Codex adversarial reviewer (`Linnaeus`,
+`019eb37c-3708-76c3-ae73-5682bb29519f`) with fresh context.
+
+**Final verdict:** Approved.
+
+No findings.

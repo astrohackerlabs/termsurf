@@ -65,6 +65,8 @@ pub(crate) struct Terminal {
     next_implicit_hyperlink_id: u32,
     previous_char: Option<char>,
     pending_clipboard_events: Vec<TerminalClipboardEvent>,
+    default_cursor_visual_style: cursor::VisualStyle,
+    default_cursor_blink: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -772,6 +774,21 @@ pub(crate) enum TerminalInitError {
     PageAlloc,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TerminalInitOptions {
+    pub(crate) cursor_visual_style: cursor::VisualStyle,
+    pub(crate) cursor_blink: Option<bool>,
+}
+
+impl Default for TerminalInitOptions {
+    fn default() -> Self {
+        Self {
+            cursor_visual_style: cursor::VisualStyle::Block,
+            cursor_blink: None,
+        }
+    }
+}
+
 struct TerminalStreamHandler<'a> {
     screens: &'a mut TerminalScreens,
     size: TerminalSize,
@@ -793,6 +810,8 @@ struct TerminalStreamHandler<'a> {
     kitty_config: &'a mut KittyGraphicsConfig,
     flags: &'a mut TerminalFlags,
     pending_clipboard_events: &'a mut Vec<TerminalClipboardEvent>,
+    default_cursor_visual_style: cursor::VisualStyle,
+    default_cursor_blink: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -995,18 +1014,41 @@ impl Terminal {
         rows: CellCountInt,
         max_scrollback_rows: Option<usize>,
     ) -> Result<Self, TerminalInitError> {
+        Self::init_with_options(
+            cols,
+            rows,
+            max_scrollback_rows,
+            TerminalInitOptions::default(),
+        )
+    }
+
+    pub(crate) fn init_with_options(
+        cols: CellCountInt,
+        rows: CellCountInt,
+        max_scrollback_rows: Option<usize>,
+        options: TerminalInitOptions,
+    ) -> Result<Self, TerminalInitError> {
         let size = TerminalSize { cols, rows };
+        let mut screens = TerminalScreens::init(cols, rows, max_scrollback_rows)
+            .map_err(|_| TerminalInitError::PageAlloc)?;
+        screens
+            .active_mut()
+            .set_cursor_visual_style(options.cursor_visual_style);
+        let mut modes = modes::ModeState::default();
+        modes.set(
+            modes::Mode::CursorBlinking,
+            options.cursor_blink.unwrap_or(true),
+        );
         Ok(Self {
             size,
-            screens: TerminalScreens::init(cols, rows, max_scrollback_rows)
-                .map_err(|_| TerminalInitError::PageAlloc)?,
+            screens,
             colors: TerminalColors {
                 palette: color::DynamicPalette::init(color::DEFAULT_PALETTE),
                 foreground: color::DynamicRgb::unset(),
                 background: color::DynamicRgb::unset(),
                 cursor: color::DynamicRgb::unset(),
             },
-            modes: modes::ModeState::default(),
+            modes,
             scrolling_region: ScrollingRegion::full(size),
             tabstops: tabstops::Tabstops::new(cols as usize, TABSTOP_INTERVAL)
                 .map_err(|_| TerminalInitError::PageAlloc)?,
@@ -1025,6 +1067,8 @@ impl Terminal {
             next_implicit_hyperlink_id: 0,
             previous_char: None,
             pending_clipboard_events: Vec::new(),
+            default_cursor_visual_style: options.cursor_visual_style,
+            default_cursor_blink: options.cursor_blink,
         })
     }
 
@@ -1051,6 +1095,8 @@ impl Terminal {
             previous_char,
             pending_clipboard_events,
             flags,
+            default_cursor_visual_style,
+            default_cursor_blink,
             ..
         } = self;
         let mut handler = TerminalStreamHandler {
@@ -1074,6 +1120,8 @@ impl Terminal {
             kitty_config,
             flags,
             pending_clipboard_events,
+            default_cursor_visual_style: *default_cursor_visual_style,
+            default_cursor_blink: *default_cursor_blink,
         };
         stream.next_slice(input, &mut handler)
     }
@@ -3077,6 +3125,13 @@ impl Handler for TerminalStreamHandler<'_> {
                 Ok(())
             }
             Action::CursorVisualStyle { style, blinking } => {
+                let (style, blinking) = match style {
+                    Some(style) => (style, blinking),
+                    None => (
+                        self.default_cursor_visual_style,
+                        self.default_cursor_blink.unwrap_or(true),
+                    ),
+                };
                 self.modes.set(modes::Mode::CursorBlinking, blinking);
                 self.screens.active_mut().set_cursor_visual_style(style);
                 Ok(())
@@ -3400,6 +3455,10 @@ impl TerminalStreamHandler<'_> {
                 return Ok(());
             }
             _ => {}
+        }
+
+        if mode == modes::Mode::CursorBlinking && self.default_cursor_blink.is_some() {
+            return Ok(());
         }
 
         self.modes.set(mode, enabled);
@@ -7516,7 +7575,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_stream_decscusr_default_sets_steady_block() {
+    fn terminal_stream_decscusr_default_sets_configured_default() {
         for input in [b"\x1b[ q".as_slice(), b"\x1b[0 q"] {
             let mut terminal = Terminal::init(10, 2, None).unwrap();
 
@@ -7527,8 +7586,88 @@ mod tests {
                 terminal.cursor_visual_style_for_tests(),
                 cursor::VisualStyle::Block
             );
-            assert!(!terminal.get_mode_for_tests(Mode::CursorBlinking));
+            assert!(terminal.get_mode_for_tests(Mode::CursorBlinking));
         }
+    }
+
+    #[test]
+    fn terminal_cursor_default_config_initializes_style_and_blink() {
+        let terminal = Terminal::init_with_options(
+            10,
+            2,
+            None,
+            TerminalInitOptions {
+                cursor_visual_style: cursor::VisualStyle::Bar,
+                cursor_blink: Some(false),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            terminal.cursor_visual_style_for_tests(),
+            cursor::VisualStyle::Bar
+        );
+        assert!(!terminal.get_mode_for_tests(Mode::CursorBlinking));
+    }
+
+    #[test]
+    fn terminal_cursor_default_config_decscusr_resets_to_configured_default() {
+        let mut terminal = Terminal::init_with_options(
+            10,
+            2,
+            None,
+            TerminalInitOptions {
+                cursor_visual_style: cursor::VisualStyle::Underline,
+                cursor_blink: Some(false),
+            },
+        )
+        .unwrap();
+
+        terminal.next_slice(b"\x1b[5 q").unwrap();
+        terminal.next_slice(b"\x1b[ q").unwrap();
+
+        assert_eq!(
+            terminal.cursor_visual_style_for_tests(),
+            cursor::VisualStyle::Underline
+        );
+        assert!(!terminal.get_mode_for_tests(Mode::CursorBlinking));
+    }
+
+    #[test]
+    fn terminal_cursor_style_blink_config_gates_dec_mode_12() {
+        for configured in [Some(true), Some(false)] {
+            let mut terminal = Terminal::init_with_options(
+                10,
+                2,
+                None,
+                TerminalInitOptions {
+                    cursor_visual_style: cursor::VisualStyle::Block,
+                    cursor_blink: configured,
+                },
+            )
+            .unwrap();
+            let initial = terminal.get_mode_for_tests(Mode::CursorBlinking);
+
+            terminal.next_slice(b"\x1b[?12h").unwrap();
+            assert_eq!(terminal.get_mode_for_tests(Mode::CursorBlinking), initial);
+            terminal.next_slice(b"\x1b[?12l").unwrap();
+            assert_eq!(terminal.get_mode_for_tests(Mode::CursorBlinking), initial);
+        }
+
+        let mut terminal = Terminal::init_with_options(
+            10,
+            2,
+            None,
+            TerminalInitOptions {
+                cursor_visual_style: cursor::VisualStyle::Block,
+                cursor_blink: None,
+            },
+        )
+        .unwrap();
+        terminal.next_slice(b"\x1b[?12l").unwrap();
+        assert!(!terminal.get_mode_for_tests(Mode::CursorBlinking));
+        terminal.next_slice(b"\x1b[?12h").unwrap();
+        assert!(terminal.get_mode_for_tests(Mode::CursorBlinking));
     }
 
     #[test]
@@ -7562,7 +7701,7 @@ mod tests {
     #[test]
     fn terminal_stream_decrqss_decscusr_reports_current_cursor_visual_style() {
         for (setup, expected) in [
-            (b"".as_slice(), b"\x1bP1$r2 q\x1b\\".as_slice()),
+            (b"".as_slice(), b"\x1bP1$r1 q\x1b\\".as_slice()),
             (b"\x1b[1 q", b"\x1bP1$r1 q\x1b\\"),
             (b"\x1b[4 q", b"\x1bP1$r4 q\x1b\\"),
             (b"\x1b[5 q", b"\x1bP1$r5 q\x1b\\"),

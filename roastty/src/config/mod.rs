@@ -25,6 +25,7 @@ use crate::font::codepoint_map::CodepointMap;
 use crate::font::discovery::Descriptor;
 use crate::os::homedir::expand_home;
 use crate::terminal::color::{Palette as TerminalPalette, PaletteMask, Rgb, DEFAULT_PALETTE};
+use crate::terminal::cursor;
 use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
 use crate::terminal::style::BoldColor as TerminalBoldColor;
 use std::collections::HashSet;
@@ -109,6 +110,12 @@ pub(crate) struct Config {
     pub bg_image_repeat: bool,
     /// `cursor-color`.
     pub cursor_color: Option<TerminalColor>,
+    /// `cursor-opacity`.
+    pub cursor_opacity: f64,
+    /// `cursor-style`.
+    pub cursor_style: CursorStyle,
+    /// `cursor-style-blink`.
+    pub cursor_style_blink: Option<bool>,
     /// `cursor-text`.
     pub cursor_text: Option<TerminalColor>,
     /// `selection-foreground`.
@@ -243,6 +250,9 @@ impl Default for Config {
             bg_image_fit: BackgroundImageFit::Contain,
             bg_image_repeat: false,
             cursor_color: None,
+            cursor_opacity: 1.0,
+            cursor_style: CursorStyle::Block,
+            cursor_style_blink: None,
             cursor_text: None,
             selection_foreground: None,
             selection_background: None,
@@ -365,6 +375,11 @@ impl Config {
         EntryFormatter::new("minimum-contrast", out).entry_float(self.minimum_contrast);
         EntryFormatter::new("cursor-color", out)
             .entry_optional(self.cursor_color, |v, f| v.format_entry(f));
+        EntryFormatter::new("cursor-opacity", out).entry_float(self.cursor_opacity);
+        self.cursor_style
+            .format_entry(&mut EntryFormatter::new("cursor-style", out));
+        EntryFormatter::new("cursor-style-blink", out)
+            .entry_optional(self.cursor_style_blink, |v, f| f.entry_bool(v));
         EntryFormatter::new("cursor-text", out)
             .entry_optional(self.cursor_text, |v, f| v.format_entry(f));
         self.scroll_to_bottom
@@ -770,6 +785,15 @@ impl Config {
             "cursor-color" => {
                 self.cursor_color =
                     set_optional_value_field(value, default.cursor_color, TerminalColor::parse_cli)?
+            }
+            "cursor-opacity" => self.cursor_opacity = set_f64_field(value, default.cursor_opacity)?,
+            "cursor-style" => {
+                self.cursor_style =
+                    set_enum_field(value, default.cursor_style, CursorStyle::from_keyword)?
+            }
+            "cursor-style-blink" => {
+                self.cursor_style_blink =
+                    set_optional_value_field(value, default.cursor_style_blink, parse_bool_field)?
             }
             "cursor-text" => {
                 self.cursor_text =
@@ -4189,6 +4213,53 @@ impl GraphemeWidthMethod {
     }
 }
 
+/// The `cursor-style` config (upstream `CursorStyle`): the default cursor visual
+/// style for newly-created terminals and `DECSCUSR` default resets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
+    BlockHollow,
+}
+
+impl CursorStyle {
+    /// The config keyword (upstream tag name).
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            CursorStyle::Block => "block",
+            CursorStyle::Bar => "bar",
+            CursorStyle::Underline => "underline",
+            CursorStyle::BlockHollow => "block_hollow",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`).
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "block" => Some(CursorStyle::Block),
+            "bar" => Some(CursorStyle::Bar),
+            "underline" => Some(CursorStyle::Underline),
+            "block_hollow" => Some(CursorStyle::BlockHollow),
+            _ => None,
+        }
+    }
+
+    /// Format as a config entry (upstream's enum branch): the keyword.
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(self.keyword());
+    }
+
+    pub(crate) fn to_terminal(self) -> cursor::VisualStyle {
+        match self {
+            CursorStyle::Block => cursor::VisualStyle::Block,
+            CursorStyle::Bar => cursor::VisualStyle::Bar,
+            CursorStyle::Underline => cursor::VisualStyle::Underline,
+            CursorStyle::BlockHollow => cursor::VisualStyle::BlockHollow,
+        }
+    }
+}
+
 /// The `custom-shader-animation` config (upstream `CustomShaderAnimation`):
 /// whether custom-shader animations run. The `Config` default is `True`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4628,10 +4699,10 @@ mod tests {
         BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
         ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
         Config, ConfigDiagnostic, ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError,
-        ConfirmCloseSurface, CopyOnSelect, CustomShaderAnimation, DefaultConfigPaths, Duration,
-        DurationParseError, FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError,
-        FontSyntheticStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden,
-        MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
+        ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths,
+        Duration, DurationParseError, FlagsParseError, FontShapingBreak, FontStyle,
+        FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews,
+        MacHidden, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
         MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
         MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
@@ -4645,6 +4716,7 @@ mod tests {
         NS_PER_S,
     };
     use crate::terminal::color::Rgb;
+    use crate::terminal::cursor;
     use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
     use std::ffi::{OsStr, OsString};
     use std::os::unix::ffi::OsStrExt;
@@ -4891,6 +4963,9 @@ mod tests {
         assert_eq!(d.font_thicken_strength, 255);
         // Optional-colors group (Experiment 467).
         assert_eq!(d.cursor_color, None);
+        assert_eq!(d.cursor_opacity, 1.0);
+        assert_eq!(d.cursor_style, CursorStyle::Block);
+        assert_eq!(d.cursor_style_blink, None);
         assert_eq!(d.cursor_text, None);
         assert_eq!(d.selection_foreground, None);
         assert_eq!(d.selection_background, None);
@@ -8720,6 +8795,9 @@ mod tests {
                 "selection-word-chars",
                 "minimum-contrast",
                 "cursor-color",
+                "cursor-opacity",
+                "cursor-style",
+                "cursor-style-blink",
                 "cursor-text",
                 "scroll-to-bottom",
                 "mouse-shift-capture",
@@ -9363,6 +9441,54 @@ mod tests {
         cfg.set("cursor-color", Some("")).unwrap(); // reset to None
         assert_eq!(line(&cfg, "cursor-color"), "cursor-color = ");
 
+        // Cursor defaults: style keywords, optional blink, and raw opacity.
+        cfg.set("cursor-opacity", Some("1.5")).unwrap();
+        assert_eq!(cfg.cursor_opacity, 1.5);
+        assert_eq!(line(&cfg, "cursor-opacity"), "cursor-opacity = 1.5");
+        cfg.set("cursor-opacity", Some("")).unwrap();
+        assert_eq!(line(&cfg, "cursor-opacity"), "cursor-opacity = 1");
+        for (keyword, expected) in [
+            ("block", CursorStyle::Block),
+            ("bar", CursorStyle::Bar),
+            ("underline", CursorStyle::Underline),
+            ("block_hollow", CursorStyle::BlockHollow),
+        ] {
+            cfg.set("cursor-style", Some(keyword)).unwrap();
+            assert_eq!(cfg.cursor_style, expected);
+            assert_eq!(
+                line(&cfg, "cursor-style"),
+                format!("cursor-style = {keyword}")
+            );
+        }
+        cfg.set("cursor-style", Some("")).unwrap();
+        assert_eq!(line(&cfg, "cursor-style"), "cursor-style = block");
+        cfg.set("cursor-style-blink", Some("true")).unwrap();
+        assert_eq!(
+            line(&cfg, "cursor-style-blink"),
+            "cursor-style-blink = true"
+        );
+        cfg.set("cursor-style-blink", Some("false")).unwrap();
+        assert_eq!(
+            line(&cfg, "cursor-style-blink"),
+            "cursor-style-blink = false"
+        );
+        cfg.set("cursor-style-blink", Some("")).unwrap();
+        assert_eq!(line(&cfg, "cursor-style-blink"), "cursor-style-blink = ");
+        assert_eq!(cfg.cursor_style.to_terminal(), cursor::VisualStyle::Block);
+        cfg.set("cursor-style", Some("block_hollow")).unwrap();
+        assert_eq!(
+            cfg.cursor_style.to_terminal(),
+            cursor::VisualStyle::BlockHollow
+        );
+        assert_eq!(
+            cfg.set("cursor-style", Some("box")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("cursor-style-blink", Some("maybe")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
         // FontStyle: `default` / `false` / a named style.
         let mut cfg = Config::default();
         cfg.set("font-style", Some("bold")).unwrap();
@@ -9394,6 +9520,112 @@ mod tests {
         );
         assert_eq!(
             cfg.set("background-blur", Some("xyz")),
+            Err(ConfigSetError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn cursor_style_config_keywords_parse_format_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        for (keyword, expected, terminal) in [
+            ("block", CursorStyle::Block, cursor::VisualStyle::Block),
+            ("bar", CursorStyle::Bar, cursor::VisualStyle::Bar),
+            (
+                "underline",
+                CursorStyle::Underline,
+                cursor::VisualStyle::Underline,
+            ),
+            (
+                "block_hollow",
+                CursorStyle::BlockHollow,
+                cursor::VisualStyle::BlockHollow,
+            ),
+        ] {
+            cfg.set("cursor-style", Some(keyword)).unwrap();
+            assert_eq!(cfg.cursor_style, expected);
+            assert_eq!(cfg.cursor_style.to_terminal(), terminal);
+            assert_eq!(
+                line(&cfg, "cursor-style"),
+                format!("cursor-style = {keyword}")
+            );
+        }
+
+        assert_eq!(
+            cfg.set("cursor-style", Some("box")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        cfg.set("cursor-style", Some("")).unwrap();
+        assert_eq!(cfg.cursor_style, CursorStyle::Block);
+    }
+
+    #[test]
+    fn cursor_style_blink_accepts_unset_true_false_and_diagnoses() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.cursor_style_blink, None);
+        assert_eq!(line(&cfg, "cursor-style-blink"), "cursor-style-blink = ");
+
+        cfg.set("cursor-style-blink", Some("true")).unwrap();
+        assert_eq!(cfg.cursor_style_blink, Some(true));
+        assert_eq!(
+            line(&cfg, "cursor-style-blink"),
+            "cursor-style-blink = true"
+        );
+
+        cfg.set("cursor-style-blink", Some("false")).unwrap();
+        assert_eq!(cfg.cursor_style_blink, Some(false));
+        assert_eq!(
+            line(&cfg, "cursor-style-blink"),
+            "cursor-style-blink = false"
+        );
+
+        cfg.set("cursor-style-blink", Some("")).unwrap();
+        assert_eq!(cfg.cursor_style_blink, None);
+        assert_eq!(
+            cfg.set("cursor-style-blink", Some("maybe")),
+            Err(ConfigSetError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn cursor_opacity_config_round_trips_raw_values() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.cursor_opacity, 1.0);
+        cfg.set("cursor-opacity", Some("1.5")).unwrap();
+        assert_eq!(cfg.cursor_opacity, 1.5);
+        assert_eq!(line(&cfg, "cursor-opacity"), "cursor-opacity = 1.5");
+        cfg.set("cursor-opacity", Some("-0.25")).unwrap();
+        assert_eq!(line(&cfg, "cursor-opacity"), "cursor-opacity = -0.25");
+        cfg.set("cursor-opacity", Some("")).unwrap();
+        assert_eq!(line(&cfg, "cursor-opacity"), "cursor-opacity = 1");
+        assert_eq!(
+            cfg.set("cursor-opacity", Some("not-float")),
             Err(ConfigSetError::InvalidValue)
         );
     }
