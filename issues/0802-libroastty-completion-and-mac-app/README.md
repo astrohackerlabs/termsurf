@@ -722,6 +722,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 54: Phase F — font config surface](54-font-config-surface.md) —
   **Pass**
+- [Experiment 55: Phase F — SharedGridSet config assembly](55-shared-grid-config-assembly.md)
+  — **Designed**
 
 ## Process
 
