@@ -551,6 +551,10 @@ stays unaltered except for the rename).
   faces get the IcWidth ideographic resize; 4411 green + design-review-confirmed
   load-bearing/no-regression; live CJK width comparison pending — screen locked)
   · Claude
+- [Experiment 30: Phase C — shift-click extends the selection](30-shift-click-extend.md)
+  — **Designed** (shift+left-click should extend the existing selection
+  (upstream Surface.zig:3763); branch the not-reporting press to selection_drag
+  when shift+click_count>0+has-selection+>500ms) · Claude
 
 ## Process
 
