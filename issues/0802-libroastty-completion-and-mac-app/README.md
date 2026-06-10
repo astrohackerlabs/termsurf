@@ -654,6 +654,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 46: Phase D — paste-safe live A/B recipe input](46-live-ab-paste-safe-recipes.md)
   — **Partial**
+- [Experiment 47: Phase D — launch-time live A/B recipe bootstrap](47-live-ab-launch-bootstrap.md)
+  — **Designed**
 
 ## Process
 
