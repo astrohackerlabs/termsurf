@@ -772,7 +772,7 @@ stays unaltered except for the rename).
 - [Experiment 63: Phase F — command config surface](63-command-config-surface.md)
   — **Pass**
 - [Experiment 64: Phase F — env config surface](64-env-config-surface.md) —
-  **Designed**
+  **Pass**
 
 ## Process
 

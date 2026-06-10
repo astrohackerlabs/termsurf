@@ -88,6 +88,8 @@ pub(crate) struct Config {
     pub bell_audio_path: Option<ConfigFilePath>,
     /// `notify-on-command-finish-after`.
     pub notify_on_command_finish_after: Duration,
+    /// `env`.
+    pub env: RepeatableStringMap,
     /// `window-colorspace`.
     pub window_colorspace: WindowColorspace,
     /// `alpha-blending`.
@@ -259,6 +261,7 @@ impl Default for Config {
             notify_on_command_finish_after: Duration {
                 duration: 5 * NS_PER_S,
             },
+            env: RepeatableStringMap::default(),
             window_colorspace: WindowColorspace::Srgb,
             alpha_blending: AlphaBlending::Native,
             background_blur: BackgroundBlur::False,
@@ -467,6 +470,7 @@ impl Config {
                 "notify-on-command-finish-action",
                 out,
             ));
+        self.env.format_entry(&mut EntryFormatter::new("env", out));
         self.link_previews
             .format_entry(&mut EntryFormatter::new("link-previews", out));
         self.fullscreen
@@ -665,6 +669,7 @@ impl Config {
                     Duration::parse_cli,
                 )?
             }
+            "env" => self.env.parse_cli(value)?,
             "window-colorspace" => {
                 self.window_colorspace = set_enum_field(
                     value,
@@ -1733,6 +1738,14 @@ impl From<CommandParseError> for ConfigSetError {
     }
 }
 
+impl From<RepeatableStringMapParseError> for ConfigSetError {
+    fn from(e: RepeatableStringMapParseError) -> Self {
+        match e {
+            RepeatableStringMapParseError::ValueRequired => ConfigSetError::ValueRequired,
+        }
+    }
+}
+
 impl From<WindowDecorationParseError> for ConfigSetError {
     fn from(e: WindowDecorationParseError) -> Self {
         match e {
@@ -2347,6 +2360,99 @@ impl Command {
             Command::Direct(args) => formatter.entry_str(&format!("direct:{}", args.join(" "))),
         }
     }
+}
+
+/// An error parsing `RepeatableStringMap` (upstream `error.ValueRequired`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepeatableStringMapParseError {
+    /// No value, or a value without `=`.
+    ValueRequired,
+}
+
+/// A repeatable insertion-order string map (upstream `RepeatableStringMap`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RepeatableStringMap {
+    entries: Vec<(String, String)>,
+}
+
+impl PartialEq for RepeatableStringMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len()
+            && self.entries.iter().all(|(key, value)| {
+                other
+                    .entries
+                    .iter()
+                    .any(|(other_key, other_value)| other_key == key && other_value == value)
+            })
+    }
+}
+
+impl Eq for RepeatableStringMap {}
+
+impl RepeatableStringMap {
+    /// Parse one repeatable map entry (upstream `RepeatableStringMap.parseCLI`).
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), RepeatableStringMapParseError> {
+        let input = input.ok_or(RepeatableStringMapParseError::ValueRequired)?;
+        if input.is_empty() {
+            self.entries.clear();
+            return Ok(());
+        }
+
+        let (key, value) = input
+            .split_once('=')
+            .ok_or(RepeatableStringMapParseError::ValueRequired)?;
+        let key = trim_ascii_ws_zig(key).to_string();
+        let value = trim_ascii_ws_zig(value).to_string();
+
+        if value.is_empty() {
+            self.entries.retain(|(entry_key, _)| entry_key != &key);
+            return Ok(());
+        }
+
+        if let Some((_, entry_value)) = self
+            .entries
+            .iter_mut()
+            .find(|(entry_key, _)| entry_key == &key)
+        {
+            *entry_value = value;
+        } else {
+            self.entries.push((key, value));
+        }
+
+        Ok(())
+    }
+
+    /// Number of stored entries (upstream `count`).
+    pub(crate) fn count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Lookup a value by key.
+    pub(crate) fn get(&self, key: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(entry_key, _)| entry_key == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Format as repeatable config entries (upstream `formatEntry`).
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        if self.entries.is_empty() {
+            formatter.entry_void();
+            return;
+        }
+
+        for (key, value) in &self.entries {
+            formatter.entry_str(&format!("{}={}", key, value));
+        }
+    }
+}
+
+fn trim_ascii_ws_zig(input: &str) -> &str {
+    input.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0B}' | '\u{0C}'))
 }
 
 /// Zig's `std.ascii.isWhitespace` set: space, `\t`, `\n`, `\r`, vertical tab, and
@@ -5138,6 +5244,7 @@ mod tests {
                 duration: 5 * NS_PER_S
             }
         );
+        assert_eq!(d.env.count(), 0);
         // Renderer-appearance group (Experiment 465).
         assert_eq!(d.window_colorspace, WindowColorspace::Srgb);
         assert_eq!(d.alpha_blending, AlphaBlending::Native);
@@ -9063,6 +9170,7 @@ mod tests {
                 "notify-on-command-finish-after",
                 "notify-on-command-finish",
                 "notify-on-command-finish-action",
+                "env",
                 "link-previews",
                 "fullscreen",
                 "title",
@@ -10396,6 +10504,97 @@ mod tests {
                 }),
             Ok(true)
         );
+    }
+
+    #[test]
+    fn env_config_parse_format_reset_and_diagnose() {
+        let lines = |cfg: &Config, key: &str| -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|l| l.starts_with(&format!("{} = ", key)))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.env.count(), 0);
+        assert_eq!(lines(&cfg, "env"), vec!["env = ".to_string()]);
+
+        cfg.set("env", Some("A=B")).unwrap();
+        assert_eq!(cfg.env.count(), 1);
+        assert_eq!(cfg.env.get("A"), Some("B"));
+        assert_eq!(lines(&cfg, "env"), vec!["env = A=B".to_string()]);
+
+        cfg.set("env", Some("B = C")).unwrap();
+        assert_eq!(cfg.env.count(), 2);
+        assert_eq!(
+            lines(&cfg, "env"),
+            vec!["env = A=B".to_string(), "env = B=C".to_string()]
+        );
+
+        cfg.set("env", Some("A=C")).unwrap();
+        assert_eq!(cfg.env.count(), 2);
+        assert_eq!(cfg.env.get("A"), Some("C"));
+        assert_eq!(
+            lines(&cfg, "env"),
+            vec!["env = A=C".to_string(), "env = B=C".to_string()]
+        );
+
+        cfg.set("env", Some(" PATH\t=\t/bin:/usr/bin ")).unwrap();
+        assert_eq!(cfg.env.get("PATH"), Some("/bin:/usr/bin"));
+
+        cfg.set("env", Some("CHAIN=A=B")).unwrap();
+        assert_eq!(cfg.env.get("CHAIN"), Some("A=B"));
+        assert!(lines(&cfg, "env")
+            .iter()
+            .any(|line| line == "env = CHAIN=A=B"));
+
+        cfg.set("env", Some("=VALUE")).unwrap();
+        assert_eq!(cfg.env.get(""), Some("VALUE"));
+        assert!(lines(&cfg, "env").iter().any(|line| line == "env = =VALUE"));
+
+        cfg.set("env", Some("A=")).unwrap();
+        assert_eq!(cfg.env.get("A"), None);
+        assert_eq!(cfg.env.count(), 4);
+
+        cfg.set("env", Some("")).unwrap();
+        assert_eq!(cfg.env.count(), 0);
+        assert_eq!(lines(&cfg, "env"), vec!["env = ".to_string()]);
+
+        assert_eq!(cfg.set("env", None), Err(ConfigSetError::ValueRequired));
+        assert_eq!(
+            cfg.set("env", Some("MISSING_EQUALS")),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        let diagnostics = cfg.load_str("env = GOOD=1\nenv\nenv = BAD\n");
+        assert_eq!(cfg.env.get("GOOD"), Some("1"));
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "env".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "env".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+            ]
+        );
+
+        let mut same = Config::default();
+        same.set("env", Some("B=2")).unwrap();
+        same.set("env", Some("A=1")).unwrap();
+        let mut different_order = Config::default();
+        different_order.set("env", Some("A=1")).unwrap();
+        different_order.set("env", Some("B=2")).unwrap();
+        assert_eq!(same.env, different_order.env);
+        let cloned = different_order.clone();
+        assert_eq!(cloned, different_order);
     }
 
     #[test]

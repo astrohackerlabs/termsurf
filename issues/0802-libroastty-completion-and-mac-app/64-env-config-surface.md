@@ -125,3 +125,54 @@ requirements before implementation.
 Re-review returned **Approved** with no findings after confirming the updated
 verification list now requires concrete diagnostics, first-`=` and empty-key
 parser coverage, and formatter-order coverage.
+
+## Result
+
+**Result:** Pass
+
+Experiment 64 added the config-only `env` surface to
+`roastty/src/config/mod.rs`. `Config` now owns a `RepeatableStringMap`
+defaulting to empty, `Config::set("env", ...)` routes to the map parser, and
+`format_config` emits `env` after the command-finish notification group.
+
+The parser follows upstream `RepeatableStringMap` semantics: missing values and
+values without `=` report `ValueRequired`, an empty value resets the map, the
+first `=` separates key from value, key and value are trimmed with Zig ASCII
+whitespace, empty keys are accepted, empty values remove that key, and repeated
+keys update in place without duplicating entries. Formatting emits `env = ` for
+an empty map or one `env = KEY=VALUE` line per entry in insertion order.
+
+Runtime application of the environment map remains out of scope; this experiment
+does not pass `env` into surface launch snapshots or alter inherited config.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/config/mod.rs`
+- `cargo test -p roastty env_config`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`
+- `cargo fmt --check`
+- `git diff --check`
+
+`cargo test -p roastty` passed with 4,499 unit tests, the C ABI harness, and doc
+tests. The C ABI harness still emits existing enum-conversion warnings unrelated
+to this config change.
+
+## Conclusion
+
+`env` now has a faithful parser/formatter config surface with defaults,
+diagnostics, reset/removal behavior, first-`=` and empty-key coverage,
+formatter-order coverage, and clone/equality coverage. The next config-surface
+experiment can continue with the following upstream launch fields such as
+`input`, `wait-after-command`, `abnormal-command-exit-runtime`, or
+`scrollback-limit`, depending on the desired slice size.
+
+## Completion Review
+
+Codex-native adversarial reviewer `019eb3b4-fdd5-72e1-9de9-86a495eecf5e`
+returned **Approved** with no findings.
+
+The reviewer checked the completed experiment with fresh context, including the
+workflow contract, issue README, experiment file, implementation diff since the
+plan commit, `roastty/src/config/mod.rs`, and upstream
+`vendor/ghostty/src/config/RepeatableStringMap.zig` / `Config.zig`.
