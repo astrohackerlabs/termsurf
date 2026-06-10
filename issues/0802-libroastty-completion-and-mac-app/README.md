@@ -255,6 +255,12 @@ before re-reading experiments.
   permissive screenshot diff exits `0`. The harness now verifies the frontmost
   app before input and the recipes avoid `printf` format-string hazards, but the
   next Phase-D input step must make command delivery itself observable.
+- **Live A/B recipe delivery is now launch-time bootstrap, not UI typing:** Exp
+  47 launches each app binary directly with per-run `ZDOTDIR` and
+  `XDG_CONFIG_HOME` temp dirs. Generated zsh/Nushell startup files run the
+  selected recipe script, so every matrix recipe visibly executes in both apps
+  without paste or synthetic keyboard input. Ghostty capture now uses the same
+  full-screen crop path as Roastty.
 
 ### Input injection (Exp 5)
 
@@ -655,7 +661,7 @@ stays unaltered except for the rename).
 - [Experiment 46: Phase D — paste-safe live A/B recipe input](46-live-ab-paste-safe-recipes.md)
   — **Partial**
 - [Experiment 47: Phase D — launch-time live A/B recipe bootstrap](47-live-ab-launch-bootstrap.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

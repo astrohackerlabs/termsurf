@@ -27,10 +27,10 @@ images.
 
 ## Live A/B Smoke
 
-`live-ab-smoke.sh` launches the debug Ghostty and Roastty apps, drives the
-selected recipe command into both, captures Ghostty with its window screenshot
-wrapper, captures Roastty through the IOSurface-safe full-screen-plus-crop path,
-and compares the captures with `pngdiff.swift`.
+`live-ab-smoke.sh` launches the debug Ghostty and Roastty app binaries directly
+with per-run shell bootstrap config, captures both apps through the
+IOSurface-safe full-screen-plus-crop path, and compares the captures with
+`pngdiff.swift`.
 
 ```bash
 scripts/roastty-app/live-ab-smoke.sh \
@@ -61,16 +61,11 @@ expected debug app path verification. Run `scripts/ghostty-app/stop-app.sh` and
 `scripts/roastty-app/stop-app.sh` after manual debugging if a run is interrupted
 externally.
 
-Recipe commands are written to a temporary file and sent to the verified
-frontmost app with `inject.swift` CGEvent keyboard input. Recipe payloads use
-data arguments rather than `printf` format strings so literal `%`, backslashes,
-and ANSI escapes do not corrupt the shell command.
-
-As of Exp 46, command delivery to Roastty is still not proven: the guarded
-synthetic keyboard paths can leave the recipe unexecuted, while Command-V paste
-terminates the current Roastty app. Treat a permissive diff pass as a harness
-mechanics result until a later experiment adds an observable command-delivery
-oracle.
+Recipe commands run from a per-run `ZDOTDIR` bootstrap. The harness launches
+each app binary directly with generated zsh and Nushell startup files, so
+recipes execute at shell startup instead of relying on paste or synthetic UI
+typing. Recipe payloads use data arguments rather than `printf` format strings
+so literal `%`, backslashes, and ANSI escapes do not corrupt the shell command.
 
 Recipes:
 
