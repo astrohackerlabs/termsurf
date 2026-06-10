@@ -769,6 +769,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 62: Phase F — search color config](62-search-color-config.md) —
   **Pass**
+- [Experiment 63: Phase F — command config surface](63-command-config-surface.md)
+  — **Designed**
 
 ## Process
 
