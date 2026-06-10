@@ -96,6 +96,8 @@ pub(crate) struct Config {
     pub abnormal_command_exit_runtime: u32,
     /// `scrollback-limit`.
     pub scrollback_limit: usize,
+    /// `scrollbar`.
+    pub scrollbar: Scrollbar,
     /// `window-colorspace`.
     pub window_colorspace: WindowColorspace,
     /// `alpha-blending`.
@@ -271,6 +273,7 @@ impl Default for Config {
             wait_after_command: false,
             abnormal_command_exit_runtime: 250,
             scrollback_limit: 10_000_000,
+            scrollbar: Scrollbar::System,
             window_colorspace: WindowColorspace::Srgb,
             alpha_blending: AlphaBlending::Native,
             background_blur: BackgroundBlur::False,
@@ -484,6 +487,8 @@ impl Config {
         EntryFormatter::new("abnormal-command-exit-runtime", out)
             .entry_int(self.abnormal_command_exit_runtime);
         EntryFormatter::new("scrollback-limit", out).entry_int(self.scrollback_limit);
+        self.scrollbar
+            .format_entry(&mut EntryFormatter::new("scrollbar", out));
         self.link_previews
             .format_entry(&mut EntryFormatter::new("link-previews", out));
         self.fullscreen
@@ -696,6 +701,9 @@ impl Config {
             "scrollback-limit" => {
                 self.scrollback_limit =
                     set_value_field(value, default.scrollback_limit, parse_usize_scalar_field)?
+            }
+            "scrollbar" => {
+                self.scrollbar = set_enum_field(value, default.scrollbar, Scrollbar::from_keyword)?
             }
             "window-colorspace" => {
                 self.window_colorspace = set_enum_field(
@@ -3545,6 +3553,41 @@ impl Default for ShellIntegrationFeatures {
     }
 }
 
+/// The `scrollbar` config (upstream `Scrollbar`): when the scrollbar is shown.
+/// The `Config` default is `System`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scrollbar {
+    /// Respect the system setting.
+    System,
+    /// Never show the scrollbar.
+    Never,
+}
+
+impl Scrollbar {
+    /// The config keyword (upstream tag name).
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            Scrollbar::System => "system",
+            Scrollbar::Never => "never",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "system" => Some(Scrollbar::System),
+            "never" => Some(Scrollbar::Never),
+            _ => None,
+        }
+    }
+
+    /// Format this value as a config entry (upstream's generic enum branch).
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(self.keyword());
+    }
+}
+
 /// The `link-previews` config (upstream `LinkPreviews`): when to show a preview
 /// for a link. The `Config` default is `True`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5067,12 +5110,12 @@ mod tests {
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
         RepeatableConfigPathParseError, RepeatableString, RepeatableStringParseError,
-        RightClickAction, ScrollToBottom, SelectionWordChars, SelectionWordCharsParseError,
-        ShellIntegration, ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor,
-        TerminalColor, Theme, ThemeParseError, WindowColorspace, WindowDecoration,
-        WindowDecorationParseError, WindowPadding, WindowPaddingColor, WindowPaddingParseError,
-        WindowSaveState, WindowSubtitle, WindowTheme, WorkingDirectory, WorkingDirectoryParseError,
-        NS_PER_MS, NS_PER_S,
+        RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
+        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
+        SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
+        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowPadding,
+        WindowPaddingColor, WindowPaddingParseError, WindowSaveState, WindowSubtitle, WindowTheme,
+        WorkingDirectory, WorkingDirectoryParseError, NS_PER_MS, NS_PER_S,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::cursor;
@@ -5289,6 +5332,7 @@ mod tests {
         assert!(!d.wait_after_command);
         assert_eq!(d.abnormal_command_exit_runtime, 250);
         assert_eq!(d.scrollback_limit, 10_000_000);
+        assert_eq!(d.scrollbar, Scrollbar::System);
         // Renderer-appearance group (Experiment 465).
         assert_eq!(d.window_colorspace, WindowColorspace::Srgb);
         assert_eq!(d.alpha_blending, AlphaBlending::Native);
@@ -9218,6 +9262,7 @@ mod tests {
                 "wait-after-command",
                 "abnormal-command-exit-runtime",
                 "scrollback-limit",
+                "scrollbar",
                 "link-previews",
                 "fullscreen",
                 "title",
@@ -10774,6 +10819,59 @@ mod tests {
         assert!(cloned.wait_after_command);
         assert_eq!(cloned.abnormal_command_exit_runtime, 42);
         assert_eq!(cloned.scrollback_limit, 256);
+    }
+
+    #[test]
+    fn scrollbar_config_parse_format_reset_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.scrollbar, Scrollbar::System);
+        assert_eq!(line(&cfg, "scrollbar"), "scrollbar = system");
+
+        cfg.set("scrollbar", Some("never")).unwrap();
+        assert_eq!(cfg.scrollbar, Scrollbar::Never);
+        assert_eq!(line(&cfg, "scrollbar"), "scrollbar = never");
+
+        cfg.set("scrollbar", Some("system")).unwrap();
+        assert_eq!(cfg.scrollbar, Scrollbar::System);
+        assert_eq!(line(&cfg, "scrollbar"), "scrollbar = system");
+
+        cfg.set("scrollbar", Some("never")).unwrap();
+        cfg.set("scrollbar", Some("")).unwrap();
+        assert_eq!(cfg.scrollbar, Scrollbar::System);
+
+        assert_eq!(
+            cfg.set("scrollbar", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("scrollbar", Some("always")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics = cfg.load_str("scrollbar = never\nscrollbar = always\n");
+        assert_eq!(cfg.scrollbar, Scrollbar::Never);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "scrollbar".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+
+        cfg.set("scrollbar", Some("never")).unwrap();
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.scrollbar, Scrollbar::Never);
     }
 
     #[test]

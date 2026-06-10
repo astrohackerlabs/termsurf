@@ -94,3 +94,50 @@ The reviewer verified that the README links Exp66 as `Designed`, the scope is a
 narrow config-surface slice, deferring `link` / `link-url` and runtime UI
 behavior is acceptable, and the plan matches upstream `Scrollbar` values and
 default.
+
+## Result
+
+**Result:** Pass
+
+Experiment 66 added the config-only `scrollbar` surface to
+`roastty/src/config/mod.rs`. `Config` now carries `scrollbar` with the upstream
+default `system`, routes it through `Config::set`, and emits it in
+`format_config` after `scrollback-limit` and before `link-previews`.
+
+The enum parser accepts the two upstream keywords, `system` and `never`. Empty
+values reset to `system`; missing values report `ValueRequired`; invalid values
+report `InvalidValue`.
+
+Runtime scrollbar display behavior remains out of scope; this experiment does
+not alter live app UI, scrollback allocation, or rendering behavior.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/config/mod.rs`
+- `cargo test -p roastty scrollbar_config`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`
+- `cargo fmt --check`
+- `git diff --check`
+
+`cargo test -p roastty` passed with 4,501 unit tests, the C ABI harness, and doc
+tests. The C ABI harness still emits existing enum-conversion warnings unrelated
+to this config change.
+
+## Conclusion
+
+`scrollbar` now has a faithful parser/formatter config surface with defaults,
+reset behavior, diagnostics, formatter-order coverage, and clone/equality
+coverage. The next config-surface experiment can continue with `link-url` or the
+following window startup fields, while `link` itself remains a larger follow-up
+because upstream still marks it TODO for config setting.
+
+## Completion Review
+
+Codex-native adversarial reviewer `019eb3cb-6bc7-7dd0-b758-6fac1e906410`
+returned **Approved** with no findings.
+
+The reviewer checked the completed experiment with fresh context, including the
+workflow contract, issue README, experiment file, implementation diff since the
+plan commit, `roastty/src/config/mod.rs`, and upstream
+`vendor/ghostty/src/config/Config.zig`.
