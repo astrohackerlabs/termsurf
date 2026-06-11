@@ -1174,6 +1174,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 123: Phase G — app-key chained actions](123-app-key-chained-actions.md)
   — **Pass**
+- [Experiment 124: Phase G — command palette config ABI](124-command-palette-config-abi.md)
+  — **Designed**
 
 ## Process
 
