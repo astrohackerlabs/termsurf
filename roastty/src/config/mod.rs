@@ -311,6 +311,8 @@ pub(crate) struct Config {
     pub scroll_to_bottom: ScrollToBottom,
     /// `custom-shader-animation`.
     pub custom_shader_animation: CustomShaderAnimation,
+    /// `bell-features`.
+    pub bell_features: BellFeatures,
     /// `background`.
     pub background: Color,
     /// `foreground`.
@@ -485,6 +487,7 @@ impl Default for Config {
             custom_shader: RepeatableConfigPath::default(),
             scroll_to_bottom: ScrollToBottom::default(),
             custom_shader_animation: CustomShaderAnimation::True,
+            bell_features: BellFeatures::default(),
             background: Color {
                 r: 0x28,
                 g: 0x2C,
@@ -759,6 +762,8 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("custom-shader", out));
         self.custom_shader_animation
             .format_entry(&mut EntryFormatter::new("custom-shader-animation", out));
+        self.bell_features
+            .format_entry(&mut EntryFormatter::new("bell-features", out));
         self.macos_non_native_fullscreen
             .format_entry(&mut EntryFormatter::new("macos-non-native-fullscreen", out));
         self.macos_window_buttons
@@ -1246,6 +1251,10 @@ impl Config {
                     default.custom_shader_animation,
                     CustomShaderAnimation::from_keyword,
                 )?
+            }
+            "bell-features" => {
+                self.bell_features =
+                    set_packed_field(value, default.bell_features, BellFeatures::parse_cli)?
             }
             "font-shaping-break" => {
                 self.font_shaping_break = set_packed_field(
@@ -6061,6 +6070,88 @@ impl CustomShaderAnimation {
     }
 }
 
+/// The `bell-features` config (upstream `BellFeatures`): which runtime bell
+/// effects are enabled when bell support exists. This is config-only here; the
+/// app/runtime bell delivery paths consume these flags in later work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BellFeatures {
+    /// Ask the system to perform its built-in bell behavior.
+    pub system: bool,
+    /// Play a configured custom audio file.
+    pub audio: bool,
+    /// Request user attention while unfocused.
+    pub attention: bool,
+    /// Mark alerted surface titles.
+    pub title: bool,
+    /// Show an alerted-surface border.
+    pub border: bool,
+}
+
+impl BellFeatures {
+    /// Format as a packed-struct config entry.
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_flags(&[
+            ("system", self.system),
+            ("audio", self.audio),
+            ("attention", self.attention),
+            ("title", self.title),
+            ("border", self.border),
+        ]);
+    }
+
+    /// Parse a standalone bool or `[no-]system,[no-]audio,[no-]attention,
+    /// [no-]title,[no-]border` packed-flag list.
+    pub(crate) fn parse_cli(value: &str) -> Result<Self, FlagsParseError> {
+        let mut result = BellFeatures::default();
+        parse_packed_flags(value, |tok| match tok {
+            FlagToken::All(b) => {
+                result.system = b;
+                result.audio = b;
+                result.attention = b;
+                result.title = b;
+                result.border = b;
+                true
+            }
+            FlagToken::One("system", on) => {
+                result.system = on;
+                true
+            }
+            FlagToken::One("audio", on) => {
+                result.audio = on;
+                true
+            }
+            FlagToken::One("attention", on) => {
+                result.attention = on;
+                true
+            }
+            FlagToken::One("title", on) => {
+                result.title = on;
+                true
+            }
+            FlagToken::One("border", on) => {
+                result.border = on;
+                true
+            }
+            FlagToken::One(_, _) => false,
+        })?;
+        Ok(result)
+    }
+}
+
+impl Default for BellFeatures {
+    /// Upstream's field defaults `system = false`, `audio = false`,
+    /// `attention = true`, `title = true`, `border = false`.
+    fn default() -> Self {
+        Self {
+            system: false,
+            audio: false,
+            attention: true,
+            title: true,
+            border: false,
+        }
+    }
+}
+
 /// An error parsing a `FontStyle` (upstream `error.ValueRequired`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FontStyleParseError {
@@ -6446,16 +6537,16 @@ mod tests {
     use super::{parse_bool_field, parse_i16_field, parse_string_field};
     use super::{
         AlphaBlending, BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit,
-        BackgroundImagePosition, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
-        ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
-        Command, CommandPaletteEntry, Config, ConfigDiagnostic, ConfigFilePath,
-        ConfigRecursiveFileErrorKind, ConfigSetError, ConfirmCloseSurface, CopyOnSelect,
-        CursorStyle, CustomShaderAnimation, DefaultConfigPaths, Duration, DurationParseError,
-        FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError, FontSyntheticStyle,
-        Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden, MacTitlebarProxyIcon,
-        MacTitlebarStyle, MacWindowButtons, MagicParseError, MiddleClickAction,
-        MouseScrollMultiplier, MouseScrollMultiplierParseError, MouseShiftCapture,
-        NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
+        BackgroundImagePosition, BellFeatures, BoldColor, ClipboardAccess,
+        ClipboardCodepointMapEntry, ClipboardCodepointMapParseError, ClipboardReplacement, Color,
+        ColorList, ColorParseError, Command, CommandPaletteEntry, Config, ConfigDiagnostic,
+        ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError, ConfirmCloseSurface,
+        CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths, Duration,
+        DurationParseError, FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError,
+        FontSyntheticStyle, Fullscreen, GraphemeWidthMethod, LinkPreviews, MacHidden,
+        MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
+        MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
+        MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         QuickTerminalDimensions, QuickTerminalKeyboardInteractivity, QuickTerminalLayer,
         QuickTerminalPosition, QuickTerminalScreen, QuickTerminalSize, QuickTerminalSizeParseError,
@@ -6823,6 +6914,7 @@ mod tests {
         assert!(d.custom_shader.list.is_empty());
         assert_eq!(d.scroll_to_bottom, ScrollToBottom::default());
         assert_eq!(d.custom_shader_animation, CustomShaderAnimation::True);
+        assert_eq!(d.bell_features, BellFeatures::default());
         // Base-colors group (Experiment 472).
         assert_eq!(
             d.background,
@@ -8304,6 +8396,97 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bell_features_config_parse_format_reset_and_diagnose() {
+        let mut cfg = Config::default();
+        assert_eq!(
+            cfg.bell_features,
+            BellFeatures {
+                system: false,
+                audio: false,
+                attention: true,
+                title: true,
+                border: false,
+            }
+        );
+
+        let line = |cfg: &Config| {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with("bell-features = "))
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            line(&cfg),
+            "bell-features = no-system,no-audio,attention,title,no-border"
+        );
+
+        cfg.set("bell-features", Some("system,no-attention,border"))
+            .unwrap();
+        assert_eq!(
+            cfg.bell_features,
+            BellFeatures {
+                system: true,
+                audio: false,
+                attention: false,
+                title: true,
+                border: true,
+            }
+        );
+        assert_eq!(
+            line(&cfg),
+            "bell-features = system,no-audio,no-attention,title,border"
+        );
+
+        cfg.set("bell-features", Some("false")).unwrap();
+        assert_eq!(
+            cfg.bell_features,
+            BellFeatures {
+                system: false,
+                audio: false,
+                attention: false,
+                title: false,
+                border: false,
+            }
+        );
+        assert_eq!(
+            line(&cfg),
+            "bell-features = no-system,no-audio,no-attention,no-title,no-border"
+        );
+
+        cfg.set("bell-features", Some("true")).unwrap();
+        assert_eq!(
+            cfg.bell_features,
+            BellFeatures {
+                system: true,
+                audio: true,
+                attention: true,
+                title: true,
+                border: true,
+            }
+        );
+        assert_eq!(
+            line(&cfg),
+            "bell-features = system,audio,attention,title,border"
+        );
+
+        cfg.set("bell-features", Some("")).unwrap();
+        assert_eq!(cfg.bell_features, BellFeatures::default());
+        assert_eq!(
+            cfg.set("bell-features", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("bell-features", Some("system,flash")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
     }
 
     #[test]
@@ -10928,6 +11111,7 @@ mod tests {
             "vt-kam-allowed",
             "custom-shader",
             "custom-shader-animation",
+            "bell-features",
             "macos-non-native-fullscreen",
             "macos-window-buttons",
             "macos-titlebar-style",
@@ -12004,6 +12188,14 @@ mod tests {
         assert_eq!(
             line(&cfg, "notify-on-command-finish-action"),
             "notify-on-command-finish-action = no-bell,notify"
+        );
+
+        let mut cfg = Config::default();
+        cfg.set("bell-features", Some("system,no-title,border"))
+            .unwrap();
+        assert_eq!(
+            line(&cfg, "bell-features"),
+            "bell-features = system,no-audio,attention,no-title,border"
         );
 
         // bool field: an explicit value, and a bare flag (None ⇒ true).

@@ -103,3 +103,78 @@ before `background`, explicitly leaving the existing local `scroll_to_bottom`
 placement untouched. The reviewer re-reviewed the fix and returned **Approved**,
 confirming the corrected placement matches the current local field/default
 region and formatter slot.
+
+## Result
+
+**Result:** Pass
+
+Implemented `bell-features` in `roastty/src/config/mod.rs` as a `BellFeatures`
+packed bool struct matching upstream's pinned defaults:
+
+- `system = false`
+- `audio = false`
+- `attention = true`
+- `title = true`
+- `border = false`
+
+`Config` now stores `bell_features`, initializes it from
+`BellFeatures::default()`, formats `bell-features` immediately after
+`custom-shader-animation`, and routes `Config::set("bell-features", ...)`
+through the existing packed-field helper.
+
+The parser/formatter surface matches the local packed-flag implementation used
+for other upstream packed structs:
+
+- standalone booleans set all five flags;
+- comma-separated `[no-]flag` values override named flags from the defaults;
+- omitted flags keep their defaults;
+- raw empty values reset to defaults;
+- missing values diagnose as `ValueRequired`;
+- unknown flags diagnose as `InvalidValue`;
+- formatter output is canonical and includes all five flags in upstream field
+  order.
+
+Added coverage in the default audit, formatter-order test, aggregate packed/bool
+setter-route test, and a focused `bell_features` test for defaults, canonical
+formatting, individual flags, bool-all parsing, empty reset, missing/invalid
+diagnostics, and clone/equality.
+
+Verification passed:
+
+- `cargo fmt`
+- `cargo test -p roastty bell_features`
+  - 1 targeted test passed
+- `cargo test -p roastty config_format_config`
+  - 1 targeted test passed
+- `cargo test -p roastty`
+  - 4532 unit tests passed
+  - ABI harness passed with the existing 10 enum-conversion warnings
+  - doc tests passed
+- `cargo fmt --check`
+- `git diff --check`
+
+No long-lived app or background process was spawned for this experiment.
+
+## Conclusion
+
+`bell-features` now has the upstream-compatible parser/formatter config surface.
+Runtime bell delivery remains later work: system alert callbacks, custom audio
+playback, app attention requests, title markers, and alerted-surface borders are
+not implemented or claimed by this experiment.
+
+## Completion Review
+
+Codex adversarial reviewer `019eb50d-4f82-70c3-b613-1bb0e6aa0ed4` returned
+**Approved** with no findings. The reviewer confirmed the result commit had not
+yet been made, the working tree contained only the expected three modified
+files, and the implementation matches the parser/formatter-only scope, upstream
+`BellFeatures` defaults and field order, and the existing packed-field parsing
+route.
+
+The reviewer independently reran and passed:
+
+- `cargo fmt --check`
+- `git diff --check`
+- `cargo test -p roastty bell_features`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`
