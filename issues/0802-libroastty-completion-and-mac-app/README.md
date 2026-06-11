@@ -267,6 +267,10 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   `term` and `enquiry-response` with upstream defaults, string reset and NUL
   diagnostics, and canonical formatter output; runtime child-process `TERM`
   propagation, ENQ response behavior, and app C ABI exposure remain later work.
+- **Async backend / auto-update config is parser/formatter-only.** Exp 96 wires
+  `async-backend`, `auto-update`, and `auto-update-channel` with exact upstream
+  enum keywords and raw defaults; runtime async backend selection, Sparkle
+  update behavior, and `auto-update-channel` finalization remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -947,6 +951,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 96: Phase F — async backend and auto-update config](96-async-update-config.md)
   — **Pass**
+- [Experiment 97: Phase F — config finalize scalar tail](97-config-finalize-scalar-tail.md)
+  — **Designed**
 
 ## Process
 
