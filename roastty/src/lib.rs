@@ -2251,7 +2251,7 @@ impl App {
             return false;
         }
 
-        if parsed.is_key_table_action() {
+        if parsed.is_key_table_action() || parsed.is_sequence_control_action() {
             return false;
         }
 
@@ -5098,6 +5098,23 @@ impl Surface {
         })
     }
 
+    fn configured_table_catch_all_entry(
+        &self,
+        table_name: &[u8],
+        event: &key::KeyEvent,
+    ) -> Option<ConfigKeybindSetEntry<'_>> {
+        if self.app.is_null() {
+            return None;
+        }
+        app_from_handle(self.app).and_then(|app| {
+            let table = app
+                .keybind_tables
+                .iter()
+                .find(|table| table.name == table_name)?;
+            table.sequences.catch_all_entry(event)
+        })
+    }
+
     fn configured_active_table_entry(
         &self,
         event: &key::KeyEvent,
@@ -5119,6 +5136,38 @@ impl Surface {
             return None;
         }
         app_from_handle(self.app).and_then(|app| app.keybind_sequences.exact_entry(event))
+    }
+
+    fn configured_root_catch_all_entry(
+        &self,
+        event: &key::KeyEvent,
+    ) -> Option<ConfigKeybindSetEntry<'_>> {
+        if self.app.is_null() {
+            return None;
+        }
+        app_from_handle(self.app).and_then(|app| app.keybind_sequences.catch_all_entry(event))
+    }
+
+    fn configured_entry_is_ignore(entry: ConfigKeybindSetEntry<'_>) -> bool {
+        matches!(
+            entry,
+            ConfigKeybindSetEntry::Leaf(binding)
+                if matches!(
+                    parse_config_binding_action(&binding.action),
+                    Some(ParsedBindingAction::Ignore)
+                )
+        )
+    }
+
+    fn catch_all_is_ignore(&self, event: &key::KeyEvent) -> bool {
+        for table in self.active_key_tables.iter().rev() {
+            if let Some(entry) = self.configured_table_catch_all_entry(&table.name, event) {
+                return Self::configured_entry_is_ignore(entry);
+            }
+        }
+        self.configured_root_catch_all_entry(event)
+            .map(Self::configured_entry_is_ignore)
+            .unwrap_or(false)
     }
 
     fn key_sequence_storage(active: bool, trigger: RoasttyInputTrigger) -> [usize; 8] {
@@ -5231,7 +5280,7 @@ impl Surface {
             return Some(SurfaceKeySequenceResult::Handled(false));
         }
 
-        match set.exact_entry(event) {
+        match set.event_entry(event) {
             Some(ConfigKeybindSetEntry::Leader { trigger, set }) => Some(
                 SurfaceKeySequenceResult::Handled(self.start_key_sequence(set, trigger, event)),
             ),
@@ -5241,6 +5290,10 @@ impl Surface {
             None if key_is_modifier(event.key) => Some(SurfaceKeySequenceResult::Handled(
                 self.write_encoded_key_event(event),
             )),
+            None if self.catch_all_is_ignore(event) => {
+                self.end_key_sequence(false);
+                Some(SurfaceKeySequenceResult::Handled(true))
+            }
             None => {
                 self.end_key_sequence(true);
                 Some(SurfaceKeySequenceResult::EncodeCurrent)
@@ -5324,10 +5377,15 @@ impl Surface {
 
     fn dispatch_configured_binding(&mut self, binding: ConfiguredBindingMatch) -> Option<bool> {
         let parsed = parse_binding_action(self, &binding.action)?;
+        let ignores_input = matches!(parsed, ParsedBindingAction::Ignore);
         let performed = perform_parsed_binding_action(self, parsed);
         let global_or_all =
             binding.flags & (ROASTTY_KEYBIND_FLAG_GLOBAL | ROASTTY_KEYBIND_FLAG_ALL) != 0;
         let consumed = binding.flags & ROASTTY_KEYBIND_FLAG_CONSUMED != 0 || global_or_all;
+        if ignores_input && performed {
+            self.last_consumed_default_binding = Some(binding.release_identity);
+            return Some(true);
+        }
         if binding.flags & ROASTTY_KEYBIND_FLAG_PERFORMABLE != 0 && !performed && !global_or_all {
             return None;
         }
@@ -5890,6 +5948,8 @@ enum ParsedBindingAction {
     ActivateKeyTable(Vec<u8>, bool),
     DeactivateKeyTable,
     DeactivateAllKeyTables,
+    Ignore,
+    EndKeySequence,
 }
 
 impl ParsedBindingAction {
@@ -5899,6 +5959,13 @@ impl ParsedBindingAction {
             ParsedBindingAction::ActivateKeyTable(_, _)
                 | ParsedBindingAction::DeactivateKeyTable
                 | ParsedBindingAction::DeactivateAllKeyTables
+        )
+    }
+
+    fn is_sequence_control_action(&self) -> bool {
+        matches!(
+            self,
+            ParsedBindingAction::Ignore | ParsedBindingAction::EndKeySequence
         )
     }
 
@@ -5984,6 +6051,8 @@ impl ParsedBindingAction {
             }
             ParsedBindingAction::DeactivateKeyTable => "deactivate_key_table".to_string(),
             ParsedBindingAction::DeactivateAllKeyTables => "deactivate_all_key_tables".to_string(),
+            ParsedBindingAction::Ignore => "ignore".to_string(),
+            ParsedBindingAction::EndKeySequence => "end_key_sequence".to_string(),
         }
     }
 }
@@ -6467,6 +6536,18 @@ fn parse_binding_action_with_auto_split(
                 return None;
             }
             Some(ParsedBindingAction::ToggleReadonly)
+        }
+        b"ignore" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::Ignore)
+        }
+        b"end_key_sequence" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::EndKeySequence)
         }
         b"activate_key_table" => Some(ParsedBindingAction::ActivateKeyTable(
             parse_key_table_name(parameter?)?,
@@ -17062,6 +17143,14 @@ fn perform_parsed_binding_action(surface: &mut Surface, action: ParsedBindingAct
         }
         ParsedBindingAction::DeactivateKeyTable => surface.deactivate_key_table(),
         ParsedBindingAction::DeactivateAllKeyTables => surface.deactivate_all_key_tables(),
+        ParsedBindingAction::Ignore => {
+            surface.end_key_sequence(false);
+            true
+        }
+        ParsedBindingAction::EndKeySequence => {
+            surface.end_key_sequence(true);
+            true
+        }
     }
 }
 
@@ -17291,6 +17380,14 @@ pub extern "C" fn roastty_surface_binding_action(
         }
         ParsedBindingAction::DeactivateKeyTable => surface.deactivate_key_table(),
         ParsedBindingAction::DeactivateAllKeyTables => surface.deactivate_all_key_tables(),
+        ParsedBindingAction::Ignore => {
+            surface.end_key_sequence(false);
+            true
+        }
+        ParsedBindingAction::EndKeySequence => {
+            surface.end_key_sequence(true);
+            true
+        }
     }
 }
 
@@ -19377,6 +19474,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_config_binding_action_sequence_control_actions() {
+        assert_eq!(
+            canonical_config_binding_action(b"ignore").unwrap(),
+            "ignore"
+        );
+        assert_eq!(
+            canonical_config_binding_action(b"end_key_sequence").unwrap(),
+            "end_key_sequence"
+        );
+
+        for action in [b"ignore:x".as_slice(), b"end_key_sequence:x".as_slice()] {
+            assert!(canonical_config_binding_action(action).is_none());
+        }
+    }
+
+    #[test]
     fn surface_key_table_exact_binding_precedes_root_and_default() {
         let config = new_test_config_with_keybind_entries(&[
             b"x=activate_key_table:nav",
@@ -20002,6 +20115,243 @@ mod tests {
     }
 
     #[test]
+    fn surface_key_ignore_consumes_without_runtime_action() {
+        let config = new_test_config_with_keybind_entries(&[b"a=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        assert!(action_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_key_sequence
+            .is_none());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_unconsumed_ignore_still_consumes_input() {
+        let config = new_test_config_with_keybind_entries(&[b"unconsumed:a=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        assert!(action_records().is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_sequence_leaf_ignore_drops_prefix_and_ends_sequence() {
+        let config = new_test_config_with_keybind_entries(&[b"a>b=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .queued_key_sequence
+                .len(),
+            1
+        );
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyB, b"b", b'b' as u32, ROASTTY_MODS_NONE)
+        ));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_KEY_SEQUENCE);
+        assert_eq!(records[0].key_sequence.map(|value| value.0), Some(false));
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.active_key_sequence.is_none());
+        assert!(surface_ref.queued_key_sequence.is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_sequence_unconsumed_ignore_still_drops_trigger_key() {
+        let config = new_test_config_with_keybind_entries(&[b"unconsumed:a>b=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyB, b"b", b'b' as u32, ROASTTY_MODS_NONE)
+        ));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_KEY_SEQUENCE);
+        assert_eq!(records[0].key_sequence.map(|value| value.0), Some(false));
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.active_key_sequence.is_none());
+        assert!(surface_ref.queued_key_sequence.is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_sequence_catch_all_ignore_drops_prefix_and_key() {
+        let config = new_test_config_with_keybind_entries(&[b"a>catch_all=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyX, b"x", b'x' as u32, ROASTTY_MODS_NONE)
+        ));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_KEY_SEQUENCE);
+        assert_eq!(records[0].key_sequence.map(|value| value.0), Some(false));
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.active_key_sequence.is_none());
+        assert!(surface_ref.queued_key_sequence.is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_sequence_end_key_sequence_flushes_prefix_only() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_keybind_entries(&[b"a>escape=end_key_sequence"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker(
+            "stty raw -echo; printf ready; bytes=$(dd bs=1 count=1 2>/dev/null); printf out:%s \"$bytes\"; sleep 1",
+        ));
+        wait_for_surface_plain_screen(app, surface, "ready");
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::Escape, b"\x1b", 0, ROASTTY_MODS_NONE)
+        ));
+
+        wait_for_surface_plain_screen(app, surface, "out:a");
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_KEY_SEQUENCE);
+        assert_eq!(records[0].key_sequence.map(|value| value.0), Some(false));
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_key_sequence
+            .is_none());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_sequence_root_catch_all_ignore_drops_invalid_key() {
+        let config = new_test_config_with_keybind_entries(&[b"a>b=quit", b"catch_all=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyX, b"x", b'x' as u32, ROASTTY_MODS_NONE)
+        ));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_KEY_SEQUENCE);
+        assert_eq!(records[0].key_sequence.map(|value| value.0), Some(false));
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.active_key_sequence.is_none());
+        assert!(surface_ref.queued_key_sequence.is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_sequence_table_catch_all_ignore_precedes_root_flush() {
+        let config = new_test_config_with_keybind_entries(&[
+            b"x=activate_key_table:nav",
+            b"nav/",
+            b"nav/catch_all=ignore",
+            b"catch_all=quit",
+            b"nav/a>b=toggle_fullscreen",
+        ]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyX, b"x", b'x' as u32, ROASTTY_MODS_NONE)
+        ));
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_NONE)
+        ));
+        reset_action_records(true);
+        assert!(send_key(
+            surface,
+            key_press(key::Key::KeyY, b"y", b'y' as u32, ROASTTY_MODS_NONE)
+        ));
+
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_KEY_SEQUENCE);
+        assert_eq!(records[0].key_sequence.map(|value| value.0), Some(false));
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.active_key_sequence.is_none());
+        assert!(surface_ref.queued_key_sequence.is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
     fn surface_key_table_sequence_leader_and_leaf_notify_and_dispatch() {
         let config =
             new_test_config_with_keybind_entries(&[b"x=activate_key_table:nav", b"nav/a>b=quit"]);
@@ -20400,6 +20750,24 @@ mod tests {
             .unwrap()
             .active_key_tables
             .is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn app_key_ignores_sequence_control_actions_for_now() {
+        let config = new_test_config_with_keybind_entries(&[b"global:x=ignore"]);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(!roastty_app_key(app, input_key_press_x(ROASTTY_MODS_NONE)));
+        assert!(action_records().is_empty());
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .active_key_sequence
+            .is_none());
 
         roastty_surface_free(surface);
         roastty_app_free(app);

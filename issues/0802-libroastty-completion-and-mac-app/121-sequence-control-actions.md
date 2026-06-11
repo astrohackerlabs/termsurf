@@ -102,3 +102,67 @@ and then root. Added explicit test coverage for sequence-local, root, and table
 **Final verdict:** Approved
 
 **Final findings:** None.
+
+## Result
+
+**Result:** Pass
+
+Implemented `ignore` and `end_key_sequence` for configured surface keybindings.
+`ignore` now parses and canonicalizes as a parameterless action, consumes direct
+surface bindings without firing runtime actions, and clears active key sequences
+without flushing queued leader bytes. `end_key_sequence` parses and
+canonicalizes as a parameterless action, ends the active sequence, flushes only
+queued leader bytes, and consumes the triggering leaf key.
+
+Active sequence continuation lookup now uses full event lookup, so
+sequence-local `catch_all` leaves run before an input is treated as an invalid
+sequence key. Invalid active-sequence misses now check active table catch-all
+bindings from inner-most to outer-most, then root catch-all bindings, and drop
+the queued prefix/current key when that fallback action is `ignore`. Reviewer
+follow-up found that `unconsumed:...=ignore` must still keep Ghostty's
+ignored-input behavior; the implementation now treats performed `ignore` as
+handled regardless of configured consumed flags, with direct and sequence
+regression tests.
+
+`roastty_app_key` explicitly ignores the new sequence-control actions for now,
+matching the experiment scope.
+
+Verification passed:
+
+- `cargo test -p roastty sequence` (46 tests)
+- `cargo test -p roastty key_table`
+- `cargo test -p roastty surface_key` (83 tests)
+- `cargo test -p roastty app_key`
+- `cargo test -p roastty parse_config_binding_action`
+- `cargo test -p roastty --test abi_harness` (passes with existing
+  enum-conversion warnings in the C harness)
+- `cargo test -p roastty -- --test-threads=1` (4688 unit tests, ABI harness, doc
+  tests)
+
+## Conclusion
+
+Roastty now covers the upstream sequence-control actions that do not require
+chained binding storage. Remaining Phase G keybinding work should move to
+`chain=`, native keymaps/global shortcuts, app-key sequence/table handling, and
+the broader default binding catalog.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial reviewer, fresh context
+(`multi_agent_v1.spawn_agent`, agent `019eb7b1-e47a-75e2-a026-cd66aad18886`)
+
+**Initial verdict:** Changes required
+
+**Required finding:** `ignore` did not preserve Ghostty's ignored-input effect
+for explicitly `unconsumed` bindings. Because configured binding dispatch only
+returned consumed for consumed/global/all flags, `unconsumed:a=ignore` and
+`unconsumed:a>b=ignore` could fall through and encode the ignored key.
+
+**Fix:** Updated configured binding dispatch so a performed `ignore` returns
+handled regardless of consumed flags. Added regression coverage for
+`unconsumed:a=ignore` and `unconsumed:a>b=ignore`.
+
+**Re-review verdict:** Approved
+
+**Re-review findings:** None. The reviewer confirmed the prior finding was
+resolved and spot-checked both new targeted regression tests.

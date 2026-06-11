@@ -394,16 +394,16 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   the full upstream binding catalog remain later work.
 - **Configured key sequences are wired for root and active-table surface
   bindings.** Exp 118 stores root/table sequence tries, Exp 119 activates root
-  sequences, and Exp 120 activates table-local sequences from active key tables,
-  including nested leaders, `catch_all` sequence leaders, one-shot table
-  popping, invalid-prefix flushes, and `surface_key_is_binding` leader/leaf
-  flags. Exp 120's final full `cargo test -p roastty -- --test-threads=1` run
-  passed after earlier transient PTY foreground-pid / mouse-readonly failures.
-  Remaining Phase G keybinding gaps include `ignore`, `end_key_sequence`,
+  sequences, Exp 120 activates table-local sequences from active key tables, and
+  Exp 121 adds `ignore` / `end_key_sequence` sequence-control actions plus
+  upstream-style `catch_all=ignore` invalid-sequence fallback. Covered behavior
+  includes nested leaders, `catch_all` sequence leaders and leaves, one-shot
+  table popping, invalid-prefix flushes/drops, and `surface_key_is_binding`
+  leader/leaf flags. Exp 121's final full
+  `cargo test -p roastty -- --test-threads=1` run passed 4688 unit tests plus
+  the ABI harness and doc tests. Remaining Phase G keybinding gaps include
   `chain=`, native keymaps/global shortcuts, app-key sequence/table handling,
   broader global/all routing, and the full upstream binding catalog.
-  keymaps/global shortcuts, app-key sequence/table handling, broader global/all
-  routing, and the full upstream binding catalog.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -775,8 +775,8 @@ the live app, verified by a Phase-D UI test.)
 **Phase G — Input / keybindings**
 
 - [ ] Multi-key sequences / chords (the trie), leader keys, key tables —
-      configured root and active-table surface sequences are wired (Exp
-      118–120), but `ignore`, `end_key_sequence`, `chain=`, native
+      configured root and active-table surface sequences plus `ignore` /
+      `end_key_sequence` are wired (Exp 118–121), but `chain=`, native
       keymaps/global shortcuts, app-key sequence/table handling, broader
       global/all routing, and the full upstream binding catalog remain later
       work
@@ -1151,7 +1151,7 @@ stays unaltered except for the rename).
 - [Experiment 120: Phase G — key-table sequence runtime](120-key-table-sequence-runtime.md)
   — **Pass**
 - [Experiment 121: Phase G — sequence control actions](121-sequence-control-actions.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
