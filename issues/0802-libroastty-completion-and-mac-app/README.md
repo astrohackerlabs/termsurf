@@ -1129,6 +1129,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 118: Phase G — sequence syntax storage](118-sequence-syntax-storage.md)
   — **Pass**
+- [Experiment 119: Phase G — sequence runtime activation](119-sequence-runtime-activation.md)
+  — **Designed**
 
 ## Process
 
