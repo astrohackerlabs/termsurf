@@ -960,7 +960,7 @@ stays unaltered except for the rename).
 - [Experiment 97: Phase F — config finalize scalar tail](97-config-finalize-scalar-tail.md)
   — **Pass**
 - [Experiment 98: Phase F — config replay foundation](98-config-replay-foundation.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

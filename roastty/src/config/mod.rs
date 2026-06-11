@@ -377,6 +377,7 @@ pub(crate) struct Config {
     pub foreground: Color,
     /// `theme`.
     pub theme: Option<Theme>,
+    replay_entries: Vec<ConfigReplayEntry>,
 }
 
 impl Default for Config {
@@ -588,6 +589,7 @@ impl Default for Config {
                 b: 0xFF,
             },
             theme: None,
+            replay_entries: Vec::new(),
         }
     }
 }
@@ -926,6 +928,68 @@ impl Config {
 
     fn set_cli(&mut self, key: &str, value: Option<&str>) -> Result<(), ConfigSetError> {
         self.set_from_source(key, value, ConfigSetSource::Cli)
+    }
+
+    fn set_from_source_recording(
+        &mut self,
+        key: &str,
+        value: Option<&str>,
+        source: ConfigSetSource,
+        begin_cli_batch: bool,
+    ) -> Result<(), ConfigSetError> {
+        self.set_from_source(key, value, source)?;
+        self.replay_entries.push(ConfigReplayEntry {
+            key: key.to_string(),
+            value: value.map(ToString::to_string),
+            source,
+            begin_cli_batch,
+        });
+        Ok(())
+    }
+
+    fn replay_into(&self, target: &mut Config) -> Result<(), ConfigSetError> {
+        let mut cli_replay_active = false;
+        for entry in &self.replay_entries {
+            if entry.source == ConfigSetSource::Cli && entry.begin_cli_batch {
+                if cli_replay_active {
+                    target.end_cli_replay();
+                }
+                target.begin_cli_replay();
+                cli_replay_active = true;
+            } else if entry.source == ConfigSetSource::Cli && !cli_replay_active {
+                target.begin_cli_replay();
+                cli_replay_active = true;
+            } else if entry.source != ConfigSetSource::Cli && cli_replay_active {
+                target.end_cli_replay();
+                cli_replay_active = false;
+            }
+            if let Err(error) =
+                target.set_from_source(&entry.key, entry.value.as_deref(), entry.source)
+            {
+                if cli_replay_active {
+                    target.end_cli_replay();
+                }
+                return Err(error);
+            }
+        }
+        if cli_replay_active {
+            target.end_cli_replay();
+        }
+        Ok(())
+    }
+
+    fn begin_cli_replay(&mut self) {
+        self.font_family.overwrite_next = true;
+        self.font_family_bold.overwrite_next = true;
+        self.font_family_italic.overwrite_next = true;
+        self.font_family_bold_italic.overwrite_next = true;
+    }
+
+    fn end_cli_replay(&mut self) {
+        self.font_family.overwrite_next = false;
+        self.font_family_bold.overwrite_next = false;
+        self.font_family_italic.overwrite_next = false;
+        self.font_family_bold_italic.overwrite_next = false;
     }
 
     fn set_from_source(
@@ -1751,7 +1815,9 @@ impl Config {
             let Some((key, value)) = loader::parse_config_line(line) else {
                 continue;
             };
-            if let Err(error) = self.set(key, value) {
+            if let Err(error) =
+                self.set_from_source_recording(key, value, ConfigSetSource::File, false)
+            {
                 diagnostics.push(ConfigDiagnostic {
                     line: i + 1,
                     key: key.to_string(),
@@ -1893,15 +1959,23 @@ impl Config {
         self.font_family_bold.overwrite_next = true;
         self.font_family_italic.overwrite_next = true;
         self.font_family_bold_italic.overwrite_next = true;
+        let mut begin_cli_batch = true;
         for (i, arg) in args.into_iter().enumerate() {
             match loader::parse_cli_arg(arg) {
                 Some((key, value)) => {
-                    if let Err(error) = self.set_cli(key, value) {
+                    if let Err(error) = self.set_from_source_recording(
+                        key,
+                        value,
+                        ConfigSetSource::Cli,
+                        begin_cli_batch,
+                    ) {
                         diagnostics.push(ConfigDiagnostic {
                             line: i + 1,
                             key: key.to_string(),
                             error,
                         });
+                    } else {
+                        begin_cli_batch = false;
                     }
                 }
                 // A non-flag argument is not a valid config field.
@@ -2083,6 +2157,14 @@ pub(crate) struct ConfigDiagnostic {
 enum ConfigSetSource {
     File,
     Cli,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigReplayEntry {
+    key: String,
+    value: Option<String>,
+    source: ConfigSetSource,
+    begin_cli_batch: bool,
 }
 
 /// An error parsing a `RepeatableConfigPath` (upstream `error.ValueRequired`).
@@ -7308,9 +7390,9 @@ mod tests {
         BoldColor, ClipboardAccess, ClipboardCodepointMapEntry, ClipboardCodepointMapParseError,
         ClipboardReplacement, Color, ColorList, ColorParseError, Command, CommandPaletteEntry,
         Config, ConfigDiagnostic, ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError,
-        ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths,
-        Duration, DurationParseError, FlagsParseError, FontShapingBreak, FontStyle,
-        FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod,
+        ConfigSetSource, ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation,
+        DefaultConfigPaths, Duration, DurationParseError, FlagsParseError, FontShapingBreak,
+        FontStyle, FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod,
         GtkSingleInstance, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, LinkPreviews,
         LinuxCgroup, MacAppIcon, MacAppIconFrame, MacHidden, MacShortcuts, MacTitlebarProxyIcon,
         MacTitlebarStyle, MacWindowButtons, MagicParseError, MiddleClickAction,
@@ -12335,6 +12417,139 @@ mod tests {
         // The good arg still applied; the bad `fullscreen` kept its default.
         assert!(has(&cfg, "copy-on-select", "clipboard"));
         assert!(has(&cfg, "fullscreen", "false"));
+    }
+
+    #[test]
+    fn config_replay_records_file_and_cli_successes_in_order() {
+        let mut cfg = Config::default();
+        let diags = cfg.load_str(
+            "# comment\n\
+             term = xterm-256color\n\
+             \n\
+             badkey = nope\n\
+             title = File Title\n",
+        );
+        assert_eq!(
+            diags,
+            vec![ConfigDiagnostic {
+                line: 4,
+                key: "badkey".to_string(),
+                error: ConfigSetError::UnknownField,
+            }]
+        );
+
+        let diags = cfg.set_cli_args([
+            "--window-theme=dark",
+            "not-a-flag",
+            "--fullscreen=nope",
+            "--auto-update=download",
+        ]);
+        assert_eq!(
+            diags,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "not-a-flag".to_string(),
+                    error: ConfigSetError::UnknownField,
+                },
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "fullscreen".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+            ]
+        );
+
+        assert_eq!(cfg.replay_entries.len(), 4);
+        assert_eq!(cfg.replay_entries[0].key, "term");
+        assert_eq!(
+            cfg.replay_entries[0].value.as_deref(),
+            Some("xterm-256color")
+        );
+        assert_eq!(cfg.replay_entries[0].source, ConfigSetSource::File);
+        assert!(!cfg.replay_entries[0].begin_cli_batch);
+        assert_eq!(cfg.replay_entries[1].key, "title");
+        assert_eq!(cfg.replay_entries[1].value.as_deref(), Some("File Title"));
+        assert_eq!(cfg.replay_entries[1].source, ConfigSetSource::File);
+        assert!(!cfg.replay_entries[1].begin_cli_batch);
+        assert_eq!(cfg.replay_entries[2].key, "window-theme");
+        assert_eq!(cfg.replay_entries[2].value.as_deref(), Some("dark"));
+        assert_eq!(cfg.replay_entries[2].source, ConfigSetSource::Cli);
+        assert!(cfg.replay_entries[2].begin_cli_batch);
+        assert_eq!(cfg.replay_entries[3].key, "auto-update");
+        assert_eq!(cfg.replay_entries[3].value.as_deref(), Some("download"));
+        assert_eq!(cfg.replay_entries[3].source, ConfigSetSource::Cli);
+        assert!(!cfg.replay_entries[3].begin_cli_batch);
+    }
+
+    #[test]
+    fn config_replay_does_not_record_direct_set() {
+        let mut cfg = Config::default();
+
+        cfg.set("term", Some("xterm-direct")).unwrap();
+        cfg.set("background-image-repeat", None).unwrap();
+
+        assert!(cfg.replay_entries.is_empty());
+        assert_eq!(cfg.term, "xterm-direct");
+        assert!(cfg.bg_image_repeat);
+    }
+
+    #[test]
+    fn config_replay_into_fresh_config_reconstructs_values_without_duplication() {
+        let mut cfg = Config::default();
+        let diags = cfg.load_str(
+            "term = xterm-256color\n\
+             title = Replay Title\n\
+             auto-update = download\n\
+             font-family = File A\n\
+             font-family = File B\n",
+        );
+        assert!(diags.is_empty());
+
+        let mut replayed = Config::default();
+        cfg.replay_into(&mut replayed).unwrap();
+
+        assert_eq!(replayed.term, "xterm-256color");
+        assert_eq!(replayed.title.as_deref(), Some("Replay Title"));
+        assert_eq!(replayed.auto_update, Some(AutoUpdate::Download));
+        assert_eq!(replayed.font_family.list, vec!["File A", "File B"]);
+        assert!(replayed.replay_entries.is_empty());
+    }
+
+    #[test]
+    fn config_replay_preserves_cli_repeatable_overwrite() {
+        let mut cfg = Config::default();
+        assert!(cfg
+            .load_str(
+                "font-family = File A\n\
+                 font-family = File B\n",
+            )
+            .is_empty());
+        assert!(cfg
+            .set_cli_args(["--font-family=CLI A", "--font-family=CLI B"])
+            .is_empty());
+
+        let mut replayed = Config::default();
+        cfg.replay_into(&mut replayed).unwrap();
+
+        assert_eq!(cfg.font_family.list, vec!["CLI A", "CLI B"]);
+        assert_eq!(replayed.font_family.list, vec!["CLI A", "CLI B"]);
+        assert!(replayed.replay_entries.is_empty());
+    }
+
+    #[test]
+    fn config_replay_preserves_separate_cli_repeatable_overwrites() {
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("font-family = File\n").is_empty());
+        assert!(cfg.set_cli_args(["--font-family=CLI A"]).is_empty());
+        assert!(cfg.set_cli_args(["--font-family=CLI B"]).is_empty());
+
+        let mut replayed = Config::default();
+        cfg.replay_into(&mut replayed).unwrap();
+
+        assert_eq!(cfg.font_family.list, vec!["CLI B"]);
+        assert_eq!(replayed.font_family.list, vec!["CLI B"]);
+        assert!(replayed.replay_entries.is_empty());
     }
 
     #[test]
