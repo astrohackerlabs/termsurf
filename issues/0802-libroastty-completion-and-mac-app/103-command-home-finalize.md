@@ -112,3 +112,60 @@ Re-review verdict: **APPROVED**
 
 The reviewer confirmed both required findings were resolved and found no new
 required findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented config-internal command/default-home finalization.
+
+- Extended the private config-finalize context with `$SHELL`, passwd shell, and
+  passwd home values.
+- Populated the production context from `std::env::var_os("SHELL")` and
+  `os::passwd::get()`.
+- Resolved the default command after the working-directory default decision:
+  probable CLI contexts use present UTF-8 `$SHELL` first, including an empty
+  string; otherwise config finalization falls back to the present UTF-8 passwd
+  shell, including an empty string.
+- Preserved explicitly configured commands.
+- Converted `WorkingDirectory::Home` to a present UTF-8 passwd-home path,
+  including an empty string, and converted it to `Inherit` when no UTF-8 passwd
+  home is present.
+- Kept Experiment 102 `~/...` path expansion after the command/home resolution
+  step.
+- Added deterministic tests for env-vs-passwd shell precedence, desktop `$SHELL`
+  rejection, explicit command preservation, empty-present values, no shell
+  sources, non-UTF-8 scoped gaps, passwd-home path conversion, missing-home
+  inheritance, and the updated working-directory finalize behavior.
+
+Verification passed:
+
+1. `cargo test -p roastty config_command_home_finalize`
+2. `cargo test -p roastty config_working_directory_finalize`
+3. `cargo test -p roastty command_config`
+4. `cargo test -p roastty`
+5. `cargo fmt --check`
+6. `git diff --check`
+
+The focused command/home run passed 8 tests. The working-directory regression
+run passed 6 tests. The command-config run passed 1 test. The full
+`cargo test -p roastty` run passed 4584 unit tests, the ABI harness, and doc
+tests. The ABI harness printed the existing 10 enum-conversion warnings.
+
+## Conclusion
+
+Roastty now ports the Unix config-finalize default command and
+`WorkingDirectory::Home` resolution block for UTF-8 shell/home values. This
+removes the main default-shell/home portion of the upstream finalize gap while
+leaving byte-faithful non-UTF-8 config storage, runtime launch fallback cleanup,
+GTK single-instance defaults, link matcher mutation, and key-remap finalization
+for later experiments.
+
+## Completion Review
+
+Codex-native adversarial review ran in fresh context with subagent
+`019eb63d-3569-7461-88d8-90e04a0dcb74`.
+
+Verdict: **APPROVED**
+
+Findings: None.

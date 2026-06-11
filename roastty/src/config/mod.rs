@@ -1853,7 +1853,9 @@ impl Config {
             },
             ConfigFinalizeContext {
                 probable_cli,
-                home: home.map(OsStr::to_os_string),
+                env_shell: None,
+                passwd_shell: None,
+                passwd_home: home.map(OsStr::to_os_string),
             },
         )
     }
@@ -1869,7 +1871,30 @@ impl Config {
             ConfigThemeLocations { locations },
             ConfigFinalizeContext {
                 probable_cli,
-                home: home.map(OsStr::to_os_string),
+                env_shell: None,
+                passwd_shell: None,
+                passwd_home: home.map(OsStr::to_os_string),
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn finalize_with_command_home_context_for_test(
+        &mut self,
+        probable_cli: bool,
+        env_shell: Option<&OsStr>,
+        passwd_shell: Option<&OsStr>,
+        passwd_home: Option<&OsStr>,
+    ) -> ConfigFinalizeReport {
+        self.finalize_with_theme_locations_and_context(
+            ConfigThemeLocations {
+                locations: Vec::new(),
+            },
+            ConfigFinalizeContext {
+                probable_cli,
+                env_shell: env_shell.map(OsStr::to_os_string),
+                passwd_shell: passwd_shell.map(OsStr::to_os_string),
+                passwd_home: passwd_home.map(OsStr::to_os_string),
             },
         )
     }
@@ -2095,10 +2120,40 @@ impl Config {
                 WorkingDirectory::Home
             }
         });
-        if let Some(home) = context.home.as_deref() {
+        self.finalize_command_and_home(&mut working_directory, context);
+        if let Some(home) = context.passwd_home.as_deref() {
             working_directory.finalize_with_home(home);
         }
         self.working_directory = Some(working_directory);
+    }
+
+    fn finalize_command_and_home(
+        &mut self,
+        working_directory: &mut WorkingDirectory,
+        context: &ConfigFinalizeContext,
+    ) {
+        if self.command.is_none() && context.probable_cli {
+            if let Some(shell) = context.env_shell.as_deref().and_then(os_str_to_string) {
+                self.command = Some(Command::Shell(shell));
+            }
+        }
+
+        if self.command.is_none() || matches!(working_directory, WorkingDirectory::Home) {
+            if self.command.is_none() {
+                if let Some(shell) = context.passwd_shell.as_deref().and_then(os_str_to_string) {
+                    self.command = Some(Command::Shell(shell));
+                }
+            }
+
+            if matches!(working_directory, WorkingDirectory::Home) {
+                *working_directory = context
+                    .passwd_home
+                    .as_deref()
+                    .and_then(os_str_to_string)
+                    .map(WorkingDirectory::Path)
+                    .unwrap_or(WorkingDirectory::Inherit);
+            }
+        }
     }
 
     /// Load config from a source string (upstream's config-file `parse` driving
@@ -2477,16 +2532,25 @@ impl ConfigThemeLocations {
 
 struct ConfigFinalizeContext {
     probable_cli: bool,
-    home: Option<OsString>,
+    env_shell: Option<OsString>,
+    passwd_shell: Option<OsString>,
+    passwd_home: Option<OsString>,
 }
 
 impl ConfigFinalizeContext {
     fn current() -> Self {
+        let passwd = passwd::get();
         Self {
             probable_cli: probable_cli_environment(),
-            home: passwd::get().home,
+            env_shell: std::env::var_os("SHELL"),
+            passwd_shell: passwd.shell,
+            passwd_home: passwd.home,
         }
     }
+}
+
+fn os_str_to_string(value: &OsStr) -> Option<String> {
+    value.to_str().map(str::to_string)
 }
 
 fn probable_cli_environment() -> bool {
@@ -17965,8 +18029,8 @@ mod tests {
         assert_eq!(cli.working_directory, Some(WorkingDirectory::Inherit));
 
         let mut desktop = Config::default();
-        desktop.finalize_with_context_for_test(false, Some(OsStr::new("/Users/tester")));
-        assert_eq!(desktop.working_directory, Some(WorkingDirectory::Home));
+        desktop.finalize_with_context_for_test(false, None);
+        assert_eq!(desktop.working_directory, Some(WorkingDirectory::Inherit));
     }
 
     #[test]
@@ -18000,16 +18064,159 @@ mod tests {
     }
 
     #[test]
-    fn config_working_directory_finalize_preserves_explicit_keywords() {
+    fn config_working_directory_finalize_resolves_home_and_preserves_inherit() {
         let mut home = Config::default();
         home.working_directory = Some(WorkingDirectory::Home);
         home.finalize_with_context_for_test(true, Some(OsStr::new("/Users/tester")));
-        assert_eq!(home.working_directory, Some(WorkingDirectory::Home));
+        assert_eq!(
+            home.working_directory,
+            Some(WorkingDirectory::Path("/Users/tester".to_string()))
+        );
 
         let mut inherit = Config::default();
         inherit.working_directory = Some(WorkingDirectory::Inherit);
         inherit.finalize_with_context_for_test(false, Some(OsStr::new("/Users/tester")));
         assert_eq!(inherit.working_directory, Some(WorkingDirectory::Inherit));
+    }
+
+    #[test]
+    fn config_command_home_finalize_probable_cli_prefers_env_shell() {
+        let mut cfg = Config::default();
+        cfg.finalize_with_command_home_context_for_test(
+            true,
+            Some(OsStr::new("/bin/envsh")),
+            Some(OsStr::new("/bin/passwdsh")),
+            Some(OsStr::new("/Users/tester")),
+        );
+
+        assert_eq!(cfg.command, Some(Command::Shell("/bin/envsh".to_string())));
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Inherit));
+    }
+
+    #[test]
+    fn config_command_home_finalize_desktop_ignores_env_shell() {
+        let mut cfg = Config::default();
+        cfg.finalize_with_command_home_context_for_test(
+            false,
+            Some(OsStr::new("/bin/envsh")),
+            Some(OsStr::new("/bin/passwdsh")),
+            Some(OsStr::new("/Users/tester")),
+        );
+
+        assert_eq!(
+            cfg.command,
+            Some(Command::Shell("/bin/passwdsh".to_string()))
+        );
+        assert_eq!(
+            cfg.working_directory,
+            Some(WorkingDirectory::Path("/Users/tester".to_string()))
+        );
+    }
+
+    #[test]
+    fn config_command_home_finalize_preserves_explicit_command() {
+        let mut cfg = Config::default();
+        cfg.command = Some(Command::Shell("configured".to_string()));
+        cfg.finalize_with_command_home_context_for_test(
+            true,
+            Some(OsStr::new("/bin/envsh")),
+            Some(OsStr::new("/bin/passwdsh")),
+            Some(OsStr::new("/Users/tester")),
+        );
+
+        assert_eq!(cfg.command, Some(Command::Shell("configured".to_string())));
+    }
+
+    #[test]
+    fn config_command_home_finalize_uses_passwd_shell_when_env_missing_or_not_allowed() {
+        let mut missing = Config::default();
+        missing.finalize_with_command_home_context_for_test(
+            true,
+            None,
+            Some(OsStr::new("/bin/passwdsh")),
+            None,
+        );
+        assert_eq!(
+            missing.command,
+            Some(Command::Shell("/bin/passwdsh".to_string()))
+        );
+
+        let mut not_allowed = Config::default();
+        not_allowed.finalize_with_command_home_context_for_test(
+            false,
+            Some(OsStr::new("/bin/envsh")),
+            Some(OsStr::new("/bin/passwdsh")),
+            None,
+        );
+        assert_eq!(
+            not_allowed.command,
+            Some(Command::Shell("/bin/passwdsh".to_string()))
+        );
+    }
+
+    #[test]
+    fn config_command_home_finalize_empty_values_are_present() {
+        let mut env = Config::default();
+        env.finalize_with_command_home_context_for_test(
+            true,
+            Some(OsStr::new("")),
+            Some(OsStr::new("/bin/passwdsh")),
+            Some(OsStr::new("/Users/tester")),
+        );
+        assert_eq!(env.command, Some(Command::Shell("".to_string())));
+
+        let mut passwd_shell = Config::default();
+        passwd_shell.finalize_with_command_home_context_for_test(
+            true,
+            None,
+            Some(OsStr::new("")),
+            Some(OsStr::new("/Users/tester")),
+        );
+        assert_eq!(passwd_shell.command, Some(Command::Shell("".to_string())));
+
+        let mut home = Config::default();
+        home.finalize_with_command_home_context_for_test(false, None, None, Some(OsStr::new("")));
+        assert_eq!(
+            home.working_directory,
+            Some(WorkingDirectory::Path("".to_string()))
+        );
+    }
+
+    #[test]
+    fn config_command_home_finalize_leaves_command_unset_without_shell_sources() {
+        let mut cfg = Config::default();
+        cfg.finalize_with_command_home_context_for_test(true, None, None, None);
+
+        assert_eq!(cfg.command, None);
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Inherit));
+    }
+
+    #[test]
+    fn config_command_home_finalize_ignores_non_utf8_shell_and_home_values() {
+        let mut cfg = Config::default();
+        cfg.finalize_with_command_home_context_for_test(
+            true,
+            Some(OsStr::from_bytes(b"/bin/env\xff")),
+            Some(OsStr::from_bytes(b"/bin/passwd\xff")),
+            Some(OsStr::from_bytes(b"/Users/tester\xff")),
+        );
+
+        assert_eq!(cfg.command, None);
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Inherit));
+    }
+
+    #[test]
+    fn config_command_home_finalize_home_without_passwd_home_inherits() {
+        let mut cfg = Config::default();
+        cfg.working_directory = Some(WorkingDirectory::Home);
+        cfg.finalize_with_command_home_context_for_test(
+            true,
+            Some(OsStr::new("/bin/envsh")),
+            None,
+            None,
+        );
+
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Inherit));
     }
 
     #[test]

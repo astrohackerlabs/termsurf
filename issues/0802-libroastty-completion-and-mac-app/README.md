@@ -298,6 +298,13 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   otherwise, and expands explicit `~/...` paths after theme replay; default
   shell resolution, passwd-home conversion for `home`, GTK runtime defaults,
   link matcher mutation, and key-remap finalization remain later work.
+- **Command/home finalize is wired for UTF-8 values.** Exp 103 extends config
+  finalization to resolve an unset `command` from present `$SHELL` in probable
+  CLI contexts or passwd shell otherwise, and converts
+  `working-directory = home` to a passwd-home path or `inherit` when no UTF-8
+  home is present; byte-faithful non-UTF-8 config storage, runtime launch
+  fallback cleanup, GTK runtime defaults, link matcher mutation, and key-remap
+  finalization remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -991,7 +998,7 @@ stays unaltered except for the rename).
 - [Experiment 102: Phase F — working-directory finalize](102-working-directory-finalize.md)
   — **Pass**
 - [Experiment 103: Phase F — command and home finalize](103-command-home-finalize.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
