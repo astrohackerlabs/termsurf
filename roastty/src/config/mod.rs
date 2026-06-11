@@ -300,6 +300,8 @@ pub(crate) struct Config {
     pub macos_titlebar_proxy_icon: MacTitlebarProxyIcon,
     /// `macos-window-buttons`.
     pub macos_window_buttons: MacWindowButtons,
+    /// `macos-window-shadow`.
+    pub macos_window_shadow: bool,
     /// `macos-hidden`.
     pub macos_hidden: MacHidden,
     /// `macos-icon`.
@@ -550,6 +552,7 @@ impl Default for Config {
             macos_titlebar_style: MacTitlebarStyle::Transparent,
             macos_titlebar_proxy_icon: MacTitlebarProxyIcon::Visible,
             macos_window_buttons: MacWindowButtons::Visible,
+            macos_window_shadow: true,
             macos_hidden: MacHidden::Never,
             macos_icon: MacAppIcon::Official,
             macos_custom_icon: None,
@@ -904,6 +907,7 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("macos-titlebar-style", out));
         self.macos_titlebar_proxy_icon
             .format_entry(&mut EntryFormatter::new("macos-titlebar-proxy-icon", out));
+        EntryFormatter::new("macos-window-shadow", out).entry_bool(self.macos_window_shadow);
         self.macos_hidden
             .format_entry(&mut EntryFormatter::new("macos-hidden", out));
         self.macos_icon
@@ -1460,6 +1464,9 @@ impl Config {
                     default.macos_window_buttons,
                     MacWindowButtons::from_keyword,
                 )?
+            }
+            "macos-window-shadow" => {
+                self.macos_window_shadow = set_bool_field(value, default.macos_window_shadow)?
             }
             "macos-hidden" => {
                 self.macos_hidden =
@@ -8362,6 +8369,7 @@ mod tests {
         assert_eq!(d.macos_titlebar_style, MacTitlebarStyle::Transparent);
         assert_eq!(d.macos_titlebar_proxy_icon, MacTitlebarProxyIcon::Visible);
         assert_eq!(d.macos_window_buttons, MacWindowButtons::Visible);
+        assert!(d.macos_window_shadow);
         assert_eq!(d.macos_hidden, MacHidden::Never);
         assert_eq!(d.macos_icon, MacAppIcon::Official);
         assert_eq!(d.macos_custom_icon, None);
@@ -14720,6 +14728,7 @@ mod tests {
             "macos-window-buttons",
             "macos-titlebar-style",
             "macos-titlebar-proxy-icon",
+            "macos-window-shadow",
             "macos-hidden",
             "macos-icon",
             "macos-custom-icon",
@@ -15705,6 +15714,7 @@ mod tests {
             ("macos-titlebar-style", "tabs"),
             ("macos-titlebar-proxy-icon", "hidden"),
             ("macos-window-buttons", "hidden"),
+            ("macos-window-shadow", "false"),
             ("macos-hidden", "always"),
             ("macos-icon", "custom-style"),
             ("macos-icon-frame", "chrome"),
@@ -19095,6 +19105,62 @@ mod tests {
         assert_eq!(cloned.window_height, 3);
         assert_eq!(cloned.window_width, 12);
         assert!(cloned.window_step_resize);
+    }
+
+    #[test]
+    fn macos_window_shadow_config_parse_format_reset_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert!(cfg.macos_window_shadow);
+        assert_eq!(
+            line(&cfg, "macos-window-shadow"),
+            "macos-window-shadow = true"
+        );
+
+        cfg.set("macos-window-shadow", Some("false")).unwrap();
+        assert!(!cfg.macos_window_shadow);
+        assert_eq!(
+            line(&cfg, "macos-window-shadow"),
+            "macos-window-shadow = false"
+        );
+
+        cfg.set("macos-window-shadow", None).unwrap();
+        assert!(cfg.macos_window_shadow);
+
+        cfg.macos_window_shadow = false;
+        cfg.set("macos-window-shadow", Some("")).unwrap();
+        assert!(cfg.macos_window_shadow);
+
+        assert_eq!(
+            cfg.set("macos-window-shadow", Some("maybe")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics = cfg.load_str(
+            "macos-window-shadow = false\n\
+             macos-window-shadow = maybe\n",
+        );
+        assert!(!cfg.macos_window_shadow);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "macos-window-shadow".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert!(!cloned.macos_window_shadow);
     }
 
     #[test]

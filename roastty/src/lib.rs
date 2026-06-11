@@ -1772,6 +1772,7 @@ struct Config {
     keybind_tables: Vec<ConfigKeybindTable>,
     keybind_chain_parent: Option<ConfigKeybindChainParent>,
     cached_title: Option<CString>,
+    cached_window_title_font_family: Option<CString>,
     cached_bell_audio_path: Option<CachedConfigPath>,
     cached_command_strings: Vec<CachedCommand>,
     cached_commands: Vec<RoasttyCommand>,
@@ -1824,6 +1825,10 @@ impl ConfigKeybind {
 
     fn first_action(&self) -> &[u8] {
         self.actions.first().map(Vec::as_slice).unwrap_or_default()
+    }
+
+    fn is_unbind(&self) -> bool {
+        self.actions.len() == 1 && self.first_action() == b"unbind"
     }
 
     fn is_chained(&self) -> bool {
@@ -1928,6 +1933,7 @@ impl Config {
     fn sync_from_parsed_config(&mut self) {
         self.confirm_close_surface = self.parsed.confirm_close_surface;
         self.rebuild_cached_title();
+        self.rebuild_cached_window_title_font_family();
         self.rebuild_cached_bell_audio_path();
         self.rebuild_cached_commands();
     }
@@ -1936,6 +1942,13 @@ impl Config {
         self.cached_title =
             self.parsed.title.as_ref().map(|title| {
                 CString::new(title.as_str()).expect("config title parser rejects NUL")
+            });
+    }
+
+    fn rebuild_cached_window_title_font_family(&mut self) {
+        self.cached_window_title_font_family =
+            self.parsed.window_title_font_family.as_ref().map(|family| {
+                CString::new(family.as_str()).expect("config title font parser rejects NUL")
             });
     }
 
@@ -2460,9 +2473,9 @@ impl App {
 
     fn app_key_action_scope(action: &ParsedBindingAction) -> AppKeyActionScope {
         match action {
-            ParsedBindingAction::AppRuntimeAction(_, _) | ParsedBindingAction::Ignore => {
-                AppKeyActionScope::App
-            }
+            ParsedBindingAction::AppRuntimeAction(_, _)
+            | ParsedBindingAction::Ignore
+            | ParsedBindingAction::Unbind => AppKeyActionScope::App,
             ParsedBindingAction::RuntimeAction(
                 ROASTTY_ACTION_NEW_WINDOW | ROASTTY_ACTION_UNDO | ROASTTY_ACTION_REDO,
                 _,
@@ -2495,6 +2508,7 @@ impl App {
                 storage,
             ) => self.perform_app_runtime_action_result(app_handle, tag, storage),
             ParsedBindingAction::Ignore => true,
+            ParsedBindingAction::Unbind => false,
             _ => false,
         }
     }
@@ -6033,6 +6047,17 @@ static WINDOW_THEME_SYSTEM: &[u8] = b"system\0";
 static WINDOW_THEME_LIGHT: &[u8] = b"light\0";
 static WINDOW_THEME_DARK: &[u8] = b"dark\0";
 static WINDOW_THEME_GHOSTTY: &[u8] = b"ghostty\0";
+static RELEASE_CHANNEL_TIP: &[u8] = b"tip\0";
+static RELEASE_CHANNEL_STABLE: &[u8] = b"stable\0";
+static MACOS_TITLEBAR_STYLE_NATIVE: &[u8] = b"native\0";
+static MACOS_TITLEBAR_STYLE_TRANSPARENT: &[u8] = b"transparent\0";
+static MACOS_TITLEBAR_STYLE_TABS: &[u8] = b"tabs\0";
+static MACOS_TITLEBAR_STYLE_HIDDEN: &[u8] = b"hidden\0";
+static RESIZE_OVERLAY_ALWAYS: &[u8] = b"always\0";
+static RESIZE_OVERLAY_NEVER: &[u8] = b"never\0";
+static RESIZE_OVERLAY_AFTER_FIRST: &[u8] = b"after-first\0";
+static SCROLLBAR_SYSTEM: &[u8] = b"system\0";
+static SCROLLBAR_NEVER: &[u8] = b"never\0";
 
 fn window_decoration_keyword(value: config::WindowDecoration) -> *const c_char {
     match value {
@@ -6058,6 +6083,37 @@ fn window_theme_keyword(value: config::WindowTheme) -> *const c_char {
         config::WindowTheme::Light => WINDOW_THEME_LIGHT.as_ptr().cast(),
         config::WindowTheme::Dark => WINDOW_THEME_DARK.as_ptr().cast(),
         config::WindowTheme::Ghostty => WINDOW_THEME_GHOSTTY.as_ptr().cast(),
+    }
+}
+
+fn release_channel_keyword(value: config::ReleaseChannel) -> *const c_char {
+    match value {
+        config::ReleaseChannel::Tip => RELEASE_CHANNEL_TIP.as_ptr().cast(),
+        config::ReleaseChannel::Stable => RELEASE_CHANNEL_STABLE.as_ptr().cast(),
+    }
+}
+
+fn macos_titlebar_style_keyword(value: config::MacTitlebarStyle) -> *const c_char {
+    match value {
+        config::MacTitlebarStyle::Native => MACOS_TITLEBAR_STYLE_NATIVE.as_ptr().cast(),
+        config::MacTitlebarStyle::Transparent => MACOS_TITLEBAR_STYLE_TRANSPARENT.as_ptr().cast(),
+        config::MacTitlebarStyle::Tabs => MACOS_TITLEBAR_STYLE_TABS.as_ptr().cast(),
+        config::MacTitlebarStyle::Hidden => MACOS_TITLEBAR_STYLE_HIDDEN.as_ptr().cast(),
+    }
+}
+
+fn resize_overlay_keyword(value: config::ResizeOverlay) -> *const c_char {
+    match value {
+        config::ResizeOverlay::Always => RESIZE_OVERLAY_ALWAYS.as_ptr().cast(),
+        config::ResizeOverlay::Never => RESIZE_OVERLAY_NEVER.as_ptr().cast(),
+        config::ResizeOverlay::AfterFirst => RESIZE_OVERLAY_AFTER_FIRST.as_ptr().cast(),
+    }
+}
+
+fn scrollbar_keyword(value: config::Scrollbar) -> *const c_char {
+    match value {
+        config::Scrollbar::System => SCROLLBAR_SYSTEM.as_ptr().cast(),
+        config::Scrollbar::Never => SCROLLBAR_NEVER.as_ptr().cast(),
     }
 }
 
@@ -6293,6 +6349,7 @@ enum ParsedBindingAction {
     DeactivateAllKeyTables,
     Crash(CrashThread),
     Ignore,
+    Unbind,
     EndKeySequence,
 }
 
@@ -6402,6 +6459,7 @@ impl ParsedBindingAction {
             ParsedBindingAction::DeactivateAllKeyTables => "deactivate_all_key_tables".to_string(),
             ParsedBindingAction::Crash(thread) => format!("crash:{}", thread.keyword()),
             ParsedBindingAction::Ignore => "ignore".to_string(),
+            ParsedBindingAction::Unbind => "unbind".to_string(),
             ParsedBindingAction::EndKeySequence => "end_key_sequence".to_string(),
         }
     }
@@ -6903,6 +6961,12 @@ fn parse_binding_action_with_auto_split(
                 return None;
             }
             Some(ParsedBindingAction::Ignore)
+        }
+        b"unbind" => {
+            if parameter.is_some() {
+                return None;
+            }
+            Some(ParsedBindingAction::Unbind)
         }
         b"end_key_sequence" => {
             if parameter.is_some() {
@@ -8198,6 +8262,9 @@ fn parse_config_keybind_entry(
         if action.is_empty() {
             return Err(ConfigKeybindParseError::MissingAction);
         }
+        if action == b"unbind" {
+            return Err(ConfigKeybindParseError::InvalidAction);
+        }
         if parse_config_binding_action(action).is_none() {
             return Err(ConfigKeybindParseError::InvalidAction);
         }
@@ -9000,18 +9067,32 @@ const DEFAULT_BINDINGS: &[DefaultBindingEntry] = &[
     ),
 ];
 
-fn default_config_trigger(action: &[u8]) -> RoasttyInputTrigger {
-    let action = match action {
+fn default_config_action_alias(action: &[u8]) -> &[u8] {
+    match action {
         b"close_tab" => b"close_tab:this".as_slice(),
         b"copy_to_clipboard" => b"copy_to_clipboard:mixed".as_slice(),
         _ => action,
-    };
+    }
+}
+
+fn default_config_trigger(action: &[u8]) -> RoasttyInputTrigger {
+    let action = default_config_action_alias(action);
     DEFAULT_BINDINGS
         .iter()
         .rev()
         .find(|entry| entry.action == action && entry.flags & ROASTTY_KEYBIND_FLAG_PERFORMABLE == 0)
         .map(default_binding_entry_trigger)
         .unwrap_or_else(empty_trigger)
+}
+
+fn configured_trigger_binding(
+    bindings: &[ConfigKeybind],
+    trigger: RoasttyInputTrigger,
+) -> Option<&ConfigKeybind> {
+    bindings
+        .iter()
+        .rev()
+        .find(|binding| config_trigger_matches_candidate(binding.trigger, trigger))
 }
 
 fn default_binding_entry_trigger(entry: &DefaultBindingEntry) -> RoasttyInputTrigger {
@@ -12389,6 +12470,7 @@ pub extern "C" fn roastty_config_new() -> RoasttyConfig {
         keybind_tables: Vec::new(),
         keybind_chain_parent: None,
         cached_title: None,
+        cached_window_title_font_family: None,
         cached_bell_audio_path: None,
         cached_command_strings: Vec::new(),
         cached_commands: Vec::new(),
@@ -12459,6 +12541,7 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
         keybind_tables,
         keybind_chain_parent: None,
         cached_title: None,
+        cached_window_title_font_family: None,
         cached_bell_audio_path: None,
         cached_command_strings: Vec::new(),
         cached_commands: Vec::new(),
@@ -12637,6 +12720,34 @@ pub extern "C" fn roastty_config_get(
                     .write(config.parsed.quit_after_last_window_closed);
                 true
             }
+            b"auto-update-channel" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                let Some(value) = config.parsed.auto_update_channel else {
+                    return false;
+                };
+                output
+                    .cast::<*const c_char>()
+                    .write(release_channel_keyword(value));
+                true
+            }
+            b"focus-follows-mouse" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output
+                    .cast::<bool>()
+                    .write(config.parsed.focus_follows_mouse);
+                true
+            }
+            b"maximize" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output.cast::<bool>().write(config.parsed.maximize);
+                true
+            }
             b"window-save-state" => {
                 let Some(config) = config_from_handle(config) else {
                     return false;
@@ -12662,6 +12773,54 @@ pub extern "C" fn roastty_config_get(
                 output
                     .cast::<*const c_char>()
                     .write(window_theme_keyword(config.parsed.window_theme));
+                true
+            }
+            b"window-title-font-family" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                let Some(value) = config.cached_window_title_font_family.as_ref() else {
+                    return false;
+                };
+                output.cast::<*const c_char>().write(value.as_ptr());
+                true
+            }
+            b"macos-titlebar-style" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output
+                    .cast::<*const c_char>()
+                    .write(macos_titlebar_style_keyword(
+                        config.parsed.macos_titlebar_style,
+                    ));
+                true
+            }
+            b"macos-window-shadow" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output
+                    .cast::<bool>()
+                    .write(config.parsed.macos_window_shadow);
+                true
+            }
+            b"resize-overlay" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output
+                    .cast::<*const c_char>()
+                    .write(resize_overlay_keyword(config.parsed.resize_overlay));
+                true
+            }
+            b"scrollbar" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output
+                    .cast::<*const c_char>()
+                    .write(scrollbar_keyword(config.parsed.scrollbar));
                 true
             }
             b"background-opacity" => {
@@ -12765,15 +12924,21 @@ pub extern "C" fn roastty_config_trigger(
         return empty_trigger();
     }
     let action = unsafe { slice::from_raw_parts(action.cast::<u8>(), action_len) };
-    if let Some(binding) = config
-        .keybind_triggers
-        .iter()
-        .rev()
-        .find(|binding| !binding.is_chained() && binding.first_action() == action)
-    {
+    let default_action = default_config_action_alias(action);
+    if let Some(binding) = config.keybind_triggers.iter().rev().find(|binding| {
+        !binding.is_chained()
+            && !binding.is_unbind()
+            && (binding.first_action() == action || binding.first_action() == default_action)
+    }) {
         return binding.trigger;
     }
-    default_config_trigger(action)
+    let default = default_config_trigger(action);
+    if let Some(binding) = configured_trigger_binding(&config.keybind_triggers, default) {
+        if binding.is_unbind() || binding.first_action() != default_action {
+            return empty_trigger();
+        }
+    }
+    default
 }
 
 /// Embedded by-value `config_key_is_binding` (the app's path) — supersedes the opaque
@@ -17611,6 +17776,7 @@ fn perform_parsed_binding_action(surface: &mut Surface, action: ParsedBindingAct
             surface.end_key_sequence(false);
             true
         }
+        ParsedBindingAction::Unbind => false,
         ParsedBindingAction::EndKeySequence => {
             surface.end_key_sequence(true);
             true
@@ -17864,6 +18030,7 @@ pub extern "C" fn roastty_surface_binding_action(
             surface.end_key_sequence(false);
             true
         }
+        ParsedBindingAction::Unbind => false,
         ParsedBindingAction::EndKeySequence => {
             surface.end_key_sequence(true);
             true
@@ -19487,6 +19654,132 @@ mod tests {
             .collect()
     }
 
+    fn config_get_bool_value(config: RoasttyConfig, key: &'static CStr) -> bool {
+        let mut value = false;
+        assert!(roastty_config_get(
+            config,
+            (&mut value as *mut bool).cast(),
+            key.as_ptr(),
+            key.to_bytes().len()
+        ));
+        value
+    }
+
+    fn config_get_string_value(config: RoasttyConfig, key: &'static CStr) -> Option<String> {
+        let mut value: *const c_char = ptr::null();
+        if !roastty_config_get(
+            config,
+            (&mut value as *mut *const c_char).cast(),
+            key.as_ptr(),
+            key.to_bytes().len(),
+        ) {
+            return None;
+        }
+        if value.is_null() {
+            return None;
+        }
+        Some(
+            unsafe { CStr::from_ptr(value) }
+                .to_str()
+                .unwrap()
+                .to_string(),
+        )
+    }
+
+    #[test]
+    fn config_get_macos_unit_test_scalar_keys() {
+        let config = roastty_config_new();
+        roastty_config_finalize(config);
+
+        assert_eq!(
+            config_get_string_value(config, c"auto-update-channel").as_deref(),
+            Some("tip")
+        );
+        assert_eq!(
+            config_get_string_value(config, c"window-title-font-family"),
+            None
+        );
+        assert_eq!(
+            config_get_string_value(config, c"macos-titlebar-style").as_deref(),
+            Some("transparent")
+        );
+        assert_eq!(
+            config_get_string_value(config, c"resize-overlay").as_deref(),
+            Some("after-first")
+        );
+        assert_eq!(
+            config_get_string_value(config, c"scrollbar").as_deref(),
+            Some("system")
+        );
+        assert!(!config_get_bool_value(config, c"focus-follows-mouse"));
+        assert!(!config_get_bool_value(config, c"maximize"));
+        assert!(config_get_bool_value(config, c"macos-window-shadow"));
+
+        {
+            let config_ref = config_from_handle(config).unwrap();
+            config_ref
+                .parsed
+                .set("focus-follows-mouse", Some("true"))
+                .unwrap();
+            config_ref.parsed.set("maximize", Some("true")).unwrap();
+            config_ref
+                .parsed
+                .set("window-title-font-family", Some("Menlo"))
+                .unwrap();
+            config_ref
+                .parsed
+                .set("macos-titlebar-style", Some("tabs"))
+                .unwrap();
+            config_ref
+                .parsed
+                .set("macos-window-shadow", Some("false"))
+                .unwrap();
+            config_ref
+                .parsed
+                .set("resize-overlay", Some("never"))
+                .unwrap();
+            config_ref.parsed.set("scrollbar", Some("never")).unwrap();
+            config_ref.sync_from_parsed_config();
+        }
+
+        assert!(config_get_bool_value(config, c"focus-follows-mouse"));
+        assert!(config_get_bool_value(config, c"maximize"));
+        assert_eq!(
+            config_get_string_value(config, c"window-title-font-family").as_deref(),
+            Some("Menlo")
+        );
+        assert_eq!(
+            config_get_string_value(config, c"macos-titlebar-style").as_deref(),
+            Some("tabs")
+        );
+        assert!(!config_get_bool_value(config, c"macos-window-shadow"));
+        assert_eq!(
+            config_get_string_value(config, c"resize-overlay").as_deref(),
+            Some("never")
+        );
+        assert_eq!(
+            config_get_string_value(config, c"scrollbar").as_deref(),
+            Some("never")
+        );
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_get_auto_update_channel_requires_finalize_default() {
+        let config = roastty_config_new();
+        assert_eq!(
+            config_get_string_value(config, c"auto-update-channel"),
+            None
+        );
+        roastty_config_finalize(config);
+        assert_eq!(
+            config_get_string_value(config, c"auto-update-channel").as_deref(),
+            Some("tip")
+        );
+        roastty_config_free(config);
+    }
+
     #[test]
     fn config_get_command_palette_entry_default_clear_custom_and_clone() {
         let config = roastty_config_new();
@@ -20161,6 +20454,66 @@ mod tests {
     }
 
     #[test]
+    fn config_trigger_custom_binding_overrides_default_menu_shortcut() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref
+            .store_keybind_entry(parse_config_keybind_entry(b"super+h=goto_split:left").unwrap());
+
+        let trigger = roastty_config_trigger(
+            config,
+            b"goto_split:left".as_ptr().cast::<c_char>(),
+            b"goto_split:left".len(),
+        );
+        assert_unicode_trigger(trigger, b'h' as u32, ROASTTY_MODS_SUPER);
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_trigger_alias_action_returns_configured_canonical_binding() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(
+            parse_config_keybind_entry(b"alt+super+w=close_tab:this").unwrap(),
+        );
+        config_ref.store_keybind_entry(
+            parse_config_keybind_entry(b"alt+super+c=copy_to_clipboard:mixed").unwrap(),
+        );
+
+        let trigger = roastty_config_trigger(
+            config,
+            b"close_tab".as_ptr().cast::<c_char>(),
+            b"close_tab".len(),
+        );
+        assert_unicode_trigger(trigger, b'w' as u32, ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER);
+
+        let trigger = roastty_config_trigger(
+            config,
+            b"copy_to_clipboard".as_ptr().cast::<c_char>(),
+            b"copy_to_clipboard".len(),
+        );
+        assert_unicode_trigger(trigger, b'c' as u32, ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER);
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn config_trigger_unbind_suppresses_default_menu_shortcut() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"super+d=unbind").unwrap());
+
+        assert_empty_trigger(roastty_config_trigger(
+            config,
+            b"new_split:right".as_ptr().cast::<c_char>(),
+            b"new_split:right".len(),
+        ));
+
+        roastty_config_free(config);
+    }
+
+    #[test]
     fn parse_config_keybind_chain_preserves_parent_flags() {
         let config = roastty_config_new();
         let config_ref = config_from_handle(config).unwrap();
@@ -20455,6 +20808,7 @@ mod tests {
             "check_for_updates",
             "undo",
             "redo",
+            "unbind",
             "end_key_sequence",
             "activate_key_table",
             "activate_key_table_once",
@@ -20463,7 +20817,7 @@ mod tests {
             "quit",
             "crash",
         ];
-        const EXCLUDED_UPSTREAM_ACTION_TAGS: &[&str] = &["unbind", "cursor_key"];
+        const EXCLUDED_UPSTREAM_ACTION_TAGS: &[&str] = &["cursor_key"];
         assert_unique_action_tags(SUPPORTED_UPSTREAM_ACTION_TAGS);
         assert_unique_action_tags(EXCLUDED_UPSTREAM_ACTION_TAGS);
         assert_eq!(
@@ -20701,6 +21055,7 @@ mod tests {
             (b"check_for_updates", "check_for_updates"),
             (b"undo", "undo"),
             (b"redo", "redo"),
+            (b"unbind", "unbind"),
             (b"end_key_sequence", "end_key_sequence"),
             (b"activate_key_table:nav", "activate_key_table:nav"),
             (
@@ -20723,16 +21078,10 @@ mod tests {
             );
         }
 
-        let excluded: &[(&[u8], &str)] = &[
-            (
-                b"unbind",
-                "binding-set mutation handled outside action leaves upstream",
-            ),
-            (
-                b"cursor_key:normal,application",
-                "upstream parser returns InvalidAction",
-            ),
-        ];
+        let excluded: &[(&[u8], &str)] = &[(
+            b"cursor_key:normal,application",
+            "upstream parser returns InvalidAction",
+        )];
         assert_eq!(excluded.len(), EXCLUDED_UPSTREAM_ACTION_TAGS.len());
         for (input, reason) in excluded {
             assert!(
@@ -21267,8 +21616,16 @@ mod tests {
             canonical_config_binding_action(b"end_key_sequence").unwrap(),
             "end_key_sequence"
         );
+        assert_eq!(
+            canonical_config_binding_action(b"unbind").unwrap(),
+            "unbind"
+        );
 
-        for action in [b"ignore:x".as_slice(), b"end_key_sequence:x".as_slice()] {
+        for action in [
+            b"ignore:x".as_slice(),
+            b"unbind:x".as_slice(),
+            b"end_key_sequence:x".as_slice(),
+        ] {
             assert!(canonical_config_binding_action(action).is_none());
         }
     }

@@ -472,6 +472,16 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   exercised in unit tests. Remaining Phase G native key work is full
   `KeymapDarwin` text translation, dead-key/preedit handling, and native global
   shortcut registration.
+- **The old copied-app config/menu assertion cluster is fixed at the Rust ABI
+  boundary, but the XCTest host still hangs.** Exp 132 wires the missing
+  Swift-read `roastty_config_get` keys, parsed `macos-window-shadow`, direct
+  `unbind` trigger shadowing, and alias-aware menu shortcut lookup. The full
+  Rust suite passed 4746 unit tests plus the C ABI harness and doc tests.
+  Focused `RoasttyTests/ConfigTests` still hangs before individual tests:
+  sampling the host showed XCTest waiting in
+  `_prepareTestConfigurationAndIDESession`, so the remaining work is macOS
+  test-host lifecycle/session setup rather than the old config assertion
+  failures.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -862,9 +872,10 @@ the live app, verified by a Phase-D UI test.)
       action→trigger mapping — the macOS single-key table foundation and reverse
       lookup are wired (Exp 112), `crash` is wired (Exp 126), and Exp 128 adds
       exhaustive pinned-upstream action-tag / finite-variant coverage plus macOS
-      default table and reverse-trigger parity. Explicit exclusions: upstream
-      `unbind` is a binding-set mutation path, and upstream `cursor_key` is
-      rejected by Ghostty's own action parser.
+      default table and reverse-trigger parity. Exp 132 accepts direct `unbind`
+      entries as non-performing binding-set metadata for menu/default shortcut
+      shadowing. Explicit exclusion: upstream `cursor_key` is rejected by
+      Ghostty's own action parser.
 - [x] Command-palette catalog (`command.zig`) — parser/defaults and C config ABI
       exposure are wired (Exp 85, Exp 124); command-palette UI behavior remains
       later work
@@ -1249,7 +1260,7 @@ stays unaltered except for the rename).
 - [Experiment 131: Phase G — keyboard layout reload](131-keyboard-layout-reload.md)
   — **Partial**
 - [Experiment 132: Phase G — macOS unit-test baseline](132-macos-unit-test-baseline.md)
-  — **Designed**
+  — **Partial**
 
 ## Process
 
