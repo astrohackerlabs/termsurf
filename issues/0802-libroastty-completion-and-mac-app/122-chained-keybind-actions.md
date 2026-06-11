@@ -23,7 +23,8 @@ out of scope.
   - Add a parsed keybind entry variant for `chain=<action>`.
   - Reject `chain=` with flags (`global:chain=...`), with table prefixes
     (`nav/chain=...`), as part of a sequence (`a>chain=...`), without a valid
-    prior leaf, and with `chain=unbind`.
+    prior leaf, and with `chain=unbind`. Orphan `chain=` entries report an
+    `invalid format` keybind diagnostic instead of silently mutating nothing.
   - Track the most recent chain parent while storing configured keybind entries.
     The parent may be a root direct leaf, a root sequence leaf, a table direct
     leaf, or a table sequence leaf.
@@ -107,6 +108,63 @@ from `Binding.Set.getTrigger`, while Roastty currently implements
 configured root bindings do not reverse-map through `roastty_config_trigger` for
 the original or appended action, and that a later non-chained overwrite restores
 normal reverse lookup eligibility.
+
+**Final verdict:** Approved
+
+**Final findings:** None.
+
+## Result
+
+**Result:** Pass
+
+Implemented configured `chain=` storage and surface dispatch for root direct
+bindings, root sequences, table direct bindings, and table sequences. Chained
+leaves preserve the parent trigger and flags, append actions in order, exclude
+chained configured root leaves from `roastty_config_trigger` reverse lookup, and
+restore normal reverse lookup after a later non-chained overwrite.
+
+Verification passed:
+
+- `cargo test -p roastty chain` — 17 passed
+- `cargo test -p roastty config_trigger` — 8 passed
+- `cargo test -p roastty sequence` — 51 passed
+- `cargo test -p roastty key_table` — 21 passed
+- `cargo test -p roastty app_key` — 14 passed
+- `cargo test -p roastty parse_config_keybind` — 23 passed
+- `cargo test -p roastty surface_key` — 89 passed
+- `cargo test -p roastty --test abi_harness` — 1 passed, with the existing
+  enum-conversion warnings in `abi_harness.c`
+- `cargo test -p roastty -- --test-threads=1` — 4704 unit tests passed, plus the
+  ABI harness and doc tests
+- `cargo fmt --check` — passed
+- `git diff --check` — passed
+
+## Conclusion
+
+Roastty now supports upstream-style chained configured keybinding leaves on the
+surface key path. App-level key handling intentionally still ignores chained
+configured actions until app-key sequence/table dispatch is ported. Remaining
+Phase G work is now concentrated around native keymaps/global shortcuts, app-key
+sequence/table handling, broader global/all routing, and the full upstream
+binding catalog.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial reviewer, fresh context
+(`multi_agent_v1.spawn_agent`, agent `019eb7d3-39a8-7b10-b87f-58e4269aff67`)
+
+**Initial verdict:** Changes required
+
+**Required finding:** Orphan `chain=` entries were silently ignored during
+storage instead of rejected. The parser accepted `chain=new_tab`, and
+`Config::store_keybind_entry` cleared the chain parent when no valid parent
+could be found, producing no user-facing keybind diagnostic. Upstream reports
+this case as invalid format.
+
+**Fix:** Added `ConfigKeybindParseError::InvalidFormat`, made
+`Config::store_keybind_entry` report that error for orphan/stale chain parents,
+threaded the error through the CLI `--keybind` diagnostic path, and added a
+public CLI diagnostic test for `--keybind=chain=new_tab`.
 
 **Final verdict:** Approved
 

@@ -401,9 +401,17 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   table popping, invalid-prefix flushes/drops, and `surface_key_is_binding`
   leader/leaf flags. Exp 121's final full
   `cargo test -p roastty -- --test-threads=1` run passed 4688 unit tests plus
+  the ABI harness and doc tests.
+- **Configured chained keybinding actions are wired for the surface path.** Exp
+  122 ports upstream-style `chain=` leaves for root direct bindings, root
+  sequences, active-table direct bindings, and active-table sequences. Chained
+  leaves dispatch each action in order, preserve parent flags, keep sequence
+  controls working inside chains, and are excluded from `roastty_config_trigger`
+  reverse lookup until a later non-chained overwrite. Exp 122's final full
+  `cargo test -p roastty -- --test-threads=1` run passed 4704 unit tests plus
   the ABI harness and doc tests. Remaining Phase G keybinding gaps include
-  `chain=`, native keymaps/global shortcuts, app-key sequence/table handling,
-  broader global/all routing, and the full upstream binding catalog.
+  native keymaps/global shortcuts, app-key sequence/table handling, broader
+  global/all routing, and the full upstream binding catalog.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -776,10 +784,10 @@ the live app, verified by a Phase-D UI test.)
 
 - [ ] Multi-key sequences / chords (the trie), leader keys, key tables —
       configured root and active-table surface sequences plus `ignore` /
-      `end_key_sequence` are wired (Exp 118–121), but `chain=`, native
-      keymaps/global shortcuts, app-key sequence/table handling, broader
-      global/all routing, and the full upstream binding catalog remain later
-      work
+      `end_key_sequence` are wired (Exp 118–121), and configured `chain=` leaves
+      are wired on the surface path (Exp 122), but native keymaps/global
+      shortcuts, app-key sequence/table handling, broader global/all routing,
+      and the full upstream binding catalog remain later work
 - [ ] Trigger-prefix flags (`global:` / `all:` / `unconsumed:` / `performable:`)
       — parser/storage/query metadata and surface unconsumed/performable
       consumption are wired (Exp 110–111), and configured `global:` app-key
@@ -1153,7 +1161,7 @@ stays unaltered except for the rename).
 - [Experiment 121: Phase G — sequence control actions](121-sequence-control-actions.md)
   — **Pass**
 - [Experiment 122: Phase G — chained keybinding actions](122-chained-keybind-actions.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
