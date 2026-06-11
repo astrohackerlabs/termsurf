@@ -1773,12 +1773,37 @@ struct Config {
     keybind_chain_parent: Option<ConfigKeybindChainParent>,
     cached_title: Option<CString>,
     cached_bell_audio_path: Option<CachedConfigPath>,
+    cached_command_strings: Vec<CachedCommand>,
+    cached_commands: Vec<RoasttyCommand>,
     diagnostics: Vec<CString>,
 }
 
 struct CachedConfigPath {
     path: CString,
     optional: bool,
+}
+
+struct CachedCommand {
+    action_key: CString,
+    action: CString,
+    title: CString,
+    description: CString,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyCommand {
+    action_key: *const c_char,
+    action: *const c_char,
+    title: *const c_char,
+    description: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RoasttyConfigCommandList {
+    commands: *const RoasttyCommand,
+    len: usize,
 }
 
 #[derive(Clone)]
@@ -1905,6 +1930,7 @@ impl Config {
         self.confirm_close_surface = self.parsed.confirm_close_surface;
         self.rebuild_cached_title();
         self.rebuild_cached_bell_audio_path();
+        self.rebuild_cached_commands();
     }
 
     fn rebuild_cached_title(&mut self) {
@@ -1923,6 +1949,41 @@ impl Config {
                     path: CString::new(path.path()).expect("config path parser rejects NUL"),
                     optional: path.optional(),
                 });
+    }
+
+    fn rebuild_cached_commands(&mut self) {
+        self.cached_command_strings = self
+            .parsed
+            .command_palette_entry
+            .entries
+            .iter()
+            .map(|entry| {
+                let action_key = entry
+                    .action
+                    .split_once(':')
+                    .map_or(entry.action.as_str(), |(action_key, _)| action_key);
+                CachedCommand {
+                    action_key: CString::new(action_key)
+                        .expect("command action parser rejects NUL"),
+                    action: CString::new(entry.action.as_str())
+                        .expect("command action parser rejects NUL"),
+                    title: CString::new(entry.title.as_str())
+                        .expect("command title parser rejects NUL"),
+                    description: CString::new(entry.description.as_str())
+                        .expect("command description parser rejects NUL"),
+                }
+            })
+            .collect();
+        self.cached_commands = self
+            .cached_command_strings
+            .iter()
+            .map(|entry| RoasttyCommand {
+                action_key: entry.action_key.as_ptr(),
+                action: entry.action.as_ptr(),
+                title: entry.title.as_ptr(),
+                description: entry.description.as_ptr(),
+            })
+            .collect();
     }
 
     fn snapshot_default_files_boundary(&mut self) {
@@ -12239,7 +12300,7 @@ pub extern "C" fn roastty_mode_report_encode(
 
 #[no_mangle]
 pub extern "C" fn roastty_config_new() -> RoasttyConfig {
-    Box::into_raw(Box::new(Config {
+    let mut config = Config {
         parsed: config::Config::default(),
         before_default_files: None,
         before_default_files_diagnostics_len: None,
@@ -12252,9 +12313,12 @@ pub extern "C" fn roastty_config_new() -> RoasttyConfig {
         keybind_chain_parent: None,
         cached_title: None,
         cached_bell_audio_path: None,
+        cached_command_strings: Vec::new(),
+        cached_commands: Vec::new(),
         diagnostics: Vec::new(),
-    }))
-    .cast()
+    };
+    config.sync_from_parsed_config();
+    Box::into_raw(Box::new(config)).cast()
 }
 
 #[no_mangle]
@@ -12319,10 +12383,11 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
         keybind_chain_parent: None,
         cached_title: None,
         cached_bell_audio_path: None,
+        cached_command_strings: Vec::new(),
+        cached_commands: Vec::new(),
         diagnostics,
     };
-    cloned.rebuild_cached_title();
-    cloned.rebuild_cached_bell_audio_path();
+    cloned.sync_from_parsed_config();
     Box::into_raw(Box::new(cloned)).cast()
 }
 
@@ -12591,6 +12656,18 @@ pub extern "C" fn roastty_config_get(
                     path: path.path.as_ptr(),
                     optional: path.optional,
                 });
+                true
+            }
+            b"command-palette-entry" => {
+                let Some(config) = config_from_handle(config) else {
+                    return false;
+                };
+                output
+                    .cast::<RoasttyConfigCommandList>()
+                    .write(RoasttyConfigCommandList {
+                        commands: config.cached_commands.as_ptr(),
+                        len: config.cached_commands.len(),
+                    });
                 true
             }
             _ => false,
@@ -19207,6 +19284,113 @@ mod tests {
         roastty_surface_free(surface);
         roastty_app_free(app);
         roastty_config_free(config);
+    }
+
+    fn config_command_palette_entries(
+        config: RoasttyConfig,
+    ) -> Vec<(String, String, String, String)> {
+        let mut list = RoasttyConfigCommandList {
+            commands: ptr::null(),
+            len: usize::MAX,
+        };
+        assert!(roastty_config_get(
+            config,
+            (&mut list as *mut RoasttyConfigCommandList).cast(),
+            c"command-palette-entry".as_ptr(),
+            "command-palette-entry".len()
+        ));
+        if list.len == 0 {
+            return Vec::new();
+        }
+        assert!(!list.commands.is_null());
+        unsafe { slice::from_raw_parts(list.commands, list.len) }
+            .iter()
+            .map(|command| {
+                assert!(!command.action_key.is_null());
+                assert!(!command.action.is_null());
+                assert!(!command.title.is_null());
+                assert!(!command.description.is_null());
+                unsafe {
+                    (
+                        CStr::from_ptr(command.action_key)
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                        CStr::from_ptr(command.action).to_str().unwrap().to_string(),
+                        CStr::from_ptr(command.title).to_str().unwrap().to_string(),
+                        CStr::from_ptr(command.description)
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                    )
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn config_get_command_palette_entry_default_clear_custom_and_clone() {
+        let config = roastty_config_new();
+        let commands = config_command_palette_entries(config);
+        assert_eq!(commands.len(), 88);
+        assert_eq!(
+            commands.first().unwrap(),
+            &(
+                "prompt_tab_title".to_string(),
+                "prompt_tab_title".to_string(),
+                "Change Tab Title…".to_string(),
+                "Prompt for a new title for the current tab.".to_string(),
+            )
+        );
+        assert!(commands.iter().any(|entry| {
+            entry.0 == "copy_to_clipboard"
+                && entry.1 == "copy_to_clipboard:mixed"
+                && entry.2 == "Copy to Clipboard"
+        }));
+
+        {
+            let config_ref = config_from_handle(config).unwrap();
+            config_ref
+                .parsed
+                .set("command-palette-entry", Some("clear"))
+                .unwrap();
+            config_ref.sync_from_parsed_config();
+        }
+        assert!(config_command_palette_entries(config).is_empty());
+
+        {
+            let config_ref = config_from_handle(config).unwrap();
+            config_ref
+                .parsed
+                .set(
+                    "command-palette-entry",
+                    Some("title:Shorthand,description:Copied,action:copy_to_clipboard"),
+                )
+                .unwrap();
+            config_ref.sync_from_parsed_config();
+        }
+        assert_eq!(
+            config_command_palette_entries(config),
+            vec![(
+                "copy_to_clipboard".to_string(),
+                "copy_to_clipboard:mixed".to_string(),
+                "Shorthand".to_string(),
+                "Copied".to_string(),
+            )]
+        );
+
+        let clone = roastty_config_clone(config);
+        roastty_config_free(config);
+        assert_eq!(
+            config_command_palette_entries(clone),
+            vec![(
+                "copy_to_clipboard".to_string(),
+                "copy_to_clipboard:mixed".to_string(),
+                "Shorthand".to_string(),
+                "Copied".to_string(),
+            )]
+        );
+        roastty_config_free(clone);
     }
 
     #[test]

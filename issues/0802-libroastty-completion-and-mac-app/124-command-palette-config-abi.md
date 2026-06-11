@@ -97,3 +97,67 @@ needs a follow-up.
 **Verdict:** Approved
 
 **Findings:** None.
+
+## Result
+
+**Result:** Pass
+
+`roastty_config_get(config, ..., "command-palette-entry", ...)` now exposes the
+command-palette catalog as a borrowed C list backed by the `RoasttyConfig`
+handle. The cache is rebuilt whenever parsed config state is synchronized and
+stores independent nul-terminated strings for `action_key`, `action`, `title`,
+and `description`.
+
+The implementation preserves Experiment 85's canonical action strings. The C ABI
+`action_key` is derived from the canonical action tag before its first `:`, so
+shorthand entries such as `copy_to_clipboard` are still exposed as
+`action = "copy_to_clipboard:mixed"` with `action_key = "copy_to_clipboard"`.
+
+Verified behavior:
+
+- default configs expose the pinned 88-entry upstream command catalog;
+- `command-palette-entry = clear` exposes an empty list with `len = 0`;
+- custom entries expose title, description, canonical action, and action key;
+- cloned configs retain independent readable command-list storage after the
+  source config is freed.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/lib.rs`
+- `cargo test -p roastty command_palette` — 2 passed
+- `cargo test -p roastty config_get` — 34 passed
+- `cargo test -p roastty --test abi_harness` — 1 passed, with the existing 10 C
+  enum-conversion warnings
+- `cargo test -p roastty -- --test-threads=1` — 4711 unit tests passed, ABI
+  harness passed, doc tests passed
+- `cargo fmt --check`
+- `git diff --check`
+
+Still out of scope:
+
+- command-palette UI behavior;
+- app-side command dispatch beyond exposing the catalog;
+- the remaining `crash` binding action;
+- native keymaps, native global shortcut registration, and broader `global:` /
+  `all:` routing.
+
+## Conclusion
+
+The command-palette catalog port from Experiment 85 is now app-visible through
+the C config ABI, matching the upstream-shaped header structs already present in
+Roastty. This closes the Phase G catalog data gap while leaving runtime command
+palette presentation and the remaining keybinding/action-routing gaps for later
+experiments.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial reviewer, fresh context
+(`multi_agent_v1.spawn_agent`, agent `019eb807-c3f8-7690-ab6e-ec132e35e81c`)
+
+**Verdict:** Approved
+
+**Required findings:** None.
+
+**Notes:** The reviewer confirmed the result commit had not yet been made, the
+Exp124 docs and README both recorded `Pass`, the existing 10 C ABI harness
+enum-conversion warnings were documented, and the result commit may proceed.

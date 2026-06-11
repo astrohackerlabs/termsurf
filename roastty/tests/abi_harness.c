@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "roastty.h"
 
@@ -329,6 +330,29 @@ static void assert_config_uintptr(roastty_config_t config,
   uintptr_t value = 0;
   assert(roastty_config_get(config, &value, key, strlen(key)));
   assert(value == expected);
+}
+
+static roastty_config_command_list_s config_command_list(roastty_config_t config) {
+  roastty_config_command_list_s commands = {0};
+  assert(roastty_config_get(config,
+                            &commands,
+                            "command-palette-entry",
+                            strlen("command-palette-entry")));
+  return commands;
+}
+
+static char *write_temp_config(const char *contents) {
+  const char template[] = "/tmp/roastty-abi-config-XXXXXX";
+  char *path = malloc(sizeof(template));
+  assert(path != NULL);
+  memcpy(path, template, sizeof(template));
+
+  int fd = mkstemp(path);
+  assert(fd >= 0);
+  size_t len = strlen(contents);
+  assert(write(fd, contents, len) == (ssize_t)len);
+  assert(close(fd) == 0);
+  return path;
 }
 
 static void assert_roastty_string_eq(roastty_string_s value,
@@ -4320,6 +4344,63 @@ int main(int argc, char **argv) {
   assert_config_double(config, "background-opacity", 1.0);
   assert_config_double(config, "bell-audio-volume", 0.5);
   assert_config_uintptr(config, "notify-on-command-finish-after", 5000);
+
+  roastty_config_command_list_s commands = config_command_list(config);
+  assert(commands.len == 88);
+  assert(commands.commands != NULL);
+  assert(strcmp(commands.commands[0].action_key, "prompt_tab_title") == 0);
+  assert(strcmp(commands.commands[0].action, "prompt_tab_title") == 0);
+  assert(strcmp(commands.commands[0].title, "Change Tab Title…") == 0);
+  assert(strcmp(commands.commands[0].description,
+                "Prompt for a new title for the current tab.") == 0);
+  bool found_copy_command = false;
+  for (size_t i = 0; i < commands.len; i++) {
+    const roastty_command_s *command = &commands.commands[i];
+    assert(command->action_key != NULL);
+    assert(command->action != NULL);
+    assert(command->title != NULL);
+    assert(command->description != NULL);
+    if (strcmp(command->action_key, "copy_to_clipboard") == 0 &&
+        strcmp(command->action, "copy_to_clipboard:mixed") == 0 &&
+        strcmp(command->title, "Copy to Clipboard") == 0) {
+      found_copy_command = true;
+    }
+  }
+  assert(found_copy_command);
+
+  char *clear_path = write_temp_config("command-palette-entry = clear\n");
+  roastty_config_t clear_config = roastty_config_new();
+  roastty_config_load_file(clear_config, clear_path);
+  assert(unlink(clear_path) == 0);
+  free(clear_path);
+  commands = config_command_list(clear_config);
+  assert(commands.len == 0);
+  roastty_config_free(clear_config);
+
+  char *custom_path = write_temp_config(
+      "command-palette-entry = clear\n"
+      "command-palette-entry = title:Shorthand,description:Copied,"
+      "action:copy_to_clipboard\n");
+  roastty_config_t custom_config = roastty_config_new();
+  roastty_config_load_file(custom_config, custom_path);
+  assert(unlink(custom_path) == 0);
+  free(custom_path);
+  commands = config_command_list(custom_config);
+  assert(commands.len == 1);
+  assert(commands.commands != NULL);
+  assert(strcmp(commands.commands[0].action_key, "copy_to_clipboard") == 0);
+  assert(strcmp(commands.commands[0].action, "copy_to_clipboard:mixed") == 0);
+  assert(strcmp(commands.commands[0].title, "Shorthand") == 0);
+  assert(strcmp(commands.commands[0].description, "Copied") == 0);
+  roastty_config_t custom_clone = roastty_config_clone(custom_config);
+  roastty_config_free(custom_config);
+  commands = config_command_list(custom_clone);
+  assert(commands.len == 1);
+  assert(strcmp(commands.commands[0].action_key, "copy_to_clipboard") == 0);
+  assert(strcmp(commands.commands[0].action, "copy_to_clipboard:mixed") == 0);
+  assert(strcmp(commands.commands[0].title, "Shorthand") == 0);
+  assert(strcmp(commands.commands[0].description, "Copied") == 0);
+  roastty_config_free(custom_clone);
 
   int16_t optional_position = 123;
   assert(!roastty_config_get(config,

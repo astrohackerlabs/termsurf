@@ -421,6 +421,13 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   rerun. Remaining Phase G gaps include native keymaps/global shortcuts, app-key
   sequence/table handling, broader global/all routing, and the full upstream
   binding catalog.
+- **Command-palette catalog data is exposed through the config ABI.** Exp 124
+  wires Experiment 85's pinned 88-entry `command-palette-entry` parser/defaults
+  into `roastty_config_get`, returning the upstream-shaped C command list with
+  canonical action strings, action keys, titles, descriptions, clear/custom
+  behavior, and clone-stable storage. Remaining Phase G gaps include
+  command-palette UI behavior, the `crash` binding action, native keymaps/global
+  shortcuts, app-key sequence/table handling, and broader global/all routing.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -810,7 +817,9 @@ the live app, verified by a Phase-D UI test.)
       action→trigger mapping — the macOS single-key table foundation and reverse
       lookup are wired for currently supported actions (Exp 112), but the full
       upstream table/actions remain later work
-- [ ] Command-palette catalog (`command.zig`)
+- [x] Command-palette catalog (`command.zig`) — parser/defaults and C config ABI
+      exposure are wired (Exp 85, Exp 124); command-palette UI behavior remains
+      later work
 - [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + app-level key handling —
       `RemapSet`/`Mask`, the `key-remap` config field, and surface runtime
       key-remap application are wired (Exp 107–109), and configured `global:`
@@ -1175,7 +1184,7 @@ stays unaltered except for the rename).
 - [Experiment 123: Phase G — app-key chained actions](123-app-key-chained-actions.md)
   — **Pass**
 - [Experiment 124: Phase G — command palette config ABI](124-command-palette-config-abi.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
