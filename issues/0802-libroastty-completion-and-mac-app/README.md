@@ -846,6 +846,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 82: Phase F — GTK quick terminal config](82-gtk-quick-terminal-config.md)
   — **Pass**
+- [Experiment 83: Phase F — quick terminal screen and animation config](83-quick-terminal-screen-animation-config.md)
+  — **Designed**
 
 ## Process
 
