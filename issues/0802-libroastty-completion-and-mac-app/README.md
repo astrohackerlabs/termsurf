@@ -1069,6 +1069,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 111: Phase G — configured binding consumption](111-configured-binding-consumption.md)
   — **Pass**
+- [Experiment 112: Phase G — default binding table foundation](112-default-binding-table-foundation.md)
+  — **Designed**
 
 ## Process
 
