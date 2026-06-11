@@ -1162,6 +1162,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 122: Phase G — chained keybinding actions](122-chained-keybind-actions.md)
   — **Pass**
+- [Experiment 123: Phase G — app-key chained actions](123-app-key-chained-actions.md)
+  — **Designed**
 
 ## Process
 
