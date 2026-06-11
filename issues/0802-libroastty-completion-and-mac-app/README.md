@@ -1091,6 +1091,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 113: Phase G — app key global binding dispatch](113-app-key-global-binding-dispatch.md)
   — **Pass**
+- [Experiment 114: Phase G — focused app key app actions](114-focused-app-key-app-actions.md)
+  — **Designed**
 
 ## Process
 
