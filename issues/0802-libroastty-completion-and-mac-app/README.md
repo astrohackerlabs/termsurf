@@ -913,6 +913,8 @@ stays unaltered except for the rename).
   **Pass**
 - [Experiment 91: Phase F — macOS Shortcuts config](91-macos-shortcuts-config.md)
   — **Pass**
+- [Experiment 92: Phase F — Linux cgroup config](92-linux-cgroup-config.md) —
+  **Designed**
 
 ## Process
 
