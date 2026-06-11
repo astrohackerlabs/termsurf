@@ -338,6 +338,14 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   terminal key encoding; native keymaps, app-scoped `roastty_app_key`, full
   upstream keybinding tables, app ABI config-string exposure, and keyboard
   layout-change handling remain later work.
+- **Keybind trigger-prefix flags are parser/storage/query metadata.** Exp 110
+  adds upstream-compatible `global:`, `all:`, `unconsumed:`, and `performable:`
+  prefix parsing for configured keybinds, stores the C-facing flag byte, derives
+  `roastty_app_has_global_keybinds` from `global:`, and returns configured flags
+  from surface binding queries. Runtime global shortcut registration,
+  all-surface routing, unconsumed pass-through, performable configured-action
+  gating, sequences/chords, native keymaps, and `roastty_app_key` dispatch
+  remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -710,6 +718,8 @@ the live app, verified by a Phase-D UI test.)
 
 - [ ] Multi-key sequences / chords (the trie), leader keys, key tables
 - [ ] Trigger-prefix flags (`global:` / `all:` / `unconsumed:` / `performable:`)
+      — parser/storage/query metadata is wired (Exp 110), but runtime
+      global/all/unconsumed/performable semantics remain later work
 - [ ] The full action set + the default-bindings data table + reverse
       action→trigger mapping
 - [ ] Command-palette catalog (`command.zig`)
@@ -1048,7 +1058,7 @@ stays unaltered except for the rename).
 - [Experiment 109: Phase G — key-remap runtime application](109-key-remap-runtime-application.md)
   — **Pass**
 - [Experiment 110: Phase G — keybind trigger prefix flags](110-keybind-trigger-prefix-flags.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

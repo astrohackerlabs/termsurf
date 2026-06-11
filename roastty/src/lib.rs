@@ -660,6 +660,8 @@ const ROASTTY_TRIGGER_UNICODE: c_int = 1;
 #[allow(dead_code)]
 const ROASTTY_TRIGGER_CATCH_ALL: c_int = 2;
 const ROASTTY_KEYBIND_FLAG_CONSUMED: u8 = 1 << 0;
+const ROASTTY_KEYBIND_FLAG_ALL: u8 = 1 << 1;
+const ROASTTY_KEYBIND_FLAG_GLOBAL: u8 = 1 << 2;
 const ROASTTY_KEYBIND_FLAG_PERFORMABLE: u8 = 1 << 3;
 const ROASTTY_KEYBIND_FLAGS_DEFAULT: u8 = ROASTTY_KEYBIND_FLAG_CONSUMED;
 const ROASTTY_KEYBIND_FLAGS_PERFORMABLE: u8 =
@@ -1706,6 +1708,7 @@ struct CachedConfigPath {
 #[derive(Clone)]
 struct ConfigKeybind {
     action: Vec<u8>,
+    flags: u8,
     trigger: RoasttyInputTrigger,
 }
 
@@ -1809,6 +1812,9 @@ impl Config {
     }
 
     fn store_keybind(&mut self, binding: ConfigKeybind) {
+        if binding.flags & ROASTTY_KEYBIND_FLAG_GLOBAL != 0 {
+            self.has_global_keybinds = true;
+        }
         self.keybind_triggers.push(binding);
     }
 
@@ -1853,12 +1859,9 @@ impl App {
             .find(|binding| config_trigger_matches_key_event(binding.trigger, event))
             .map(|binding| ConfiguredBindingMatch {
                 action: binding.action.clone(),
+                flags: binding.flags,
                 release_identity,
             })
-    }
-
-    fn key_event_is_binding(&self, event: &key::KeyEvent) -> bool {
-        self.key_event_binding(event).is_some()
     }
 }
 
@@ -2129,6 +2132,7 @@ struct DefaultBindingMatch {
 #[derive(Debug, Eq, PartialEq)]
 struct ConfiguredBindingMatch {
     action: Vec<u8>,
+    flags: u8,
     release_identity: DefaultBindingReleaseIdentity,
 }
 
@@ -4749,14 +4753,15 @@ impl Surface {
         }
         let event = event.unwrap();
         let event = self.remapped_key_event(&event.event);
-        let flags_value =
-            if app_from_handle(self.app).is_some_and(|app| app.key_event_is_binding(&event)) {
-                ROASTTY_KEYBIND_FLAGS_DEFAULT
-            } else if let Some(flags) = default_key_event_binding_flags(&event) {
-                flags
-            } else {
-                return false;
-            };
+        let flags_value = if let Some(binding) =
+            app_from_handle(self.app).and_then(|app| app.key_event_binding(&event))
+        {
+            binding.flags
+        } else if let Some(flags) = default_key_event_binding_flags(&event) {
+            flags
+        } else {
+            return false;
+        };
         if !flags.is_null() {
             unsafe {
                 flags.write(flags_value);
@@ -6880,6 +6885,7 @@ enum ConfigKeybindParseError {
     MissingSeparator,
     MissingTrigger,
     MissingAction,
+    DuplicateFlagPrefix,
     InvalidTrigger,
     InvalidAction,
 }
@@ -6890,6 +6896,7 @@ impl ConfigKeybindParseError {
             ConfigKeybindParseError::MissingSeparator => "missing `=` separator",
             ConfigKeybindParseError::MissingTrigger => "missing trigger",
             ConfigKeybindParseError::MissingAction => "missing action",
+            ConfigKeybindParseError::DuplicateFlagPrefix => "duplicate flag prefix",
             ConfigKeybindParseError::InvalidTrigger => "invalid trigger",
             ConfigKeybindParseError::InvalidAction => "invalid action",
         }
@@ -6909,6 +6916,11 @@ fn parse_config_keybind(value: &[u8]) -> Result<ConfigKeybind, ConfigKeybindPars
     if action.is_empty() {
         return Err(ConfigKeybindParseError::MissingAction);
     }
+    let (flags, trigger_start) = parse_config_keybind_flags(trigger)?;
+    let trigger = &trigger[trigger_start..];
+    if trigger.is_empty() {
+        return Err(ConfigKeybindParseError::MissingTrigger);
+    }
     let trigger =
         parse_config_keybind_trigger(trigger).ok_or(ConfigKeybindParseError::InvalidTrigger)?;
     if parse_config_binding_action(action).is_none() {
@@ -6916,8 +6928,39 @@ fn parse_config_keybind(value: &[u8]) -> Result<ConfigKeybind, ConfigKeybindPars
     }
     Ok(ConfigKeybind {
         action: action.to_vec(),
+        flags,
         trigger,
     })
+}
+
+fn parse_config_keybind_flags(trigger: &[u8]) -> Result<(u8, usize), ConfigKeybindParseError> {
+    let mut flags = ROASTTY_KEYBIND_FLAGS_DEFAULT;
+    let mut start = 0;
+    let mut input = trigger;
+    while let Some(index) = input.iter().position(|byte| *byte == b':') {
+        let prefix = &input[..index];
+        let flag = match prefix {
+            b"all" => ROASTTY_KEYBIND_FLAG_ALL,
+            b"global" => ROASTTY_KEYBIND_FLAG_GLOBAL,
+            b"unconsumed" => ROASTTY_KEYBIND_FLAG_CONSUMED,
+            b"performable" => ROASTTY_KEYBIND_FLAG_PERFORMABLE,
+            _ => break,
+        };
+        if prefix == b"unconsumed" {
+            if flags & ROASTTY_KEYBIND_FLAG_CONSUMED == 0 {
+                return Err(ConfigKeybindParseError::DuplicateFlagPrefix);
+            }
+            flags &= !ROASTTY_KEYBIND_FLAG_CONSUMED;
+        } else {
+            if flags & flag != 0 {
+                return Err(ConfigKeybindParseError::DuplicateFlagPrefix);
+            }
+            flags |= flag;
+        }
+        start += index + 1;
+        input = &input[index + 1..];
+    }
+    Ok((flags, start))
 }
 
 fn parse_config_keybind_trigger(trigger: &[u8]) -> Option<RoasttyInputTrigger> {
@@ -17106,6 +17149,18 @@ mod tests {
         KeyEvent { event }
     }
 
+    fn input_key_press_x(mods: c_int) -> RoasttyInputKey {
+        RoasttyInputKey {
+            action: key_action_to_int(key::KeyAction::Press),
+            mods,
+            consumed_mods: ROASTTY_MODS_NONE,
+            keycode: 0x0007,
+            text: b"x\0".as_ptr().cast::<c_char>(),
+            unshifted_codepoint: u32::from(b'x'),
+            composing: false,
+        }
+    }
+
     fn send_key(surface: RoasttySurface, event: KeyEvent) -> bool {
         surface_from_handle(surface).unwrap().key(&event)
     }
@@ -17625,6 +17680,186 @@ mod tests {
         let records = action_records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].action_tag, ROASTTY_ACTION_QUIT);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_prefix_flags() {
+        let binding = parse_config_keybind(b"ctrl+x=quit").unwrap();
+        assert_eq!(binding.flags, ROASTTY_KEYBIND_FLAGS_DEFAULT);
+
+        let binding = parse_config_keybind(b"unconsumed:ctrl+x=quit").unwrap();
+        assert_eq!(binding.flags, 0);
+
+        let binding = parse_config_keybind(b"all:ctrl+x=quit").unwrap();
+        assert_eq!(
+            binding.flags,
+            ROASTTY_KEYBIND_FLAG_CONSUMED | ROASTTY_KEYBIND_FLAG_ALL
+        );
+
+        let binding = parse_config_keybind(b"global:ctrl+x=quit").unwrap();
+        assert_eq!(
+            binding.flags,
+            ROASTTY_KEYBIND_FLAG_CONSUMED | ROASTTY_KEYBIND_FLAG_GLOBAL
+        );
+
+        let binding = parse_config_keybind(b"performable:ctrl+x=quit").unwrap();
+        assert_eq!(
+            binding.flags,
+            ROASTTY_KEYBIND_FLAG_CONSUMED | ROASTTY_KEYBIND_FLAG_PERFORMABLE
+        );
+
+        let binding = parse_config_keybind(b"performable:global:unconsumed:ctrl+x=quit").unwrap();
+        assert_eq!(
+            binding.flags,
+            ROASTTY_KEYBIND_FLAG_GLOBAL | ROASTTY_KEYBIND_FLAG_PERFORMABLE
+        );
+    }
+
+    #[test]
+    fn parse_config_keybind_prefix_flags_reject_duplicates_and_fall_through_unknown() {
+        assert_eq!(
+            parse_config_keybind(b"global:global:ctrl+x=quit")
+                .err()
+                .unwrap(),
+            ConfigKeybindParseError::DuplicateFlagPrefix
+        );
+        assert_eq!(
+            parse_config_keybind(b"unconsumed:unconsumed:ctrl+x=quit")
+                .err()
+                .unwrap(),
+            ConfigKeybindParseError::DuplicateFlagPrefix
+        );
+        assert_eq!(
+            parse_config_keybind(b"unknown:ctrl+x=quit").err().unwrap(),
+            ConfigKeybindParseError::InvalidTrigger
+        );
+
+        let handle = roastty_config_new();
+        let config = config_from_handle(handle).unwrap();
+        let value = b"global:global:ctrl+x=quit";
+        let error = parse_config_keybind(value).err().unwrap();
+        config.push_keybind_diagnostic(value, error);
+
+        assert_eq!(roastty_config_diagnostics_count(handle), 1);
+        let diagnostic = roastty_config_get_diagnostic(handle, 0);
+        assert_eq!(
+            unsafe { CStr::from_ptr(diagnostic.message) }
+                .to_str()
+                .unwrap(),
+            "invalid keybind `global:global:ctrl+x=quit`: duplicate flag prefix"
+        );
+
+        roastty_config_free(handle);
+    }
+
+    #[test]
+    fn app_has_global_keybinds_tracks_config_prefix_flags() {
+        let non_global = roastty_config_new();
+        config_from_handle(non_global)
+            .unwrap()
+            .store_keybind(parse_config_keybind(b"ctrl+x=quit").unwrap());
+        let app = roastty_app_new(ptr::null(), non_global);
+        assert!(!roastty_app_has_global_keybinds(app));
+
+        let global = roastty_config_new();
+        config_from_handle(global)
+            .unwrap()
+            .store_keybind(parse_config_keybind(b"global:ctrl+x=quit").unwrap());
+        roastty_app_update_config(app, global);
+        assert!(roastty_app_has_global_keybinds(app));
+
+        roastty_app_update_config(app, non_global);
+        assert!(!roastty_app_has_global_keybinds(app));
+
+        roastty_app_free(app);
+        roastty_config_free(global);
+        roastty_config_free(non_global);
+    }
+
+    #[test]
+    fn surface_key_is_binding_returns_configured_prefix_flags() {
+        let config =
+            new_test_config_with_key_remap_and_keybind(None, Some(b"all:performable:ctrl+x=quit"));
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        let event = key_press(key::Key::KeyX, b"x", u32::from(b'x'), ROASTTY_MODS_CTRL);
+        let mut flags = 0;
+
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .key_is_binding(Some(&event), &mut flags));
+        assert_eq!(
+            flags,
+            ROASTTY_KEYBIND_FLAG_CONSUMED
+                | ROASTTY_KEYBIND_FLAG_ALL
+                | ROASTTY_KEYBIND_FLAG_PERFORMABLE
+        );
+
+        let mut abi_flags = 0;
+        assert!(roastty_surface_key_is_binding(
+            surface,
+            input_key_press_x(ROASTTY_MODS_CTRL),
+            &mut abi_flags
+        ));
+        assert_eq!(abi_flags, c_int::from(flags));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_is_binding_handle_returns_configured_prefix_flags() {
+        let config =
+            new_test_config_with_key_remap_and_keybind(None, Some(b"unconsumed:key_x+ctrl=quit"));
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        let mut event = ptr::null_mut();
+        assert_eq!(roastty_key_event_new(&mut event), ROASTTY_SUCCESS);
+        assert_eq!(
+            roastty_key_event_set_action(event, key_action_to_int(key::KeyAction::Press)),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_key_event_set_key(event, key_to_int(key::Key::KeyX)),
+            ROASTTY_SUCCESS
+        );
+        assert_eq!(
+            roastty_key_event_set_mods(
+                event,
+                key_mods_to_abi(key_mods_from_raw(ROASTTY_MODS_CTRL))
+            ),
+            ROASTTY_SUCCESS
+        );
+        let mut flags = 255;
+
+        assert!(roastty_surface_key_is_binding_handle(
+            surface, event, &mut flags
+        ));
+        assert_eq!(flags, 0);
+
+        roastty_key_event_free(event);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn surface_key_is_binding_default_flags_are_unchanged() {
+        let config = roastty_config_new();
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        let event = key_press(key::Key::KeyQ, b"q", u32::from(b'q'), ROASTTY_MODS_SUPER);
+        let mut flags = 0;
+
+        assert!(surface_from_handle(surface)
+            .unwrap()
+            .key_is_binding(Some(&event), &mut flags));
+        assert_eq!(flags, ROASTTY_KEYBIND_FLAGS_DEFAULT);
+
         roastty_surface_free(surface);
         roastty_app_free(app);
         roastty_config_free(config);

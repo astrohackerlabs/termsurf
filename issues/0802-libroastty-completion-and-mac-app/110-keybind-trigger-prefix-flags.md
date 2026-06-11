@@ -78,3 +78,65 @@ Codex-native adversarial review ran in a fresh-context subagent
 **Verdict:** Approved.
 
 Findings: none.
+
+## Result
+
+**Result:** Pass.
+
+Implemented the configured-keybind prefix flag foundation in
+`roastty/src/lib.rs`. Configured keybinds now store the upstream C-facing flag
+byte, with consumed bit 0, all bit 1, global bit 2, and performable bit 3. The
+parser accepts `all:`, `global:`, `unconsumed:`, and `performable:` prefixes
+before the trigger, rejects duplicate recognized prefixes, composes distinct
+prefixes in any order, and lets unknown prefixes fall through to normal trigger
+parsing.
+
+`Config::store_keybind` now derives `has_global_keybinds` from parsed `global:`
+bindings, and existing app creation / config-update paths clone that state into
+`App`. Configured binding lookup carries stored flags through
+`ConfiguredBindingMatch`, so `Surface::key_is_binding`,
+`roastty_surface_key_is_binding`, and `roastty_surface_key_is_binding_handle`
+report configured prefix flags instead of always reporting consumed-only.
+Runtime dispatch still consumes configured bindings; global registration,
+all-surface dispatch, unconsumed pass-through, performable configured-action
+gating, sequences/chords, native keymaps, and `roastty_app_key` remain later
+work as planned.
+
+Verification:
+
+- `cargo test -p roastty keybind` — pass: 20 unit tests passed; ABI harness
+  filtered pass.
+- `cargo test -p roastty surface_key` — pass: 44 unit tests passed; ABI harness
+  filtered pass.
+- `cargo test -p roastty -- --test-threads=1` — failed only on the known
+  pre-existing
+  `tests::surface_foreground_pid_reports_worker_foreground_pid_after_start`
+  foreground-PID race. The final run had 4614 unit tests pass and 1 fail
+  (`left: 44851`, `right: 44847`).
+- `cargo test -p roastty surface_foreground_pid_reports_worker_foreground_pid_after_start -- --test-threads=1 --nocapture`
+  — reproduced the same foreground-PID mismatch in isolation (`left: 60592`,
+  `right: 60587`).
+- `cargo test -p roastty -- --test-threads=1 --skip surface_foreground_pid_reports_worker_foreground_pid_after_start`
+  — pass: 4614 unit tests passed, ABI harness passed with the known 10
+  enum-conversion warnings, doc tests passed.
+- `cargo fmt --check` — pass.
+- `git diff --check` — pass.
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/110-keybind-trigger-prefix-flags.md issues/0802-libroastty-completion-and-mac-app/README.md`
+  — pass after result formatting.
+
+## Conclusion
+
+The next keybinding prerequisite is in place: configured keybinds now preserve
+the same prefix flag metadata that the embedded app needs to distinguish global,
+all-surface, unconsumed, and performable bindings. The next Phase G slice can
+build on this metadata for runtime semantics, most likely app-level/global
+handling or the broader upstream binding table/action routing work.
+
+## Completion Review
+
+Codex-native adversarial review ran in a fresh-context subagent
+(`multi_agent_v1.spawn_agent`, agent `019eb6c3-27ba-7a42-9d41-7f7254967e00`).
+
+**Verdict:** Approved.
+
+Findings: none.
