@@ -305,6 +305,12 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   home is present; byte-faithful non-UTF-8 config storage, runtime launch
   fallback cleanup, GTK runtime defaults, link matcher mutation, and key-remap
   finalization remain later work.
+- **GTK single-instance detect finalization is wired.** Exp 104 adds the
+  upstream GTK-only default for `gtk-single-instance = detect`: GTK probable CLI
+  resolves to `false`, GTK non-CLI resolves to `true`, and the current non-GTK
+  embedded/mac production runtime remains unchanged; GTK runtime behavior, link
+  matcher mutation, quit-delay warning logging, key-remap finalization, and
+  byte-faithful config string storage remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -1000,7 +1006,7 @@ stays unaltered except for the rename).
 - [Experiment 103: Phase F — command and home finalize](103-command-home-finalize.md)
   — **Pass**
 - [Experiment 104: Phase F — GTK single-instance finalize](104-gtk-single-instance-finalize.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

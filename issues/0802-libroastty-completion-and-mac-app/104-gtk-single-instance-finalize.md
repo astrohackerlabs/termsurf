@@ -71,3 +71,55 @@ Codex-native adversarial review ran in fresh context with subagent
 Verdict: **APPROVED**
 
 Findings: None.
+
+## Result
+
+**Result:** Pass
+
+Implemented config-internal GTK single-instance detect finalization.
+
+- Added a private config-finalize app-runtime discriminator with production set
+  to the current non-GTK runtime.
+- Extended the private finalize context with that runtime discriminator.
+- Applied upstream GTK-only `gtk-single-instance = detect` defaulting after
+  command/home/working-directory finalization and before the later scalar tail.
+- Left non-GTK runtime finalization unchanged, preserving `Detect` in
+  production.
+- Preserved explicit `gtk-single-instance = true` and `false`.
+- Added deterministic tests for non-GTK no-op behavior, GTK probable-CLI
+  `Detect -> False`, GTK non-CLI `Detect -> True`, explicit-value preservation,
+  and later scalar-tail continuity.
+
+Verification passed:
+
+1. `cargo test -p roastty config_gtk_single_instance_finalize`
+2. `cargo test -p roastty gtk_chrome_config`
+3. `cargo test -p roastty config_command_home_finalize`
+4. `cargo test -p roastty`
+5. `cargo fmt --check`
+6. `git diff --check`
+
+The focused GTK finalize run passed 4 tests. The GTK chrome regression run
+passed 1 test. The command/home regression run passed 8 tests. The full
+`cargo test -p roastty` run passed 4588 unit tests, the ABI harness, and doc
+tests. The ABI harness printed the existing 10 enum-conversion warnings.
+
+## Conclusion
+
+Roastty now ports upstream's GTK-only `gtk-single-instance = detect`
+finalization while keeping the current embedded/mac production runtime non-GTK.
+This removes the GTK runtime-default entry from the config-finalize gap without
+claiming GTK runtime behavior or a build-config system. Remaining upstream
+finalize gaps include link matcher mutation, quit-delay warning logging, and
+key-remap finalization, plus broader byte-faithful config string storage.
+
+## Completion Review
+
+Codex-native adversarial review ran in fresh context with subagent
+`019eb649-f89d-77d0-a328-f658354edbcc` after implementation and result
+recording. The reviewer checked the experiment file, README, implementation diff
+from the plan commit, changed source, and upstream `Config.zig`.
+
+Verdict: **APPROVED**
+
+Findings: None.

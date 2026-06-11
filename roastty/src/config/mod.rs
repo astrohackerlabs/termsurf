@@ -1852,6 +1852,7 @@ impl Config {
                 locations: Vec::new(),
             },
             ConfigFinalizeContext {
+                app_runtime: ConfigAppRuntime::None,
                 probable_cli,
                 env_shell: None,
                 passwd_shell: None,
@@ -1870,6 +1871,7 @@ impl Config {
         self.finalize_with_theme_locations_and_context(
             ConfigThemeLocations { locations },
             ConfigFinalizeContext {
+                app_runtime: ConfigAppRuntime::None,
                 probable_cli,
                 env_shell: None,
                 passwd_shell: None,
@@ -1891,10 +1893,31 @@ impl Config {
                 locations: Vec::new(),
             },
             ConfigFinalizeContext {
+                app_runtime: ConfigAppRuntime::None,
                 probable_cli,
                 env_shell: env_shell.map(OsStr::to_os_string),
                 passwd_shell: passwd_shell.map(OsStr::to_os_string),
                 passwd_home: passwd_home.map(OsStr::to_os_string),
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn finalize_with_app_runtime_for_test(
+        &mut self,
+        app_runtime: ConfigAppRuntime,
+        probable_cli: bool,
+    ) -> ConfigFinalizeReport {
+        self.finalize_with_theme_locations_and_context(
+            ConfigThemeLocations {
+                locations: Vec::new(),
+            },
+            ConfigFinalizeContext {
+                app_runtime,
+                probable_cli,
+                env_shell: None,
+                passwd_shell: None,
+                passwd_home: None,
             },
         )
     }
@@ -2090,6 +2113,7 @@ impl Config {
         }
 
         self.finalize_working_directory(context);
+        self.finalize_gtk_single_instance(context);
 
         if self.click_repeat_interval == 0 {
             self.click_repeat_interval = 500;
@@ -2153,6 +2177,20 @@ impl Config {
                     .map(WorkingDirectory::Path)
                     .unwrap_or(WorkingDirectory::Inherit);
             }
+        }
+    }
+
+    fn finalize_gtk_single_instance(&mut self, context: &ConfigFinalizeContext) {
+        if context.app_runtime != ConfigAppRuntime::Gtk {
+            return;
+        }
+
+        if self.gtk_single_instance == GtkSingleInstance::Detect {
+            self.gtk_single_instance = if context.probable_cli {
+                GtkSingleInstance::False
+            } else {
+                GtkSingleInstance::True
+            };
         }
     }
 
@@ -2530,7 +2568,14 @@ impl ConfigThemeLocations {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigAppRuntime {
+    None,
+    Gtk,
+}
+
 struct ConfigFinalizeContext {
+    app_runtime: ConfigAppRuntime,
     probable_cli: bool,
     env_shell: Option<OsString>,
     passwd_shell: Option<OsString>,
@@ -2541,6 +2586,7 @@ impl ConfigFinalizeContext {
     fn current() -> Self {
         let passwd = passwd::get();
         Self {
+            app_runtime: ConfigAppRuntime::None,
             probable_cli: probable_cli_environment(),
             env_shell: std::env::var_os("SHELL"),
             passwd_shell: passwd.shell,
@@ -7845,7 +7891,7 @@ mod tests {
         BackgroundBlur, BackgroundBlurParseError, BackgroundImageFit, BackgroundImagePosition,
         BellFeatures, BoldColor, ClipboardAccess, ClipboardCodepointMapEntry,
         ClipboardCodepointMapParseError, ClipboardReplacement, Color, ColorList, ColorParseError,
-        Command, CommandPaletteEntry, Config, ConfigDiagnostic, ConfigFilePath,
+        Command, CommandPaletteEntry, Config, ConfigAppRuntime, ConfigDiagnostic, ConfigFilePath,
         ConfigFinalizeReport, ConfigRecursiveFileErrorKind, ConfigReplayEntry, ConfigSetError,
         ConfigSetSource, ConfigThemeLoadReport, ConfirmCloseSurface, CopyOnSelect, CursorStyle,
         CustomShaderAnimation, DefaultConfigPaths, Duration, DurationParseError, FlagsParseError,
@@ -10498,6 +10544,58 @@ mod tests {
 
         let cloned = cfg.clone();
         assert_eq!(cloned, cfg);
+    }
+
+    #[test]
+    fn config_gtk_single_instance_finalize_non_gtk_leaves_detect_unchanged() {
+        let mut cfg = Config::default();
+        cfg.finalize_with_app_runtime_for_test(ConfigAppRuntime::None, true);
+        assert_eq!(cfg.gtk_single_instance, GtkSingleInstance::Detect);
+
+        let mut cfg = Config::default();
+        cfg.finalize_with_app_runtime_for_test(ConfigAppRuntime::None, false);
+        assert_eq!(cfg.gtk_single_instance, GtkSingleInstance::Detect);
+    }
+
+    #[test]
+    fn config_gtk_single_instance_finalize_gtk_detect_uses_probable_cli() {
+        let mut cli = Config::default();
+        cli.finalize_with_app_runtime_for_test(ConfigAppRuntime::Gtk, true);
+        assert_eq!(cli.gtk_single_instance, GtkSingleInstance::False);
+
+        let mut desktop = Config::default();
+        desktop.finalize_with_app_runtime_for_test(ConfigAppRuntime::Gtk, false);
+        assert_eq!(desktop.gtk_single_instance, GtkSingleInstance::True);
+    }
+
+    #[test]
+    fn config_gtk_single_instance_finalize_preserves_explicit_values() {
+        let mut enabled = Config::default();
+        enabled.gtk_single_instance = GtkSingleInstance::True;
+        enabled.finalize_with_app_runtime_for_test(ConfigAppRuntime::Gtk, true);
+        assert_eq!(enabled.gtk_single_instance, GtkSingleInstance::True);
+
+        let mut disabled = Config::default();
+        disabled.gtk_single_instance = GtkSingleInstance::False;
+        disabled.finalize_with_app_runtime_for_test(ConfigAppRuntime::Gtk, false);
+        assert_eq!(disabled.gtk_single_instance, GtkSingleInstance::False);
+    }
+
+    #[test]
+    fn config_gtk_single_instance_finalize_keeps_later_scalar_tail() {
+        let mut cfg = Config::default();
+        cfg.click_repeat_interval = 0;
+        cfg.minimum_contrast = 99.0;
+        cfg.faint_opacity = -1.0;
+        cfg.auto_update_channel = None;
+
+        cfg.finalize_with_app_runtime_for_test(ConfigAppRuntime::Gtk, false);
+
+        assert_eq!(cfg.gtk_single_instance, GtkSingleInstance::True);
+        assert_eq!(cfg.click_repeat_interval, 500);
+        assert_eq!(cfg.minimum_contrast, 21.0);
+        assert_eq!(cfg.faint_opacity, 0.0);
+        assert_eq!(cfg.auto_update_channel, Some(ReleaseChannel::Tip));
     }
 
     #[test]
