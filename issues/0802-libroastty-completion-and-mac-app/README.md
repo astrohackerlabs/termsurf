@@ -967,6 +967,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 99: Phase F — absolute theme loading](99-absolute-theme-loading.md)
   — **Pass**
+- [Experiment 100: Phase F — named theme lookup](100-named-theme-lookup.md) —
+  **Designed**
 
 ## Process
 
