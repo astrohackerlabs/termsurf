@@ -194,6 +194,10 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   `gtk-quick-terminal-layer` and `gtk-quick-terminal-namespace`; empty values
   reset to upstream defaults before enum/string parsing, and GTK layer-shell
   runtime behavior remains later work.
+- **Quick-terminal screen/animation config is parser/formatter-only.** Exp 83
+  wires `quick-terminal-screen`, `quick-terminal-animation-duration`, and
+  `quick-terminal-autohide` with macOS upstream defaults; runtime screen
+  selection, animation timing, and focus-loss autohide remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -847,7 +851,7 @@ stays unaltered except for the rename).
 - [Experiment 82: Phase F — GTK quick terminal config](82-gtk-quick-terminal-config.md)
   — **Pass**
 - [Experiment 83: Phase F — quick terminal screen and animation config](83-quick-terminal-screen-animation-config.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

@@ -54,6 +54,12 @@ pub(crate) struct Config {
     pub gtk_quick_terminal_layer: QuickTerminalLayer,
     /// `gtk-quick-terminal-namespace`.
     pub gtk_quick_terminal_namespace: String,
+    /// `quick-terminal-screen`.
+    pub quick_terminal_screen: QuickTerminalScreen,
+    /// `quick-terminal-animation-duration`.
+    pub quick_terminal_animation_duration: f64,
+    /// `quick-terminal-autohide`.
+    pub quick_terminal_autohide: bool,
     /// `copy-on-select`.
     pub copy_on_select: CopyOnSelect,
     /// `selection-clear-on-typing`.
@@ -318,6 +324,9 @@ impl Default for Config {
             quick_terminal_size: QuickTerminalSize::default(),
             gtk_quick_terminal_layer: QuickTerminalLayer::Top,
             gtk_quick_terminal_namespace: "ghostty-quick-terminal".to_string(),
+            quick_terminal_screen: QuickTerminalScreen::Main,
+            quick_terminal_animation_duration: 0.2,
+            quick_terminal_autohide: true,
             copy_on_select: CopyOnSelect::True,
             selection_clear_on_typing: true,
             selection_clear_on_copy: false,
@@ -497,6 +506,12 @@ impl Config {
             .format_entry(&mut EntryFormatter::new("gtk-quick-terminal-layer", out));
         EntryFormatter::new("gtk-quick-terminal-namespace", out)
             .entry_str(&self.gtk_quick_terminal_namespace);
+        self.quick_terminal_screen
+            .format_entry(&mut EntryFormatter::new("quick-terminal-screen", out));
+        EntryFormatter::new("quick-terminal-animation-duration", out)
+            .entry_float(self.quick_terminal_animation_duration);
+        EntryFormatter::new("quick-terminal-autohide", out)
+            .entry_bool(self.quick_terminal_autohide);
         self.font_family
             .format_entry(&mut EntryFormatter::new("font-family", out));
         self.font_family_bold
@@ -793,6 +808,21 @@ impl Config {
                     default.gtk_quick_terminal_namespace,
                     parse_string_field,
                 )?
+            }
+            "quick-terminal-screen" => {
+                self.quick_terminal_screen = set_enum_field(
+                    value,
+                    default.quick_terminal_screen,
+                    QuickTerminalScreen::from_keyword,
+                )?
+            }
+            "quick-terminal-animation-duration" => {
+                self.quick_terminal_animation_duration =
+                    set_f64_field(value, default.quick_terminal_animation_duration)?
+            }
+            "quick-terminal-autohide" => {
+                self.quick_terminal_autohide =
+                    set_bool_field(value, default.quick_terminal_autohide)?
             }
             "copy-on-select" => {
                 self.copy_on_select =
@@ -3487,6 +3517,41 @@ impl QuickTerminalLayer {
     }
 }
 
+/// The `quick-terminal-screen` config (upstream `QuickTerminalScreen`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuickTerminalScreen {
+    Main,
+    Mouse,
+    MacosMenuBar,
+}
+
+impl QuickTerminalScreen {
+    /// The config keyword (upstream tag name).
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            QuickTerminalScreen::Main => "main",
+            QuickTerminalScreen::Mouse => "mouse",
+            QuickTerminalScreen::MacosMenuBar => "macos-menu-bar",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "main" => Some(QuickTerminalScreen::Main),
+            "mouse" => Some(QuickTerminalScreen::Mouse),
+            "macos-menu-bar" => Some(QuickTerminalScreen::MacosMenuBar),
+            _ => None,
+        }
+    }
+
+    /// Format this value as a config entry (upstream's generic enum branch).
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(self.keyword());
+    }
+}
+
 /// The `resize-overlay` config (upstream `ResizeOverlay`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResizeOverlay {
@@ -5917,17 +5982,17 @@ mod tests {
         MagicParseError, MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
         MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
-        QuickTerminalDimensions, QuickTerminalLayer, QuickTerminalPosition, QuickTerminalSize,
-        QuickTerminalSizeParseError, QuickTerminalSizeValue, RepeatableClipboardCodepointMap,
-        RepeatableCodepointMap, RepeatableConfigPath, RepeatableConfigPathParseError,
-        RepeatableString, RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition,
-        RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
-        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
-        SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
-        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowNewTabPosition,
-        WindowPadding, WindowPaddingBalance, WindowPaddingColor, WindowPaddingParseError,
-        WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme, WorkingDirectory,
-        WorkingDirectoryParseError, NS_PER_MS, NS_PER_S,
+        QuickTerminalDimensions, QuickTerminalLayer, QuickTerminalPosition, QuickTerminalScreen,
+        QuickTerminalSize, QuickTerminalSizeParseError, QuickTerminalSizeValue,
+        RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
+        RepeatableConfigPathParseError, RepeatableString, RepeatableStringParseError,
+        ResizeOverlay, ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar,
+        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
+        ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme,
+        ThemeParseError, WindowColorspace, WindowDecoration, WindowDecorationParseError,
+        WindowNewTabPosition, WindowPadding, WindowPaddingBalance, WindowPaddingColor,
+        WindowPaddingParseError, WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme,
+        WorkingDirectory, WorkingDirectoryParseError, NS_PER_MS, NS_PER_S,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::cursor;
@@ -10115,6 +10180,9 @@ mod tests {
                 "quick-terminal-position",
                 "gtk-quick-terminal-layer",
                 "gtk-quick-terminal-namespace",
+                "quick-terminal-screen",
+                "quick-terminal-animation-duration",
+                "quick-terminal-autohide",
                 "font-family",
                 "font-family-bold",
                 "font-family-italic",
@@ -11338,7 +11406,13 @@ mod tests {
         assert_eq!(keys[position_index + 1], "quick-terminal-size");
         assert_eq!(keys[position_index + 2], "gtk-quick-terminal-layer");
         assert_eq!(keys[position_index + 3], "gtk-quick-terminal-namespace");
-        assert_eq!(keys[position_index + 4], "font-family");
+        assert_eq!(keys[position_index + 4], "quick-terminal-screen");
+        assert_eq!(
+            keys[position_index + 5],
+            "quick-terminal-animation-duration"
+        );
+        assert_eq!(keys[position_index + 6], "quick-terminal-autohide");
+        assert_eq!(keys[position_index + 7], "font-family");
 
         cfg.set("quick-terminal-size", Some("")).unwrap();
         assert_eq!(cfg.quick_terminal_size, QuickTerminalSize::default());
@@ -11480,7 +11554,10 @@ mod tests {
             .unwrap();
         assert_eq!(keys[size_index + 1], "gtk-quick-terminal-layer");
         assert_eq!(keys[size_index + 2], "gtk-quick-terminal-namespace");
-        assert_eq!(keys[size_index + 3], "font-family");
+        assert_eq!(keys[size_index + 3], "quick-terminal-screen");
+        assert_eq!(keys[size_index + 4], "quick-terminal-animation-duration");
+        assert_eq!(keys[size_index + 5], "quick-terminal-autohide");
+        assert_eq!(keys[size_index + 6], "font-family");
 
         let diagnostics = cfg.load_str(
             "gtk-quick-terminal-layer = bottom\n\
@@ -11512,6 +11589,170 @@ mod tests {
         assert_eq!(cloned, cfg);
         assert_eq!(cloned.gtk_quick_terminal_layer, QuickTerminalLayer::Bottom);
         assert_eq!(cloned.gtk_quick_terminal_namespace, "roastty-quick");
+    }
+
+    #[test]
+    fn quick_terminal_screen_animation_config_parse_format_reset_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.quick_terminal_screen, QuickTerminalScreen::Main);
+        assert_eq!(cfg.quick_terminal_animation_duration, 0.2);
+        assert!(cfg.quick_terminal_autohide);
+        assert_eq!(
+            line(&cfg, "quick-terminal-screen"),
+            "quick-terminal-screen = main"
+        );
+        assert_eq!(
+            line(&cfg, "quick-terminal-animation-duration"),
+            "quick-terminal-animation-duration = 0.2"
+        );
+        assert_eq!(
+            line(&cfg, "quick-terminal-autohide"),
+            "quick-terminal-autohide = true"
+        );
+
+        for (keyword, expected) in [
+            ("main", QuickTerminalScreen::Main),
+            ("mouse", QuickTerminalScreen::Mouse),
+            ("macos-menu-bar", QuickTerminalScreen::MacosMenuBar),
+        ] {
+            cfg.set("quick-terminal-screen", Some(keyword)).unwrap();
+            assert_eq!(cfg.quick_terminal_screen, expected);
+            assert_eq!(
+                line(&cfg, "quick-terminal-screen"),
+                format!("quick-terminal-screen = {keyword}")
+            );
+        }
+
+        cfg.set("quick-terminal-screen", Some("")).unwrap();
+        assert_eq!(cfg.quick_terminal_screen, QuickTerminalScreen::Main);
+        assert_eq!(
+            line(&cfg, "quick-terminal-screen"),
+            "quick-terminal-screen = main"
+        );
+        assert_eq!(
+            cfg.set("quick-terminal-screen", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("quick-terminal-screen", Some("primary")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        cfg.set("quick-terminal-animation-duration", Some("0.125"))
+            .unwrap();
+        assert_eq!(cfg.quick_terminal_animation_duration, 0.125);
+        assert_eq!(
+            line(&cfg, "quick-terminal-animation-duration"),
+            "quick-terminal-animation-duration = 0.125"
+        );
+        cfg.set("quick-terminal-animation-duration", Some("0"))
+            .unwrap();
+        assert_eq!(cfg.quick_terminal_animation_duration, 0.0);
+        assert_eq!(
+            line(&cfg, "quick-terminal-animation-duration"),
+            "quick-terminal-animation-duration = 0"
+        );
+        cfg.set("quick-terminal-animation-duration", Some(""))
+            .unwrap();
+        assert_eq!(cfg.quick_terminal_animation_duration, 0.2);
+        assert_eq!(
+            line(&cfg, "quick-terminal-animation-duration"),
+            "quick-terminal-animation-duration = 0.2"
+        );
+        assert_eq!(
+            cfg.set("quick-terminal-animation-duration", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("quick-terminal-animation-duration", Some("slow")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        cfg.set("quick-terminal-autohide", Some("false")).unwrap();
+        assert!(!cfg.quick_terminal_autohide);
+        assert_eq!(
+            line(&cfg, "quick-terminal-autohide"),
+            "quick-terminal-autohide = false"
+        );
+        cfg.set("quick-terminal-autohide", Some("true")).unwrap();
+        assert!(cfg.quick_terminal_autohide);
+        cfg.quick_terminal_autohide = false;
+        cfg.set("quick-terminal-autohide", None).unwrap();
+        assert!(cfg.quick_terminal_autohide);
+        cfg.quick_terminal_autohide = false;
+        cfg.set("quick-terminal-autohide", Some("")).unwrap();
+        assert!(cfg.quick_terminal_autohide);
+        assert_eq!(
+            cfg.set("quick-terminal-autohide", Some("maybe")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        let keys: Vec<&str> = out
+            .lines()
+            .map(|l| l.split(" = ").next().unwrap())
+            .collect();
+        let namespace_index = keys
+            .iter()
+            .position(|key| *key == "gtk-quick-terminal-namespace")
+            .unwrap();
+        assert_eq!(keys[namespace_index + 1], "quick-terminal-screen");
+        assert_eq!(
+            keys[namespace_index + 2],
+            "quick-terminal-animation-duration"
+        );
+        assert_eq!(keys[namespace_index + 3], "quick-terminal-autohide");
+        assert_eq!(keys[namespace_index + 4], "font-family");
+
+        let diagnostics = cfg.load_str(
+            "quick-terminal-screen = mouse\n\
+             quick-terminal-screen = primary\n\
+             quick-terminal-animation-duration = 0.75\n\
+             quick-terminal-animation-duration = slow\n\
+             quick-terminal-autohide = false\n\
+             quick-terminal-autohide = maybe\n\
+             gtk-quick-terminal-layer = bottom\n",
+        );
+        assert_eq!(cfg.quick_terminal_screen, QuickTerminalScreen::Mouse);
+        assert_eq!(cfg.quick_terminal_animation_duration, 0.75);
+        assert!(!cfg.quick_terminal_autohide);
+        assert_eq!(cfg.gtk_quick_terminal_layer, QuickTerminalLayer::Bottom);
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "quick-terminal-screen".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 4,
+                    key: "quick-terminal-animation-duration".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 6,
+                    key: "quick-terminal-autohide".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+            ]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.quick_terminal_screen, QuickTerminalScreen::Mouse);
+        assert_eq!(cloned.quick_terminal_animation_duration, 0.75);
+        assert!(!cloned.quick_terminal_autohide);
     }
 
     #[test]
@@ -13941,6 +14182,15 @@ mod tests {
             assert_eq!(QuickTerminalLayer::from_keyword(v.keyword()), Some(v));
         }
         assert_eq!(QuickTerminalLayer::from_keyword("floating"), None);
+
+        for v in [
+            QuickTerminalScreen::Main,
+            QuickTerminalScreen::Mouse,
+            QuickTerminalScreen::MacosMenuBar,
+        ] {
+            assert_eq!(QuickTerminalScreen::from_keyword(v.keyword()), Some(v));
+        }
+        assert_eq!(QuickTerminalScreen::from_keyword("primary"), None);
 
         for v in [
             ResizeOverlay::Always,

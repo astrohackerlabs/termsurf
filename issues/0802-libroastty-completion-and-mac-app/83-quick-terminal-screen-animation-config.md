@@ -115,3 +115,64 @@ planned parser behavior matches upstream/local helpers, formatter placement
 matches local order, scope is consistent with adjacent parser/formatter-only
 quick-terminal experiments, the verification plan covers likely implementation
 mistakes, and `git diff --check` passed for the issue docs.
+
+## Result
+
+**Result:** Pass
+
+Implemented `quick-terminal-screen` in `roastty/src/config/mod.rs` as
+`QuickTerminalScreen::{Main, Mouse, MacosMenuBar}` with upstream default `Main`.
+The enum parses exact upstream keywords, formats through the existing enum
+formatter path, resets an empty value to `main`, and reports missing or unknown
+values through the expected `ConfigSetError` variants.
+
+Implemented `quick-terminal-animation-duration` as an `f64` field with upstream
+default `0.2`, routed through the existing `set_f64_field` and float formatter.
+Implemented `quick-terminal-autohide` as a bool with upstream macOS default
+`true`, routed through the existing bool field parser so a bare key parses as
+`true` and an empty value resets to the default.
+
+The first full-suite run caught two stale formatter-order assertions in older
+quick-terminal tests: they still expected `font-family` immediately after the
+Experiment 82 keys. Those assertions were updated to keep strict order coverage
+across the newly inserted Experiment 83 keys, and the targeted plus full suites
+were rerun successfully.
+
+Verification passed:
+
+- `cargo fmt`
+- `cargo test -p roastty quick_terminal_screen_animation`
+- `cargo test -p roastty quick_terminal`
+- `cargo test -p roastty gtk_quick_terminal`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`
+  - 4521 unit tests passed
+  - ABI harness passed with the existing 10 enum-conversion warnings
+  - doc tests passed
+- `cargo fmt --check`
+- `git diff --check`
+
+## Conclusion
+
+The quick-terminal screen, animation-duration, and autohide config surface now
+matches upstream macOS defaults, enum/float/bool parser behavior, empty-reset
+behavior, formatter output, and diagnostics for this slice. Runtime
+quick-terminal screen selection, animation, focus-loss autohide behavior, and
+app C ABI accessors remain later work. The next upstream quick-terminal fields
+are `quick-terminal-space-behavior` and `quick-terminal-keyboard-interactivity`.
+
+## Completion Review
+
+Codex adversarial reviewer `019eb4a5-9c62-7533-9640-9289fe4c545c` returned
+**Approved** with no findings.
+
+The reviewer verified read-only that the diff is limited to the expected three
+files, upstream defaults and tags match, the implementation is
+parser/formatter/config-test only, no runtime behavior or C ABI accessor work
+was added, README status and operating notes were updated, and the result docs
+record the stale formatter-order assertion failure and fix.
+
+The reviewer ran `git diff --check`, `cargo fmt --check`,
+`cargo test -p roastty quick_terminal_screen_animation`,
+`cargo test -p roastty config_format_config`, and `cargo test -p roastty`. The
+full suite passed with 4521 unit tests plus the ABI harness and doc tests.
