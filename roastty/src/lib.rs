@@ -6252,6 +6252,8 @@ fn goto_tab_action(selector: c_int) -> ParsedBindingAction {
 enum ParsedBindingAction {
     RuntimeAction(c_int, [usize; 8]),
     AppRuntimeAction(c_int, [usize; 8]),
+    NewSplitAuto,
+    Search(Vec<u8>),
     StartSearch,
     SearchSelection,
     CopyUrlToClipboard,
@@ -6314,6 +6316,10 @@ impl ParsedBindingAction {
             ParsedBindingAction::RuntimeAction(tag, storage)
             | ParsedBindingAction::AppRuntimeAction(tag, storage) => {
                 canonical_runtime_action(*tag, storage)
+            }
+            ParsedBindingAction::NewSplitAuto => "new_split:auto".to_string(),
+            ParsedBindingAction::Search(needle) => {
+                format!("search:{}", zig_escape_action_bytes(needle))
             }
             ParsedBindingAction::StartSearch => "start_search".to_string(),
             ParsedBindingAction::SearchSelection => "search_selection".to_string(),
@@ -6696,11 +6702,11 @@ fn selection_adjustment_keyword(value: TerminalSelectionAdjustment) -> &'static 
 }
 
 fn parse_binding_action(surface: &Surface, action: &[u8]) -> Option<ParsedBindingAction> {
-    parse_binding_action_with_auto_split(action, auto_split_direction(surface))
+    parse_binding_action_with_auto_split(action, auto_split_direction(surface), false)
 }
 
 fn parse_config_binding_action(action: &[u8]) -> Option<ParsedBindingAction> {
-    parse_binding_action_with_auto_split(action, ROASTTY_SPLIT_DIRECTION_RIGHT)
+    parse_binding_action_with_auto_split(action, ROASTTY_SPLIT_DIRECTION_RIGHT, true)
 }
 
 pub(crate) fn canonical_config_binding_action(action: &[u8]) -> Option<String> {
@@ -6710,6 +6716,7 @@ pub(crate) fn canonical_config_binding_action(action: &[u8]) -> Option<String> {
 fn parse_binding_action_with_auto_split(
     action: &[u8],
     auto_direction: c_int,
+    preserve_auto: bool,
 ) -> Option<ParsedBindingAction> {
     let (name, parameter) = action
         .iter()
@@ -6852,6 +6859,7 @@ fn parse_binding_action_with_auto_split(
             }
             Some(ParsedBindingAction::StartSearch)
         }
+        b"search" => Some(ParsedBindingAction::Search(parameter?.to_vec())),
         b"end_search" => {
             if parameter.is_some() {
                 return None;
@@ -6980,6 +6988,9 @@ fn parse_binding_action_with_auto_split(
             ))
         }
         b"new_split" => {
+            if preserve_auto && matches!(parameter, None | Some(b"auto")) {
+                return Some(ParsedBindingAction::NewSplitAuto);
+            }
             let direction = match parameter {
                 None | Some(b"auto") => auto_direction,
                 Some(parameter) => split_direction_from_str(parameter)?,
@@ -8425,13 +8436,13 @@ fn config_keybind_physical_key_supported(key: key::Key) -> bool {
     )
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DefaultBindingTrigger {
     Physical(key::Key),
     Unicode(u32),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DefaultBindingEntry {
     trigger: DefaultBindingTrigger,
     mods: c_int,
@@ -17351,6 +17362,16 @@ fn perform_parsed_binding_action(surface: &mut Surface, action: ParsedBindingAct
         ParsedBindingAction::AppRuntimeAction(tag, storage) => {
             surface.perform_app_action_result(tag, storage)
         }
+        ParsedBindingAction::NewSplitAuto => false,
+        ParsedBindingAction::Search(needle) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            let Ok(needle) = CString::new(needle) else {
+                return false;
+            };
+            surface.perform_start_search_result(&needle)
+        }
         ParsedBindingAction::StartSearch => {
             let needle = CString::new("").expect("empty string has no interior NUL");
             surface.perform_start_search_result(&needle)
@@ -17593,6 +17614,16 @@ pub extern "C" fn roastty_surface_binding_action(
         }
         ParsedBindingAction::AppRuntimeAction(tag, storage) => {
             surface.perform_app_action_result(tag, storage)
+        }
+        ParsedBindingAction::NewSplitAuto => false,
+        ParsedBindingAction::Search(needle) => {
+            if surface.app.is_null() {
+                return false;
+            }
+            let Ok(needle) = CString::new(needle) else {
+                return false;
+            };
+            surface.perform_start_search_result(&needle)
         }
         ParsedBindingAction::StartSearch => {
             let needle = CString::new("").expect("empty string has no interior NUL");
@@ -20290,6 +20321,866 @@ mod tests {
         } else {
             "<non-string panic>".to_string()
         }
+    }
+
+    fn assert_unique_action_tags(tags: &[&str]) {
+        for (index, tag) in tags.iter().enumerate() {
+            assert!(
+                !tags[..index].contains(tag),
+                "duplicate action tag in coverage table: {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn binding_action_catalog_covers_pinned_upstream_actions() {
+        // Pinned upstream: vendor/ghostty/src/input/Binding.zig Action union at
+        // 2c62d182cec246764ff725096a70b9ef44996f7f.
+        const UPSTREAM_ACTION_TAG_COUNT: usize = 85;
+        const SUPPORTED_UPSTREAM_ACTION_TAGS: &[&str] = &[
+            "ignore",
+            "csi",
+            "esc",
+            "text",
+            "reset",
+            "copy_to_clipboard",
+            "paste_from_clipboard",
+            "paste_from_selection",
+            "copy_url_to_clipboard",
+            "copy_title_to_clipboard",
+            "increase_font_size",
+            "decrease_font_size",
+            "reset_font_size",
+            "set_font_size",
+            "search",
+            "search_selection",
+            "navigate_search",
+            "start_search",
+            "end_search",
+            "clear_screen",
+            "select_all",
+            "scroll_to_top",
+            "scroll_to_bottom",
+            "scroll_to_selection",
+            "scroll_to_row",
+            "scroll_page_up",
+            "scroll_page_down",
+            "scroll_page_fractional",
+            "scroll_page_lines",
+            "adjust_selection",
+            "jump_to_prompt",
+            "write_scrollback_file",
+            "write_screen_file",
+            "write_selection_file",
+            "new_window",
+            "new_tab",
+            "previous_tab",
+            "next_tab",
+            "last_tab",
+            "goto_tab",
+            "move_tab",
+            "toggle_tab_overview",
+            "prompt_surface_title",
+            "prompt_tab_title",
+            "set_surface_title",
+            "set_tab_title",
+            "new_split",
+            "goto_split",
+            "goto_window",
+            "toggle_split_zoom",
+            "toggle_readonly",
+            "resize_split",
+            "equalize_splits",
+            "reset_window_size",
+            "inspector",
+            "show_gtk_inspector",
+            "show_on_screen_keyboard",
+            "open_config",
+            "reload_config",
+            "close_surface",
+            "close_tab",
+            "close_window",
+            "close_all_windows",
+            "toggle_maximize",
+            "toggle_fullscreen",
+            "toggle_window_decorations",
+            "toggle_window_float_on_top",
+            "toggle_secure_input",
+            "toggle_mouse_reporting",
+            "toggle_command_palette",
+            "toggle_quick_terminal",
+            "toggle_visibility",
+            "toggle_background_opacity",
+            "check_for_updates",
+            "undo",
+            "redo",
+            "end_key_sequence",
+            "activate_key_table",
+            "activate_key_table_once",
+            "deactivate_key_table",
+            "deactivate_all_key_tables",
+            "quit",
+            "crash",
+        ];
+        const EXCLUDED_UPSTREAM_ACTION_TAGS: &[&str] = &["unbind", "cursor_key"];
+        assert_unique_action_tags(SUPPORTED_UPSTREAM_ACTION_TAGS);
+        assert_unique_action_tags(EXCLUDED_UPSTREAM_ACTION_TAGS);
+        assert_eq!(
+            SUPPORTED_UPSTREAM_ACTION_TAGS.len() + EXCLUDED_UPSTREAM_ACTION_TAGS.len(),
+            UPSTREAM_ACTION_TAG_COUNT
+        );
+
+        let supported: &[(&[u8], &str)] = &[
+            (b"ignore", "ignore"),
+            (b"csi:0m", "csi:0m"),
+            (b"esc:b", "esc:b"),
+            (b"text:hello", "text:hello"),
+            (b"text:\\n\\x1b", "text:\\\\n\\\\x1b"),
+            (b"reset", "reset"),
+            (b"copy_to_clipboard", "copy_to_clipboard:mixed"),
+            (b"copy_to_clipboard:plain", "copy_to_clipboard:plain"),
+            (b"copy_to_clipboard:vt", "copy_to_clipboard:vt"),
+            (b"copy_to_clipboard:html", "copy_to_clipboard:html"),
+            (b"copy_to_clipboard:mixed", "copy_to_clipboard:mixed"),
+            (b"paste_from_clipboard", "paste_from_clipboard"),
+            (b"paste_from_selection", "paste_from_selection"),
+            (b"copy_url_to_clipboard", "copy_url_to_clipboard"),
+            (b"copy_title_to_clipboard", "copy_title_to_clipboard"),
+            (b"increase_font_size:1.5", "increase_font_size:1.5"),
+            (b"decrease_font_size:2", "decrease_font_size:2"),
+            (b"reset_font_size", "reset_font_size"),
+            (b"set_font_size:14.5", "set_font_size:14.5"),
+            (b"search:needle", "search:needle"),
+            (b"search_selection", "search_selection"),
+            (b"navigate_search:previous", "navigate_search:previous"),
+            (b"navigate_search:next", "navigate_search:next"),
+            (b"start_search", "start_search"),
+            (b"end_search", "end_search"),
+            (b"clear_screen", "clear_screen"),
+            (b"select_all", "select_all"),
+            (b"scroll_to_top", "scroll_to_top"),
+            (b"scroll_to_bottom", "scroll_to_bottom"),
+            (b"scroll_to_selection", "scroll_to_selection"),
+            (b"scroll_to_row:42", "scroll_to_row:42"),
+            (b"scroll_page_up", "scroll_page_up"),
+            (b"scroll_page_down", "scroll_page_down"),
+            (b"scroll_page_fractional:0.5", "scroll_page_fractional:0.5"),
+            (
+                b"scroll_page_fractional:-1.5",
+                "scroll_page_fractional:-1.5",
+            ),
+            (b"scroll_page_lines:3", "scroll_page_lines:3"),
+            (b"scroll_page_lines:-10", "scroll_page_lines:-10"),
+            (b"adjust_selection:left", "adjust_selection:left"),
+            (b"adjust_selection:right", "adjust_selection:right"),
+            (b"adjust_selection:up", "adjust_selection:up"),
+            (b"adjust_selection:down", "adjust_selection:down"),
+            (b"adjust_selection:page_up", "adjust_selection:page_up"),
+            (b"adjust_selection:page_down", "adjust_selection:page_down"),
+            (b"adjust_selection:home", "adjust_selection:home"),
+            (b"adjust_selection:end", "adjust_selection:end"),
+            (
+                b"adjust_selection:beginning_of_line",
+                "adjust_selection:beginning_of_line",
+            ),
+            (
+                b"adjust_selection:end_of_line",
+                "adjust_selection:end_of_line",
+            ),
+            (b"jump_to_prompt:-1", "jump_to_prompt:-1"),
+            (b"jump_to_prompt:1", "jump_to_prompt:1"),
+            (
+                b"write_scrollback_file:copy",
+                "write_scrollback_file:copy,plain",
+            ),
+            (
+                b"write_scrollback_file:copy,plain",
+                "write_scrollback_file:copy,plain",
+            ),
+            (
+                b"write_scrollback_file:copy,vt",
+                "write_scrollback_file:copy,vt",
+            ),
+            (
+                b"write_scrollback_file:copy,html",
+                "write_scrollback_file:copy,html",
+            ),
+            (
+                b"write_scrollback_file:paste,plain",
+                "write_scrollback_file:paste,plain",
+            ),
+            (
+                b"write_scrollback_file:paste,vt",
+                "write_scrollback_file:paste,vt",
+            ),
+            (
+                b"write_scrollback_file:paste,html",
+                "write_scrollback_file:paste,html",
+            ),
+            (
+                b"write_scrollback_file:open,plain",
+                "write_scrollback_file:open,plain",
+            ),
+            (
+                b"write_scrollback_file:open,vt",
+                "write_scrollback_file:open,vt",
+            ),
+            (
+                b"write_scrollback_file:open,html",
+                "write_scrollback_file:open,html",
+            ),
+            (b"write_screen_file:copy", "write_screen_file:copy,plain"),
+            (
+                b"write_screen_file:copy,plain",
+                "write_screen_file:copy,plain",
+            ),
+            (b"write_screen_file:copy,vt", "write_screen_file:copy,vt"),
+            (
+                b"write_screen_file:copy,html",
+                "write_screen_file:copy,html",
+            ),
+            (
+                b"write_screen_file:paste,plain",
+                "write_screen_file:paste,plain",
+            ),
+            (b"write_screen_file:paste,vt", "write_screen_file:paste,vt"),
+            (
+                b"write_screen_file:paste,html",
+                "write_screen_file:paste,html",
+            ),
+            (
+                b"write_screen_file:open,plain",
+                "write_screen_file:open,plain",
+            ),
+            (b"write_screen_file:open,vt", "write_screen_file:open,vt"),
+            (
+                b"write_screen_file:open,html",
+                "write_screen_file:open,html",
+            ),
+            (
+                b"write_selection_file:copy",
+                "write_selection_file:copy,plain",
+            ),
+            (
+                b"write_selection_file:copy,plain",
+                "write_selection_file:copy,plain",
+            ),
+            (
+                b"write_selection_file:copy,vt",
+                "write_selection_file:copy,vt",
+            ),
+            (
+                b"write_selection_file:copy,html",
+                "write_selection_file:copy,html",
+            ),
+            (
+                b"write_selection_file:paste,plain",
+                "write_selection_file:paste,plain",
+            ),
+            (
+                b"write_selection_file:paste,vt",
+                "write_selection_file:paste,vt",
+            ),
+            (
+                b"write_selection_file:paste,html",
+                "write_selection_file:paste,html",
+            ),
+            (
+                b"write_selection_file:open,plain",
+                "write_selection_file:open,plain",
+            ),
+            (
+                b"write_selection_file:open,vt",
+                "write_selection_file:open,vt",
+            ),
+            (
+                b"write_selection_file:open,html",
+                "write_selection_file:open,html",
+            ),
+            (b"new_window", "new_window"),
+            (b"new_tab", "new_tab"),
+            (b"previous_tab", "goto_tab:-1"),
+            (b"next_tab", "goto_tab:-2"),
+            (b"last_tab", "goto_tab:-3"),
+            (b"goto_tab:1", "goto_tab:1"),
+            (b"move_tab:-1", "move_tab:-1"),
+            (b"toggle_tab_overview", "toggle_tab_overview"),
+            (b"prompt_surface_title", "prompt_surface_title"),
+            (b"prompt_tab_title", "prompt_tab_title"),
+            (b"set_surface_title:surface", "set_surface_title:surface"),
+            (b"set_tab_title:tab", "set_tab_title:tab"),
+            (b"new_split", "new_split:auto"),
+            (b"new_split:auto", "new_split:auto"),
+            (b"new_split:right", "new_split:right"),
+            (b"new_split:down", "new_split:down"),
+            (b"new_split:left", "new_split:left"),
+            (b"new_split:up", "new_split:up"),
+            (b"goto_split:previous", "goto_split:previous"),
+            (b"goto_split:next", "goto_split:next"),
+            (b"goto_split:up", "goto_split:up"),
+            (b"goto_split:top", "goto_split:up"),
+            (b"goto_split:left", "goto_split:left"),
+            (b"goto_split:down", "goto_split:down"),
+            (b"goto_split:bottom", "goto_split:down"),
+            (b"goto_split:right", "goto_split:right"),
+            (b"goto_window:previous", "goto_window:previous"),
+            (b"goto_window:next", "goto_window:next"),
+            (b"toggle_split_zoom", "toggle_split_zoom"),
+            (b"toggle_readonly", "toggle_readonly"),
+            (b"resize_split:up,10", "resize_split:up,10"),
+            (b"resize_split:down,10", "resize_split:down,10"),
+            (b"resize_split:left,10", "resize_split:left,10"),
+            (b"resize_split:right,10", "resize_split:right,10"),
+            (b"equalize_splits", "equalize_splits"),
+            (b"reset_window_size", "reset_window_size"),
+            (b"inspector:toggle", "inspector:toggle"),
+            (b"inspector:show", "inspector:show"),
+            (b"inspector:hide", "inspector:hide"),
+            (b"show_gtk_inspector", "show_gtk_inspector"),
+            (b"show_on_screen_keyboard", "show_on_screen_keyboard"),
+            (b"open_config", "open_config"),
+            (b"reload_config", "reload_config"),
+            (b"close_surface", "close_surface"),
+            (b"close_tab", "close_tab:this"),
+            (b"close_tab:this", "close_tab:this"),
+            (b"close_tab:other", "close_tab:other"),
+            (b"close_tab:right", "close_tab:right"),
+            (b"close_window", "close_window"),
+            (b"close_all_windows", "close_all_windows"),
+            (b"toggle_maximize", "toggle_maximize"),
+            (b"toggle_fullscreen", "toggle_fullscreen"),
+            (b"toggle_window_decorations", "toggle_window_decorations"),
+            (b"toggle_window_float_on_top", "toggle_window_float_on_top"),
+            (b"toggle_secure_input", "toggle_secure_input"),
+            (b"toggle_mouse_reporting", "toggle_mouse_reporting"),
+            (b"toggle_command_palette", "toggle_command_palette"),
+            (b"toggle_quick_terminal", "toggle_quick_terminal"),
+            (b"toggle_visibility", "toggle_visibility"),
+            (b"toggle_background_opacity", "toggle_background_opacity"),
+            (b"check_for_updates", "check_for_updates"),
+            (b"undo", "undo"),
+            (b"redo", "redo"),
+            (b"end_key_sequence", "end_key_sequence"),
+            (b"activate_key_table:nav", "activate_key_table:nav"),
+            (
+                b"activate_key_table_once:nav",
+                "activate_key_table_once:nav",
+            ),
+            (b"deactivate_key_table", "deactivate_key_table"),
+            (b"deactivate_all_key_tables", "deactivate_all_key_tables"),
+            (b"quit", "quit"),
+            (b"crash:main", "crash:main"),
+            (b"crash:io", "crash:io"),
+            (b"crash:render", "crash:render"),
+        ];
+        for (input, expected) in supported {
+            assert_eq!(
+                canonical_config_binding_action(input).as_deref(),
+                Some(*expected),
+                "input={}",
+                String::from_utf8_lossy(input)
+            );
+        }
+
+        let excluded: &[(&[u8], &str)] = &[
+            (
+                b"unbind",
+                "binding-set mutation handled outside action leaves upstream",
+            ),
+            (
+                b"cursor_key:normal,application",
+                "upstream parser returns InvalidAction",
+            ),
+        ];
+        assert_eq!(excluded.len(), EXCLUDED_UPSTREAM_ACTION_TAGS.len());
+        for (input, reason) in excluded {
+            assert!(
+                canonical_config_binding_action(input).is_none(),
+                "excluded action parsed unexpectedly: input={} reason={reason}",
+                String::from_utf8_lossy(input)
+            );
+        }
+    }
+
+    fn assert_default_unicode_trigger(action: &[u8], codepoint: u32, mods: c_int) {
+        let trigger = default_config_trigger(action);
+        assert_eq!(trigger.tag, ROASTTY_TRIGGER_UNICODE, "action={action:?}");
+        assert_eq!(
+            unsafe { trigger.key.unicode },
+            codepoint,
+            "action={action:?}"
+        );
+        assert_eq!(trigger.mods, mods, "action={action:?}");
+    }
+
+    fn assert_default_physical_trigger(action: &[u8], key: key::Key, mods: c_int) {
+        let trigger = default_config_trigger(action);
+        assert_eq!(trigger.tag, ROASTTY_TRIGGER_PHYSICAL, "action={action:?}");
+        assert_eq!(
+            unsafe { trigger.key.physical },
+            key as c_int,
+            "action={action:?}"
+        );
+        assert_eq!(trigger.mods, mods, "action={action:?}");
+    }
+
+    #[test]
+    fn default_binding_table_matches_pinned_upstream_macos_defaults() {
+        let mut expected = Vec::new();
+        macro_rules! u {
+            ($ch:literal, $mods:expr, $action:literal, $flags:expr) => {
+                expected.push(default_unicode_entry($ch as u32, $mods, $action, $flags));
+            };
+        }
+        macro_rules! p {
+            ($key:expr, $mods:expr, $action:literal, $flags:expr) => {
+                expected.push(default_physical_entry($key, $mods, $action, $flags));
+            };
+        }
+
+        u!(
+            b',',
+            ROASTTY_MODS_SUPER,
+            b"open_config",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b',',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"reload_config",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Copy,
+            ROASTTY_MODS_NONE,
+            b"copy_to_clipboard:mixed",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Paste,
+            ROASTTY_MODS_NONE,
+            b"paste_from_clipboard",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Insert,
+            ROASTTY_MODS_SHIFT,
+            b"paste_from_selection",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'c',
+            ROASTTY_MODS_SUPER,
+            b"copy_to_clipboard:mixed",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'v',
+            ROASTTY_MODS_SUPER,
+            b"paste_from_clipboard",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'=',
+            ROASTTY_MODS_SUPER,
+            b"increase_font_size:1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'+',
+            ROASTTY_MODS_SUPER,
+            b"increase_font_size:1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'-',
+            ROASTTY_MODS_SUPER,
+            b"decrease_font_size:1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'0',
+            ROASTTY_MODS_SUPER,
+            b"reset_font_size",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'j',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER,
+            b"write_screen_file:copy",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'j',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"write_screen_file:paste",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'j',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER,
+            b"write_screen_file:open",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+
+        for (key, action) in [
+            (key::Key::ArrowLeft, b"adjust_selection:left".as_slice()),
+            (key::Key::ArrowRight, b"adjust_selection:right".as_slice()),
+            (key::Key::ArrowUp, b"adjust_selection:up".as_slice()),
+            (key::Key::ArrowDown, b"adjust_selection:down".as_slice()),
+            (key::Key::PageUp, b"adjust_selection:page_up".as_slice()),
+            (key::Key::PageDown, b"adjust_selection:page_down".as_slice()),
+            (key::Key::Home, b"adjust_selection:home".as_slice()),
+            (key::Key::End, b"adjust_selection:end".as_slice()),
+        ] {
+            expected.push(default_physical_entry(
+                key,
+                ROASTTY_MODS_SHIFT,
+                action,
+                ROASTTY_KEYBIND_FLAGS_PERFORMABLE,
+            ));
+        }
+
+        p!(
+            key::Key::Tab,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_CTRL,
+            b"previous_tab",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Tab,
+            ROASTTY_MODS_CTRL,
+            b"next_tab",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        for digit in b'1'..=b'8' {
+            let action = format!("goto_tab:{}", digit - b'0').into_bytes();
+            let action: &'static [u8] = Box::leak(action.into_boxed_slice());
+            expected.push(default_unicode_entry(
+                digit as u32,
+                ROASTTY_MODS_SUPER,
+                action,
+                ROASTTY_KEYBIND_FLAGS_DEFAULT,
+            ));
+        }
+        u!(
+            b'9',
+            ROASTTY_MODS_SUPER,
+            b"last_tab",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Enter,
+            ROASTTY_MODS_SUPER,
+            b"toggle_fullscreen",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Enter,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"toggle_split_zoom",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'p',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"toggle_command_palette",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'q',
+            ROASTTY_MODS_SUPER,
+            b"quit",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'k',
+            ROASTTY_MODS_SUPER,
+            b"clear_screen",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'a',
+            ROASTTY_MODS_SUPER,
+            b"select_all",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b't',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"undo",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'z',
+            ROASTTY_MODS_SUPER,
+            b"undo",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'z',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"redo",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+
+        for (key, action) in [
+            (key::Key::Home, b"scroll_to_top".as_slice()),
+            (key::Key::End, b"scroll_to_bottom".as_slice()),
+            (key::Key::PageUp, b"scroll_page_up".as_slice()),
+            (key::Key::PageDown, b"scroll_page_down".as_slice()),
+        ] {
+            expected.push(default_physical_entry(
+                key,
+                ROASTTY_MODS_SUPER,
+                action,
+                ROASTTY_KEYBIND_FLAGS_DEFAULT,
+            ));
+        }
+        u!(
+            b'j',
+            ROASTTY_MODS_SUPER,
+            b"scroll_to_selection",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        p!(
+            key::Key::ArrowUp,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"jump_to_prompt:-1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowDown,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"jump_to_prompt:1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+
+        for (ch, mods, action) in [
+            (b'n', ROASTTY_MODS_SUPER, b"new_window".as_slice()),
+            (b'w', ROASTTY_MODS_SUPER, b"close_surface".as_slice()),
+            (
+                b'w',
+                ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER,
+                b"close_tab:this".as_slice(),
+            ),
+            (
+                b'w',
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+                b"close_window".as_slice(),
+            ),
+            (
+                b'w',
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER,
+                b"close_all_windows".as_slice(),
+            ),
+            (b't', ROASTTY_MODS_SUPER, b"new_tab".as_slice()),
+            (
+                b'[',
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+                b"previous_tab".as_slice(),
+            ),
+            (
+                b']',
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+                b"next_tab".as_slice(),
+            ),
+            (b'd', ROASTTY_MODS_SUPER, b"new_split:right".as_slice()),
+            (
+                b'd',
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+                b"new_split:down".as_slice(),
+            ),
+            (b'[', ROASTTY_MODS_SUPER, b"goto_split:previous".as_slice()),
+            (b']', ROASTTY_MODS_SUPER, b"goto_split:next".as_slice()),
+        ] {
+            expected.push(default_unicode_entry(
+                ch as u32,
+                mods,
+                action,
+                ROASTTY_KEYBIND_FLAGS_DEFAULT,
+            ));
+        }
+
+        for (key, action) in [
+            (key::Key::ArrowUp, b"goto_split:up".as_slice()),
+            (key::Key::ArrowDown, b"goto_split:down".as_slice()),
+            (key::Key::ArrowLeft, b"goto_split:left".as_slice()),
+            (key::Key::ArrowRight, b"goto_split:right".as_slice()),
+        ] {
+            expected.push(default_physical_entry(
+                key,
+                ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER,
+                action,
+                ROASTTY_KEYBIND_FLAGS_DEFAULT,
+            ));
+        }
+        for (key, action) in [
+            (key::Key::ArrowUp, b"resize_split:up,10".as_slice()),
+            (key::Key::ArrowDown, b"resize_split:down,10".as_slice()),
+            (key::Key::ArrowLeft, b"resize_split:left,10".as_slice()),
+            (key::Key::ArrowRight, b"resize_split:right,10".as_slice()),
+        ] {
+            expected.push(default_physical_entry(
+                key,
+                ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER,
+                action,
+                ROASTTY_KEYBIND_FLAGS_DEFAULT,
+            ));
+        }
+
+        u!(
+            b'=',
+            ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER,
+            b"equalize_splits",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowUp,
+            ROASTTY_MODS_SUPER,
+            b"jump_to_prompt:-1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowDown,
+            ROASTTY_MODS_SUPER,
+            b"jump_to_prompt:1",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'f',
+            ROASTTY_MODS_SUPER,
+            b"start_search",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'e',
+            ROASTTY_MODS_SUPER,
+            b"search_selection",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'f',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"end_search",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        p!(
+            key::Key::Escape,
+            ROASTTY_MODS_NONE,
+            b"end_search",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'g',
+            ROASTTY_MODS_SUPER,
+            b"navigate_search:next",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'g',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"navigate_search:previous",
+            ROASTTY_KEYBIND_FLAGS_PERFORMABLE
+        );
+        u!(
+            b'i',
+            ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER,
+            b"inspector:toggle",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'f',
+            ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER,
+            b"toggle_fullscreen",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        u!(
+            b'v',
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            b"paste_from_selection",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowRight,
+            ROASTTY_MODS_SUPER,
+            b"text:\\x05",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowLeft,
+            ROASTTY_MODS_SUPER,
+            b"text:\\x01",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::Backspace,
+            ROASTTY_MODS_SUPER,
+            b"text:\\x15",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowLeft,
+            ROASTTY_MODS_ALT,
+            b"esc:b",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+        p!(
+            key::Key::ArrowRight,
+            ROASTTY_MODS_ALT,
+            b"esc:f",
+            ROASTTY_KEYBIND_FLAGS_DEFAULT
+        );
+
+        assert_eq!(DEFAULT_BINDINGS, expected.as_slice());
+    }
+
+    #[test]
+    fn config_trigger_reports_ordered_macos_default_bindings() {
+        assert_default_unicode_trigger(b"open_config", b',' as u32, ROASTTY_MODS_SUPER);
+        assert_default_unicode_trigger(
+            b"reload_config",
+            b',' as u32,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+        );
+        assert_default_physical_trigger(
+            b"copy_to_clipboard:mixed",
+            key::Key::Copy,
+            ROASTTY_MODS_NONE,
+        );
+        assert_default_physical_trigger(
+            b"paste_from_clipboard",
+            key::Key::Paste,
+            ROASTTY_MODS_NONE,
+        );
+        for digit in b'1'..=b'8' {
+            let action = format!("goto_tab:{}", digit - b'0');
+            assert_default_unicode_trigger(action.as_bytes(), digit as u32, ROASTTY_MODS_SUPER);
+        }
+        assert_default_unicode_trigger(b"last_tab", b'9' as u32, ROASTTY_MODS_SUPER);
+        assert_default_unicode_trigger(
+            b"close_tab:this",
+            b'w' as u32,
+            ROASTTY_MODS_ALT | ROASTTY_MODS_SUPER,
+        );
+        assert_default_unicode_trigger(b"new_split:right", b'd' as u32, ROASTTY_MODS_SUPER);
+        assert_default_unicode_trigger(
+            b"new_split:down",
+            b'd' as u32,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+        );
+        assert_default_unicode_trigger(
+            b"toggle_fullscreen",
+            b'f' as u32,
+            ROASTTY_MODS_CTRL | ROASTTY_MODS_SUPER,
+        );
+        assert_default_unicode_trigger(
+            b"toggle_command_palette",
+            b'p' as u32,
+            ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+        );
+        assert_empty_trigger(default_config_trigger(b"start_search"));
+        assert_empty_trigger(default_config_trigger(b"end_search"));
     }
 
     #[test]

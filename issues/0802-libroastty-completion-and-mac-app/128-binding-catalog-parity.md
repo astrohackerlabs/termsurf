@@ -137,3 +137,87 @@ default/reverse-trigger parity coverage.
 **Final verdict:** Approved. The reviewer confirmed the required finding and
 optional pass-criteria finding were resolved and reported no new required
 findings.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has audit-backed coverage for the pinned upstream binding/default
+tail:
+
+- the test fixture accounts for all 85 pinned upstream `input.Binding.Action`
+  tags from `vendor/ghostty/src/input/Binding.zig`;
+- 83 action tags are covered through `canonical_config_binding_action`;
+- every finite enum parameter value exposed by Roastty's parser is covered,
+  including clipboard formats, write-file actions/formats, search navigation,
+  selection adjustment directions, split/tab/window modes, inspector modes, key
+  table actions, sequence-control actions, and crash locations;
+- the two explicit exclusions are upstream `unbind`, which is a binding-set
+  mutation path rather than an executable action leaf in Roastty today, and
+  upstream `cursor_key`, which Ghostty's own action parser rejects with
+  `InvalidAction`;
+- the macOS `DEFAULT_BINDINGS` table is checked against the pinned upstream
+  `Keybinds.init` macOS defaults, including trigger kind/value, modifier mask,
+  action string, order, and performable flags;
+- reverse-trigger coverage now checks ordering-sensitive app/menu defaults,
+  including the later Cmd-Ctrl-F `toggle_fullscreen` row and performable-only
+  search actions being absent from menu reverse lookup.
+
+Two behavior gaps found by the audit were fixed:
+
+- `search:<text>` now parses, canonicalizes, and dispatches through the same
+  runtime start-search callback path as `start_search`;
+- config canonicalization preserves upstream `new_split:auto` instead of
+  resolving it to the right-split fallback used only for surface runtime parsing
+  when a target surface is unavailable.
+
+Verification run:
+
+- `cargo fmt`
+- `cargo test -p roastty binding_action_catalog` — 1 passed
+- `cargo test -p roastty default_binding` — 4 passed
+- `cargo test -p roastty config_trigger` — 9 passed
+- `cargo test -p roastty command_palette` — 2 passed
+- `cargo test -p roastty -- --test-threads=1` — 4731 unit tests passed, ABI
+  harness passed with the existing 10 C enum-conversion warnings, doc tests
+  passed
+- `cargo fmt --check`
+- `git diff --check`
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/128-binding-catalog-parity.md issues/0802-libroastty-completion-and-mac-app/README.md`
+
+Still out of scope:
+
+- native keymaps and keyboard-layout reload;
+- native global shortcut registration;
+- command-palette UI behavior and command execution from the copied app;
+- runtime support for upstream `unbind` as a keybinding set mutation path.
+
+## Conclusion
+
+The upstream binding/default-action tail is no longer an unproven Phase G gap.
+Roastty now has explicit tests tying the pinned Ghostty action union and macOS
+default initializer to its parser, canonicalizer, default table, and reverse
+trigger lookup. The remaining Phase G work is native keymaps/global shortcuts
+and command-palette UI behavior.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial reviewer, fresh context
+(`multi_agent_v1.spawn_agent`, agent `019eb860-ad1c-7700-a831-652efdc34e84`)
+
+**Initial verdict:** Changes required.
+
+**Required finding:** The result's verification record omitted three commands
+required by the experiment's own Verification section: `cargo fmt --check`,
+`git diff --check`, and the Prettier `--check` command. The reviewer
+independently verified those checks passed, but the experiment record did not
+match the verification contract.
+
+**Fix:** The Verification run list now includes `cargo fmt --check`,
+`git diff --check`, and the exact Prettier `--check` command. After the edit,
+`prettier --write`, `git diff --check`, and the Prettier check were rerun and
+passed.
+
+**Final verdict:** Approved. The reviewer confirmed the required finding was
+resolved, verified the diff and Prettier checks, and reported no new required
+findings.

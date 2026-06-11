@@ -454,6 +454,15 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   4728 unit tests plus the ABI harness and doc tests. Remaining Phase G gaps
   include native keymaps/global shortcuts, command-palette UI behavior, and the
   full upstream binding/default-action tail.
+- **The binding/default-action tail is audit-backed.** Exp 128 adds exhaustive
+  pinned-upstream action-tag coverage for `input.Binding.Action`, every finite
+  enum parameter variant, explicit exclusions for upstream `unbind` and
+  `cursor_key`, macOS default-binding table parity against `Keybinds.init`, and
+  reverse-trigger coverage for ordering-sensitive defaults. It also wires
+  `search:<text>` and preserves config canonicalization for `new_split:auto`.
+  The Exp 128 full run passed 4731 unit tests plus the ABI harness and doc
+  tests. Remaining Phase G gaps are native keymaps/global shortcuts and
+  command-palette UI behavior.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -829,8 +838,8 @@ the live app, verified by a Phase-D UI test.)
       `end_key_sequence` are wired (Exp 118–121), and configured `chain=` leaves
       are wired on the surface path (Exp 122) and direct app-key path (Exp 123),
       with global app-key surface-control fanout for direct key-table and
-      `end_key_sequence` leaves (Exp 125), but native keymaps/global shortcuts,
-      and the full upstream binding catalog remain later work
+      `end_key_sequence` leaves (Exp 125), but native keymaps/global shortcuts
+      remain later work
 - [ ] Trigger-prefix flags (`global:` / `all:` / `unconsumed:` / `performable:`)
       — parser/storage/query metadata and surface unconsumed/performable
       consumption are wired (Exp 110–111), and configured `global:` app-key
@@ -840,11 +849,13 @@ the live app, verified by a Phase-D UI test.)
       remains later work
 - [x] `catch_all` trigger parsing and fallback lookup for configured single-key
       bindings (Exp 115)
-- [ ] The full action set + the default-bindings data table + reverse
+- [x] The full action set + the default-bindings data table + reverse
       action→trigger mapping — the macOS single-key table foundation and reverse
-      lookup are wired for currently supported actions (Exp 112), and the
-      `crash` binding action is wired as a hard-crash surface action (Exp 126),
-      but the full upstream table/actions remain later work
+      lookup are wired (Exp 112), `crash` is wired (Exp 126), and Exp 128 adds
+      exhaustive pinned-upstream action-tag / finite-variant coverage plus macOS
+      default table and reverse-trigger parity. Explicit exclusions: upstream
+      `unbind` is a binding-set mutation path, and upstream `cursor_key` is
+      rejected by Ghostty's own action parser.
 - [x] Command-palette catalog (`command.zig`) — parser/defaults and C config ABI
       exposure are wired (Exp 85, Exp 124); command-palette UI behavior remains
       later work
@@ -1220,7 +1231,7 @@ stays unaltered except for the rename).
 - [Experiment 127: Phase G — surface all-key routing](127-surface-all-key-routing.md)
   — **Pass**
 - [Experiment 128: Phase G — binding catalog parity](128-binding-catalog-parity.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
