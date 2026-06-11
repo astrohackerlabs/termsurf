@@ -74,3 +74,73 @@ Codex-native adversarial review ran in fresh context with subagent
 Verdict: **APPROVED**
 
 Findings: None.
+
+## Result
+
+**Result:** Pass
+
+Implemented parser/formatter support for `async-backend`, `auto-update`, and
+`auto-update-channel` in `roastty/src/config/mod.rs`.
+
+The implementation adds the raw parser/default state for the three upstream
+fields:
+
+- `async_backend: AsyncBackend`, defaulting to `auto`
+- `auto_update: Option<AutoUpdate>`, defaulting to unset
+- `auto_update_channel: Option<ReleaseChannel>`, defaulting to unset
+
+It also adds exact upstream keyword parsing/formatting for:
+
+- `async-backend`: `auto`, `epoll`, `io_uring`
+- `auto-update`: `off`, `check`, `download`
+- `auto-update-channel`: `tip`, `stable`
+
+Runtime async backend selection, Sparkle update behavior, and
+`auto-update-channel` finalization to the build release channel remain
+deliberately out of scope for this parser/formatter slice.
+
+Verification:
+
+1. `cargo test -p roastty async_update_config` — pass
+2. `cargo test -p roastty enum_format_entries` — pass
+3. `cargo test -p roastty config_format_config` — pass
+4. `cargo test -p roastty` — pass: 4541 unit tests, ABI harness pass, doc tests
+   pass. The ABI harness printed the existing 10 enum-conversion warnings. After
+   completion review found one non-reproducing full-suite failure in a
+   foreground-PID test, this full command was rerun and passed again with the
+   same 4541 unit-test, ABI harness, and doc-test result.
+5. `cargo fmt --check` — pass
+6. `git diff --check` — pass
+
+An initial focused test run failed before verification because the new enum
+types were missing from the test module's explicit import list. That was fixed
+before the passing verification runs above.
+
+## Conclusion
+
+Roastty now covers the next upstream config fields through parser/formatter
+parity. The next experiment should continue with the following upstream config
+field after `auto-update-channel`.
+
+## Completion Review
+
+Codex-native adversarial review ran in fresh context with subagent
+`019eb5ab-9b68-7760-a6f6-f87899227a05`.
+
+Initial verdict: **CHANGES REQUIRED**
+
+Required finding:
+
+- The reviewer's independent `cargo test -p roastty` run failed once in
+  `tests::surface_foreground_pid_reports_worker_foreground_pid_after_start`. The
+  reviewer noted that the isolated rerun of that test passed.
+
+Fix:
+
+- Reran the full `cargo test -p roastty` gate. It passed again: 4541 unit tests,
+  ABI harness pass with the existing 10 enum-conversion warnings, and doc tests
+  pass.
+
+Final verdict after re-review: **APPROVED**
+
+Final findings: None.

@@ -211,6 +211,12 @@ pub(crate) struct Config {
     pub term: String,
     /// `enquiry-response`.
     pub enquiry_response: String,
+    /// `async-backend`.
+    pub async_backend: AsyncBackend,
+    /// `auto-update`.
+    pub auto_update: Option<AutoUpdate>,
+    /// `auto-update-channel`.
+    pub auto_update_channel: Option<ReleaseChannel>,
     /// `confirm-close-surface`.
     pub confirm_close_surface: ConfirmCloseSurface,
     /// `link-previews`.
@@ -479,6 +485,9 @@ impl Default for Config {
             faint_opacity: 0.5,
             term: "xterm-ghostty".to_string(),
             enquiry_response: String::new(),
+            async_backend: AsyncBackend::Auto,
+            auto_update: None,
+            auto_update_channel: None,
             confirm_close_surface: ConfirmCloseSurface::True,
             link_previews: LinkPreviews::True,
             maximize: false,
@@ -895,6 +904,12 @@ impl Config {
         EntryFormatter::new("faint-opacity", out).entry_float(self.faint_opacity);
         EntryFormatter::new("term", out).entry_str(&self.term);
         EntryFormatter::new("enquiry-response", out).entry_str(&self.enquiry_response);
+        self.async_backend
+            .format_entry(&mut EntryFormatter::new("async-backend", out));
+        EntryFormatter::new("auto-update", out)
+            .entry_optional(self.auto_update, |v, f| v.format_entry(f));
+        EntryFormatter::new("auto-update-channel", out)
+            .entry_optional(self.auto_update_channel, |v, f| v.format_entry(f));
     }
 
     /// Set one config field from a `key = value` pair (upstream
@@ -1448,6 +1463,21 @@ impl Config {
             "enquiry-response" => {
                 self.enquiry_response =
                     set_value_field(value, default.enquiry_response, parse_string_field)?
+            }
+            "async-backend" => {
+                self.async_backend =
+                    set_enum_field(value, default.async_backend, AsyncBackend::from_keyword)?
+            }
+            "auto-update" => {
+                self.auto_update =
+                    set_optional_enum_field(value, default.auto_update, AutoUpdate::from_keyword)?
+            }
+            "auto-update-channel" => {
+                self.auto_update_channel = set_optional_enum_field(
+                    value,
+                    default.auto_update_channel,
+                    ReleaseChannel::from_keyword,
+                )?
             }
             "grapheme-width-method" => {
                 self.grapheme_width_method = set_enum_field(
@@ -2493,6 +2523,21 @@ fn set_optional_value_field<T, E: Into<ConfigSetError>>(
     }
 }
 
+/// Resolve an optional enum field (upstream optional-as-child + empty-reset): a
+/// set-but-empty value resets to the default (`None` here); a missing value is
+/// required by the child enum parser; otherwise match the enum keyword.
+fn set_optional_enum_field<T: Copy>(
+    value: Option<&str>,
+    default_value: Option<T>,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> Result<Option<T>, ConfigSetError> {
+    match value {
+        Some("") => Ok(default_value),
+        None => Err(ConfigSetError::ValueRequired),
+        Some(v) => parse(v).map(Some).ok_or(ConfigSetError::InvalidValue),
+    }
+}
+
 /// A config color value (upstream `Config.Color`): an RGB byte triple. The string
 /// parsing (named colors / hex) and the C extern struct are ported in later
 /// slices.
@@ -3409,6 +3454,108 @@ impl WindowDecoration {
             WindowDecoration::Client => "client",
             WindowDecoration::Server => "server",
             WindowDecoration::None => "none",
+        }
+    }
+
+    /// Format this value as a config entry (upstream's generic enum branch).
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(self.keyword());
+    }
+}
+
+/// The `async-backend` config (upstream `Config.AsyncBackend`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsyncBackend {
+    Auto,
+    Epoll,
+    IoUring,
+}
+
+impl AsyncBackend {
+    /// The config keyword (upstream tag name).
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            AsyncBackend::Auto => "auto",
+            AsyncBackend::Epoll => "epoll",
+            AsyncBackend::IoUring => "io_uring",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(AsyncBackend::Auto),
+            "epoll" => Some(AsyncBackend::Epoll),
+            "io_uring" => Some(AsyncBackend::IoUring),
+            _ => None,
+        }
+    }
+
+    /// Format this value as a config entry (upstream's generic enum branch).
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(self.keyword());
+    }
+}
+
+/// The `auto-update` config (upstream `Config.AutoUpdate`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutoUpdate {
+    Off,
+    Check,
+    Download,
+}
+
+impl AutoUpdate {
+    /// The config keyword (upstream tag name).
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            AutoUpdate::Off => "off",
+            AutoUpdate::Check => "check",
+            AutoUpdate::Download => "download",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(AutoUpdate::Off),
+            "check" => Some(AutoUpdate::Check),
+            "download" => Some(AutoUpdate::Download),
+            _ => None,
+        }
+    }
+
+    /// Format this value as a config entry (upstream's generic enum branch).
+    pub(crate) fn format_entry(self, formatter: &mut EntryFormatter) {
+        formatter.entry_str(self.keyword());
+    }
+}
+
+/// The `auto-update-channel` config (upstream `build_config.ReleaseChannel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleaseChannel {
+    Tip,
+    Stable,
+}
+
+impl ReleaseChannel {
+    /// The config keyword (upstream tag name).
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            ReleaseChannel::Tip => "tip",
+            ReleaseChannel::Stable => "stable",
+        }
+    }
+
+    /// Parse the config keyword (upstream `std.meta.stringToEnum`): an exact tag
+    /// match, else `None`.
+    pub(crate) fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "tip" => Some(ReleaseChannel::Tip),
+            "stable" => Some(ReleaseChannel::Stable),
+            _ => None,
         }
     }
 
@@ -7143,31 +7290,32 @@ mod tests {
     use super::EntryFormatter;
     use super::{parse_bool_field, parse_i16_field, parse_string_field};
     use super::{
-        AlphaBlending, AppNotifications, BackgroundBlur, BackgroundBlurParseError,
-        BackgroundImageFit, BackgroundImagePosition, BellFeatures, BoldColor, ClipboardAccess,
-        ClipboardCodepointMapEntry, ClipboardCodepointMapParseError, ClipboardReplacement, Color,
-        ColorList, ColorParseError, Command, CommandPaletteEntry, Config, ConfigDiagnostic,
-        ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError, ConfirmCloseSurface,
-        CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths, Duration,
-        DurationParseError, FlagsParseError, FontShapingBreak, FontStyle, FontStyleParseError,
-        FontSyntheticStyle, Fullscreen, GraphemeWidthMethod, GtkSingleInstance, GtkTabsLocation,
-        GtkTitlebarStyle, GtkToolbarStyle, LinkPreviews, LinuxCgroup, MacAppIcon, MacAppIconFrame,
-        MacHidden, MacShortcuts, MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons,
-        MagicParseError, MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
-        MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
+        AlphaBlending, AppNotifications, AsyncBackend, AutoUpdate, BackgroundBlur,
+        BackgroundBlurParseError, BackgroundImageFit, BackgroundImagePosition, BellFeatures,
+        BoldColor, ClipboardAccess, ClipboardCodepointMapEntry, ClipboardCodepointMapParseError,
+        ClipboardReplacement, Color, ColorList, ColorParseError, Command, CommandPaletteEntry,
+        Config, ConfigDiagnostic, ConfigFilePath, ConfigRecursiveFileErrorKind, ConfigSetError,
+        ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths,
+        Duration, DurationParseError, FlagsParseError, FontShapingBreak, FontStyle,
+        FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod,
+        GtkSingleInstance, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, LinkPreviews,
+        LinuxCgroup, MacAppIcon, MacAppIconFrame, MacHidden, MacShortcuts, MacTitlebarProxyIcon,
+        MacTitlebarStyle, MacWindowButtons, MagicParseError, MiddleClickAction,
+        MouseScrollMultiplier, MouseScrollMultiplierParseError, MouseShiftCapture,
+        NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         QuickTerminalDimensions, QuickTerminalKeyboardInteractivity, QuickTerminalLayer,
         QuickTerminalPosition, QuickTerminalScreen, QuickTerminalSize, QuickTerminalSizeParseError,
-        QuickTerminalSizeValue, QuickTerminalSpaceBehavior, RepeatableClipboardCodepointMap,
-        RepeatableCodepointMap, RepeatableConfigPath, RepeatableConfigPathParseError,
-        RepeatableString, RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition,
-        RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
-        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
-        SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
-        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowNewTabPosition,
-        WindowPadding, WindowPaddingBalance, WindowPaddingColor, WindowPaddingParseError,
-        WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme, WorkingDirectory,
-        WorkingDirectoryParseError, NS_PER_MS, NS_PER_S,
+        QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReleaseChannel,
+        RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
+        RepeatableConfigPathParseError, RepeatableString, RepeatableStringParseError,
+        ResizeOverlay, ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar,
+        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
+        ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme,
+        ThemeParseError, WindowColorspace, WindowDecoration, WindowDecorationParseError,
+        WindowNewTabPosition, WindowPadding, WindowPaddingBalance, WindowPaddingColor,
+        WindowPaddingParseError, WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme,
+        WorkingDirectory, WorkingDirectoryParseError, NS_PER_MS, NS_PER_S,
     };
     use crate::terminal::color::Rgb;
     use crate::terminal::cursor;
@@ -11267,6 +11415,26 @@ mod tests {
         ] {
             assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {}\n", kw));
         }
+        for (variant, kw) in [
+            (AsyncBackend::Auto, "auto"),
+            (AsyncBackend::Epoll, "epoll"),
+            (AsyncBackend::IoUring, "io_uring"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {}\n", kw));
+        }
+        for (variant, kw) in [
+            (AutoUpdate::Off, "off"),
+            (AutoUpdate::Check, "check"),
+            (AutoUpdate::Download, "download"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {}\n", kw));
+        }
+        for (variant, kw) in [
+            (ReleaseChannel::Tip, "tip"),
+            (ReleaseChannel::Stable, "stable"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {}\n", kw));
+        }
     }
 
     #[test]
@@ -12250,6 +12418,141 @@ mod tests {
     }
 
     #[test]
+    fn async_update_config_parse_format_reset_and_diagnose() {
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with(&format!("{} = ", key)))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.async_backend, AsyncBackend::Auto);
+        assert_eq!(cfg.auto_update, None);
+        assert_eq!(cfg.auto_update_channel, None);
+        assert_eq!(line(&cfg, "async-backend"), "async-backend = auto");
+        assert_eq!(line(&cfg, "auto-update"), "auto-update = ");
+        assert_eq!(line(&cfg, "auto-update-channel"), "auto-update-channel = ");
+
+        for (keyword, expected) in [
+            ("auto", AsyncBackend::Auto),
+            ("epoll", AsyncBackend::Epoll),
+            ("io_uring", AsyncBackend::IoUring),
+        ] {
+            cfg.set("async-backend", Some(keyword)).unwrap();
+            assert_eq!(cfg.async_backend, expected);
+            assert_eq!(
+                line(&cfg, "async-backend"),
+                format!("async-backend = {keyword}")
+            );
+        }
+
+        for (keyword, expected) in [
+            ("off", AutoUpdate::Off),
+            ("check", AutoUpdate::Check),
+            ("download", AutoUpdate::Download),
+        ] {
+            cfg.set("auto-update", Some(keyword)).unwrap();
+            assert_eq!(cfg.auto_update, Some(expected));
+            assert_eq!(
+                line(&cfg, "auto-update"),
+                format!("auto-update = {keyword}")
+            );
+        }
+
+        for (keyword, expected) in [
+            ("tip", ReleaseChannel::Tip),
+            ("stable", ReleaseChannel::Stable),
+        ] {
+            cfg.set("auto-update-channel", Some(keyword)).unwrap();
+            assert_eq!(cfg.auto_update_channel, Some(expected));
+            assert_eq!(
+                line(&cfg, "auto-update-channel"),
+                format!("auto-update-channel = {keyword}")
+            );
+        }
+
+        cfg.set("async-backend", Some("io_uring")).unwrap();
+        cfg.set("auto-update", Some("download")).unwrap();
+        cfg.set("auto-update-channel", Some("tip")).unwrap();
+        cfg.set("async-backend", Some("")).unwrap();
+        cfg.set("auto-update", Some("")).unwrap();
+        cfg.set("auto-update-channel", Some("")).unwrap();
+        assert_eq!(cfg.async_backend, AsyncBackend::Auto);
+        assert_eq!(cfg.auto_update, None);
+        assert_eq!(cfg.auto_update_channel, None);
+        assert_eq!(line(&cfg, "async-backend"), "async-backend = auto");
+        assert_eq!(line(&cfg, "auto-update"), "auto-update = ");
+        assert_eq!(line(&cfg, "auto-update-channel"), "auto-update-channel = ");
+
+        assert_eq!(
+            cfg.set("async-backend", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("auto-update", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("auto-update-channel", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("async-backend", Some("uring")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("async-backend", Some("io-uring")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("auto-update", Some("always")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("auto-update-channel", Some("nightly")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics = cfg.load_str(
+            "async-backend = epoll\n\
+             async-backend = uring\n\
+             auto-update = check\n\
+             auto-update\n\
+             auto-update-channel = stable\n\
+             auto-update-channel = nightly\n",
+        );
+        assert_eq!(cfg.async_backend, AsyncBackend::Epoll);
+        assert_eq!(cfg.auto_update, Some(AutoUpdate::Check));
+        assert_eq!(cfg.auto_update_channel, Some(ReleaseChannel::Stable));
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "async-backend".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 4,
+                    key: "auto-update".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+                ConfigDiagnostic {
+                    line: 6,
+                    key: "auto-update-channel".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+            ]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+    }
+
+    #[test]
     fn config_font_thicken_parses_and_round_trips() {
         let mut cfg = Config::default();
 
@@ -12646,6 +12949,9 @@ mod tests {
             "faint-opacity",
             "term",
             "enquiry-response",
+            "async-backend",
+            "auto-update",
+            "auto-update-channel",
         ]);
         assert_eq!(keys, expected);
 
@@ -13613,6 +13919,9 @@ mod tests {
             ("grapheme-width-method", "legacy"),
             ("osc-color-report-format", "8-bit"),
             ("custom-shader-animation", "always"),
+            ("async-backend", "io_uring"),
+            ("auto-update", "download"),
+            ("auto-update-channel", "tip"),
         ];
         for (key, sample) in cases {
             let mut cfg = Config::default();
@@ -17120,6 +17429,28 @@ mod tests {
             assert_eq!(GraphemeWidthMethod::from_keyword(v.keyword()), Some(v));
         }
         assert_eq!(GraphemeWidthMethod::from_keyword("nope"), None);
+
+        for v in [
+            AsyncBackend::Auto,
+            AsyncBackend::Epoll,
+            AsyncBackend::IoUring,
+        ] {
+            assert_eq!(AsyncBackend::from_keyword(v.keyword()), Some(v));
+        }
+        assert_eq!(AsyncBackend::from_keyword("io-uring"), None);
+        assert_eq!(AsyncBackend::from_keyword("nope"), None);
+
+        for v in [AutoUpdate::Off, AutoUpdate::Check, AutoUpdate::Download] {
+            assert_eq!(AutoUpdate::from_keyword(v.keyword()), Some(v));
+        }
+        assert_eq!(AutoUpdate::from_keyword("always"), None);
+        assert_eq!(AutoUpdate::from_keyword("nope"), None);
+
+        for v in [ReleaseChannel::Tip, ReleaseChannel::Stable] {
+            assert_eq!(ReleaseChannel::from_keyword(v.keyword()), Some(v));
+        }
+        assert_eq!(ReleaseChannel::from_keyword("nightly"), None);
+        assert_eq!(ReleaseChannel::from_keyword("nope"), None);
     }
 
     #[test]

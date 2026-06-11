@@ -946,7 +946,7 @@ stays unaltered except for the rename).
 - [Experiment 95: Phase F — TERM and enquiry-response config](95-term-enquiry-config.md)
   — **Pass**
 - [Experiment 96: Phase F — async backend and auto-update config](96-async-update-config.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
