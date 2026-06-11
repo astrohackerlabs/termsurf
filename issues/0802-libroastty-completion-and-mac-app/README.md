@@ -328,6 +328,10 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   config field, config finalization call, app ABI exposure, runtime surface
   key-event remapping, and byte-faithful config string storage remain later
   work.
+- **Key-remap config is wired.** Exp 108 adds `key-remap` to `Config`
+  parsing/formatting/finalization using Exp 107's `RemapSet`; app ABI exposure,
+  surface cloning, runtime key-event application before keybind/input encoding,
+  native keymaps, and byte-faithful config string storage remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -703,8 +707,9 @@ the live app, verified by a Phase-D UI test.)
 - [ ] The full action set + the default-bindings data table + reverse
       action→trigger mapping
 - [ ] Command-palette catalog (`command.zig`)
-- [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + `RemapSet`/`Mask` — if the
-      app expects roastty-side translation
+- [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + runtime key-remap
+      application — `RemapSet`/`Mask` and the `key-remap` config field are wired
+      (Exp 107–108), but surface/app key-event remapping remains later work
 
 **Phase H — Renderer feature-completion (in the live pass)**
 
@@ -1031,7 +1036,7 @@ stays unaltered except for the rename).
 - [Experiment 107: Phase G — key-remap set foundation](107-key-remap-set-foundation.md)
   — **Pass**
 - [Experiment 108: Phase G — key-remap config field](108-key-remap-config-field.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

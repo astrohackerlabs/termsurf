@@ -82,3 +82,50 @@ Re-review ran in fresh context with subagent
 Final verdict: **APPROVED**
 
 Findings: None.
+
+## Result
+
+**Result:** Pass
+
+Implemented the config-owned `key-remap` field in `roastty/src/config/mod.rs`:
+
+- added `Config::key_remap: RemapSet` with the upstream empty default;
+- added `key-remap` formatting through `RemapSet::format_entries()`, including
+  the upstream empty `key-remap = ` line and deterministic repeated output;
+- added `Config::set("key-remap", ...)` routing with repeatable accumulation,
+  empty-value reset, and `RemapSetParseError` mapped to
+  `ConfigSetError::InvalidValue`;
+- added `Config::finalize()` wiring so `key_remap.finalize()` orders the set for
+  application;
+- added focused config tests for parse/reset/format/finalize/error behavior and
+  the local formatter-order anchor.
+
+The implementation deliberately does not apply remaps to surface key events,
+clone remaps into `Surface`, expose the field through the app C ABI, implement
+native keymaps, or wire the full keybinding table.
+
+Verification:
+
+1. `cargo test -p roastty key_remap` — pass: 12 tests passed; filtered ABI
+   harness passed.
+2. `cargo test -p roastty config_format_config_emits_fields_in_upstream_order` —
+   pass: 1 test passed; filtered ABI harness passed.
+3. `cargo test -p roastty -- --test-threads=1` — pass: 4602 unit tests passed;
+   ABI harness passed; doc tests passed. The ABI harness printed the known 10
+   enum-conversion warnings.
+
+## Conclusion
+
+`key-remap` is now a first-class config field with parser, formatter, and
+finalize behavior. Runtime use of the finalized remap set remains later Phase G
+work: surface/app key-event handling still needs to clone the config set and
+apply it before keybinding matching and terminal input encoding.
+
+## Completion Review
+
+Codex-native adversarial review ran in fresh context with subagent
+`019eb68d-dae6-7853-b9a1-d83f6f7b78a9`.
+
+Verdict: **APPROVED**
+
+Findings: None.

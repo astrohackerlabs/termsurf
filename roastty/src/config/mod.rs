@@ -23,7 +23,7 @@ use crate::config::string::{codepoint_iterator, parse_quoted_string};
 use crate::config::unicode_range::{InvalidRange, UnicodeRangeParser};
 use crate::font::codepoint_map::CodepointMap;
 use crate::font::discovery::Descriptor;
-use crate::input::key_mods::{self, Mods};
+use crate::input::key_mods::{self, Mods, RemapSet, RemapSetParseError};
 use crate::input::link;
 use crate::os::homedir::expand_home;
 use crate::os::{desktop, passwd, resources_dir};
@@ -176,6 +176,8 @@ pub(crate) struct Config {
     pub command: Option<Command>,
     /// `initial-command`.
     pub initial_command: Option<Command>,
+    /// `key-remap`.
+    pub key_remap: RemapSet,
     /// `window-padding-x`.
     pub window_padding_x: WindowPadding,
     /// `window-padding-y`.
@@ -476,6 +478,7 @@ impl Default for Config {
             }),
             command: None,
             initial_command: None,
+            key_remap: RemapSet::default(),
             window_padding_x: WindowPadding {
                 top_left: 2,
                 bottom_right: 2,
@@ -791,6 +794,9 @@ impl Config {
             .entry_optional(self.x11_instance_name.clone(), |v, f| f.entry_str(&v));
         EntryFormatter::new("working-directory", out)
             .entry_optional(self.working_directory.clone(), |v, f| v.format_entry(f));
+        for entry in self.key_remap.format_entries() {
+            EntryFormatter::new("key-remap", out).entry_str(&entry);
+        }
         self.window_padding_x
             .format_entry(&mut EntryFormatter::new("window-padding-x", out));
         self.window_padding_y
@@ -1404,6 +1410,7 @@ impl Config {
                     parse_working_directory_field,
                 )?
             }
+            "key-remap" => self.key_remap.parse_cli(value)?,
             "window-padding-x" => {
                 self.window_padding_x =
                     set_value_field(value, default.window_padding_x, WindowPadding::parse_cli)?
@@ -2165,6 +2172,7 @@ impl Config {
             self.auto_update_channel = Some(PINNED_BUILD_RELEASE_CHANNEL);
         }
         self.faint_opacity = self.faint_opacity.clamp(0.0, 1.0);
+        self.key_remap.finalize();
     }
 
     fn finalize_link_url(&mut self) {
@@ -3124,6 +3132,12 @@ impl From<WorkingDirectoryParseError> for ConfigSetError {
         match e {
             WorkingDirectoryParseError::ValueRequired => ConfigSetError::ValueRequired,
         }
+    }
+}
+
+impl From<RemapSetParseError> for ConfigSetError {
+    fn from(_: RemapSetParseError) -> Self {
+        ConfigSetError::InvalidValue
     }
 }
 
@@ -14377,6 +14391,89 @@ mod tests {
     }
 
     #[test]
+    fn config_key_remap_routes_formats_resets_and_finalizes() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.key_remap.format_entries(), vec![String::new()]);
+
+        cfg.set("key-remap", Some("ctrl=super")).unwrap();
+        cfg.set("key-remap", Some("right_ctrl=alt")).unwrap();
+        cfg.finalize();
+
+        assert_eq!(
+            cfg.key_remap.apply(key_mods::Mods::for_mod(
+                key_mods::Mod::Ctrl,
+                key_mods::Side::Right
+            )),
+            key_mods::Mods::for_mod(key_mods::Mod::Alt, key_mods::Side::Left)
+        );
+        assert_eq!(
+            cfg.key_remap.format_entries(),
+            vec![
+                "right_ctrl=left_alt".to_string(),
+                "left_ctrl=left_super".to_string(),
+            ]
+        );
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        let key_remap_lines: Vec<&str> = out
+            .lines()
+            .filter(|line| line.starts_with("key-remap = "))
+            .collect();
+        assert_eq!(
+            key_remap_lines,
+            vec![
+                "key-remap = right_ctrl=left_alt",
+                "key-remap = left_ctrl=left_super",
+            ]
+        );
+
+        cfg.set("key-remap", Some("")).unwrap();
+        assert_eq!(cfg.key_remap.format_entries(), vec![String::new()]);
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out.lines().any(|line| line == "key-remap = "));
+    }
+
+    #[test]
+    fn config_key_remap_invalid_values_are_invalid_value() {
+        let mut cfg = Config::default();
+        assert_eq!(
+            cfg.set("key-remap", Some("ctrl")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("key-remap", Some("hyper=ctrl")),
+            Err(ConfigSetError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn config_key_remap_format_order_uses_window_padding_anchor() {
+        let cfg = Config::default();
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        let keys: Vec<&str> = out
+            .lines()
+            .map(|line| line.split(" = ").next().unwrap())
+            .collect();
+
+        let working_directory = keys
+            .iter()
+            .position(|key| *key == "working-directory")
+            .unwrap();
+        let key_remap = keys.iter().position(|key| *key == "key-remap").unwrap();
+        let window_padding_x = keys
+            .iter()
+            .position(|key| *key == "window-padding-x")
+            .unwrap();
+
+        assert_eq!(key_remap, working_directory + 1);
+        assert_eq!(window_padding_x, key_remap + 1);
+    }
+
+    #[test]
     fn config_format_config_emits_fields_in_upstream_order() {
         let cfg = Config::default();
         let mut out = String::new();
@@ -14470,6 +14567,7 @@ mod tests {
             "class",
             "x11-instance-name",
             "working-directory",
+            "key-remap",
             "window-padding-x",
             "window-padding-y",
             "window-padding-balance",
