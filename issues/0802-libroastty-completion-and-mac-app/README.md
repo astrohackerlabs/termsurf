@@ -813,6 +813,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 74: Phase F — window tab and titlebar config](74-window-tab-titlebar-config.md)
   — **Pass**
+- [Experiment 75: Phase F — resize overlay config](75-resize-overlay-config.md)
+  — **Designed**
 
 ## Process
 
