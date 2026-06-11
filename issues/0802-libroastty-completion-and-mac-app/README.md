@@ -806,6 +806,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 72: Phase F — window scalar config](72-window-scalar-config.md) —
   **Pass**
+- [Experiment 73: Phase F — window size and step resize config](73-window-size-step-config.md)
+  — **Designed**
 
 ## Process
 
