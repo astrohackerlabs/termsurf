@@ -107,3 +107,83 @@ matches Phase G sequence/keybinding work, the storage plan matches upstream
 leader/leaf replacement semantics, and the verification list includes focused
 tests, the ABI harness, full Roastty tests, formatting checks,
 `git diff --check`, and Prettier.
+
+## Result
+
+**Result:** Pass
+
+Implemented the configured-keybind sequence syntax/storage foundation:
+
+- Added `ConfigKeybindSet` trie storage with leaf bindings and leader nodes.
+- Parsed `>`-separated configured keybind triggers into sequence bindings.
+- Rejected empty sequence segments and `global:` / `all:` sequence prefixes.
+- Stored root and table-local sequences separately from current runtime flat
+  single-key vectors.
+- Preserved current runtime behavior for sequence bindings: sequence-only
+  prefixes do not match `roastty_config_key_is_binding_handle`,
+  `roastty_surface_key_is_binding_handle`, `roastty_surface_key`, or
+  `roastty_app_key` yet.
+- Applied upstream-style direct/sequence replacement rules in root and named
+  table storage.
+- Cloned sequence storage through config clone, app construction, and app config
+  update.
+- Added Rust unit coverage for root sequences, nested sequences, malformed
+  syntax, direct/sequence overrides, table-local sequences and clear behavior,
+  table-local overrides, clone/app update propagation, and inert runtime lookup.
+- Added C ABI coverage for CLI sequence keybind parsing, invalid global
+  sequences, clone/app paths, and current single-key runtime non-matches.
+
+Verification:
+
+- `cargo test -p roastty sequence` — 22 passed.
+- `cargo test -p roastty parse_config_keybind` — 16 passed.
+- `cargo test -p roastty key_table` — 13 passed.
+- `cargo test -p roastty surface_key` — 60 passed.
+- `cargo test -p roastty app_key` — 11 passed.
+- `cargo test -p roastty --test abi_harness` — 1 passed.
+- `cargo test -p roastty -- --test-threads=1` — 4,662 unit tests passed, plus
+  the ABI harness and doc tests.
+- `cargo fmt` — passed.
+- `cargo fmt --check` — passed.
+- `git diff --check` — passed.
+
+## Conclusion
+
+Roastty now has a sequence-capable configured-keybinding storage foundation that
+matches upstream's leader/leaf trie shape and replacement semantics while
+leaving runtime sequence activation intentionally disabled. The next experiment
+should activate runtime sequence state: leader matching, queued prefix encoding,
+invalid-sequence flush/drop behavior, sequence completion, and eventual
+`ROASTTY_ACTION_KEY_SEQUENCE` notifications.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial reviewer, fresh context
+(`multi_agent_v1.spawn_agent`, agent `019eb770-39d0-7a33-bee5-428148da8a01`)
+
+**Verdict:** Approved
+
+**Findings:** None.
+
+The reviewer checked the workflow contract, issue README, experiment file,
+implementation diff, changed Rust/C sources, and upstream Ghostty parser,
+storage, and runtime references. It confirmed that the implementation remains in
+parser/storage scope: `keybind_sequences` is maintained and cloned, while
+runtime lookup still uses `keybind_triggers` and table `bindings`, not the
+sequence tries.
+
+The reviewer independently reran:
+
+- `cargo test -p roastty sequence` — 22 passed.
+- `cargo test -p roastty parse_config_keybind` — 16 passed.
+- `cargo test -p roastty key_table` — 13 passed.
+- `cargo test -p roastty surface_key` — 60 passed.
+- `cargo test -p roastty app_key` — 11 passed.
+- `cargo test -p roastty --test abi_harness` — 1 passed.
+- `cargo fmt --check` — passed.
+- `git diff --check` — passed.
+- Prettier markdown check — passed.
+
+It did not rerun the full `cargo test -p roastty -- --test-threads=1` suite; the
+implementing pass had already run it successfully. The reviewer also confirmed
+that the result commit had not been made before review.

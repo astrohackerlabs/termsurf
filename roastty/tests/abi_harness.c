@@ -4706,6 +4706,76 @@ int main(int argc, char **argv) {
   roastty_key_event_free(cli_binding_event);
   roastty_config_free(table_config);
 
+  char sequence_keybind1[] = "--keybind=ctrl+a>n=text:sequence";
+  char sequence_keybind2[] = "--keybind=nav/a>b=quit";
+  char sequence_keybind3[] = "--keybind=x=toggle_fullscreen";
+  char sequence_invalid[] = "--keybind=global:ctrl+a>n=quit";
+  char *sequence_argv[] = {cli_arg0, sequence_keybind1, sequence_keybind2,
+                           sequence_keybind3, sequence_invalid};
+  assert(roastty_init(5, sequence_argv) == ROASTTY_SUCCESS);
+  roastty_config_t sequence_config = roastty_config_new();
+  assert(sequence_config != NULL);
+  roastty_config_load_cli_args(sequence_config);
+  assert(roastty_config_diagnostics_count(sequence_config) == 1);
+  assert(strstr(roastty_config_get_diagnostic(sequence_config, 0).message,
+                "global:ctrl+a>n=quit") != NULL);
+  assert(strstr(roastty_config_get_diagnostic(sequence_config, 0).message,
+                "invalid trigger") != NULL);
+  trigger = roastty_config_trigger(sequence_config, "text:sequence",
+                                   strlen("text:sequence"));
+  assert(trigger.tag == ROASTTY_TRIGGER_PHYSICAL);
+  assert(trigger.key.physical == ROASTTY_KEY_UNIDENTIFIED);
+  assert(trigger.mods == ROASTTY_MODS_NONE);
+  trigger = roastty_config_trigger(sequence_config, "toggle_fullscreen",
+                                   strlen("toggle_fullscreen"));
+  assert(trigger.tag == ROASTTY_TRIGGER_UNICODE);
+  assert(trigger.key.unicode == 'x');
+  assert(trigger.mods == ROASTTY_MODS_NONE);
+
+  assert(roastty_key_event_new(&cli_binding_event) == ROASTTY_SUCCESS);
+  set_config_binding_event(cli_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_UNIDENTIFIED, ROASTTY_MODS_CTRL, "a",
+                           0);
+  assert(!roastty_config_key_is_binding_handle(sequence_config,
+                                               cli_binding_event));
+  set_config_binding_event(cli_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_UNIDENTIFIED, ROASTTY_MODS_NONE, "n",
+                           0);
+  assert(!roastty_config_key_is_binding_handle(sequence_config,
+                                               cli_binding_event));
+  set_config_binding_event(cli_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_UNIDENTIFIED, ROASTTY_MODS_NONE, "x",
+                           0);
+  assert(roastty_config_key_is_binding_handle(sequence_config,
+                                              cli_binding_event));
+
+  roastty_config_t sequence_clone = roastty_config_clone(sequence_config);
+  assert(sequence_clone != NULL);
+  set_config_binding_event(cli_binding_event, ROASTTY_KEY_ACTION_PRESS,
+                           ROASTTY_KEY_UNIDENTIFIED, ROASTTY_MODS_CTRL, "a",
+                           0);
+  assert(!roastty_config_key_is_binding_handle(sequence_clone,
+                                               cli_binding_event));
+  roastty_config_free(sequence_clone);
+
+  cli_app = roastty_app_new(NULL, sequence_config);
+  assert(cli_app != NULL);
+  roastty_surface_config_s sequence_surface_config =
+      roastty_surface_config_new();
+  cli_surface = roastty_surface_new(cli_app, &sequence_surface_config);
+  assert(cli_surface != NULL);
+  cli_binding_flags = 0xff;
+  assert(!roastty_surface_key_is_binding_handle(cli_surface, cli_binding_event,
+                                                &cli_binding_flags));
+  assert(cli_binding_flags == 0);
+  roastty_app_update_config(cli_app, sequence_config);
+  assert(!roastty_surface_key_is_binding_handle(cli_surface, cli_binding_event,
+                                                NULL));
+  roastty_surface_free(cli_surface);
+  roastty_app_free(cli_app);
+  roastty_key_event_free(cli_binding_event);
+  roastty_config_free(sequence_config);
+
   char malformed_flag[] = "--keybind";
   char next_option[] = "--window-theme=dark";
   char empty_keybind[] = "--keybind=";

@@ -1737,6 +1737,7 @@ struct Config {
     confirm_close_surface: config::ConfirmCloseSurface,
     has_global_keybinds: bool,
     keybind_triggers: Vec<ConfigKeybind>,
+    keybind_sequences: ConfigKeybindSet,
     keybind_tables: Vec<ConfigKeybindTable>,
     cached_title: Option<CString>,
     cached_bell_audio_path: Option<CachedConfigPath>,
@@ -1756,9 +1757,28 @@ struct ConfigKeybind {
 }
 
 #[derive(Clone)]
+struct ConfigKeybindSequence {
+    triggers: Vec<RoasttyInputTrigger>,
+    binding: ConfigKeybind,
+}
+
+#[derive(Clone)]
 struct ConfigKeybindTable {
     name: Vec<u8>,
     bindings: Vec<ConfigKeybind>,
+    sequences: ConfigKeybindSet,
+}
+
+#[derive(Clone, Default)]
+struct ConfigKeybindSet {
+    bindings: Vec<ConfigKeybind>,
+    leaders: Vec<ConfigKeybindLeader>,
+}
+
+#[derive(Clone)]
+struct ConfigKeybindLeader {
+    trigger: RoasttyInputTrigger,
+    set: ConfigKeybindSet,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1870,24 +1890,36 @@ impl Config {
         if binding.flags & ROASTTY_KEYBIND_FLAG_GLOBAL != 0 {
             self.has_global_keybinds = true;
         }
+        self.keybind_sequences.store_direct(binding.clone());
+        self.keybind_triggers.retain(|existing| {
+            !config_trigger_matches_candidate(existing.trigger, binding.trigger)
+        });
         self.keybind_triggers.push(binding);
     }
 
     fn store_keybind_entry(&mut self, entry: ParsedConfigKeybind) {
         match entry {
-            ParsedConfigKeybind::Root(binding) => self.store_keybind(binding),
+            ParsedConfigKeybind::Root(binding) => match binding {
+                ParsedConfigKeybindBinding::Direct(binding) => self.store_keybind(binding),
+                ParsedConfigKeybindBinding::Sequence(sequence) => {
+                    self.store_keybind_sequence(sequence);
+                }
+            },
             ParsedConfigKeybind::Table { name, binding } => {
                 if let Some(table) = self
                     .keybind_tables
                     .iter_mut()
                     .find(|table| table.name == name)
                 {
-                    table.bindings.push(binding);
+                    table.store(binding);
                 } else {
-                    self.keybind_tables.push(ConfigKeybindTable {
+                    let mut table = ConfigKeybindTable {
                         name,
-                        bindings: vec![binding],
-                    });
+                        bindings: Vec::new(),
+                        sequences: ConfigKeybindSet::default(),
+                    };
+                    table.store(binding);
+                    self.keybind_tables.push(table);
                 }
             }
             ParsedConfigKeybind::TableClear { name } => {
@@ -1897,14 +1929,27 @@ impl Config {
                     .find(|table| table.name == name)
                 {
                     table.bindings.clear();
+                    table.sequences.clear();
                 } else {
                     self.keybind_tables.push(ConfigKeybindTable {
                         name,
                         bindings: Vec::new(),
+                        sequences: ConfigKeybindSet::default(),
                     });
                 }
             }
         }
+    }
+
+    fn store_keybind_sequence(&mut self, sequence: ConfigKeybindSequence) {
+        if sequence.binding.flags & ROASTTY_KEYBIND_FLAG_GLOBAL != 0 {
+            self.has_global_keybinds = true;
+        }
+        if let Some(first) = sequence.triggers.first().copied() {
+            self.keybind_triggers
+                .retain(|binding| !config_trigger_matches_candidate(binding.trigger, first));
+        }
+        self.keybind_sequences.store_sequence(sequence);
     }
 
     fn key_event_is_binding(&self, event: &key::KeyEvent) -> bool {
@@ -1925,6 +1970,78 @@ impl Config {
     }
 }
 
+impl ConfigKeybindTable {
+    fn store(&mut self, binding: ParsedConfigKeybindBinding) {
+        match binding {
+            ParsedConfigKeybindBinding::Direct(binding) => {
+                self.sequences.store_direct(binding.clone());
+                self.bindings.retain(|existing| {
+                    !config_trigger_matches_candidate(existing.trigger, binding.trigger)
+                });
+                self.bindings.push(binding);
+            }
+            ParsedConfigKeybindBinding::Sequence(sequence) => {
+                if let Some(first) = sequence.triggers.first().copied() {
+                    self.bindings.retain(|binding| {
+                        !config_trigger_matches_candidate(binding.trigger, first)
+                    });
+                }
+                self.sequences.store_sequence(sequence);
+            }
+        }
+    }
+}
+
+impl ConfigKeybindSet {
+    fn clear(&mut self) {
+        self.bindings.clear();
+        self.leaders.clear();
+    }
+
+    fn store_direct(&mut self, binding: ConfigKeybind) {
+        self.leaders
+            .retain(|leader| !config_trigger_matches_candidate(leader.trigger, binding.trigger));
+        self.bindings.retain(|existing| {
+            !config_trigger_matches_candidate(existing.trigger, binding.trigger)
+        });
+        self.bindings.push(binding);
+    }
+
+    fn store_sequence(&mut self, sequence: ConfigKeybindSequence) {
+        self.store_sequence_parts(&sequence.triggers, sequence.binding);
+    }
+
+    fn store_sequence_parts(&mut self, triggers: &[RoasttyInputTrigger], binding: ConfigKeybind) {
+        let Some((&first, rest)) = triggers.split_first() else {
+            return;
+        };
+        if rest.is_empty() {
+            self.store_direct(ConfigKeybind {
+                trigger: first,
+                ..binding
+            });
+            return;
+        }
+
+        self.bindings
+            .retain(|existing| !config_trigger_matches_candidate(existing.trigger, first));
+        let leader_index = self
+            .leaders
+            .iter()
+            .position(|leader| config_trigger_matches_candidate(leader.trigger, first))
+            .unwrap_or_else(|| {
+                self.leaders.push(ConfigKeybindLeader {
+                    trigger: first,
+                    set: ConfigKeybindSet::default(),
+                });
+                self.leaders.len() - 1
+            });
+        self.leaders[leader_index]
+            .set
+            .store_sequence_parts(rest, binding);
+    }
+}
+
 struct App {
     runtime: RoasttyRuntimeConfig,
     focused: bool,
@@ -1936,6 +2053,7 @@ struct App {
     mouse_shift_capture: config::MouseShiftCapture,
     has_global_keybinds: bool,
     keybind_triggers: Vec<ConfigKeybind>,
+    keybind_sequences: ConfigKeybindSet,
     keybind_tables: Vec<ConfigKeybindTable>,
     surfaces: Vec<NonNull<Surface>>,
 }
@@ -7268,14 +7386,20 @@ impl ConfigKeybindParseError {
 
 #[derive(Clone)]
 enum ParsedConfigKeybind {
-    Root(ConfigKeybind),
+    Root(ParsedConfigKeybindBinding),
     Table {
         name: Vec<u8>,
-        binding: ConfigKeybind,
+        binding: ParsedConfigKeybindBinding,
     },
     TableClear {
         name: Vec<u8>,
     },
+}
+
+#[derive(Clone)]
+enum ParsedConfigKeybindBinding {
+    Direct(ConfigKeybind),
+    Sequence(ConfigKeybindSequence),
 }
 
 fn parse_config_keybind_entry(
@@ -7286,11 +7410,11 @@ fn parse_config_keybind_entry(
         if binding.is_empty() {
             return Ok(ParsedConfigKeybind::TableClear { name });
         }
-        return parse_config_keybind(binding)
+        return parse_config_keybind_binding(binding)
             .map(|binding| ParsedConfigKeybind::Table { name, binding });
     }
 
-    parse_config_keybind(value).map(ParsedConfigKeybind::Root)
+    parse_config_keybind_binding(value).map(ParsedConfigKeybind::Root)
 }
 
 fn config_keybind_table_parts(value: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -7306,7 +7430,17 @@ fn config_keybind_table_parts(value: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((table_name, &value[slash_index + 1..]))
 }
 
+#[cfg(test)]
 fn parse_config_keybind(value: &[u8]) -> Result<ConfigKeybind, ConfigKeybindParseError> {
+    match parse_config_keybind_binding(value)? {
+        ParsedConfigKeybindBinding::Direct(binding) => Ok(binding),
+        ParsedConfigKeybindBinding::Sequence(_) => Err(ConfigKeybindParseError::InvalidTrigger),
+    }
+}
+
+fn parse_config_keybind_binding(
+    value: &[u8],
+) -> Result<ParsedConfigKeybindBinding, ConfigKeybindParseError> {
     let separator = value
         .iter()
         .position(|byte| *byte == b'=')
@@ -7324,16 +7458,36 @@ fn parse_config_keybind(value: &[u8]) -> Result<ConfigKeybind, ConfigKeybindPars
     if trigger.is_empty() {
         return Err(ConfigKeybindParseError::MissingTrigger);
     }
-    let trigger =
-        parse_config_keybind_trigger(trigger).ok_or(ConfigKeybindParseError::InvalidTrigger)?;
+    let mut triggers = Vec::new();
+    for segment in trigger.split(|byte| *byte == b'>') {
+        if segment.is_empty() {
+            return Err(ConfigKeybindParseError::InvalidTrigger);
+        }
+        let trigger =
+            parse_config_keybind_trigger(segment).ok_or(ConfigKeybindParseError::InvalidTrigger)?;
+        triggers.push(trigger);
+    }
     if parse_config_binding_action(action).is_none() {
         return Err(ConfigKeybindParseError::InvalidAction);
     }
-    Ok(ConfigKeybind {
+    let Some(trigger) = triggers.last().copied() else {
+        return Err(ConfigKeybindParseError::MissingTrigger);
+    };
+    if triggers.len() > 1 && flags & (ROASTTY_KEYBIND_FLAG_GLOBAL | ROASTTY_KEYBIND_FLAG_ALL) != 0 {
+        return Err(ConfigKeybindParseError::InvalidTrigger);
+    }
+    let binding = ConfigKeybind {
         action: action.to_vec(),
         flags,
         trigger,
-    })
+    };
+    if triggers.len() == 1 {
+        Ok(ParsedConfigKeybindBinding::Direct(binding))
+    } else {
+        Ok(ParsedConfigKeybindBinding::Sequence(
+            ConfigKeybindSequence { triggers, binding },
+        ))
+    }
 }
 
 fn parse_config_keybind_flags(trigger: &[u8]) -> Result<(u8, usize), ConfigKeybindParseError> {
@@ -11436,6 +11590,7 @@ pub extern "C" fn roastty_config_new() -> RoasttyConfig {
         confirm_close_surface: config::ConfirmCloseSurface::True,
         has_global_keybinds: false,
         keybind_triggers: Vec::new(),
+        keybind_sequences: ConfigKeybindSet::default(),
         keybind_tables: Vec::new(),
         cached_title: None,
         cached_bell_audio_path: None,
@@ -11463,6 +11618,7 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
         confirm_close_surface,
         has_global_keybinds,
         keybind_triggers,
+        keybind_sequences,
         keybind_tables,
         diagnostics,
     ) = config_from_handle(config)
@@ -11475,6 +11631,7 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
                 config.confirm_close_surface,
                 config.has_global_keybinds,
                 config.keybind_triggers.clone(),
+                config.keybind_sequences.clone(),
                 config.keybind_tables.clone(),
                 config.diagnostics.clone(),
             )
@@ -11487,6 +11644,7 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
             config::ConfirmCloseSurface::True,
             false,
             Vec::new(),
+            ConfigKeybindSet::default(),
             Vec::new(),
             Vec::new(),
         ));
@@ -11498,6 +11656,7 @@ pub extern "C" fn roastty_config_clone(config: RoasttyConfig) -> RoasttyConfig {
         confirm_close_surface,
         has_global_keybinds,
         keybind_triggers,
+        keybind_sequences,
         keybind_tables,
         cached_title: None,
         cached_bell_audio_path: None,
@@ -11884,6 +12043,7 @@ pub extern "C" fn roastty_app_new(
         mouse_shift_capture,
         has_global_keybinds,
         keybind_triggers,
+        keybind_sequences,
         keybind_tables,
         parsed_config,
     ) = config_from_handle(config)
@@ -11896,6 +12056,7 @@ pub extern "C" fn roastty_app_new(
                 parsed.mouse_shift_capture,
                 config.has_global_keybinds,
                 config.keybind_triggers.clone(),
+                config.keybind_sequences.clone(),
                 config.keybind_tables.clone(),
                 parsed,
             )
@@ -11907,6 +12068,7 @@ pub extern "C" fn roastty_app_new(
             config::MouseShiftCapture::False,
             false,
             Vec::new(),
+            ConfigKeybindSet::default(),
             Vec::new(),
             default_finalized_config(),
         ));
@@ -11922,6 +12084,7 @@ pub extern "C" fn roastty_app_new(
         mouse_shift_capture,
         has_global_keybinds,
         keybind_triggers,
+        keybind_sequences,
         keybind_tables,
         surfaces: Vec::new(),
     }))
@@ -11984,6 +12147,7 @@ pub extern "C" fn roastty_app_update_config(app: RoasttyApp, config: RoasttyConf
     app.mouse_shift_capture = app.parsed_config.mouse_shift_capture;
     app.has_global_keybinds = config.has_global_keybinds;
     app.keybind_triggers = config.keybind_triggers.clone();
+    app.keybind_sequences = config.keybind_sequences.clone();
     app.keybind_tables = config.keybind_tables.clone();
     for mut surface in app.surfaces.clone() {
         let surface = unsafe { surface.as_mut() };
@@ -18441,7 +18605,11 @@ mod tests {
     #[test]
     fn parse_config_keybind_key_table_binding_stores_outside_root() {
         let entry = parse_config_keybind_entry(b"foo/a=quit").unwrap();
-        let ParsedConfigKeybind::Table { name, binding } = entry else {
+        let ParsedConfigKeybind::Table {
+            name,
+            binding: ParsedConfigKeybindBinding::Direct(binding),
+        } = entry
+        else {
             panic!("expected table binding");
         };
         assert_eq!(name, b"foo");
@@ -18451,7 +18619,10 @@ mod tests {
 
         let config = roastty_config_new();
         let config_ref = config_from_handle(config).unwrap();
-        config_ref.store_keybind_entry(ParsedConfigKeybind::Table { name, binding });
+        config_ref.store_keybind_entry(ParsedConfigKeybind::Table {
+            name,
+            binding: ParsedConfigKeybindBinding::Direct(binding),
+        });
 
         assert!(config_ref.keybind_triggers.is_empty());
         assert_eq!(config_ref.keybind_tables.len(), 1);
@@ -18515,7 +18686,7 @@ mod tests {
 
     #[test]
     fn parse_config_keybind_key_table_preserves_slash_disambiguation() {
-        let ParsedConfigKeybind::Root(root_slash) =
+        let ParsedConfigKeybind::Root(ParsedConfigKeybindBinding::Direct(root_slash)) =
             parse_config_keybind_entry(b"/=text:foo").unwrap()
         else {
             panic!("bare slash should remain a root binding");
@@ -18523,7 +18694,7 @@ mod tests {
         assert_eq!(root_slash.trigger.tag, ROASTTY_TRIGGER_UNICODE);
         assert_eq!(unsafe { root_slash.trigger.key.unicode }, b'/' as u32);
 
-        let ParsedConfigKeybind::Root(ctrl_slash) =
+        let ParsedConfigKeybind::Root(ParsedConfigKeybindBinding::Direct(ctrl_slash)) =
             parse_config_keybind_entry(b"ctrl+/=text:foo").unwrap()
         else {
             panic!("modified slash should remain a root binding");
@@ -18532,15 +18703,17 @@ mod tests {
         assert_eq!(unsafe { ctrl_slash.trigger.key.unicode }, b'/' as u32);
         assert_eq!(ctrl_slash.trigger.mods, ROASTTY_MODS_CTRL);
 
-        let ParsedConfigKeybind::Root(action_slash) =
+        let ParsedConfigKeybind::Root(ParsedConfigKeybindBinding::Direct(action_slash)) =
             parse_config_keybind_entry(b"x=text:/hello").unwrap()
         else {
             panic!("slash after action separator should remain a root binding");
         };
         assert_eq!(action_slash.action, b"text:/hello");
 
-        let ParsedConfigKeybind::Table { name, binding } =
-            parse_config_keybind_entry(b"mytable//=text:foo").unwrap()
+        let ParsedConfigKeybind::Table {
+            name,
+            binding: ParsedConfigKeybindBinding::Direct(binding),
+        } = parse_config_keybind_entry(b"mytable//=text:foo").unwrap()
         else {
             panic!("named table slash key should store in the table");
         };
@@ -18555,6 +18728,273 @@ mod tests {
             parse_config_keybind_entry(b"foo/a+b=quit").err().unwrap(),
             ConfigKeybindParseError::InvalidTrigger
         );
+    }
+
+    fn assert_unicode_trigger(trigger: RoasttyInputTrigger, codepoint: u32, mods: c_int) {
+        assert_eq!(trigger.tag, ROASTTY_TRIGGER_UNICODE);
+        assert_eq!(unsafe { trigger.key.unicode }, codepoint);
+        assert_eq!(trigger.mods, mods);
+    }
+
+    fn sequence_leaf_action<'a>(
+        set: &'a ConfigKeybindSet,
+        triggers: &[RoasttyInputTrigger],
+    ) -> &'a [u8] {
+        let Some((&first, rest)) = triggers.split_first() else {
+            panic!("expected sequence trigger");
+        };
+        if rest.is_empty() {
+            return set
+                .bindings
+                .iter()
+                .find(|binding| config_trigger_matches_candidate(binding.trigger, first))
+                .map(|binding| binding.action.as_slice())
+                .expect("expected sequence leaf");
+        }
+
+        let leader = set
+            .leaders
+            .iter()
+            .find(|leader| config_trigger_matches_candidate(leader.trigger, first))
+            .expect("expected sequence leader");
+        sequence_leaf_action(&leader.set, rest)
+    }
+
+    #[test]
+    fn parse_config_keybind_sequence_stores_root_trie_without_runtime_binding() {
+        let ParsedConfigKeybind::Root(ParsedConfigKeybindBinding::Sequence(sequence)) =
+            parse_config_keybind_entry(b"ctrl+a>n=new_window").unwrap()
+        else {
+            panic!("expected root sequence");
+        };
+        assert_eq!(sequence.triggers.len(), 2);
+        assert_unicode_trigger(sequence.triggers[0], b'a' as u32, ROASTTY_MODS_CTRL);
+        assert_unicode_trigger(sequence.triggers[1], b'n' as u32, ROASTTY_MODS_NONE);
+
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(ParsedConfigKeybind::Root(
+            ParsedConfigKeybindBinding::Sequence(sequence),
+        ));
+
+        assert!(config_ref.keybind_triggers.is_empty());
+        assert!(config_ref.keybind_sequences.bindings.is_empty());
+        assert_eq!(config_ref.keybind_sequences.leaders.len(), 1);
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_CTRL),
+            unicode_trigger(b'n' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(
+            sequence_leaf_action(&config_ref.keybind_sequences, &triggers),
+            b"new_window"
+        );
+
+        let event = key_press(key::Key::KeyA, b"a", b'a' as u32, ROASTTY_MODS_CTRL);
+        assert!(!config_ref.key_event_is_binding(&event.event));
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_sequence_stores_nested_trie() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(
+            parse_config_keybind_entry(b"ctrl+a>b>c=toggle_fullscreen").unwrap(),
+        );
+
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_CTRL),
+            unicode_trigger(b'b' as u32, ROASTTY_MODS_NONE),
+            unicode_trigger(b'c' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(
+            sequence_leaf_action(&config_ref.keybind_sequences, &triggers),
+            b"toggle_fullscreen"
+        );
+        assert!(config_ref.keybind_triggers.is_empty());
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_sequence_rejects_malformed_syntax() {
+        for value in [
+            b">n=quit".as_slice(),
+            b"ctrl+a>=quit".as_slice(),
+            b"ctrl+a>>n=quit".as_slice(),
+            b"ctrl+a>bad+two=quit".as_slice(),
+            b"global:ctrl+a>n=quit".as_slice(),
+            b"all:ctrl+a>n=quit".as_slice(),
+        ] {
+            assert_eq!(
+                parse_config_keybind_entry(value).err().unwrap(),
+                ConfigKeybindParseError::InvalidTrigger,
+                "value={}",
+                String::from_utf8_lossy(value)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_config_keybind_sequence_and_direct_override_each_other() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"a=quit").unwrap());
+        assert_eq!(config_ref.keybind_triggers.len(), 1);
+        assert_eq!(config_ref.keybind_sequences.bindings.len(), 1);
+
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"a>b=new_window").unwrap());
+        assert!(config_ref.keybind_triggers.is_empty());
+        assert!(config_ref.keybind_sequences.bindings.is_empty());
+        assert_eq!(config_ref.keybind_sequences.leaders.len(), 1);
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_NONE),
+            unicode_trigger(b'b' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(
+            sequence_leaf_action(&config_ref.keybind_sequences, &triggers),
+            b"new_window"
+        );
+
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"a=toggle_fullscreen").unwrap());
+        assert_eq!(config_ref.keybind_triggers.len(), 1);
+        assert_eq!(config_ref.keybind_sequences.bindings.len(), 1);
+        assert!(config_ref.keybind_sequences.leaders.is_empty());
+        assert_eq!(
+            config_ref.keybind_sequences.bindings[0].action,
+            b"toggle_fullscreen"
+        );
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_sequence_later_leaf_overrides_prior_leaf() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"a>b=quit").unwrap());
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"a>b=new_window").unwrap());
+
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_NONE),
+            unicode_trigger(b'b' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(
+            sequence_leaf_action(&config_ref.keybind_sequences, &triggers),
+            b"new_window"
+        );
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_table_sequence_stores_and_clears_table_trie() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"nav/a>b=quit").unwrap());
+
+        assert!(config_ref.keybind_triggers.is_empty());
+        assert_eq!(config_ref.keybind_tables.len(), 1);
+        let table = &config_ref.keybind_tables[0];
+        assert_eq!(table.name, b"nav");
+        assert!(table.bindings.is_empty());
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_NONE),
+            unicode_trigger(b'b' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(sequence_leaf_action(&table.sequences, &triggers), b"quit");
+
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"nav/").unwrap());
+        let table = &config_ref.keybind_tables[0];
+        assert!(table.bindings.is_empty());
+        assert!(table.sequences.bindings.is_empty());
+        assert!(table.sequences.leaders.is_empty());
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_table_sequence_and_direct_override_each_other() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"nav/a=quit").unwrap());
+        let table = config_ref
+            .keybind_tables
+            .iter()
+            .find(|table| table.name == b"nav")
+            .unwrap();
+        assert_eq!(table.bindings.len(), 1);
+        assert_eq!(table.sequences.bindings.len(), 1);
+
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"nav/a>b=new_window").unwrap());
+        let table = config_ref
+            .keybind_tables
+            .iter()
+            .find(|table| table.name == b"nav")
+            .unwrap();
+        assert!(table.bindings.is_empty());
+        assert!(table.sequences.bindings.is_empty());
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_NONE),
+            unicode_trigger(b'b' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(
+            sequence_leaf_action(&table.sequences, &triggers),
+            b"new_window"
+        );
+
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"nav/a=quit").unwrap());
+        let table = config_ref
+            .keybind_tables
+            .iter()
+            .find(|table| table.name == b"nav")
+            .unwrap();
+        assert_eq!(table.bindings.len(), 1);
+        assert_eq!(table.sequences.bindings.len(), 1);
+        assert!(table.sequences.leaders.is_empty());
+        assert_eq!(table.sequences.bindings[0].action, b"quit");
+
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn parse_config_keybind_sequence_clones_and_updates_app_storage() {
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        config_ref.store_keybind_entry(parse_config_keybind_entry(b"a>b=quit").unwrap());
+
+        let clone = roastty_config_clone(config);
+        let clone_ref = config_from_handle(clone).unwrap();
+        let triggers = [
+            unicode_trigger(b'a' as u32, ROASTTY_MODS_NONE),
+            unicode_trigger(b'b' as u32, ROASTTY_MODS_NONE),
+        ];
+        assert_eq!(
+            sequence_leaf_action(&clone_ref.keybind_sequences, &triggers),
+            b"quit"
+        );
+
+        let app = roastty_app_new(ptr::null(), clone);
+        assert_eq!(
+            sequence_leaf_action(&app_from_handle(app).unwrap().keybind_sequences, &triggers),
+            b"quit"
+        );
+
+        let updated = roastty_config_new();
+        config_from_handle(updated)
+            .unwrap()
+            .store_keybind_entry(parse_config_keybind_entry(b"a>b=new_window").unwrap());
+        roastty_app_update_config(app, updated);
+        assert_eq!(
+            sequence_leaf_action(&app_from_handle(app).unwrap().keybind_sequences, &triggers),
+            b"new_window"
+        );
+
+        roastty_app_free(app);
+        roastty_config_free(updated);
+        roastty_config_free(clone);
+        roastty_config_free(config);
     }
 
     fn surface_binding_action(surface: RoasttySurface, action: &[u8]) -> bool {
