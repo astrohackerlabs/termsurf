@@ -106,3 +106,82 @@ table sequence leaf with nonzero configured flags after the leader is active.
 **Final verdict:** Approved
 
 **Final findings:** None.
+
+## Result
+
+**Result:** Pass
+
+Implemented table-local sequence runtime lookup for active key tables. Active
+table entries now use the table sequence trie for exact and `catch_all`
+leader/leaf lookup. A table sequence leader starts the same active sequence
+state as root leaders, queues the leader key, emits the active
+`ROASTTY_ACTION_KEY_SEQUENCE` notification, and consumes the event. Table
+sequence leaves dispatch through the configured binding path and end the
+sequence with the inactive notification. One-shot tables pop when the matching
+leader or leaf comes from the currently active one-shot table, while the cloned
+nested sequence set still completes after the table has been popped.
+
+Focused and full verification passed:
+
+- `cargo test -p roastty key_table` — 20 passed
+- `cargo test -p roastty sequence` — 38 passed
+- `cargo test -p roastty surface_key` — 75 passed
+- `cargo test -p roastty app_key` — 12 passed
+- `cargo test -p roastty --test abi_harness` — 1 passed, with existing enum
+  conversion warnings in the C harness
+- `cargo test -p roastty -- --test-threads=1` — 4,678 unit tests passed, plus
+  the ABI harness and doc tests
+- `cargo fmt`
+- `cargo fmt --check`
+- `git diff --check`
+
+Verification history:
+
+- First `cargo test -p roastty -- --test-threads=1` run — 4,675 passed, 2
+  failed:
+  - `tests::surface_foreground_pid_reports_worker_foreground_pid_after_start`
+  - `tests::surface_mouse_button_reporting_honors_readonly_gate`
+- Immediate focused reruns of both failed tests passed.
+- Second `cargo test -p roastty -- --test-threads=1` run — 4,676 passed, 1
+  failed:
+  - `tests::surface_foreground_pid_reports_worker_foreground_pid_after_start`
+- After the completion reviewer found the missing `catch_all` sequence-leader
+  path and the fix landed, the final full-suite run passed: 4,678 unit tests
+  plus the ABI harness and doc tests.
+
+Completion review initially found one required issue: table sequence lookup used
+exact lookup plus a flat catch-all fallback, so `nav/catch_all>b=quit` would not
+start a sequence. The fix added `ConfigKeybindSet::catch_all_entry` /
+`event_entry`, switched active table lookup to the full table sequence set, and
+added `surface_key_table_catch_all_sequence_precedes_root_binding`.
+
+## Conclusion
+
+The table-sequence runtime itself is wired and covered by focused tests, closing
+the key-table half of the sequence behavior deferred by Experiment 119. Active
+table sequences now follow upstream's set lookup shape, including `catch_all`
+leaders, direct override behavior, one-shot table popping, invalid-prefix
+flushes, and key-binding query flags. The next Phase G slices can move to
+`ignore` / `end_key_sequence` / `chain=` semantics, app-key sequence/table
+handling, native keymaps/global shortcuts, or broader upstream default binding
+coverage.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial reviewer, fresh context
+(`multi_agent_v1.spawn_agent`, agent `019eb79b-d042-7112-9eb6-119e1f6687d7`)
+
+**Initial verdict:** Changes required
+
+**Required finding:** Active table sequence lookup did not include `catch_all`
+sequence leaders. The reviewer pointed out that upstream table dispatch calls
+`Binding.Set.getEvent`, which falls back to `catch_all`, while the first
+implementation used exact lookup plus a flat direct-binding catch-all fallback.
+
+**Fix:** Added `ConfigKeybindSet::catch_all_entry` and `event_entry`, switched
+active table lookup to `table.sequences.event_entry(event)`, and added the
+`surface_key_table_catch_all_sequence_precedes_root_binding` regression test.
+
+**Final verdict:** Approved
+
+**Final findings:** None.

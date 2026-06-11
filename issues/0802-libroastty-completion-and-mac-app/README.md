@@ -392,6 +392,18 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   `ROASTTY_ACTION_KEY_TABLE` app notifications. Sequences/chords, `chain=`,
   `ignore`, native keymaps, native global shortcuts, app-key table handling, and
   the full upstream binding catalog remain later work.
+- **Configured key sequences are wired for root and active-table surface
+  bindings.** Exp 118 stores root/table sequence tries, Exp 119 activates root
+  sequences, and Exp 120 activates table-local sequences from active key tables,
+  including nested leaders, `catch_all` sequence leaders, one-shot table
+  popping, invalid-prefix flushes, and `surface_key_is_binding` leader/leaf
+  flags. Exp 120's final full `cargo test -p roastty -- --test-threads=1` run
+  passed after earlier transient PTY foreground-pid / mouse-readonly failures.
+  Remaining Phase G keybinding gaps include `ignore`, `end_key_sequence`,
+  `chain=`, native keymaps/global shortcuts, app-key sequence/table handling,
+  broader global/all routing, and the full upstream binding catalog.
+  keymaps/global shortcuts, app-key sequence/table handling, broader global/all
+  routing, and the full upstream binding catalog.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -762,7 +774,12 @@ the live app, verified by a Phase-D UI test.)
 
 **Phase G — Input / keybindings**
 
-- [ ] Multi-key sequences / chords (the trie), leader keys, key tables
+- [ ] Multi-key sequences / chords (the trie), leader keys, key tables —
+      configured root and active-table surface sequences are wired (Exp
+      118–120), but `ignore`, `end_key_sequence`, `chain=`, native
+      keymaps/global shortcuts, app-key sequence/table handling, broader
+      global/all routing, and the full upstream binding catalog remain later
+      work
 - [ ] Trigger-prefix flags (`global:` / `all:` / `unconsumed:` / `performable:`)
       — parser/storage/query metadata and surface unconsumed/performable
       consumption are wired (Exp 110–111), and configured `global:` app-key
@@ -1132,7 +1149,7 @@ stays unaltered except for the rename).
 - [Experiment 119: Phase G — sequence runtime activation](119-sequence-runtime-activation.md)
   — **Pass**
 - [Experiment 120: Phase G — key-table sequence runtime](120-key-table-sequence-runtime.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
