@@ -281,6 +281,11 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   files during config finalization, then replays user file/CLI entries on top so
   explicit user config wins; named theme lookup, user/resource theme
   directories, full diagnostic parity, and conditional reload remain later work.
+- **Named theme lookup is wired.** Exp 100 resolves non-absolute theme names
+  from user `roastty/themes` first, then app resource `themes`, rejects
+  path-separator names, reports tried paths, and preserves Exp99 replay
+  priority; conditional reload, diagnostic text parity, resource packaging
+  validation, and app ABI exposure remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -968,7 +973,7 @@ stays unaltered except for the rename).
 - [Experiment 99: Phase F — absolute theme loading](99-absolute-theme-loading.md)
   — **Pass**
 - [Experiment 100: Phase F — named theme lookup](100-named-theme-lookup.md) —
-  **Designed**
+  **Pass**
 
 ## Process
 

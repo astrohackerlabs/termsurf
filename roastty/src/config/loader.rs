@@ -10,6 +10,7 @@ use std::path::PathBuf;
 pub(crate) const ROASTTY_BUNDLE_ID: &str = "com.termsurf.roastty";
 pub(crate) const ROASTTY_XDG_CONFIG_LEGACY: &str = "roastty/config";
 pub(crate) const ROASTTY_XDG_CONFIG_PREFERRED: &str = "roastty/config.roastty";
+pub(crate) const ROASTTY_XDG_THEMES: &str = "roastty/themes";
 pub(crate) const ROASTTY_APP_CONFIG_LEGACY: &str = "config";
 pub(crate) const ROASTTY_APP_CONFIG_PREFERRED: &str = "config.roastty";
 
@@ -56,6 +57,12 @@ pub(crate) fn xdg_config_dir(subdir: Option<&str>) -> Option<PathBuf> {
         env_nonempty("HOME").as_deref(),
         subdir,
     )
+}
+
+/// The user theme directory (upstream `config.theme.Location.user`): the XDG
+/// config directory with Roastty's renamed `roastty/themes` subdir.
+pub(crate) fn user_theme_dir() -> Option<PathBuf> {
+    xdg_config_dir(Some(ROASTTY_XDG_THEMES))
 }
 
 /// Resolve the macOS Application Support config path from the `$HOME` value (upstream
@@ -219,6 +226,18 @@ mod tests {
         );
         // Neither set is `None` (upstream `NoHomeDir`).
         assert_eq!(resolve_xdg_config(None, None, Some("roastty/config")), None);
+    }
+
+    #[test]
+    fn user_theme_dir_uses_roastty_themes_subdir() {
+        assert_eq!(
+            resolve_xdg_config(Some("/x"), Some("/h"), Some(ROASTTY_XDG_THEMES)),
+            Some(PathBuf::from("/x/roastty/themes"))
+        );
+        assert_eq!(
+            resolve_xdg_config(None, Some("/h"), Some(ROASTTY_XDG_THEMES)),
+            Some(PathBuf::from("/h/.config/roastty/themes"))
+        );
     }
 
     #[test]

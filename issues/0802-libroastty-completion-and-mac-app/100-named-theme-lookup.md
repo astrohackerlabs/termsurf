@@ -90,3 +90,69 @@ Codex-native adversarial review ran in fresh context with subagent
 Verdict: **APPROVED**
 
 Findings: None.
+
+## Result
+
+**Result:** Pass
+
+Implemented upstream-style named theme lookup for config finalization.
+
+- Added the renamed user theme directory helper:
+  `$XDG_CONFIG_HOME/roastty/themes` or `$HOME/.config/roastty/themes`.
+- Added theme finalization locations that search the user theme directory before
+  app resources `themes`.
+- Kept absolute theme paths on the existing direct-load path.
+- Rejected non-absolute names containing path separators before probing any
+  relative paths.
+- Probed named theme locations in order, continuing only past `NotFound`.
+- Reported path-separator rejection, not-found tried paths, IO failures, and
+  non-regular theme paths through the internal finalization report.
+- Shared the resolved theme-file load path with absolute themes, preserving the
+  Exp99 behavior where theme values load first, then user file/CLI replay
+  overrides them, and the original replay entries remain on the finalized
+  config.
+- Preserved the different light/dark theme-name behavior that changes
+  `window-theme = auto` to `system`.
+
+Verification passed:
+
+1. `cargo test -p roastty config_theme_loading`
+2. `cargo test -p roastty config_finalize_scalar_tail`
+3. `cargo test -p roastty config_replay`
+4. `cargo test -p roastty`
+5. `cargo fmt --check`
+6. `git diff --check`
+
+The focused theme-loading run passed 15 tests. The full `cargo test -p roastty`
+run passed 4563 unit tests, the ABI harness, and doc tests. The ABI harness
+printed the existing 10 enum-conversion warnings.
+
+## Conclusion
+
+Roastty now resolves named themes from user config themes first and bundled app
+resource themes second, matching upstream lookup priority after the
+`ghostty`→`roastty` rename. Theme loading still applies at lower priority than
+explicit user config through replay. Remaining theme work is conditional reload
+/ `changeConditionalState`, full diagnostic text parity, conditionalized theme
+replay entries, resource packaging validation, and app ABI exposure.
+
+## Completion Review
+
+Codex-native adversarial review ran in fresh context with subagent
+`019eb608-9d4a-7ac0-8a5c-88ea02c13020`.
+
+Verdict: **APPROVED**
+
+Findings: None.
+
+The reviewer independently verified:
+
+1. `cargo test -p roastty config_theme_loading`
+2. `cargo test -p roastty config_finalize_scalar_tail`
+3. `cargo test -p roastty config_replay`
+4. `cargo test -p roastty`
+5. `cargo fmt --check`
+6. `git diff --check`
+
+The reviewer confirmed the full suite passed 4563 unit tests, the ABI harness,
+and doc tests, with the existing 10 ABI enum-conversion warnings.

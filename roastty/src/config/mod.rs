@@ -24,6 +24,7 @@ use crate::config::unicode_range::{InvalidRange, UnicodeRangeParser};
 use crate::font::codepoint_map::CodepointMap;
 use crate::font::discovery::Descriptor;
 use crate::os::homedir::expand_home;
+use crate::os::resources_dir;
 use crate::terminal::color::{Palette as TerminalPalette, PaletteMask, Rgb, DEFAULT_PALETTE};
 use crate::terminal::cursor;
 use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -1773,13 +1774,32 @@ impl Config {
     }
 
     pub(crate) fn finalize_with_report(&mut self) -> ConfigFinalizeReport {
+        self.finalize_with_theme_locations(ConfigThemeLocations::default())
+    }
+
+    fn finalize_with_theme_locations(
+        &mut self,
+        locations: ConfigThemeLocations,
+    ) -> ConfigFinalizeReport {
         let mut report = ConfigFinalizeReport::default();
-        self.finalize_theme(&mut report);
+        self.finalize_theme(&mut report, &locations);
         self.finalize_scalars();
         report
     }
 
-    fn finalize_theme(&mut self, report: &mut ConfigFinalizeReport) {
+    #[cfg(test)]
+    fn finalize_with_theme_locations_for_test(
+        &mut self,
+        locations: Vec<PathBuf>,
+    ) -> ConfigFinalizeReport {
+        self.finalize_with_theme_locations(ConfigThemeLocations { locations })
+    }
+
+    fn finalize_theme(
+        &mut self,
+        report: &mut ConfigFinalizeReport,
+        locations: &ConfigThemeLocations,
+    ) {
         let Some(theme) = self.theme.clone() else {
             return;
         };
@@ -1788,22 +1808,94 @@ impl Config {
             conditional::Theme::Light => theme.light.clone(),
             conditional::Theme::Dark => theme.dark.clone(),
         };
-        let selected_path = PathBuf::from(&selected);
-        if !selected_path.is_absolute() {
-            self.finalize_theme_window_theme(different_light_dark);
-            report.theme = Some(ConfigThemeLoadReport::UnsupportedName { name: selected });
-            return;
+
+        let selected_path = match self.resolve_theme_path(&selected, locations) {
+            Ok(path) => path,
+            Err(load_report) => {
+                self.finalize_theme_window_theme(different_light_dark);
+                report.theme = Some(load_report);
+                return;
+            }
+        };
+
+        match self.load_theme_file(&selected_path, different_light_dark) {
+            Ok(diagnostics) => {
+                report.theme = Some(ConfigThemeLoadReport::Loaded {
+                    path: selected_path,
+                    diagnostics,
+                });
+            }
+            Err(load_report) => {
+                report.theme = Some(load_report);
+            }
+        }
+    }
+
+    fn resolve_theme_path(
+        &self,
+        selected: &str,
+        locations: &ConfigThemeLocations,
+    ) -> Result<PathBuf, ConfigThemeLoadReport> {
+        let selected_path = PathBuf::from(selected);
+        if selected_path.is_absolute() {
+            return Ok(selected_path);
         }
 
-        let file = match std::fs::File::open(&selected_path) {
+        if selected.chars().any(std::path::is_separator) {
+            return Err(ConfigThemeLoadReport::NameContainsSeparator {
+                name: selected.to_string(),
+            });
+        }
+
+        let mut tried = Vec::new();
+        for dir in &locations.locations {
+            let path = dir.join(selected);
+            tried.push(path.clone());
+            match std::fs::File::open(&path) {
+                Ok(file) => {
+                    let metadata = match file.metadata() {
+                        Ok(metadata) => metadata,
+                        Err(error) => {
+                            return Err(ConfigThemeLoadReport::Io {
+                                path,
+                                kind: error.kind(),
+                            });
+                        }
+                    };
+                    if !metadata.is_file() {
+                        return Err(ConfigThemeLoadReport::NotFile { path });
+                    }
+                    return Ok(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ConfigThemeLoadReport::Io {
+                        path,
+                        kind: error.kind(),
+                    });
+                }
+            }
+        }
+
+        Err(ConfigThemeLoadReport::NotFound {
+            name: selected.to_string(),
+            tried,
+        })
+    }
+
+    fn load_theme_file(
+        &mut self,
+        selected_path: &Path,
+        different_light_dark: bool,
+    ) -> Result<Vec<ConfigDiagnostic>, ConfigThemeLoadReport> {
+        let file = match std::fs::File::open(selected_path) {
             Ok(file) => file,
             Err(error) => {
                 self.finalize_theme_window_theme(different_light_dark);
-                report.theme = Some(ConfigThemeLoadReport::Io {
-                    path: selected_path,
+                return Err(ConfigThemeLoadReport::Io {
+                    path: selected_path.to_path_buf(),
                     kind: error.kind(),
                 });
-                return;
             }
         };
 
@@ -1811,30 +1903,27 @@ impl Config {
             Ok(metadata) => metadata,
             Err(error) => {
                 self.finalize_theme_window_theme(different_light_dark);
-                report.theme = Some(ConfigThemeLoadReport::Io {
-                    path: selected_path,
+                return Err(ConfigThemeLoadReport::Io {
+                    path: selected_path.to_path_buf(),
                     kind: error.kind(),
                 });
-                return;
             }
         };
         if !metadata.is_file() {
             self.finalize_theme_window_theme(different_light_dark);
-            report.theme = Some(ConfigThemeLoadReport::NotFile {
-                path: selected_path,
+            return Err(ConfigThemeLoadReport::NotFile {
+                path: selected_path.to_path_buf(),
             });
-            return;
         }
 
-        let text = match std::fs::read_to_string(&selected_path) {
+        let text = match std::fs::read_to_string(selected_path) {
             Ok(text) => text,
             Err(error) => {
                 self.finalize_theme_window_theme(different_light_dark);
-                report.theme = Some(ConfigThemeLoadReport::Io {
-                    path: selected_path,
+                return Err(ConfigThemeLoadReport::Io {
+                    path: selected_path.to_path_buf(),
                     kind: error.kind(),
                 });
-                return;
             }
         };
 
@@ -1846,20 +1935,16 @@ impl Config {
         let diagnostics = theme_config.load_str(text);
         if self.replay_into(&mut theme_config).is_err() {
             self.finalize_theme_window_theme(different_light_dark);
-            report.theme = Some(ConfigThemeLoadReport::ReplayFailed {
-                path: selected_path,
+            return Err(ConfigThemeLoadReport::ReplayFailed {
+                path: selected_path.to_path_buf(),
             });
-            return;
         }
 
         theme_config.replay_entries = replay_entries;
         theme_config.conditional_state = conditional_state;
         *self = theme_config;
         self.finalize_theme_window_theme(different_light_dark);
-        report.theme = Some(ConfigThemeLoadReport::Loaded {
-            path: selected_path,
-            diagnostics,
-        });
+        Ok(diagnostics)
     }
 
     fn finalize_theme_window_theme(&mut self, different_light_dark: bool) {
@@ -2260,14 +2345,38 @@ pub(crate) struct ConfigFinalizeReport {
     pub theme: Option<ConfigThemeLoadReport>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ConfigThemeLocations {
+    locations: Vec<PathBuf>,
+}
+
+impl ConfigThemeLocations {
+    fn default() -> Self {
+        let mut locations = Vec::new();
+        if let Some(dir) = loader::user_theme_dir() {
+            locations.push(dir);
+        }
+        if let Ok(resources) = resources_dir::resources_dir() {
+            if let Some(app) = resources.app() {
+                locations.push(app.join("themes"));
+            }
+        }
+        Self { locations }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConfigThemeLoadReport {
     Loaded {
         path: PathBuf,
         diagnostics: Vec<ConfigDiagnostic>,
     },
-    UnsupportedName {
+    NameContainsSeparator {
         name: String,
+    },
+    NotFound {
+        name: String,
+        tried: Vec<PathBuf>,
     },
     Io {
         path: PathBuf,
@@ -12852,15 +12961,215 @@ mod tests {
                  window-theme = auto\n"
             )
             .is_empty());
-        let report = cfg.finalize_with_report();
+        let report = cfg.finalize_with_theme_locations_for_test(Vec::new());
 
         assert_eq!(cfg.window_theme, WindowTheme::System);
         assert_eq!(
             report.theme,
-            Some(ConfigThemeLoadReport::UnsupportedName {
+            Some(ConfigThemeLoadReport::NotFound {
                 name: "foo".to_string(),
+                tried: Vec::new(),
             })
         );
+    }
+
+    #[test]
+    fn config_theme_loading_named_theme_loads_from_user_dir() {
+        let dir = unique_config_test_dir("theme-named-user");
+        let user = dir.join("user-themes");
+        let theme_path = user.join("sunrise");
+        write_config_file(&theme_path, "background = #123ABC\n");
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = sunrise\n").is_empty());
+        let report = cfg.finalize_with_theme_locations_for_test(vec![user]);
+
+        assert_eq!(
+            cfg.background,
+            Color {
+                r: 0x12,
+                g: 0x3A,
+                b: 0xBC
+            }
+        );
+        assert_eq!(
+            report.theme,
+            Some(ConfigThemeLoadReport::Loaded {
+                path: theme_path,
+                diagnostics: Vec::new(),
+            })
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_theme_loading_named_user_dir_wins_over_resources() {
+        let dir = unique_config_test_dir("theme-named-priority");
+        let user = dir.join("user-themes");
+        let resources = dir.join("resource-themes");
+        let user_path = user.join("shared");
+        let resource_path = resources.join("shared");
+        write_config_file(&user_path, "background = #111111\n");
+        write_config_file(&resource_path, "background = #222222\n");
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = shared\n").is_empty());
+        let report = cfg.finalize_with_theme_locations_for_test(vec![user, resources]);
+
+        assert_eq!(
+            cfg.background,
+            Color {
+                r: 0x11,
+                g: 0x11,
+                b: 0x11
+            }
+        );
+        assert!(matches!(
+            report.theme,
+            Some(ConfigThemeLoadReport::Loaded { path, .. }) if path == user_path
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_theme_loading_named_falls_back_to_resources() {
+        let dir = unique_config_test_dir("theme-named-resources");
+        let user = dir.join("user-themes");
+        let resources = dir.join("resource-themes");
+        let resource_path = resources.join("fallback");
+        std::fs::create_dir_all(&user).unwrap();
+        write_config_file(&resource_path, "background = #222222\n");
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = fallback\n").is_empty());
+        let report = cfg.finalize_with_theme_locations_for_test(vec![user, resources]);
+
+        assert_eq!(
+            cfg.background,
+            Color {
+                r: 0x22,
+                g: 0x22,
+                b: 0x22
+            }
+        );
+        assert!(matches!(
+            report.theme,
+            Some(ConfigThemeLoadReport::Loaded { path, .. }) if path == resource_path
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_theme_loading_named_rejects_path_separators() {
+        let dir = unique_config_test_dir("theme-named-separator");
+        write_config_file(&dir.join("nested/name"), "background = #123ABC\n");
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = nested/name\n").is_empty());
+        let report = cfg.finalize_with_theme_locations_for_test(vec![dir.clone()]);
+
+        assert_ne!(
+            cfg.background,
+            Color {
+                r: 0x12,
+                g: 0x3A,
+                b: 0xBC
+            }
+        );
+        assert_eq!(
+            report.theme,
+            Some(ConfigThemeLoadReport::NameContainsSeparator {
+                name: "nested/name".to_string(),
+            })
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_theme_loading_named_not_found_reports_tried_paths() {
+        let dir = unique_config_test_dir("theme-named-not-found");
+        let user = dir.join("user-themes");
+        let resources = dir.join("resource-themes");
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = missing\n").is_empty());
+        let report =
+            cfg.finalize_with_theme_locations_for_test(vec![user.clone(), resources.clone()]);
+
+        assert_eq!(
+            report.theme,
+            Some(ConfigThemeLoadReport::NotFound {
+                name: "missing".to_string(),
+                tried: vec![user.join("missing"), resources.join("missing")],
+            })
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_theme_loading_named_rejects_non_regular_path() {
+        let dir = unique_config_test_dir("theme-named-not-file");
+        let user = dir.join("user-themes");
+        let theme_path = user.join("not-file");
+        std::fs::create_dir_all(&theme_path).unwrap();
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = not-file\n").is_empty());
+        let report = cfg.finalize_with_theme_locations_for_test(vec![user]);
+
+        assert_eq!(
+            report.theme,
+            Some(ConfigThemeLoadReport::NotFile { path: theme_path })
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_theme_loading_named_io_error_stops_before_fallback() {
+        let dir = unique_config_test_dir("theme-named-io");
+        let user = dir.join("user-themes");
+        let resources = dir.join("resource-themes");
+        let unreadable = user.join("blocked");
+        let resource_path = resources.join("blocked");
+        write_config_file(&unreadable, "background = #111111\n");
+        write_config_file(&resource_path, "background = #222222\n");
+        let mut permissions = std::fs::metadata(&unreadable).unwrap().permissions();
+        let original_mode = permissions.mode();
+        permissions.set_mode(0o000);
+        std::fs::set_permissions(&unreadable, permissions).unwrap();
+
+        let mut cfg = Config::default();
+        assert!(cfg.load_str("theme = blocked\n").is_empty());
+        let report = cfg.finalize_with_theme_locations_for_test(vec![user, resources]);
+
+        if !matches!(
+            report.theme,
+            Some(ConfigThemeLoadReport::Io {
+                ref path,
+                kind: std::io::ErrorKind::PermissionDenied,
+            }) if path == &unreadable
+        ) {
+            panic!("expected named theme permission error, got {report:?}");
+        }
+        assert_ne!(
+            cfg.background,
+            Color {
+                r: 0x22,
+                g: 0x22,
+                b: 0x22
+            }
+        );
+
+        let mut permissions = std::fs::metadata(&unreadable).unwrap().permissions();
+        permissions.set_mode(original_mode);
+        std::fs::set_permissions(&unreadable, permissions).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
