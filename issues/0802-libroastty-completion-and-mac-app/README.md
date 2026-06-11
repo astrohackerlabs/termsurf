@@ -1261,6 +1261,8 @@ stays unaltered except for the rename).
   — **Partial**
 - [Experiment 132: Phase G — macOS unit-test baseline](132-macos-unit-test-baseline.md)
   — **Partial**
+- [Experiment 133: Phase G — XCTest host lifecycle](133-xctest-host-lifecycle.md)
+  — **Designed**
 
 ## Process
 
