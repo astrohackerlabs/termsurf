@@ -305,6 +305,8 @@ pub(crate) struct Config {
     pub osc_color_report_format: OscColorReportFormat,
     /// `vt-kam-allowed`.
     pub vt_kam_allowed: bool,
+    /// `custom-shader`.
+    pub custom_shader: RepeatableConfigPath,
     /// `scroll-to-bottom`.
     pub scroll_to_bottom: ScrollToBottom,
     /// `custom-shader-animation`.
@@ -480,6 +482,7 @@ impl Default for Config {
             grapheme_width_method: GraphemeWidthMethod::Unicode,
             osc_color_report_format: OscColorReportFormat::Bits16,
             vt_kam_allowed: false,
+            custom_shader: RepeatableConfigPath::default(),
             scroll_to_bottom: ScrollToBottom::default(),
             custom_shader_animation: CustomShaderAnimation::True,
             background: Color {
@@ -752,6 +755,8 @@ impl Config {
         self.osc_color_report_format
             .format_entry(&mut EntryFormatter::new("osc-color-report-format", out));
         EntryFormatter::new("vt-kam-allowed", out).entry_bool(self.vt_kam_allowed);
+        self.custom_shader
+            .format_entry(&mut EntryFormatter::new("custom-shader", out));
         self.custom_shader_animation
             .format_entry(&mut EntryFormatter::new("custom-shader-animation", out));
         self.macos_non_native_fullscreen
@@ -1234,6 +1239,7 @@ impl Config {
             "vt-kam-allowed" => {
                 self.vt_kam_allowed = set_bool_field(value, default.vt_kam_allowed)?
             }
+            "custom-shader" => self.custom_shader.parse_cli(value)?,
             "custom-shader-animation" => {
                 self.custom_shader_animation = set_enum_field(
                     value,
@@ -1636,6 +1642,7 @@ impl Config {
 
     fn expand_config_file_paths_from_base(&mut self, base: &std::path::Path) {
         self.config_file.expand_from_base(base);
+        self.custom_shader.expand_from_base(base);
         if let Some(path) = self.bell_audio_path.as_mut() {
             path.expand_from_base(base);
         }
@@ -6813,6 +6820,7 @@ mod tests {
         assert_eq!(d.grapheme_width_method, GraphemeWidthMethod::Unicode);
         assert_eq!(d.osc_color_report_format, OscColorReportFormat::Bits16);
         assert!(!d.vt_kam_allowed);
+        assert!(d.custom_shader.list.is_empty());
         assert_eq!(d.scroll_to_bottom, ScrollToBottom::default());
         assert_eq!(d.custom_shader_animation, CustomShaderAnimation::True);
         // Base-colors group (Experiment 472).
@@ -8150,6 +8158,149 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
             ))
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn custom_shader_config_parse_format_reset_and_diagnose() {
+        let mut cfg = Config::default();
+        assert!(cfg.custom_shader.list.is_empty());
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        assert!(out.lines().any(|line| line == "custom-shader = "));
+
+        cfg.set("custom-shader", Some("a.glsl")).unwrap();
+        cfg.set("custom-shader", Some("?b.glsl")).unwrap();
+        cfg.set("custom-shader", Some("\"?literal.glsl\"")).unwrap();
+        assert_eq!(
+            cfg.custom_shader.list,
+            vec![
+                ConfigFilePath::Required("a.glsl".to_string()),
+                ConfigFilePath::Optional("b.glsl".to_string()),
+                ConfigFilePath::Required("?literal.glsl".to_string()),
+            ]
+        );
+
+        let mut out = String::new();
+        cfg.format_config(&mut out);
+        let shader_lines: Vec<_> = out
+            .lines()
+            .filter(|line| line.starts_with("custom-shader = "))
+            .collect();
+        assert_eq!(
+            shader_lines,
+            vec![
+                "custom-shader = a.glsl",
+                "custom-shader = ?b.glsl",
+                "custom-shader = ?literal.glsl",
+            ]
+        );
+
+        cfg.set("custom-shader", Some("?")).unwrap();
+        cfg.set("custom-shader", Some("\"\"")).unwrap();
+        cfg.set("custom-shader", Some("?\"\"")).unwrap();
+        assert_eq!(cfg.custom_shader.list.len(), 3);
+
+        cfg.set("custom-shader", Some("")).unwrap();
+        assert!(cfg.custom_shader.list.is_empty());
+        assert_eq!(
+            cfg.set("custom-shader", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        let diagnostics = cfg.load_str(
+            "custom-shader = valid-a.glsl\n\
+             custom-shader\n\
+             custom-shader = ?valid-b.glsl\n",
+        );
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "custom-shader".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }]
+        );
+        assert_eq!(
+            cfg.custom_shader.list,
+            vec![
+                ConfigFilePath::Required("valid-a.glsl".to_string()),
+                ConfigFilePath::Optional("valid-b.glsl".to_string()),
+            ]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+    }
+
+    #[test]
+    fn custom_shader_expands_from_file_and_cli_bases() {
+        let dir = unique_config_test_dir("custom-shader-base");
+        let file_base = dir.join("file-base");
+        let cli_base = dir.join("cli-base");
+        let config_file = file_base.join("config.roastty");
+        let file_shader = file_base.join("file-shader.glsl");
+        let file_optional = file_base.join("optional-shader.glsl");
+        let cli_shader = cli_base.join("cli-shader.glsl");
+        let cli_optional = cli_base.join("optional-cli.glsl");
+        write_config_file(
+            &config_file,
+            "custom-shader = ./file-shader.glsl\ncustom-shader = ?optional-shader.glsl\n",
+        );
+        write_config_file(&file_shader, "");
+        write_config_file(&file_optional, "");
+        write_config_file(&cli_shader, "");
+        write_config_file(&cli_optional, "");
+
+        let mut cfg = Config::default();
+        let diagnostics = cfg.load_file(&config_file).unwrap();
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.custom_shader.list,
+            vec![
+                ConfigFilePath::Required(
+                    std::fs::canonicalize(&file_shader)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                ),
+                ConfigFilePath::Optional(
+                    std::fs::canonicalize(&file_optional)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                ),
+            ]
+        );
+
+        let mut cfg = Config::default();
+        let diagnostics = cfg.set_cli_args_from_base(
+            [
+                "--custom-shader=./cli-shader.glsl",
+                "--custom-shader=?optional-cli.glsl",
+            ],
+            &cli_base,
+        );
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.custom_shader.list,
+            vec![
+                ConfigFilePath::Required(
+                    std::fs::canonicalize(&cli_shader)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                ),
+                ConfigFilePath::Optional(
+                    std::fs::canonicalize(&cli_optional)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                ),
+            ]
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -10775,6 +10926,7 @@ mod tests {
         expected.extend([
             "osc-color-report-format",
             "vt-kam-allowed",
+            "custom-shader",
             "custom-shader-animation",
             "macos-non-native-fullscreen",
             "macos-window-buttons",

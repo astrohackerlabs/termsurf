@@ -119,3 +119,70 @@ Codex adversarial reviewer `019eb4f3-a33b-75a2-9453-2be47f191a53` re-reviewed
 the fix and returned **Approved** with no remaining findings. The reviewer
 confirmed the design now requires path expansion through the local config-file /
 CLI base hook and tests for both `load_file` and `set_cli_args_from_base`.
+
+## Result
+
+**Result:** Pass
+
+Implemented `custom-shader` in `roastty/src/config/mod.rs` as a
+`RepeatableConfigPath` field in upstream order after `vt-kam-allowed` and before
+`custom-shader-animation`. `Config::default` starts with an empty shader list,
+and `format_config` emits `custom-shader = ` when empty or one
+`custom-shader = ...` line per configured shader.
+
+The parser reuses the local repeatable path implementation, matching upstream
+`RepeatablePath` behavior for this config surface:
+
+- repeated `custom-shader = path` lines append in order;
+- `?path` stores an optional path;
+- quoted `"?path"` stores a required literal path beginning with `?`;
+- parsed-empty path forms such as `?`, `""`, and `?""` are ignored without
+  clearing existing entries;
+- raw `custom-shader =` clears the list;
+- missing values diagnose as `ValueRequired`;
+- `load_str` preserves neighboring valid entries around a missing-value
+  diagnostic;
+- clone/equality preserve the shader list.
+
+`expand_config_file_paths_from_base` now expands `custom-shader` paths from both
+config-file and CLI bases, preserving required/optional status. This matches
+upstream `expandPaths` applying to all `RepeatablePath` fields.
+
+Verification passed:
+
+- `cargo fmt`
+- `cargo test -p roastty custom_shader`
+  - 15 targeted tests passed, including the new config tests and existing
+    custom-shader renderer-support tests selected by the filter
+- `cargo test -p roastty config_format_config`
+  - 1 targeted order test passed
+- `cargo test -p roastty`
+  - 4531 unit tests passed
+  - ABI harness passed with the existing 10 enum-conversion warnings
+  - doc tests passed
+- `cargo fmt --check`
+- `git diff --check`
+
+## Conclusion
+
+`custom-shader` now has a faithful config parser/formatter/path-expansion
+surface for the pinned upstream `RepeatablePath` field. Runtime shader file
+loading, Shadertoy translation, shader compilation, custom shader render
+pipelines, animation-loop behavior, and app C ABI exposure remain later work.
+
+## Completion Review
+
+Codex adversarial reviewer `019eb4fa-0e1d-7d83-a7fe-fdc41de4abae` returned
+**Approved** with no required findings. The reviewer verified that the result
+commit had not been made yet, the working tree contained only the expected three
+modified files, and the implementation matches the approved scope and upstream
+`RepeatablePath` behavior for default, append/reset/parsed-empty semantics,
+formatting, clone/equality, diagnostics, and config-file / CLI base expansion.
+
+The reviewer reran and passed:
+
+- `cargo fmt --check`
+- `git diff --check`
+- `cargo test -p roastty custom_shader`
+- `cargo test -p roastty config_format_config`
+- `cargo test -p roastty`

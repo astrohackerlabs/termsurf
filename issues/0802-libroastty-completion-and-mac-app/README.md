@@ -213,6 +213,12 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   surface key path: keybindings run first, then ANSI mode 2 (`disable_keyboard`)
   consumes normal key input only when the config allows it; config updates also
   refresh existing surfaces.
+- **Custom shader config is parser/formatter/path-expansion-only.** Exp 87 wires
+  `custom-shader` as an upstream `RepeatablePath`: repeated entries append, raw
+  empty clears, parsed-empty paths are ignored, formatting emits one line per
+  shader, and load-file / CLI-base expansion preserves required/optional path
+  status; shader loading, compilation, and renderer integration remain later
+  work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -874,7 +880,7 @@ stays unaltered except for the rename).
 - [Experiment 86: Phase F — VT KAM config and key gate](86-vt-kam-config-key-gate.md)
   — **Pass**
 - [Experiment 87: Phase F — custom shader config](87-custom-shader-config.md) —
-  **Designed**
+  **Pass**
 
 ## Process
 
