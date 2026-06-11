@@ -68,7 +68,7 @@ impl State {
 }
 
 /// Which state field a conditional tests (upstream `Key`, derived from `State`'s fields).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Key {
     Theme,
     Os,

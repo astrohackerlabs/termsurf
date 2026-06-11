@@ -92,3 +92,69 @@ Findings:
 Fix:
 
 - Added a focused replay-failure test requirement to the experiment design.
+
+## Result
+
+**Result:** Pass
+
+Implemented config-internal conditional theme reload.
+
+- Made `conditional::Key` hashable.
+- Added a private `conditional_set` to `Config`.
+- Marked `conditional::Key::Theme` as relevant whenever light and dark theme
+  names differ during finalization.
+- Added private `change_conditional_state` rebuild logic that returns `None` for
+  irrelevant state changes, rebuilds a fresh config from replay entries for
+  relevant changes, restores the replay list before finalization so theme
+  loading can preserve user override priority, and propagates replay failures as
+  `ConfigSetError`.
+- Added a test-only explicit theme-location variant for deterministic
+  conditional theme reload tests.
+- Added focused tests for same-state no-op, irrelevant theme-state change,
+  conditional-set marking, light-to-dark reload, dark-to-light reload after
+  cloning, replay-entry preservation/no duplication, and replay-failure error
+  propagation.
+
+Verification passed:
+
+1. `cargo test -p roastty config_conditional_theme`
+2. `cargo test -p roastty config_theme_loading`
+3. `cargo test -p roastty config_replay`
+4. `cargo test -p roastty`
+5. `cargo fmt --check`
+6. `git diff --check`
+
+The focused conditional-theme run passed 7 tests. The full
+`cargo test -p roastty` run passed 4570 unit tests, the ABI harness, and doc
+tests. The ABI harness printed the existing 10 enum-conversion warnings.
+
+## Conclusion
+
+Roastty now tracks when the finalized config depends on the OS theme conditional
+and can rebuild a new config from the recorded file/CLI replay entries when the
+theme state changes. This gives the config layer the core upstream
+`changeConditionalState` behavior for light/dark themes, while leaving app ABI
+exposure, runtime OS-theme notifications, general conditional syntax,
+conditionalized theme-file replay steps, and live surface/app propagation for
+later work.
+
+## Completion Review
+
+Codex-native adversarial review ran in fresh context with subagent
+`019eb61b-ac24-7bf1-99ef-dfd962c745f5`.
+
+Verdict: **APPROVED**
+
+Findings: None.
+
+The reviewer independently verified:
+
+1. `cargo test -p roastty config_conditional_theme`
+2. `cargo test -p roastty config_theme_loading`
+3. `cargo test -p roastty config_replay`
+4. `cargo test -p roastty`
+5. `cargo fmt --check`
+6. `git diff --check`
+
+The reviewer confirmed the full suite passed 4570 unit tests, the ABI harness,
+and doc tests, with the existing 10 ABI enum-conversion warnings.

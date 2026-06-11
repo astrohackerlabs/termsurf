@@ -379,6 +379,7 @@ pub(crate) struct Config {
     /// `theme`.
     pub theme: Option<Theme>,
     conditional_state: conditional::State,
+    conditional_set: HashSet<conditional::Key>,
     replay_entries: Vec<ConfigReplayEntry>,
 }
 
@@ -592,6 +593,7 @@ impl Default for Config {
             },
             theme: None,
             conditional_state: conditional::State::default(),
+            conditional_set: HashSet::new(),
             replay_entries: Vec::new(),
         }
     }
@@ -1777,6 +1779,42 @@ impl Config {
         self.finalize_with_theme_locations(ConfigThemeLocations::default())
     }
 
+    fn change_conditional_state(
+        &self,
+        new_state: conditional::State,
+    ) -> Result<Option<Config>, ConfigSetError> {
+        self.change_conditional_state_with_theme_locations(
+            new_state,
+            ConfigThemeLocations::default(),
+        )
+    }
+
+    fn change_conditional_state_with_theme_locations(
+        &self,
+        new_state: conditional::State,
+        locations: ConfigThemeLocations,
+    ) -> Result<Option<Config>, ConfigSetError> {
+        if !self.conditional_state_changed_relevantly(new_state) {
+            return Ok(None);
+        }
+
+        let mut new_config = Config {
+            conditional_state: new_state,
+            ..Config::default()
+        };
+        self.replay_into(&mut new_config)?;
+        new_config.replay_entries = self.replay_entries.clone();
+        new_config.finalize_with_theme_locations(locations);
+        Ok(Some(new_config))
+    }
+
+    fn conditional_state_changed_relevantly(&self, new_state: conditional::State) -> bool {
+        self.conditional_set.iter().any(|key| match key {
+            conditional::Key::Theme => self.conditional_state.theme != new_state.theme,
+            conditional::Key::Os => self.conditional_state.os != new_state.os,
+        })
+    }
+
     fn finalize_with_theme_locations(
         &mut self,
         locations: ConfigThemeLocations,
@@ -1793,6 +1831,18 @@ impl Config {
         locations: Vec<PathBuf>,
     ) -> ConfigFinalizeReport {
         self.finalize_with_theme_locations(ConfigThemeLocations { locations })
+    }
+
+    #[cfg(test)]
+    fn change_conditional_state_with_theme_locations_for_test(
+        &self,
+        new_state: conditional::State,
+        locations: Vec<PathBuf>,
+    ) -> Result<Option<Config>, ConfigSetError> {
+        self.change_conditional_state_with_theme_locations(
+            new_state,
+            ConfigThemeLocations { locations },
+        )
     }
 
     fn finalize_theme(
@@ -1950,6 +2000,9 @@ impl Config {
     fn finalize_theme_window_theme(&mut self, different_light_dark: bool) {
         if different_light_dark && self.window_theme == WindowTheme::Auto {
             self.window_theme = WindowTheme::System;
+        }
+        if different_light_dark {
+            self.conditional_set.insert(conditional::Key::Theme);
         }
     }
 
@@ -7628,15 +7681,15 @@ mod tests {
         BoldColor, ClipboardAccess, ClipboardCodepointMapEntry, ClipboardCodepointMapParseError,
         ClipboardReplacement, Color, ColorList, ColorParseError, Command, CommandPaletteEntry,
         Config, ConfigDiagnostic, ConfigFilePath, ConfigFinalizeReport,
-        ConfigRecursiveFileErrorKind, ConfigSetError, ConfigSetSource, ConfigThemeLoadReport,
-        ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths,
-        Duration, DurationParseError, FlagsParseError, FontShapingBreak, FontStyle,
-        FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod,
-        GtkSingleInstance, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, LinkPreviews,
-        LinuxCgroup, MacAppIcon, MacAppIconFrame, MacHidden, MacShortcuts, MacTitlebarProxyIcon,
-        MacTitlebarStyle, MacWindowButtons, MagicParseError, MiddleClickAction,
-        MouseScrollMultiplier, MouseScrollMultiplierParseError, MouseShiftCapture,
-        NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
+        ConfigRecursiveFileErrorKind, ConfigReplayEntry, ConfigSetError, ConfigSetSource,
+        ConfigThemeLoadReport, ConfirmCloseSurface, CopyOnSelect, CursorStyle,
+        CustomShaderAnimation, DefaultConfigPaths, Duration, DurationParseError, FlagsParseError,
+        FontShapingBreak, FontStyle, FontStyleParseError, FontSyntheticStyle, Fullscreen,
+        GraphemeWidthMethod, GtkSingleInstance, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle,
+        LinkPreviews, LinuxCgroup, MacAppIcon, MacAppIconFrame, MacHidden, MacShortcuts,
+        MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
+        MiddleClickAction, MouseScrollMultiplier, MouseScrollMultiplierParseError,
+        MouseShiftCapture, NonNativeFullscreen, NotifyOnCommandFinish, NotifyOnCommandFinishAction,
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         QuickTerminalDimensions, QuickTerminalKeyboardInteractivity, QuickTerminalLayer,
         QuickTerminalPosition, QuickTerminalScreen, QuickTerminalSize, QuickTerminalSizeParseError,
@@ -13253,6 +13306,246 @@ mod tests {
             .any(|entry| entry.key == "background"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_conditional_theme_same_state_returns_none() {
+        let mut cfg = Config::default();
+        assert!(cfg
+            .load_str(
+                "theme = light:day,dark:night\n\
+                 window-theme = auto\n"
+            )
+            .is_empty());
+        cfg.finalize_with_theme_locations_for_test(Vec::new());
+
+        assert_eq!(
+            cfg.change_conditional_state_with_theme_locations_for_test(
+                conditional::State::default(),
+                Vec::new(),
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn config_conditional_theme_ignores_irrelevant_theme_state_change() {
+        let dir = unique_config_test_dir("conditional-theme-irrelevant");
+        let theme_path = dir.join("single");
+        write_config_file(&theme_path, "background = #123ABC\n");
+
+        let mut cfg = Config::default();
+        assert!(cfg
+            .load_str(&format!("theme = {}\n", theme_path.display()))
+            .is_empty());
+        cfg.finalize();
+
+        assert!(!cfg.conditional_set.contains(&conditional::Key::Theme));
+        assert_eq!(
+            cfg.change_conditional_state(conditional::State {
+                theme: conditional::Theme::Dark,
+                ..conditional::State::default()
+            }),
+            Ok(None)
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_conditional_theme_marks_different_light_dark_as_relevant() {
+        let mut cfg = Config::default();
+        assert!(cfg
+            .load_str(
+                "theme = light:day,dark:night\n\
+                 window-theme = auto\n"
+            )
+            .is_empty());
+        cfg.finalize_with_theme_locations_for_test(Vec::new());
+
+        assert!(cfg.conditional_set.contains(&conditional::Key::Theme));
+        assert_eq!(cfg.window_theme, WindowTheme::System);
+    }
+
+    #[test]
+    fn config_conditional_theme_change_reloads_theme_and_preserves_user_priority() {
+        let dir = unique_config_test_dir("conditional-theme-reload");
+        let themes = dir.join("themes");
+        write_config_file(
+            &themes.join("light"),
+            "background = #FFFFFF\nforeground = #111111\n",
+        );
+        write_config_file(
+            &themes.join("dark"),
+            "background = #000000\nforeground = #EEEEEE\n",
+        );
+
+        let mut cfg = Config::default();
+        assert!(cfg
+            .load_str(
+                "background = #ABCDEF\n\
+                 theme = light:light,dark:dark\n"
+            )
+            .is_empty());
+        cfg.finalize_with_theme_locations_for_test(vec![themes.clone()]);
+        assert_eq!(
+            cfg.background,
+            Color {
+                r: 0xAB,
+                g: 0xCD,
+                b: 0xEF
+            }
+        );
+        assert_eq!(
+            cfg.foreground,
+            Color {
+                r: 0x11,
+                g: 0x11,
+                b: 0x11
+            }
+        );
+
+        let dark = cfg
+            .change_conditional_state_with_theme_locations_for_test(
+                conditional::State {
+                    theme: conditional::Theme::Dark,
+                    ..conditional::State::default()
+                },
+                vec![themes.clone()],
+            )
+            .unwrap()
+            .expect("dark config");
+
+        assert_eq!(
+            dark.background,
+            Color {
+                r: 0xAB,
+                g: 0xCD,
+                b: 0xEF
+            }
+        );
+        assert_eq!(
+            dark.foreground,
+            Color {
+                r: 0xEE,
+                g: 0xEE,
+                b: 0xEE
+            }
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_conditional_theme_clone_can_reload_back_to_light() {
+        let dir = unique_config_test_dir("conditional-theme-clone");
+        let themes = dir.join("themes");
+        write_config_file(&themes.join("light"), "background = #FFFFFF\n");
+        write_config_file(&themes.join("dark"), "background = #000000\n");
+
+        let mut light = Config::default();
+        assert!(light.load_str("theme = light:light,dark:dark\n").is_empty());
+        light.finalize_with_theme_locations_for_test(vec![themes.clone()]);
+
+        let dark = light
+            .change_conditional_state_with_theme_locations_for_test(
+                conditional::State {
+                    theme: conditional::Theme::Dark,
+                    ..conditional::State::default()
+                },
+                vec![themes.clone()],
+            )
+            .unwrap()
+            .expect("dark config");
+        assert_eq!(
+            dark.background,
+            Color {
+                r: 0x00,
+                g: 0x00,
+                b: 0x00
+            }
+        );
+
+        let cloned_dark = dark.clone();
+        let light_again = cloned_dark
+            .change_conditional_state_with_theme_locations_for_test(
+                conditional::State::default(),
+                vec![themes.clone()],
+            )
+            .unwrap()
+            .expect("light config");
+        assert_eq!(
+            light_again.background,
+            Color {
+                r: 0xFF,
+                g: 0xFF,
+                b: 0xFF
+            }
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_conditional_theme_rebuild_preserves_replay_entries_without_duplication() {
+        let dir = unique_config_test_dir("conditional-theme-replay");
+        let themes = dir.join("themes");
+        write_config_file(&themes.join("light"), "font-family = Theme Light\n");
+        write_config_file(&themes.join("dark"), "font-family = Theme Dark\n");
+
+        let mut cfg = Config::default();
+        assert!(cfg
+            .load_str(
+                "term = xterm-user\n\
+                 theme = light:light,dark:dark\n"
+            )
+            .is_empty());
+        assert!(cfg.set_cli_args(["--font-family=User CLI"]).is_empty());
+        cfg.finalize_with_theme_locations_for_test(vec![themes.clone()]);
+        let before = cfg.replay_entries.clone();
+
+        let dark = cfg
+            .change_conditional_state_with_theme_locations_for_test(
+                conditional::State {
+                    theme: conditional::Theme::Dark,
+                    ..conditional::State::default()
+                },
+                vec![themes],
+            )
+            .unwrap()
+            .expect("dark config");
+
+        assert_eq!(dark.replay_entries, before);
+        assert_eq!(dark.font_family.list, vec!["User CLI"]);
+        assert_eq!(
+            dark.replay_entries
+                .iter()
+                .filter(|entry| entry.key == "theme")
+                .count(),
+            1
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_conditional_theme_replay_failure_returns_error() {
+        let mut cfg = Config::default();
+        cfg.conditional_set.insert(conditional::Key::Theme);
+        cfg.replay_entries.push(ConfigReplayEntry {
+            key: "not-a-real-field".to_string(),
+            value: Some("x".to_string()),
+            source: ConfigSetSource::File,
+            begin_cli_batch: false,
+        });
+
+        assert_eq!(
+            cfg.change_conditional_state(conditional::State {
+                theme: conditional::Theme::Dark,
+                ..conditional::State::default()
+            }),
+            Err(ConfigSetError::UnknownField)
+        );
     }
 
     #[test]

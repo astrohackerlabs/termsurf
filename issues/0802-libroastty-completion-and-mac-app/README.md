@@ -286,6 +286,12 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   path-separator names, reports tried paths, and preserves Exp99 replay
   priority; conditional reload, diagnostic text parity, resource packaging
   validation, and app ABI exposure remain later work.
+- **Conditional theme reload foundation is wired.** Exp 101 marks different
+  light/dark themes as dependent on the theme conditional state and can rebuild
+  a fresh config from recorded file/CLI replay entries when that state changes;
+  app ABI exposure, runtime OS-theme notifications, general conditional syntax,
+  conditionalized theme-file replay steps, and live surface/app propagation
+  remain later work.
 
 **Keep this current.** When an experiment yields a durable, reusable fact — a
 toolchain incantation, a dead-end to avoid, or where an artifact lives — distill
@@ -975,7 +981,7 @@ stays unaltered except for the rename).
 - [Experiment 100: Phase F — named theme lookup](100-named-theme-lookup.md) —
   **Pass**
 - [Experiment 101: Phase F — conditional theme reload](101-conditional-theme-reload.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
