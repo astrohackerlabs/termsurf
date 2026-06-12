@@ -222,6 +222,13 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   through the existing staged index path. The asserted release probe measured
   1.12x versus full-property width lookup, closing the width part of the Phase I
   SIMD/perf item without a C++ Highway bridge.
+- **Focused command-palette UI tests now run real bodies.** Exp 156 removes the
+  stale UI-test `defaultTestSuite` suppression, gives the custom-config UI
+  harness an empty config by default, and makes command-palette cases launch a
+  fresh app process. `macos/build.nu --action test` still skips
+  `RoasttyUITests`, while
+  `macos/build.nu --action test --ui-tests --only-testing RoasttyUITests/RoasttyCommandPaletteTests`
+  now executes 3 command-palette UI tests with 0 failures.
 - **Bundled terminfo is now real and matches `TERM`.** Exp 153 replaces the
   placeholder `xterm-roastty` sentinel with a bundled `roastty.terminfo` source
   that is mechanically verified against pinned upstream Ghostty, compiles it
@@ -967,9 +974,10 @@ the live app, verified by a Phase-D UI test.)
 - [x] Command-palette catalog (`command.zig`) — parser/defaults and C config ABI
       exposure are wired (Exp 85, Exp 124), and hosted tests now prove the
       command-entry/delegate action path through
-      `roastty_surface_binding_action` (Exp 155); full command-palette UI
-      open/filter/click automation remains unproven because the focused UI
-      selector currently executes 0 tests
+      `roastty_surface_binding_action` (Exp 155), while focused XCTest UI
+      automation now proves command-palette open/dismiss/filter/keyboard-submit
+      and mouse-select behavior through 3 real `RoasttyCommandPaletteTests`
+      (Exp 156)
 - [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + app-level key handling —
       `RemapSet`/`Mask`, the `key-remap` config field, and surface runtime
       key-remap application are wired (Exp 107–109), and configured `global:`
@@ -1430,7 +1438,7 @@ stays unaltered except for the rename).
 - [Experiment 155: Phase G — command-palette hosted execution](155-command-palette-hosted-execution.md)
   — **Pass**
 - [Experiment 156: Phase G — command-palette UI discovery](156-command-palette-ui-discovery.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

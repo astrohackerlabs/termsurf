@@ -10,7 +10,7 @@ import XCTest
 final class RoasttyCommandPaletteTests: RoasttyCustomConfigCase {
     @MainActor func testDismissingCommandPalette() async throws {
         let app = try roasttyApplication()
-        app.activate()
+        app.launch()
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5), "New window should appear")
 
@@ -64,7 +64,7 @@ final class RoasttyCommandPaletteTests: RoasttyCustomConfigCase {
 
     @MainActor func testSelectCommandWithMouse() async throws {
         let app = try roasttyApplication()
-        app.activate()
+        app.launch()
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5), "New window should appear")
 
@@ -79,7 +79,7 @@ final class RoasttyCommandPaletteTests: RoasttyCustomConfigCase {
 
     @MainActor func testSelectCommandWithKeyboard() async throws {
         let app = try roasttyApplication()
-        app.activate()
+        app.launch()
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5), "New window should appear")
 

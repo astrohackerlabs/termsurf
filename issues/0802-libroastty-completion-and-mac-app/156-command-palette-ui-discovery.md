@@ -103,3 +103,80 @@ using the `adversarial-review` skill's Codex path
 **Findings:** No Required, Optional, or Nit findings.
 
 **Final verdict:** Approved.
+
+## Result
+
+**Result:** Pass
+
+The focused command-palette UI selector now executes real
+`RoasttyCommandPaletteTests` test bodies and passes:
+
+```text
+cd roastty && macos/build.nu --action test --ui-tests --only-testing RoasttyUITests/RoasttyCommandPaletteTests
+```
+
+The final XCTest summary reports `Executed 3 tests, with 0 failures`, and the
+three executed cases cover:
+
+- opening/dismissing the palette by menu, outside click, Escape, empty Enter,
+  filtered Enter, and mouse command selection;
+- keyboard execution of `Close All Windows`;
+- mouse execution of `Close All Windows`.
+
+The default hosted test path still skips UI tests and passes:
+
+```text
+cd roastty && macos/build.nu --action test
+```
+
+That run used `-skip-testing RoasttyUITests`, reported the Swift Testing suite
+passing with `213 tests in 23 suites`, and ended with `** TEST SUCCEEDED **`.
+
+Swift lint also passed for the edited UI-test Swift files:
+
+```text
+swiftlint lint roastty/macos/RoasttyUITests/RoasttyCustomConfigCase.swift roastty/macos/RoasttyUITests/RoasttyCommandPaletteTests.swift
+```
+
+## Conclusion
+
+The old `RoasttyCustomConfigCase.defaultTestSuite` override was the focused
+CLI-discovery blocker. Removing it lets `macos/build.nu --ui-tests` own the
+test-policy split: ordinary app tests skip `RoasttyUITests`, while explicit UI
+selectors run real test methods.
+
+Two small harness fixes were needed once the tests actually ran:
+
+- the shared custom-config case now creates an empty temporary config by
+  default, avoiding an unrelated startup `Configuration Errors` modal for tests
+  that do not call `updateConfig`;
+- the command-palette UI tests now call `launch()` rather than `activate()`, so
+  each case starts from a clean app process with a window after
+  `Close All Windows` closes the prior one.
+
+Phase G's command-palette catalog and UI coverage are now proven through both
+hosted action-path tests and focused XCTest UI automation. Remaining Phase G
+work is outside the command-palette UI gate: native keymaps/dead-key UI
+automation and permission-dependent global shortcut installation.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial subagent `Erdos` with fresh context,
+using the `adversarial-review` skill's Codex path
+(`multi_agent_v1.spawn_agent`), not Claude's named `adversarial-reviewer` agent.
+
+**Verdict:** Approved.
+
+**Required findings:** None.
+
+**Optional findings:** One process note: record this completion-review result
+before committing the experiment result.
+
+**Docs accuracy:** The reviewer confirmed that the result docs match the code
+and stated verification: `defaultTestSuite` suppression is removed, default test
+policy remains in `macos/build.nu` via `-skip-testing RoasttyUITests`, the
+command-palette tests now use `launch()`, and the shared harness creates an
+empty config file by default.
+
+**Final verdict:** Safe to commit as the Experiment 156 result commit after
+recording this review.
