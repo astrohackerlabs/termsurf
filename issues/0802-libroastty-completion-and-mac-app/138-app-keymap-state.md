@@ -114,3 +114,59 @@ experiment has the required sections, the scope is narrow and faithful to
 upstream embedded app keymap ownership/reload state, the design does not
 overclaim Swift keyDown text replacement or public ABI changes, and
 `git diff --check` plus the Prettier check passed.
+
+## Result
+
+**Result:** Pass
+
+Implemented app-owned keymap state in `roastty/src/lib.rs`. `App` now owns an
+`AppKeymap`, initializes it at `roastty_app_new`, derives the stored
+`keyboard_layout` from the keymap source ID when available, and reloads the
+keymap before refreshing the layout in `roastty_app_keyboard_changed`.
+Unsupported or unavailable keymap initialization falls back to the existing
+`Layout::current()` path, so app creation remains non-fatal.
+
+The experiment keeps the public input ABI and `roastty_surface_key` /
+`roastty_app_key` semantics unchanged. Deterministic Rust tests cover app-new
+layout detection from app-owned keymap source metadata, fallback to the current
+layout when no keymap is available, keyboard-change reload behavior, and
+explicit `macos-option-as-alt` config precedence after reload.
+
+Verification run:
+
+- `cargo fmt -- roastty/src/lib.rs` — pass
+- `cargo test -p roastty app_keymap` — pass, 4 passed
+- `cargo test -p roastty key_translation_mods` — pass, 10 passed
+- `cargo test -p roastty keyboard_layout` — pass, 4 passed
+- `cargo test -p roastty keymap_darwin` — pass, 5 passed
+- `cargo build -p roastty` — pass
+- `cargo test -p roastty -- --test-threads=1` — failed only the known
+  foreground-PID race:
+  `tests::surface_foreground_pid_reports_worker_foreground_pid_after_start`
+  reported `left: 61406`, `right: 61401`; summary was 4759 passed, 1 failed.
+- `cargo test -p roastty surface_foreground_pid_reports_worker_foreground_pid_after_start -- --test-threads=1`
+  — pass, 1 passed
+- `cargo fmt --check` — pass
+- `git diff --check` — pass
+
+## Conclusion
+
+Roastty now has the upstream-shaped app keymap ownership/reload boundary needed
+before Rust-side native text translation can be applied to by-value key events.
+The remaining native-key work is to use the app-owned keymap in
+`roastty_surface_key` / `roastty_app_key` text enrichment, validate hosted
+dead-key/preedit behavior, and finish permission-dependent live global shortcut
+registration.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Arendt`, fresh context.
+
+**Verdict:** Approved.
+
+**Findings:** None.
+
+The reviewer checked the working-tree diff against the approved scope and
+workflow contract, confirmed the result commit had not been made before review,
+and approved the app-owned keymap state/reload implementation plus result
+documentation with no required findings.

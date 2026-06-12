@@ -13,6 +13,8 @@ use std::ptr::NonNull;
 use std::slice;
 use std::sync::Mutex;
 
+#[cfg(not(test))]
+use input::keymap_darwin as input_keymap_darwin;
 use input::{key, key_encode, key_mods, keyboard as input_keyboard, paste};
 use terminal::clipboard::{KittyClipboard, Location as KittyClipboardLocation};
 use terminal::clipboard::{Operation as KittyClipboardOperation, Status as KittyClipboardStatus};
@@ -2537,6 +2539,108 @@ impl ConfigKeybindSet {
     }
 }
 
+struct AppKeymap {
+    #[cfg(not(test))]
+    keymap: Option<input_keymap_darwin::KeymapDarwin>,
+    #[cfg(test)]
+    source_id: Option<&'static str>,
+    #[cfg(test)]
+    reload_count: usize,
+}
+
+impl AppKeymap {
+    fn new() -> Self {
+        #[cfg(test)]
+        {
+            return Self {
+                source_id: APP_KEYMAP_SOURCE_ID_FOR_TEST.with(Cell::get),
+                reload_count: 0,
+            };
+        }
+
+        #[cfg(not(test))]
+        {
+            Self {
+                keymap: input_keymap_darwin::KeymapDarwin::new().ok(),
+            }
+        }
+    }
+
+    fn reload(&mut self) {
+        #[cfg(test)]
+        {
+            self.reload_count += 1;
+            self.source_id = APP_KEYMAP_SOURCE_ID_FOR_TEST.with(Cell::get);
+        }
+
+        #[cfg(not(test))]
+        {
+            match &mut self.keymap {
+                Some(keymap) => {
+                    if keymap.reload().is_err() {
+                        self.keymap = input_keymap_darwin::KeymapDarwin::new().ok();
+                    }
+                }
+                None => {
+                    self.keymap = input_keymap_darwin::KeymapDarwin::new().ok();
+                }
+            }
+        }
+    }
+
+    fn layout(&self) -> Option<input_keyboard::Layout> {
+        #[cfg(test)]
+        {
+            return self
+                .source_id
+                .and_then(input_keyboard::Layout::map_apple_id);
+        }
+
+        #[cfg(not(test))]
+        {
+            self.keymap
+                .as_ref()
+                .and_then(|keymap| keymap.source_id())
+                .as_deref()
+                .and_then(input_keyboard::Layout::map_apple_id)
+        }
+    }
+
+    #[cfg(test)]
+    fn reload_count(&self) -> usize {
+        self.reload_count
+    }
+}
+
+fn app_keyboard_layout_from_keymap(keymap: &AppKeymap) -> input_keyboard::Layout {
+    keymap
+        .layout()
+        .unwrap_or_else(input_keyboard::Layout::current)
+}
+
+#[cfg(test)]
+thread_local! {
+    static APP_KEYMAP_SOURCE_ID_FOR_TEST: Cell<Option<&'static str>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn with_app_keymap_source_id_for_test<T>(
+    source_id: Option<&'static str>,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<&'static str>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            APP_KEYMAP_SOURCE_ID_FOR_TEST.with(|current| current.set(self.0));
+        }
+    }
+
+    let previous = APP_KEYMAP_SOURCE_ID_FOR_TEST.with(|current| current.replace(source_id));
+    let _restore = Restore(previous);
+    f()
+}
+
 struct App {
     runtime: RoasttyRuntimeConfig,
     focused: bool,
@@ -2547,6 +2651,7 @@ struct App {
     clipboard_write: config::ClipboardAccess,
     mouse_shift_capture: config::MouseShiftCapture,
     has_global_keybinds: bool,
+    keymap: AppKeymap,
     keyboard_layout: input_keyboard::Layout,
     keybind_triggers: Vec<ConfigKeybind>,
     keybind_sequences: ConfigKeybindSet,
@@ -13184,6 +13289,9 @@ pub extern "C" fn roastty_app_new(
     } else {
         unsafe { *runtime }
     };
+    let keymap = AppKeymap::new();
+    let keyboard_layout = app_keyboard_layout_from_keymap(&keymap);
+
     let (
         confirm_close_surface,
         clipboard_read,
@@ -13193,7 +13301,6 @@ pub extern "C" fn roastty_app_new(
         keybind_triggers,
         keybind_sequences,
         keybind_tables,
-        keyboard_layout,
         parsed_config,
     ) = config_from_handle(config)
         .map(|config| {
@@ -13207,7 +13314,6 @@ pub extern "C" fn roastty_app_new(
                 config.keybind_triggers.clone(),
                 config.keybind_sequences.clone(),
                 config.keybind_tables.clone(),
-                input_keyboard::Layout::current(),
                 parsed,
             )
         })
@@ -13220,7 +13326,6 @@ pub extern "C" fn roastty_app_new(
             Vec::new(),
             ConfigKeybindSet::default(),
             Vec::new(),
-            input_keyboard::Layout::current(),
             default_finalized_config(),
         ));
 
@@ -13234,6 +13339,7 @@ pub extern "C" fn roastty_app_new(
         clipboard_write,
         mouse_shift_capture,
         has_global_keybinds,
+        keymap,
         keyboard_layout,
         keybind_triggers,
         keybind_sequences,
@@ -17199,7 +17305,8 @@ pub extern "C" fn roastty_app_key(app: RoasttyApp, event: RoasttyInputKey) -> bo
 #[no_mangle]
 pub extern "C" fn roastty_app_keyboard_changed(app: RoasttyApp) {
     if let Some(app) = app_from_handle(app) {
-        app.keyboard_layout = input_keyboard::Layout::current();
+        app.keymap.reload();
+        app.keyboard_layout = app_keyboard_layout_from_keymap(&app.keymap);
     }
 }
 
@@ -24039,6 +24146,44 @@ mod tests {
     }
 
     #[test]
+    fn app_keymap_source_id_drives_app_new_keyboard_layout() {
+        input_keyboard::with_current_layout_for_test(input_keyboard::Layout::Unknown, || {
+            with_app_keymap_source_id_for_test(Some("com.apple.keylayout.US"), || {
+                let app = new_test_app();
+                let surface = new_test_surface(app);
+                let input = ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT;
+
+                assert_eq!(
+                    roastty_surface_key_translation_mods(surface, input),
+                    expected_translation_mods(input, key_mods::OptionAsAlt::True)
+                );
+
+                roastty_surface_free(surface);
+                roastty_app_free(app);
+            });
+        });
+    }
+
+    #[test]
+    fn app_keymap_unavailable_falls_back_to_current_layout() {
+        input_keyboard::with_current_layout_for_test(input_keyboard::Layout::UsStandard, || {
+            with_app_keymap_source_id_for_test(None, || {
+                let app = new_test_app();
+                let surface = new_test_surface(app);
+                let input = ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT;
+
+                assert_eq!(
+                    roastty_surface_key_translation_mods(surface, input),
+                    expected_translation_mods(input, key_mods::OptionAsAlt::True)
+                );
+
+                roastty_surface_free(surface);
+                roastty_app_free(app);
+            });
+        });
+    }
+
+    #[test]
     fn current_keyboard_layout_abi_maps_current_layout() {
         input_keyboard::with_current_layout_for_test(input_keyboard::Layout::Unknown, || {
             assert_eq!(
@@ -24092,6 +24237,35 @@ mod tests {
     }
 
     #[test]
+    fn app_keymap_keyboard_changed_reloads_source_id_layout() {
+        input_keyboard::with_current_layout_for_test(input_keyboard::Layout::Unknown, || {
+            with_app_keymap_source_id_for_test(None, || {
+                let app = new_test_app();
+                let surface = new_test_surface(app);
+                let input = ROASTTY_MODS_SHIFT | ROASTTY_MODS_ALT;
+
+                assert_eq!(
+                    roastty_surface_key_translation_mods(surface, input),
+                    expected_translation_mods(input, key_mods::OptionAsAlt::False)
+                );
+                assert_eq!(app_from_handle(app).unwrap().keymap.reload_count(), 0);
+
+                with_app_keymap_source_id_for_test(Some("com.apple.keylayout.US"), || {
+                    roastty_app_keyboard_changed(app);
+                });
+                assert_eq!(app_from_handle(app).unwrap().keymap.reload_count(), 1);
+                assert_eq!(
+                    roastty_surface_key_translation_mods(surface, input),
+                    expected_translation_mods(input, key_mods::OptionAsAlt::True)
+                );
+
+                roastty_surface_free(surface);
+                roastty_app_free(app);
+            });
+        });
+    }
+
+    #[test]
     fn key_translation_mods_surface_config_update_overrides_detected_layout() {
         let app = new_test_app();
         set_app_keyboard_layout_for_test(app, input_keyboard::Layout::UsStandard);
@@ -24140,6 +24314,33 @@ mod tests {
             roastty_config_free(config);
             roastty_surface_free(surface);
             roastty_app_free(app);
+        });
+    }
+
+    #[test]
+    fn app_keymap_config_override_survives_keymap_reload() {
+        input_keyboard::with_current_layout_for_test(input_keyboard::Layout::Unknown, || {
+            with_app_keymap_source_id_for_test(None, || {
+                let app = new_test_app();
+                let surface = new_test_surface(app);
+                let input = ROASTTY_MODS_ALT;
+
+                let config =
+                    new_test_config_with_macos_option_as_alt(Some(key_mods::OptionAsAlt::False));
+                roastty_surface_update_config(surface, config);
+
+                with_app_keymap_source_id_for_test(Some("com.apple.keylayout.US"), || {
+                    roastty_app_keyboard_changed(app);
+                });
+                assert_eq!(
+                    roastty_surface_key_translation_mods(surface, input),
+                    expected_translation_mods(input, key_mods::OptionAsAlt::False)
+                );
+
+                roastty_config_free(config);
+                roastty_surface_free(surface);
+                roastty_app_free(app);
+            });
         });
     }
 
