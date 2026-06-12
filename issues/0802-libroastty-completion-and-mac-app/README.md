@@ -1369,6 +1369,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 148: Phase I — sprite legacy-computing coverage](148-sprite-legacy-computing-coverage.md)
   — **Pass**
+- [Experiment 149: Phase I — Sentry crash capture](149-sentry-crash-capture.md)
+  — **Designed**
 
 ## Process
 
