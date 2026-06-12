@@ -1810,3 +1810,7 @@ pub(crate) const STAGE3: [Properties; 30] = [
         emoji_vs_base: false,
     },
 ];
+
+pub(crate) const WIDTH_STAGE3: [u8; 30] = [
+    0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 2, 0, 0, 0, 1, 0, 0, 2, 2, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2, 1,
+];

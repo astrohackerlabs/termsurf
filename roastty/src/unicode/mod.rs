@@ -9,7 +9,6 @@ use unicode_width::UnicodeWidthChar;
 
 mod grapheme_table;
 mod tables;
-mod width;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Properties {
@@ -65,7 +64,11 @@ pub(crate) fn get(codepoint: u32) -> Properties {
 }
 
 pub(crate) fn codepoint_width(codepoint: u32) -> u8 {
-    width::fast_codepoint_width(codepoint).unwrap_or_else(|| table_properties(codepoint).width)
+    if codepoint <= 0xff {
+        return 1;
+    }
+
+    table_width(codepoint)
 }
 
 fn table_properties(codepoint: u32) -> Properties {
@@ -78,6 +81,18 @@ fn table_properties(codepoint: u32) -> Properties {
     let stage2_index = usize::from(tables::STAGE1[high]) + low;
     let stage3_index = usize::from(tables::STAGE2[stage2_index]);
     tables::STAGE3[stage3_index]
+}
+
+fn table_width(codepoint: u32) -> u8 {
+    let high = (codepoint >> 8) as usize;
+    if high >= tables::STAGE1.len() {
+        return fallback().width;
+    }
+
+    let low = (codepoint & 0xff) as usize;
+    let stage2_index = usize::from(tables::STAGE1[high]) + low;
+    let stage3_index = usize::from(tables::STAGE2[stage2_index]);
+    tables::WIDTH_STAGE3[stage3_index]
 }
 
 const ASCII_PRINTABLE_PROPERTIES: Properties = Properties {
@@ -1457,7 +1472,7 @@ mod tests {
             }
             assert_eq!(sum, expected);
         });
-        report_ratio("codepoint_width", scalar, fast);
+        assert_speedup("codepoint_width", scalar, fast, 1.05);
     }
 
     fn time_iterations(iterations: usize, mut f: impl FnMut()) -> std::time::Duration {
@@ -1468,9 +1483,18 @@ mod tests {
         start.elapsed()
     }
 
-    fn report_ratio(label: &str, scalar: std::time::Duration, fast: std::time::Duration) {
+    fn assert_speedup(
+        label: &str,
+        scalar: std::time::Duration,
+        fast: std::time::Duration,
+        minimum: f64,
+    ) {
         let ratio = scalar.as_secs_f64() / fast.as_secs_f64();
         eprintln!("{label}: scalar={scalar:?} fast={fast:?} ratio={ratio:.2}x");
+        assert!(
+            ratio >= minimum,
+            "{label} ratio {ratio:.2}x is below {minimum:.2}x"
+        );
     }
 
     #[test]

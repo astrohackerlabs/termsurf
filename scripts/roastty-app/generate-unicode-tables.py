@@ -217,6 +217,12 @@ def render_props() -> str:
                 "    },",
             ]
         )
+    lines += [
+        "];",
+        "",
+        f"pub(crate) const WIDTH_STAGE3: [u8; {len(stage3)}] = [",
+    ]
+    lines.extend(format_int_array([prop.width for prop in stage3]))
     lines += ["];"]
     return "\n".join(lines) + "\n"
 

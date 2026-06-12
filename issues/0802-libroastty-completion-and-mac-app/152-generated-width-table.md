@@ -104,3 +104,67 @@ The reviewer confirmed that the design is linked from the issue README with
 status `Designed`, has the required sections, stays scoped to the Phase I width
 performance gap, preserves the pinned Ghostty-generated table as the oracle, and
 includes concrete pass/partial/fail criteria plus required hygiene checks.
+
+## Result
+
+**Result:** Pass
+
+Roastty now generates a width-only `WIDTH_STAGE3` table from the same pinned
+Ghostty Unicode `stage3` entries that produce the full `Properties` table.
+`unicode::codepoint_width` keeps the Experiment 151 caller-filter semantics for
+`<= 0xff` codepoints and otherwise uses the same staged `STAGE1`/`STAGE2` index
+path to load one byte from `WIDTH_STAGE3` instead of copying a full `Properties`
+value.
+
+The old scalar range helper is removed. Metadata-heavy callers still use
+`unicode::get` / `table_properties`, so grapheme break, emoji variation, and
+`width_zero_in_grapheme` behavior remain tied to the full generated table.
+
+The release perf probe now enforces the 1.05x threshold and measured:
+
+- `codepoint_width`: 1.12x versus direct generated-table `Properties` width
+  lookup
+
+This closes the remaining width portion of the Phase I SIMD/perf roadmap item.
+
+## Verification
+
+- `scripts/roastty-app/generate-unicode-tables.py --check` — passed
+- `cargo fmt` — passed
+- `cargo test -p roastty unicode -- --test-threads=1` — 33 passed, 1 ignored
+- `cargo test -p roastty terminal_stream -- --test-threads=1` — 447 passed
+- `cargo test --release -p roastty simd_fast_path_perf_codepoint_width -- --ignored --nocapture --test-threads=1`
+  — passed with enforced 1.05x threshold; measured `codepoint_width` at 1.12x
+- `cargo test -p roastty -- --test-threads=1` — 4,840 unit tests passed, 4
+  ignored; ABI harness and doc-tests passed, with existing C enum-conversion
+  warnings and existing `[unknown](scope): message` noise
+- `cd roastty && macos/build.nu --action test` — 211 hosted macOS tests passed
+  (`TEST SUCCEEDED`), with existing SwiftLint, Swift concurrency,
+  main-thread-checker, and pasteboard warning noise
+- `cargo fmt --check` — passed
+- `git diff --check` — passed
+
+## Conclusion
+
+A generated width-only stage table is enough to make Roastty's width hot path
+faster without adding a C++ Highway bridge. The Phase I SIMD/perf item now has
+base64, VT ASCII, index-of, and codepoint width fast paths wired and verified.
+
+## Completion Review
+
+Codex-native adversarial subagent `Copernicus` reviewed the completed experiment
+with fresh context before the result commit. The reviewer inspected the
+experiment file, the issue README, the implementation diff from plan commit
+`209c0ab31fc7a`, the changed source files, and the previous width experiment.
+
+**Verdict:** Approved.
+
+**Findings:** None.
+
+**Independent verification:** The reviewer ran `git status --short`,
+`scripts/roastty-app/generate-unicode-tables.py --check`, `cargo fmt --check`,
+`git diff --check`, targeted Unicode and terminal stream tests, and the release
+perf probe. The reviewer also independently parsed `STAGE3` and `WIDTH_STAGE3`,
+confirming that both have 30 entries and that `WIDTH_STAGE3` exactly matches the
+parsed `STAGE3.width` values. The reviewer's release perf rerun reproduced the
+1.12x result.

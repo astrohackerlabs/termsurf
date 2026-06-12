@@ -216,6 +216,12 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   lookup. The remaining SIMD/perf width work should use a generated width-only
   table, target intrinsics, or a C++ Highway bridge; do not spend more time on
   scalar range scans/checks.
+- **Generated width tables close codepoint width perf.** Exp 152 derives a
+  compact `WIDTH_STAGE3` table from the same pinned Ghostty Unicode `stage3`
+  entries as the full `Properties` table, so `codepoint_width` loads one byte
+  through the existing staged index path. The asserted release probe measured
+  1.12x versus full-property width lookup, closing the width part of the Phase I
+  SIMD/perf item without a C++ Highway bridge.
 - **GTK quick-terminal config is parser/formatter-only.** Exp 82 wires
   `gtk-quick-terminal-layer` and `gtk-quick-terminal-namespace`; empty values
   reset to upstream defaults before enum/string parsing, and GTK layer-shell
@@ -990,11 +996,9 @@ the live app, verified by a Phase-D UI test.)
 - [x] Sentry crash capture (the init/capture half of `crash/`) — local-only
       Sentry SDK init, panic/event capture, custom envelope transport, and
       dependency checks excluding Sentry HTTP/TLS transports wired in Exp 149
-- [ ] SIMD fast paths (perf — base64 / VT / index-of / width) — base64,
-      index-of, and VT ASCII fast paths wired in Exp 150; width remains a scalar
-      shortcut after Exp 151's parity-safe width helper measured slower than the
-      generated table; needs a generated width table, intrinsics, or C++ Highway
-      bridge
+- [x] SIMD fast paths (perf — base64 / VT / index-of / width) — base64,
+      index-of, and VT ASCII fast paths wired in Exp 150; generated width-only
+      table wired in Exp 152 and measured 1.12x over full-property width lookup
 - [ ] `os/cf_release_thread` (perf), terminfo resource
 
 **Workstream 3 (continuous — the harness from Phase A, the roastty app from
@@ -1392,7 +1396,7 @@ stays unaltered except for the rename).
 - [Experiment 151: Phase I — codepoint width fast path](151-codepoint-width-fast-path.md)
   — **Partial**
 - [Experiment 152: Phase I — generated width table](152-generated-width-table.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
