@@ -1439,6 +1439,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 156: Phase G — command-palette UI discovery](156-command-palette-ui-discovery.md)
   — **Pass**
+- [Experiment 157: Phase G — dead-key UI automation](157-dead-key-ui-automation.md)
+  — **Designed**
 
 ## Process
 
