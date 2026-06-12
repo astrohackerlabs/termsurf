@@ -5,16 +5,20 @@ use objc2_metal::{
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLTexture,
 };
 
+use crate::renderer::image::{ImageDrawBackend, Placement};
 use crate::renderer::metal::api::{
     MetalClearColor, MetalCommandBufferStatus, MetalLoadAction, MetalPrimitiveType,
     MetalStoreAction,
 };
-use crate::renderer::metal::buffer::FrameCells;
+use crate::renderer::metal::buffer::{
+    FrameCells, MetalBuffer, MetalBufferError, MetalBufferOptions,
+};
 use crate::renderer::metal::frame::FrameState;
 use crate::renderer::metal::pipeline::MetalPipeline;
 use crate::renderer::metal::sampler::MetalSampler;
 use crate::renderer::metal::shaders::MetalStandardPipelines;
 use crate::renderer::metal::texture::MetalTexture;
+use crate::renderer::shader::{ImageDrawCall, ImageVertex, PrimitiveType};
 
 pub(crate) struct MetalCommandFrame {
     command_buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
@@ -128,25 +132,13 @@ impl MetalRenderPass {
         self.encoder.endEncoding();
     }
 
-    /// Issue the core cell-draw sequence — the background color, the opaque cell
-    /// backgrounds, and the cell text — from the frame's cell buffers. Mirrors
-    /// upstream `drawFrame`'s cell steps (the no-background-image path): the two
-    /// background steps bind `[null, cells_bg]` and draw a full-target triangle;
-    /// the text step binds `[cells_text, cells_bg]` with the grayscale and color
-    /// atlases and draws one instanced quad per foreground cell (`fg_count`). A
-    /// `fg_count` of `0` skips the text step (`step` short-circuits zero
-    /// instances). The background-image branch and the kitty/overlay draws are
-    /// deferred.
-    pub(crate) fn draw_cells(
+    /// Draw the background color step from upstream `drawFrame`'s no-background-image path.
+    pub(crate) fn draw_background_color(
         &self,
         pipelines: &MetalStandardPipelines,
         uniforms: &ProtocolObject<dyn MTLBuffer>,
         cells: &FrameCells,
-        grayscale: &MetalTexture,
-        color: &MetalTexture,
-        fg_count: usize,
     ) {
-        // Background color: a full-target triangle reading the bg cells.
         self.step(MetalRenderPassStep {
             pipeline: &pipelines.bg_color,
             buffers: &[None, Some(cells.bg_buffer())],
@@ -159,7 +151,15 @@ impl MetalRenderPass {
                 instance_count: 1,
             },
         });
-        // Opaque cell backgrounds.
+    }
+
+    /// Draw opaque cell backgrounds from upstream `drawFrame`.
+    pub(crate) fn draw_cell_backgrounds(
+        &self,
+        pipelines: &MetalStandardPipelines,
+        uniforms: &ProtocolObject<dyn MTLBuffer>,
+        cells: &FrameCells,
+    ) {
         self.step(MetalRenderPassStep {
             pipeline: &pipelines.cell_bg,
             buffers: &[None, Some(cells.bg_buffer())],
@@ -172,7 +172,18 @@ impl MetalRenderPass {
                 instance_count: 1,
             },
         });
-        // Cell text: one instanced quad per foreground cell.
+    }
+
+    /// Draw cell text from upstream `drawFrame`.
+    pub(crate) fn draw_cell_text(
+        &self,
+        pipelines: &MetalStandardPipelines,
+        uniforms: &ProtocolObject<dyn MTLBuffer>,
+        cells: &FrameCells,
+        grayscale: &MetalTexture,
+        color: &MetalTexture,
+        fg_count: usize,
+    ) {
         self.step(MetalRenderPassStep {
             pipeline: &pipelines.cell_text,
             buffers: &[Some(cells.text_buffer()), Some(cells.bg_buffer())],
@@ -185,6 +196,25 @@ impl MetalRenderPass {
                 instance_count: fg_count,
             },
         });
+    }
+
+    /// Issue the core cell-draw sequence — the background color, the opaque cell
+    /// backgrounds, and the cell text — from the frame's cell buffers. Mirrors
+    /// upstream `drawFrame`'s cell steps (the no-background-image path). The split
+    /// helpers are used directly by the image-aware compositor path so Kitty
+    /// buckets can be interleaved between these stages.
+    pub(crate) fn draw_cells(
+        &self,
+        pipelines: &MetalStandardPipelines,
+        uniforms: &ProtocolObject<dyn MTLBuffer>,
+        cells: &FrameCells,
+        grayscale: &MetalTexture,
+        color: &MetalTexture,
+        fg_count: usize,
+    ) {
+        self.draw_background_color(pipelines, uniforms, cells);
+        self.draw_cell_backgrounds(pipelines, uniforms, cells);
+        self.draw_cell_text(pipelines, uniforms, cells, grayscale, color, fg_count);
     }
 
     /// Draw a synced [`FrameState`]'s cells — the cell-drawing portion of
@@ -207,6 +237,70 @@ impl MetalRenderPass {
             state.color_texture(),
             fg_count,
         );
+    }
+}
+
+pub(crate) struct MetalImageDrawPass<'a> {
+    pass: &'a MetalRenderPass,
+    pipelines: &'a MetalStandardPipelines,
+    uniforms: &'a ProtocolObject<dyn MTLBuffer>,
+    sampler: &'a MetalSampler,
+    options: MetalBufferOptions<'a>,
+    vertex_buffers: Vec<MetalBuffer<ImageVertex>>,
+}
+
+impl<'a> MetalImageDrawPass<'a> {
+    pub(crate) fn new(
+        pass: &'a MetalRenderPass,
+        pipelines: &'a MetalStandardPipelines,
+        uniforms: &'a ProtocolObject<dyn MTLBuffer>,
+        sampler: &'a MetalSampler,
+        options: MetalBufferOptions<'a>,
+    ) -> Self {
+        Self {
+            pass,
+            pipelines,
+            uniforms,
+            sampler,
+            options,
+            vertex_buffers: Vec::new(),
+        }
+    }
+}
+
+impl ImageDrawBackend<MetalTexture> for MetalImageDrawPass<'_> {
+    type Error = MetalBufferError;
+
+    fn draw_image(
+        &mut self,
+        texture: &MetalTexture,
+        _placement: Placement,
+        call: ImageDrawCall,
+    ) -> Result<(), Self::Error> {
+        let primitive_type = match call.primitive {
+            PrimitiveType::TriangleStrip => MetalPrimitiveType::TriangleStrip,
+        };
+        self.vertex_buffers
+            .push(MetalBuffer::init_fill(self.options, &[call.vertex])?);
+        let vertex_buffer = self
+            .vertex_buffers
+            .last()
+            .expect("image vertex buffer was just pushed");
+
+        self.pass.step(MetalRenderPassStep {
+            pipeline: &self.pipelines.image,
+            buffers: &[Some(vertex_buffer.buffer())],
+            textures: &[Some(texture)],
+            samplers: &[Some(self.sampler)],
+            uniforms: Some(self.uniforms),
+            draw: MetalDraw {
+                primitive_type,
+                vertex_count: call.vertex_count as usize,
+                instance_count: call.instance_count as usize,
+            },
+        });
+
+        Ok(())
     }
 }
 

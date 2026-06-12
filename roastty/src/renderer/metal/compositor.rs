@@ -4,6 +4,7 @@ use objc2_metal::{MTLCommandQueue, MTLDevice};
 
 use crate::font::atlas::Atlas;
 use crate::renderer::cell::Contents;
+use crate::renderer::image::{DrawPlacements, ImageState};
 use crate::renderer::metal::api::{
     MetalClearColor, MetalPixelFormat, MetalResourceOptions, MetalStorageMode,
 };
@@ -11,18 +12,24 @@ use crate::renderer::metal::buffer::MetalBufferOptions;
 use crate::renderer::metal::frame::{FrameState, FrameStateError};
 use crate::renderer::metal::iosurface_layer::{MetalIOSurfaceLayer, MetalSurfacePresentationMode};
 use crate::renderer::metal::render_pass::{
-    MetalCommandFrame, MetalCommandFrameError, MetalRenderPassAttachment, MetalRenderPassError,
+    MetalCommandFrame, MetalCommandFrameError, MetalImageDrawPass, MetalRenderPassAttachment,
+    MetalRenderPassError,
+};
+use crate::renderer::metal::sampler::{
+    MetalSampler, MetalSamplerDescriptorOptions, MetalSamplerError, MetalSamplerOptions,
 };
 use crate::renderer::metal::shaders::{
     MetalStandardPipelines, MetalStandardPipelinesError, MetalUniforms,
 };
 use crate::renderer::metal::target::{MetalTarget, MetalTargetError, MetalTargetOptions};
+use crate::renderer::metal::texture::{MetalImageUploadBackend, MetalTexture};
 
 pub(crate) struct MetalFrameCompositor {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     pipelines: MetalStandardPipelines,
     frame: FrameState,
+    image_sampler: MetalSampler,
     layer: MetalIOSurfaceLayer,
     target: Option<MetalTarget>,
     pixel_format: MetalPixelFormat,
@@ -68,6 +75,7 @@ pub(crate) enum MetalFrameCompositorError {
     CommandQueueCreationFailed,
     Pipelines(MetalStandardPipelinesError),
     Frame(FrameStateError),
+    ImageSampler(MetalSamplerError),
     Target(MetalTargetError),
     CommandFrame(MetalCommandFrameError),
     RenderPass(MetalRenderPassError),
@@ -115,11 +123,17 @@ impl MetalFrameCompositor {
             options.grayscale_atlas,
             options.color_atlas,
         )?;
+        let image_sampler = MetalSampler::new(MetalSamplerOptions {
+            device: &options.device,
+            descriptor: MetalSamplerDescriptorOptions::default(),
+        })
+        .map_err(MetalFrameCompositorError::ImageSampler)?;
         let mut compositor = Self {
             device: options.device,
             queue,
             pipelines,
             frame,
+            image_sampler,
             layer: MetalIOSurfaceLayer::new(),
             target: None,
             pixel_format: options.pixel_format,
@@ -140,12 +154,25 @@ impl MetalFrameCompositor {
         &mut self,
         input: MetalFrameInput<'_>,
     ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
-        self.draw_frame_with_presenter(input, |layer, target| layer.set_surface(target.surface()))
+        self.draw_frame_with_presenter(input, None, |layer, target| {
+            layer.set_surface(target.surface())
+        })
+    }
+
+    pub(crate) fn draw_frame_with_images(
+        &mut self,
+        input: MetalFrameInput<'_>,
+        images: &mut ImageState<MetalTexture>,
+    ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
+        self.draw_frame_with_presenter(input, Some(images), |layer, target| {
+            layer.set_surface(target.surface())
+        })
     }
 
     fn draw_frame_with_presenter(
         &mut self,
         input: MetalFrameInput<'_>,
+        mut images: Option<&mut ImageState<MetalTexture>>,
         presenter: impl FnOnce(&MetalIOSurfaceLayer, &MetalTarget) -> MetalSurfacePresentationMode,
     ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
         if !input.contents_scale.is_finite() || input.contents_scale <= 0.0 {
@@ -169,6 +196,11 @@ impl MetalFrameCompositor {
             .target
             .as_ref()
             .expect("target should exist after ensure_target");
+        if let Some(images) = images.as_deref_mut() {
+            let mut upload_backend =
+                MetalImageUploadBackend::new(&device, self.storage_mode, false);
+            images.upload(&mut upload_backend);
+        }
         let command_frame = MetalCommandFrame::begin(&self.queue)?;
         let pass = command_frame.render_pass(&[MetalRenderPassAttachment {
             texture: target.texture(),
@@ -179,7 +211,67 @@ impl MetalFrameCompositor {
                 alpha: 0.0,
             }),
         }])?;
-        pass.draw_frame(&self.pipelines, &self.frame, fg_count);
+        if let Some(images) = images {
+            pass.draw_background_color(
+                &self.pipelines,
+                self.frame.uniforms_buffer(),
+                self.frame.cells(),
+            );
+            {
+                let mut image_pass = MetalImageDrawPass::new(
+                    &pass,
+                    &self.pipelines,
+                    self.frame.uniforms_buffer(),
+                    &self.image_sampler,
+                    MetalBufferOptions {
+                        device: &device,
+                        resource_options: self.resource_options,
+                    },
+                );
+                images.draw(DrawPlacements::KittyBelowBackground, &mut image_pass);
+            }
+            pass.draw_cell_backgrounds(
+                &self.pipelines,
+                self.frame.uniforms_buffer(),
+                self.frame.cells(),
+            );
+            {
+                let mut image_pass = MetalImageDrawPass::new(
+                    &pass,
+                    &self.pipelines,
+                    self.frame.uniforms_buffer(),
+                    &self.image_sampler,
+                    MetalBufferOptions {
+                        device: &device,
+                        resource_options: self.resource_options,
+                    },
+                );
+                images.draw(DrawPlacements::KittyBelowText, &mut image_pass);
+            }
+            pass.draw_cell_text(
+                &self.pipelines,
+                self.frame.uniforms_buffer(),
+                self.frame.cells(),
+                self.frame.grayscale_texture(),
+                self.frame.color_texture(),
+                fg_count,
+            );
+            {
+                let mut image_pass = MetalImageDrawPass::new(
+                    &pass,
+                    &self.pipelines,
+                    self.frame.uniforms_buffer(),
+                    &self.image_sampler,
+                    MetalBufferOptions {
+                        device: &device,
+                        resource_options: self.resource_options,
+                    },
+                );
+                images.draw(DrawPlacements::KittyAboveText, &mut image_pass);
+            }
+        } else {
+            pass.draw_frame(&self.pipelines, &self.frame, fg_count);
+        }
         pass.complete();
         command_frame.commit_and_wait()?;
 
@@ -228,7 +320,7 @@ impl MetalFrameCompositor {
         &mut self,
         input: MetalFrameInput<'_>,
     ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
-        self.draw_frame_with_presenter(input, |layer, target| {
+        self.draw_frame_with_presenter(input, None, |layer, target| {
             assert!(layer.set_surface_if_size_matches(target.surface()));
             MetalSurfacePresentationMode::Immediate
         })

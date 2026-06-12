@@ -20,7 +20,9 @@ use crate::renderer::frame_rebuild::{
     FrameSnapshotCursorUniformInput, FrameSnapshotRowFormatInput, FrameSnapshotTextOverlayInput,
     FrameTerminalSnapshot, RenderDirty,
 };
+use crate::renderer::image::ImageState;
 use crate::renderer::metal::shaders::MetalUniforms;
+use crate::renderer::metal::texture::MetalTexture;
 use crate::renderer::size::GridSize;
 use crate::renderer::state::Preedit;
 use crate::terminal::color::{Palette, Rgb};
@@ -121,6 +123,37 @@ impl FrameRenderer {
         Ok(app)
     }
 
+    pub(crate) fn update_and_present_frame_with_images(
+        &mut self,
+        terminal: &Terminal,
+        grid: &mut SharedGrid,
+        images: &mut ImageState<MetalTexture>,
+        dirty: RenderDirty,
+        preedit: Option<Preedit>,
+        input: FramePreparedRebuildInput<'_>,
+        presentation: FramePreparedPresentationInput<'_>,
+    ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        let snapshot = FrameTerminalSnapshot::collect(terminal, self.current_grid, dirty, preedit);
+
+        self.row_dirty.clear();
+        self.row_dirty.extend_from_slice(&snapshot.row_dirty);
+
+        let app = snapshot.rebuild_and_present_frame_with_images(
+            FramePreparedRebuildTargets {
+                contents: &mut self.contents,
+                grid,
+                row_dirty: &mut self.row_dirty,
+                uniforms: &mut self.uniforms,
+            },
+            input,
+            images,
+            presentation,
+        )?;
+
+        self.current_grid = snapshot.terminal_grid;
+        Ok(app)
+    }
+
     /// Compose the full render input from `(terminal, config)` and rebuild a frame
     /// — the single entry point the live draw path uses (Issue 801, Exp 847).
     /// Builds the `FrameRenderState`, `FrameRenderKnobs`, and input internally and
@@ -155,6 +188,30 @@ impl FrameRenderer {
         let knobs = FrameRenderKnobs::from_config(config);
         let input = state.rebuild_input(&knobs);
         self.update_and_present_frame(terminal, grid, dirty, preedit, input, presentation)
+    }
+
+    pub(crate) fn render_and_present_frame_with_images(
+        &mut self,
+        terminal: &Terminal,
+        grid: &mut SharedGrid,
+        images: &mut ImageState<MetalTexture>,
+        dirty: RenderDirty,
+        preedit: Option<Preedit>,
+        config: &Config,
+        presentation: FramePreparedPresentationInput<'_>,
+    ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        let state = FrameRenderState::from_terminal(terminal);
+        let knobs = FrameRenderKnobs::from_config(config);
+        let input = state.rebuild_input(&knobs);
+        self.update_and_present_frame_with_images(
+            terminal,
+            grid,
+            images,
+            dirty,
+            preedit,
+            input,
+            presentation,
+        )
     }
 
     /// Drive the screen-size + font-grid uniforms from the live surface (Issue 802 / Exp 18):

@@ -2893,6 +2893,7 @@ struct KittyClipboardWriteTransaction {
 struct SurfaceLiveRenderer {
     compositor: renderer::metal::compositor::MetalFrameCompositor,
     frame_renderer: renderer::frame_renderer::FrameRenderer,
+    image_state: renderer::image::ImageState<renderer::metal::texture::MetalTexture>,
     shared_grid: font::shared_grid::SharedGrid,
 }
 
@@ -2997,6 +2998,7 @@ fn build_live_renderer(
     Some(SurfaceLiveRenderer {
         compositor,
         frame_renderer,
+        image_state: renderer::image::ImageState::default(),
         shared_grid,
     })
 }
@@ -3508,6 +3510,7 @@ impl Surface {
         let SurfaceLiveRenderer {
             compositor,
             frame_renderer,
+            image_state,
             shared_grid,
         } = live;
         // Drive the projection/screen-size + font-grid uniforms from the surface (Exp 18) — the
@@ -3530,9 +3533,12 @@ impl Surface {
             .unwrap_or_default();
         worker.with_termio(|termio| {
             let terminal = termio.terminal();
-            if let Err(e) = frame_renderer.render_and_present_frame(
+            let kitty_placements = kitty_render_placement_snapshots(terminal);
+            image_state.update_kitty_from_render_placements(&kitty_placements);
+            if let Err(e) = frame_renderer.render_and_present_frame_with_images(
                 terminal,
                 shared_grid,
+                image_state,
                 renderer::frame_rebuild::RenderDirty::Full,
                 None,
                 &config,

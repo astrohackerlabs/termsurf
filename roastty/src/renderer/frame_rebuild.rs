@@ -19,10 +19,12 @@ use crate::renderer::cell::{
     add_cursor, add_preedit, rebuild_bg_row, rebuild_row, Contents, Highlight, SelectionConfig,
 };
 use crate::renderer::cursor::Style as CursorStyle;
+use crate::renderer::image::ImageState;
 use crate::renderer::metal::compositor::{
     MetalFrameCompositor, MetalFrameCompositorError, MetalFrameInput, MetalFramePresentation,
 };
 use crate::renderer::metal::shaders::MetalUniforms;
+use crate::renderer::metal::texture::MetalTexture;
 use crate::renderer::shader::CellTextVertex;
 use crate::renderer::shadertoy::CustomShaderUniforms;
 use crate::renderer::size::{GridSize, Unit};
@@ -269,6 +271,43 @@ impl FrameTerminalSnapshot {
                 // Sample the SharedGrid's OWN atlases — the ones the rebuild just rasterized
                 // glyphs into (Issue 802 / Exp 17). The rebuild's `&mut grid` borrow has ended,
                 // so this immutable re-borrow is sound; presentation no longer carries atlases.
+                grayscale_atlas: &targets.grid.atlas_grayscale,
+                color_atlas: &targets.grid.atlas_color,
+            },
+        )?;
+
+        Ok(FramePreparedFrameApplication { rebuild, present })
+    }
+
+    pub(crate) fn rebuild_and_present_frame_with_images(
+        &self,
+        targets: FramePreparedRebuildTargets<'_>,
+        input: FramePreparedRebuildInput<'_>,
+        images: &mut ImageState<MetalTexture>,
+        presentation: FramePreparedPresentationInput<'_>,
+    ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        let plan = self.build_plan().map_err(FramePreparedRebuildError::from)?;
+
+        let rebuild = self.run_rebuild_stages(
+            &plan,
+            FramePreparedRebuildTargets {
+                contents: &mut *targets.contents,
+                grid: &mut *targets.grid,
+                row_dirty: &mut *targets.row_dirty,
+                uniforms: &mut *targets.uniforms,
+            },
+            input,
+        )?;
+
+        let present = plan.present_metal_frame_with_images(
+            presentation.compositor,
+            images,
+            FrameMetalPresentationInput {
+                width: presentation.width,
+                height: presentation.height,
+                contents_scale: presentation.contents_scale,
+                uniforms: targets.uniforms,
+                contents: targets.contents,
                 grayscale_atlas: &targets.grid.atlas_grayscale,
                 color_atlas: &targets.grid.atlas_color,
             },
@@ -1135,6 +1174,34 @@ impl FrameRebuildPlan {
             grayscale_atlas: input.grayscale_atlas,
             color_atlas: input.color_atlas,
         })?;
+
+        Ok(FrameMetalPresentationApplication {
+            foreground_drawn: presentation.fg_count > 0,
+            target_reallocated: presentation.target_reallocated,
+            presentation,
+        })
+    }
+
+    pub(crate) fn present_metal_frame_with_images(
+        &self,
+        compositor: &mut MetalFrameCompositor,
+        images: &mut ImageState<MetalTexture>,
+        input: FrameMetalPresentationInput<'_>,
+    ) -> Result<FrameMetalPresentationApplication, FrameMetalPresentationError> {
+        self.validate_metal_presentation_input(&input)?;
+
+        let presentation = compositor.draw_frame_with_images(
+            MetalFrameInput {
+                width: input.width,
+                height: input.height,
+                contents_scale: input.contents_scale,
+                uniforms: input.uniforms,
+                contents: input.contents,
+                grayscale_atlas: input.grayscale_atlas,
+                color_atlas: input.color_atlas,
+            },
+            images,
+        )?;
 
         Ok(FrameMetalPresentationApplication {
             foreground_drawn: presentation.fg_count > 0,
