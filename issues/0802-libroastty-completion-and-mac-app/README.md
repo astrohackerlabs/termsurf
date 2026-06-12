@@ -474,6 +474,13 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   behavior, and clone-stable storage. Remaining Phase G gaps include
   command-palette UI behavior, the `crash` binding action, native keymaps/global
   shortcuts, app-key sequence/table handling, and broader global/all routing.
+- **Command-palette action execution has a hosted gate.** Exp 155 extracts the
+  copied app's terminal command-entry mapping into a hosted-testable helper and
+  proves configured entries, unsupported filtering, shortcut symbols, `onAction`
+  selection callbacks, and real surface dispatch through
+  `roastty_surface_binding_action`. Full UI open/filter/click automation remains
+  unproven: the focused `RoasttyUITests/RoasttyCommandPaletteTests` command
+  currently exits successfully but executes 0 UI tests.
 - **Global app-key surface-control actions fan out to live surfaces.** Exp 125
   classifies key-table actions and `end_key_sequence` as surface-scoped in the
   app-key path, matching upstream `App.keyEvent`: focused non-global app-key
@@ -958,8 +965,11 @@ the live app, verified by a Phase-D UI test.)
       shadowing. Explicit exclusion: upstream `cursor_key` is rejected by
       Ghostty's own action parser.
 - [x] Command-palette catalog (`command.zig`) — parser/defaults and C config ABI
-      exposure are wired (Exp 85, Exp 124); command-palette UI behavior remains
-      later work
+      exposure are wired (Exp 85, Exp 124), and hosted tests now prove the
+      command-entry/delegate action path through
+      `roastty_surface_binding_action` (Exp 155); full command-palette UI
+      open/filter/click automation remains unproven because the focused UI
+      selector currently executes 0 tests
 - [ ] Native keymaps (`keycodes`, `KeymapDarwin`) + app-level key handling —
       `RemapSet`/`Mask`, the `key-remap` config field, and surface runtime
       key-remap application are wired (Exp 107–109), and configured `global:`
@@ -1418,7 +1428,7 @@ stays unaltered except for the rename).
 - [Experiment 154: Phase I — CF release thread](154-cf-release-thread.md) —
   **Pass**
 - [Experiment 155: Phase G — command-palette hosted execution](155-command-palette-hosted-execution.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

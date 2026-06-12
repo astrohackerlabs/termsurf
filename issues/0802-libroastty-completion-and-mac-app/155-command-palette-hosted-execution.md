@@ -122,3 +122,68 @@ using the `adversarial-review` skill's Codex path
 **Findings:** No Required, Optional, or Nit findings.
 
 **Final verdict:** Approved.
+
+## Result
+
+**Result:** Pass
+
+Added a hosted, non-UI command-palette execution gate that runs in the default
+macOS test path:
+
+- `TerminalCommandPaletteView.terminalCommandOptions(...)` now exposes the pure
+  terminal command-entry mapping used by the live command palette.
+- The live `terminalOptions` path still reads `appDelegate.roastty.config`,
+  still filters unsupported commands, still derives keyboard shortcut symbols
+  from `Roastty.Config.keyboardShortcut(for:)`, and still calls the copied
+  `onAction(c.action)` callback when a command is selected.
+- `CommandPaletteHostedTests` verifies:
+  - command-palette config entries are read through the real
+    `Roastty.Config.commandPaletteEntries` C ABI;
+  - unsupported action keys are filtered out;
+  - shortcut symbols are attached for a configured `keybind`;
+  - selecting the option records the exact action through the copied `onAction`
+    callback;
+  - a real `Roastty.SurfaceView` can dispatch `clear_screen` through
+    `Roastty.Surface.perform(action:)`, which wraps
+    `roastty_surface_binding_action`, and rejects an invalid action.
+
+Verification:
+
+- `swiftlint lint roastty/macos/Sources/Features/Command\ Palette/TerminalCommandPalette.swift roastty/macos/Tests/Roastty/CommandPaletteHostedTests.swift`
+  — pass, 0 violations.
+- `cd roastty && macos/build.nu --action test --only-testing RoasttyTests/CommandPaletteHostedTests`
+  — pass, 2 tests.
+- `cd roastty && macos/build.nu --action test` — pass, 213 hosted tests.
+  Existing SwiftLint/Main Thread Checker/pasteboard warnings remain.
+- `cd roastty && macos/build.nu --action test --ui-tests --only-testing RoasttyUITests/RoasttyCommandPaletteTests`
+  — pass as a process, but executed 0 UI tests. This does not prove full UI
+  behavior, so the README keeps full command-palette UI open/filter/click
+  coverage listed as unproven.
+- `cargo fmt --check` — pass.
+- `git diff --check` — pass.
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/155-command-palette-hosted-execution.md issues/0802-libroastty-completion-and-mac-app/README.md`
+  — pass.
+
+## Conclusion
+
+The command-palette action-entry/delegate path is now covered by ordinary hosted
+macOS tests that do not require XCTest UI automation mode. This closes the
+dismissal-only proof gap for configured command entries and proves the
+surface-action dispatch wrapper reaches `roastty_surface_binding_action`.
+
+Full UI behavior remains separate: the focused `RoasttyUITests` command now
+returns success in this environment, but it runs zero UI tests, so Issue 802
+must still treat command-palette open/filter/click UI automation as unproven
+until that selector actually executes `RoasttyCommandPaletteTests`.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial subagent `Hume` with fresh context, using
+the `adversarial-review` skill's Codex path (`multi_agent_v1.spawn_agent`), not
+Claude's named `adversarial-reviewer` agent.
+
+**Verdict:** Approved.
+
+**Findings:** No Required, Optional, or Nit findings.
+
+**Final verdict:** Approved.
