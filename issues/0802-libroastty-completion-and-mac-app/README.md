@@ -1305,6 +1305,8 @@ stays unaltered except for the rename).
   **Pass**
 - [Experiment 139: Phase G — keymap text scope](139-keymap-text-scope.md) —
   **Pass**
+- [Experiment 140: Phase G — hosted preedit surface view](140-hosted-preedit-surface-view.md)
+  — **Designed**
 
 ## Process
 
