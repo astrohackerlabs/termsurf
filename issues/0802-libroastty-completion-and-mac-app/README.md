@@ -1320,6 +1320,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 141: Phase H — live Kitty image presentation](141-live-kitty-image-presentation.md)
   — **Pass**
+- [Experiment 142: Phase H — background-image config path](142-background-image-config-path.md)
+  — **Designed**
 
 ## Process
 
