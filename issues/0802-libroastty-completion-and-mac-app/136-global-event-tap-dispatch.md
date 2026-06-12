@@ -96,3 +96,69 @@ The reviewer confirmed the README links Experiment 136 as `Designed`, the
 experiment has the required sections, the scope is narrow and does not overclaim
 live Accessibility-permission or event-tap installation validation, and the
 formatting/diff checks passed.
+
+## Result
+
+**Result:** Pass
+
+The copied macOS `GlobalEventTap` callback now routes keydown dispatch through
+an internal helper that accepts the captured `CGEvent`, current app-active
+state, and optional `roastty_app_t`. The callback still preserves the existing
+disabled-tap re-enable path and pass-through behavior, but the key dispatch body
+is now directly testable without installing a real event tap.
+
+`GlobalEventTapTests` creates temporary Roastty configs and raw app handles,
+then uses synthetic macOS keycode-0 `CGEvent` values to validate the interesting
+cases:
+
+- inactive `keybind = global:a=ignore` keydown events are handled and would be
+  suppressed by the event tap;
+- active-app keydown events pass through even when the same global binding is
+  configured;
+- inactive non-global `keybind = a=ignore` events pass through the global tap
+  path;
+- non-keydown event types pass through.
+
+The first targeted hosted-test run failed to compile because the new test file
+was missing `@testable import Roastty` for the internal helper and
+`TemporaryConfig.config` access. Adding the testable import fixed the issue, and
+the rerun passed.
+
+Verification:
+
+- `cargo test -p roastty app_key_global` passed 11 targeted unit tests.
+- `cargo test -p roastty app_has_global_keybinds` passed 2 targeted unit tests.
+- `cd roastty && macos/build.nu --action test --only-testing RoasttyTests/GlobalEventTapTests`
+  passed 4 hosted Swift tests in 1 suite.
+- `cd roastty && macos/build.nu --action test` passed 206 hosted Swift tests in
+  20 suites.
+- `cargo test -p roastty -- --test-threads=1` passed 4,751 Rust unit tests, the
+  C ABI harness, and doc tests.
+- `cargo fmt --check` passed.
+- `git diff --check` passed.
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/136-global-event-tap-dispatch.md issues/0802-libroastty-completion-and-mac-app/README.md`
+  passed.
+
+## Conclusion
+
+Global event-tap captured-event dispatch is now covered by hosted automation:
+the callback's key path converts a captured `CGEvent` into Roastty app-key input
+and suppresses only inactive-app configured `global:` captures that the app
+handles. The remaining native global-shortcut work is narrower: permission-
+dependent live `CGEventTap` installation/accessibility validation, plus the
+larger `KeymapDarwin` text translation and dead-key/preedit work that this
+experiment intentionally left untouched.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Avicenna`, fresh
+context.
+
+**Verdict:** Approved.
+
+**Findings:** None.
+
+The reviewer inspected the uncommitted result diff from plan commit
+`638052449cd1e`, verified the result commit had not been made before review, and
+approved the implementation, tests, README status, and result documentation
+without required changes.

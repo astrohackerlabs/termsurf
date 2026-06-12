@@ -365,8 +365,11 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   Exp 113 makes `roastty_app_key` match configured `global:` keybinds, consume
   matched captures, dispatch app-scoped actions once, and fan out surface-scoped
   actions to live app surfaces. Plain `all:` remains surface-key-path behavior;
-  native keymaps, keyboard-layout reload, sequences/chords, key tables, default
-  global bindings, and full app action coverage remain later work.
+  Exp 136 validates the copied macOS global event-tap callback dispatch path
+  with hosted synthetic `CGEvent` tests, without installing a live tap. Native
+  keymaps, keyboard-layout reload, sequences/chords, key tables, default global
+  bindings, full app action coverage, and permission-dependent live tap
+  installation remain later work.
 - **Focused app-key app actions are wired for configured single-key bindings.**
   Exp 114 extends `roastty_app_key` to match upstream's focused app-key split:
   `global:` bindings still work regardless of focus, focused non-global
@@ -879,8 +882,9 @@ the live app, verified by a Phase-D UI test.)
       consumption are wired (Exp 110–111), and configured `global:` app-key
       dispatch plus focused app-scoped app-key dispatch are wired (Exp 113–114);
       configured `all:` / `global:` leaves reached through the surface key path
-      now dispatch app-wide (Exp 127), but native global shortcut registration
-      remains later work
+      now dispatch app-wide (Exp 127), and the copied macOS event-tap callback
+      dispatch path is hosted-test validated (Exp 136), but permission-dependent
+      live tap installation remains later work
 - [x] `catch_all` trigger parsing and fallback lookup for configured single-key
       bindings (Exp 115)
 - [x] The full action set + the default-bindings data table + reverse
@@ -899,9 +903,11 @@ the live app, verified by a Phase-D UI test.)
       key-remap application are wired (Exp 107–109), and configured `global:`
       plus focused app-scoped `roastty_app_key` dispatch is wired (Exp 113–114),
       option-as-alt layout reload plumbing is wired (Exp 130–131), and the live
-      host layout probe is validated from a hosted app test (Exp 135), but full
-      `KeymapDarwin` text translation, dead-key/preedit handling, and native
-      global shortcut registration remain later work
+      host layout probe is validated from a hosted app test (Exp 135), and the
+      copied macOS event-tap callback dispatch path is hosted-test validated
+      (Exp 136), but full `KeymapDarwin` text translation, dead-key/preedit
+      handling, and permission-dependent live global shortcut installation
+      remain later work
 
 **Phase H — Renderer feature-completion (in the live pass)**
 
@@ -1284,7 +1290,7 @@ stays unaltered except for the rename).
 - [Experiment 135: Phase G — live keyboard layout probe](135-live-keyboard-layout-probe.md)
   — **Pass**
 - [Experiment 136: Phase G — global event tap dispatch](136-global-event-tap-dispatch.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

@@ -117,6 +117,26 @@ class GlobalEventTap {
     }
 }
 
+func globalEventTapHandleKeyEvent(
+    type: CGEventType,
+    cgEvent: CGEvent,
+    appIsActive: Bool,
+    roastty: roastty_app_t?
+) -> Bool {
+    guard type == .keyDown else { return false }
+    guard !appIsActive else { return false }
+    guard let roastty else { return false }
+    guard let event: NSEvent = .init(cgEvent: cgEvent) else { return false }
+
+    let key_ev = event.roasttyKeyEvent(ROASTTY_ACTION_PRESS)
+    if roastty_app_key(roastty, key_ev) {
+        GlobalEventTap.logger.info("global key event handled event=\(event)")
+        return true
+    }
+
+    return false
+}
+
 private func cgEventFlagsChangedHandler(
     proxy: CGEventTapProxy,
     type: CGEventType,
@@ -136,25 +156,14 @@ private func cgEventFlagsChangedHandler(
         return result
     }
 
-    // We only care about keydown events
-    guard type == .keyDown else { return result }
-
-    // If our app is currently active then we don't process the key event.
-    // This is because we already have a local event handler in AppDelegate
-    // that processes all local events.
-    guard !NSApp.isActive else { return result }
-
     // We need an app delegate to get the Roastty app instance
-    guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return result }
-    guard let roastty = appDelegate.roastty.app else { return result }
-
-    // We need an NSEvent for our logic below
-    guard let event: NSEvent = .init(cgEvent: cgEvent) else { return result }
-
-    // Build our event input and call roastty
-    let key_ev = event.roasttyKeyEvent(ROASTTY_ACTION_PRESS)
-    if roastty_app_key(roastty, key_ev) {
-        GlobalEventTap.logger.info("global key event handled event=\(event)")
+    let appDelegate = NSApplication.shared.delegate as? AppDelegate
+    if globalEventTapHandleKeyEvent(
+        type: type,
+        cgEvent: cgEvent,
+        appIsActive: NSApp.isActive,
+        roastty: appDelegate?.roastty.app
+    ) {
         return nil
     }
 
