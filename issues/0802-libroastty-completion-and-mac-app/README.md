@@ -1347,6 +1347,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 146: Phase H — link-highlight renderer feed](146-link-highlight-renderer-feed.md)
   — **Pass**
+- [Experiment 147: Phase I — shell-integration setup](147-shell-integration-setup.md)
+  — **Designed**
 
 ## Process
 
