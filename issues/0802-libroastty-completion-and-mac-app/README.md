@@ -1408,6 +1408,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 153: Phase I — terminfo resource env](153-terminfo-resource-env.md)
   — **Pass**
+- [Experiment 154: Phase I — CF release thread](154-cf-release-thread.md) —
+  **Designed**
 
 ## Process
 
