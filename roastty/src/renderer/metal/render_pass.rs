@@ -18,7 +18,7 @@ use crate::renderer::metal::pipeline::MetalPipeline;
 use crate::renderer::metal::sampler::MetalSampler;
 use crate::renderer::metal::shaders::MetalStandardPipelines;
 use crate::renderer::metal::texture::MetalTexture;
-use crate::renderer::shader::{ImageDrawCall, ImageVertex, PrimitiveType};
+use crate::renderer::shader::{BgImageVertex, ImageDrawCall, ImageVertex, PrimitiveType};
 
 pub(crate) struct MetalCommandFrame {
     command_buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
@@ -194,6 +194,27 @@ impl MetalRenderPass {
                 primitive_type: MetalPrimitiveType::TriangleStrip,
                 vertex_count: 4,
                 instance_count: fg_count,
+            },
+        });
+    }
+
+    pub(crate) fn draw_background_image(
+        &self,
+        pipelines: &MetalStandardPipelines,
+        uniforms: &ProtocolObject<dyn MTLBuffer>,
+        vertex: &MetalBuffer<BgImageVertex>,
+        texture: &MetalTexture,
+    ) {
+        self.step(MetalRenderPassStep {
+            pipeline: &pipelines.bg_image,
+            buffers: &[Some(vertex.buffer())],
+            textures: &[Some(texture)],
+            samplers: &[],
+            uniforms: Some(uniforms),
+            draw: MetalDraw {
+                primitive_type: MetalPrimitiveType::Triangle,
+                vertex_count: 3,
+                instance_count: 1,
             },
         });
     }

@@ -2,8 +2,15 @@
 // This renderer foundation is consumed by later renderer slices.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
-use crate::renderer::shader::{ImageDrawCall, ImageVertex, PrimitiveType};
+use image::ImageFormat;
+
+use crate::config::{BackgroundImageFit, BackgroundImagePosition, Config};
+use crate::renderer::shader::{
+    BgImageFit, BgImageInfo, BgImagePosition, BgImageVertex, ImageDrawCall, ImageVertex,
+    PrimitiveType,
+};
 use crate::KittyGraphicsRenderPlacementSnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -214,7 +221,7 @@ impl<Texture> RendererImage<Texture> {
         }
     }
 
-    fn ready_texture(&self) -> Option<&Texture> {
+    pub(crate) fn ready_texture(&self) -> Option<&Texture> {
         match self {
             RendererImage::Ready { texture, .. } | RendererImage::UnloadReady { texture, .. } => {
                 Some(texture)
@@ -236,6 +243,180 @@ impl<Texture> RendererImage<Texture> {
             | RendererImage::UnloadPending(_)
             | RendererImage::UnloadReplace { .. } => None,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BackgroundImageConfig {
+    path: String,
+    optional: bool,
+    opacity: f32,
+    position: BackgroundImagePosition,
+    fit: BackgroundImageFit,
+    repeat: bool,
+}
+
+impl BackgroundImageConfig {
+    pub(crate) fn from_config(config: &Config) -> Option<Self> {
+        let path = config.background_image.as_ref()?;
+        Some(Self {
+            path: path.path().to_string(),
+            optional: path.optional(),
+            opacity: config.bg_image_opacity,
+            position: config.bg_image_position,
+            fit: config.bg_image_fit,
+            repeat: config.bg_image_repeat,
+        })
+    }
+
+    fn same_path(&self, other: &Self) -> bool {
+        self.path == other.path && self.optional == other.optional
+    }
+
+    pub(crate) fn vertex(&self) -> BgImageVertex {
+        BgImageVertex {
+            opacity: self.opacity,
+            info: BgImageInfo::new(
+                match self.position {
+                    BackgroundImagePosition::TopLeft => BgImagePosition::TopLeft,
+                    BackgroundImagePosition::TopCenter => BgImagePosition::TopCenter,
+                    BackgroundImagePosition::TopRight => BgImagePosition::TopRight,
+                    BackgroundImagePosition::CenterLeft => BgImagePosition::MiddleLeft,
+                    BackgroundImagePosition::CenterCenter | BackgroundImagePosition::Center => {
+                        BgImagePosition::MiddleCenter
+                    }
+                    BackgroundImagePosition::CenterRight => BgImagePosition::MiddleRight,
+                    BackgroundImagePosition::BottomLeft => BgImagePosition::BottomLeft,
+                    BackgroundImagePosition::BottomCenter => BgImagePosition::BottomCenter,
+                    BackgroundImagePosition::BottomRight => BgImagePosition::BottomRight,
+                },
+                match self.fit {
+                    BackgroundImageFit::Contain => BgImageFit::Contain,
+                    BackgroundImageFit::Cover => BgImageFit::Cover,
+                    BackgroundImageFit::Stretch => BgImageFit::Stretch,
+                    BackgroundImageFit::None => BgImageFit::None,
+                },
+                self.repeat,
+            ),
+            _padding: [0; 3],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BackgroundImageLoadError {
+    Io,
+    UnknownFormat,
+    UnsupportedFormat,
+    Decode,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BackgroundImageState<Texture = ()> {
+    config: Option<BackgroundImageConfig>,
+    image: Option<RendererImage<Texture>>,
+    vertex: BgImageVertex,
+}
+
+impl<Texture> Default for BackgroundImageState<Texture> {
+    fn default() -> Self {
+        Self {
+            config: None,
+            image: None,
+            vertex: BgImageVertex {
+                opacity: 1.0,
+                info: BgImageInfo::new(BgImagePosition::MiddleCenter, BgImageFit::Contain, false),
+                _padding: [0; 3],
+            },
+        }
+    }
+}
+
+impl<Texture> BackgroundImageState<Texture> {
+    pub(crate) fn update_from_config(&mut self, config: &Config) -> bool {
+        let next = BackgroundImageConfig::from_config(config);
+        let path_changed = match (self.config.as_ref(), next.as_ref()) {
+            (Some(old), Some(new)) => !old.same_path(new),
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => false,
+        };
+
+        if let Some(config) = next.as_ref() {
+            self.vertex = config.vertex();
+        }
+
+        if path_changed {
+            match next.as_ref() {
+                Some(config) => match load_background_image(config) {
+                    Ok(pending) => match self.image.as_mut() {
+                        Some(image) if image.pending_image() == Some(&pending) => {}
+                        Some(image) if image.source_image() == Some(&pending) => {}
+                        Some(image) => image.mark_for_replace(pending),
+                        None => self.image = Some(RendererImage::Pending(pending)),
+                    },
+                    Err(error) => {
+                        eprintln!(
+                            "[roastty] background image \"{}\" skipped: {error:?}",
+                            config.path
+                        );
+                    }
+                },
+                None => {
+                    if let Some(image) = self.image.as_mut() {
+                        image.mark_for_unload();
+                    }
+                }
+            }
+        }
+
+        let changed = self.config != next;
+        self.config = next;
+        changed || path_changed
+    }
+
+    pub(crate) fn upload<Backend>(&mut self, backend: &mut Backend) -> bool
+    where
+        Backend: ImageUploadBackend<Texture = Texture>,
+    {
+        let Some(image) = self.image.as_ref() else {
+            return true;
+        };
+        if image.is_unloading() {
+            self.image = None;
+            return true;
+        }
+        if !image.is_pending() {
+            return true;
+        }
+
+        let upload = {
+            let image = self.image.as_mut().expect("background image exists");
+            let pending = image.pending_image_mut().expect("pending image exists");
+            let source = pending.clone();
+            let mut upload_pending = source.clone();
+            if upload_pending.prepare_rgba().is_err() {
+                return false;
+            }
+            backend
+                .upload_image(&upload_pending)
+                .map(|texture| (texture, source))
+        };
+
+        match upload {
+            Ok((texture, source)) => {
+                self.image = Some(RendererImage::Ready { texture, source });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub(crate) fn ready_texture(&self) -> Option<&Texture> {
+        self.image.as_ref()?.ready_texture()
+    }
+
+    pub(crate) fn vertex(&self) -> BgImageVertex {
+        self.vertex
     }
 }
 
@@ -539,6 +720,32 @@ fn first_index_at_or_after(placements: &[Placement], z: i32) -> u32 {
         .unwrap_or(placements.len()) as u32
 }
 
+fn load_background_image(
+    config: &BackgroundImageConfig,
+) -> Result<PendingImage, BackgroundImageLoadError> {
+    let path = Path::new(&config.path);
+    let bytes = std::fs::read(path).map_err(|_| BackgroundImageLoadError::Io)?;
+    let format = match image::guess_format(&bytes) {
+        Ok(format) => format,
+        Err(_) => {
+            ImageFormat::from_path(path).map_err(|_| BackgroundImageLoadError::UnknownFormat)?
+        }
+    };
+    match format {
+        ImageFormat::Png | ImageFormat::Jpeg => {}
+        _ => return Err(BackgroundImageLoadError::UnsupportedFormat),
+    }
+    let decoded = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|_| BackgroundImageLoadError::Decode)?;
+    let rgba = decoded.into_rgba8();
+    Ok(PendingImage {
+        width: rgba.width(),
+        height: rgba.height(),
+        pixel_format: PixelFormat::Rgba,
+        data: rgba.into_raw(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,6 +870,159 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    fn temp_image_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "roastty-renderer-image-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp image dir");
+        dir
+    }
+
+    fn write_image(path: &std::path::Path, rgba: [u8; 4], format: ImageFormat) {
+        if format == ImageFormat::Jpeg {
+            image::save_buffer_with_format(path, &rgba[..3], 1, 1, image::ColorType::Rgb8, format)
+                .expect("write test image");
+        } else {
+            image::save_buffer_with_format(path, &rgba, 1, 1, image::ColorType::Rgba8, format)
+                .expect("write test image");
+        }
+    }
+
+    fn background_config(path: &std::path::Path) -> Config {
+        let mut config = Config::default();
+        config
+            .set("background-image", Some(&path.to_string_lossy()))
+            .expect("set background image");
+        config
+    }
+
+    #[test]
+    fn background_image_state_loads_decodes_uploads_reuses_and_replaces() {
+        let dir = temp_image_dir("load-replace");
+        let red = dir.join("red.png");
+        let green = dir.join("green.jpg");
+        write_image(&red, [255, 0, 0, 255], ImageFormat::Png);
+        write_image(&green, [0, 255, 0, 255], ImageFormat::Jpeg);
+
+        let mut state = BackgroundImageState::<FakeTexture>::default();
+        state.update_from_config(&background_config(&red));
+        assert!(matches!(state.image, Some(RendererImage::Pending(_))));
+
+        let mut backend = FakeUploadBackend::default();
+        assert!(state.upload(&mut backend));
+        assert_eq!(backend.uploaded.len(), 1);
+        assert_eq!(backend.uploaded[0].data, vec![255, 0, 0, 255]);
+        assert_eq!(state.ready_texture(), Some(&FakeTexture(1)));
+
+        state.update_from_config(&background_config(&red));
+        assert_eq!(state.ready_texture(), Some(&FakeTexture(1)));
+
+        state.update_from_config(&background_config(&green));
+        assert!(matches!(state.image, Some(RendererImage::Replace { .. })));
+        assert!(state.upload(&mut backend));
+        assert_eq!(backend.uploaded.len(), 2);
+        assert_eq!(state.ready_texture(), Some(&FakeTexture(2)));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn background_image_failed_replacement_preserves_previous_ready_image() {
+        let dir = temp_image_dir("failed-replace");
+        let red = dir.join("red.png");
+        let bad = dir.join("bad.png");
+        write_image(&red, [255, 0, 0, 255], ImageFormat::Png);
+        std::fs::write(&bad, b"not a png").expect("write bad image");
+
+        let mut state = BackgroundImageState::<FakeTexture>::default();
+        state.update_from_config(&background_config(&red));
+        let mut backend = FakeUploadBackend::default();
+        assert!(state.upload(&mut backend));
+        assert_eq!(state.ready_texture(), Some(&FakeTexture(1)));
+
+        state.update_from_config(&background_config(&bad));
+        assert_eq!(state.ready_texture(), Some(&FakeTexture(1)));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn background_image_reset_unloads_and_initial_missing_skips() {
+        let dir = temp_image_dir("reset-missing");
+        let red = dir.join("red.png");
+        let missing = dir.join("missing.png");
+        write_image(&red, [255, 0, 0, 255], ImageFormat::Png);
+
+        let mut state = BackgroundImageState::<FakeTexture>::default();
+        let mut missing_config = Config::default();
+        missing_config
+            .set(
+                "background-image",
+                Some(&format!("?{}", missing.to_string_lossy())),
+            )
+            .expect("set optional missing image");
+        state.update_from_config(&missing_config);
+        assert!(state.ready_texture().is_none());
+        assert!(state.image.is_none());
+
+        state.update_from_config(&background_config(&red));
+        let mut backend = FakeUploadBackend::default();
+        assert!(state.upload(&mut backend));
+        assert_eq!(state.ready_texture(), Some(&FakeTexture(1)));
+
+        let mut reset = background_config(&red);
+        reset.set("background-image", Some("")).expect("reset");
+        state.update_from_config(&reset);
+        assert!(matches!(
+            state.image,
+            Some(RendererImage::UnloadReady { .. })
+        ));
+        assert!(state.upload(&mut backend));
+        assert!(state.image.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn background_image_initial_unsupported_format_skips_without_image() {
+        let dir = temp_image_dir("unsupported");
+        let gif = dir.join("bg.gif");
+        std::fs::write(&gif, b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")
+            .expect("write gif");
+
+        let mut state = BackgroundImageState::<FakeTexture>::default();
+        state.update_from_config(&background_config(&gif));
+        assert!(state.image.is_none());
+        assert!(state.ready_texture().is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn background_image_config_packs_vertex_from_config() {
+        let dir = temp_image_dir("vertex");
+        let image = dir.join("bg.png");
+        write_image(&image, [255, 0, 0, 255], ImageFormat::Png);
+
+        let mut config = background_config(&image);
+        config.bg_image_opacity = 0.25;
+        config.bg_image_position = BackgroundImagePosition::BottomRight;
+        config.bg_image_fit = BackgroundImageFit::Cover;
+        config.bg_image_repeat = true;
+        let bg = BackgroundImageConfig::from_config(&config).expect("background config");
+        assert_eq!(
+            bg.vertex(),
+            BgImageVertex {
+                opacity: 0.25,
+                info: BgImageInfo::new(BgImagePosition::BottomRight, BgImageFit::Cover, true),
+                _padding: [0; 3],
+            }
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

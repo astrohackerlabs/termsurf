@@ -4,11 +4,11 @@ use objc2_metal::{MTLCommandQueue, MTLDevice};
 
 use crate::font::atlas::Atlas;
 use crate::renderer::cell::Contents;
-use crate::renderer::image::{DrawPlacements, ImageState};
+use crate::renderer::image::{BackgroundImageState, DrawPlacements, ImageState};
 use crate::renderer::metal::api::{
     MetalClearColor, MetalPixelFormat, MetalResourceOptions, MetalStorageMode,
 };
-use crate::renderer::metal::buffer::MetalBufferOptions;
+use crate::renderer::metal::buffer::{MetalBuffer, MetalBufferOptions};
 use crate::renderer::metal::frame::{FrameState, FrameStateError};
 use crate::renderer::metal::iosurface_layer::{MetalIOSurfaceLayer, MetalSurfacePresentationMode};
 use crate::renderer::metal::render_pass::{
@@ -75,6 +75,7 @@ pub(crate) enum MetalFrameCompositorError {
     CommandQueueCreationFailed,
     Pipelines(MetalStandardPipelinesError),
     Frame(FrameStateError),
+    Buffer(crate::renderer::metal::buffer::MetalBufferError),
     ImageSampler(MetalSamplerError),
     Target(MetalTargetError),
     CommandFrame(MetalCommandFrameError),
@@ -84,6 +85,12 @@ pub(crate) enum MetalFrameCompositorError {
 impl From<FrameStateError> for MetalFrameCompositorError {
     fn from(error: FrameStateError) -> Self {
         Self::Frame(error)
+    }
+}
+
+impl From<crate::renderer::metal::buffer::MetalBufferError> for MetalFrameCompositorError {
+    fn from(error: crate::renderer::metal::buffer::MetalBufferError) -> Self {
+        Self::Buffer(error)
     }
 }
 
@@ -163,8 +170,9 @@ impl MetalFrameCompositor {
         &mut self,
         input: MetalFrameInput<'_>,
         images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
     ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
-        self.draw_frame_with_presenter(input, Some(images), |layer, target| {
+        self.draw_frame_with_presenter(input, Some((images, background)), |layer, target| {
             layer.set_surface(target.surface())
         })
     }
@@ -172,7 +180,10 @@ impl MetalFrameCompositor {
     fn draw_frame_with_presenter(
         &mut self,
         input: MetalFrameInput<'_>,
-        mut images: Option<&mut ImageState<MetalTexture>>,
+        mut images: Option<(
+            &mut ImageState<MetalTexture>,
+            &mut BackgroundImageState<MetalTexture>,
+        )>,
         presenter: impl FnOnce(&MetalIOSurfaceLayer, &MetalTarget) -> MetalSurfacePresentationMode,
     ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
         if !input.contents_scale.is_finite() || input.contents_scale <= 0.0 {
@@ -196,10 +207,11 @@ impl MetalFrameCompositor {
             .target
             .as_ref()
             .expect("target should exist after ensure_target");
-        if let Some(images) = images.as_deref_mut() {
+        if let Some((images, background)) = images.as_mut() {
             let mut upload_backend =
                 MetalImageUploadBackend::new(&device, self.storage_mode, false);
             images.upload(&mut upload_backend);
+            background.upload(&mut upload_backend);
         }
         let command_frame = MetalCommandFrame::begin(&self.queue)?;
         let pass = command_frame.render_pass(&[MetalRenderPassAttachment {
@@ -211,12 +223,30 @@ impl MetalFrameCompositor {
                 alpha: 0.0,
             }),
         }])?;
-        if let Some(images) = images {
-            pass.draw_background_color(
-                &self.pipelines,
-                self.frame.uniforms_buffer(),
-                self.frame.cells(),
-            );
+        if let Some((images, background)) = images {
+            let background_vertex = if let Some(texture) = background.ready_texture() {
+                let vertex = MetalBuffer::init_fill(
+                    MetalBufferOptions {
+                        device: &device,
+                        resource_options: self.resource_options,
+                    },
+                    &[background.vertex()],
+                )?;
+                pass.draw_background_image(
+                    &self.pipelines,
+                    self.frame.uniforms_buffer(),
+                    &vertex,
+                    texture,
+                );
+                Some(vertex)
+            } else {
+                pass.draw_background_color(
+                    &self.pipelines,
+                    self.frame.uniforms_buffer(),
+                    self.frame.cells(),
+                );
+                None
+            };
             let mut image_pass = MetalImageDrawPass::new(
                 &pass,
                 &self.pipelines,
@@ -244,6 +274,7 @@ impl MetalFrameCompositor {
             );
             images.draw(DrawPlacements::KittyAboveText, &mut image_pass);
             drop(image_pass);
+            drop(background_vertex);
         } else {
             pass.draw_frame(&self.pipelines, &self.frame, fg_count);
         }
@@ -305,8 +336,9 @@ impl MetalFrameCompositor {
         &mut self,
         input: MetalFrameInput<'_>,
         images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
     ) -> Result<MetalFramePresentation, MetalFrameCompositorError> {
-        self.draw_frame_with_presenter(input, Some(images), |layer, target| {
+        self.draw_frame_with_presenter(input, Some((images, background)), |layer, target| {
             assert!(layer.set_surface_if_size_matches(target.surface()));
             MetalSurfacePresentationMode::Immediate
         })
@@ -331,9 +363,12 @@ mod tests {
     use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice};
 
     use super::*;
+    use crate::config::Config;
     use crate::font::atlas::{Atlas, Format};
     use crate::renderer::cell::{Contents, Key};
-    use crate::renderer::image::{ImageId, PendingImage, PixelFormat, Placement, RendererImage};
+    use crate::renderer::image::{
+        BackgroundImageState, ImageId, PendingImage, PixelFormat, Placement, RendererImage,
+    };
     use crate::renderer::metal::api::MetalStorageMode;
     use crate::renderer::shader::{CellBg, CellTextAtlas, CellTextFlags, CellTextVertex};
     use crate::renderer::size::GridSize;
@@ -403,6 +438,37 @@ mod tests {
             pixel_format: PixelFormat::Rgba,
             data: rgba.to_vec(),
         }
+    }
+
+    fn temp_image_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "roastty-metal-compositor-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp image dir");
+        dir
+    }
+
+    fn write_png(path: &std::path::Path, rgba: [u8; 4]) {
+        image::save_buffer_with_format(
+            path,
+            &rgba,
+            1,
+            1,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .expect("write png");
+    }
+
+    fn background_state(path: &std::path::Path) -> BackgroundImageState<MetalTexture> {
+        let mut config = Config::default();
+        config
+            .set("background-image", Some(&path.to_string_lossy()))
+            .expect("set background image");
+        let mut background = BackgroundImageState::default();
+        background.update_from_config(&config);
+        background
     }
 
     fn placement(image_id: u32, x: i32, z: i32) -> Placement {
@@ -625,10 +691,12 @@ mod tests {
         images.kitty_text_end = 3;
 
         let uniforms = cell_text_uniforms([4, 1], [4, 1], [1.0, 1.0], [0, 0, 0, 0]);
+        let mut background = BackgroundImageState::<MetalTexture>::default();
         let presentation = compositor
             .draw_frame_with_images_immediate(
                 frame_input(4, 1, 1.0, &uniforms, &contents, &grayscale, &color),
                 &mut images,
+                &mut background,
             )
             .expect("image frame should draw");
 
@@ -642,5 +710,61 @@ mod tests {
                 [255, 255, 0, 255],
             ],
         );
+    }
+
+    #[test]
+    fn compositor_draws_background_image_instead_of_bg_color() {
+        let Some(device) = metal_device() else {
+            return;
+        };
+        let grayscale = Atlas::new(8, Format::Grayscale);
+        let color = Atlas::new(8, Format::Bgra);
+        let mut compositor = compositor(device, 1, 1, &grayscale, &color);
+        let contents = Contents::default();
+        let uniforms = cell_text_uniforms([1, 1], [1, 1], [1.0, 1.0], [10, 20, 30, 255]);
+        let mut images = ImageState::<MetalTexture>::default();
+        let dir = temp_image_dir("background-image");
+        let path = dir.join("bg.png");
+        write_png(&path, [255, 0, 0, 255]);
+        let mut background = background_state(&path);
+
+        compositor
+            .draw_frame_with_images_immediate(
+                frame_input(1, 1, 1.0, &uniforms, &contents, &grayscale, &color),
+                &mut images,
+                &mut background,
+            )
+            .expect("background image frame should draw");
+
+        assert_eq!(compositor.target_bytes(), vec![0, 0, 255, 255]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn compositor_background_image_does_not_double_compose_bg_color() {
+        let Some(device) = metal_device() else {
+            return;
+        };
+        let grayscale = Atlas::new(8, Format::Grayscale);
+        let color = Atlas::new(8, Format::Bgra);
+        let mut compositor = compositor(device, 1, 1, &grayscale, &color);
+        let contents = Contents::default();
+        let uniforms = cell_text_uniforms([1, 1], [1, 1], [1.0, 1.0], [10, 20, 30, 128]);
+        let mut images = ImageState::<MetalTexture>::default();
+        let dir = temp_image_dir("background-image-alpha");
+        let path = dir.join("bg.png");
+        write_png(&path, [255, 0, 0, 255]);
+        let mut background = background_state(&path);
+
+        compositor
+            .draw_frame_with_images_immediate(
+                frame_input(1, 1, 1.0, &uniforms, &contents, &grayscale, &color),
+                &mut images,
+                &mut background,
+            )
+            .expect("background image alpha frame should draw");
+
+        assert_eq!(compositor.target_bytes(), vec![0, 0, 128, 128]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

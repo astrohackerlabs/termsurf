@@ -2907,6 +2907,7 @@ struct SurfaceLiveRenderer {
     compositor: renderer::metal::compositor::MetalFrameCompositor,
     frame_renderer: renderer::frame_renderer::FrameRenderer,
     image_state: renderer::image::ImageState<renderer::metal::texture::MetalTexture>,
+    background_image: renderer::image::BackgroundImageState<renderer::metal::texture::MetalTexture>,
     shared_grid: font::shared_grid::SharedGrid,
 }
 
@@ -3012,6 +3013,7 @@ fn build_live_renderer(
         compositor,
         frame_renderer,
         image_state: renderer::image::ImageState::default(),
+        background_image: renderer::image::BackgroundImageState::default(),
         shared_grid,
     })
 }
@@ -3524,6 +3526,7 @@ impl Surface {
             compositor,
             frame_renderer,
             image_state,
+            background_image,
             shared_grid,
         } = live;
         // Drive the projection/screen-size + font-grid uniforms from the surface (Exp 18) — the
@@ -3552,6 +3555,7 @@ impl Surface {
                 terminal,
                 shared_grid,
                 image_state,
+                background_image,
                 renderer::frame_rebuild::RenderDirty::Full,
                 None,
                 &config,

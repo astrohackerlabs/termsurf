@@ -19,7 +19,7 @@ use crate::renderer::cell::{
     add_cursor, add_preedit, rebuild_bg_row, rebuild_row, Contents, Highlight, SelectionConfig,
 };
 use crate::renderer::cursor::Style as CursorStyle;
-use crate::renderer::image::ImageState;
+use crate::renderer::image::{BackgroundImageState, ImageState};
 use crate::renderer::metal::compositor::{
     MetalFrameCompositor, MetalFrameCompositorError, MetalFrameInput, MetalFramePresentation,
 };
@@ -284,6 +284,7 @@ impl FrameTerminalSnapshot {
         targets: FramePreparedRebuildTargets<'_>,
         input: FramePreparedRebuildInput<'_>,
         images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
         presentation: FramePreparedPresentationInput<'_>,
     ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
         let plan = self.build_plan().map_err(FramePreparedRebuildError::from)?;
@@ -302,6 +303,7 @@ impl FrameTerminalSnapshot {
         let present = plan.present_metal_frame_with_images(
             presentation.compositor,
             images,
+            background,
             FrameMetalPresentationInput {
                 width: presentation.width,
                 height: presentation.height,
@@ -1186,6 +1188,7 @@ impl FrameRebuildPlan {
         &self,
         compositor: &mut MetalFrameCompositor,
         images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
         input: FrameMetalPresentationInput<'_>,
     ) -> Result<FrameMetalPresentationApplication, FrameMetalPresentationError> {
         self.validate_metal_presentation_input(&input)?;
@@ -1201,6 +1204,7 @@ impl FrameRebuildPlan {
                 color_atlas: input.color_atlas,
             },
             images,
+            background,
         )?;
 
         Ok(FrameMetalPresentationApplication {

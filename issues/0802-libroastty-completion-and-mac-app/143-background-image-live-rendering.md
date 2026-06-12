@@ -156,3 +156,73 @@ background images without a broader renderer redesign.
   narrower crate is chosen.
 
 Volta's re-review approved the corrected design with no remaining findings.
+
+## Result
+
+**Result:** Pass.
+
+Implemented live background-image rendering:
+
+- `roastty/Cargo.toml` now depends on `image` with `default-features = false`
+  and only PNG/JPEG features enabled.
+- `roastty/src/renderer/image.rs` now has `BackgroundImageState` and
+  `BackgroundImageConfig`, reusing the existing `RendererImage` lifecycle for
+  pending/ready/replace/unload. It decodes configured PNG/JPEG files to RGBA,
+  preserves a previous ready image on failed replacement, skips initial
+  missing/unsupported images without failing presentation, and unloads on
+  reset/no-path.
+- `roastty/src/renderer/metal/render_pass.rs` now has a `draw_background_image`
+  step for the existing `bg_image` pipeline.
+- `roastty/src/renderer/metal/compositor.rs` now uploads background images and
+  draws the `bg_image` shader instead of `draw_background_color` when a ready
+  background image exists, preserving the existing Kitty bucket ordering around
+  cell backgrounds/text.
+- `roastty/src/renderer/frame_rebuild.rs`,
+  `roastty/src/renderer/frame_renderer.rs`, and `roastty/src/lib.rs` thread the
+  background-image state through the live frame renderer and
+  `SurfaceLiveRenderer` so each present observes the current `Config`.
+
+Verification:
+
+- `cargo fmt`
+- `cargo test -p roastty background_image -- --test-threads=1` — 14 passed
+- `cargo test -p roastty bg_image -- --test-threads=1` — 8 passed
+- `cargo test -p roastty live_background_image -- --test-threads=1` — 1 passed
+- `cargo test -p roastty --test abi_harness` — 1 passed; existing C harness
+  enum-conversion warnings remain
+- `cargo test -p roastty -- --test-threads=1` — 4775 unit tests, C ABI harness,
+  and doc tests passed
+- `cd roastty && macos/build.nu --action test` — 210 hosted macOS tests passed
+- `cargo fmt --check`
+- `git diff --check`
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/143-background-image-live-rendering.md issues/0802-libroastty-completion-and-mac-app/README.md`
+
+## Conclusion
+
+The live Metal path now supports configured background images end to end: config
+path, PNG/JPEG decode, lifecycle, upload, and shader draw. The renderer matches
+the two important upstream lifecycle/order details caught in design review:
+failed replacements keep the previous ready image, and a ready background image
+replaces the background-color pass rather than stacking on top of it.
+
+Remaining Phase H renderer work is now custom-shader screen pass, link-highlight
+cell mapping, and the optional debug overlay.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Noether`, fresh context.
+
+**Verdict:** Approved.
+
+**Findings and fixes:**
+
+- **Optional:** Noether noted that the approved plan asked for unsupported-image
+  coverage, while the initial result tests covered malformed PNG/JPEG decode
+  failure and optional missing paths but not a valid unsupported format. Fixed
+  by adding `background_image_initial_unsupported_format_skips_without_image`,
+  which writes a tiny valid GIF and verifies an initially empty background-image
+  state remains unloaded.
+
+Noether found no required issues. After the optional fix, the focused
+`background_image`, `bg_image`, and `live_background_image` filters,
+`cargo fmt --check`, and `git diff --check` passed again.

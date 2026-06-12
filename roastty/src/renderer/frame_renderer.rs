@@ -20,7 +20,7 @@ use crate::renderer::frame_rebuild::{
     FrameSnapshotCursorUniformInput, FrameSnapshotRowFormatInput, FrameSnapshotTextOverlayInput,
     FrameTerminalSnapshot, RenderDirty,
 };
-use crate::renderer::image::ImageState;
+use crate::renderer::image::{BackgroundImageState, ImageState};
 use crate::renderer::metal::shaders::MetalUniforms;
 use crate::renderer::metal::texture::MetalTexture;
 use crate::renderer::size::GridSize;
@@ -128,6 +128,7 @@ impl FrameRenderer {
         terminal: &Terminal,
         grid: &mut SharedGrid,
         images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
         dirty: RenderDirty,
         preedit: Option<Preedit>,
         input: FramePreparedRebuildInput<'_>,
@@ -147,6 +148,7 @@ impl FrameRenderer {
             },
             input,
             images,
+            background,
             presentation,
         )?;
 
@@ -195,11 +197,13 @@ impl FrameRenderer {
         terminal: &Terminal,
         grid: &mut SharedGrid,
         images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
         dirty: RenderDirty,
         preedit: Option<Preedit>,
         config: &Config,
         presentation: FramePreparedPresentationInput<'_>,
     ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        background.update_from_config(config);
         let state = FrameRenderState::from_terminal(terminal);
         let knobs = FrameRenderKnobs::from_config(config);
         let input = state.rebuild_input(&knobs);
@@ -207,6 +211,7 @@ impl FrameRenderer {
             terminal,
             grid,
             images,
+            background,
             dirty,
             preedit,
             input,
@@ -462,6 +467,16 @@ mod tests {
         [bytes[0], bytes[1], bytes[2], bytes[3]]
     }
 
+    fn pixel_at(bytes: &[u8], width: usize, x: usize, y: usize) -> [u8; 4] {
+        let offset = (y * width + x) * 4;
+        [
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]
+    }
+
     fn terminal(columns: u16, rows: u16) -> Terminal {
         let mut terminal = Terminal::init(columns, rows, None).expect("terminal");
         terminal.next_slice(b"A").expect("terminal input");
@@ -481,6 +496,27 @@ mod tests {
         collection.update_metrics().unwrap();
         let metrics = *collection.metrics().unwrap();
         SharedGrid::new(CodepointResolver::new(collection), metrics)
+    }
+
+    fn temp_image_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "roastty-frame-renderer-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp image dir");
+        dir
+    }
+
+    fn write_png(path: &std::path::Path, rgba: [u8; 4]) {
+        image::save_buffer_with_format(
+            path,
+            &rgba,
+            1,
+            1,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .expect("write png");
     }
 
     fn uniforms() -> MetalUniforms {
@@ -1279,11 +1315,13 @@ mod tests {
             },
         );
         let mut renderer = FrameRenderer::new(u);
+        let mut background = BackgroundImageState::<MetalTexture>::default();
         renderer
             .render_and_present_frame_with_images(
                 &term,
                 &mut shared,
                 &mut images,
+                &mut background,
                 RenderDirty::Full,
                 None,
                 &Config::default(),
@@ -1310,6 +1348,7 @@ mod tests {
                 &empty,
                 &mut shared,
                 &mut images,
+                &mut background,
                 RenderDirty::Full,
                 None,
                 &Config::default(),
@@ -1322,6 +1361,117 @@ mod tests {
             )
             .expect("empty frame should present");
         assert_eq!(first_pixel(&compositor.target_bytes()), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn live_background_image_frame_renderer_presents_config_path_and_unloads() {
+        let Some(device) = metal_device() else {
+            return;
+        };
+        let mut shared = menlo_grid();
+        let cell = shared.cell_size();
+        let (cw, ch) = (cell.width as usize, cell.height as usize);
+        let width = cw * 2;
+        let mut term = Terminal::init(1, 1, None).expect("terminal");
+        term.next_slice(b"\x1b[?25l").expect("hide cursor");
+        let mut compositor = MetalFrameCompositor::new(MetalFrameCompositorOptions {
+            device,
+            width,
+            height: ch,
+            pixel_format: MetalPixelFormat::Bgra8Unorm,
+            storage_mode: MetalStorageMode::Shared,
+            resource_options: MetalResourceOptions::image(MetalStorageMode::Shared),
+            grayscale_atlas: &shared.atlas_grayscale,
+            color_atlas: &shared.atlas_color,
+        })
+        .expect("compositor");
+
+        use crate::renderer::size::{CellSize, Padding, ScreenSize, Size};
+        let mut u = MetalUniforms::test_with_grid(
+            [width as u16, ch as u16],
+            [1, 1],
+            [cw as f32, ch as f32],
+            [0.0; 4],
+            0,
+            [0, 0, 0, 255],
+        );
+        u.update_screen_size(
+            Size {
+                screen: ScreenSize {
+                    width: width as u32,
+                    height: ch as u32,
+                },
+                cell: CellSize {
+                    width: cw as u32,
+                    height: ch as u32,
+                },
+                padding: Padding::default(),
+            },
+            GridSize {
+                columns: 1,
+                rows: 1,
+            },
+        );
+
+        let dir = temp_image_dir("background-image");
+        let path = dir.join("bg.png");
+        write_png(&path, [255, 0, 0, 255]);
+        let mut config = Config::default();
+        config
+            .set("background-image", Some(&path.to_string_lossy()))
+            .expect("set background image");
+        config.bg_image_fit = crate::config::BackgroundImageFit::Stretch;
+        let mut renderer = FrameRenderer::new(u);
+        let mut images = ImageState::<MetalTexture>::default();
+        let mut background = BackgroundImageState::<MetalTexture>::default();
+
+        renderer
+            .render_and_present_frame_with_images(
+                &term,
+                &mut shared,
+                &mut images,
+                &mut background,
+                RenderDirty::Full,
+                None,
+                &config,
+                FramePreparedPresentationInput {
+                    compositor: &mut compositor,
+                    width,
+                    height: ch,
+                    contents_scale: 1.0,
+                },
+            )
+            .expect("background image frame should present");
+        let image_pixel = pixel_at(&compositor.target_bytes(), width, cw, 0);
+        assert_eq!(image_pixel[3], 255);
+        assert!(
+            image_pixel[2] > 0,
+            "background image should add red contribution: {image_pixel:?}"
+        );
+
+        renderer
+            .render_and_present_frame_with_images(
+                &term,
+                &mut shared,
+                &mut images,
+                &mut background,
+                RenderDirty::Full,
+                None,
+                &Config::default(),
+                FramePreparedPresentationInput {
+                    compositor: &mut compositor,
+                    width,
+                    height: ch,
+                    contents_scale: 1.0,
+                },
+            )
+            .expect("reset background frame should present");
+        assert_eq!(
+            pixel_at(&compositor.target_bytes(), width, cw, 0),
+            [0, 0, 0, 255]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Issue 802 / Exp 17: the present must sample the **grid's** rasterized atlas, so glyph

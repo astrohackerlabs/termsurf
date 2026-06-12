@@ -489,8 +489,11 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   images with the Metal image upload backend, and interleaves Kitty image
   buckets around background/text draw stages. Exp 142 wires the missing
   `background-image` config path through parsing, formatting, expansion, clone,
-  and the C ABI; background-image file decode/load/upload/draw remains separate
-  Phase H work.
+  and the C ABI. Exp 143 adds live background-image PNG/JPEG decode, lifecycle,
+  Metal upload, and `bg_image` shader draw; failed replacement preserves the
+  previous ready image, reset/no-path unloads, and the background-image shader
+  replaces the background-color pass when ready so opacity is not
+  double-composited.
 - **The old copied-app config/menu assertion cluster is fixed at the Rust ABI
   boundary, but the XCTest host still hangs.** Exp 132 wires the missing
   Swift-read `roastty_config_get` keys, parsed `macos-window-shadow`, direct
@@ -934,7 +937,7 @@ the live app, verified by a Phase-D UI test.)
 - [ ] Invoke image draws (Kitty graphics + background image) in the live draw
       pass — live Kitty graphics wired and pixel-readback proven in Exp 141;
       background-image config path wired in Exp 142; background image
-      load/upload/draw remains
+      load/upload/draw wired in Exp 143
 - [ ] Custom-shader screen pass (ping-pong target + post-process apply)
 - [ ] Link-highlight matcher (`renderer/link.zig` `renderCellMap`) + feed
       `link_ranges`
@@ -1326,7 +1329,7 @@ stays unaltered except for the rename).
 - [Experiment 142: Phase H — background-image config path](142-background-image-config-path.md)
   — **Pass**
 - [Experiment 143: Phase H — background-image live rendering](143-background-image-live-rendering.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
