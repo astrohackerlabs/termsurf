@@ -1514,6 +1514,8 @@ stays unaltered except for the rename).
 - [Experiment 167: Phase F — language config](167-language-config.md) — **Pass**
 - [Experiment 168: Phase F — font feature config](168-font-feature-config.md) —
   **Pass**
+- [Experiment 169: Phase F — font variation config](169-font-variation-config.md)
+  — **Designed**
 
 ## Process
 
