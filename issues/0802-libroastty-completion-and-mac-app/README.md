@@ -250,6 +250,11 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   comma-separated `[no-]flag` tokens, empty reset, and upstream defaults.
   Applying these flags remains FreeType font-backend runtime work; macOS still
   uses CoreText.
+- **Input config is parser/formatter-only.** Exp 172 wires upstream `input` as
+  `RepeatableReadableIO` after `env`, including raw/path entries, unknown-tag
+  raw fallback, Zig string-literal validation of the original unparsed value,
+  empty reset, diagnostics, config-file loading, and CLI append semantics.
+  Runtime path reads and terminal-startup byte delivery remain later work.
 - **Codepoint width needs more than scalar Rust ranges.** Exp 151 added a
   width-only helper and proved full Unicode-scalar parity with the generated
   table, but the release probe measured only 0.76x versus direct table width
@@ -994,7 +999,7 @@ the live app, verified by a Phase-D UI test.)
 
 **Phase F — Config completeness**
 
-- [ ] The remaining 2 public config options (`input` and `keybind`)
+- [ ] The remaining public config option (`keybind`)
 - [ ] `finalize()` — cross-field validation / derivation / clamping
 - [ ] Theme loading (themes-dir locator + file read + palette/option
       application)
@@ -1538,7 +1543,7 @@ stays unaltered except for the rename).
 - [Experiment 171: Phase F — FreeType load flags config](171-freetype-load-flags-config.md)
   — **Pass**
 - [Experiment 172: Phase F — input config surface](172-input-config-surface.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

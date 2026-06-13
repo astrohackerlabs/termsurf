@@ -85,3 +85,46 @@ experiment has the required sections, the plan matches upstream
 `ReadableIO`/`RepeatableReadableIO` parse and format semantics, the field order
 is after `env` and before `wait-after-command`, and the verification includes
 both the required `cargo fmt -p roastty` run and check-only formatter command.
+
+## Result
+
+**Result:** Pass
+
+Implemented the parser/formatter/storage surface for upstream
+`RepeatableReadableIO` as `Config::input`. The field now defaults to an empty
+repeatable list, formats after `env` and before `wait-after-command`, parses
+`raw:` and `path:` entries, falls back to raw for unknown tags, validates the
+full unparsed value with Zig string-literal semantics, supports empty-list
+reset, reports missing values as `ValueRequired`, and preserves the original
+unparsed payload spelling for formatting.
+
+Runtime file reading and terminal-startup delivery are still out of scope; this
+experiment only removes `input` from the public parser/formatter config tail.
+
+Verification passed:
+
+- `cargo test -p roastty input_config_parse_format_reset_load_cli_and_clone`
+- `cargo test -p roastty config_format_config_emits_fields_in_upstream_order`
+- `cargo fmt -p roastty`
+- `cargo test -p roastty` — 4,868 unit tests passed, 4 ignored; ABI harness
+  passed with the existing 10 enum-conversion warnings; doc tests had 0 tests.
+
+## Conclusion
+
+`input` is no longer a public-config gap for parsing, formatting, diagnostics,
+config-file loading, CLI appending, cloning, or field ordering. The remaining
+Phase F public-config tail is now `keybind`; runtime consumption of
+`Config::input` should be handled later with terminal startup behavior rather
+than mixed into this config-surface slice.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Bohr`, fresh context.
+
+**Verdict:** Approved with no findings.
+
+The reviewer checked the uncommitted result diff against the approved plan and
+upstream `vendor/ghostty/src/config/io.zig`, including raw/path tag behavior,
+unknown-tag raw fallback, missing-value and reset semantics, original unparsed
+payload preservation, string-literal validation, field ordering, test coverage,
+README status, and that the result commit had not been made before review.

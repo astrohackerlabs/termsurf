@@ -19,7 +19,7 @@ mod unicode_range;
 
 use crate::config::comma_splitter::CommaSplitter;
 use crate::config::formatter::EntryFormatter;
-use crate::config::string::{codepoint_iterator, parse_quoted_string};
+use crate::config::string::{codepoint_iterator, parse_quoted_string, parse_string_literal};
 use crate::config::unicode_range::{InvalidRange, UnicodeRangeParser};
 use crate::font::codepoint_map::CodepointMap;
 use crate::font::discovery::Descriptor;
@@ -139,6 +139,8 @@ pub(crate) struct Config {
     pub notify_on_command_finish_after: Duration,
     /// `env`.
     pub env: RepeatableStringMap,
+    /// `input`.
+    pub input: RepeatableReadableIo,
     /// `wait-after-command`.
     pub wait_after_command: bool,
     /// `abnormal-command-exit-runtime`.
@@ -516,6 +518,7 @@ impl Default for Config {
                 duration: 5 * NS_PER_S,
             },
             env: RepeatableStringMap::default(),
+            input: RepeatableReadableIo::default(),
             wait_after_command: false,
             abnormal_command_exit_runtime: 250,
             scrollback_limit: 10_000_000,
@@ -940,6 +943,8 @@ impl Config {
                 out,
             ));
         self.env.format_entry(&mut EntryFormatter::new("env", out));
+        self.input
+            .format_entry(&mut EntryFormatter::new("input", out));
         EntryFormatter::new("wait-after-command", out).entry_bool(self.wait_after_command);
         EntryFormatter::new("abnormal-command-exit-runtime", out)
             .entry_int(self.abnormal_command_exit_runtime);
@@ -1398,6 +1403,7 @@ impl Config {
                 )?
             }
             "env" => self.env.parse_cli(value)?,
+            "input" => self.input.parse_cli(value)?,
             "wait-after-command" => {
                 self.wait_after_command = set_bool_field(value, default.wait_after_command)?
             }
@@ -5585,6 +5591,101 @@ impl RepeatableString {
     }
 }
 
+/// An error parsing `RepeatableReadableIo` (upstream
+/// `config.io.RepeatableReadableIO`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepeatableReadableIoParseError {
+    /// No value was supplied, or a single `ReadableIO` value was empty (upstream
+    /// `error.ValueRequired`).
+    ValueRequired,
+    /// The input did not pass upstream Zig string-literal validation.
+    InvalidValue,
+}
+
+impl From<RepeatableReadableIoParseError> for ConfigSetError {
+    fn from(error: RepeatableReadableIoParseError) -> Self {
+        match error {
+            RepeatableReadableIoParseError::ValueRequired => ConfigSetError::ValueRequired,
+            RepeatableReadableIoParseError::InvalidValue => ConfigSetError::InvalidValue,
+        }
+    }
+}
+
+/// A readable input source (upstream `config.io.ReadableIO`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReadableIo {
+    /// Direct raw input bytes, stored in their original unparsed config spelling.
+    Raw(String),
+    /// A path to read later at terminal startup, stored in its original unparsed
+    /// config spelling.
+    Path(String),
+}
+
+impl ReadableIo {
+    /// Parse one `ReadableIO` entry. Upstream validates the full config string
+    /// with Zig string-literal parsing before tagged-union parsing, stores the
+    /// original unparsed payload, and falls back to `raw` for unknown tags.
+    pub(crate) fn parse_cli(value: &str) -> Result<Self, RepeatableReadableIoParseError> {
+        if value.is_empty() {
+            return Err(RepeatableReadableIoParseError::ValueRequired);
+        }
+        parse_string_literal(value.as_bytes())
+            .map_err(|_| RepeatableReadableIoParseError::InvalidValue)?;
+
+        if let Some(raw) = value.strip_prefix("raw:") {
+            return Ok(ReadableIo::Raw(raw.to_string()));
+        }
+        if let Some(path) = value.strip_prefix("path:") {
+            return Ok(ReadableIo::Path(path.to_string()));
+        }
+        Ok(ReadableIo::Raw(value.to_string()))
+    }
+
+    /// Format one `ReadableIO` entry with its explicit tag.
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        match self {
+            ReadableIo::Raw(value) => formatter.entry_str(&format!("raw:{value}")),
+            ReadableIo::Path(value) => formatter.entry_str(&format!("path:{value}")),
+        }
+    }
+}
+
+/// Repeatable readable input sources (upstream
+/// `config.io.RepeatableReadableIO`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RepeatableReadableIo {
+    pub list: Vec<ReadableIo>,
+}
+
+impl RepeatableReadableIo {
+    /// Parse one repeatable value: missing is `ValueRequired`, empty clears the
+    /// list, otherwise append one parsed `ReadableIO`.
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), RepeatableReadableIoParseError> {
+        let value = input.ok_or(RepeatableReadableIoParseError::ValueRequired)?;
+        if value.is_empty() {
+            self.list.clear();
+            return Ok(());
+        }
+        self.list.push(ReadableIo::parse_cli(value)?);
+        Ok(())
+    }
+
+    /// Format as config entries: an empty list writes one empty entry; otherwise
+    /// one tagged entry per source.
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        if self.list.is_empty() {
+            formatter.entry_void();
+            return;
+        }
+        for value in &self.list {
+            value.format_entry(formatter);
+        }
+    }
+}
+
 /// An error parsing `SelectionWordChars` (upstream `parseCLI`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionWordCharsParseError {
@@ -8588,11 +8689,11 @@ mod tests {
         OptionalFileAction, OscColorReportFormat, Palette, PaletteParseError,
         QuickTerminalDimensions, QuickTerminalKeyboardInteractivity, QuickTerminalLayer,
         QuickTerminalPosition, QuickTerminalScreen, QuickTerminalSize, QuickTerminalSizeParseError,
-        QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReleaseChannel,
+        QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReadableIo, ReleaseChannel,
         RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
         RepeatableConfigPathParseError, RepeatableFontVariation, RepeatableFontVariationParseError,
-        RepeatableString, RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition,
-        RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
+        RepeatableReadableIo, RepeatableString, RepeatableStringParseError, ResizeOverlay,
+        ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
         SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
         SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
         WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowNewTabPosition,
@@ -9016,6 +9117,7 @@ mod tests {
         assert_eq!(d.custom_shader_animation, CustomShaderAnimation::True);
         assert_eq!(d.bell_features, BellFeatures::default());
         assert_eq!(d.app_notifications, AppNotifications::default());
+        assert!(d.input.list.is_empty());
         // Base-colors group (Experiment 472).
         assert_eq!(
             d.background,
@@ -15894,6 +15996,7 @@ mod tests {
             "notify-on-command-finish",
             "notify-on-command-finish-action",
             "env",
+            "input",
             "wait-after-command",
             "abnormal-command-exit-runtime",
             "scrollback-limit",
@@ -19368,6 +19471,98 @@ mod tests {
                 }),
             Ok(true)
         );
+    }
+
+    #[test]
+    fn input_config_parse_format_reset_load_cli_and_clone() {
+        let lines = |cfg: &Config| -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|line| line.starts_with("input = "))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.input, RepeatableReadableIo::default());
+        assert_eq!(lines(&cfg), vec!["input = "]);
+
+        cfg.set("input", Some("raw:hello\\n")).unwrap();
+        cfg.set("input", Some("path:/tmp/in.txt")).unwrap();
+        cfg.set("input", Some("plain text")).unwrap();
+        cfg.set("input", Some("foo:bar")).unwrap();
+        assert_eq!(
+            cfg.input.list,
+            vec![
+                ReadableIo::Raw("hello\\n".to_string()),
+                ReadableIo::Path("/tmp/in.txt".to_string()),
+                ReadableIo::Raw("plain text".to_string()),
+                ReadableIo::Raw("foo:bar".to_string()),
+            ]
+        );
+        assert_eq!(
+            lines(&cfg),
+            vec![
+                "input = raw:hello\\n",
+                "input = path:/tmp/in.txt",
+                "input = raw:plain text",
+                "input = raw:foo:bar",
+            ]
+        );
+
+        cfg.set("input", Some("raw:")).unwrap();
+        assert_eq!(cfg.input.list.last(), Some(&ReadableIo::Raw(String::new())));
+        assert_eq!(lines(&cfg).last().map(String::as_str), Some("input = raw:"));
+
+        cfg.set("input", Some("")).unwrap();
+        assert!(cfg.input.list.is_empty());
+        assert_eq!(lines(&cfg), vec!["input = "]);
+        assert_eq!(cfg.set("input", None), Err(ConfigSetError::ValueRequired));
+        assert_eq!(
+            cfg.set("input", Some("raw:\\q")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics = cfg.load_str(
+            "input = raw:A\n\
+             input = path:/tmp/B\n\
+             input = raw:\\q\n\
+             input\n\
+             input =\n",
+        );
+        assert!(cfg.input.list.is_empty());
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "input".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 4,
+                    key: "input".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+            ]
+        );
+
+        assert!(cfg.load_str("input = raw:file\n").is_empty());
+        let diagnostics = cfg.set_cli_args(["--input=path:/tmp/cli", "--input=cli text"]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.input.list,
+            vec![
+                ReadableIo::Raw("file".to_string()),
+                ReadableIo::Path("/tmp/cli".to_string()),
+                ReadableIo::Raw("cli text".to_string()),
+            ]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.input, cfg.input);
     }
 
     #[test]
