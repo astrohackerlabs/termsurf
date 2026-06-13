@@ -1464,6 +1464,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 161: Phase G — committed preedit UTF-8](161-committed-preedit-utf8.md)
   — **Pass**
+- [Experiment 162: Phase I — CF release-thread test isolation](162-cf-release-thread-test-isolation.md)
+  — **Designed**
 
 ## Process
 
