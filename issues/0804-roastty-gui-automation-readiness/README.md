@@ -236,3 +236,5 @@ not add the `## Experiments` index until Experiment 1 is designed.
 - [Experiment 7: Trace external keyboard entry](07-trace-external-keyboard-entry.md)
   — **Partial** (initial run invalidated because keyboard input targeted
   Ghostty/Codex, not Roastty; focus targeting must be proven before retrying)
+- [Experiment 8: Focus-owned keyboard rerun](08-focus-owned-keyboard-rerun.md) —
+  **Designed**
