@@ -1523,6 +1523,8 @@ stays unaltered except for the rename).
   **Pass**
 - [Experiment 169: Phase F — font variation config](169-font-variation-config.md)
   — **Pass**
+- [Experiment 170: Phase F — font metric adjust config](170-font-metric-adjust-config.md)
+  — **Designed**
 
 ## Process
 
