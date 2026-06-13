@@ -376,3 +376,5 @@ remains open.
   — **Pass**
 - [Experiment 10: Command palette default format parity](10-command-palette-default-format-parity.md)
   — **Pass**
+- [Experiment 11: Default config parser oracle](11-default-config-parser-oracle.md)
+  — **Designed**
