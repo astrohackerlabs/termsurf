@@ -123,3 +123,79 @@ safety, clean shutdown, or the existing dirty-pump behavior.
 **Verdict:** Approved.
 
 Findings: None.
+
+## Result
+
+**Result:** Partial
+
+Implemented the display-link-shaped present driver in `roastty/src/lib.rs`.
+
+Key outcomes:
+
+- Replaced the bare `present_driver_running: Option<Arc<AtomicBool>>` surface
+  field with an owned `PresentDriver` handle.
+- Centralized the present tick so both schedulers share the same main-thread
+  behavior: check the stop flag, drain `tick_termio()`, run drag-selection
+  autoscroll, present only when `dirty`, and clear `dirty` after the present
+  attempt.
+- Added a macOS CoreVideo `CVDisplayLink` scheduler for `window-vsync = true`
+  surfaces, with local minimal FFI and a callback that only enqueues the
+  main-thread tick.
+- Preserved the fallback sleep-thread scheduler for `window-vsync = false` and
+  display-link creation/start failures.
+- Routed `roastty_surface_set_display_id` into the active display-link driver
+  through `CVDisplayLinkSetCurrentCGDisplay`.
+- Added test-only fake/failing scheduler modes so driver selection, fallback,
+  display-ID update routing, and stop-state behavior are covered without
+  requiring a live CoreVideo display link in unit tests.
+
+Verification run:
+
+- `cargo test -p roastty present_driver -- --test-threads=1` — pass: 4 passed.
+- `cargo test -p roastty content_scale_change_drops_renderer_for_rebuild -- --test-threads=1`
+  — pass.
+- `cargo test -p roastty app_tick_drains_worker_output_into_surface_dirty_state -- --test-threads=1`
+  — pass.
+- `cargo test -p roastty --test abi_harness` — pass; existing 10 C
+  enum-conversion warnings only.
+- `cargo test -p roastty -- --test-threads=1` — pass: 4877 passed, 0 failed, 4
+  ignored; ABI harness and doc tests also passed.
+
+Live copied-app verification was not run in this pass, so the experiment remains
+Partial rather than Pass. The implemented code compiles and links against
+CoreVideo, the fake display-link path proves the state machine, and the fallback
+path remains covered, but the real `CVDisplayLink` callback path still needs a
+desktop app run to prove live rendering and display-ID changes with an active
+display link.
+
+## Conclusion
+
+Roastty now has an owned present-driver abstraction with a real macOS
+display-link scheduler for vsync-enabled surfaces and a fallback scheduler for
+non-vsync or display-link failure cases. The shared tick preserves the existing
+dirty-pump semantics that made the copied app live in Experiment 19, and display
+ID changes now reach the active driver.
+
+The remaining work before marking this slice Pass is live desktop validation:
+launch the copied Roastty app, confirm terminal updates still render through the
+new scheduler, and trigger a display change so the active CoreVideo display link
+receives the new display ID without crashing.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Singer`, fresh context.
+
+**Verdict:** Approved.
+
+Findings:
+
+- Optional: `present_driver_stop_marks_queued_ticks_inert_before_surface_drop`
+  was stronger than the test body, which checked the stopped driver flag rather
+  than executing a late queued tick.
+
+Fix:
+
+- Renamed the test to
+  `present_driver_stop_marks_driver_not_running_before_surface_drop`, matching
+  the behavior it proves. The production stop path already checks the same
+  running flag before every surface dereference.

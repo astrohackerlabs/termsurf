@@ -2686,9 +2686,9 @@ struct Surface {
     /// The lazily-created live Metal present state (compositor + frame renderer + the
     /// IOSurface layer attached to `nsview`). `None` until the first present on the main thread.
     renderer: Option<SurfaceLiveRenderer>,
-    /// The continuous present driver's stop flag (Issue 802 / Exp 19). `surface_free`/`Drop`
-    /// flip it false to stop the driver thread + its main-queue ticks before the box is dropped.
-    present_driver_running: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The continuous present driver (Issue 802 / Exp 19, Exp 175). `surface_free`/`Drop` stop it
+    /// before the box is dropped so queued ticks cannot dereference a freed surface.
+    present_driver: Option<PresentDriver>,
     #[cfg(test)]
     test_termio_events: VecDeque<termio::TermioWorkerEvent>,
 }
@@ -2830,46 +2830,377 @@ struct SendSurfacePtr(*mut Surface);
 // SAFETY: see the type doc — the pointer is only dereferenced on the main thread while `running`.
 unsafe impl Send for SendSurfacePtr {}
 
-/// Start the continuous present driver for a surface (Issue 802 / Exp 19). A dedicated thread
-/// sleeps ~16 ms and dispatches a present tick to the **main** queue; each tick drains the termio
-/// worker (`tick_termio` — the event-loop pump the app's empty `wakeup` stub does not provide,
-/// which applies output to the terminal and sets `dirty`) and presents when dirty. Returns the
-/// `running` flag; `surface_free`/`Drop` flip it false to stop.
-fn start_present_driver(surface: *mut Surface) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-    use std::sync::atomic::Ordering;
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let ptr = SendSurfacePtr(surface);
-    let thread_running = running.clone();
-    std::thread::spawn(move || {
-        while thread_running.load(Ordering::SeqCst) {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            if !thread_running.load(Ordering::SeqCst) {
-                break;
-            }
-            let tick_running = thread_running.clone();
-            let tick_ptr = ptr;
-            dispatch2::DispatchQueue::main().exec_async(move || {
-                // Re-bind the whole `SendSurfacePtr` (Rust 2021 disjoint capture would otherwise
-                // grab the `!Send` `*mut Surface` field directly, bypassing the Send wrapper).
-                let tick_ptr = tick_ptr;
-                if !tick_running.load(Ordering::SeqCst) {
-                    return;
-                }
-                // SAFETY: main thread + running == true → the surface is alive (free flips
-                // running false before dropping the box, serialized on this same queue).
-                let surface = unsafe { &mut *tick_ptr.0 };
-                surface.tick_termio();
-                // Issue 802 / Exp 28: drive drag-selection autoscroll while a drag is held past the
-                // edge (no-op otherwise); before the dirty check so the scrolled row presents now.
-                surface.selection_autoscroll_tick();
-                if surface.dirty {
-                    surface.present_live();
-                    surface.dirty = false;
-                }
-            });
+struct PresentDriver {
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    kind: PresentDriverKind,
+}
+
+enum PresentDriverKind {
+    FallbackThread(Option<std::thread::JoinHandle<()>>),
+    #[cfg(target_os = "macos")]
+    DisplayLink(MacDisplayLink),
+    #[cfg(test)]
+    Test(TestPresentDriver),
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PresentDriverTestMode {
+    ForceFallback,
+    FailDisplayLink,
+    FakeDisplayLink,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct PresentDriverTestState {
+    mode: Option<PresentDriverTestMode>,
+    updated_display_ids: Vec<u32>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRESENT_DRIVER_TEST_STATE: std::cell::RefCell<PresentDriverTestState> =
+        const { std::cell::RefCell::new(PresentDriverTestState {
+            mode: None,
+            updated_display_ids: Vec::new(),
+        }) };
+}
+
+#[cfg(test)]
+struct PresentDriverTestGuard {
+    previous: Option<PresentDriverTestMode>,
+    previous_updates: Vec<u32>,
+}
+
+#[cfg(test)]
+impl Drop for PresentDriverTestGuard {
+    fn drop(&mut self) {
+        PRESENT_DRIVER_TEST_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.mode = self.previous;
+            state.updated_display_ids = std::mem::take(&mut self.previous_updates);
+        });
+    }
+}
+
+#[cfg(test)]
+fn with_present_driver_test_mode<T>(mode: PresentDriverTestMode, f: impl FnOnce() -> T) -> T {
+    let guard = PRESENT_DRIVER_TEST_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        PresentDriverTestGuard {
+            previous: state.mode.replace(mode),
+            previous_updates: std::mem::take(&mut state.updated_display_ids),
         }
     });
-    running
+    let result = f();
+    drop(guard);
+    result
+}
+
+#[cfg(test)]
+fn present_driver_test_updates() -> Vec<u32> {
+    PRESENT_DRIVER_TEST_STATE.with(|state| state.borrow().updated_display_ids.clone())
+}
+
+#[cfg(test)]
+struct TestPresentDriver {
+    display_link: bool,
+}
+
+impl PresentDriver {
+    fn start(surface: *mut Surface, window_vsync: bool) -> Self {
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        #[cfg(test)]
+        {
+            let mode = PRESENT_DRIVER_TEST_STATE.with(|state| state.borrow().mode);
+            match mode {
+                Some(PresentDriverTestMode::ForceFallback) => {
+                    return Self {
+                        running,
+                        kind: PresentDriverKind::Test(TestPresentDriver {
+                            display_link: false,
+                        }),
+                    };
+                }
+                Some(PresentDriverTestMode::FailDisplayLink) if window_vsync => {
+                    return Self {
+                        running,
+                        kind: PresentDriverKind::Test(TestPresentDriver {
+                            display_link: false,
+                        }),
+                    };
+                }
+                Some(PresentDriverTestMode::FakeDisplayLink) if window_vsync => {
+                    return Self {
+                        running,
+                        kind: PresentDriverKind::Test(TestPresentDriver { display_link: true }),
+                    };
+                }
+                _ => {}
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        if window_vsync {
+            if let Some(link) = MacDisplayLink::new(surface, running.clone()) {
+                return Self {
+                    running,
+                    kind: PresentDriverKind::DisplayLink(link),
+                };
+            }
+        }
+
+        Self {
+            kind: PresentDriverKind::FallbackThread(Some(start_present_fallback_thread(
+                surface,
+                running.clone(),
+            ))),
+            running,
+        }
+    }
+
+    fn stop(&mut self) {
+        use std::sync::atomic::Ordering;
+        self.running.store(false, Ordering::SeqCst);
+        match &mut self.kind {
+            PresentDriverKind::FallbackThread(handle) => {
+                if let Some(handle) = handle.take() {
+                    let _ = handle.join();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            PresentDriverKind::DisplayLink(link) => link.stop(),
+            #[cfg(test)]
+            PresentDriverKind::Test(_) => {}
+        }
+    }
+
+    fn set_display_id(&mut self, display_id: u32) {
+        match &mut self.kind {
+            PresentDriverKind::FallbackThread(_) => {}
+            #[cfg(target_os = "macos")]
+            PresentDriverKind::DisplayLink(link) => link.set_display_id(display_id),
+            #[cfg(test)]
+            PresentDriverKind::Test(test) => {
+                if test.display_link {
+                    PRESENT_DRIVER_TEST_STATE.with(|state| {
+                        state.borrow_mut().updated_display_ids.push(display_id);
+                    });
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn is_display_link(&self) -> bool {
+        match &self.kind {
+            PresentDriverKind::FallbackThread(_) => false,
+            #[cfg(target_os = "macos")]
+            PresentDriverKind::DisplayLink(_) => true,
+            PresentDriverKind::Test(test) => test.display_link,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for PresentDriver {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn start_present_fallback_thread(
+    surface: *mut Surface,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    use std::sync::atomic::Ordering;
+    let ptr = SendSurfacePtr(surface);
+    std::thread::spawn(move || {
+        while running.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+            enqueue_present_tick(ptr, running.clone());
+        }
+    })
+}
+
+fn enqueue_present_tick(
+    ptr: SendSurfacePtr,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        // Re-bind the whole `SendSurfacePtr` (Rust 2021 disjoint capture would otherwise grab
+        // the `!Send` `*mut Surface` field directly, bypassing the Send wrapper).
+        let ptr = ptr;
+        use std::sync::atomic::Ordering;
+        if !running.load(Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: main thread + running == true → the surface is alive (free flips running false
+        // before dropping the box, serialized on this same queue).
+        let surface = unsafe { &mut *ptr.0 };
+        surface.tick_termio();
+        // Issue 802 / Exp 28: drive drag-selection autoscroll while a drag is held past the edge
+        // (no-op otherwise); before the dirty check so the scrolled row presents now.
+        surface.selection_autoscroll_tick();
+        if surface.dirty {
+            surface.present_live();
+            surface.dirty = false;
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+struct MacDisplayLink {
+    link: core_video_display_link::CVDisplayLinkRef,
+    context: *mut DisplayLinkContext,
+}
+
+#[cfg(target_os = "macos")]
+impl MacDisplayLink {
+    fn new(
+        surface: *mut Surface,
+        running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Option<Self> {
+        let context = Box::new(DisplayLinkContext {
+            running,
+            ptr: SendSurfacePtr(surface),
+        });
+        let context = Box::into_raw(context);
+        let mut link = std::ptr::null_mut();
+        let create =
+            unsafe { core_video_display_link::CVDisplayLinkCreateWithActiveCGDisplays(&mut link) };
+        if create != 0 || link.is_null() {
+            unsafe { drop(Box::from_raw(context)) };
+            return None;
+        }
+        let callback = unsafe {
+            core_video_display_link::CVDisplayLinkSetOutputCallback(
+                link,
+                display_link_callback,
+                context.cast(),
+            )
+        };
+        if callback != 0 {
+            unsafe {
+                core_video_display_link::CVDisplayLinkRelease(link);
+                drop(Box::from_raw(context));
+            }
+            return None;
+        }
+        let start = unsafe { core_video_display_link::CVDisplayLinkStart(link) };
+        if start != 0 {
+            unsafe {
+                core_video_display_link::CVDisplayLinkRelease(link);
+                drop(Box::from_raw(context));
+            }
+            return None;
+        }
+        Some(Self { link, context })
+    }
+
+    fn stop(&mut self) {
+        if self.link.is_null() {
+            return;
+        }
+        unsafe {
+            let _ = core_video_display_link::CVDisplayLinkStop(self.link);
+            core_video_display_link::CVDisplayLinkRelease(self.link);
+            self.link = std::ptr::null_mut();
+            if !self.context.is_null() {
+                drop(Box::from_raw(self.context));
+                self.context = std::ptr::null_mut();
+            }
+        }
+    }
+
+    fn set_display_id(&mut self, display_id: u32) {
+        if self.link.is_null() || display_id == 0 {
+            return;
+        }
+        unsafe {
+            let _ =
+                core_video_display_link::CVDisplayLinkSetCurrentCGDisplay(self.link, display_id);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacDisplayLink {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct DisplayLinkContext {
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ptr: SendSurfacePtr,
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn display_link_callback(
+    _display_link: core_video_display_link::CVDisplayLinkRef,
+    _in_now: *const std::ffi::c_void,
+    _in_output_time: *const std::ffi::c_void,
+    _flags_in: core_video_display_link::CVOptionFlags,
+    _flags_out: *mut core_video_display_link::CVOptionFlags,
+    context: *mut std::ffi::c_void,
+) -> core_video_display_link::CVReturn {
+    use std::sync::atomic::Ordering;
+    if context.is_null() {
+        return 0;
+    }
+    let context = unsafe { &*(context.cast::<DisplayLinkContext>()) };
+    if context.running.load(Ordering::SeqCst) {
+        enqueue_present_tick(context.ptr, context.running.clone());
+    }
+    0
+}
+
+#[cfg(target_os = "macos")]
+mod core_video_display_link {
+    use std::ffi::c_void;
+
+    pub(crate) type CVReturn = i32;
+    pub(crate) type CVOptionFlags = u64;
+    pub(crate) type CGDirectDisplayID = u32;
+    pub(crate) type CVDisplayLinkRef = *mut c_void;
+
+    pub(crate) type CVDisplayLinkOutputCallback = extern "C" fn(
+        CVDisplayLinkRef,
+        *const c_void,
+        *const c_void,
+        CVOptionFlags,
+        *mut CVOptionFlags,
+        *mut c_void,
+    ) -> CVReturn;
+
+    #[link(name = "CoreVideo", kind = "framework")]
+    extern "C" {
+        pub(crate) fn CVDisplayLinkCreateWithActiveCGDisplays(
+            display_link_out: *mut CVDisplayLinkRef,
+        ) -> CVReturn;
+        pub(crate) fn CVDisplayLinkSetOutputCallback(
+            display_link: CVDisplayLinkRef,
+            callback: CVDisplayLinkOutputCallback,
+            user_info: *mut c_void,
+        ) -> CVReturn;
+        pub(crate) fn CVDisplayLinkStart(display_link: CVDisplayLinkRef) -> CVReturn;
+        pub(crate) fn CVDisplayLinkStop(display_link: CVDisplayLinkRef) -> CVReturn;
+        pub(crate) fn CVDisplayLinkSetCurrentCGDisplay(
+            display_link: CVDisplayLinkRef,
+            display_id: CGDirectDisplayID,
+        ) -> CVReturn;
+        pub(crate) fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
+    }
 }
 
 /// Build the live Metal present state for a surface on the main thread (Issue 802 / Exp 15,
@@ -3039,9 +3370,9 @@ fn osc8_hover_link_ranges(
 
 impl Drop for Surface {
     fn drop(&mut self) {
-        // Stop the present driver (Exp 19) so no tick dereferences this surface after it drops.
-        if let Some(running) = &self.present_driver_running {
-            running.store(false, std::sync::atomic::Ordering::SeqCst);
+        // Stop the present driver (Exp 19/175) so no tick dereferences this surface after it drops.
+        if let Some(driver) = &mut self.present_driver {
+            driver.stop();
         }
         self.clear_clipboard_requests();
     }
@@ -16942,6 +17273,7 @@ pub extern "C" fn roastty_surface_new(
         mouse_reporting,
         mouse_scroll_multiplier,
         click_repeat_interval_ns,
+        window_vsync,
         config_conditional_state,
     ) = app_from_handle(app)
         .map(|app| {
@@ -16963,6 +17295,7 @@ pub extern "C" fn roastty_surface_new(
                 parsed.mouse_reporting,
                 parsed.mouse_scroll_multiplier,
                 click_repeat_interval_ns(&parsed),
+                parsed.window_vsync,
                 app.config_conditional_state,
             )
         })
@@ -16980,6 +17313,7 @@ pub extern "C" fn roastty_surface_new(
             true,
             config::MouseScrollMultiplier::default(),
             500_000_000,
+            true,
             config::conditional::State::default(),
         ));
 
@@ -17058,7 +17392,7 @@ pub extern "C" fn roastty_surface_new(
             ptr::null_mut()
         },
         renderer: None,
-        present_driver_running: None,
+        present_driver: None,
         #[cfg(test)]
         test_termio_events: VecDeque::new(),
     });
@@ -17075,8 +17409,8 @@ pub extern "C" fn roastty_surface_new(
         let surface_ptr = surface.as_ptr();
         if let Some(s) = unsafe { surface_ptr.as_mut() } {
             let _ = s.start_termio();
-            // Start the continuous present driver (Exp 19) so the terminal updates live.
-            s.present_driver_running = Some(start_present_driver(surface_ptr));
+            // Start the continuous present driver (Exp 19/175) so the terminal updates live.
+            s.present_driver = Some(PresentDriver::start(surface_ptr, window_vsync));
         }
     }
     surface.as_ptr().cast()
@@ -17093,11 +17427,12 @@ pub extern "C" fn roastty_surface_start(surface: RoasttySurface) -> c_int {
 #[no_mangle]
 pub extern "C" fn roastty_surface_free(surface: RoasttySurface) {
     if !surface.is_null() {
-        // Stop the present driver (Exp 19) before freeing — the flag its thread + main-queue
-        // ticks check before touching the surface. (`Drop` repeats this as a safety net.)
+        // Stop the present driver (Exp 19/175) before freeing — its thread/display link +
+        // main-queue ticks check the flag before touching the surface. (`Drop` repeats this as a
+        // safety net.)
         if let Some(s) = surface_from_handle(surface) {
-            if let Some(running) = &s.present_driver_running {
-                running.store(false, std::sync::atomic::Ordering::SeqCst);
+            if let Some(driver) = &mut s.present_driver {
+                driver.stop();
             }
         }
         unsafe {
@@ -17229,6 +17564,9 @@ pub extern "C" fn roastty_surface_set_content_scale(surface: RoasttySurface, x: 
 pub extern "C" fn roastty_surface_set_display_id(surface: RoasttySurface, display_id: u32) {
     if let Some(surface) = surface_from_handle(surface) {
         surface.display_id = display_id;
+        if let Some(driver) = &mut surface.present_driver {
+            driver.set_display_id(display_id);
+        }
     }
 }
 
@@ -20339,6 +20677,75 @@ mod tests {
         });
 
         assert!(surface_from_handle(surface).unwrap().dirty);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn present_driver_vsync_false_selects_fallback_scheduler() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        with_present_driver_test_mode(PresentDriverTestMode::ForceFallback, || {
+            let driver = PresentDriver::start(surface.cast(), false);
+            assert!(!driver.is_display_link());
+            assert!(driver.is_running());
+            surface_from_handle(surface).unwrap().present_driver = Some(driver);
+        });
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn present_driver_vsync_true_falls_back_when_display_link_fails() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        with_present_driver_test_mode(PresentDriverTestMode::FailDisplayLink, || {
+            let driver = PresentDriver::start(surface.cast(), true);
+            assert!(!driver.is_display_link());
+            assert!(driver.is_running());
+            surface_from_handle(surface).unwrap().present_driver = Some(driver);
+        });
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn present_driver_display_id_update_reaches_active_display_link() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        with_present_driver_test_mode(PresentDriverTestMode::FakeDisplayLink, || {
+            let driver = PresentDriver::start(surface.cast(), true);
+            assert!(driver.is_display_link());
+            surface_from_handle(surface).unwrap().present_driver = Some(driver);
+
+            roastty_surface_set_display_id(surface, 42);
+
+            assert_eq!(surface_from_handle(surface).unwrap().display_id, 42);
+            assert_eq!(present_driver_test_updates(), vec![42]);
+        });
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn present_driver_stop_marks_driver_not_running_before_surface_drop() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+
+        with_present_driver_test_mode(PresentDriverTestMode::FakeDisplayLink, || {
+            let mut driver = PresentDriver::start(surface.cast(), true);
+            assert!(driver.is_running());
+            driver.stop();
+            assert!(!driver.is_running());
+            surface_from_handle(surface).unwrap().present_driver = Some(driver);
+        });
+
         roastty_surface_free(surface);
         roastty_app_free(app);
     }
