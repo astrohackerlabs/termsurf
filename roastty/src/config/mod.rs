@@ -9,7 +9,7 @@
 
 mod comma_splitter;
 #[allow(dead_code)]
-mod conditional;
+pub(crate) mod conditional;
 #[allow(dead_code)]
 mod edit;
 mod formatter;
@@ -2171,7 +2171,7 @@ impl Config {
         self.finalize_with_theme_locations(ConfigThemeLocations::default())
     }
 
-    fn change_conditional_state(
+    pub(crate) fn change_conditional_state(
         &self,
         new_state: conditional::State,
     ) -> Result<Option<Config>, ConfigSetError> {

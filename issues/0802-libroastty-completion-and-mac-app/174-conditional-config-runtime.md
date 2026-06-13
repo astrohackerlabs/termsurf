@@ -122,3 +122,68 @@ Findings and fixes:
 
 **Final verdict:** Approved. The re-review confirmed all prior required findings
 were resolved and found no new required issues.
+
+## Result
+
+**Result:** Pass
+
+Implemented app/surface conditional config runtime wiring in
+`roastty/src/lib.rs` and exposed the minimal crate-private config replay hook in
+`roastty/src/config/mod.rs`.
+
+Key outcomes:
+
+- `App` now stores both its current conditional state and a replay-capable
+  source config, separate from the finalized app snapshot.
+- App config creation/update finalizes through the app conditional state.
+- New surfaces apply the app conditional state during creation and initialize
+  their own surface conditional state from the app.
+- Later surface config updates apply the surface-owned conditional state.
+- App and surface color-scheme setters reject invalid ABI values, update state
+  only on real light/dark transitions, and dispatch target-correct soft
+  `reload_config` actions.
+- Surface working-directory overrides remain owned by `RoasttySurfaceConfig`
+  while conditional config replay updates config-derived fields.
+
+Verification run:
+
+- `cargo test -p roastty config_conditional_theme` — pass
+- `cargo test -p roastty config_theme_loading` — pass
+- `cargo test -p roastty app_set_color_scheme` — pass
+- `cargo test -p roastty surface_new_conditional` — pass
+- `cargo test -p roastty surface_set_color_scheme` — pass
+- `cargo test -p roastty surface_update_config` — pass
+- `cargo test -p roastty --test abi_harness` — pass; existing C enum-conversion
+  warnings only
+- `cargo test -p roastty -- --test-threads=1` — pass: 4873 passed, 0 failed, 4
+  ignored; ABI harness and doc-tests also passed
+- `cargo fmt -p roastty` — pass
+- `cargo fmt --check -p roastty` — pass
+- `git diff --check` — pass
+
+## Conclusion
+
+The Phase F conditional runtime path is now wired. The app owns the process-wide
+conditional state and replay-capable source config; surfaces inherit that state
+when created, then own their subsequent conditional state for surface-specific
+updates. Platform light/dark changes now request soft reloads on the correct
+app/surface target without accepting invalid color-scheme integers.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Bacon`, fresh context.
+
+**Initial verdict:** Changes required.
+
+Finding and fix:
+
+- The first result dispatched app/surface color-scheme `reload_config` actions
+  with an empty storage payload, so callback consumers would see `soft = false`
+  even though upstream sends `.reload_config` with `{ .soft = true }`. Fixed by
+  adding the typed `RoasttyActionReloadConfig { soft: bool }` union member,
+  mapping storage slot 0 through `action_u_from_storage` and the test inverse,
+  dispatching color-scheme reloads with `soft_reload_config_storage()`, and
+  asserting `records[0].storage[0] == 1` in both app and surface tests.
+
+**Final verdict:** Approved. The re-review confirmed the prior required finding
+was resolved and found no new required issues.

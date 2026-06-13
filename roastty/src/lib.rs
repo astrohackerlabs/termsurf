@@ -1249,6 +1249,11 @@ pub struct RoasttyActionResizeSplit {
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct RoasttyActionReloadConfig {
+    soft: bool,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct RoasttyActionKeyTableActivate {
     name: *const c_char,
     len: usize,
@@ -1286,6 +1291,7 @@ pub union RoasttyActionU {
     goto_window: c_int,
     resize_split: RoasttyActionResizeSplit,
     inspector: c_int,
+    reload_config: RoasttyActionReloadConfig,
     set_title: RoasttyActionSetTitle,
     prompt_title: c_int,
     float_window: c_int,
@@ -1350,6 +1356,11 @@ fn action_u_from_storage(tag: c_int, storage: [usize; 8]) -> RoasttyActionU {
         }
         ROASTTY_ACTION_TOGGLE_FULLSCREEN => u.toggle_fullscreen = storage[0] as c_int,
         ROASTTY_ACTION_PROMPT_TITLE => u.prompt_title = storage[0] as c_int,
+        ROASTTY_ACTION_RELOAD_CONFIG => {
+            u.reload_config = RoasttyActionReloadConfig {
+                soft: storage[0] != 0,
+            }
+        }
         ROASTTY_ACTION_NAVIGATE_SEARCH => u.raw = [storage[0], 0, 0],
         ROASTTY_ACTION_KEY_TABLE => {
             u.key_table = RoasttyActionKeyTable {
@@ -1412,6 +1423,7 @@ fn action_u_to_storage(tag: c_int, u: &RoasttyActionU) -> [usize; 8] {
             }
             ROASTTY_ACTION_TOGGLE_FULLSCREEN => s[0] = u.toggle_fullscreen as usize,
             ROASTTY_ACTION_PROMPT_TITLE => s[0] = u.prompt_title as usize,
+            ROASTTY_ACTION_RELOAD_CONFIG => s[0] = usize::from(u.reload_config.soft),
             ROASTTY_ACTION_NAVIGATE_SEARCH => s[0] = u.raw[0],
             ROASTTY_ACTION_KEY_TABLE => {
                 s[0] = u.key_table.tag as usize;
@@ -2456,6 +2468,8 @@ struct App {
     runtime: RoasttyRuntimeConfig,
     focused: bool,
     color_scheme: c_int,
+    config_conditional_state: config::conditional::State,
+    source_config: config::Config,
     parsed_config: config::Config,
     confirm_close_surface: config::ConfirmCloseSurface,
     clipboard_read: config::ClipboardAccess,
@@ -2631,6 +2645,7 @@ struct Surface {
     occluded: bool,
     size: RoasttySurfaceSize,
     color_scheme: c_int,
+    config_conditional_state: config::conditional::State,
     confirm_close_surface: config::ConfirmCloseSurface,
     clipboard_read: config::ClipboardAccess,
     clipboard_write: config::ClipboardAccess,
@@ -3179,10 +3194,35 @@ fn finalized_parsed_config(config: &config::Config) -> config::Config {
     config
 }
 
+fn finalized_parsed_config_with_conditional_state(
+    config: &config::Config,
+    conditional_state: config::conditional::State,
+) -> config::Config {
+    let finalized = finalized_parsed_config(config);
+    match finalized.change_conditional_state(conditional_state) {
+        Ok(Some(config)) => config,
+        Ok(None) | Err(_) => finalized,
+    }
+}
+
 fn default_finalized_config() -> config::Config {
     let mut config = config::Config::default();
     config.finalize();
     config
+}
+
+fn color_scheme_conditional_theme(color_scheme: c_int) -> Option<config::conditional::Theme> {
+    match color_scheme {
+        ROASTTY_COLOR_SCHEME_LIGHT => Some(config::conditional::Theme::Light),
+        ROASTTY_COLOR_SCHEME_DARK => Some(config::conditional::Theme::Dark),
+        _ => None,
+    }
+}
+
+fn soft_reload_config_storage() -> [usize; 8] {
+    let mut storage = [0usize; 8];
+    storage[0] = 1;
+    storage
 }
 
 fn derived_config_palette(config: &config::Config) -> color::Palette {
@@ -3222,7 +3262,10 @@ fn scroll_cursor_key_sequence(y_steps: i64, cursor_keys: bool) -> &'static [u8] 
 
 impl Surface {
     fn apply_config(&mut self, config: &Config) {
-        let parsed = finalized_parsed_config(&config.parsed);
+        let parsed = finalized_parsed_config_with_conditional_state(
+            &config.parsed,
+            self.config_conditional_state,
+        );
         self.confirm_close_surface = config.confirm_close_surface;
         self.clipboard_paste_protection = parsed.clipboard_paste_protection;
         self.clipboard_paste_bracketed_safe = parsed.clipboard_paste_bracketed_safe;
@@ -13451,10 +13494,15 @@ pub extern "C" fn roastty_app_new(
         keybind_triggers,
         keybind_sequences,
         keybind_tables,
+        source_config,
         parsed_config,
     ) = config_from_handle(config)
         .map(|config| {
-            let parsed = finalized_parsed_config(&config.parsed);
+            let source_config = config.parsed.clone();
+            let parsed = finalized_parsed_config_with_conditional_state(
+                &source_config,
+                config::conditional::State::default(),
+            );
             (
                 config.confirm_close_surface,
                 parsed.clipboard_read,
@@ -13464,25 +13512,32 @@ pub extern "C" fn roastty_app_new(
                 config.keybind_triggers.clone(),
                 config.keybind_sequences.clone(),
                 config.keybind_tables.clone(),
+                source_config,
                 parsed,
             )
         })
-        .unwrap_or((
-            config::ConfirmCloseSurface::True,
-            config::ClipboardAccess::Ask,
-            config::ClipboardAccess::Allow,
-            config::MouseShiftCapture::False,
-            false,
-            Vec::new(),
-            ConfigKeybindSet::default(),
-            Vec::new(),
-            default_finalized_config(),
-        ));
+        .unwrap_or_else(|| {
+            let source_config = config::Config::default();
+            (
+                config::ConfirmCloseSurface::True,
+                config::ClipboardAccess::Ask,
+                config::ClipboardAccess::Allow,
+                config::MouseShiftCapture::False,
+                false,
+                Vec::new(),
+                ConfigKeybindSet::default(),
+                Vec::new(),
+                source_config,
+                default_finalized_config(),
+            )
+        });
 
     Box::into_raw(Box::new(App {
         runtime,
         focused: false,
         color_scheme: 0,
+        config_conditional_state: config::conditional::State::default(),
+        source_config,
         parsed_config,
         confirm_close_surface,
         clipboard_read,
@@ -13550,8 +13605,13 @@ pub extern "C" fn roastty_app_update_config(app: RoasttyApp, config: RoasttyConf
     let Some(config) = config_from_handle(config) else {
         return;
     };
-    let parsed_config = finalized_parsed_config(&config.parsed);
+    let source_config = config.parsed.clone();
+    let parsed_config = finalized_parsed_config_with_conditional_state(
+        &source_config,
+        app.config_conditional_state,
+    );
     app.confirm_close_surface = config.confirm_close_surface;
+    app.source_config = source_config;
     app.parsed_config = parsed_config;
     app.mouse_shift_capture = app.parsed_config.mouse_shift_capture;
     app.has_global_keybinds = config.has_global_keybinds;
@@ -13588,9 +13648,22 @@ pub extern "C" fn roastty_app_has_global_keybinds(app: RoasttyApp) -> bool {
 
 #[no_mangle]
 pub extern "C" fn roastty_app_set_color_scheme(app: RoasttyApp, color_scheme: c_int) {
-    if let Some(app) = app_from_handle(app) {
-        app.color_scheme = color_scheme;
+    let Some(app_ref) = app_from_handle(app) else {
+        return;
+    };
+    let Some(theme) = color_scheme_conditional_theme(color_scheme) else {
+        return;
+    };
+    if app_ref.config_conditional_state.theme == theme {
+        return;
     }
+    app_ref.color_scheme = color_scheme;
+    app_ref.config_conditional_state.theme = theme;
+    let _ = app_ref.perform_app_runtime_action_result(
+        app,
+        ROASTTY_ACTION_RELOAD_CONFIG,
+        soft_reload_config_storage(),
+    );
 }
 
 #[no_mangle]
@@ -16855,44 +16928,60 @@ pub extern "C" fn roastty_surface_new(
     } else {
         unsafe { *config }
     };
-    let confirm_close_surface = app_from_handle(app)
-        .map(|app| app.confirm_close_surface)
-        .unwrap_or(config::ConfirmCloseSurface::True);
-    let clipboard_read = app_from_handle(app)
-        .map(|app| app.clipboard_read)
-        .unwrap_or(config::ClipboardAccess::Ask);
-    let clipboard_write = app_from_handle(app)
-        .map(|app| app.clipboard_write)
-        .unwrap_or(config::ClipboardAccess::Allow);
-    let clipboard_paste_protection = app_from_handle(app)
-        .map(|app| app.parsed_config.clipboard_paste_protection)
-        .unwrap_or(true);
-    let clipboard_paste_bracketed_safe = app_from_handle(app)
-        .map(|app| app.parsed_config.clipboard_paste_bracketed_safe)
-        .unwrap_or(true);
-    let selection_clear_on_typing = app_from_handle(app)
-        .map(|app| app.parsed_config.selection_clear_on_typing)
-        .unwrap_or(true);
-    let selection_word_chars = app_from_handle(app)
-        .map(|app| app.parsed_config.selection_word_chars.codepoints.clone())
-        .unwrap_or_else(|| config::SelectionWordChars::default().codepoints);
-    let vt_kam_allowed = app_from_handle(app)
-        .map(|app| app.parsed_config.vt_kam_allowed)
-        .unwrap_or(false);
-    let key_remaps = app_from_handle(app)
-        .map(|app| app.parsed_config.key_remap.clone())
-        .unwrap_or_default();
-    let macos_option_as_alt =
-        app_from_handle(app).and_then(|app| app.parsed_config.macos_option_as_alt);
-    let mouse_reporting = app_from_handle(app)
-        .map(|app| app.parsed_config.mouse_reporting)
-        .unwrap_or(true);
-    let mouse_scroll_multiplier = app_from_handle(app)
-        .map(|app| app.parsed_config.mouse_scroll_multiplier)
-        .unwrap_or_default();
-    let click_repeat_interval_ns = app_from_handle(app)
-        .map(|app| click_repeat_interval_ns(&app.parsed_config))
-        .unwrap_or(500_000_000);
+    let (
+        confirm_close_surface,
+        clipboard_read,
+        clipboard_write,
+        clipboard_paste_protection,
+        clipboard_paste_bracketed_safe,
+        selection_clear_on_typing,
+        selection_word_chars,
+        vt_kam_allowed,
+        key_remaps,
+        macos_option_as_alt,
+        mouse_reporting,
+        mouse_scroll_multiplier,
+        click_repeat_interval_ns,
+        config_conditional_state,
+    ) = app_from_handle(app)
+        .map(|app| {
+            let parsed = finalized_parsed_config_with_conditional_state(
+                &app.source_config,
+                app.config_conditional_state,
+            );
+            (
+                app.confirm_close_surface,
+                app.clipboard_read,
+                app.clipboard_write,
+                parsed.clipboard_paste_protection,
+                parsed.clipboard_paste_bracketed_safe,
+                parsed.selection_clear_on_typing,
+                parsed.selection_word_chars.codepoints.clone(),
+                parsed.vt_kam_allowed,
+                parsed.key_remap.clone(),
+                parsed.macos_option_as_alt,
+                parsed.mouse_reporting,
+                parsed.mouse_scroll_multiplier,
+                click_repeat_interval_ns(&parsed),
+                app.config_conditional_state,
+            )
+        })
+        .unwrap_or((
+            config::ConfirmCloseSurface::True,
+            config::ClipboardAccess::Ask,
+            config::ClipboardAccess::Allow,
+            true,
+            true,
+            true,
+            config::SelectionWordChars::default().codepoints,
+            false,
+            key_mods::RemapSet::default(),
+            None,
+            true,
+            config::MouseScrollMultiplier::default(),
+            500_000_000,
+            config::conditional::State::default(),
+        ));
 
     let initial_surface = app_from_handle(app)
         .map(|app| {
@@ -16929,6 +17018,7 @@ pub extern "C" fn roastty_surface_new(
             cell_height_px: 0,
         },
         color_scheme: 0,
+        config_conditional_state,
         confirm_close_surface,
         clipboard_read,
         clipboard_write,
@@ -17217,20 +17307,27 @@ pub extern "C" fn roastty_surface_tty_name(surface: RoasttySurface) -> RoasttySt
 
 #[no_mangle]
 pub extern "C" fn roastty_surface_set_color_scheme(surface: RoasttySurface, color_scheme: c_int) {
-    if let Some(surface) = surface_from_handle(surface) {
-        let changed = surface.color_scheme != color_scheme;
-        surface.color_scheme = color_scheme;
-        if changed {
-            // OS appearance changed: if the program enabled mode 2031, notify it live (Issue 802 /
-            // Exp 36, upstream `Surface.colorSchemeCallback` → `Termio.colorSchemeReportLocked`).
-            if let Some(worker) = surface.termio_worker.as_ref() {
-                worker.with_termio_mut(|termio| {
-                    termio
-                        .terminal_mut()
-                        .report_color_scheme_change(color_scheme);
-                });
-            }
-        }
+    let Some(surface_ref) = surface_from_handle(surface) else {
+        return;
+    };
+    let Some(theme) = color_scheme_conditional_theme(color_scheme) else {
+        return;
+    };
+    if surface_ref.config_conditional_state.theme == theme {
+        return;
+    }
+    surface_ref.color_scheme = color_scheme;
+    surface_ref.config_conditional_state.theme = theme;
+    let _ = surface_ref
+        .perform_action_result(ROASTTY_ACTION_RELOAD_CONFIG, soft_reload_config_storage());
+    // OS appearance changed: if the program enabled mode 2031, notify it live (Issue 802 /
+    // Exp 36, upstream `Surface.colorSchemeCallback` → `Termio.colorSchemeReportLocked`).
+    if let Some(worker) = surface_ref.termio_worker.as_ref() {
+        worker.with_termio_mut(|termio| {
+            termio
+                .terminal_mut()
+                .report_color_scheme_change(color_scheme);
+        });
     }
 }
 
@@ -18691,9 +18788,47 @@ mod tests {
         (dir, path)
     }
 
+    fn new_test_config_with_light_dark_theme(
+        name: &str,
+        light_body: &str,
+        dark_body: &str,
+    ) -> (PathBuf, RoasttyConfig) {
+        let id = SCRIPT_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "roastty-conditional-theme-{}-{id}-{name}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let light = dir.join("light");
+        let dark = dir.join("dark");
+        std::fs::write(&light, light_body).unwrap();
+        std::fs::write(&dark, dark_body).unwrap();
+
+        let config = roastty_config_new();
+        let config_ref = config_from_handle(config).unwrap();
+        let diagnostics = config_ref.parsed.load_str(&format!(
+            "theme = light:{},dark:{}\n",
+            light.display(),
+            dark.display()
+        ));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        config_ref.sync_from_parsed_config();
+        (dir, config)
+    }
+
     fn load_test_config_file(config: RoasttyConfig, path: &Path) {
         let path = CString::new(path.as_os_str().as_bytes()).unwrap();
         roastty_config_load_file(config, path.as_ptr());
+    }
+
+    fn config_background_rgb(config: &config::Config) -> (u8, u8, u8) {
+        let background = config.background.to_terminal_rgb();
+        (background.r, background.g, background.b)
+    }
+
+    fn app_background_rgb(app: RoasttyApp) -> (u8, u8, u8) {
+        config_background_rgb(&app_from_handle(app).unwrap().parsed_config)
     }
 
     fn diagnostic_message(config: RoasttyConfig, index: u32) -> String {
@@ -18984,6 +19119,7 @@ mod tests {
 
     fn set_app_clipboard_paste_protection(app: RoasttyApp, enabled: bool) {
         let app_ref = app_from_handle(app).unwrap();
+        app_ref.source_config.clipboard_paste_protection = enabled;
         app_ref.parsed_config.clipboard_paste_protection = enabled;
         for surface in &app_ref.surfaces {
             unsafe {
@@ -18998,6 +19134,7 @@ mod tests {
 
     fn set_app_clipboard_paste_bracketed_safe(app: RoasttyApp, enabled: bool) {
         let app_ref = app_from_handle(app).unwrap();
+        app_ref.source_config.clipboard_paste_bracketed_safe = enabled;
         app_ref.parsed_config.clipboard_paste_bracketed_safe = enabled;
         for surface in &app_ref.surfaces {
             unsafe {
@@ -19173,6 +19310,168 @@ mod tests {
         config: &RoasttySurfaceConfig,
     ) -> RoasttySurface {
         roastty_surface_new(app, config)
+    }
+
+    #[test]
+    fn app_set_color_scheme_updates_conditional_state_and_requests_reload() {
+        let (_dir, config) = new_test_config_with_light_dark_theme(
+            "app",
+            "background = #FAFAFA\n",
+            "background = #0A0B0C\n",
+        );
+        let app = new_test_app_with_action_config(true, config);
+        assert_eq!(app_background_rgb(app), (0xFA, 0xFA, 0xFA));
+
+        roastty_app_set_color_scheme(app, 99);
+        roastty_app_set_color_scheme(app, ROASTTY_COLOR_SCHEME_LIGHT);
+        assert!(action_records().is_empty());
+        assert_eq!(
+            app_from_handle(app).unwrap().config_conditional_state.theme,
+            config::conditional::Theme::Light
+        );
+
+        roastty_app_set_color_scheme(app, ROASTTY_COLOR_SCHEME_DARK);
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].target_tag, ROASTTY_TARGET_APP);
+        assert!(records[0].surface.is_null());
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_RELOAD_CONFIG);
+        assert_eq!(records[0].storage[0], 1);
+        assert_eq!(
+            app_from_handle(app).unwrap().config_conditional_state.theme,
+            config::conditional::Theme::Dark
+        );
+
+        roastty_app_update_config(app, config);
+        assert_eq!(app_background_rgb(app), (0x0A, 0x0B, 0x0C));
+
+        reset_action_records(true);
+        roastty_app_set_color_scheme(app, ROASTTY_COLOR_SCHEME_DARK);
+        assert!(action_records().is_empty());
+
+        roastty_app_free(app);
+        roastty_config_free(config);
+        std::fs::remove_dir_all(_dir).ok();
+    }
+
+    #[test]
+    fn surface_new_conditional_uses_app_state_and_preserves_working_directory() {
+        let (_dir, config) = new_test_config_with_light_dark_theme(
+            "surface-new",
+            "selection-clear-on-typing = true\n",
+            "selection-clear-on-typing = false\n",
+        );
+        let app = new_test_app_with_action_config(true, config);
+        roastty_app_set_color_scheme(app, ROASTTY_COLOR_SCHEME_DARK);
+        reset_action_records(true);
+
+        let working_directory = CString::new("/tmp/roastty-surface-conditional").unwrap();
+        let mut surface_config = roastty_surface_config_new();
+        surface_config.working_directory = working_directory.as_ptr();
+        let surface = new_test_surface_with_config(app, &surface_config);
+        {
+            let surface_ref = surface_from_handle(surface).unwrap();
+            assert!(!surface_ref.selection_clear_on_typing);
+            assert_eq!(
+                surface_ref.config_conditional_state.theme,
+                config::conditional::Theme::Dark
+            );
+            assert_eq!(
+                surface_ref.working_directory.as_deref(),
+                Some("/tmp/roastty-surface-conditional")
+            );
+        }
+
+        roastty_app_set_color_scheme(app, ROASTTY_COLOR_SCHEME_LIGHT);
+        roastty_surface_update_config(surface, config);
+        assert!(
+            !surface_from_handle(surface)
+                .unwrap()
+                .selection_clear_on_typing
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+        std::fs::remove_dir_all(_dir).ok();
+    }
+
+    #[test]
+    fn surface_update_config_uses_surface_conditional_state() {
+        let (_dir, config) = new_test_config_with_light_dark_theme(
+            "surface-update",
+            "selection-clear-on-typing = true\n",
+            "selection-clear-on-typing = false\n",
+        );
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        assert!(
+            surface_from_handle(surface)
+                .unwrap()
+                .selection_clear_on_typing
+        );
+
+        roastty_surface_set_color_scheme(surface, ROASTTY_COLOR_SCHEME_DARK);
+        roastty_surface_update_config(surface, config);
+        assert!(
+            !surface_from_handle(surface)
+                .unwrap()
+                .selection_clear_on_typing
+        );
+
+        roastty_surface_set_color_scheme(surface, ROASTTY_COLOR_SCHEME_LIGHT);
+        roastty_surface_update_config(surface, config);
+        assert!(
+            surface_from_handle(surface)
+                .unwrap()
+                .selection_clear_on_typing
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+        std::fs::remove_dir_all(_dir).ok();
+    }
+
+    #[test]
+    fn surface_set_color_scheme_updates_conditional_state_reloads_and_reports() {
+        let _guard = pty_command_lock();
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+
+        roastty_surface_set_color_scheme(surface, 99);
+        roastty_surface_set_color_scheme(surface, ROASTTY_COLOR_SCHEME_LIGHT);
+        assert!(action_records().is_empty());
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .config_conditional_state
+                .theme,
+            config::conditional::Theme::Light
+        );
+
+        roastty_surface_set_color_scheme(surface, ROASTTY_COLOR_SCHEME_DARK);
+        let records = action_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].target_tag, ROASTTY_TARGET_SURFACE);
+        assert_eq!(records[0].surface, surface);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_RELOAD_CONFIG);
+        assert_eq!(records[0].storage[0], 1);
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .config_conditional_state
+                .theme,
+            config::conditional::Theme::Dark
+        );
+
+        reset_action_records(true);
+        roastty_surface_set_color_scheme(surface, ROASTTY_COLOR_SCHEME_DARK);
+        assert!(action_records().is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
     }
 
     fn app_surface_count(app: RoasttyApp) -> usize {

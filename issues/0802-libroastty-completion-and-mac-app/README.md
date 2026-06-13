@@ -397,6 +397,15 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   app ABI exposure, runtime OS-theme notifications, general conditional syntax,
   conditionalized theme-file replay steps, and live surface/app propagation
   remain later work.
+- **Conditional config runtime is wired.** Exp 174 gives the Roastty app and
+  each surface their own conditional config state, keeps the app's
+  replay-capable source config separate from its finalized snapshot, applies app
+  state during app config snapshots and new surface creation, applies surface
+  state during later surface config updates, rejects invalid color-scheme ABI
+  values, and dispatches soft `reload_config` actions only on real light/dark
+  transitions. New surfaces inherit the app state, then diverge through their
+  own surface state for later updates; surface working-directory overrides
+  remain owned by `RoasttySurfaceConfig`.
 - **Working-directory finalize is wired.** Exp 102 computes the upstream
   probable-CLI heuristic during config finalization, defaults an unset
   `working-directory` to `inherit` for probable CLI launches and `home`
@@ -1010,7 +1019,7 @@ the live app, verified by a Phase-D UI test.)
 - [ ] `finalize()` — cross-field validation / derivation / clamping
 - [ ] Theme loading (themes-dir locator + file read + palette/option
       application)
-- [ ] Conditional state wiring (`changeConditionalState` + conditional reload)
+- [x] Conditional state wiring (`changeConditionalState` + conditional reload)
 - [x] `font-codepoint-map` + `clipboard-codepoint-map` as config fields
 - [x] `SharedGridSet` config→font assembly (`Key`/`DerivedConfig` → discovery →
       populated `Collection`), replacing the hardcoded-"Menlo" test path
@@ -1554,7 +1563,7 @@ stays unaltered except for the rename).
 - [Experiment 173: Phase F — keybind config surface](173-keybind-config-surface.md)
   — **Pass**
 - [Experiment 174: Phase F — conditional config runtime](174-conditional-config-runtime.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
