@@ -239,7 +239,10 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   `os/cf_release_thread` performance behavior as a process-shared Rust worker
   plus local per-shape pools, because Roastty has no long-lived `Shaper` owner;
   CoreText shaping now hands temporary retained CF objects, including retained
-  `CTRun`s, to that pool after last use.
+  `CTRun`s, to that pool after last use. Exp 162 keeps that production behavior
+  unchanged but fixes the test oracle: the release-thread tests now register
+  only their own retained CF pointers, so parallel CoreText/font tests cannot
+  contaminate the expected release counts.
 - **GTK quick-terminal config is parser/formatter-only.** Exp 82 wires
   `gtk-quick-terminal-layer` and `gtk-quick-terminal-namespace`; empty values
   reset to upstream defaults before enum/string parsing, and GTK layer-shell
@@ -535,20 +538,21 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   makes `App` own and reload that keymap for layout detection. The copied app
   keyDown path intentionally keeps using AppKit / `interpretKeyEvents` text,
   matching upstream embedded scope; Exp 139 verifies the Swift wrapper and
-  raw-ABI handoff preserve app-provided UTF-8 text. Remaining Phase G native key
-  work is hosted dead-key/IME UI automation and native global shortcut
-  registration. Exp 140 adds hosted `NSTextInputClient` marked-text/preedit
-  coverage and fixes live renderer cell metrics feeding `roastty_surface_size`,
-  which `roastty_surface_ime_point` needs for IME geometry. Exp 159 restores the
-  copied-app custom-config title gate, so UI automation now proves
-  `ROASTTY_CONFIG_PATH` reaches the visible first window before terminal-output
-  diagnostics continue. Exp 160 fixes the embedded Rust first-surface launch
-  path so app-level `initial-command` runs for the initial copied-app surface;
-  the focused terminal-output UI selector now executes one test with 0 skips and
-  proves `TERMSURF_READY_158` through the real terminal accessibility path.
-  Dead-key output is still not app-visible: the route reaches
-  `committedPreeditText text=é`, but the terminal output exposes a replacement
-  character instead of visible `é`.
+  raw-ABI handoff preserve app-provided UTF-8 text. Exp 140 adds hosted
+  `NSTextInputClient` marked-text/preedit coverage and fixes live renderer cell
+  metrics feeding `roastty_surface_size`, which `roastty_surface_ime_point`
+  needs for IME geometry. Exp 159 restores the copied-app custom-config title
+  gate, so UI automation now proves `ROASTTY_CONFIG_PATH` reaches the visible
+  first window before terminal-output diagnostics continue. Exp 160 fixes the
+  embedded Rust first-surface launch path so app-level `initial-command` runs
+  for the initial copied-app surface; the focused terminal-output UI selector
+  now executes one test with 0 skips and proves `TERMSURF_READY_158` through the
+  real terminal accessibility path. Exp 161 proves the copied app's native
+  `Option-E`, `E` dead-key route end to end for deterministic UTF-8 output:
+  AppKit marked text commits `é`, `committedPreeditTextAction` sends it through
+  by-value `roastty_surface_key`, the PTY receives it, and terminal
+  accessibility observes visible `é`. Remaining Phase G native-key work is
+  permission-dependent live global shortcut registration.
 - **Live Kitty graphics now draw in the Metal presentation pass.** Exp 141 adds
   persistent `ImageState<MetalTexture>` to the live surface renderer, updates it
   from terminal Kitty render-placement snapshots each frame, uploads pending
@@ -1465,7 +1469,7 @@ stays unaltered except for the rename).
 - [Experiment 161: Phase G — committed preedit UTF-8](161-committed-preedit-utf8.md)
   — **Pass**
 - [Experiment 162: Phase I — CF release-thread test isolation](162-cf-release-thread-test-isolation.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

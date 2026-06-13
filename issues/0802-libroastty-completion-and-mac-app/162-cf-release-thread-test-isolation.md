@@ -112,3 +112,75 @@ directly targets the Experiment 161 regression.
 Implementation note from the review: make the pointer-observer scope explicit
 with a per-test handle/guard or equivalent cleanup so registered pointer state
 cannot leak across parallel tests or later pointer reuse.
+
+## Result
+
+**Result:** Pass
+
+The CF release-thread failures were test-oracle contamination, not a production
+release-worker regression. The old `#[cfg(test)]` hook recorded every
+`CFRelease` that passed through `release_raw`, so unrelated CoreText/font tests
+and the process-shared global release worker could add releases while the
+focused `os::cf_release_thread` tests expected exactly two entries or none.
+
+This experiment replaced that global count oracle with a pointer-scoped
+observer:
+
+- each CF-release-thread test registers the exact retained `CFString` pointers
+  it owns before handing them to `CfReleasePool`;
+- `release_raw` records a release only when the pointer is registered;
+- each observer guard removes its pointer and any recorded releases on drop, so
+  pointer state does not leak across parallel tests or later pointer reuse;
+- unregistered production releases are ignored by the test oracle but still
+  proceed through the same `CFRelease` call.
+
+The production behavior remains unchanged: `CfReleasePool`, the bounded mailbox,
+the process-shared worker, synchronous fallback, and worker drop-drain semantics
+still use the same release path.
+
+Verification:
+
+- `cargo fmt -p roastty` — pass.
+- `cargo test -p roastty os::cf_release_thread::tests -- --nocapture` — pass: 4
+  passed, 0 failed, 0 ignored; ABI harness filtered run passed.
+- `cargo test -p roastty os::cf_release_thread::tests -- --test-threads=1 --nocapture`
+  — pass: 4 passed, 0 failed, 0 ignored; ABI harness filtered run passed.
+- `cargo test -p roastty` — pass: 4,850 unit tests passed, 0 failed, 4 ignored;
+  ABI harness passed; doc tests passed.
+- `cd roastty && macos/build.nu --action test` — pass: `TEST SUCCEEDED`, 213
+  hosted app tests in 23 suites passed; UI tests remain skipped by default.
+- `cargo fmt --check -p roastty` — pass.
+- `git diff --check` — pass.
+
+## Conclusion
+
+The full default Rust suite is green again without serializing Cargo tests or
+weakening the release-thread assertions. The release-thread tests now prove
+worker-thread release, worker drop drain, synchronous fallback, and empty-pool
+no-op behavior only for the retained CF objects they create, so unrelated
+parallel CoreText/font release traffic cannot affect the result.
+
+The stale Phase G issue text was also updated: Experiment 161 closed the
+app-visible dead-key terminal-output oracle for deterministic UTF-8 output. The
+remaining native-key roadmap gap is permission-dependent live global shortcut
+installation.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial subagent `Kant` with fresh context, using
+the `adversarial-review` skill's Codex path (`multi_agent_v1.spawn_agent`), not
+Claude's named `adversarial-reviewer` agent.
+
+**Verdict:** Approved.
+
+The reviewer found no Required findings. It confirmed that the observer is
+test-only and pointer-scoped, `release_raw` still calls `CFRelease` for every
+pointer, guard cleanup prevents parallel-test contamination and pointer reuse,
+the release-thread tests remain non-vacuous, the README no longer contains the
+stale dead-key-output contradiction, and the result/conclusion support `Pass`.
+
+The reviewer independently reran:
+
+- `git diff --check`
+- `cargo fmt --check -p roastty`
+- `cargo test -p roastty os::cf_release_thread::tests -- --nocapture`

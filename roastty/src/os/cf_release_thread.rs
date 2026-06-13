@@ -143,7 +143,7 @@ fn release_all(refs: Vec<CfReleaseRef>) {
 
 fn release_raw(ptr: NonNull<c_void>) {
     #[cfg(test)]
-    release_test_hook();
+    release_test_hook(ptr);
     unsafe { CFRelease(ptr.as_ptr()) };
 }
 
@@ -153,15 +153,27 @@ extern "C" {
 }
 
 #[cfg(test)]
-fn release_test_hook() {
-    RELEASE_THREADS
-        .lock()
-        .expect("release hook lock")
-        .push(thread::current().id());
+fn release_test_hook(ptr: NonNull<c_void>) {
+    let mut state = RELEASE_OBSERVER.lock().expect("release observer lock");
+    let ptr = ptr.as_ptr() as usize;
+    if state.watched.contains(&ptr) {
+        state.releases.push((ptr, thread::current().id()));
+    }
 }
 
 #[cfg(test)]
-static RELEASE_THREADS: std::sync::Mutex<Vec<thread::ThreadId>> = std::sync::Mutex::new(Vec::new());
+#[derive(Default)]
+struct ReleaseObserver {
+    watched: Vec<usize>,
+    releases: Vec<(usize, thread::ThreadId)>,
+}
+
+#[cfg(test)]
+static RELEASE_OBSERVER: std::sync::Mutex<ReleaseObserver> =
+    std::sync::Mutex::new(ReleaseObserver {
+        watched: Vec::new(),
+        releases: Vec::new(),
+    });
 
 #[cfg(test)]
 mod tests {
@@ -169,18 +181,49 @@ mod tests {
     use objc2_core_foundation::CFString;
     use std::time::{Duration, Instant};
 
-    fn clear_release_threads() {
-        RELEASE_THREADS.lock().expect("release hook lock").clear();
+    struct ObservedRelease {
+        ptr: usize,
     }
 
-    fn release_threads() -> Vec<thread::ThreadId> {
-        RELEASE_THREADS.lock().expect("release hook lock").clone()
+    impl Drop for ObservedRelease {
+        fn drop(&mut self) {
+            let mut state = RELEASE_OBSERVER.lock().expect("release observer lock");
+            state.watched.retain(|&ptr| ptr != self.ptr);
+            state.releases.retain(|&(ptr, _)| ptr != self.ptr);
+        }
     }
 
-    fn wait_for_release_count(count: usize) -> Vec<thread::ThreadId> {
+    fn observed_string(text: &str) -> (CFRetained<CFString>, ObservedRelease) {
+        let retained = CFString::from_str(text);
+        let ptr = CFRetained::as_ptr(&retained).cast::<c_void>().as_ptr() as usize;
+        {
+            let mut state = RELEASE_OBSERVER.lock().expect("release observer lock");
+            state.watched.push(ptr);
+            state
+                .releases
+                .retain(|&(release_ptr, _)| release_ptr != ptr);
+        }
+        (retained, ObservedRelease { ptr })
+    }
+
+    fn release_threads(observed: &[&ObservedRelease]) -> Vec<thread::ThreadId> {
+        let ptrs: Vec<usize> = observed.iter().map(|release| release.ptr).collect();
+        RELEASE_OBSERVER
+            .lock()
+            .expect("release observer lock")
+            .releases
+            .iter()
+            .filter_map(|&(ptr, thread)| ptrs.contains(&ptr).then_some(thread))
+            .collect()
+    }
+
+    fn wait_for_release_count(
+        observed: &[&ObservedRelease],
+        count: usize,
+    ) -> Vec<thread::ThreadId> {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            let threads = release_threads();
+            let threads = release_threads(observed);
             if threads.len() >= count || Instant::now() >= deadline {
                 return threads;
             }
@@ -190,16 +233,17 @@ mod tests {
 
     #[test]
     fn pool_flush_releases_on_worker_thread() {
-        clear_release_threads();
         let caller = thread::current().id();
         let worker = CfReleaseThread::spawn().expect("spawn release thread");
         let mut pool = CfReleasePool::new();
+        let (first, first_release) = observed_string("worker-release-a");
+        let (second, second_release) = observed_string("worker-release-b");
 
-        pool.push(CFString::from_str("worker-release-a"));
-        pool.push(CFString::from_str("worker-release-b"));
+        pool.push(first);
+        pool.push(second);
         pool.flush_with(&worker);
 
-        let threads = wait_for_release_count(2);
+        let threads = wait_for_release_count(&[&first_release, &second_release], 2);
         assert_eq!(threads.len(), 2);
         assert!(
             threads.iter().all(|&id| id != caller),
@@ -209,38 +253,41 @@ mod tests {
 
     #[test]
     fn worker_drop_drains_queued_refs() {
-        clear_release_threads();
+        let (first, first_release) = observed_string("drop-drain-a");
+        let (second, second_release) = observed_string("drop-drain-b");
         {
             let worker = CfReleaseThread::spawn().expect("spawn release thread");
             let mut pool = CfReleasePool::new();
-            pool.push(CFString::from_str("drop-drain-a"));
-            pool.push(CFString::from_str("drop-drain-b"));
+            pool.push(first);
+            pool.push(second);
             pool.flush_with(&worker);
         }
 
-        let threads = wait_for_release_count(2);
+        let threads = wait_for_release_count(&[&first_release, &second_release], 2);
         assert_eq!(threads.len(), 2);
     }
 
     #[test]
     fn pool_falls_back_to_synchronous_release_when_worker_is_closed() {
-        clear_release_threads();
         let caller = thread::current().id();
         let mut pool = CfReleasePool::new();
-        pool.push(CFString::from_str("fallback-release"));
+        let (retained, release) = observed_string("fallback-release");
+        pool.push(retained);
         pool.flush_with(&CfReleaseThread {
             sender: None,
             handle: None,
         });
 
-        assert_eq!(release_threads(), vec![caller]);
+        assert_eq!(release_threads(&[&release]), vec![caller]);
     }
 
     #[test]
     fn empty_pool_is_noop() {
-        clear_release_threads();
+        let (sentinel, release) = observed_string("empty-pool-sentinel");
         let mut pool = CfReleasePool::new();
         pool.flush();
-        assert!(release_threads().is_empty());
+        assert!(release_threads(&[&release]).is_empty());
+        drop(release);
+        drop(sentinel);
     }
 }
