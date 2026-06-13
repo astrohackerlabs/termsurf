@@ -552,7 +552,15 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   AppKit marked text commits `é`, `committedPreeditTextAction` sends it through
   by-value `roastty_surface_key`, the PTY receives it, and terminal
   accessibility observes visible `é`. Remaining Phase G native-key work is
-  permission-dependent live global shortcut registration.
+  permission-dependent live global shortcut receipt.
+- **Global shortcut tap installation is state-machine tested without
+  Accessibility permission.** Exp 163 keeps the copied app's live
+  `CGEvent.tapCreate` / run-loop / retry behavior as the default path, but adds
+  an internal dependency seam so hosted tests can prove enable success,
+  idempotent enable, failed creation retry, retry success, pending retry
+  disable, and installed tap invalidation without requesting host Accessibility
+  permission. Runtime receipt of inactive-app global keystrokes remains
+  dependent on macOS granting Accessibility permission.
 - **Live Kitty graphics now draw in the Metal presentation pass.** Exp 141 adds
   persistent `ImageState<MetalTexture>` to the live surface renderer, updates it
   from terminal Kitty render-placement snapshots each frame, uploads pending
@@ -1008,9 +1016,12 @@ the live app, verified by a Phase-D UI test.)
       preedit text (Exp 157 Partial). Experiment 158 added a focused
       terminal-output oracle, but it remains Partial because copied-app UI
       automation still cannot observe deterministic terminal text through the
-      current accessibility/copy path. The remaining native-key gaps are an
-      app-visible terminal-output oracle for dead-key UI automation and
-      permission-dependent live global shortcut installation.
+      current accessibility/copy path. Exp 163 proves the copied app's global
+      event-tap installation state machine without requiring Accessibility
+      permission: enable success, idempotent enable, failure retry, retry
+      success, and disable are covered by hosted tests. The remaining native-key
+      gap is permission-dependent live global shortcut receipt on hosts where
+      macOS grants Accessibility permission.
 
 **Phase H — Renderer feature-completion (in the live pass)**
 
@@ -1471,7 +1482,7 @@ stays unaltered except for the rename).
 - [Experiment 162: Phase I — CF release-thread test isolation](162-cf-release-thread-test-isolation.md)
   — **Pass**
 - [Experiment 163: Phase G — global event tap installation state](163-global-event-tap-installation-state.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

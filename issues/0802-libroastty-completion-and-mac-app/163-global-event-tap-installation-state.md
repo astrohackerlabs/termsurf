@@ -105,3 +105,71 @@ path.
 
 The reviewer re-reviewed the fix and approved the design with no remaining
 required findings.
+
+## Result
+
+**Result:** Pass
+
+The copied macOS app's `GlobalEventTap` now has an internal dependency seam for
+event-tap creation and retry scheduling. The shared production singleton still
+uses the real path: `CGEvent.tapCreate`, `CFMachPortCreateRunLoopSource`,
+`CFRunLoopAddSource`, `Timer.scheduledTimer`, and `CGEvent.tapEnable` for
+system-disabled tap recovery. Tests instantiate isolated `GlobalEventTap`
+instances with fake dependencies, so hosted automation proves the installation
+state machine without requesting Accessibility permission.
+
+`GlobalEventTapTests` now covers ten cases total. The six new installation tests
+prove:
+
+- immediate enable success installs one tap with no retry;
+- repeated `enable()` does not reinstall an already installed tap;
+- failed creation schedules a retry;
+- retry success installs the tap and cancels the pending retry;
+- `disable()` cancels a pending retry;
+- `disable()` invalidates an installed tap.
+
+The four existing dispatch tests from Experiment 136 still prove inactive-app
+configured `global:` keydown suppression and active-app/non-global/non-keydown
+pass-through behavior.
+
+Verification:
+
+- `swiftlint lint 'roastty/macos/Sources/Features/Global Keybinds/GlobalEventTap.swift' roastty/macos/Tests/Roastty/GlobalEventTapTests.swift`
+  passed with 0 violations.
+- `cd roastty && macos/build.nu --action test --only-testing RoasttyTests/GlobalEventTapTests`
+  passed 10 Swift Testing tests in 1 suite.
+- `cd roastty && macos/build.nu --action test` passed 219 hosted Swift tests in
+  23 suites. Existing Swift concurrency, Main Thread Checker, App Intents, and
+  pasteboard warnings/noise remained.
+- `cargo test -p roastty app_has_global_keybinds` passed 2 targeted Rust tests.
+- `cargo test -p roastty app_key_global` passed 11 targeted Rust tests.
+- `cargo test -p roastty` passed 4,850 Rust unit tests, 0 failed, 4 ignored; the
+  C ABI harness passed with existing enum-conversion warnings; doc tests passed
+  with 0 tests.
+- `cargo fmt --check -p roastty` passed.
+- `git diff --check` passed.
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/163-global-event-tap-installation-state.md issues/0802-libroastty-completion-and-mac-app/README.md`
+  passed.
+
+## Conclusion
+
+Roastty now proves the copied app requests and maintains the live global event
+tap correctly without making Accessibility permission a test prerequisite. The
+remaining global-shortcut caveat is host-level: actually receiving inactive-app
+global keystrokes still depends on macOS granting Accessibility permission to
+the app, but the app-side enable/retry/disable logic is no longer an untested
+gap.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Carver`, fresh context.
+
+**Verdict:** Approved.
+
+**Findings:**
+
+- Nit: `GlobalEventTap.swift` still described the initializer as private after
+  the test seam made it internal. Fixed by updating the comment.
+
+No required findings remained, and the reviewer approved the completed
+experiment before the result commit.

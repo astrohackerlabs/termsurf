@@ -9,6 +9,54 @@ import RoasttyKit
 class GlobalEventTap {
     static let shared = GlobalEventTap()
 
+    struct InstalledTap {
+        var invalidate: () -> Void
+        var setEnabled: (Bool) -> Void
+    }
+
+    protocol RetryTimer: AnyObject {
+        func invalidate()
+    }
+
+    struct Dependencies {
+        var createEventTap: (CGEventMask) -> InstalledTap?
+        var scheduleRetry: (@escaping () -> Void) -> RetryTimer
+
+        static let live = Dependencies(
+            createEventTap: { eventMask in
+                // Try to create it
+                guard let eventTap = CGEvent.tapCreate(
+                    tap: .cgSessionEventTap,
+                    place: .headInsertEventTap,
+                    options: .defaultTap,
+                    eventsOfInterest: eventMask,
+                    callback: cgEventFlagsChangedHandler(proxy:type:cgEvent:userInfo:),
+                    userInfo: nil
+                ) else {
+                    return nil
+                }
+
+                // Attach our event tap to the main run loop. Note if you don't
+                // do this then the event tap will block every
+                CFRunLoopAddSource(
+                    CFRunLoopGetMain(),
+                    CFMachPortCreateRunLoopSource(nil, eventTap, 0),
+                    .commonModes
+                )
+
+                return InstalledTap(
+                    invalidate: { CFMachPortInvalidate(eventTap) },
+                    setEnabled: { CGEvent.tapEnable(tap: eventTap, enable: $0) }
+                )
+            },
+            scheduleRetry: { retry in
+                Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                    retry()
+                }
+            }
+        )
+    }
+
     fileprivate static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier!,
         category: String(describing: GlobalEventTap.self)
@@ -16,14 +64,21 @@ class GlobalEventTap {
 
     // The event tap used for global event listening. This is non-nil if it is
     // created.
-    fileprivate var eventTap: CFMachPort?
+    fileprivate var eventTap: InstalledTap?
 
     // This is the timer used to retry enabling the global event tap if we
     // don't have permissions.
-    private var enableTimer: Timer?
+    private var enableTimer: RetryTimer?
 
-    // Private init so it can't be constructed outside of our singleton
-    private init() {}
+    private let dependencies: Dependencies
+
+    var isEventTapInstalled: Bool { eventTap != nil }
+    var isRetryPending: Bool { enableTimer != nil }
+
+    // Internal init so hosted tests can inject non-permissioned dependencies.
+    init(dependencies: Dependencies = .live) {
+        self.dependencies = dependencies
+    }
 
     deinit {
         disable()
@@ -41,6 +96,7 @@ class GlobalEventTap {
         // If we are already trying to enable, then stop the timer and restart it.
         if let enableTimer {
             enableTimer.invalidate()
+            self.enableTimer = nil
         }
 
         // Try to enable the event tap immediately. If this succeeds then we're done!
@@ -51,7 +107,7 @@ class GlobalEventTap {
         // Failed, probably due to permissions. The permissions dialog should've
         // popped up. We retry on a timer since once the permissions are granted
         // then they take affect immediately.
-        enableTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        enableTimer = dependencies.scheduleRetry {
             _ = self.tryEnable()
         }
     }
@@ -67,7 +123,7 @@ class GlobalEventTap {
         // Stop our event tap
         if let eventTap {
             Self.logger.debug("invalidating event tap mach port")
-            CFMachPortInvalidate(eventTap)
+            eventTap.invalidate()
             self.eventTap = nil
         }
     }
@@ -79,15 +135,7 @@ class GlobalEventTap {
             CGEventType.keyDown
         ].reduce(CGEventMask(0), { $0 | (1 << $1.rawValue)})
 
-        // Try to create it
-        guard let eventTap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: eventMask,
-                callback: cgEventFlagsChangedHandler(proxy:type:cgEvent:userInfo:),
-                userInfo: nil
-        ) else {
+        guard let eventTap = dependencies.createEventTap(eventMask) else {
             // Return false if creation failed. This is usually because we don't have
             // Accessibility permissions but can probably be other reasons I don't
             // know about.
@@ -104,18 +152,12 @@ class GlobalEventTap {
             self.enableTimer = nil
         }
 
-        // Attach our event tap to the main run loop. Note if you don't do this then
-        // the event tap will block every
-        CFRunLoopAddSource(
-            CFRunLoopGetMain(),
-            CFMachPortCreateRunLoopSource(nil, eventTap, 0),
-            .commonModes
-        )
-
         Self.logger.info("global event tap enabled for global keybinds")
         return true
     }
 }
+
+extension Timer: GlobalEventTap.RetryTimer {}
 
 func globalEventTapHandleKeyEvent(
     type: CGEventType,
@@ -150,8 +192,8 @@ private func cgEventFlagsChangedHandler(
     // to re-enable the tap or it stays dead forever.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         GlobalEventTap.logger.warning("global event tap was disabled by the system, re-enabling")
-        if let machPort = GlobalEventTap.shared.eventTap {
-            CGEvent.tapEnable(tap: machPort, enable: true)
+        if let eventTap = GlobalEventTap.shared.eventTap {
+            eventTap.setEnabled(true)
         }
         return result
     }
