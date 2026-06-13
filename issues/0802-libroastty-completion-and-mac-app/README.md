@@ -1568,6 +1568,8 @@ stays unaltered except for the rename).
   — **Partial** (needs live copied-app display-link verification)
 - [Experiment 176: Phase C — display-link live validation](176-display-link-live-validation.md)
   — **Partial** (display-link selected, but smoke marker did not render)
+- [Experiment 177: Phase C — preserve startup bootstrap env](177-preserve-startup-bootstrap-env.md)
+  — **Designed**
 
 ## Process
 
