@@ -13,6 +13,13 @@ observable oracles. If any automation path is blocked or unreliable, fix the
 blocker or document the exact host permission/setup requirement before doing
 more Roastty product work.
 
+External keyboard input into the live Roastty terminal is a **required outcome**
+for this issue. XCTest keyboard automation and launch-time bootstrap command
+delivery are useful fallback tools, but they do not satisfy the main readiness
+gate by themselves: future Roastty GUI work must be able to synthesize keyboard
+input into the actual running terminal window and prove that the terminal
+received it.
+
 ## Background
 
 Issue 802 completed the copied, lightly renamed Ghostty macOS app port to
@@ -84,13 +91,104 @@ while validating automation may be fixed here only when the bug blocks proving
 automation readiness; otherwise they should become their own focused Roastty
 issue after this readiness gate is complete.
 
+### Current Keyboard Failure Hypotheses
+
+Experiments 2 through 5 show that the failure is narrower than "Roastty cannot
+handle keyboard input":
+
+- XCTest can type into Roastty and observe terminal output.
+- Launch-time bootstrap can run terminal commands.
+- System Events and CGEvent keyboard posting return successfully while Roastty
+  is frontmost and visible, but no marker command reaches the terminal.
+- Accessibility, Automation to System Events, and Input Monitoring have been
+  granted to the Ghostty-hosted agent path.
+
+The working hypotheses are:
+
+- **Terminal view focus / first responder:** Roastty may be frontmost without
+  the terminal surface being the first responder. Issue 802 had a
+  `focus_terminal_view` click step before typing in some harness paths, and
+  XCTest explicitly clicks `"Terminal pane"` before typing.
+- **Activation semantics:** `System Events` `set frontmost` may not be
+  equivalent to a normal user click into the terminal surface, especially in a
+  macOS VM.
+- **Timing / focus settling:** Issue 802 found that the first key after
+  activation could be dropped. The VM may need a longer sequence: activate,
+  click terminal content, wait, warm up, then type.
+- **VM-specific HID or TCC behavior:** macOS inside Parallels may route
+  synthetic keyboard events differently than bare-metal macOS, even when
+  Accessibility and Input Monitoring report as granted.
+- **Responsible-process mismatch:** TCC may attribute event posting to a helper
+  process differently than expected, even though the visible parent process is
+  Ghostty.
+- **Roastty/AppKit event dispatch:** Events may enter the app but miss
+  `SurfaceView_AppKit.keyDown` / text input handling, or enter that path and
+  fail later during terminal forwarding.
+
+These are hypotheses, not conclusions. The true cause may be something else. The
+next experiments should gather direct evidence, especially by clicking the
+terminal surface before typing and by instrumenting Roastty's AppKit keyboard
+entry points (`keyDown`, `insertText`, marked text, first-responder/focus
+callbacks) to determine where the synthetic keyboard events disappear.
+
+## Learnings
+
+Record concrete, reproducible findings here as this issue discovers how to make
+Roastty GUI automation work. Keep hypotheses in Analysis until they are proven.
+
+- **Accessibility must be granted to Ghostty, the responsible host app for this
+  Codex session.** Without it, the automation preflight fails. After the grant
+  and Ghostty restart, `AXIsProcessTrusted()` returns `true`.
+- **Automation permission from Ghostty to System Events is required and
+  currently granted.** The System Settings Automation pane shows
+  `Ghostty -> System Events` enabled, and
+  `osascript -e 'tell application "System Events" to count processes'` succeeds.
+- **Input Monitoring was granted to Ghostty but did not fix external keyboard
+  delivery.** TCC logs show `kTCCServiceListenEvent` was modified for
+  `com.mitchellh.ghostty`, but both System Events and CGEvent keyboard marker
+  tests still failed afterward.
+- **Window screenshots work.** `scripts/roastty-app/screenshot.sh` can capture
+  the visible Roastty window with `screencapture -l`, producing `1600x1264px`
+  PNGs for the `800x632pt` debug window.
+- **`scripts/roastty-app/winid.swift` must prefer the visible onscreen layer-0
+  window.** Experiment 2 fixed an early harness issue where the screenshot path
+  selected an offscreen helper window instead of the real terminal window.
+- **XCTest keyboard automation works against Roastty.**
+  `RoasttyTerminalOutputUITests.testTerminalOutputIsVisibleToUIAutomation`
+  passes and observes `TERMSURF_READY_158`; after the latest rerun,
+  `RoasttyDeadKeyUITests.testDeadKeyCompositionCommitsText` also passes
+  outright.
+- **Launch-time bootstrap works and avoids external keyboard injection.**
+  Launching `roastty/macos/build/Debug/Roastty.app/Contents/MacOS/roastty` with
+  per-run `ZDOTDIR`, `XDG_CONFIG_HOME`, and shell startup files can run a recipe
+  and display deterministic terminal content.
+- **The actual debug app path is `roastty/macos/build/Debug/Roastty.app`.**
+  Older derived-data-style paths such as
+  `roastty/macos/build/Build/Products/Debug/Roastty.app` are stale for this
+  harness.
+- **CGEvent mouse scroll works against Roastty.** With bootstrap content
+  `seq 1 200`, `scripts/roastty-app/scroll.swift` moves the viewport from tail
+  lines `178..200` to top/history lines `1..24` and back.
+- **CGEvent drag selection works when coordinates hit the text row.** A first
+  drag at `windowY + 95pt` missed the text; a rerun at `windowY + 72pt` selected
+  `DRAGSELECTME_TARGET_HERE`, and menu-driven Copy made `pbpaste` return that
+  string.
+- **Click/right-click events can be posted, but receipt is not yet strongly
+  proven.** The commands return and Roastty remains frontmost, but the issue
+  still needs a deterministic oracle such as a bootstrap-started byteprobe or
+  mouse-reporting program.
+- **External System Events keyboard and CGEvent keyboard still do not reach the
+  Roastty terminal.** They return successfully while Roastty is frontmost and
+  visible, but marker files are not created. This remains the primary blocker.
+
 ## Verification
 
 The issue is complete when an experiment proves, with logs or artifacts, that
 the current environment can automatically:
 
 - launch the copied Roastty macOS app;
-- drive keyboard input into the terminal;
+- drive external synthetic keyboard input into the live Roastty terminal window
+  and prove terminal receipt with a deterministic oracle;
 - drive mouse click, drag, and scroll input into the terminal window;
 - capture the full Roastty window;
 - use deterministic non-OCR oracles where possible, such as PTY bytes,
