@@ -62,8 +62,12 @@ if listMode {
     exit(0)
 }
 
-// Front-to-back order is preserved, so the first layer-0 match of a sane size is frontmost.
-let pick = candidates.first(where: { $0.layer == 0 && $0.w >= 50 && $0.h >= 50 }) ?? candidates.first
+// Front-to-back order is preserved, but AppKit may keep auxiliary layer-0
+// windows offscreen. Prefer the first visible real window for screenshots and
+// input coordinates.
+let pick = candidates.first(where: { $0.onscreen && $0.layer == 0 && $0.w >= 50 && $0.h >= 50 })
+    ?? candidates.first(where: { $0.layer == 0 && $0.w >= 50 && $0.h >= 50 })
+    ?? candidates.first
 guard let p = pick else {
     FileHandle.standardError.write("no window for target: \(target)\n".data(using: .utf8)!)
     exit(1)

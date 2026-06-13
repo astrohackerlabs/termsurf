@@ -110,3 +110,6 @@ not add the `## Experiments` index until Experiment 1 is designed.
 - [Experiment 1: Automation readiness audit](01-automation-readiness-audit.md) —
   **Partial** (blocked at Accessibility preflight; grant Ghostty Accessibility
   permission and rerun)
+- [Experiment 2: Rerun after Accessibility grant](02-rerun-after-accessibility-grant.md)
+  — **Partial** (build, launch, screenshot, and XCTest pass; external keyboard
+  injection still does not reach Roastty)
