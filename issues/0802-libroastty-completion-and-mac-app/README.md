@@ -1597,6 +1597,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 180: Phase C — live draw ownership audit](180-live-draw-ownership-audit.md)
   — **Pass**
+- [Experiment 181: Phase C — ASCII terminal milestone](181-ascii-terminal-milestone.md)
+  — **Designed**
 
 ## Process
 
