@@ -105,3 +105,83 @@ Accepted review suggestions:
   fixture count.
 - Named the existing `loader::parse_config_line` parser path instead of leaving
   room for ad hoc line splitting.
+
+## Result
+
+**Result:** Pass
+
+Roastty now accepts every line in the pinned Ghostty default config fixture
+through its config-line parser and per-key parser. The oracle initially found
+six rejected default lines:
+
+- `font-codepoint-map = `
+- `clipboard-codepoint-map = `
+- `background-image-opacity = 1`
+- `keybind = super+==increase_font_size:1`
+- `keybind = super++=increase_font_size:1`
+- `keybind = super+ctrl+==equalize_splits`
+
+Key changes:
+
+- `roastty/src/config/mod.rs`
+  - Added `config_default_parser_oracle`, which asserts the 635-line fixture
+    count and checks every default line with `Config::parse_config_line` plus
+    `Config::set` on a fresh config.
+  - Made empty `font-codepoint-map` and `clipboard-codepoint-map` values reset
+    their maps, matching Ghostty's valid default config output.
+  - Routed `background-image-opacity` through the config parser.
+  - Added focused regression coverage for codepoint-map empty resets and
+    background image opacity parsing.
+- `roastty/src/lib.rs`
+  - Changed keybind parsing to choose the trigger/action separator by validating
+    candidate `=` separators, preserving `=` as a trigger key while keeping
+    `text:=...` actions valid.
+  - Added plus-key trigger parsing for Ghostty's `super++` default syntax.
+  - Added focused regression coverage for the default `=`, `+`, and
+    `ctrl+super+=` keybind forms.
+- Issue docs
+  - Added the parser oracle to the default-config oracle docs.
+  - Added `CFG-216` to the config matrix.
+  - Added a README learning and updated Experiment 11 status.
+
+Verification:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml config_default_parser_oracle -- --nocapture
+ROASTTY_DEFAULT_CONFIG_OUT=/Users/astrohacker/dev/termsurf/logs/issue805-exp11-roastty-default-config.txt \
+  cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle -- --nocapture
+cargo test --manifest-path roastty/Cargo.toml parse_config_keybind_defaults_preserve_equal_and_plus_keys -- --nocapture
+cargo test --manifest-path roastty/Cargo.toml config_codepoint_map_parses_ranges_and_formats_entries -- --nocapture
+cargo test --manifest-path roastty/Cargo.toml config_clipboard_codepoint_map_routes_and_formats -- --nocapture
+cargo test --manifest-path roastty/Cargo.toml background_opacity -- --nocapture
+cargo test --manifest-path roastty/Cargo.toml keybind -- --test-threads=1 --nocapture
+```
+
+## Conclusion
+
+The full pinned Ghostty default config surface now has two cheap durable guards
+in Roastty: exact formatter parity and per-line parser acceptance. This still
+does not prove non-default values, whole-file repeatable replacement semantics,
+diagnostics, precedence, reload behavior, command palette UI behavior, or
+runtime effects.
+
+## Completion Review
+
+Fresh-context adversarial completion review initially found one required issue:
+the new doubled-plus trigger branch accepted `++=...`, while pinned Ghostty
+rejects that form.
+
+Fix:
+
+- Updated `roastty/src/lib.rs` so the doubled-plus branch requires a non-empty
+  modifier prefix. Bare `+=...` remains the plus key, `ctrl++=...` remains a
+  modified plus key, and `++=...` is rejected.
+- Added a focused regression assertion for `++=ignore`.
+
+Re-review approved the result:
+
+```text
+VERDICT: APPROVED
+
+Findings: none.
+```

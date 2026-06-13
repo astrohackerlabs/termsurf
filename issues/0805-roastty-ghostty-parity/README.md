@@ -345,6 +345,11 @@ experiment files until they are proven.
   built-in Ghostty text action as the semantic UTF-8 text payload, letting the
   shared action formatter emit Ghostty's `\xf0\x9f\x91\xbb` bytes instead of
   double-escaping a pre-escaped string.
+- **Ghostty's default config output must also parse.** Experiment 11 proved all
+  635 pinned Ghostty default config lines are accepted by Roastty's per-line
+  parser. The default parser gaps were void codepoint-map reset lines,
+  `background-image-opacity`, and keybind triggers where `=` or `+` is both
+  syntax and the key.
 
 ## Verification
 
@@ -377,4 +382,4 @@ remains open.
 - [Experiment 10: Command palette default format parity](10-command-palette-default-format-parity.md)
   — **Pass**
 - [Experiment 11: Default config parser oracle](11-default-config-parser-oracle.md)
-  — **Designed**
+  — **Pass**

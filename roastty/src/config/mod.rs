@@ -2043,6 +2043,9 @@ impl Config {
             "background-opacity" => {
                 self.background_opacity = set_f64_field(value, default.background_opacity)?
             }
+            "background-image-opacity" => {
+                self.bg_image_opacity = set_f32_field(value, default.bg_image_opacity)?
+            }
             "background-opacity-cells" => {
                 self.background_opacity_cells =
                     set_bool_field(value, default.background_opacity_cells)?
@@ -3385,6 +3388,10 @@ impl RepeatableCodepointMap {
         input: Option<&str>,
     ) -> Result<(), RepeatableCodepointMapParseError> {
         let input = input.ok_or(RepeatableCodepointMapParseError::ValueRequired)?;
+        if input.is_empty() {
+            self.map = CodepointMap::default();
+            return Ok(());
+        }
         let eql = input
             .find('=')
             .ok_or(RepeatableCodepointMapParseError::InvalidValue)?;
@@ -5852,6 +5859,10 @@ impl RepeatableClipboardCodepointMap {
         input: Option<&str>,
     ) -> Result<(), ClipboardCodepointMapParseError> {
         let input = input.ok_or(ClipboardCodepointMapParseError::ValueRequired)?;
+        if input.is_empty() {
+            self.map.clear();
+            return Ok(());
+        }
         let eql = input
             .find('=')
             .ok_or(ClipboardCodepointMapParseError::InvalidValue)?;
@@ -15915,6 +15926,9 @@ mod tests {
             "font-codepoint-map = U+ABCD=Symbols\nfont-codepoint-map = U+0001-U+0003=Emoji\nfont-codepoint-map = U+0005=Emoji\n"
         );
 
+        cfg.set("font-codepoint-map", Some("")).unwrap();
+        assert!(cfg.font_codepoint_map.map.is_empty());
+
         assert_eq!(
             cfg.set("font-codepoint-map", None),
             Err(ConfigSetError::ValueRequired)
@@ -15962,6 +15976,9 @@ mod tests {
         cfg.format_config(&mut out);
         assert!(out.contains("clipboard-codepoint-map = U+2500=U+002D\n"));
         assert!(out.contains("clipboard-codepoint-map = U+03A3=SUM\n"));
+
+        cfg.set("clipboard-codepoint-map", Some("")).unwrap();
+        assert!(cfg.clipboard_codepoint_map.map.is_empty());
 
         assert_eq!(
             cfg.set("clipboard-codepoint-map", None),
@@ -16354,6 +16371,29 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn config_default_parser_oracle() {
+        let fixture = include_str!("../../testdata/issue805-ghostty-default-config.txt");
+        let lines: Vec<&str> = fixture.lines().collect();
+        assert_eq!(lines.len(), 635);
+
+        let mut failures = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let Some((key, value)) = Config::parse_config_line(line) else {
+                panic!("line {} was not parsed: {line:?}", index + 1);
+            };
+
+            let mut cfg = Config::default();
+            if let Err(error) = cfg.set(key, value) {
+                failures.push(format!(
+                    "line {} key {key:?} rejected: {error:?}; line={line:?}",
+                    index + 1
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     fn normalize_default_config_fixture(input: &str) -> String {
@@ -19263,6 +19303,19 @@ mod tests {
         cfg.set("background-opacity", Some("")).unwrap();
         assert_eq!(cfg.background_opacity, 1.0);
         assert_eq!(line(&cfg, "background-opacity"), "background-opacity = 1");
+
+        cfg.set("background-image-opacity", Some("0.25")).unwrap();
+        assert_eq!(cfg.bg_image_opacity, 0.25);
+        assert_eq!(
+            line(&cfg, "background-image-opacity"),
+            "background-image-opacity = 0.25"
+        );
+        cfg.set("background-image-opacity", Some("")).unwrap();
+        assert_eq!(cfg.bg_image_opacity, 1.0);
+        assert_eq!(
+            line(&cfg, "background-image-opacity"),
+            "background-image-opacity = 1"
+        );
 
         assert_eq!(
             cfg.set("background-opacity", None),

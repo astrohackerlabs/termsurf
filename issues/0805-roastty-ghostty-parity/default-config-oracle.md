@@ -37,6 +37,12 @@ Run the durable guard without regenerating the output log:
 cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle
 ```
 
+Run the default-line parser guard:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml config_default_parser_oracle
+```
+
 ## Normalization
 
 The test normalizes only the application rename:
@@ -74,3 +80,15 @@ This oracle proves default values, formatter output, and formatter order only
 for the full default-format surface. It does not prove parser behavior,
 diagnostics, config-file precedence, CLI/env precedence, config reload, command
 palette UI behavior, or runtime effects.
+
+## Parser Oracle
+
+Experiment 11 adds `config_default_parser_oracle`, which iterates over all 635
+lines in the pinned Ghostty default-config fixture, parses each line through
+Roastty's config-line parser, and applies that key/value pair to a fresh
+`Config`. The test proves per-line parser acceptance for the full default
+surface and reports the rejected line/key if a future regression breaks it.
+
+This parser oracle intentionally does not prove non-default values, diagnostics,
+whole-file repeatable replacement semantics, precedence, reload behavior,
+command palette UI behavior, or runtime effects.

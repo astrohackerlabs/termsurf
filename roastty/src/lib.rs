@@ -9268,12 +9268,30 @@ fn parse_config_keybind(value: &[u8]) -> Result<ConfigKeybind, ConfigKeybindPars
 fn parse_config_keybind_binding(
     value: &[u8],
 ) -> Result<ParsedConfigKeybindBinding, ConfigKeybindParseError> {
-    let separator = value
+    let mut saw_separator = false;
+    let mut last_error = ConfigKeybindParseError::MissingSeparator;
+    for separator in value
         .iter()
-        .position(|byte| *byte == b'=')
-        .ok_or(ConfigKeybindParseError::MissingSeparator)?;
-    let trigger = &value[..separator];
-    let action = &value[separator + 1..];
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b'=').then_some(index))
+    {
+        saw_separator = true;
+        match parse_config_keybind_binding_parts(&value[..separator], &value[separator + 1..]) {
+            Ok(binding) => return Ok(binding),
+            Err(error) => last_error = error,
+        }
+    }
+    if saw_separator {
+        Err(last_error)
+    } else {
+        Err(ConfigKeybindParseError::MissingSeparator)
+    }
+}
+
+fn parse_config_keybind_binding_parts(
+    trigger: &[u8],
+    action: &[u8],
+) -> Result<ParsedConfigKeybindBinding, ConfigKeybindParseError> {
     if trigger.is_empty() {
         return Err(ConfigKeybindParseError::MissingTrigger);
     }
@@ -9344,6 +9362,31 @@ fn parse_config_keybind_flags(trigger: &[u8]) -> Result<(u8, usize), ConfigKeybi
 }
 
 fn parse_config_keybind_trigger(trigger: &[u8]) -> Option<RoasttyInputTrigger> {
+    if trigger == b"+" {
+        return Some(unicode_trigger(b'+' as u32, ROASTTY_MODS_NONE));
+    }
+    if trigger.ends_with(b"+") {
+        if trigger.len() < 2 || trigger[trigger.len() - 2] != b'+' {
+            return None;
+        }
+        let mut mods = ROASTTY_MODS_NONE;
+        let prefix = &trigger[..trigger.len() - 2];
+        if prefix.is_empty() {
+            return None;
+        }
+        for part in prefix.split(|byte| *byte == b'+') {
+            if part.is_empty() {
+                return None;
+            }
+            let modifier = config_keybind_modifier(part)?;
+            if mods & modifier != 0 {
+                return None;
+            }
+            mods |= modifier;
+        }
+        return Some(unicode_trigger(b'+' as u32, mods));
+    }
+
     let mut mods = ROASTTY_MODS_NONE;
     let mut key = None;
     for part in trigger.split(|byte| *byte == b'+') {
@@ -22161,6 +22204,39 @@ mod tests {
         assert_eq!(name, b"mytable");
         assert_eq!(binding.trigger.tag, ROASTTY_TRIGGER_UNICODE);
         assert_eq!(unsafe { binding.trigger.key.unicode }, b'/' as u32);
+    }
+
+    #[test]
+    fn parse_config_keybind_defaults_preserve_equal_and_plus_keys() {
+        let equal = parse_config_keybind(b"super+==increase_font_size:1").unwrap();
+        assert_eq!(equal.trigger.tag, ROASTTY_TRIGGER_UNICODE);
+        assert_eq!(unsafe { equal.trigger.key.unicode }, b'=' as u32);
+        assert_eq!(equal.trigger.mods, ROASTTY_MODS_SUPER);
+        assert_eq!(equal.first_action(), b"increase_font_size:1");
+
+        let plus = parse_config_keybind(b"super++=increase_font_size:1").unwrap();
+        assert_eq!(plus.trigger.tag, ROASTTY_TRIGGER_UNICODE);
+        assert_eq!(unsafe { plus.trigger.key.unicode }, b'+' as u32);
+        assert_eq!(plus.trigger.mods, ROASTTY_MODS_SUPER);
+        assert_eq!(plus.first_action(), b"increase_font_size:1");
+
+        let ctrl_equal = parse_config_keybind(b"super+ctrl+==equalize_splits").unwrap();
+        assert_eq!(ctrl_equal.trigger.tag, ROASTTY_TRIGGER_UNICODE);
+        assert_eq!(unsafe { ctrl_equal.trigger.key.unicode }, b'=' as u32);
+        assert_eq!(
+            ctrl_equal.trigger.mods,
+            ROASTTY_MODS_SUPER | ROASTTY_MODS_CTRL
+        );
+        assert_eq!(ctrl_equal.first_action(), b"equalize_splits");
+
+        assert_eq!(
+            parse_config_keybind(b"super+=increase_font_size:1").err(),
+            Some(ConfigKeybindParseError::InvalidTrigger)
+        );
+        assert_eq!(
+            parse_config_keybind(b"++=ignore").err(),
+            Some(ConfigKeybindParseError::InvalidTrigger)
+        );
     }
 
     #[test]
