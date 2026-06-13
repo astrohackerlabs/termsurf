@@ -1619,6 +1619,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 183: Phase G — key sequence and table audit](183-key-sequence-table-audit.md)
   — **Pass**
+- [Experiment 184: Phase G — trigger-prefix finality audit](184-trigger-prefix-finality-audit.md)
+  — **Designed**
 
 ## Process
 
