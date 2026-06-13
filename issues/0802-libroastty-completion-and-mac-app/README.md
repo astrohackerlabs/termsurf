@@ -1501,6 +1501,8 @@ stays unaltered except for the rename).
   **Pass**
 - [Experiment 166: Phase F — cursor mouse tail config](166-cursor-mouse-tail-config.md)
   — **Pass**
+- [Experiment 167: Phase F — language config](167-language-config.md) —
+  **Designed**
 
 ## Process
 
