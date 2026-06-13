@@ -1573,6 +1573,8 @@ stays unaltered except for the rename).
   — **Partial** (display-link selected, but smoke marker did not render)
 - [Experiment 177: Phase C — preserve startup bootstrap env](177-preserve-startup-bootstrap-env.md)
   — **Pass**
+- [Experiment 178: Phase C — live cursor blink parity](178-live-cursor-blink.md)
+  — **Designed**
 
 ## Process
 
