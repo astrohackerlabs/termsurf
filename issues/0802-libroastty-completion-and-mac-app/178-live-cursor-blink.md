@@ -160,3 +160,124 @@ Findings and fixes:
 Final findings: None. The reviewer confirmed the corrected design covers the 500
 ms reset throttle and focus loss/gain lifecycle without introducing new required
 issues.
+
+## Result
+
+**Result:** Pass.
+
+Implemented live cursor blink parity across the renderer input and live present
+driver:
+
+- `FrameRenderState` now has a `FrameCursorOptions` input carrying focused state
+  and `cursor_blink_visible`.
+- Live Metal presentation calls the cursor-options render paths, so focused
+  blinking cursors disappear when the blink state is hidden, while unfocused
+  surfaces render the upstream hollow block.
+- `Surface` now owns live blink state: `cursor_blink_visible`, a 600 ms next
+  deadline, and `last_cursor_reset` for upstream's 500 ms heavy-output reset
+  throttle.
+- Present-driver ticks advance the blink deadline and mark the live surface
+  dirty even when no PTY bytes arrive.
+- Terminal-output pump events reset the cursor to visible, but only when at
+  least 500 ms elapsed since the prior output reset.
+- Focus loss stops blink toggling; focus gain immediately shows the cursor,
+  pushes the deadline forward, and marks only live `NSView` surfaces dirty. This
+  preserves the C ABI expectation that ABI-only surfaces do not become dirty
+  just because focus metadata changed.
+
+Focused verification:
+
+- `cargo test -p roastty cursor_blink -- --test-threads=1` — **Pass**, 8 tests
+  passed.
+- `cargo test -p roastty live_cursor_blink -- --test-threads=1` — **Pass**, 4
+  tests passed.
+
+Regression verification:
+
+- `cargo test -p roastty --test abi_harness` initially failed because the first
+  focus-change implementation marked ABI-only surfaces dirty. Fixed by making
+  focus repaint requests conditional on a live `NSView`, while still updating
+  blink state. Rerun: **Pass**, 1 test passed; the existing enum-conversion
+  warnings and `[unknown](scope): message` remained.
+- `cargo test -p roastty -- --test-threads=1` — **Pass**, 4890 passed, 0 failed,
+  4 ignored; ABI harness and doc-tests also passed.
+- `cargo fmt --check -p roastty` — **Pass**.
+- `git diff --check` — **Pass**.
+
+Live sanity:
+
+- `cd roastty && macos/build.nu --action build` — **Pass**. The copied app build
+  completed with `** BUILD SUCCEEDED **`; only the existing Swift actor,
+  retroactive Sendable, linker deployment-target, and terminfo warnings
+  appeared.
+- `scripts/roastty-app/stop-app.sh && TERMSURF_AB_HOLD_SECONDS=10 ROASTTY_PRESENT_DRIVER_LOG=1 scripts/roastty-app/live-ab-smoke.sh --recipe smoke --comparison-region content --max-mismatch-ratio 1 --max-mean-channel-delta 255`
+  — **Pass**. The harness launched Ghostty PID `57177` and Roastty PID `57185`
+  with marker `ISSUE802_AB_SMOKE_20260613-015502` and returned JSON verdict
+  `PASS`.
+- Content-region diff metrics for that run:
+
+  ```text
+  mismatch_ratio=0.005620833333333334
+  mean_channel_delta=0.5585425347222223
+  ```
+
+- `grep -n 'present-driver' /Users/ryan/.cache/termsurf/shots/roastty-ab-stderr-20260613-015502.log`
+  returned `1:[roastty] present-driver=display-link reason=core-video`.
+- The explicit cleanup check printed `no debug Roastty app PID remains`.
+- Captured artifacts:
+  - `/Users/ryan/.cache/termsurf/shots/ghostty-ab-content-20260613-015502.png`
+  - `/Users/ryan/.cache/termsurf/shots/ghostty-ab-crop-20260613-015502.png`
+  - `/Users/ryan/.cache/termsurf/shots/ghostty-ab-full-20260613-015502.png`
+  - `/Users/ryan/.cache/termsurf/shots/ghostty-ab-stderr-20260613-015502.log`
+  - `/Users/ryan/.cache/termsurf/shots/ghostty-ab-stdout-20260613-015502.log`
+  - `/Users/ryan/.cache/termsurf/shots/roastty-ab-content-20260613-015502.png`
+  - `/Users/ryan/.cache/termsurf/shots/roastty-ab-crop-20260613-015502.png`
+  - `/Users/ryan/.cache/termsurf/shots/roastty-ab-full-20260613-015502.png`
+  - `/Users/ryan/.cache/termsurf/shots/roastty-ab-stderr-20260613-015502.log`
+  - `/Users/ryan/.cache/termsurf/shots/roastty-ab-stdout-20260613-015502.log`
+
+No cursor-specific live recipe was added in this slice. The deterministic Rust
+tests are the stronger oracle for the 600 ms timer, 500 ms output-reset
+throttle, focus lifecycle, and blink-hidden renderer input; the live smoke run
+serves as the copied-app startup/display-link regression proof.
+
+## Conclusion
+
+The Phase C render-thread item is now complete: Experiment 177 proved the copied
+app uses the CoreVideo display-link present driver and renders startup output,
+and this experiment proves the cursor blink timer and reset lifecycle that ride
+on that driver.
+
+The broader Phase C items remain open: renderer mailbox/options propagation,
+retiring the interim `render_state` pull divergence, and the final
+working-ASCII-terminal milestone still need separate experiments.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `James`, fresh context.
+
+**Verdict:** Approved.
+
+Findings: None.
+
+Independent checks performed by the reviewer:
+
+- `git log -1 --oneline` confirmed the result commit had not been made yet; HEAD
+  was still the plan commit `140b71d54d564 Plan live cursor blink parity`.
+- `git status --short` showed only the four expected modified files.
+- `cargo test -p roastty cursor_blink -- --test-threads=1` — **Pass**, 8 tests
+  passed.
+- `cargo test -p roastty live_cursor_blink -- --test-threads=1` — **Pass**, 4
+  tests passed.
+- `cargo test -p roastty --test abi_harness` — **Pass**, 1 test passed with the
+  existing warnings.
+- `cargo test -p roastty -- --test-threads=1` — **Pass**, 4890 passed, 0 failed,
+  4 ignored; ABI harness and doc-tests passed.
+- `cargo fmt --check -p roastty` — **Pass**.
+- `prettier --check ...` — **Pass**.
+- `git diff --check ...` — **Pass**.
+- Verified the live artifact log contains
+  `present-driver=display-link reason=core-video`.
+
+The reviewer did not re-run the macOS app build or live smoke harness; they
+verified the recorded smoke artifacts and log marker where feasible.

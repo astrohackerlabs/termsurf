@@ -622,6 +622,11 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   disable, and installed tap invalidation without requesting host Accessibility
   permission. Runtime receipt of inactive-app global keystrokes remains
   dependent on macOS granting Accessibility permission.
+- **Live cursor blink now follows the display-link present path.** Exp 178
+  threads cursor blink visibility and focus into frame rendering, toggles it on
+  the live present driver with upstream's 600 ms interval, applies the
+  terminal-output-only 500 ms reset throttle, and keeps ABI-only surfaces from
+  becoming dirty on focus changes.
 - **Live Kitty graphics now draw in the Metal presentation pass.** Exp 141 adds
   persistent `ImageState<MetalTexture>` to the live surface renderer, updates it
   from terminal Kitty render-placement snapshots each frame, uploads pending
@@ -993,10 +998,12 @@ the live app, verified by a Phase-D UI test.)
 
 - [ ] `surface_draw` owns a Metal renderer bound to the app `NSView`/`CALayer`;
       attach the layer and present on-screen
-- [ ] Render thread (frame pacing + cursor-blink timer) -
+- [x] Render thread (frame pacing + cursor-blink timer) -
       Display-link/frame-pacing startup rendering is now live-proven by
       Experiment 177: the copied app selected CoreVideo display link and
-      rendered the smoke marker. Cursor-blink timer parity remains unproven.
+      rendered the smoke marker. Experiment 178 threads cursor blink visibility
+      into live frame rendering and proves the 600 ms blink timer, 500 ms
+      output-reset throttle, and focus loss/gain lifecycle.
 - [ ] Renderer mailbox / `Options` (focus / visible / occlusion / change-config)
 - [ ] Retire the interim `render_state` pull divergence
 - [ ] **Milestone: the app launches and shows a working ASCII terminal**
@@ -1574,7 +1581,7 @@ stays unaltered except for the rename).
 - [Experiment 177: Phase C — preserve startup bootstrap env](177-preserve-startup-bootstrap-env.md)
   — **Pass**
 - [Experiment 178: Phase C — live cursor blink parity](178-live-cursor-blink.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 

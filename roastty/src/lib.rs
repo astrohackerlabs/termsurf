@@ -2679,6 +2679,9 @@ struct Surface {
     kitty_clipboard_write: Option<KittyClipboardWriteTransaction>,
     process_exited: bool,
     dirty: bool,
+    cursor_blink_visible: bool,
+    cursor_blink_next: std::time::Instant,
+    last_cursor_reset: Option<std::time::Instant>,
     last_termio_error: Option<String>,
     /// The app-provided `NSView` (macOS) captured from `surface_config.platform.macos.nsview`
     /// (Issue 802 / Exp 15) — the live-render target. Null off-macOS or when not supplied.
@@ -2692,6 +2695,9 @@ struct Surface {
     #[cfg(test)]
     test_termio_events: VecDeque<termio::TermioWorkerEvent>,
 }
+
+const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(600);
+const CURSOR_BLINK_RESET_THROTTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Debug)]
 struct ClipboardRequestState {
@@ -3064,10 +3070,12 @@ fn enqueue_present_tick(
         // SAFETY: main thread + running == true → the surface is alive (free flips running false
         // before dropping the box, serialized on this same queue).
         let surface = unsafe { &mut *ptr.0 };
+        let now = std::time::Instant::now();
         surface.tick_termio();
         // Issue 802 / Exp 28: drive drag-selection autoscroll while a drag is held past the edge
         // (no-op otherwise); before the dirty check so the scrolled row presents now.
         surface.selection_autoscroll_tick();
+        surface.advance_cursor_blink(now);
         if surface.dirty {
             surface.present_live();
             surface.dirty = false;
@@ -3924,6 +3932,46 @@ impl Surface {
         self.wakeup_app();
     }
 
+    fn reset_cursor_blink(&mut self, now: std::time::Instant) {
+        self.cursor_blink_visible = true;
+        self.cursor_blink_next = now + CURSOR_BLINK_INTERVAL;
+        self.dirty = true;
+    }
+
+    fn reset_cursor_blink_for_output(&mut self, now: std::time::Instant) {
+        if self
+            .last_cursor_reset
+            .is_some_and(|last| now.duration_since(last) <= CURSOR_BLINK_RESET_THROTTLE)
+        {
+            return;
+        }
+
+        self.last_cursor_reset = Some(now);
+        self.reset_cursor_blink(now);
+    }
+
+    fn advance_cursor_blink(&mut self, now: std::time::Instant) -> bool {
+        if !self.focused || now < self.cursor_blink_next {
+            return false;
+        }
+
+        self.cursor_blink_visible = !self.cursor_blink_visible;
+        self.cursor_blink_next = now + CURSOR_BLINK_INTERVAL;
+        self.dirty = true;
+        true
+    }
+
+    fn focus_changed_for_cursor_blink(&mut self, focused: bool, now: std::time::Instant) {
+        if focused {
+            self.cursor_blink_visible = true;
+            self.cursor_blink_next = now + CURSOR_BLINK_INTERVAL;
+        }
+        if !self.nsview.is_null() {
+            self.dirty = true;
+            self.wakeup_app();
+        }
+    }
+
     fn refresh(&mut self) {
         self.request_render();
     }
@@ -3973,6 +4021,10 @@ impl Surface {
         let columns = self.size.columns;
         let rows = self.size.rows;
         let focused = self.focused;
+        let cursor_options = renderer::frame_renderer::FrameCursorOptions {
+            focused,
+            blink_visible: self.cursor_blink_visible,
+        };
         let mouse_position = self.mouse.position;
         let mouse_mods = self.mouse.mods;
         let mouse_geometry = MouseViewportGeometry {
@@ -4033,7 +4085,7 @@ impl Surface {
             let kitty_placements = kitty_render_placement_snapshots(terminal);
             image_state.update_kitty_from_render_placements(&kitty_placements);
             let present_result = if custom_shader.pipelines.is_empty() {
-                frame_renderer.render_and_present_frame_with_images_and_link_ranges(
+                frame_renderer.render_and_present_frame_with_images_and_link_ranges_and_cursor_options(
                     terminal,
                     shared_grid,
                     image_state,
@@ -4048,6 +4100,7 @@ impl Surface {
                         height,
                         contents_scale: scale,
                     },
+                    cursor_options,
                 )
             } else {
                 let cell = shared_grid.cell_size();
@@ -4058,7 +4111,7 @@ impl Surface {
                 );
                 let pipeline_refs: Vec<_> = custom_shader.pipelines.iter().collect();
                 let result = frame_renderer
-                    .render_and_present_frame_with_images_and_custom_shaders_and_link_ranges(
+                    .render_and_present_frame_with_images_and_custom_shaders_and_link_ranges_and_cursor_options(
                         terminal,
                         shared_grid,
                         image_state,
@@ -4076,6 +4129,7 @@ impl Surface {
                             height,
                             contents_scale: scale,
                         },
+                        cursor_options,
                     );
                 custom_shader.focus_changed = match &result {
                     Ok(app) => app
@@ -6745,6 +6799,9 @@ impl Surface {
     fn apply_termio_event(&mut self, event: termio::TermioWorkerEvent) {
         match event {
             termio::TermioWorkerEvent::Pump(pump) => {
+                if pump.bytes_read > 0 {
+                    self.reset_cursor_blink_for_output(std::time::Instant::now());
+                }
                 if pump.bytes_read > 0
                     || pump.bytes_written > 0
                     || pump.pending_write_bytes > 0
@@ -17402,6 +17459,9 @@ pub extern "C" fn roastty_surface_new(
         kitty_clipboard_write: None,
         process_exited: false,
         dirty: false,
+        cursor_blink_visible: false,
+        cursor_blink_next: std::time::Instant::now() + CURSOR_BLINK_INTERVAL,
+        last_cursor_reset: None,
         last_termio_error: None,
         // Capture the app's NSView (macOS) for the live-render target (Exp 15). Null off-macOS.
         nsview: if config.platform_tag == 1 {
@@ -17598,6 +17658,7 @@ pub extern "C" fn roastty_surface_set_focus(surface: RoasttySurface, focused: bo
             if let Some(renderer) = surface.renderer.as_mut() {
                 renderer.custom_shader.focus_changed = true;
             }
+            surface.focus_changed_for_cursor_blink(focused, std::time::Instant::now());
         }
     }
 }
@@ -20764,6 +20825,129 @@ mod tests {
             assert!(!driver.is_running());
             surface_from_handle(surface).unwrap().present_driver = Some(driver);
         });
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_cursor_blink_tick_toggles_focused_surface_and_marks_dirty() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let now = std::time::Instant::now();
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.focused = true;
+        surface_ref.cursor_blink_visible = true;
+        surface_ref.cursor_blink_next = now - std::time::Duration::from_millis(1);
+        surface_ref.dirty = false;
+
+        assert!(surface_ref.advance_cursor_blink(now));
+        assert!(!surface_ref.cursor_blink_visible);
+        assert_eq!(surface_ref.cursor_blink_next, now + CURSOR_BLINK_INTERVAL);
+        assert!(surface_ref.dirty);
+
+        surface_ref.dirty = false;
+        assert!(!surface_ref.advance_cursor_blink(now + std::time::Duration::from_millis(1)));
+        assert!(!surface_ref.cursor_blink_visible);
+        assert!(!surface_ref.dirty);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_cursor_blink_output_reset_is_throttled() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let now = std::time::Instant::now();
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.cursor_blink_visible = false;
+        surface_ref.cursor_blink_next = now - std::time::Duration::from_millis(1);
+        surface_ref.dirty = false;
+
+        surface_ref.reset_cursor_blink_for_output(now);
+        assert!(surface_ref.cursor_blink_visible);
+        assert_eq!(surface_ref.last_cursor_reset, Some(now));
+        assert_eq!(surface_ref.cursor_blink_next, now + CURSOR_BLINK_INTERVAL);
+        assert!(surface_ref.dirty);
+
+        surface_ref.cursor_blink_visible = false;
+        surface_ref.dirty = false;
+        let throttled_deadline = surface_ref.cursor_blink_next;
+        surface_ref.reset_cursor_blink_for_output(now + std::time::Duration::from_millis(100));
+        assert!(!surface_ref.cursor_blink_visible);
+        assert_eq!(surface_ref.cursor_blink_next, throttled_deadline);
+        assert!(!surface_ref.dirty);
+
+        let allowed = now + CURSOR_BLINK_RESET_THROTTLE + std::time::Duration::from_millis(1);
+        surface_ref.reset_cursor_blink_for_output(allowed);
+        assert!(surface_ref.cursor_blink_visible);
+        assert_eq!(surface_ref.last_cursor_reset, Some(allowed));
+        assert_eq!(
+            surface_ref.cursor_blink_next,
+            allowed + CURSOR_BLINK_INTERVAL
+        );
+        assert!(surface_ref.dirty);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_cursor_blink_pump_resets_only_on_terminal_output() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.cursor_blink_visible = false;
+        surface_ref.dirty = false;
+
+        surface_ref.apply_termio_event(termio::TermioWorkerEvent::Pump(test_pump(
+            0, 1, 0, false, false,
+        )));
+        assert!(!surface_ref.cursor_blink_visible);
+        assert!(surface_ref.last_cursor_reset.is_none());
+        assert!(surface_ref.dirty);
+
+        surface_ref.dirty = false;
+        surface_ref.apply_termio_event(termio::TermioWorkerEvent::Pump(test_pump(
+            1, 0, 0, false, false,
+        )));
+        assert!(surface_ref.cursor_blink_visible);
+        assert!(surface_ref.last_cursor_reset.is_some());
+        assert!(surface_ref.dirty);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_cursor_blink_focus_loss_stops_toggling_and_focus_gain_resets() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let now = std::time::Instant::now();
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.focused = false;
+        surface_ref.cursor_blink_visible = true;
+        surface_ref.cursor_blink_next = now - std::time::Duration::from_millis(1);
+        surface_ref.nsview = std::ptr::NonNull::<c_void>::dangling().as_ptr();
+        surface_ref.dirty = false;
+
+        assert!(!surface_ref.advance_cursor_blink(now));
+        assert!(surface_ref.cursor_blink_visible);
+        assert!(!surface_ref.dirty);
+
+        roastty_surface_set_focus(surface, true);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.focused);
+        assert!(surface_ref.cursor_blink_visible);
+        assert!(surface_ref.cursor_blink_next > now);
+        assert!(surface_ref.dirty);
+
+        surface_ref.dirty = false;
+        roastty_surface_set_focus(surface, false);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(!surface_ref.focused);
+        assert!(surface_ref.dirty);
 
         roastty_surface_free(surface);
         roastty_app_free(app);

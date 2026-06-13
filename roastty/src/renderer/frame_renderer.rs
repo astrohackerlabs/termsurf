@@ -230,8 +230,36 @@ impl FrameRenderer {
         config: &Config,
         presentation: FramePreparedPresentationInput<'_>,
     ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        self.render_and_present_frame_with_images_and_link_ranges_and_cursor_options(
+            terminal,
+            grid,
+            images,
+            background,
+            link_ranges,
+            dirty,
+            preedit,
+            config,
+            presentation,
+            FrameCursorOptions::default(),
+        )
+    }
+
+    pub(crate) fn render_and_present_frame_with_images_and_link_ranges_and_cursor_options(
+        &mut self,
+        terminal: &Terminal,
+        grid: &mut SharedGrid,
+        images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
+        link_ranges: Vec<Vec<[u16; 2]>>,
+        dirty: RenderDirty,
+        preedit: Option<Preedit>,
+        config: &Config,
+        presentation: FramePreparedPresentationInput<'_>,
+        cursor_options: FrameCursorOptions,
+    ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
         background.update_from_config(config);
-        let mut state = FrameRenderState::from_terminal(terminal);
+        let mut state =
+            FrameRenderState::from_terminal_with_cursor_options(terminal, cursor_options);
         state.link_ranges = link_ranges;
         let knobs = FrameRenderKnobs::from_config(config);
         let input = state.rebuild_input(&knobs);
@@ -292,8 +320,42 @@ impl FrameRenderer {
         config: &Config,
         presentation: FramePreparedPresentationInput<'_>,
     ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
+        self.render_and_present_frame_with_images_and_custom_shaders_and_link_ranges_and_cursor_options(
+            terminal,
+            grid,
+            images,
+            background,
+            custom_uniforms,
+            custom_input,
+            custom_pipelines,
+            link_ranges,
+            dirty,
+            preedit,
+            config,
+            presentation,
+            FrameCursorOptions::default(),
+        )
+    }
+
+    pub(crate) fn render_and_present_frame_with_images_and_custom_shaders_and_link_ranges_and_cursor_options(
+        &mut self,
+        terminal: &Terminal,
+        grid: &mut SharedGrid,
+        images: &mut ImageState<MetalTexture>,
+        background: &mut BackgroundImageState<MetalTexture>,
+        custom_uniforms: &mut CustomShaderUniforms,
+        custom_input: FrameCustomShaderInput,
+        custom_pipelines: &[&MetalPipeline],
+        link_ranges: Vec<Vec<[u16; 2]>>,
+        dirty: RenderDirty,
+        preedit: Option<Preedit>,
+        config: &Config,
+        presentation: FramePreparedPresentationInput<'_>,
+        cursor_options: FrameCursorOptions,
+    ) -> Result<FramePreparedFrameApplication, FramePreparedFrameError> {
         background.update_from_config(config);
-        let mut state = FrameRenderState::from_terminal(terminal);
+        let mut state =
+            FrameRenderState::from_terminal_with_cursor_options(terminal, cursor_options);
         state.link_ranges = link_ranges;
         state.update_custom_shader_uniforms_from_state(custom_uniforms);
         let knobs = FrameRenderKnobs::from_config(config);
@@ -423,6 +485,21 @@ impl FrameRenderKnobs {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FrameCursorOptions {
+    pub(crate) focused: bool,
+    pub(crate) blink_visible: bool,
+}
+
+impl Default for FrameCursorOptions {
+    fn default() -> Self {
+        Self {
+            focused: true,
+            blink_visible: true,
+        }
+    }
+}
+
 /// Render data derived from the live terminal — the effective default fg/bg,
 /// palette, cursor, and per-row never-extend flags — plus the dynamic buffers the
 /// rebuild input borrows. The remaining stubs (until their own slices):
@@ -445,6 +522,13 @@ impl FrameRenderState {
     /// fallback, foreground → white fallback, the 256-entry palette. The dynamic
     /// buffers are empty/default placeholders for later slices.
     pub(crate) fn from_terminal(terminal: &Terminal) -> Self {
+        Self::from_terminal_with_cursor_options(terminal, FrameCursorOptions::default())
+    }
+
+    pub(crate) fn from_terminal_with_cursor_options(
+        terminal: &Terminal,
+        cursor_options: FrameCursorOptions,
+    ) -> Self {
         let default_bg = terminal
             .color_effective(TerminalColorKind::Background)
             .map(|(r, g, b)| Rgb::new(r, g, b))
@@ -457,11 +541,10 @@ impl FrameRenderState {
             .palette_current()
             .map(|(r, g, b)| Rgb::new(r, g, b));
 
-        // The cursor is derived only when visible: style mapped from the terminal
-        // visual style, color from the effective cursor color with a foreground
-        // fallback (mirrors the GUI render path / upstream `cursor_color`).
-        let cursor = terminal.cursor_visible().then(|| {
-            let style = CursorStyle::from_terminal(terminal.cursor_visual_style());
+        // The cursor is derived only when the renderer should draw it. This mirrors
+        // upstream `renderer/cursor.zig` for the live inputs Roastty currently has:
+        // viewport presence, terminal visibility, focus hollowing, and blink-visible state.
+        let cursor = cursor_style_from_terminal(terminal, cursor_options).map(|style| {
             let color = terminal
                 .color_effective(TerminalColorKind::Cursor)
                 .map(|(r, g, b)| Rgb::new(r, g, b))
@@ -563,6 +646,27 @@ impl FrameRenderState {
             .unwrap_or((false, CursorStyle::Block));
         uniforms.update_cursor_style(visible, style);
     }
+}
+
+fn cursor_style_from_terminal(
+    terminal: &Terminal,
+    options: FrameCursorOptions,
+) -> Option<CursorStyle> {
+    terminal.cursor_viewport_position()?;
+
+    if !terminal.cursor_visible() {
+        return None;
+    }
+
+    if !options.focused {
+        return Some(CursorStyle::BlockHollow);
+    }
+
+    if terminal.cursor_blinking() && !options.blink_visible {
+        return None;
+    }
+
+    Some(CursorStyle::from_terminal(terminal.cursor_visual_style()))
 }
 
 #[cfg(test)]
@@ -1164,6 +1268,54 @@ mod tests {
         let underline_input = underline_state.rebuild_input(&knobs);
         assert!(underline_input.cursor_uniform.block_cursor.is_none());
         assert!(underline_input.text_overlay.cursor.is_some());
+    }
+
+    #[test]
+    fn cursor_blink_render_state_hides_focused_blinking_cursor_when_not_visible() {
+        let term = terminal(4, 3);
+        let state = FrameRenderState::from_terminal_with_cursor_options(
+            &term,
+            FrameCursorOptions {
+                focused: true,
+                blink_visible: false,
+            },
+        );
+
+        assert!(state.cursor.is_none());
+        let knobs = render_knobs();
+        let input = state.rebuild_input(&knobs);
+        assert!(input.text_overlay.cursor.is_none());
+        assert!(input.cursor_uniform.block_cursor.is_none());
+    }
+
+    #[test]
+    fn cursor_blink_render_state_shows_focused_blinking_cursor_when_visible() {
+        let term = terminal(4, 3);
+        let state = FrameRenderState::from_terminal_with_cursor_options(
+            &term,
+            FrameCursorOptions {
+                focused: true,
+                blink_visible: true,
+            },
+        );
+
+        let (style, _) = state.cursor.expect("visible cursor");
+        assert!(matches!(style, CursorStyle::Block));
+    }
+
+    #[test]
+    fn cursor_blink_render_state_unfocused_cursor_is_hollow_even_when_blink_hidden() {
+        let term = terminal(4, 3);
+        let state = FrameRenderState::from_terminal_with_cursor_options(
+            &term,
+            FrameCursorOptions {
+                focused: false,
+                blink_visible: false,
+            },
+        );
+
+        let (style, _) = state.cursor.expect("unfocused cursor");
+        assert!(matches!(style, CursorStyle::BlockHollow));
     }
 
     #[test]
