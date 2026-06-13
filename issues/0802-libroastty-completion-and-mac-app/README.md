@@ -1486,6 +1486,8 @@ stays unaltered except for the rename).
   — **Pass**
 - [Experiment 164: Phase F — palette config runtime](164-palette-config-runtime.md)
   — **Pass**
+- [Experiment 165: Phase F — macOS tail config](165-macos-tail-config.md) —
+  **Designed**
 
 ## Process
 
