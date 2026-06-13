@@ -202,4 +202,46 @@ Overall result:
 
 ## Result
 
-Not run yet.
+**Result:** Partial
+
+The initial trace setup was started, but the System Events keyboard attempt was
+invalid as a Roastty keyboard test.
+
+Evidence:
+
+- The trace hook exists in `SurfaceView_AppKit.swift`; the hook-check transcript
+  was saved as `logs/issue804-exp7-trace-hook-check.log`.
+- Roastty initially launched with `ROASTTY_UI_KEY_TRACE_PATH` set, and
+  `logs/issue804-exp7-launch.log` recorded a visible layer-0 window and
+  frontmost process confirmation.
+- Before the keyboard attempt, the direct-launched Roastty process exited. The
+  coordinate computation then produced an empty window line and bogus zero-based
+  coordinates in `logs/issue804-exp7-coordinates.log`.
+- The subsequent System Events activation failed with
+  `Can’t get process 1 whose unix id = 94343` in
+  `logs/issue804-exp7-keyboard-system-events.log`, so that attempted run did not
+  target a live Roastty process.
+- Most importantly, the marker command text appeared in the current
+  Ghostty/Codex window. That was not user input. It proves that synthetic
+  keyboard generation can work in this VM, but it landed in the wrong
+  application window.
+
+No external keyboard conclusion should be drawn from this run about Roastty's
+AppKit `keyDown` or text input path. The failed trace file is not meaningful
+because the keyboard event stream did not target Roastty.
+
+## Conclusion
+
+Experiment 7 corrected the failure classification. The current primary blocker
+is no longer "the VM cannot synthesize keyboard input"; the stronger conclusion
+is "the harness has not proven that Roastty is the focused keyboard target at
+the moment of typing."
+
+The next experiment should focus only on target ownership:
+
+- keep Roastty alive through a normal app launch path;
+- prove the window is frontmost and focused immediately before typing;
+- record AppKit focus callbacks, first-responder state, and keyboard traces;
+- refuse to type if the focused target cannot be proven to be Roastty.
+
+Per user instruction, no adversarial review was run for this issue.

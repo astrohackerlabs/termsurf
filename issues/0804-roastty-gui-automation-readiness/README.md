@@ -184,6 +184,12 @@ Roastty GUI automation work. Keep hypotheses in Analysis until they are proven.
   6 clicked both a safe terminal content point and the known text-row offset
   before retrying System Events and CGEvent keyboard input; both marker-file
   oracles still failed, and the post-attempt screenshot showed no typed text.
+- **Keyboard synthesis can work in this VM, but focus targeting is unproven.**
+  During Experiment 7, the System Events typing attempt produced the marker
+  command text in the Ghostty/Codex window instead of Roastty. That proves the
+  event source can generate keyboard input after the granted permissions, but it
+  also invalidates the run as a Roastty keyboard test and shows the harness must
+  prove the focused target immediately before typing.
 
 ## Verification
 
@@ -228,4 +234,5 @@ not add the `## Experiments` index until Experiment 1 is designed.
   — **Partial** (explicit terminal-content clicks did not make System Events or
   CGEvent keyboard input reach Roastty)
 - [Experiment 7: Trace external keyboard entry](07-trace-external-keyboard-entry.md)
-  — **Designed**
+  — **Partial** (initial run invalidated because keyboard input targeted
+  Ghostty/Codex, not Roastty; focus targeting must be proven before retrying)
