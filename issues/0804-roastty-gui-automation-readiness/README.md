@@ -227,3 +227,5 @@ not add the `## Experiments` index until Experiment 1 is designed.
 - [Experiment 6: Click terminal before keyboard](06-click-terminal-before-keyboard.md)
   — **Partial** (explicit terminal-content clicks did not make System Events or
   CGEvent keyboard input reach Roastty)
+- [Experiment 7: Trace external keyboard entry](07-trace-external-keyboard-entry.md)
+  — **Designed**
