@@ -222,6 +222,11 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   defaults/order and bool bare-flag handling. Prompt-click cursor movement and
   platform mouse hiding remain terminal/app runtime work, not public config
   field gaps.
+- **Language config is parser/formatter-only.** Exp 167 wires `language` as
+  upstream's optional GUI language override string with default `null`, formats
+  it immediately before the font-family group, and preserves optional-string
+  reset/diagnostic semantics. Runtime localization, GTK restart semantics, and
+  platform UI integration remain app/runtime work.
 - **Codepoint width needs more than scalar Rust ranges.** Exp 151 added a
   width-only helper and proved full Unicode-scalar parity with the generated
   table, but the release probe measured only 0.76x versus direct table width
@@ -966,8 +971,8 @@ the live app, verified by a Phase-D UI test.)
 
 **Phase F — Config completeness**
 
-- [ ] The remaining 22 public config options (language, font
-      feature/variation/metric/freetype knobs, `input`, and `keybind`)
+- [ ] The remaining 21 public config options (font feature/variation/metric/
+      freetype knobs, `input`, and `keybind`)
 - [ ] `finalize()` — cross-field validation / derivation / clamping
 - [ ] Theme loading (themes-dir locator + file read + palette/option
       application)
@@ -1501,8 +1506,7 @@ stays unaltered except for the rename).
   **Pass**
 - [Experiment 166: Phase F — cursor mouse tail config](166-cursor-mouse-tail-config.md)
   — **Pass**
-- [Experiment 167: Phase F — language config](167-language-config.md) —
-  **Designed**
+- [Experiment 167: Phase F — language config](167-language-config.md) — **Pass**
 
 ## Process
 

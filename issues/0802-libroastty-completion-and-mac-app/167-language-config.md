@@ -71,3 +71,53 @@ current partial formatter order. The review also suggested making the focused
 test name explicit; the design now requires a `language_config_*` test.
 
 The re-review approved the fixes with no remaining required findings.
+
+## Result
+
+**Result:** Pass
+
+Roastty now stores, parses, and formats `language` as an upstream optional
+string config field. The default is `None`, formatting emits the void
+`language = ` line, non-empty values store the GUI language override, empty
+values reset to the default, missing values report `ValueRequired`, and
+NUL-containing values report `InvalidValue`.
+
+The formatter places `language` immediately before `font-family`, preserving the
+upstream relative position ahead of the font-family group inside Roastty's
+current partial formatter order. Runtime localization, GTK restart semantics,
+and platform UI integration remain out of scope.
+
+The Phase F public-config tail is now 21 keys: font
+feature/variation/metric/freetype knobs, `input`, and `keybind`.
+
+Verification:
+
+- `cargo test -p roastty language_config` passed 1 filtered unit test plus the
+  ABI harness filter.
+- `cargo test -p roastty config_format_config_emits_fields_in_upstream_order`
+  passed 1 filtered unit test plus the ABI harness filter.
+- `cargo test -p roastty` passed 4,863 Rust unit tests, 0 failed, 4 ignored; the
+  C ABI harness passed with the existing enum-conversion warnings; doc tests
+  passed with 0 tests.
+- `cargo fmt --check -p roastty` passed.
+- `prettier --check --prose-wrap always --print-width 80 issues/0802-libroastty-completion-and-mac-app/167-language-config.md issues/0802-libroastty-completion-and-mac-app/README.md`
+  passed.
+- `git diff --check` passed.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `McClintock`, fresh
+context.
+
+**Verdict:** Approved with no findings.
+
+The reviewer verified that the working-tree diff was limited to the experiment
+doc, issue README, and `roastty/src/config/mod.rs`; the result commit had not
+been made; upstream fidelity, optional-string semantics, test coverage, README
+status/count, and result-gate state were correct; and all claimed checks passed.
+
+## Conclusion
+
+The `language` config surface is complete at the parser/formatter/storage layer.
+Actual GUI localization remains app/platform runtime behavior, not a missing
+public config field.

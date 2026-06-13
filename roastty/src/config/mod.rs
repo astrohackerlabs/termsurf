@@ -368,6 +368,8 @@ pub(crate) struct Config {
     pub desktop_notifications: bool,
     /// `progress-style`.
     pub progress_style: bool,
+    /// `language`.
+    pub language: Option<String>,
     /// `font-family`.
     pub font_family: RepeatableString,
     /// `font-family-bold`.
@@ -610,6 +612,7 @@ impl Default for Config {
             gtk_custom_css: RepeatableConfigPath::default(),
             desktop_notifications: true,
             progress_style: true,
+            language: None,
             font_family: RepeatableString::default(),
             font_family_bold: RepeatableString::default(),
             font_family_italic: RepeatableString::default(),
@@ -701,6 +704,8 @@ impl Config {
                 "quick-terminal-keyboard-interactivity",
                 out,
             ));
+        EntryFormatter::new("language", out)
+            .entry_optional(self.language.clone(), |v, f| f.entry_str(&v));
         self.font_family
             .format_entry(&mut EntryFormatter::new("font-family", out));
         self.font_family_bold
@@ -1865,6 +1870,10 @@ impl Config {
             }
             "palette-harmonious" => {
                 self.palette_harmonious = set_bool_field(value, default.palette_harmonious)?
+            }
+            "language" => {
+                self.language =
+                    set_optional_value_field(value, default.language, parse_string_field)?
             }
             "font-family" => self.font_family.parse_cli(value)?,
             "font-family-bold" => self.font_family_bold.parse_cli(value)?,
@@ -8483,6 +8492,7 @@ mod tests {
             }
         );
         assert!(d.font_codepoint_map.map.is_empty());
+        assert_eq!(d.language, None);
         assert!(d.clipboard_codepoint_map.map.is_empty());
         // Font-thicken group (Experiment 845): upstream defaults false / 255.
         assert!(!d.font_thicken);
@@ -15119,6 +15129,7 @@ mod tests {
             "quick-terminal-autohide",
             "quick-terminal-space-behavior",
             "quick-terminal-keyboard-interactivity",
+            "language",
             "font-family",
             "font-family-bold",
             "font-family-italic",
@@ -17051,7 +17062,7 @@ mod tests {
             keys[position_index + 8],
             "quick-terminal-keyboard-interactivity"
         );
-        assert_eq!(keys[position_index + 9], "font-family");
+        assert_eq!(keys[position_index + 9], "language");
 
         cfg.set("quick-terminal-size", Some("")).unwrap();
         assert_eq!(cfg.quick_terminal_size, QuickTerminalSize::default());
@@ -17201,7 +17212,7 @@ mod tests {
             keys[size_index + 7],
             "quick-terminal-keyboard-interactivity"
         );
-        assert_eq!(keys[size_index + 8], "font-family");
+        assert_eq!(keys[size_index + 8], "language");
 
         let diagnostics = cfg.load_str(
             "gtk-quick-terminal-layer = bottom\n\
@@ -17361,7 +17372,7 @@ mod tests {
             keys[namespace_index + 5],
             "quick-terminal-keyboard-interactivity"
         );
-        assert_eq!(keys[namespace_index + 6], "font-family");
+        assert_eq!(keys[namespace_index + 6], "language");
 
         let diagnostics = cfg.load_str(
             "quick-terminal-screen = mouse\n\
@@ -17512,7 +17523,7 @@ mod tests {
             keys[autohide_index + 2],
             "quick-terminal-keyboard-interactivity"
         );
-        assert_eq!(keys[autohide_index + 3], "font-family");
+        assert_eq!(keys[autohide_index + 3], "language");
 
         let diagnostics = cfg.load_str(
             "quick-terminal-space-behavior = remain\n\
@@ -18930,6 +18941,59 @@ mod tests {
                 error: ConfigSetError::InvalidValue,
             }]
         );
+    }
+
+    #[test]
+    fn language_config_parse_format_reset_load_and_clone() {
+        let line = |cfg: &Config| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|l| l.starts_with("language = "))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.language, None);
+        assert_eq!(line(&cfg), "language = ");
+
+        cfg.set("language", Some("de")).unwrap();
+        assert_eq!(cfg.language.as_deref(), Some("de"));
+        assert_eq!(line(&cfg), "language = de");
+
+        cfg.set("language", Some("pt-BR")).unwrap();
+        assert_eq!(cfg.language.as_deref(), Some("pt-BR"));
+        assert_eq!(line(&cfg), "language = pt-BR");
+
+        cfg.set("language", Some("")).unwrap();
+        assert_eq!(cfg.language, None);
+        assert_eq!(line(&cfg), "language = ");
+
+        assert_eq!(
+            cfg.set("language", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("language", Some("bad\0language")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics = cfg.load_str("language = fr\nlanguage =\nlanguage = bad\0language\n");
+        assert_eq!(cfg.language, None);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 3,
+                key: "language".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+
+        cfg.set("language", Some("ja")).unwrap();
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.language.as_deref(), Some("ja"));
     }
 
     #[test]
