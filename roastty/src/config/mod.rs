@@ -392,6 +392,14 @@ pub(crate) struct Config {
     pub font_feature: RepeatableString,
     /// `font-size`.
     pub font_size: f32,
+    /// `font-variation`.
+    pub font_variation: RepeatableFontVariation,
+    /// `font-variation-bold`.
+    pub font_variation_bold: RepeatableFontVariation,
+    /// `font-variation-italic`.
+    pub font_variation_italic: RepeatableFontVariation,
+    /// `font-variation-bold-italic`.
+    pub font_variation_bold_italic: RepeatableFontVariation,
     /// `font-codepoint-map`.
     pub font_codepoint_map: RepeatableCodepointMap,
     /// `clipboard-codepoint-map`.
@@ -630,6 +638,10 @@ impl Default for Config {
             } else {
                 12.0
             },
+            font_variation: RepeatableFontVariation::default(),
+            font_variation_bold: RepeatableFontVariation::default(),
+            font_variation_italic: RepeatableFontVariation::default(),
+            font_variation_bold_italic: RepeatableFontVariation::default(),
             font_codepoint_map: RepeatableCodepointMap::default(),
             clipboard_codepoint_map: RepeatableClipboardCodepointMap::default(),
             font_thicken: false,
@@ -730,6 +742,14 @@ impl Config {
         self.font_feature
             .format_entry(&mut EntryFormatter::new("font-feature", out));
         EntryFormatter::new("font-size", out).entry_float(self.font_size);
+        self.font_variation
+            .format_entry(&mut EntryFormatter::new("font-variation", out));
+        self.font_variation_bold
+            .format_entry(&mut EntryFormatter::new("font-variation-bold", out));
+        self.font_variation_italic
+            .format_entry(&mut EntryFormatter::new("font-variation-italic", out));
+        self.font_variation_bold_italic
+            .format_entry(&mut EntryFormatter::new("font-variation-bold-italic", out));
         self.font_codepoint_map
             .format_entry(&mut EntryFormatter::new("font-codepoint-map", out));
         self.clipboard_codepoint_map
@@ -1908,6 +1928,16 @@ impl Config {
             }
             "font-feature" => self.font_feature.parse_cli(value)?,
             "font-size" => self.font_size = set_f32_field(value, default.font_size)?,
+            "font-variation" => set_repeatable_font_variation(&mut self.font_variation, value)?,
+            "font-variation-bold" => {
+                set_repeatable_font_variation(&mut self.font_variation_bold, value)?
+            }
+            "font-variation-italic" => {
+                set_repeatable_font_variation(&mut self.font_variation_italic, value)?
+            }
+            "font-variation-bold-italic" => {
+                set_repeatable_font_variation(&mut self.font_variation_bold_italic, value)?
+            }
             "font-codepoint-map" => self.font_codepoint_map.parse_cli(value)?,
             "clipboard-codepoint-map" => self.clipboard_codepoint_map.parse_cli(value)?,
             // `BackgroundBlur::parse_cli` is `&mut self` (it overwrites `self` in
@@ -3037,6 +3067,77 @@ impl RepeatableConfigPath {
     }
 }
 
+/// One variable-font axis override (upstream `fontpkg.face.Variation` as used by
+/// `Config.RepeatableFontVariation`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FontVariation {
+    pub id: [u8; 4],
+    pub value: f64,
+}
+
+/// A repeatable variable-font axis override list (upstream
+/// `Config.RepeatableFontVariation`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct RepeatableFontVariation {
+    pub list: Vec<FontVariation>,
+}
+
+impl RepeatableFontVariation {
+    pub(crate) fn parse_cli(
+        &mut self,
+        input: Option<&str>,
+    ) -> Result<(), RepeatableFontVariationParseError> {
+        let input = input.ok_or(RepeatableFontVariationParseError::ValueRequired)?;
+        let eql = input
+            .find('=')
+            .ok_or(RepeatableFontVariationParseError::InvalidValue)?;
+        let key = input[..eql].trim_matches(|c: char| c == ' ' || c == '\t');
+        let value = input[eql + 1..].trim_matches(|c: char| c == ' ' || c == '\t');
+        let id: [u8; 4] = key
+            .as_bytes()
+            .try_into()
+            .map_err(|_| RepeatableFontVariationParseError::InvalidValue)?;
+        let value = value
+            .parse::<f64>()
+            .map_err(|_| RepeatableFontVariationParseError::InvalidValue)?;
+        self.list.push(FontVariation { id, value });
+        Ok(())
+    }
+
+    pub(crate) fn format_entry(&self, formatter: &mut EntryFormatter) {
+        if self.list.is_empty() {
+            formatter.entry_void();
+            return;
+        }
+
+        for variation in &self.list {
+            let id = std::str::from_utf8(&variation.id).unwrap_or("");
+            let value = if variation.value.is_nan() {
+                "nan".to_string()
+            } else {
+                variation.value.to_string()
+            };
+            formatter.entry_str(&format!("{}={}", id, value));
+        }
+    }
+}
+
+/// An error parsing `font-variation*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepeatableFontVariationParseError {
+    ValueRequired,
+    InvalidValue,
+}
+
+impl From<RepeatableFontVariationParseError> for ConfigSetError {
+    fn from(error: RepeatableFontVariationParseError) -> Self {
+        match error {
+            RepeatableFontVariationParseError::ValueRequired => ConfigSetError::ValueRequired,
+            RepeatableFontVariationParseError::InvalidValue => ConfigSetError::InvalidValue,
+        }
+    }
+}
+
 /// A repeatable codepoint-to-font map (upstream
 /// `Config.RepeatableCodepointMap`).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -3200,6 +3301,18 @@ fn set_f32_field(value: Option<&str>, default_value: f32) -> Result<f32, ConfigS
         None => Err(ConfigSetError::ValueRequired),
         Some(v) => v.parse::<f32>().map_err(|_| ConfigSetError::InvalidValue),
     }
+}
+
+fn set_repeatable_font_variation(
+    target: &mut RepeatableFontVariation,
+    value: Option<&str>,
+) -> Result<(), ConfigSetError> {
+    if value == Some("") {
+        *target = RepeatableFontVariation::default();
+        return Ok(());
+    }
+    target.parse_cli(value)?;
+    Ok(())
 }
 
 impl From<ColorParseError> for ConfigSetError {
@@ -8175,7 +8288,7 @@ mod tests {
         ConfigReplayEntry, ConfigSetError, ConfigSetSource, ConfigThemeLoadReport,
         ConfirmCloseSurface, CopyOnSelect, CursorStyle, CustomShaderAnimation, DefaultConfigPaths,
         Duration, DurationParseError, FlagsParseError, FontShapingBreak, FontStyle,
-        FontStyleParseError, FontSyntheticStyle, Fullscreen, GraphemeWidthMethod,
+        FontStyleParseError, FontSyntheticStyle, FontVariation, Fullscreen, GraphemeWidthMethod,
         GtkSingleInstance, GtkTabsLocation, GtkTitlebarStyle, GtkToolbarStyle, LinkPreviews,
         LinuxCgroup, MacAppIcon, MacAppIconFrame, MacHidden, MacOSDockDropBehavior, MacShortcuts,
         MacTitlebarProxyIcon, MacTitlebarStyle, MacWindowButtons, MagicParseError,
@@ -8186,14 +8299,15 @@ mod tests {
         QuickTerminalPosition, QuickTerminalScreen, QuickTerminalSize, QuickTerminalSizeParseError,
         QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReleaseChannel,
         RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
-        RepeatableConfigPathParseError, RepeatableString, RepeatableStringParseError,
-        ResizeOverlay, ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar,
-        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
-        ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme,
-        ThemeParseError, WindowColorspace, WindowDecoration, WindowDecorationParseError,
-        WindowNewTabPosition, WindowPadding, WindowPaddingBalance, WindowPaddingColor,
-        WindowPaddingParseError, WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme,
-        WorkingDirectory, WorkingDirectoryParseError, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
+        RepeatableConfigPathParseError, RepeatableFontVariation, RepeatableFontVariationParseError,
+        RepeatableString, RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition,
+        RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
+        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
+        SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
+        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowNewTabPosition,
+        WindowPadding, WindowPaddingBalance, WindowPaddingColor, WindowPaddingParseError,
+        WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme, WorkingDirectory,
+        WorkingDirectoryParseError, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
     };
     use crate::input::key_mods::{self, Mods};
     use crate::input::link::{Action as LinkAction, Highlight as LinkHighlight};
@@ -8498,6 +8612,10 @@ mod tests {
                 12.0
             }
         );
+        assert!(d.font_variation.list.is_empty());
+        assert!(d.font_variation_bold.list.is_empty());
+        assert!(d.font_variation_italic.list.is_empty());
+        assert!(d.font_variation_bold_italic.list.is_empty());
         assert!(d.font_codepoint_map.map.is_empty());
         assert_eq!(d.language, None);
         assert!(d.clipboard_codepoint_map.map.is_empty());
@@ -15009,6 +15127,182 @@ mod tests {
     }
 
     #[test]
+    fn font_variation_config_parse_format_reset_load_cli_append_and_clone() {
+        let lines = |cfg: &Config, key: &str| -> Vec<String> {
+            let prefix = format!("{} = ", key);
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|l| l.starts_with(&prefix))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let mut direct = RepeatableFontVariation::default();
+        assert_eq!(
+            direct.parse_cli(None),
+            Err(RepeatableFontVariationParseError::ValueRequired)
+        );
+        assert_eq!(
+            direct.parse_cli(Some("")),
+            Err(RepeatableFontVariationParseError::InvalidValue)
+        );
+        assert_eq!(
+            direct.parse_cli(Some("wght")),
+            Err(RepeatableFontVariationParseError::InvalidValue)
+        );
+        assert_eq!(
+            direct.parse_cli(Some("longer=1")),
+            Err(RepeatableFontVariationParseError::InvalidValue)
+        );
+        assert_eq!(
+            direct.parse_cli(Some("wght=heavy")),
+            Err(RepeatableFontVariationParseError::InvalidValue)
+        );
+        direct.parse_cli(Some("wght =200")).unwrap();
+        direct.parse_cli(Some("slnt= -15")).unwrap();
+        assert_eq!(
+            direct.list,
+            vec![
+                FontVariation {
+                    id: *b"wght",
+                    value: 200.0,
+                },
+                FontVariation {
+                    id: *b"slnt",
+                    value: -15.0,
+                },
+            ]
+        );
+        let mut direct_out = String::new();
+        direct.format_entry(&mut EntryFormatter::new("font-variation", &mut direct_out));
+        assert_eq!(
+            direct_out,
+            "font-variation = wght=200\nfont-variation = slnt=-15\n"
+        );
+
+        let mut cfg = Config::default();
+        assert!(cfg.font_variation.list.is_empty());
+        assert_eq!(lines(&cfg, "font-variation"), vec!["font-variation = "]);
+
+        cfg.set("font-variation", Some("wght=200")).unwrap();
+        cfg.set("font-variation", Some("slnt=-15")).unwrap();
+        cfg.set("font-variation-bold", Some("wght=700")).unwrap();
+        cfg.set("font-variation-italic", Some("ital=1")).unwrap();
+        cfg.set("font-variation-bold-italic", Some("wdth=90"))
+            .unwrap();
+        assert_eq!(
+            cfg.font_variation.list,
+            vec![
+                FontVariation {
+                    id: *b"wght",
+                    value: 200.0,
+                },
+                FontVariation {
+                    id: *b"slnt",
+                    value: -15.0,
+                },
+            ]
+        );
+        assert_eq!(
+            lines(&cfg, "font-variation"),
+            vec!["font-variation = wght=200", "font-variation = slnt=-15"]
+        );
+        assert_eq!(
+            lines(&cfg, "font-variation-bold"),
+            vec!["font-variation-bold = wght=700"]
+        );
+        assert_eq!(
+            lines(&cfg, "font-variation-italic"),
+            vec!["font-variation-italic = ital=1"]
+        );
+        assert_eq!(
+            lines(&cfg, "font-variation-bold-italic"),
+            vec!["font-variation-bold-italic = wdth=90"]
+        );
+
+        cfg.set("font-variation", Some("")).unwrap();
+        assert!(cfg.font_variation.list.is_empty());
+        assert_eq!(lines(&cfg, "font-variation"), vec!["font-variation = "]);
+        assert_eq!(
+            cfg.set("font-variation", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("font-variation", Some("abc=1")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics = cfg.load_str(
+            "font-variation = wght=300\n\
+             font-variation = bad\n\
+             font-variation\n\
+             font-variation =\n",
+        );
+        assert!(cfg.font_variation.list.is_empty());
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "font-variation".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "font-variation".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+            ]
+        );
+
+        assert!(cfg
+            .load_str("font-variation = wght=400\nfont-variation = slnt=-10\n")
+            .is_empty());
+        assert_eq!(
+            cfg.font_variation.list,
+            vec![
+                FontVariation {
+                    id: *b"wght",
+                    value: 400.0,
+                },
+                FontVariation {
+                    id: *b"slnt",
+                    value: -10.0,
+                },
+            ]
+        );
+        let diagnostics =
+            cfg.set_cli_args(["--font-variation=wght=500", "--font-variation=opsz=12"]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.font_variation.list,
+            vec![
+                FontVariation {
+                    id: *b"wght",
+                    value: 400.0,
+                },
+                FontVariation {
+                    id: *b"slnt",
+                    value: -10.0,
+                },
+                FontVariation {
+                    id: *b"wght",
+                    value: 500.0,
+                },
+                FontVariation {
+                    id: *b"opsz",
+                    value: 12.0,
+                },
+            ]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.font_variation.list, cfg.font_variation.list);
+    }
+
+    #[test]
     fn config_codepoint_map_parses_ranges_and_formats_entries() {
         let mut cfg = Config::default();
         cfg.set("font-codepoint-map", Some("U+ABCD = Symbols"))
@@ -15222,6 +15516,10 @@ mod tests {
             "font-synthetic-style",
             "font-feature",
             "font-size",
+            "font-variation",
+            "font-variation-bold",
+            "font-variation-italic",
+            "font-variation-bold-italic",
             "font-codepoint-map",
             "clipboard-codepoint-map",
             "font-thicken",

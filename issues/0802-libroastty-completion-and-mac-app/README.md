@@ -232,6 +232,13 @@ the earlier "commit a small baseline PNG set" wording in Exp 2.
   `font-size`, including repeatable reset, diagnostics, and CLI-append
   semantics. Applying feature strings to actual shaping remains font/text
   runtime work.
+- **Font-variation config is parser/formatter-only.** Exp 169 wires
+  `font-variation`, `font-variation-bold`, `font-variation-italic`, and
+  `font-variation-bold-italic` as upstream repeatable variable-font axis fields
+  between `font-size` and `font-codepoint-map`, including four-byte axis ids,
+  ASCII space/tab trimming, empty default reset through config dispatch, and
+  CLI-append semantics. Applying variation axes during font discovery/shaping
+  remains font/text runtime work.
 - **Codepoint width needs more than scalar Rust ranges.** Exp 151 added a
   width-only helper and proved full Unicode-scalar parity with the generated
   table, but the release probe measured only 0.76x versus direct table width
@@ -976,8 +983,8 @@ the live app, verified by a Phase-D UI test.)
 
 **Phase F — Config completeness**
 
-- [ ] The remaining 20 public config options (font variation/metric/freetype
-      knobs, `input`, and `keybind`)
+- [ ] The remaining 16 public config options (font metric/freetype knobs,
+      `input`, and `keybind`)
 - [ ] `finalize()` — cross-field validation / derivation / clamping
 - [ ] Theme loading (themes-dir locator + file read + palette/option
       application)
@@ -1515,7 +1522,7 @@ stays unaltered except for the rename).
 - [Experiment 168: Phase F — font feature config](168-font-feature-config.md) —
   **Pass**
 - [Experiment 169: Phase F — font variation config](169-font-variation-config.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
