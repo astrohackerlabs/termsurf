@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-13"
+closed = "2026-06-13"
 +++
 
 # Issue 804: Roastty GUI Automation Readiness
@@ -162,10 +163,13 @@ Roastty GUI automation work. Keep hypotheses in Analysis until they are proven.
   Launching `roastty/macos/build/Debug/Roastty.app/Contents/MacOS/roastty` with
   per-run `ZDOTDIR`, `XDG_CONFIG_HOME`, and shell startup files can run a recipe
   and display deterministic terminal content.
-- **The actual debug app path is `roastty/macos/build/Debug/Roastty.app`.**
-  Older derived-data-style paths such as
-  `roastty/macos/build/Build/Products/Debug/Roastty.app` are stale for this
-  harness.
+- **Roastty has two debug app layouts; launch the current one.** `nu` builds can
+  produce `roastty/macos/build/Debug/Roastty.app`, while
+  `xcodebuild -derivedDataPath build` produces
+  `roastty/macos/build/Build/Products/Debug/Roastty.app`. Experiment 11 found
+  the helper was launching a stale flat app after the xcodebuild product was
+  rebuilt. `scripts/roastty-app/start-app.sh` now honors `ROASTTY_APP` and
+  otherwise prefers the newer debug app bundle when both exist.
 - **CGEvent mouse scroll works against Roastty.** With bootstrap content
   `seq 1 200`, `scripts/roastty-app/scroll.swift` moves the viewport from tail
   lines `178..200` to top/history lines `1..24` and back.
@@ -214,6 +218,11 @@ Roastty GUI automation work. Keep hypotheses in Analysis until they are proven.
   `Termio` pump kept the worker alive; the guarded marker command created
   `/tmp/termsurf-issue804-exp10-after-fix-system-events/marker.txt` with
   `ISSUE804_EXP10_AFTER_FIX_SYSTEM_EVENTS`.
+- **The final readiness smoke passes against the current debug app.** Experiment
+  11 proved current-app external keyboard input with a marker file, mouse click
+  with a frontmost/window oracle, mouse drag selection with `pbpaste`, mouse
+  scroll with changed screenshot hashes, full-window screenshots, and cleanup
+  with no remaining debug Roastty process.
 
 ## Verification
 
@@ -269,5 +278,28 @@ not add the `## Experiments` index until Experiment 1 is designed.
 - [Experiment 10: Trace worker disconnect](10-trace-worker-disconnect.md) —
   **Pass** (fixed the live worker disconnect; guarded System Events keyboard
   input created the marker file through Roastty)
-- [Experiment 11: Final readiness smoke](11-final-readiness-smoke.md) —
-  **Designed**
+- [Experiment 11: Final readiness smoke](11-final-readiness-smoke.md) — **Pass**
+  (proved keyboard, click, drag, scroll, screenshots, and cleanup against the
+  current debug app; fixed stale app selection in `start-app.sh`)
+
+## Conclusion
+
+Issue 804 is closed. The VM can automatically build, launch, drive, verify, and
+clean up the full Roastty macOS GUI window.
+
+The external-keyboard blocker was app-side, not a VM-level inability to
+synthesize keys. System Events can generate keyboard input in this macOS VM, and
+after the worker fix the current Roastty app receives and executes commands
+typed by that route. Mouse click, drag, and scroll automation also work when the
+current debug app is launched and the visible window coordinates are refreshed
+before input.
+
+Required permissions/setup for this VM:
+
+- Ghostty, the responsible host app for Codex here, needs Accessibility.
+- Ghostty needs Automation permission to control System Events.
+- Ghostty needs Input Monitoring for the current keyboard/mouse automation
+  setup.
+- Ghostty needs Screen Recording for screenshot-based oracles.
+- `scripts/roastty-app/start-app.sh` should be used after building, or
+  `ROASTTY_APP` should explicitly point at the current debug app bundle.

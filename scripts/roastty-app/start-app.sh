@@ -4,7 +4,17 @@
 # flow so the app is never left running on the user's screen across turns.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-APP="${ROASTTY_APP:-$ROOT/roastty/macos/build/Debug/Roastty.app}"
+if [ -n "${ROASTTY_APP:-}" ]; then
+  APP="$ROASTTY_APP"
+else
+  XCODE_APP="$ROOT/roastty/macos/build/Build/Products/Debug/Roastty.app"
+  FLAT_APP="$ROOT/roastty/macos/build/Debug/Roastty.app"
+  if [ -d "$XCODE_APP" ] && { [ ! -d "$FLAT_APP" ] || [ "$XCODE_APP" -nt "$FLAT_APP" ]; }; then
+    APP="$XCODE_APP"
+  else
+    APP="$FLAT_APP"
+  fi
+fi
 [ -d "$APP" ] || { echo "app not built: $APP" >&2; exit 1; }
 
 open "$APP"
