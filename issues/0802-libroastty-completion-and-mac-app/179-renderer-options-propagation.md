@@ -145,3 +145,130 @@ Findings: None. The reviewer confirmed the design links Experiment 179 as
 mailbox / `Options` item, matches upstream focus / visible / `change_config`
 semantics closely enough for this slice, and includes concrete verification and
 hygiene gates.
+
+## Result
+
+**Result:** Pass.
+
+Implemented the scoped renderer-options propagation slice:
+
+- Replaced the misleading live-surface `occluded` state with `visible`, matching
+  upstream's renderer-thread flag default and the copied Swift caller's
+  `window.occlusionState.contains(.visible)` argument.
+- Made `roastty_surface_set_occlusion(surface, visible)` interpret its bool as
+  visibility. Becoming visible requests a live frame for `NSView` surfaces;
+  becoming invisible suppresses live presentation work.
+- Added live-render helpers for `has_live_view`, `should_present_live`,
+  `request_live_render`, focus option propagation, and visibility option
+  propagation.
+- Gated present-driver submission and `present_live` on live visibility, so
+  timer work may continue but invisible surfaces do not rebuild or submit Metal
+  frames.
+- Routed focus changes through `apply_focus_options`, preserving Experiment
+  178's cursor-blink behavior and ABI-only quietness while keeping custom shader
+  focus-change marking on the same path.
+- Made config updates on live `NSView` surfaces drop the live renderer, mark the
+  surface dirty, and wake the app so renderer-derived state is rebuilt on the
+  next visible frame. ABI-only surfaces without a worker remain quiet.
+
+Focused verification:
+
+- `cargo test -p roastty live_renderer_options -- --test-threads=1` — **Pass**,
+  6 tests passed; the package integration harness had 0 matching filtered tests.
+- `cargo test -p roastty live_cursor_blink -- --test-threads=1` — **Pass**, 4
+  tests passed; the package integration harness had 0 matching filtered tests.
+
+Regression verification:
+
+- `cargo test -p roastty --test abi_harness` — **Pass**, 1 test passed. The
+  existing 10 enum-conversion warnings and `[unknown](scope): message` remained.
+- `cargo test -p roastty -- --test-threads=1` — **Pass**, 4896 passed, 0 failed,
+  4 ignored; ABI harness and doc-tests also passed.
+- `cargo fmt --check -p roastty` — **Pass**.
+- `git diff --check` — **Pass**.
+
+Live sanity:
+
+- `cd roastty && macos/build.nu --action build` — **Pass**. The copied app build
+  completed with `** BUILD SUCCEEDED **`; only the existing Swift actor,
+  retroactive Sendable, linker deployment-target, and terminfo warnings
+  appeared.
+- `scripts/roastty-app/stop-app.sh && TERMSURF_AB_HOLD_SECONDS=10 ROASTTY_PRESENT_DRIVER_LOG=1 scripts/roastty-app/live-ab-smoke.sh --recipe smoke --comparison-region content --max-mismatch-ratio 1 --max-mean-channel-delta 255`
+  — **Pass**. The harness launched Ghostty PID `67244` and Roastty PID `67252`
+  with marker `ISSUE802_AB_SMOKE_20260613-021538` and returned JSON verdict
+  `PASS`.
+- Content-region diff metrics for that run:
+
+  ```text
+  mismatch_ratio=0.005615972222222222
+  mean_channel_delta=0.5575102430555555
+  compared_pixels=1440000
+  mismatched_pixels=8087
+  ```
+
+- Full-window diff metrics for that run:
+
+  ```text
+  mismatch_ratio=0.0583534414556962
+  mean_channel_delta=1.500798556170886
+  compared_pixels=2022400
+  mismatched_pixels=118014
+  ```
+
+- Screenshot artifacts:
+
+  ```text
+  /Users/ryan/.cache/termsurf/shots/ghostty-ab-content-20260613-021538.png
+  /Users/ryan/.cache/termsurf/shots/roastty-ab-content-20260613-021538.png
+  /Users/ryan/.cache/termsurf/shots/ghostty-ab-crop-20260613-021538.png
+  /Users/ryan/.cache/termsurf/shots/roastty-ab-crop-20260613-021538.png
+  /Users/ryan/.cache/termsurf/shots/roastty-ab-full-20260613-021538.png
+  ```
+
+- Present-driver log check:
+
+  ```text
+  /Users/ryan/.cache/termsurf/shots/roastty-ab-stderr-20260613-021538.log:1:[roastty] present-driver=display-link reason=core-video
+  ```
+
+- Cleanup check: `no debug Roastty app PID remains`.
+
+The Phase C renderer mailbox / `Options` checklist item is now checked. The
+remaining Phase C gaps are the broader `surface_draw` ownership wording,
+retiring the interim `render_state` pull divergence, and the final ASCII
+terminal milestone.
+
+## Conclusion
+
+The in-process live renderer now has the state transitions that matter for the
+upstream renderer mailbox's `Options` slice. The most important behavioral fix
+was semantic: the copied macOS app passes `visible`, not `occluded`, so the Rust
+side now stores and uses visibility directly. With visibility, focus, and config
+updates wired into live rendering, the next Phase C experiment can focus on
+removing the remaining `render_state_update` pull-path divergence or proving the
+broader `surface_draw` ownership milestone, depending on which gap is still most
+limiting in the current app path.
+
+## Completion Review
+
+**Reviewer:** Codex-native adversarial review subagent `Franklin`, fresh
+context.
+
+**Initial verdict:** Approved.
+
+Findings and fixes:
+
+- Optional: the original focused tests asserted `should_present_live()` and
+  dirty/wakeup state, but did not directly call through the invisible
+  `present_live` gate. Fixed by adding
+  `live_renderer_options_present_live_is_noop_while_invisible`, which creates a
+  dirty live surface with a dangling `NSView`, sets `visible = false`, calls
+  `present_live()`, and proves no live renderer is built and the dirty frame
+  remains pending.
+
+**Final verdict:** Approved.
+
+The reviewer independently verified the focused renderer-options and
+cursor-blink tests, `cargo fmt --check -p roastty`, prettier check, and
+`git diff --check`, and confirmed the result remained uncommitted at review
+time.

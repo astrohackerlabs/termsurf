@@ -2642,7 +2642,7 @@ struct Surface {
     inherited_working_directory: Option<CString>,
     display_id: u32,
     focused: bool,
-    occluded: bool,
+    visible: bool,
     size: RoasttySurfaceSize,
     color_scheme: c_int,
     config_conditional_state: config::conditional::State,
@@ -3076,7 +3076,7 @@ fn enqueue_present_tick(
         // (no-op otherwise); before the dirty check so the scrolled row presents now.
         surface.selection_autoscroll_tick();
         surface.advance_cursor_blink(now);
-        if surface.dirty {
+        if surface.dirty && surface.should_present_live() {
             surface.present_live();
             surface.dirty = false;
         }
@@ -3644,6 +3644,11 @@ impl Surface {
             });
             self.dirty = true;
         }
+        if self.has_live_view() {
+            self.renderer = None;
+            self.dirty = true;
+            self.wakeup_app();
+        }
     }
 
     fn selection_word_boundaries(&self) -> &[u32] {
@@ -3932,6 +3937,14 @@ impl Surface {
         self.wakeup_app();
     }
 
+    fn has_live_view(&self) -> bool {
+        !self.nsview.is_null()
+    }
+
+    fn should_present_live(&self) -> bool {
+        self.has_live_view() && self.visible
+    }
+
     fn reset_cursor_blink(&mut self, now: std::time::Instant) {
         self.cursor_blink_visible = true;
         self.cursor_blink_next = now + CURSOR_BLINK_INTERVAL;
@@ -3966,7 +3979,32 @@ impl Surface {
             self.cursor_blink_visible = true;
             self.cursor_blink_next = now + CURSOR_BLINK_INTERVAL;
         }
-        if !self.nsview.is_null() {
+        self.request_live_render();
+    }
+
+    fn apply_focus_options(&mut self, focused: bool, now: std::time::Instant) {
+        let changed = self.focused != focused;
+        self.focused = focused;
+        if changed {
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.custom_shader.focus_changed = true;
+            }
+            self.focus_changed_for_cursor_blink(focused, now);
+        }
+    }
+
+    fn apply_visibility_options(&mut self, visible: bool) {
+        if self.visible == visible {
+            return;
+        }
+        self.visible = visible;
+        if visible {
+            self.request_live_render();
+        }
+    }
+
+    fn request_live_render(&mut self) {
+        if self.has_live_view() {
             self.dirty = true;
             self.wakeup_app();
         }
@@ -3985,7 +4023,7 @@ impl Surface {
     /// slice 1). Lazily builds the Metal renderer on first call (main thread; driven from
     /// `set_size`/`set_content_scale`/`draw`). No-op without an nsview or a running terminal.
     fn present_live(&mut self) {
-        if self.nsview.is_null() {
+        if !self.should_present_live() {
             return;
         }
         if self.renderer.is_none() {
@@ -17418,7 +17456,7 @@ pub extern "C" fn roastty_surface_new(
         inherited_working_directory: None,
         display_id: 0,
         focused: false,
-        occluded: false,
+        visible: true,
         size: RoasttySurfaceSize {
             columns: 0,
             rows: 0,
@@ -17652,21 +17690,14 @@ pub extern "C" fn roastty_surface_set_display_id(surface: RoasttySurface, displa
 #[no_mangle]
 pub extern "C" fn roastty_surface_set_focus(surface: RoasttySurface, focused: bool) {
     if let Some(surface) = surface_from_handle(surface) {
-        let changed = surface.focused != focused;
-        surface.focused = focused;
-        if changed {
-            if let Some(renderer) = surface.renderer.as_mut() {
-                renderer.custom_shader.focus_changed = true;
-            }
-            surface.focus_changed_for_cursor_blink(focused, std::time::Instant::now());
-        }
+        surface.apply_focus_options(focused, std::time::Instant::now());
     }
 }
 
 #[no_mangle]
-pub extern "C" fn roastty_surface_set_occlusion(surface: RoasttySurface, occluded: bool) {
+pub extern "C" fn roastty_surface_set_occlusion(surface: RoasttySurface, visible: bool) {
     if let Some(surface) = surface_from_handle(surface) {
-        surface.occluded = occluded;
+        surface.apply_visibility_options(visible);
     }
 }
 
@@ -20948,6 +20979,149 @@ mod tests {
         let surface_ref = surface_from_handle(surface).unwrap();
         assert!(!surface_ref.focused);
         assert!(surface_ref.dirty);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_renderer_options_occlusion_abi_uses_visible_bool() {
+        let _guard = WAKEUP_LOCK.lock().unwrap();
+        let app = new_test_app_with_wakeup(0x179);
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.nsview = std::ptr::NonNull::<c_void>::dangling().as_ptr();
+        surface_ref.dirty = false;
+
+        assert!(surface_ref.visible);
+        assert!(surface_ref.should_present_live());
+
+        roastty_surface_set_occlusion(surface, false);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(!surface_ref.visible);
+        assert!(!surface_ref.should_present_live());
+        assert!(!surface_ref.dirty);
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 0);
+
+        roastty_surface_set_occlusion(surface, true);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.visible);
+        assert!(surface_ref.should_present_live());
+        assert!(surface_ref.dirty);
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(WAKEUP_USERDATA.load(Ordering::SeqCst), 0x179);
+
+        surface_ref.dirty = false;
+        roastty_surface_set_occlusion(surface, true);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.visible);
+        assert!(!surface_ref.dirty);
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 1);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_renderer_options_occlusion_keeps_abi_only_surfaces_quiet() {
+        let _guard = WAKEUP_LOCK.lock().unwrap();
+        let app = new_test_app_with_wakeup(0x180);
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+
+        assert!(surface_ref.nsview.is_null());
+        assert!(surface_ref.visible);
+        assert!(!surface_ref.should_present_live());
+
+        roastty_surface_set_occlusion(surface, false);
+        roastty_surface_set_occlusion(surface, true);
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.visible);
+        assert!(!surface_ref.dirty);
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 0);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_renderer_options_present_live_is_noop_while_invisible() {
+        let app = new_test_app();
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.nsview = std::ptr::NonNull::<c_void>::dangling().as_ptr();
+        surface_ref.visible = false;
+        surface_ref.dirty = true;
+
+        surface_ref.present_live();
+
+        assert!(surface_ref.renderer.is_none());
+        assert!(surface_ref.dirty);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_renderer_options_config_update_requests_live_rebuild() {
+        let _guard = WAKEUP_LOCK.lock().unwrap();
+        let app = new_test_app_with_wakeup(0x181);
+        let surface = new_test_surface(app);
+        let config = roastty_config_new();
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.nsview = std::ptr::NonNull::<c_void>::dangling().as_ptr();
+        surface_ref.dirty = false;
+
+        roastty_surface_update_config(surface, config);
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.dirty);
+        assert!(surface_ref.renderer.is_none());
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(WAKEUP_USERDATA.load(Ordering::SeqCst), 0x181);
+
+        roastty_config_free(config);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_renderer_options_config_update_keeps_abi_only_surfaces_quiet() {
+        let _guard = WAKEUP_LOCK.lock().unwrap();
+        let app = new_test_app_with_wakeup(0x182);
+        let surface = new_test_surface(app);
+        let config = roastty_config_new();
+
+        roastty_surface_update_config(surface, config);
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.nsview.is_null());
+        assert!(!surface_ref.dirty);
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 0);
+
+        roastty_config_free(config);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn live_renderer_options_focus_keeps_abi_only_surfaces_quiet() {
+        let _guard = WAKEUP_LOCK.lock().unwrap();
+        let app = new_test_app_with_wakeup(0x183);
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        surface_ref.focused = false;
+        surface_ref.cursor_blink_visible = false;
+        surface_ref.dirty = false;
+
+        roastty_surface_set_focus(surface, true);
+
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert!(surface_ref.focused);
+        assert!(surface_ref.cursor_blink_visible);
+        assert!(!surface_ref.dirty);
+        assert_eq!(WAKEUP_COUNT.load(Ordering::SeqCst), 0);
 
         roastty_surface_free(surface);
         roastty_app_free(app);

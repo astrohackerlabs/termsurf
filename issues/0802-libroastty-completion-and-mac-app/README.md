@@ -1004,7 +1004,11 @@ the live app, verified by a Phase-D UI test.)
       rendered the smoke marker. Experiment 178 threads cursor blink visibility
       into live frame rendering and proves the 600 ms blink timer, 500 ms
       output-reset throttle, and focus loss/gain lifecycle.
-- [ ] Renderer mailbox / `Options` (focus / visible / occlusion / change-config)
+- [x] Renderer mailbox / `Options` (focus / visible / occlusion / change-config)
+      — Experiment 179 fixes the copied ABI's visibility polarity, gates live
+      presentation while invisible, requests a live redraw when visible again,
+      keeps focus/cursor/custom-shader option updates on one helper path, and
+      forces live renderer rebuild/redraw on config changes.
 - [ ] Retire the interim `render_state` pull divergence
 - [ ] **Milestone: the app launches and shows a working ASCII terminal**
 
@@ -1583,7 +1587,7 @@ stays unaltered except for the rename).
 - [Experiment 178: Phase C — live cursor blink parity](178-live-cursor-blink.md)
   — **Pass**
 - [Experiment 179: Phase C — renderer options propagation](179-renderer-options-propagation.md)
-  — **Designed**
+  — **Pass**
 
 ## Process
 
