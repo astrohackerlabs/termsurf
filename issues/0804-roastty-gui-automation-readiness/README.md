@@ -116,3 +116,5 @@ not add the `## Experiments` index until Experiment 1 is designed.
 - [Experiment 3: Keyboard rerun after Ghostty restart](03-keyboard-rerun-after-ghostty-restart.md)
   — **Partial** (restart did not make CGEvent or System Events keyboard input
   reach Roastty)
+- [Experiment 4: Reproduce Issue 802 input methods against Roastty](04-reproduce-issue-802-methods-against-roastty.md)
+  — **Designed**
