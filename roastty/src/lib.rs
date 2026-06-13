@@ -2916,6 +2916,7 @@ impl PresentDriver {
             let mode = PRESENT_DRIVER_TEST_STATE.with(|state| state.borrow().mode);
             match mode {
                 Some(PresentDriverTestMode::ForceFallback) => {
+                    present_driver_log("present-driver=fallback reason=test-force-fallback");
                     return Self {
                         running,
                         kind: PresentDriverKind::Test(TestPresentDriver {
@@ -2924,6 +2925,7 @@ impl PresentDriver {
                     };
                 }
                 Some(PresentDriverTestMode::FailDisplayLink) if window_vsync => {
+                    present_driver_log("present-driver=fallback reason=test-display-link-failed");
                     return Self {
                         running,
                         kind: PresentDriverKind::Test(TestPresentDriver {
@@ -2932,6 +2934,7 @@ impl PresentDriver {
                     };
                 }
                 Some(PresentDriverTestMode::FakeDisplayLink) if window_vsync => {
+                    present_driver_log("present-driver=display-link reason=test-fake-display-link");
                     return Self {
                         running,
                         kind: PresentDriverKind::Test(TestPresentDriver { display_link: true }),
@@ -2944,6 +2947,7 @@ impl PresentDriver {
         #[cfg(target_os = "macos")]
         if window_vsync {
             if let Some(link) = MacDisplayLink::new(surface, running.clone()) {
+                present_driver_log("present-driver=display-link reason=core-video");
                 return Self {
                     running,
                     kind: PresentDriverKind::DisplayLink(link),
@@ -2951,6 +2955,12 @@ impl PresentDriver {
             }
         }
 
+        let reason = if window_vsync {
+            "display-link-unavailable"
+        } else {
+            "window-vsync-false"
+        };
+        present_driver_log(&format!("present-driver=fallback reason={reason}"));
         Self {
             kind: PresentDriverKind::FallbackThread(Some(start_present_fallback_thread(
                 surface,
@@ -2984,6 +2994,7 @@ impl PresentDriver {
             #[cfg(test)]
             PresentDriverKind::Test(test) => {
                 if test.display_link {
+                    present_driver_log(&format!("present-driver-display-id={display_id}"));
                     PRESENT_DRIVER_TEST_STATE.with(|state| {
                         state.borrow_mut().updated_display_ids.push(display_id);
                     });
@@ -3005,6 +3016,13 @@ impl PresentDriver {
     #[cfg(test)]
     fn is_running(&self) -> bool {
         self.running.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+fn present_driver_log(message: &str) {
+    if std::env::var_os("ROASTTY_PRESENT_DRIVER_LOG").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        eprintln!("[roastty] {message}");
     }
 }
 
@@ -3125,6 +3143,7 @@ impl MacDisplayLink {
         if self.link.is_null() || display_id == 0 {
             return;
         }
+        present_driver_log(&format!("present-driver-display-id={display_id}"));
         unsafe {
             let _ =
                 core_video_display_link::CVDisplayLinkSetCurrentCGDisplay(self.link, display_id);
