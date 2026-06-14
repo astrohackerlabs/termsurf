@@ -545,3 +545,5 @@ remains open.
   — **Pass**
 - [Experiment 31: Cursor style blink parser oracle](31-cursor-style-blink-parser-oracle.md)
   — **Pass**
+- [Experiment 32: macOS icon screen color parser oracle](32-macos-icon-screen-color-parser-oracle.md)
+  — **Designed**
