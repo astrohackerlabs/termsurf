@@ -492,6 +492,11 @@ experiment files until they are proven.
   `RepeatableLink.formatEntry` intentionally emits nothing because `link` cannot
   currently be set; Roastty now has an oracle proving `format_config` emits no
   `link = ` line while adjacent `link-url` still formats normally.
+- **Command-palette formatter coverage reuses the parser-family oracle.**
+  Experiment 58 promoted the single `command-palette-entry` formatter row using
+  existing focused tests that already prove default entries, clear output,
+  custom entries, quoted comma values, shorthand actions, reset behavior,
+  diagnostics, and exact formatted output.
 - **Enum parser rows share exact keyword semantics plus compatibility
   branches.** Experiment 26 proved the 52 enum rows: required and optional enum
   fields accept exact keywords only, missing values are required, raw-empty
@@ -739,4 +744,4 @@ remains open.
 - [Experiment 57: Link no-output formatter oracle](57-link-no-output-formatter-oracle.md)
   — **Pass**
 - [Experiment 58: Command palette formatter oracle](58-command-palette-formatter-oracle.md)
-  — **Designed**
+  — **Pass**
