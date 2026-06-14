@@ -876,3 +876,5 @@ remains open.
   — **Pass**
 - [Experiment 75: Window enum formatter oracle](75-window-enum-formatter-oracle.md)
   — **Pass**
+- [Experiment 76: Resize overlay formatter oracle](76-resize-overlay-formatter-oracle.md)
+  — **Designed**
