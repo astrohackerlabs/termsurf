@@ -92,7 +92,9 @@ from pathlib import Path
 matrix = Path("issues/0805-roastty-ghostty-parity/config-matrix.md").read_text()
 line = next(row for row in matrix.splitlines() if row.startswith("| CFG-222 "))
 assert "config-reload-inventory.md" in line
-assert ("| Pass " in line) == ("0 incomplete" in line and "0 gaps" in line)
+assert ("| Pass " in line) == (
+    "0 rows are incomplete" in line and "0 rows are reload gaps" in line
+)
 PY
 
 python3 -m py_compile issues/0805-roastty-ghostty-parity/config_reload_inventory.py
@@ -135,3 +137,88 @@ Adversarial design review by fresh-context Codex subagent `Kierkegaard`:
   counts report zero incomplete rows and zero gaps.
 - **Re-review verdict:** Approved. The reviewer confirmed both prior findings
   are resolved and no new required findings were introduced.
+
+## Result
+
+**Result:** Partial
+
+The reload inventory was generated and wired into `config-matrix.md`. It records
+14 pinned Ghostty reload rows:
+
+- 12 rows are `Oracle complete`;
+- 0 rows are `Audit covered`;
+- 2 rows are `Gap`;
+- CFG-222 remains `Gap`.
+
+The two unresolved reload gaps are:
+
+- `RELOAD-012`: Roastty surface config update does not clear active key tables
+  like pinned Ghostty's `Surface.updateConfig` does.
+- `RELOAD-013`: Roastty surface config update does not apply configured
+  `font-size` for unadjusted surfaces or prove preservation of manually adjusted
+  font size.
+
+Verification passed:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_reload_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-reload-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# reload_rows=14 oracle_complete=12 closed=12 audit_covered=0 incomplete=2 gap=2 cfg222=Gap
+
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+
+matrix = Path("issues/0805-roastty-ghostty-parity/config-matrix.md").read_text()
+line = next(row for row in matrix.splitlines() if row.startswith("| CFG-222 "))
+assert "config-reload-inventory.md" in line
+assert ("| Pass " in line) == (
+    "0 rows are incomplete" in line and "0 rows are reload gaps" in line
+)
+PY
+
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_reload_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+
+cargo fmt --manifest-path roastty/Cargo.toml --check
+cargo test --manifest-path roastty/Cargo.toml config_conditional_theme
+cargo test --manifest-path roastty/Cargo.toml app_set_color_scheme
+cargo test --manifest-path roastty/Cargo.toml surface_set_color_scheme
+cargo test --manifest-path roastty/Cargo.toml surface_update_config
+cargo test --manifest-path roastty/Cargo.toml surface_apply_config
+
+prettier --check issues/0805-roastty-ghostty-parity/README.md \
+  issues/0805-roastty-ghostty-parity/103-config-reload-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md \
+  issues/0805-roastty-ghostty-parity/config-reload-inventory.md
+
+git diff --check
+```
+
+Focused Rust results:
+
+- `config_conditional_theme`: 7 passed.
+- `app_set_color_scheme`: 1 passed.
+- `surface_set_color_scheme`: 1 passed.
+- `surface_update_config`: 5 passed.
+- `surface_apply_config`: 2 passed.
+
+## Conclusion
+
+CFG-222 now has a durable reload parity manifest and matrix guard, but it cannot
+close yet. The next experiment should fix `RELOAD-012` first because clearing
+active key tables on config reload is a narrow surface-state behavior with a
+clear upstream source anchor and an existing Roastty key-table test harness.
+
+## Completion Review
+
+Adversarial completion review by fresh-context Codex subagent `Mendel`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The generator's row ID validation was tautological
+  because IDs were derived from row position instead of row data.
+- **Fix:** `ReloadRow` now has an explicit `id` field, every manifest row stores
+  its `RELOAD-00N` ID, validation compares row IDs to `EXPECTED_IDS`, duplicate
+  detection uses row IDs, and generated row output emits `row.id`.
+- **Re-review verdict:** Approved. The reviewer confirmed the prior finding is
+  resolved and no new required findings were introduced.

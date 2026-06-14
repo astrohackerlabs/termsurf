@@ -501,6 +501,11 @@ experiment files until they are proven.
   default files, CLI args, recursive config files, and finalization in pinned
   Ghostty order. All 18 CFG-221 load rows are now `Oracle complete`, so config
   source precedence and repeated-file load semantics are `Pass`.
+- **CFG-222 reload parity now has an explicit manifest.** Experiment 103 split
+  config reload behavior into 14 pinned Ghostty reload rows. Existing Roastty
+  tests and source evidence prove 12 rows, while surface reload still needs to
+  clear active key tables and apply configured font-size changes without
+  overriding manually adjusted font sizes.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1097,4 +1102,4 @@ remains open.
 - [Experiment 102: Full load pipeline order](102-full-load-pipeline-order.md) —
   **Pass**
 - [Experiment 103: Config reload inventory](103-config-reload-inventory.md) —
-  **Designed**
+  **Partial**
