@@ -970,3 +970,5 @@ remains open.
   **Pass**
 - [Experiment 87: Integer diagnostic oracle](87-integer-diagnostic-oracle.md) —
   **Pass**
+- [Experiment 88: Float diagnostic oracle](88-float-diagnostic-oracle.md) —
+  **Designed**
