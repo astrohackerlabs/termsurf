@@ -554,3 +554,5 @@ remains open.
   — **Pass**
 - [Experiment 32: macOS icon screen color parser oracle](32-macos-icon-screen-color-parser-oracle.md)
   — **Pass**
+- [Experiment 33: Selection word chars parser oracle](33-selection-word-chars-parser-oracle.md)
+  — **Designed**
