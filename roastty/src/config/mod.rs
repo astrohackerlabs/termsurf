@@ -43,6 +43,9 @@ use std::path::{Component, Path, PathBuf};
 /// classifies as the prerelease `tip` channel in build config.
 const PINNED_BUILD_RELEASE_CHANNEL: ReleaseChannel = ReleaseChannel::Tip;
 
+const DEFAULT_CONFIG_TEMPLATE: &str =
+    include_str!("../../../vendor/ghostty/src/config/config-template");
+
 /// Default URL/path regex from pinned upstream
 /// `vendor/ghostty/src/config/url.zig`. This is config data for the default
 /// link matcher; regex compilation and runtime link highlighting are later
@@ -2751,6 +2754,10 @@ impl Config {
         let mut report = DefaultConfigLoadReport::default();
         let legacy_xdg = paths.legacy_xdg;
         let preferred_xdg = paths.preferred_xdg;
+        let template_target = paths
+            .preferred_app_support
+            .clone()
+            .or_else(|| preferred_xdg.clone());
         let legacy_xdg_status = self.load_default_file_candidate(legacy_xdg.clone(), &mut report);
         if legacy_xdg_status.present() {
             report.xdg_loaded = true;
@@ -2784,6 +2791,16 @@ impl Config {
                 if let (Some(legacy), Some(preferred)) = (legacy_app_support, preferred_app_support)
                 {
                     report.duplicate_app_support = Some((legacy, preferred));
+                }
+            }
+        }
+        if !report.xdg_loaded && !report.app_support_loaded {
+            if let Some(path) = template_target {
+                match write_default_config_template(&path) {
+                    Ok(()) => report.template_created = Some(path),
+                    Err(error) => {
+                        report.template_error = Some(DefaultConfigTemplateError { path, error })
+                    }
                 }
             }
         }
@@ -2949,6 +2966,17 @@ impl Config {
     }
 }
 
+fn default_config_template_for_path(path: &Path) -> String {
+    DEFAULT_CONFIG_TEMPLATE.replace("{[path]s}", &path.display().to_string())
+}
+
+fn write_default_config_template(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, default_config_template_for_path(path))
+}
+
 /// The result of `Config::load_optional_file` (upstream `OptionalFileAction`).
 #[derive(Debug)]
 pub(crate) enum OptionalFileAction {
@@ -2997,6 +3025,13 @@ pub(crate) struct DefaultConfigFileError {
     pub error: std::io::Error,
 }
 
+/// A nonfatal error encountered while creating the default config template.
+#[derive(Debug)]
+pub(crate) struct DefaultConfigTemplateError {
+    pub path: PathBuf,
+    pub error: std::io::Error,
+}
+
 /// Summary of default config file loading.
 #[derive(Debug, Default)]
 pub(crate) struct DefaultConfigLoadReport {
@@ -3006,6 +3041,8 @@ pub(crate) struct DefaultConfigLoadReport {
     pub app_support_loaded: bool,
     pub duplicate_xdg: Option<(PathBuf, PathBuf)>,
     pub duplicate_app_support: Option<(PathBuf, PathBuf)>,
+    pub template_created: Option<PathBuf>,
+    pub template_error: Option<DefaultConfigTemplateError>,
 }
 
 #[derive(Debug, Default)]
@@ -8963,7 +9000,7 @@ mod tests {
         WindowDecorationParseError, WindowNewTabPosition, WindowPadding, WindowPaddingBalance,
         WindowPaddingColor, WindowPaddingParseError, WindowSaveState, WindowShowTabBar,
         WindowSubtitle, WindowTheme, WorkingDirectory, WorkingDirectoryParseError,
-        DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
+        DEFAULT_CONFIG_TEMPLATE, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
     };
     use crate::input::key_mods::{self, Mods};
     use crate::input::link::{Action as LinkAction, Highlight as LinkHighlight};
@@ -17754,6 +17791,10 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
+    fn expected_default_config_template(path: &std::path::Path) -> String {
+        DEFAULT_CONFIG_TEMPLATE.replace("{[path]s}", &path.display().to_string())
+    }
+
     // Serializes all process-global env/cwd mutation across test threads so the
     // HOME/cwd guards below cannot race (Issue 801, Exp 837). Poison-resilient:
     // the lock guards no data (a pure serialization mutex over `()`), so a test
@@ -18046,6 +18087,146 @@ mod tests {
             .lines()
             .any(|line| line == "window-colorspace = display-p3"));
         assert!(out.lines().any(|line| line == "fullscreen = non-native"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_creates_app_support_template_when_all_missing() {
+        let dir = unique_config_test_dir("default-template-app");
+        let legacy_xdg = dir.join("xdg-legacy");
+        let preferred_xdg = dir.join("xdg-preferred");
+        let legacy_app = dir.join("app-legacy");
+        let preferred_app = dir.join("nested").join("app-preferred");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(legacy_xdg),
+            preferred_xdg: Some(preferred_xdg.clone()),
+            legacy_app_support: Some(legacy_app),
+            preferred_app_support: Some(preferred_app.clone()),
+        });
+
+        assert!(!report.xdg_loaded);
+        assert!(!report.app_support_loaded);
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.template_created, Some(preferred_app.clone()));
+        assert!(report.template_error.is_none());
+        assert!(!preferred_xdg.exists());
+        assert_eq!(
+            std::fs::read_to_string(&preferred_app).unwrap(),
+            expected_default_config_template(&preferred_app)
+        );
+        assert!(!std::fs::read_to_string(&preferred_app)
+            .unwrap()
+            .contains("{[path]s}"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_creates_xdg_template_without_app_support_target() {
+        let dir = unique_config_test_dir("default-template-xdg");
+        let legacy_xdg = dir.join("xdg-legacy");
+        let preferred_xdg = dir.join("nested").join("xdg-preferred");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(legacy_xdg),
+            preferred_xdg: Some(preferred_xdg.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+
+        assert!(!report.xdg_loaded);
+        assert!(!report.app_support_loaded);
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.template_created, Some(preferred_xdg.clone()));
+        assert!(report.template_error.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&preferred_xdg).unwrap(),
+            expected_default_config_template(&preferred_xdg)
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_suppresses_template_when_candidate_loaded_or_errors() {
+        let loaded_dir = unique_config_test_dir("default-template-loaded");
+        let loaded_xdg = loaded_dir.join("xdg");
+        let loaded_template = loaded_dir.join("template");
+        write_config_file(&loaded_xdg, "fullscreen = true\n");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(loaded_xdg.clone()),
+            preferred_xdg: Some(loaded_template.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+
+        assert!(report.xdg_loaded);
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(report.loaded[0].path, loaded_xdg);
+        assert_eq!(report.template_created, None);
+        assert!(report.template_error.is_none());
+        assert!(!loaded_template.exists());
+        std::fs::remove_dir_all(&loaded_dir).ok();
+
+        let error_dir = unique_config_test_dir("default-template-error");
+        let error_xdg = error_dir.join("is-directory");
+        let error_template = error_dir.join("template");
+        std::fs::create_dir_all(&error_xdg).unwrap();
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(error_xdg.clone()),
+            preferred_xdg: Some(error_template.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+
+        assert!(report.xdg_loaded);
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].path, error_xdg);
+        assert_eq!(report.template_created, None);
+        assert!(report.template_error.is_none());
+        assert!(!error_template.exists());
+        std::fs::remove_dir_all(&error_dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_records_template_creation_errors_without_aborting() {
+        let dir = unique_config_test_dir("default-template-error-record");
+        let protected_dir = dir.join("protected");
+        let preferred_xdg = protected_dir.join("config.roastty");
+        std::fs::create_dir_all(&protected_dir).unwrap();
+        std::fs::set_permissions(&protected_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(dir.join("missing-legacy")),
+            preferred_xdg: Some(preferred_xdg.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+        std::fs::set_permissions(&protected_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!report.xdg_loaded);
+        assert!(!report.app_support_loaded);
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.template_created, None);
+        let template_error = report.template_error.unwrap();
+        assert_eq!(template_error.path, preferred_xdg);
+        assert_eq!(
+            template_error.error.kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

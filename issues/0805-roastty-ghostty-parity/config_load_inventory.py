@@ -129,17 +129,19 @@ ROWS = [
     LoadRow(
         behavior="default template creation when no default file exists",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig::loadDefaultFiles`, `writeConfigTemplate`",
-        roastty_reference="No Roastty template-creation implementation found in `roastty/src/config/mod.rs`",
+        roastty_reference="`roastty/src/config/mod.rs::load_default_files_from_paths`, `write_default_config_template`",
         family="default files",
-        status="Gap",
+        status="Oracle complete",
         evidence=(
-            "Pinned Ghostty creates a template config file when no default config "
-            "file is found."
+            "`config_load_default_files_creates_app_support_template_when_all_missing`, "
+            "`config_load_default_files_creates_xdg_template_without_app_support_target`, "
+            "`config_load_default_files_suppresses_template_when_candidate_loaded_or_errors`, "
+            "and `config_load_default_files_records_template_creation_errors_without_aborting` "
+            "prove target selection, pinned template text with substituted path, "
+            "suppression when any default candidate loads or errors, and nonfatal "
+            "creation error recording."
         ),
-        missing_evidence=(
-            "Needs Roastty implementation or an intentional divergence record for "
-            "default config template creation."
-        ),
+        missing_evidence="None for default config template creation behavior.",
     ),
     LoadRow(
         behavior="CLI diagnostics and good-argument continuation",

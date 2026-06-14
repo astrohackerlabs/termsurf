@@ -485,6 +485,11 @@ experiment files until they are proven.
   default template creation plus recursive replay placement before the initial
   command suffix are structural gaps. CFG-221 remains `Gap` with 15
   `Oracle complete` rows, 3 incomplete rows, and 2 load gaps.
+- **Default config template creation includes content parity.** Experiment 100
+  promoted `LOAD-008` by creating the missing default config template at the
+  same selected target as pinned Ghostty and proving the generated file matches
+  the pinned template text after substituting the selected path. CFG-221 now has
+  16 `Oracle complete` rows, 2 incomplete rows, and 1 load gap.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1075,4 +1080,4 @@ remains open.
 - [Experiment 99: Source precedence load inventory](99-source-precedence-load-inventory.md)
   — **Pass**
 - [Experiment 100: Default config template creation](100-default-config-template-creation.md)
-  — **Designed**
+  — **Pass**

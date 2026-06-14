@@ -134,3 +134,113 @@ Fix:
   or existence-only test.
 
 Final verdict: Approved.
+
+## Result
+
+**Result:** Pass
+
+Implemented default config template creation for the default-file load path.
+Roastty now creates the pinned Ghostty template when no default config candidate
+is loaded or errors:
+
+- preferred Application Support target wins when it is available;
+- preferred XDG target is used when no Application Support target is available;
+- loaded or error default candidates suppress template creation;
+- template creation errors are recorded in the load report and do not abort
+  loading.
+
+The focused tests also prove the generated file contents match the pinned
+Ghostty template after substituting the selected path into the template
+placeholder.
+
+`LOAD-008` is now `Oracle complete`. The generated CFG-221 load inventory
+reports:
+
+- 18 total load rows;
+- 16 `Oracle complete` rows;
+- 1 `Audit covered` row;
+- 1 `Gap` row;
+- 2 rows not yet `Oracle complete`.
+
+CFG-221 remains `Gap` because `LOAD-001` remains audit-covered and `LOAD-017`
+remains a structural gap.
+
+Verification run:
+
+```bash
+cargo fmt --manifest-path roastty/Cargo.toml
+cargo test --manifest-path roastty/Cargo.toml config_load_default_files
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  issues/0805-roastty-ghostty-parity/config_load_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-load-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/config-load-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import subprocess
+from pathlib import Path
+issue=Path('issues/0805-roastty-ghostty-parity')
+matrix=(issue/'config-matrix.md').read_text()
+old_matrix=subprocess.check_output(['git','show','55af75479:issues/0805-roastty-ghostty-parity/config-matrix.md'], text=True)
+for cfg in ['CFG-217','CFG-218','CFG-219','CFG-220']:
+    old=next(line for line in old_matrix.splitlines() if line.startswith(f'| {cfg} |'))
+    new=next(line for line in matrix.splitlines() if line.startswith(f'| {cfg} |'))
+    assert old == new, cfg
+rows=[]
+for line in (issue/'config-load-inventory.md').read_text().splitlines():
+    if line.startswith('| LOAD-'):
+        rows.append([cell.strip() for cell in line.strip('|').split('|')])
+expected_ids=[f'LOAD-{i:03d}' for i in range(1,19)]
+ids=[row[0] for row in rows]
+assert ids == expected_ids, ids
+statuses={row[0]: row[5] for row in rows}
+assert statuses['LOAD-008']=='Oracle complete', statuses['LOAD-008']
+oracle=sum(s=='Oracle complete' for s in statuses.values())
+incomplete=len(rows)-oracle
+gaps=sum(s=='Gap' for s in statuses.values())
+audit=sum(s=='Audit covered' for s in statuses.values())
+assert (len(rows), oracle, audit, gaps, incomplete)==(18,16,1,1,2), (len(rows), oracle, audit, gaps, incomplete)
+cfg221=next(line for line in matrix.splitlines() if line.startswith('| CFG-221 |'))
+cells=[c.strip() for c in cfg221.strip('|').split('|')]
+assert cells[4]=='Gap', cells[4]
+assert 'config-load-inventory.md' in cfg221
+assert '16 rows Oracle complete' in cfg221
+assert '2 rows are not Oracle complete' in cfg221
+assert '1 rows are load gaps' in cfg221
+print('load_rows=18 oracle_complete=16 audit_covered=1 incomplete=2 gaps=1 cfg221=Gap load008=Oracle complete protected_cfg217_220_unchanged=true')
+PY
+```
+
+The focused test filter passed with 10 tests. The matrix assertion printed:
+
+```text
+load_rows=18 oracle_complete=16 audit_covered=1 incomplete=2 gaps=1 cfg221=Gap load008=Oracle complete protected_cfg217_220_unchanged=true
+```
+
+## Conclusion
+
+Default config template creation now matches pinned Ghostty's load behavior and
+content generation closely enough for `LOAD-008` to be `Oracle complete`.
+CFG-221 still needs follow-up work for end-to-end load pipeline order and
+recursive replay placement before the initial command suffix.
+
+## Completion Review
+
+Adversarial reviewer: Codex subagent with fresh context.
+
+Verdict: Approved.
+
+The reviewer found no required fixes before the result commit. The review
+confirmed:
+
+- the implementation matches pinned Ghostty `LOAD-008` behavior for selected
+  target, parent creation, pinned template content, path substitution, and
+  nonfatal write errors;
+- the focused Rust tests pass;
+- `LOAD-008` is promoted to `Oracle complete` while `LOAD-001` remains
+  `Audit covered` and `LOAD-017` remains `Gap`;
+- generated counts are 18 rows, 16 `Oracle complete`, 1 `Audit covered`, 1
+  `Gap`, and 2 incomplete rows;
+- CFG-217 through CFG-220 remain byte-for-byte unchanged from `55af75479`;
+- the result docs and README status/learnings are accurate.
