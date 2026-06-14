@@ -1103,3 +1103,5 @@ remains open.
   **Pass**
 - [Experiment 103: Config reload inventory](103-config-reload-inventory.md) —
   **Partial**
+- [Experiment 104: Reload clears key tables](104-reload-clears-key-tables.md) —
+  **Designed**
