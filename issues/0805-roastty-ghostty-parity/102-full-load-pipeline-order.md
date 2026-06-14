@@ -156,3 +156,125 @@ Fix:
   finalization to clamp them.
 
 Final verdict: Approved.
+
+## Result
+
+**Result:** Pass
+
+Implemented a config-layer pipeline helper and a focused end-to-end load order
+test. The helper starts from `Config::default()`, then runs default files, CLI
+args, recursive config files, and finalization, returning a stage report for
+each step.
+
+The pipeline test proves the pinned Ghostty order with failure-sensitive
+assertions:
+
+- an untouched field remains at its pinned default, proving the pipeline starts
+  from `Config::default()`;
+- a default-file `title` is overridden by CLI `title`, proving default files run
+  before CLI;
+- a CLI-provided `config-file` path is loaded recursively, proving CLI runs
+  before recursive config files;
+- the recursive file sets `title` after CLI sets `title`, and the recursive
+  value wins, proving recursive config files run after ordinary CLI values;
+- the recursive file sets `window-width = 3` and `window-height = 2`, and
+  finalization clamps them to deterministic minimums `10` and `4`, proving
+  finalization runs after recursive files.
+
+`LOAD-001` is now `Oracle complete`. The generated CFG-221 load inventory
+reports:
+
+- 18 total load rows;
+- 18 `Oracle complete` rows;
+- 0 `Audit covered` rows;
+- 0 `Gap` rows;
+- 0 incomplete rows.
+
+CFG-221 is now `Pass`.
+
+Verification run:
+
+```bash
+cargo fmt --manifest-path roastty/Cargo.toml
+cargo test --manifest-path roastty/Cargo.toml config_load_pipeline
+cargo test --manifest-path roastty/Cargo.toml config_load_default_files
+cargo test --manifest-path roastty/Cargo.toml config_recursive
+cargo test --manifest-path roastty/Cargo.toml config_replay
+cargo test --manifest-path roastty/Cargo.toml config_finalize
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  issues/0805-roastty-ghostty-parity/config_load_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-load-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/config-load-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import subprocess
+from pathlib import Path
+issue=Path('issues/0805-roastty-ghostty-parity')
+matrix=(issue/'config-matrix.md').read_text()
+old_matrix=subprocess.check_output(['git','show','f2b2a0063:issues/0805-roastty-ghostty-parity/config-matrix.md'], text=True)
+for cfg in ['CFG-217','CFG-218','CFG-219','CFG-220']:
+    old=next(line for line in old_matrix.splitlines() if line.startswith(f'| {cfg} |'))
+    new=next(line for line in matrix.splitlines() if line.startswith(f'| {cfg} |'))
+    assert old == new, cfg
+rows=[]
+for line in (issue/'config-load-inventory.md').read_text().splitlines():
+    if line.startswith('| LOAD-'):
+        rows.append([cell.strip() for cell in line.strip('|').split('|')])
+expected_ids=[f'LOAD-{i:03d}' for i in range(1,19)]
+ids=[row[0] for row in rows]
+assert ids == expected_ids, ids
+statuses={row[0]: row[5] for row in rows}
+assert statuses['LOAD-001']=='Oracle complete', statuses['LOAD-001']
+oracle=sum(s=='Oracle complete' for s in statuses.values())
+incomplete=len(rows)-oracle
+gaps=sum(s=='Gap' for s in statuses.values())
+audit=sum(s=='Audit covered' for s in statuses.values())
+assert (len(rows), oracle, audit, gaps, incomplete)==(18,18,0,0,0), (len(rows), oracle, audit, gaps, incomplete)
+cfg221=next(line for line in matrix.splitlines() if line.startswith('| CFG-221 |'))
+cells=[c.strip() for c in cfg221.strip('|').split('|')]
+assert cells[4]=='Pass', cells[4]
+assert 'config-load-inventory.md' in cfg221
+assert '18 rows Oracle complete' in cfg221
+assert '0 rows are not Oracle complete' in cfg221
+assert '0 rows are load gaps' in cfg221
+print('load_rows=18 oracle_complete=18 audit_covered=0 incomplete=0 gaps=0 cfg221=Pass load001=Oracle complete protected_cfg217_220_unchanged=true')
+PY
+```
+
+The focused test filters passed. The matrix assertion printed:
+
+```text
+load_rows=18 oracle_complete=18 audit_covered=0 incomplete=0 gaps=0 cfg221=Pass load001=Oracle complete protected_cfg217_220_unchanged=true
+```
+
+## Conclusion
+
+CFG-221 is complete. Config source precedence and repeated-file load semantics
+now have row-level proofs for every pinned Ghostty load behavior plus an
+end-to-end pipeline-order oracle.
+
+## Completion Review
+
+Adversarial reviewer: Codex subagent with fresh context.
+
+Verdict: Approved.
+
+The reviewer found no required fixes before the result commit. The review
+confirmed:
+
+- the helper/test honestly covers the pinned Ghostty load order;
+- assertions are failure-sensitive for default state, precedence, and
+  finalization cases;
+- `LOAD-001` promotion and CFG-221 `Pass` are consistent;
+- CFG-217 through CFG-220 are byte-for-byte unchanged from `f2b2a0063`.
+
+The reviewer also independently ran:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml config_load_pipeline
+git diff --check
+```
+
+Both passed.

@@ -496,6 +496,11 @@ experiment files until they are proven.
   before that boundary, keep file/config-entry representation, and replay as
   config while the original initial-command suffix remains unchanged. CFG-221
   now has 17 `Oracle complete` rows, 1 incomplete row, and 0 load gaps.
+- **Config load precedence now has full pipeline proof.** Experiment 102 added a
+  focused pipeline oracle proving Roastty starts from defaults, then applies
+  default files, CLI args, recursive config files, and finalization in pinned
+  Ghostty order. All 18 CFG-221 load rows are now `Oracle complete`, so config
+  source precedence and repeated-file load semantics are `Pass`.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1090,4 +1095,4 @@ remains open.
 - [Experiment 101: Recursive replay suffix placement](101-recursive-replay-suffix.md)
   — **Pass**
 - [Experiment 102: Full load pipeline order](102-full-load-pipeline-order.md) —
-  **Designed**
+  **Pass**

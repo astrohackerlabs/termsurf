@@ -2861,6 +2861,31 @@ impl Config {
         self.load_default_files_from_paths(loader::default_config_paths())
     }
 
+    #[cfg(test)]
+    fn load_pipeline_for_test<'a, I>(
+        paths: DefaultConfigPaths,
+        cli_args: I,
+        cli_base: &std::path::Path,
+    ) -> (Config, ConfigLoadPipelineReport)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let mut config = Config::default();
+        let default_files = config.load_default_files_from_paths(paths);
+        let cli_diagnostics = config.set_cli_args_from_base(cli_args, cli_base);
+        let recursive = config.load_recursive_files_from_config();
+        let finalization = config.finalize_with_report();
+        (
+            config,
+            ConfigLoadPipelineReport {
+                default_files,
+                cli_diagnostics,
+                recursive,
+                finalization,
+            },
+        )
+    }
+
     fn load_default_file_candidate(
         &mut self,
         path: Option<PathBuf>,
@@ -3100,6 +3125,14 @@ pub(crate) struct DefaultConfigLoadReport {
     pub duplicate_app_support: Option<(PathBuf, PathBuf)>,
     pub template_created: Option<PathBuf>,
     pub template_error: Option<DefaultConfigTemplateError>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ConfigLoadPipelineReport {
+    pub default_files: DefaultConfigLoadReport,
+    pub cli_diagnostics: Vec<ConfigDiagnostic>,
+    pub recursive: ConfigRecursiveLoadReport,
+    pub finalization: ConfigFinalizeReport,
 }
 
 #[derive(Debug, Default)]
@@ -18398,6 +18431,63 @@ mod tests {
             template_error.error.kind(),
             std::io::ErrorKind::PermissionDenied
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_pipeline_applies_default_cli_recursive_then_finalize_order() {
+        let dir = unique_config_test_dir("load-pipeline-order");
+        let default_file = dir.join("default.conf");
+        let recursive_file = dir.join("recursive.conf");
+        write_config_file(
+            &default_file,
+            "title = Default Title\n\
+             font-size = 11\n",
+        );
+        write_config_file(
+            &recursive_file,
+            "title = Recursive Title\n\
+             window-height = 2\n\
+             window-width = 3\n",
+        );
+
+        let config_file_arg = format!("--config-file={}", recursive_file.display());
+        let (cfg, report) = Config::load_pipeline_for_test(
+            DefaultConfigPaths {
+                legacy_xdg: Some(default_file.clone()),
+                preferred_xdg: None,
+                legacy_app_support: None,
+                preferred_app_support: None,
+            },
+            [
+                "--title=CLI Title",
+                "--font-size=12",
+                config_file_arg.as_str(),
+                "not-a-flag",
+            ],
+            &dir,
+        );
+
+        assert_eq!(cfg.term, Config::default().term);
+        assert_eq!(report.default_files.loaded.len(), 1);
+        assert_eq!(report.default_files.loaded[0].path, default_file);
+        assert_eq!(
+            report.cli_diagnostics,
+            vec![ConfigDiagnostic {
+                line: 4,
+                key: "not-a-flag".to_string(),
+                error: ConfigSetError::UnknownField,
+            }]
+        );
+        assert_eq!(report.recursive.loaded.len(), 1);
+        assert_eq!(report.recursive.loaded[0].path, recursive_file);
+        assert_eq!(report.finalization, ConfigFinalizeReport::default());
+
+        assert_eq!(cfg.title.as_deref(), Some("Recursive Title"));
+        assert_eq!(cfg.font_size, 12.0);
+        assert_eq!(cfg.window_width, 10);
+        assert_eq!(cfg.window_height, 4);
 
         std::fs::remove_dir_all(&dir).ok();
     }

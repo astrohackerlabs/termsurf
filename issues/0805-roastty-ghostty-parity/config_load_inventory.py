@@ -30,18 +30,17 @@ ROWS = [
     LoadRow(
         behavior="full load pipeline order",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig::load`",
-        roastty_reference="Roastty load pieces are implemented separately in `roastty/src/config/mod.rs`",
+        roastty_reference="`roastty/src/config/mod.rs::load_pipeline_for_test`",
         family="pipeline",
-        status="Audit covered",
+        status="Oracle complete",
         evidence=(
-            "Roastty has separate default-file, CLI, recursive-file, and "
-            "finalize entry points with focused tests for each stage."
+            "`config_load_pipeline_applies_default_cli_recursive_then_finalize_order` "
+            "proves the pipeline starts from defaults, then applies default "
+            "files, CLI args, recursive config files, and finalization in the "
+            "pinned Ghostty order with failure-sensitive same-key and clamp "
+            "assertions."
         ),
-        missing_evidence=(
-            "Needs an end-to-end load pipeline oracle proving default files, CLI "
-            "args, recursive config files, and finalization run in the pinned "
-            "Ghostty order."
-        ),
+        missing_evidence="None for full load pipeline order behavior.",
     ),
     LoadRow(
         behavior="config-file reader parsing and BOM skipping",
