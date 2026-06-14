@@ -1096,3 +1096,5 @@ remains open.
   — **Pass**
 - [Experiment 102: Full load pipeline order](102-full-load-pipeline-order.md) —
   **Pass**
+- [Experiment 103: Config reload inventory](103-config-reload-inventory.md) —
+  **Designed**
