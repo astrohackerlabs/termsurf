@@ -18488,6 +18488,105 @@ mod tests {
     }
 
     #[test]
+    fn font_repeatable_string_config_formatter_family_oracle() {
+        fn formatted_lines(cfg: &Config) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines().map(ToString::to_string).collect()
+        }
+
+        fn lines_for(lines: &[String], key: &str) -> Vec<String> {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .filter(|line| line.starts_with(&prefix))
+                .cloned()
+                .collect()
+        }
+
+        fn index(lines: &[String], key: &str) -> usize {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .position(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted line for {key}"))
+        }
+
+        let mut cfg = Config::default();
+        let default_lines = formatted_lines(&cfg);
+        for key in [
+            "font-family",
+            "font-family-bold",
+            "font-family-italic",
+            "font-family-bold-italic",
+            "font-feature",
+        ] {
+            assert_eq!(lines_for(&default_lines, key), vec![format!("{key} = ")]);
+        }
+
+        cfg.set("font-family", Some("Regular A")).unwrap();
+        cfg.set("font-family", Some("Regular\0B")).unwrap();
+        cfg.set("font-family-bold", Some("Bold A")).unwrap();
+        cfg.set("font-family-bold", Some("Bold B")).unwrap();
+        cfg.set("font-family-italic", Some("Italic A")).unwrap();
+        cfg.set("font-family-italic", Some("Italic B")).unwrap();
+        cfg.set("font-family-bold-italic", Some("Bold Italic A"))
+            .unwrap();
+        cfg.set("font-family-bold-italic", Some("Bold Italic B"))
+            .unwrap();
+        cfg.set("font-feature", Some("calt")).unwrap();
+        cfg.set("font-feature", Some("-liga\0off")).unwrap();
+        let lines = formatted_lines(&cfg);
+        assert_eq!(
+            lines_for(&lines, "font-family"),
+            vec!["font-family = Regular A", "font-family = Regular\0B"]
+        );
+        assert_eq!(
+            lines_for(&lines, "font-family-bold"),
+            vec!["font-family-bold = Bold A", "font-family-bold = Bold B"]
+        );
+        assert_eq!(
+            lines_for(&lines, "font-family-italic"),
+            vec![
+                "font-family-italic = Italic A",
+                "font-family-italic = Italic B"
+            ]
+        );
+        assert_eq!(
+            lines_for(&lines, "font-family-bold-italic"),
+            vec![
+                "font-family-bold-italic = Bold Italic A",
+                "font-family-bold-italic = Bold Italic B"
+            ]
+        );
+        assert_eq!(
+            lines_for(&lines, "font-feature"),
+            vec!["font-feature = calt", "font-feature = -liga\0off"]
+        );
+
+        cfg.set("font-family", Some("")).unwrap();
+        cfg.set("font-family-bold", Some("")).unwrap();
+        cfg.set("font-family-italic", Some("")).unwrap();
+        cfg.set("font-family-bold-italic", Some("")).unwrap();
+        cfg.set("font-feature", Some("")).unwrap();
+        let reset_lines = formatted_lines(&cfg);
+        for key in [
+            "font-family",
+            "font-family-bold",
+            "font-family-italic",
+            "font-family-bold-italic",
+            "font-feature",
+        ] {
+            assert_eq!(lines_for(&reset_lines, key), vec![format!("{key} = ")]);
+        }
+
+        assert!(index(&lines, "font-family") < index(&lines, "font-family-bold"));
+        assert!(index(&lines, "font-family-bold") < index(&lines, "font-family-italic"));
+        assert!(index(&lines, "font-family-italic") < index(&lines, "font-family-bold-italic"));
+        assert!(index(&lines, "font-family-bold-italic") < index(&lines, "font-feature"));
+    }
+
+    #[test]
     fn metric_modifier_config_formatter_family_oracle() {
         fn formatted_lines(cfg: &Config) -> Vec<String> {
             let mut out = String::new();

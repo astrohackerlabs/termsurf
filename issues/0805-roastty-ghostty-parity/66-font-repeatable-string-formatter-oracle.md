@@ -132,3 +132,74 @@ experiment has the required sections, the five target rows match the current
 `RepeatableString` font-family/font-feature shape, pinned Ghostty formatter
 behavior supports the planned oracle, and the expected 117/86/0 to 122/81/0
 count movement is plausible.
+
+## Result
+
+**Result:** Pass
+
+Added `font_repeatable_string_config_formatter_family_oracle`, split the five
+`RepeatableString` font rows into a `font repeatable string` formatter family,
+and promoted only that family.
+
+The new oracle proves:
+
+- empty lists format as one void line for all five rows;
+- populated lists format one line per item in insertion order;
+- raw-empty values reset each row back to void output;
+- representative font-family and font-feature strings are byte-preserving;
+- representative row order is stable within formatter order.
+
+The regenerated formatter inventory now reports:
+
+```text
+ghostty_canonical=203
+roastty_formatter_rows=203
+missing_canonical_formatter_rows=0
+extra_formatter_rows=0
+oracle_complete=122
+audit_covered=81
+gap=0
+no_output_rows=1
+```
+
+CFG-218 remains `Gap`, as intended, because 81 formatter rows still need
+dedicated non-default formatter oracles.
+
+Verification:
+
+- `cargo test --manifest-path roastty/Cargo.toml font_repeatable_string_config_formatter_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml repeatable_string_font_config_parser_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_font_family_finalize_inherits_regular_family`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle`
+  passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_formatter_inventory.py --upstream vendor/ghostty/src/config/Config.zig --upstream-formatter-file vendor/ghostty/src/config/formatter_file.zig --upstream-formatter vendor/ghostty/src/config/formatter.zig --roastty roastty/src/config/mod.rs --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md --output issues/0805-roastty-ghostty-parity/config-formatter-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md`
+  reported the expected 203/203 rows, 122 `Oracle complete`, 81 `Audit covered`,
+  and 0 `Gap`.
+- Matrix assertion passed: CFG-218 remains `Gap`; all five
+  `font repeatable string` formatter rows are `Oracle complete`; representative
+  complex font rows and custom `format_entry` rows remain `Audit covered`.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.
+
+The reviewer reran the focused oracle, the related parser/finalize/default
+formatter tests, `cargo fmt --check`, `git diff --check`, and the matrix
+assertion. The reviewer confirmed that the generated formatter inventory has 203
+rows, 122 `Oracle complete`, 81 `Audit covered`, and 0 gaps, only the five
+target rows are classified as `font repeatable string`, README status is `Pass`,
+the experiment has `Result` and `Conclusion`, and the result commit had not been
+made before review.
+
+## Conclusion
+
+The repeatable-string font formatter rows are now oracle-complete. CFG-218
+remains open with 81 audit-covered formatter rows: 11 complex font rows and 70
+custom `format_entry` rows.
