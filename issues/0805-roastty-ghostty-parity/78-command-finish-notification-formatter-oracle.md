@@ -143,3 +143,71 @@ Reviewed by a fresh-context Codex adversarial subagent.
 Verdict: **Approved**.
 
 Findings: none.
+
+## Result
+
+**Result:** Pass
+
+Experiment 78 promoted exactly the three planned command-finish notification
+formatter rows: `notify-on-command-finish`, `notify-on-command-finish-action`,
+and `notify-on-command-finish-after`.
+
+Implementation:
+
+- Added `command_finish_notification_config_formatter_family_oracle` in
+  `roastty/src/config/mod.rs`.
+- Classified exactly those three rows as the `command notification` formatter
+  family in `config_formatter_inventory.py`.
+- Regenerated `config-formatter-inventory.md` and `config-matrix.md`.
+
+Verification completed:
+
+- `cargo fmt --manifest-path roastty/Cargo.toml`
+- `cargo test --manifest-path roastty/Cargo.toml command_finish_notification_config_formatter_family_oracle`
+  passed with 1 test.
+- Representative existing tests passed:
+  - `cargo test --manifest-path roastty/Cargo.toml notify_on_command_finish_should_notify_truth_table`
+  - `cargo test --manifest-path roastty/Cargo.toml notify_on_command_finish_action_defaults_bell_true_notify_false`
+  - `cargo test --manifest-path roastty/Cargo.toml packed_flags_parse_cli_shell_notify`
+  - `cargo test --manifest-path roastty/Cargo.toml config_set_routes_notify_on_command_finish_after_duration`
+  - `cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle`
+- The formatter inventory generator reported:
+  - `ghostty_canonical=203`
+  - `roastty_formatter_rows=203`
+  - `missing_canonical_formatter_rows=0`
+  - `extra_formatter_rows=0`
+  - `oracle_complete=164`
+  - `audit_covered=39`
+  - `gap=0`
+  - `no_output_rows=1`
+- The matrix assertion passed and verified:
+  - CFG-218 remains `Gap`.
+  - The CFG-218 count text is now 164 Oracle complete rows, 39 not Oracle
+    complete rows, and 0 formatter gaps.
+  - Exactly the three planned rows have family `command notification`.
+  - Exactly the three planned rows cite
+    `Command-finish notification formatter oracle` evidence.
+  - `bell-features`, `freetype-load-flags`, `scroll-to-bottom`,
+    `shell-integration-features`, `split-preserve-zoom`, and `undo-timeout` were
+    not promoted as `command notification`.
+- `cargo fmt --manifest-path roastty/Cargo.toml --check` passed.
+- `prettier --write --prose-wrap always --print-width 80` was run on changed
+  Markdown files after the generator run.
+- `prettier --check --prose-wrap always --print-width 80` passed on changed
+  Markdown files.
+- `git diff --check` passed.
+
+## Conclusion
+
+The command-finish notification formatter cluster is now independently guarded.
+CFG-218 remains open because 39 formatter rows still need non-default formatter
+oracles, but the command notification family has no remaining formatter evidence
+gap.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.

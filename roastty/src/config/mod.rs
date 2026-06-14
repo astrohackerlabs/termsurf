@@ -15601,6 +15601,149 @@ mod tests {
     }
 
     #[test]
+    fn command_finish_notification_config_formatter_family_oracle() {
+        let fmt = |v: &dyn Fn(&mut EntryFormatter)| {
+            let mut out = String::new();
+            let mut f = EntryFormatter::new("a", &mut out);
+            v(&mut f);
+            out
+        };
+        let formatted_lines = |cfg: &Config| -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines().map(str::to_string).collect()
+        };
+        let line = |lines: &[String], key: &str| -> String {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted config line for {key}"))
+                .clone()
+        };
+        let index = |lines: &[String], key: &str| -> usize {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .position(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted config line for {key}"))
+        };
+
+        for (variant, kw) in [
+            (NotifyOnCommandFinish::Never, "never"),
+            (NotifyOnCommandFinish::Unfocused, "unfocused"),
+            (NotifyOnCommandFinish::Always, "always"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {kw}\n"));
+        }
+        for (variant, output) in [
+            (
+                NotifyOnCommandFinishAction {
+                    bell: true,
+                    notify: false,
+                },
+                "bell,no-notify",
+            ),
+            (
+                NotifyOnCommandFinishAction {
+                    bell: false,
+                    notify: true,
+                },
+                "no-bell,notify",
+            ),
+            (
+                NotifyOnCommandFinishAction {
+                    bell: true,
+                    notify: true,
+                },
+                "bell,notify",
+            ),
+            (
+                NotifyOnCommandFinishAction {
+                    bell: false,
+                    notify: false,
+                },
+                "no-bell,no-notify",
+            ),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {output}\n"));
+        }
+        assert_eq!(
+            fmt(&|f| Duration {
+                duration: NS_PER_S + 250 * NS_PER_MS,
+            }
+            .format_entry(f)),
+            "a = 1s 250ms\n"
+        );
+
+        let default = Config::default();
+        let default_lines = formatted_lines(&default);
+        assert_eq!(
+            line(&default_lines, "notify-on-command-finish"),
+            "notify-on-command-finish = never"
+        );
+        assert_eq!(
+            line(&default_lines, "notify-on-command-finish-action"),
+            "notify-on-command-finish-action = bell,no-notify"
+        );
+        assert_eq!(
+            line(&default_lines, "notify-on-command-finish-after"),
+            "notify-on-command-finish-after = 5s"
+        );
+
+        let mut cfg = Config::default();
+        cfg.set("notify-on-command-finish", Some("always")).unwrap();
+        cfg.set("notify-on-command-finish-action", Some("no-bell,notify"))
+            .unwrap();
+        cfg.set("notify-on-command-finish-after", Some("1s 250ms"))
+            .unwrap();
+
+        let lines = formatted_lines(&cfg);
+        assert_eq!(
+            line(&lines, "notify-on-command-finish"),
+            "notify-on-command-finish = always"
+        );
+        assert_eq!(
+            line(&lines, "notify-on-command-finish-action"),
+            "notify-on-command-finish-action = no-bell,notify"
+        );
+        assert_eq!(
+            line(&lines, "notify-on-command-finish-after"),
+            "notify-on-command-finish-after = 1s 250ms"
+        );
+
+        for key in [
+            "notify-on-command-finish",
+            "notify-on-command-finish-action",
+            "notify-on-command-finish-after",
+        ] {
+            cfg.set(key, Some("")).unwrap();
+        }
+
+        let reset_lines = formatted_lines(&cfg);
+        for key in [
+            "notify-on-command-finish",
+            "notify-on-command-finish-action",
+            "notify-on-command-finish-after",
+        ] {
+            assert_eq!(line(&reset_lines, key), line(&default_lines, key));
+        }
+
+        assert!(index(&lines, "command") < index(&lines, "initial-command"));
+        assert!(index(&lines, "initial-command") < index(&lines, "notify-on-command-finish"));
+        assert!(
+            index(&lines, "notify-on-command-finish")
+                < index(&lines, "notify-on-command-finish-action")
+        );
+        assert!(
+            index(&lines, "notify-on-command-finish-action")
+                < index(&lines, "notify-on-command-finish-after")
+        );
+        assert!(index(&lines, "notify-on-command-finish-after") < index(&lines, "env"));
+        assert!(index(&lines, "env") < index(&lines, "input"));
+    }
+
+    #[test]
     fn enum_format_entries_shader_mouse() {
         let fmt = |v: &dyn Fn(&mut EntryFormatter)| {
             let mut out = String::new();

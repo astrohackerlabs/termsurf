@@ -41,6 +41,9 @@ CLICK_ACTION_ORACLE_TEST = "click_action_config_formatter_family_oracle"
 WINDOW_ENUM_ORACLE_TEST = "window_enum_config_formatter_family_oracle"
 RESIZE_OVERLAY_ORACLE_TEST = "resize_overlay_config_formatter_family_oracle"
 QUICK_TERMINAL_ENUM_ORACLE_TEST = "quick_terminal_enum_config_formatter_family_oracle"
+COMMAND_NOTIFICATION_ORACLE_TEST = (
+    "command_finish_notification_config_formatter_family_oracle"
+)
 METRIC_MODIFIER_ORACLE_TEST = "metric_modifier_config_formatter_family_oracle"
 WINDOW_PADDING_ORACLE_TEST = "window_padding_config_formatter_family_oracle"
 REPEATABLE_PATH_ORACLE_TEST = "repeatable_path_config_formatter_family_oracle"
@@ -126,6 +129,11 @@ QUICK_TERMINAL_ENUM_OPTIONS = {
     "quick-terminal-screen",
     "quick-terminal-space-behavior",
     "quick-terminal-keyboard-interactivity",
+}
+COMMAND_NOTIFICATION_OPTIONS = {
+    "notify-on-command-finish",
+    "notify-on-command-finish-action",
+    "notify-on-command-finish-after",
 }
 OPTIONAL_COLOR_OPTIONS = {
     "bold-color",
@@ -255,6 +263,8 @@ def formatter_family(option: str, path_text: str, call_text: str) -> str:
         return "resize overlay"
     if option in QUICK_TERMINAL_ENUM_OPTIONS:
         return "quick terminal enum"
+    if option in COMMAND_NOTIFICATION_OPTIONS:
+        return "command notification"
     if "font_" in call_text or "Font" in call_text:
         return "font"
     if "window_padding" in call_text:
@@ -420,6 +430,7 @@ def build_rows(
     window_enum_oracle_present: bool,
     resize_overlay_oracle_present: bool,
     quick_terminal_enum_oracle_present: bool,
+    command_notification_oracle_present: bool,
     metric_modifier_oracle_present: bool,
     window_padding_oracle_present: bool,
     repeatable_path_oracle_present: bool,
@@ -670,6 +681,16 @@ def build_rows(
                 "defaults; and representative order checks"
             )
             missing_evidence = "None for quick terminal enum formatter rows."
+        elif command_notification_oracle_present and family == "command notification":
+            status = "Oracle complete"
+            evidence = (
+                "Command-finish notification formatter oracle covers every "
+                "NotifyOnCommandFinish keyword; NotifyOnCommandFinishAction "
+                "packed flag output; duration output; representative "
+                "Config::set plus format_config output; raw-empty resets to "
+                "defaults; and representative order checks"
+            )
+            missing_evidence = "None for command notification formatter rows."
         elif metric_modifier_oracle_present and family == "metric modifier":
             status = "Oracle complete"
             evidence = (
@@ -791,6 +812,9 @@ def main() -> int:
     quick_terminal_enum_oracle_present = (
         QUICK_TERMINAL_ENUM_ORACLE_TEST in roastty_source
     )
+    command_notification_oracle_present = (
+        COMMAND_NOTIFICATION_ORACLE_TEST in roastty_source
+    )
     metric_modifier_oracle_present = METRIC_MODIFIER_ORACLE_TEST in roastty_source
     window_padding_oracle_present = WINDOW_PADDING_ORACLE_TEST in roastty_source
     repeatable_path_oracle_present = REPEATABLE_PATH_ORACLE_TEST in roastty_source
@@ -821,6 +845,7 @@ def main() -> int:
         window_enum_oracle_present,
         resize_overlay_oracle_present,
         quick_terminal_enum_oracle_present,
+        command_notification_oracle_present,
         metric_modifier_oracle_present,
         window_padding_oracle_present,
         repeatable_path_oracle_present,
@@ -836,7 +861,9 @@ def main() -> int:
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        77
+        78
+        if command_notification_oracle_present
+        else 77
         if quick_terminal_enum_oracle_present
         else 76
         if resize_overlay_oracle_present

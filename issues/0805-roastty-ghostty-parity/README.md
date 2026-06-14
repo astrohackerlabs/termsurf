@@ -349,6 +349,12 @@ experiment files until they are proven.
   `gtk-quick-terminal-namespace`, `quick-terminal-animation-duration`, and
   `quick-terminal-autohide` to keep those custom formatter rows unpromoted until
   they have their own proof.
+- **Command-finish notification rows can be proven as one adjacent cluster.**
+  Experiment 78 promoted `notify-on-command-finish`,
+  `notify-on-command-finish-action`, and `notify-on-command-finish-after`
+  together by covering enum keywords, packed flag output, duration output,
+  resets, and order while leaving unrelated packed flags and duration rows for
+  later proof.
 - **Full-header ABI gaps must be split into symbol and semantic outcomes.**
   Experiment 5 proved the mapped Ghostty header can be closed at the
   declaration/export level while still recording honest semantic divergences for
@@ -892,4 +898,4 @@ remains open.
 - [Experiment 77: Quick terminal enum formatter oracle](77-quick-terminal-enum-formatter-oracle.md)
   — **Pass**
 - [Experiment 78: Command-finish notification formatter oracle](78-command-finish-notification-formatter-oracle.md)
-  — **Designed**
+  — **Pass**
