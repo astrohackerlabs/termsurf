@@ -1207,3 +1207,5 @@ remains open.
   — **Pass**
 - [Experiment 117: Scrollback limit runtime split](117-scrollback-limit-runtime-split.md)
   — **Pass**
+- [Experiment 118: Wait after command runtime split](118-wait-after-command-runtime-split.md)
+  — **Designed**
