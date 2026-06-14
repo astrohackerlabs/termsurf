@@ -93,3 +93,73 @@ Optional finding:
 
 Re-review verdict: **Approved**. The reviewer confirmed all prior findings were
 resolved and found no new required issues.
+
+## Result
+
+**Result:** Pass
+
+Implemented Ghostty's `config-default-files` CLI-only discard behavior in
+Roastty's CLI config loader. Each CLI batch now resets `config_default_files` to
+`true`, records the batch replay boundary, and when the batch sets
+`config-default-files = false`, rebuilds the config from only the successful CLI
+entries in that batch. This discards previously loaded default-file values while
+preserving CLI-sourced values, matching pinned Ghostty's replay behavior for
+this switch.
+
+Added `config_default_files_parser_family_oracle`, which proves:
+
+- direct/file-sourced `config-default-files = false` is accepted but has no
+  effect;
+- CLI `false`, empty reset/default, `true`, and invalid values follow the
+  boolean parser semantics;
+- default-file-loaded values are discarded when CLI disables default files;
+- default-file-loaded values are preserved when CLI resets/enables default
+  files.
+
+Updated the parser inventory generator with a targeted detector for this oracle.
+The regenerated parser inventory now reports all 203 canonical parser rows as
+`Oracle complete`; CFG-217 is `Pass`. CFG-221 intentionally remains `Gap`
+because broader source precedence and repeated-file load semantics still need
+dedicated coverage.
+
+Verification:
+
+- `cargo test --manifest-path roastty/Cargo.toml config_default_files_parser_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_default_parser_oracle`
+  passed.
+- `python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py --upstream vendor/ghostty/src/config/Config.zig --roastty roastty/src/config/mod.rs --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md`
+  reported `oracle_complete=203`, `audit_covered=0`, `missing_dispatch_rows=0`,
+  and `gap=0`.
+- Matrix assertion passed: CFG-217 is `Pass`; CFG-221 is `Gap`.
+- `cargo fmt --manifest-path roastty/Cargo.toml --check` passed.
+- `prettier --write --prose-wrap always --print-width 80 issues/0805-roastty-ghostty-parity/49-config-default-files-load-oracle.md issues/0805-roastty-ghostty-parity/README.md issues/0805-roastty-ghostty-parity/config-parser-inventory.md issues/0805-roastty-ghostty-parity/config-matrix.md`
+  completed.
+- `git diff --check` passed.
+
+## Conclusion
+
+The non-default parser facet is now complete: every canonical parser row has an
+oracle, and CFG-217 can pass. The next experiments should move to another
+unresolved config facet, most likely CFG-218 non-default formatter behavior or
+CFG-221 source precedence/repeated-file load semantics.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.
+
+The reviewer independently verified:
+
+- `cargo test --manifest-path roastty/Cargo.toml config_default_files_parser_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_default_parser_oracle`
+  passed.
+- `cargo fmt --manifest-path roastty/Cargo.toml --check` passed.
+- `git diff --check` passed.
+
+The reviewer did not run the parser inventory generator because it writes files,
+but inspected the working-tree diff and approved the completed experiment.

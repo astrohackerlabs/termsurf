@@ -1174,8 +1174,15 @@ impl Config {
     }
 
     fn replay_into(&self, target: &mut Config) -> Result<(), ConfigSetError> {
+        Self::replay_entries_into(&self.replay_entries, target)
+    }
+
+    fn replay_entries_into(
+        entries: &[ConfigReplayEntry],
+        target: &mut Config,
+    ) -> Result<(), ConfigSetError> {
         let mut cli_replay_active = false;
-        for entry in &self.replay_entries {
+        for entry in entries {
             if entry.source == ConfigSetSource::Cli && entry.begin_cli_batch {
                 if cli_replay_active {
                     target.end_cli_replay();
@@ -2805,6 +2812,8 @@ impl Config {
         I: IntoIterator<Item = &'a str>,
     {
         let mut diagnostics = Vec::new();
+        self.config_default_files = true;
+        let replay_len_start = self.replay_entries.len();
         self.font_family.overwrite_next = true;
         self.font_family_bold.overwrite_next = true;
         self.font_family_italic.overwrite_next = true;
@@ -2841,6 +2850,16 @@ impl Config {
         self.font_family_italic.overwrite_next = false;
         self.font_family_bold_italic.overwrite_next = false;
         let base = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+        if !self.config_default_files {
+            let replay_entries = self.replay_entries[replay_len_start..].to_vec();
+            if !replay_entries.is_empty() {
+                let mut new_config = Config::default();
+                if Config::replay_entries_into(&replay_entries, &mut new_config).is_ok() {
+                    new_config.replay_entries = replay_entries;
+                    *self = new_config;
+                }
+            }
+        }
         self.expand_config_file_paths_from_base(&base);
         diagnostics
     }
@@ -12904,7 +12923,7 @@ mod tests {
     }
 
     #[test]
-    fn config_default_files_is_cli_only() {
+    fn config_default_files_parser_family_oracle() {
         let mut cfg = Config::default();
         assert!(cfg.config_default_files);
 
@@ -12915,9 +12934,10 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert!(cfg.config_default_files);
 
-        let diagnostics = cfg.set_cli_args(["--config-default-files=false"]);
+        let diagnostics = cfg.set_cli_args(["--config-default-files=false", "--title=CLI Title"]);
         assert!(diagnostics.is_empty());
         assert!(!cfg.config_default_files);
+        assert_eq!(cfg.title.as_deref(), Some("CLI Title"));
 
         let diagnostics = cfg.set_cli_args(["--config-default-files="]);
         assert!(diagnostics.is_empty());
@@ -12933,6 +12953,76 @@ mod tests {
             }]
         );
         assert!(cfg.config_default_files);
+
+        let dir = unique_config_test_dir("config-default-files-oracle");
+        let default_config = dir.join("config.roastty");
+        write_config_file(
+            &default_config,
+            "term = file-term\n\
+             title = File Title\n\
+             fullscreen = true\n\
+             config-default-files = false\n",
+        );
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(default_config.clone()),
+            preferred_xdg: None,
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+        assert!(report.errors.is_empty());
+        assert_eq!(report.loaded.len(), 1);
+        assert!(report.loaded[0].diagnostics.is_empty());
+        assert_eq!(cfg.term, "file-term");
+        assert_eq!(cfg.title.as_deref(), Some("File Title"));
+        assert_eq!(cfg.fullscreen, Fullscreen::True);
+        assert!(cfg.config_default_files);
+
+        let diagnostics = cfg.set_cli_args(["--config-default-files=false", "--title=CLI Only"]);
+        assert!(diagnostics.is_empty());
+        assert!(!cfg.config_default_files);
+        assert_eq!(cfg.term, Config::default().term);
+        assert_eq!(cfg.title.as_deref(), Some("CLI Only"));
+        assert_eq!(cfg.fullscreen, Fullscreen::False);
+        assert_eq!(cfg.replay_entries.len(), 2);
+        assert!(cfg
+            .replay_entries
+            .iter()
+            .all(|entry| entry.source == ConfigSetSource::Cli));
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(default_config.clone()),
+            preferred_xdg: None,
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+        assert!(report.errors.is_empty());
+        let diagnostics = cfg.set_cli_args(["--config-default-files=", "--title=CLI Keeps Files"]);
+        assert!(diagnostics.is_empty());
+        assert!(cfg.config_default_files);
+        assert_eq!(cfg.term, "file-term");
+        assert_eq!(cfg.title.as_deref(), Some("CLI Keeps Files"));
+        assert_eq!(cfg.fullscreen, Fullscreen::True);
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(default_config),
+            preferred_xdg: None,
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+        assert!(report.errors.is_empty());
+        let diagnostics =
+            cfg.set_cli_args(["--config-default-files=true", "--title=CLI Keeps Files"]);
+        assert!(diagnostics.is_empty());
+        assert!(cfg.config_default_files);
+        assert_eq!(cfg.term, "file-term");
+        assert_eq!(cfg.title.as_deref(), Some("CLI Keeps Files"));
+        assert_eq!(cfg.fullscreen, Fullscreen::True);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

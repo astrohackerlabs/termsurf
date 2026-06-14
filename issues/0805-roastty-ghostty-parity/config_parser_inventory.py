@@ -58,6 +58,7 @@ CODEPOINT_MAP_ORACLE_TEST = "codepoint_map_config_parser_family_oracle"
 KEY_REMAP_ORACLE_TEST = "key_remap_config_parser_family_oracle"
 THEME_ORACLE_TEST = "theme_config_parser_family_oracle"
 KEYBIND_ORACLE_TEST = "keybind_config_parser_family_oracle"
+CONFIG_DEFAULT_FILES_ORACLE_TEST = "config_default_files_parser_family_oracle"
 
 REPEATABLE_STRING_FONT_OPTIONS = {
     "font-family",
@@ -387,6 +388,7 @@ def build_rows(
     key_remap_oracle_present: bool,
     theme_oracle_present: bool,
     keybind_oracle_present: bool,
+    config_default_files_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -714,6 +716,18 @@ def build_rows(
                 "diagnostics, CLI, formatting, equality, and clone semantics"
             )
             missing_evidence = "None for direct keybind parser semantics."
+        elif config_default_files_oracle_present and option == "config-default-files":
+            status = "Oracle complete"
+            evidence = (
+                "Config-default-files oracle covers CLI-only boolean parsing, "
+                "file-sourced no-op behavior, invalid diagnostics, default-file "
+                "discard when disabled by CLI, and default-file preservation "
+                "when reset/enabled by CLI"
+            )
+            missing_evidence = (
+                "None for config-default-files parser and targeted default-file "
+                "discard semantics."
+            )
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -787,6 +801,7 @@ def main() -> int:
     key_remap_oracle_present = KEY_REMAP_ORACLE_TEST in roastty_source
     theme_oracle_present = THEME_ORACLE_TEST in roastty_source
     keybind_oracle_present = KEYBIND_ORACLE_TEST in roastty_source
+    config_default_files_oracle_present = CONFIG_DEFAULT_FILES_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -825,13 +840,16 @@ def main() -> int:
         key_remap_oracle_present,
         theme_oracle_present,
         keybind_oracle_present,
+        config_default_files_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        48
+        49
+        if config_default_files_oracle_present
+        else 48
         if keybind_oracle_present
         else 47
         if theme_oracle_present
