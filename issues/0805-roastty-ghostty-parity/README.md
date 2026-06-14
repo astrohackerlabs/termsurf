@@ -518,6 +518,13 @@ experiment files until they are proven.
   reload, and reset-font-size targets the newly reloaded configured font size.
   All 14 CFG-222 reload rows are now `Oracle complete`, so config reload
   behavior is `Pass`.
+- **CFG-223 now has a runtime/UI effect manifest.** Experiment 106 split broad
+  runtime and UI config effects into 14 rows. Existing Roastty tests and
+  divergence records close 6 rows, while mouse/click/cursor behavior, broad font
+  runtime behavior, renderer-visible effects, terminal toggles beyond VT KAM,
+  PTY/process launch effects beyond initial command and inherited working
+  directory, macOS app/window/menu workflows, notifications/bell/link behavior,
+  and platform-specific classifications remain gaps.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1119,4 +1126,4 @@ remains open.
   **Pass**
 - [Experiment 105: Reload font size](105-reload-font-size.md) — **Pass**
 - [Experiment 106: Runtime UI effects inventory](106-runtime-ui-effects-inventory.md)
-  — **Designed**
+  — **Partial**

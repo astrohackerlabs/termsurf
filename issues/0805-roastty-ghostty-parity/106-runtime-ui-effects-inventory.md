@@ -27,7 +27,7 @@ The initial runtime/UI effect manifest is:
   `cursor-click-to-move`, `mouse-hide-while-typing`, `right-click-action`,
   `middle-click-action`);
 - `RUNTIME-005`: keyboard remap and keybind dispatch effects (`key-remap`,
-  `keybind`, `command-palette-entry`);
+  `keybind`);
 - `RUNTIME-006`: color, palette, theme, and color-scheme runtime effects;
 - `RUNTIME-007`: font selection, shaping, fallback, metrics, and font-size
   runtime effects;
@@ -38,7 +38,8 @@ The initial runtime/UI effect manifest is:
 - `RUNTIME-010`: PTY/process launch effects such as command, working directory,
   environment, wait-after-command, abnormal-command-exit-runtime, and quit
   policy;
-- `RUNTIME-011`: macOS app/window/tab/split/menu effects;
+- `RUNTIME-011`: macOS app/window/tab/split/menu and command palette UI effects
+  (`command-palette-entry`);
 - `RUNTIME-012`: notifications, bell, command-finish notification, app
   notifications, and URL/link opening effects;
 - `RUNTIME-013`: platform-specific or unsupported runtime effects that may be
@@ -133,3 +134,95 @@ Adversarial design review by fresh-context Codex subagent `Plato`:
   selection/copy, and click/cursor mouse effects in the runtime rows.
 - **Re-review verdict:** Approved. The reviewer confirmed the prior finding is
   resolved and no new required findings were introduced.
+
+## Result
+
+**Result:** Partial
+
+The runtime/UI effects inventory was generated and wired into
+`config-matrix.md`. It records 14 config-driven runtime/UI rows:
+
+- 5 rows are `Oracle complete`;
+- 1 row is an accepted `Intentional divergence`;
+- 0 rows are `Audit covered`;
+- 8 rows are `Gap`;
+- CFG-223 remains `Gap`.
+
+The unresolved runtime/UI gaps are:
+
+- `RUNTIME-004`: config-driven mouse/click/cursor effects;
+- `RUNTIME-007`: broader font runtime behavior beyond reload font-size;
+- `RUNTIME-008`: renderer-visible config effects;
+- `RUNTIME-009`: terminal behavior beyond the existing VT KAM guard;
+- `RUNTIME-010`: PTY/process behavior beyond initial command and inherited
+  working-directory guards;
+- `RUNTIME-011`: macOS app/window/tab/split/menu and command palette UI effects;
+- `RUNTIME-012`: notifications, bell, command-finish, URL/link opening effects;
+- `RUNTIME-013`: platform-specific runtime classification.
+
+Verification passed:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# runtime_rows=14 oracle_complete=5 closed=6 audit_covered=0 incomplete=8 gap=8 cfg223=Gap
+
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+
+matrix = Path("issues/0805-roastty-ghostty-parity/config-matrix.md").read_text()
+line = next(row for row in matrix.splitlines() if row.startswith("| CFG-223 "))
+assert "config-runtime-inventory.md" in line
+assert ("| Pass " in line) == (
+    "0 rows are incomplete" in line and "0 rows are runtime gaps" in line
+)
+PY
+
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_runtime_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+
+prettier --check issues/0805-roastty-ghostty-parity/README.md \
+  issues/0805-roastty-ghostty-parity/106-runtime-ui-effects-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md \
+  issues/0805-roastty-ghostty-parity/config-runtime-inventory.md
+
+git diff --check
+```
+
+## Result Review
+
+Adversarial result review by fresh-context Codex subagent `Leibniz`:
+
+- **Initial verdict:** Changes required.
+- **Required findings:** The initial result overclaimed parity for `RUNTIME-009`
+  based only on VT KAM tests, overclaimed parity for `RUNTIME-010` based only on
+  initial command and inherited working-directory tests, and included command
+  palette UI behavior in `RUNTIME-005` without runtime evidence.
+- **Fix:** `RUNTIME-009` and `RUNTIME-010` are now explicit gaps, `RUNTIME-005`
+  is narrowed to keyboard remap/keybind dispatch, command palette UI behavior is
+  tracked by `RUNTIME-011`, and the generated counts now report 5 oracle
+  complete rows, 6 closed rows, 8 incomplete rows, and 8 runtime gaps.
+
+Focused re-review by fresh-context Codex subagent `Wegener`:
+
+- **Verdict:** Changes required.
+- **Required finding:** The experiment design manifest still listed
+  `command-palette-entry` under `RUNTIME-005`.
+- **Fix:** The design manifest now lists `RUNTIME-005` only for `key-remap` and
+  `keybind`, and assigns `command-palette-entry` to `RUNTIME-011`.
+
+Final focused re-review by fresh-context Codex subagent `McClintock`:
+
+- **Verdict:** Approved.
+- **Finding status:** The reviewer confirmed the `RUNTIME-005` / `RUNTIME-011`
+  command palette split is consistent across the experiment file, generator,
+  generated inventory, and matrix output, with no new required findings.
+
+## Conclusion
+
+CFG-223 now has a durable runtime/UI effect manifest and matrix guard, but it
+cannot close yet. The next experiment should attack the smallest high-value gap:
+`RUNTIME-004`, the config-driven mouse/click/cursor behavior row, because it is
+bounded to core runtime code and already has nearby mouse/selection test
+harnesses.
