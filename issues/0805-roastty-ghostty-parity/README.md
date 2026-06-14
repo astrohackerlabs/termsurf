@@ -525,6 +525,12 @@ experiment files until they are proven.
   `Color.parseCLI`, failed key or color parses leave prior palette values and
   mask bits unchanged, explicit empty config values reset to the default palette
   through optional dispatch, and formatting emits all 256 entries.
+- **Env parser is RepeatableStringMap semantics.** Experiment 39 proved
+  canonical `env`: missing values and whitespace-only direct values are
+  required-value errors, an exactly empty value clears the whole map, the first
+  `=` splits key from value, ASCII whitespace is trimmed around both sides,
+  empty keys are accepted, empty parsed values delete a key, repeated keys
+  overwrite, and equality ignores insertion order.
 
 ## Verification
 
@@ -603,4 +609,4 @@ remains open.
   — **Pass**
 - [Experiment 37: Command parser oracle](37-command-parser-oracle.md) — **Pass**
 - [Experiment 38: Palette parser oracle](38-palette-parser-oracle.md) — **Pass**
-- [Experiment 39: Env parser oracle](39-env-parser-oracle.md) — **Designed**
+- [Experiment 39: Env parser oracle](39-env-parser-oracle.md) — **Pass**

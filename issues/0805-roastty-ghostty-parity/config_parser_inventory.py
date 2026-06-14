@@ -48,6 +48,7 @@ MOUSE_SCROLL_MULTIPLIER_ORACLE_TEST = "mouse_scroll_multiplier_config_parser_fam
 QUICK_TERMINAL_SIZE_ORACLE_TEST = "quick_terminal_size_config_parser_family_oracle"
 COMMAND_ORACLE_TEST = "command_config_parser_family_oracle"
 PALETTE_ORACLE_TEST = "palette_config_parser_family_oracle"
+ENV_ORACLE_TEST = "env_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -340,6 +341,7 @@ def build_rows(
     quick_terminal_size_oracle_present: bool,
     command_oracle_present: bool,
     palette_oracle_present: bool,
+    env_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -573,6 +575,16 @@ def build_rows(
                 "replay, and clone semantics"
             )
             missing_evidence = "None for direct palette parser semantics."
+        elif env_oracle_present and option == "env":
+            status = "Oracle complete"
+            evidence = (
+                "Env parser oracle covers required values, empty reset, missing "
+                "equals, whitespace-only rejection, first-equals splitting, "
+                "ASCII whitespace trimming, empty keys, key deletion, repeated "
+                "key overwrite, formatting, diagnostics, equality, and clone "
+                "semantics"
+            )
+            missing_evidence = "None for direct env parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -636,6 +648,7 @@ def main() -> int:
     quick_terminal_size_oracle_present = QUICK_TERMINAL_SIZE_ORACLE_TEST in roastty_source
     command_oracle_present = COMMAND_ORACLE_TEST in roastty_source
     palette_oracle_present = PALETTE_ORACLE_TEST in roastty_source
+    env_oracle_present = ENV_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -664,13 +677,16 @@ def main() -> int:
         quick_terminal_size_oracle_present,
         command_oracle_present,
         palette_oracle_present,
+        env_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        38
+        39
+        if env_oracle_present
+        else 38
         if palette_oracle_present
         else 37
         if command_oracle_present

@@ -8901,14 +8901,15 @@ mod tests {
         QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReadableIo, ReleaseChannel,
         RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
         RepeatableConfigPathParseError, RepeatableFontVariation, RepeatableFontVariationParseError,
-        RepeatableReadableIo, RepeatableString, RepeatableStringParseError, ResizeOverlay,
-        ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar, SelectionWordChars,
-        SelectionWordCharsParseError, ShellIntegration, ShellIntegrationFeatures,
-        SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme, ThemeParseError,
-        WindowColorspace, WindowDecoration, WindowDecorationParseError, WindowNewTabPosition,
-        WindowPadding, WindowPaddingBalance, WindowPaddingColor, WindowPaddingParseError,
-        WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme, WorkingDirectory,
-        WorkingDirectoryParseError, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
+        RepeatableReadableIo, RepeatableString, RepeatableStringMap, RepeatableStringMapParseError,
+        RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition, RightClickAction,
+        ScrollToBottom, Scrollbar, SelectionWordChars, SelectionWordCharsParseError,
+        ShellIntegration, ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor,
+        TerminalColor, Theme, ThemeParseError, WindowColorspace, WindowDecoration,
+        WindowDecorationParseError, WindowNewTabPosition, WindowPadding, WindowPaddingBalance,
+        WindowPaddingColor, WindowPaddingParseError, WindowSaveState, WindowShowTabBar,
+        WindowSubtitle, WindowTheme, WorkingDirectory, WorkingDirectoryParseError,
+        DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
     };
     use crate::input::key_mods::{self, Mods};
     use crate::input::link::{Action as LinkAction, Highlight as LinkHighlight};
@@ -22010,7 +22011,7 @@ mod tests {
     }
 
     #[test]
-    fn env_config_parse_format_reset_and_diagnose() {
+    fn env_config_parser_family_oracle() {
         let lines = |cfg: &Config, key: &str| -> Vec<String> {
             let mut out = String::new();
             cfg.format_config(&mut out);
@@ -22023,6 +22024,23 @@ mod tests {
         let mut cfg = Config::default();
         assert_eq!(cfg.env.count(), 0);
         assert_eq!(lines(&cfg, "env"), vec!["env = ".to_string()]);
+
+        let mut direct = RepeatableStringMap::default();
+        assert_eq!(
+            direct.parse_cli(None),
+            Err(RepeatableStringMapParseError::ValueRequired)
+        );
+        assert_eq!(
+            direct.parse_cli(Some("   \t  ")),
+            Err(RepeatableStringMapParseError::ValueRequired)
+        );
+        assert_eq!(
+            direct.parse_cli(Some("MISSING_EQUALS")),
+            Err(RepeatableStringMapParseError::ValueRequired)
+        );
+        direct.parse_cli(Some("A=B")).unwrap();
+        direct.parse_cli(Some("")).unwrap();
+        assert_eq!(direct.count(), 0);
 
         cfg.set("env", Some("A=B")).unwrap();
         assert_eq!(cfg.env.count(), 1);

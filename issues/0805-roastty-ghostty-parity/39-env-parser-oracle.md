@@ -164,3 +164,90 @@ prettier --write --prose-wrap always --print-width 80 \
   issues/0805-roastty-ghostty-parity/config-matrix.md
 git diff --check
 ```
+
+## Result
+
+**Result:** Pass
+
+Roastty now has a focused env parser family oracle for the canonical `env` row.
+
+Implementation notes:
+
+- Renamed and extended the existing config-routing regression as
+  `env_config_parser_family_oracle`.
+- Added direct parser coverage for missing values, whitespace-only values,
+  missing `=`, and exactly empty reset behavior.
+- Taught `config_parser_inventory.py` to detect the env oracle, promote only
+  `env`, and make CFG-217's owner `Experiment 39` when this oracle is present.
+
+Verification commands run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml env_config_parser_family_oracle
+```
+
+Result:
+
+```text
+test config::tests::env_config_parser_family_oracle ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4926 filtered out
+```
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+```
+
+Result:
+
+```text
+ghostty_canonical=203
+roastty_parser_rows=203
+missing_canonical_parser_rows=0
+missing_dispatch_rows=0
+extra_parser_rows=0
+compatibility_only_parser_arms=5
+noncanonical_noncompat_parser_arms=0
+oracle_complete=181
+audit_covered=22
+gap=0
+```
+
+The matrix assertion passed and printed:
+
+```text
+env_oracle_rows=1 oracle_complete=181 cfg217=Gap
+```
+
+Additional hygiene checks passed:
+
+```bash
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+cargo fmt --manifest-path roastty/Cargo.toml
+```
+
+## Conclusion
+
+The `env` parser row is now oracle-complete for CFG-217. The important upstream
+boundary is that an exactly empty value resets the whole map, while a
+whitespace-only direct value is not empty, has no `=`, and is therefore
+`ValueRequired`. CFG-217 remains `Gap` because 22 parser rows are still only
+audit-covered.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.
+
+The reviewer independently verified the focused env oracle test, Rust format
+check, `git diff --check`, generated inventory counts, the promoted `env` row,
+CFG-217's `Gap` status and Experiment 39 ownership, absence of Python cache
+artifacts, and that the result commit had not yet been made.
