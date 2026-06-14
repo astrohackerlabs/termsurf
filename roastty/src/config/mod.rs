@@ -3546,7 +3546,7 @@ fn set_f64_field(value: Option<&str>, default_value: f64) -> Result<f64, ConfigS
     match value {
         Some("") => Ok(default_value),
         None => Err(ConfigSetError::ValueRequired),
-        Some(v) => v.parse::<f64>().map_err(|_| ConfigSetError::InvalidValue),
+        Some(v) => parse_zig_float_f64(v),
     }
 }
 
@@ -3555,7 +3555,126 @@ fn set_f32_field(value: Option<&str>, default_value: f32) -> Result<f32, ConfigS
     match value {
         Some("") => Ok(default_value),
         None => Err(ConfigSetError::ValueRequired),
-        Some(v) => v.parse::<f32>().map_err(|_| ConfigSetError::InvalidValue),
+        Some(v) => parse_zig_float_f32(v),
+    }
+}
+
+fn parse_zig_float_f64(value: &str) -> Result<f64, ConfigSetError> {
+    let (negative, body) = split_float_sign(value).ok_or(ConfigSetError::InvalidValue)?;
+    if body.is_empty() {
+        return Err(ConfigSetError::InvalidValue);
+    }
+    let normalized = normalize_zig_float(value, negative, body)?;
+    parse_c_float_f64(&normalized)
+}
+
+fn parse_zig_float_f32(value: &str) -> Result<f32, ConfigSetError> {
+    let (negative, body) = split_float_sign(value).ok_or(ConfigSetError::InvalidValue)?;
+    if body.is_empty() {
+        return Err(ConfigSetError::InvalidValue);
+    }
+    let normalized = normalize_zig_float(value, negative, body)?;
+    parse_c_float_f32(&normalized)
+}
+
+fn split_float_sign(value: &str) -> Option<(bool, &str)> {
+    match value.as_bytes().first()? {
+        b'+' => Some((false, &value[1..])),
+        b'-' => Some((true, &value[1..])),
+        _ => Some((false, value)),
+    }
+}
+
+fn normalize_zig_float(value: &str, negative: bool, body: &str) -> Result<String, ConfigSetError> {
+    if value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Err(ConfigSetError::InvalidValue);
+    }
+    if body.to_ascii_lowercase().starts_with("nan(") {
+        return Err(ConfigSetError::InvalidValue);
+    }
+
+    if body.starts_with("0x") || body.starts_with("0X") {
+        validate_zig_hex_float_separators(body)?;
+        let mut normalized = String::new();
+        if negative {
+            normalized.push('-');
+        } else if value.starts_with('+') {
+            normalized.push('+');
+        }
+        normalized.push_str(&remove_zig_digit_separators(body, 16)?);
+        Ok(normalized)
+    } else {
+        remove_zig_digit_separators(value, 10)
+    }
+}
+
+fn parse_c_float_f64(value: &str) -> Result<f64, ConfigSetError> {
+    let c_value = std::ffi::CString::new(value).map_err(|_| ConfigSetError::InvalidValue)?;
+    let mut end: *mut libc::c_char = std::ptr::null_mut();
+    let parsed = unsafe { libc::strtod(c_value.as_ptr(), &mut end) };
+    let expected_end = unsafe { c_value.as_ptr().add(value.len()) as *mut libc::c_char };
+    if end == expected_end {
+        Ok(parsed)
+    } else {
+        Err(ConfigSetError::InvalidValue)
+    }
+}
+
+fn parse_c_float_f32(value: &str) -> Result<f32, ConfigSetError> {
+    let c_value = std::ffi::CString::new(value).map_err(|_| ConfigSetError::InvalidValue)?;
+    let mut end: *mut libc::c_char = std::ptr::null_mut();
+    let parsed = unsafe { libc::strtof(c_value.as_ptr(), &mut end) };
+    let expected_end = unsafe { c_value.as_ptr().add(value.len()) as *mut libc::c_char };
+    if end == expected_end {
+        Ok(parsed)
+    } else {
+        Err(ConfigSetError::InvalidValue)
+    }
+}
+
+fn remove_zig_digit_separators(value: &str, base: u32) -> Result<String, ConfigSetError> {
+    let bytes = value.as_bytes();
+    for (idx, byte) in bytes.iter().enumerate() {
+        if *byte == b'_' {
+            let prev = idx.checked_sub(1).and_then(|prev| bytes.get(prev)).copied();
+            let next = bytes.get(idx + 1).copied();
+            if !prev.is_some_and(|ch| is_float_digit(ch, base))
+                || !next.is_some_and(|ch| is_float_digit(ch, base))
+            {
+                return Err(ConfigSetError::InvalidValue);
+            }
+        }
+    }
+    Ok(value.chars().filter(|ch| *ch != '_').collect())
+}
+
+fn validate_zig_hex_float_separators(value: &str) -> Result<(), ConfigSetError> {
+    let bytes = value.as_bytes();
+    let mut in_exponent = false;
+    for (idx, byte) in bytes.iter().enumerate() {
+        match *byte {
+            b'p' | b'P' => in_exponent = true,
+            b'_' => {
+                let prev = idx.checked_sub(1).and_then(|prev| bytes.get(prev)).copied();
+                let next = bytes.get(idx + 1).copied();
+                let base = if in_exponent { 10 } else { 16 };
+                if !prev.is_some_and(|ch| is_float_digit(ch, base))
+                    || !next.is_some_and(|ch| is_float_digit(ch, base))
+                {
+                    return Err(ConfigSetError::InvalidValue);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn is_float_digit(byte: u8, base: u32) -> bool {
+    match base {
+        10 => byte.is_ascii_digit(),
+        16 => byte.is_ascii_hexdigit(),
+        _ => false,
     }
 }
 
@@ -20538,6 +20657,103 @@ mod tests {
                 "font-thicken-strength rejects {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn float_config_parser_family_oracle() {
+        let mut cfg = Config::default();
+
+        cfg.set("bell-audio-volume", Some("0.125")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 0.125);
+        cfg.set("bell-audio-volume", Some("+1e3")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 1000.0);
+        cfg.set("bell-audio-volume", Some("-1E-2")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, -0.01);
+        cfg.set("bell-audio-volume", Some("1_000.5")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 1000.5);
+        cfg.set("bell-audio-volume", Some("0x1p4")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 16.0);
+        cfg.set("bell-audio-volume", Some("0X1.8P1")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 3.0);
+        cfg.set("bell-audio-volume", Some("0x1.000000000000081p0"))
+            .unwrap();
+        assert_eq!(cfg.bell_audio_volume.to_bits(), 0x3ff0000000000001);
+        cfg.set("bell-audio-volume", Some("0x0")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 0.0);
+        cfg.set("bell-audio-volume", Some("-0x0")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, -0.0);
+        assert!(cfg.bell_audio_volume.is_sign_negative());
+        cfg.set("bell-audio-volume", Some("0x1_a.p2")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, 104.0);
+
+        cfg.set("bell-audio-volume", Some("nAn")).unwrap();
+        assert!(cfg.bell_audio_volume.is_nan());
+        cfg.set("bell-audio-volume", Some("+Inf")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, f64::INFINITY);
+        cfg.set("bell-audio-volume", Some("-iNf")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, f64::NEG_INFINITY);
+        cfg.set("bell-audio-volume", Some("INFINITY")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, f64::INFINITY);
+        cfg.set("bell-audio-volume", Some("1e309")).unwrap();
+        assert_eq!(cfg.bell_audio_volume, f64::INFINITY);
+        cfg.set("bell-audio-volume", Some("0x1p9999999999"))
+            .unwrap();
+        assert_eq!(cfg.bell_audio_volume, f64::INFINITY);
+        cfg.set("bell-audio-volume", Some("0x1p-9999999999"))
+            .unwrap();
+        assert_eq!(cfg.bell_audio_volume, 0.0);
+
+        cfg.set("background-image-opacity", Some("0x1p-1")).unwrap();
+        assert_eq!(cfg.bg_image_opacity, 0.5);
+        cfg.set("background-image-opacity", Some("0x1.000002p0"))
+            .unwrap();
+        assert_eq!(cfg.bg_image_opacity.to_bits(), 0x3f800001);
+        cfg.set("background-image-opacity", Some("1_0.5")).unwrap();
+        assert_eq!(cfg.bg_image_opacity, 10.5);
+        cfg.set("background-image-opacity", Some("NaN")).unwrap();
+        assert!(cfg.bg_image_opacity.is_nan());
+        cfg.set("background-image-opacity", Some("0.25")).unwrap();
+        cfg.set("background-image-opacity", Some("")).unwrap();
+        assert_eq!(cfg.bg_image_opacity, Config::default().bg_image_opacity);
+
+        assert_eq!(
+            cfg.set("bell-audio-volume", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        for value in [
+            "+",
+            "-",
+            "abc",
+            "_1",
+            "1_",
+            "1__0",
+            "1._0",
+            "1_.0",
+            "0x",
+            "0x.p1",
+            "0x_1",
+            "0x1_",
+            "0x1__0",
+            "0x1._8",
+            "0x1_.8",
+            "0x1p",
+            "0x1p_4",
+            "0x1p4_",
+            "0x1p+",
+            "0x1p+_4",
+            "nan(payload)",
+            "NaN(123)",
+        ] {
+            assert_eq!(
+                cfg.set("bell-audio-volume", Some(value)),
+                Err(ConfigSetError::InvalidValue),
+                "bell-audio-volume rejects {value:?}"
+            );
+        }
+        assert_eq!(
+            cfg.set("background-image-opacity", Some("nan(payload)")),
+            Err(ConfigSetError::InvalidValue)
+        );
     }
 
     #[test]

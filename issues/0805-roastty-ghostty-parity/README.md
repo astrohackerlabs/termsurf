@@ -380,6 +380,12 @@ experiment files until they are proven.
   lowercase and uppercase prefixes, accepted signs, interior underscores,
   set-but-empty reset, missing values, invalid bare signs/prefixes,
   prefix-adjacent underscores, and overflow/range failures.
+- **Float scalar parser rows need Zig syntax, not Rust syntax.** Experiment 17
+  found and fixed concrete Rust/Zig parser differences for direct float fields:
+  Zig accepts digit separators and hexadecimal float literals such as `0x1p4`,
+  exponentless hex floats, mixed-case signed `nan`/`inf`/`infinity`, and
+  overflow to infinities. Roastty now uses a shared Zig-compatible float helper
+  for the 9 float scalar parser rows.
 
 ## Verification
 
@@ -421,4 +427,4 @@ remains open.
   **Pass**
 - [Experiment 15: Boolean parser oracle](15-boolean-parser-oracle.md) — **Pass**
 - [Experiment 16: Integer parser oracle](16-integer-parser-oracle.md) — **Pass**
-- [Experiment 17: Float parser oracle](17-float-parser-oracle.md) — **Designed**
+- [Experiment 17: Float parser oracle](17-float-parser-oracle.md) — **Pass**
