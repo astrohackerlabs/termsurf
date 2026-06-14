@@ -738,3 +738,5 @@ remains open.
   — **Pass**
 - [Experiment 57: Link no-output formatter oracle](57-link-no-output-formatter-oracle.md)
   — **Pass**
+- [Experiment 58: Command palette formatter oracle](58-command-palette-formatter-oracle.md)
+  — **Designed**
