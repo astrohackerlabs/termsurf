@@ -416,6 +416,12 @@ experiment files until they are proven.
   duplicate fields use the last value, actions are canonicalized, invalid
   fields/actions/quotes/escapes are rejected, and formatter output repeats one
   line per entry.
+- **Window padding parser rows share one pair parser.** Experiment 23 proved the
+  direct parser boundary for `window-padding-x` and `window-padding-y`: one
+  base-10 `u32` applies to both sides, comma-separated pairs set each side, only
+  spaces and tabs are trimmed around values, raw-empty option values reset to
+  defaults, invalid numeric/pair forms are rejected, and formatter output
+  collapses equal sides to one value.
 
 ## Verification
 
@@ -467,4 +473,4 @@ remains open.
 - [Experiment 22: Command palette parser oracle](22-command-palette-parser-oracle.md)
   — **Pass**
 - [Experiment 23: Window padding parser oracle](23-window-padding-parser-oracle.md)
-  — **Designed**
+  — **Pass**

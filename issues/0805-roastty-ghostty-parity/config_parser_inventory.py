@@ -32,6 +32,7 @@ DURATION_ORACLE_TEST = "duration_config_parser_family_oracle"
 PATH_ORACLE_TEST = "path_config_parser_family_oracle"
 WORKING_DIRECTORY_ORACLE_TEST = "working_directory_config_parser_family_oracle"
 COMMAND_PALETTE_ORACLE_TEST = "command_palette_config_parser_family_oracle"
+WINDOW_PADDING_ORACLE_TEST = "window_padding_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -308,6 +309,7 @@ def build_rows(
     path_oracle_present: bool,
     working_directory_oracle_present: bool,
     command_palette_oracle_present: bool,
+    window_padding_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -401,6 +403,14 @@ def build_rows(
                 "action canonicalization, invalid values, and formatting"
             )
             missing_evidence = "None for direct command-palette parser semantics."
+        elif window_padding_oracle_present and family == "window padding":
+            status = "Oracle complete"
+            evidence = (
+                "Shared window-padding parser oracle covers single and paired "
+                "values, space/tab trimming, base-10 u32 parsing, invalid values, "
+                "empty resets, diagnostics, and formatting"
+            )
+            missing_evidence = "None for direct window-padding parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -448,6 +458,7 @@ def main() -> int:
     path_oracle_present = PATH_ORACLE_TEST in roastty_source
     working_directory_oracle_present = WORKING_DIRECTORY_ORACLE_TEST in roastty_source
     command_palette_oracle_present = COMMAND_PALETTE_ORACLE_TEST in roastty_source
+    window_padding_oracle_present = WINDOW_PADDING_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -460,13 +471,16 @@ def main() -> int:
         path_oracle_present,
         working_directory_oracle_present,
         command_palette_oracle_present,
+        window_padding_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        22
+        23
+        if window_padding_oracle_present
+        else 22
         if command_palette_oracle_present
         else 21
         if working_directory_oracle_present

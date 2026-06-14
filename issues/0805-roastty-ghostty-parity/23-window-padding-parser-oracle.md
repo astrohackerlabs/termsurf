@@ -140,3 +140,107 @@ prettier --write --prose-wrap always --print-width 80 \
   issues/0805-roastty-ghostty-parity/config-matrix.md
 git diff --check
 ```
+
+## Result
+
+**Result:** Pass
+
+Roastty now has a focused window-padding parser family oracle for the two
+`window-padding-x` and `window-padding-y` parser rows. The oracle proves pinned
+Ghostty's `WindowPadding.parseCLI` boundary:
+
+- one value applies to both sides;
+- comma-separated pairs set left/right sides separately;
+- only spaces and tabs are trimmed around values;
+- base-10 `u32` parsing accepts interior underscores, leading `+`, `-0`, and
+  `u32::MAX`;
+- missing values are `ValueRequired`;
+- empty direct parser input, non-numeric values, bad pair sides, missing pair
+  sides, too many comma-separated fields, overflow, edge underscores, negative
+  nonzero numbers, and newline-suffixed values are `InvalidValue`;
+- raw empty option values reset `window-padding-x/y` to their default `2`;
+- formatter output uses one value when sides match and `left,right` when sides
+  differ;
+- load-string diagnostics preserve valid earlier values while reporting invalid
+  later lines.
+
+Focused Roastty verification passed:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml window_padding_config_parser_family_oracle
+```
+
+Output summary:
+
+```text
+running 1 test
+test config::tests::window_padding_config_parser_family_oracle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4913 filtered out; finished in 0.01s
+```
+
+The existing window-padding option-level regression test also passed:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml window_padding_config_parse_format_reset_and_diagnose
+```
+
+Output summary:
+
+```text
+running 1 test
+test config::tests::window_padding_config_parse_format_reset_and_diagnose ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4913 filtered out; finished in 0.01s
+```
+
+The parser inventory generator passed and moved the 2 window-padding rows to
+`Oracle complete`:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+```
+
+Output:
+
+```text
+ghostty_canonical=203
+roastty_parser_rows=203
+missing_canonical_parser_rows=0
+missing_dispatch_rows=0
+extra_parser_rows=0
+compatibility_only_parser_arms=5
+noncanonical_noncompat_parser_arms=0
+oracle_complete=78
+audit_covered=125
+gap=0
+```
+
+The matrix assertion passed:
+
+```text
+parser_rows=203 window_padding_oracle=2 cfg217=Gap
+```
+
+CFG-217 remains `Gap` because 125 parser rows are still audit-only, but the
+window-padding parser family is now oracle-complete.
+
+## Conclusion
+
+Window-padding parser semantics are now proven for the pinned Ghostty target at
+the direct parser boundary. The parser row can be separated cleanly from the
+related padding balance/color enum rows: `window-padding-x/y` are a shared
+numeric pair parser with raw-empty reset and deterministic formatter output.
+
+## Completion Review
+
+Fresh-context adversarial completion review approved the result with no
+findings. The reviewer independently verified the focused window-padding oracle,
+the existing window-padding regression test, Rust fmt check, `git diff --check`,
+and the matrix assertion: 203 parser rows, exactly 2 window-padding rows, 78
+`Oracle complete`, CFG-217 still `Gap`, and owner `Experiment 23`.

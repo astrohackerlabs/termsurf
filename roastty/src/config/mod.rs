@@ -10136,6 +10136,115 @@ mod tests {
     }
 
     #[test]
+    fn window_padding_config_parser_family_oracle() {
+        let pad = |top_left, bottom_right| WindowPadding {
+            top_left,
+            bottom_right,
+        };
+
+        assert_eq!(WindowPadding::parse_cli(Some("100")), Ok(pad(100, 100)));
+        assert_eq!(WindowPadding::parse_cli(Some("100,200")), Ok(pad(100, 200)));
+        assert_eq!(
+            WindowPadding::parse_cli(Some(" \t100\t,\t200 ")),
+            Ok(pad(100, 200))
+        );
+        assert_eq!(WindowPadding::parse_cli(Some("1_000")), Ok(pad(1000, 1000)));
+        assert_eq!(WindowPadding::parse_cli(Some("+5")), Ok(pad(5, 5)));
+        assert_eq!(WindowPadding::parse_cli(Some("-0")), Ok(pad(0, 0)));
+        assert_eq!(
+            WindowPadding::parse_cli(Some("4294967295")),
+            Ok(pad(u32::MAX, u32::MAX))
+        );
+        assert_eq!(
+            WindowPadding::parse_cli(None),
+            Err(WindowPaddingParseError::ValueRequired)
+        );
+        for bad in [
+            "",
+            "a",
+            "100,x",
+            "100,",
+            ",100",
+            "1,2,3",
+            "4294967296",
+            "_5",
+            "5_",
+            "-5",
+            "1\n",
+        ] {
+            assert_eq!(
+                WindowPadding::parse_cli(Some(bad)),
+                Err(WindowPaddingParseError::InvalidValue),
+                "{bad:?}"
+            );
+        }
+
+        let line = |cfg: &Config, key: &str| -> String {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.window_padding_x, pad(2, 2));
+        assert_eq!(cfg.window_padding_y, pad(2, 2));
+        assert_eq!(line(&cfg, "window-padding-x"), "window-padding-x = 2");
+        assert_eq!(line(&cfg, "window-padding-y"), "window-padding-y = 2");
+
+        cfg.set("window-padding-x", Some("4")).unwrap();
+        cfg.set("window-padding-y", Some("6,8")).unwrap();
+        assert_eq!(cfg.window_padding_x, pad(4, 4));
+        assert_eq!(cfg.window_padding_y, pad(6, 8));
+        assert_eq!(line(&cfg, "window-padding-x"), "window-padding-x = 4");
+        assert_eq!(line(&cfg, "window-padding-y"), "window-padding-y = 6,8");
+
+        cfg.set("window-padding-x", Some("")).unwrap();
+        cfg.set("window-padding-y", Some("")).unwrap();
+        assert_eq!(cfg.window_padding_x, pad(2, 2));
+        assert_eq!(cfg.window_padding_y, pad(2, 2));
+
+        assert_eq!(
+            cfg.set("window-padding-x", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("window-padding-y", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("window-padding-x", Some("left")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.set("window-padding-y", Some("1,right")),
+            Err(ConfigSetError::InvalidValue)
+        );
+
+        let diagnostics =
+            cfg.load_str("window-padding-x = 4\nwindow-padding-x = left\nwindow-padding-y = 6,8\nwindow-padding-y = 1,right\n");
+        assert_eq!(cfg.window_padding_x, pad(4, 4));
+        assert_eq!(cfg.window_padding_y, pad(6, 8));
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "window-padding-x".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 4,
+                    key: "window-padding-y".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn window_decoration_parse_cli_resolves_bool_and_variants() {
         // Upstream `WindowDecoration.parseCLI` cases.
         assert_eq!(
