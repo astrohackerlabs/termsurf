@@ -808,3 +808,5 @@ remains open.
   — **Pass**
 - [Experiment 66: Font repeatable string formatter oracle](66-font-repeatable-string-formatter-oracle.md)
   — **Pass**
+- [Experiment 67: Font style formatter oracle](67-font-style-formatter-oracle.md)
+  — **Designed**
