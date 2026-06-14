@@ -1014,3 +1014,5 @@ remains open.
   — **Pass**
 - [Experiment 92: Path diagnostic oracle](92-path-diagnostic-oracle.md) —
   **Pass**
+- [Experiment 93: Command palette diagnostic oracle](93-command-palette-diagnostic-oracle.md)
+  — **Designed**
