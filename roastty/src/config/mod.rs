@@ -27402,6 +27402,197 @@ mod tests {
     }
 
     #[test]
+    fn config_integer_diagnostic_family_oracle() {
+        struct IntegerDiagnosticCase {
+            key: &'static str,
+            valid: &'static str,
+            invalid: &'static str,
+            expected_valid_line: &'static str,
+            get_line: fn(&Config) -> Option<String>,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        let cases = [
+            IntegerDiagnosticCase {
+                key: "abnormal-command-exit-runtime",
+                valid: "1234",
+                invalid: "-1",
+                expected_valid_line: "abnormal-command-exit-runtime = 1234",
+                get_line: |cfg| config_line(cfg, "abnormal-command-exit-runtime"),
+            },
+            IntegerDiagnosticCase {
+                key: "font-thicken-strength",
+                valid: "128",
+                invalid: "256",
+                expected_valid_line: "font-thicken-strength = 128",
+                get_line: |cfg| config_line(cfg, "font-thicken-strength"),
+            },
+            IntegerDiagnosticCase {
+                key: "image-storage-limit",
+                valid: "0x20",
+                invalid: "4294967296",
+                expected_valid_line: "image-storage-limit = 32",
+                get_line: |cfg| config_line(cfg, "image-storage-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "linux-cgroup-memory-limit",
+                valid: "0x1_000",
+                invalid: "-1",
+                expected_valid_line: "linux-cgroup-memory-limit = 4096",
+                get_line: |cfg| config_line(cfg, "linux-cgroup-memory-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "linux-cgroup-processes-limit",
+                valid: "0xff",
+                invalid: "-1",
+                expected_valid_line: "linux-cgroup-processes-limit = 255",
+                get_line: |cfg| config_line(cfg, "linux-cgroup-processes-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "scrollback-limit",
+                valid: "0x20",
+                invalid: "-1",
+                expected_valid_line: "scrollback-limit = 32",
+                get_line: |cfg| config_line(cfg, "scrollback-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-height",
+                valid: "30",
+                invalid: "-1",
+                expected_valid_line: "window-height = 30",
+                get_line: |cfg| config_line(cfg, "window-height"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-position-x",
+                valid: "-0X10",
+                invalid: "-32769",
+                expected_valid_line: "window-position-x = -16",
+                get_line: |cfg| config_line(cfg, "window-position-x"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-position-y",
+                valid: "+0B111",
+                invalid: "32768",
+                expected_valid_line: "window-position-y = 7",
+                get_line: |cfg| config_line(cfg, "window-position-y"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-width",
+                valid: "120",
+                invalid: "-1",
+                expected_valid_line: "window-width = 120",
+                get_line: |cfg| config_line(cfg, "window-width"),
+            },
+        ];
+        assert_eq!(cases.len(), 10);
+
+        for case in cases {
+            let default_line = (case.get_line)(&Config::default());
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(case.valid)).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(case.expected_valid_line),
+                "{} accepts representative non-default value",
+                case.key
+            );
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg),
+                default_line,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&file_cfg);
+            let diagnostics = file_cfg.load_str(&format!("\n{} = {}\n", case.key, case.invalid));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} file diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&file_cfg),
+                before,
+                "{} invalid file value preserves previous state",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&cli_cfg);
+            let arg = format!("--{}={}", case.key, case.invalid);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} CLI diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&cli_cfg),
+                before,
+                "{} invalid CLI value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+        }
+    }
+
+    #[test]
     fn float_config_parser_family_oracle() {
         let mut cfg = Config::default();
 

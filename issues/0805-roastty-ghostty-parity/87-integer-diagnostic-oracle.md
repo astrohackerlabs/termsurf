@@ -134,3 +134,69 @@ contains the required sections, scope is limited to the ten current
 `integer scalar` / `Audit covered` diagnostic rows, CFG-219 closure is not
 overclaimed, the expected 171/32/0 counts are coherent, and required hygiene
 checks are present.
+
+## Result
+
+**Result:** Pass
+
+The shared integer diagnostic oracle now covers the ten integer scalar options
+that were still `Audit covered` after Experiment 86. The oracle verifies every
+option's representative non-default parse, empty reset to the option's default,
+missing-value `ValueRequired` behavior, config-file invalid-value diagnostics
+with line/key/error, CLI invalid-value diagnostics with argument
+position/key/error, and invalid-value state retention.
+
+The implementation confirmed that optional integer fields use the same bare
+missing-value diagnostic behavior as required integer fields: empty values reset
+optional integer fields to their defaults, but missing values report
+`ConfigSetError::ValueRequired`.
+
+The diagnostic inventory generator now has an exact Experiment 87 override list
+for those ten options and validates that every override still maps to a
+canonical integer-scalar parser-family row. Regeneration moved the integer
+diagnostic rows to `Oracle complete`. CFG-219 remains `Gap` because 32
+non-integer diagnostic rows are still incomplete.
+
+Verification output:
+
+```text
+test config::tests::config_integer_diagnostic_family_oracle ... ok
+ghostty_canonical=203
+diagnostic_rows=203
+missing_canonical_diagnostic_rows=0
+extra_diagnostic_rows=0
+oracle_complete=171
+audit_covered=32
+gap=0
+```
+
+Additional checks passed:
+
+```bash
+cargo fmt --manifest-path roastty/Cargo.toml
+cargo test --manifest-path roastty/Cargo.toml config_integer_diagnostic_family_oracle
+```
+
+## Conclusion
+
+Integer scalar diagnostic parity is now proven for CFG-219. The reusable scalar
+pattern is an exact row list plus per-option formatted-state accessors, because
+state retention must be checked for each destination field and optional fields
+can differ from required fields only in empty-reset output, not in bare missing
+value diagnostics.
+
+## Completion Review
+
+Adversarial reviewer: Codex subagent with fresh context.
+
+Final verdict: Approved.
+
+Findings: None.
+
+The reviewer confirmed the diff from plan commit `046a9c3c6` touches only the
+requested six files, the result commit had not been made, the integer diagnostic
+oracle covers the exact ten integer rows, the generated inventory has 203 rows
+with 171 `Oracle complete`, 32 `Audit covered`, and 0 `Gap`, all ten integer
+rows cite Experiment 87, CFG-219 remains `Gap` with the 171/32/0 counts, the
+README marks Experiment 87 `Pass`, and the experiment file records the result,
+conclusion, and missing-value learning.

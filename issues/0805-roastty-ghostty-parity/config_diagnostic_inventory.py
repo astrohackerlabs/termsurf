@@ -59,6 +59,19 @@ BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS = {
     "window-vsync",
 }
 
+INTEGER_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "abnormal-command-exit-runtime",
+    "font-thicken-strength",
+    "image-storage-limit",
+    "linux-cgroup-memory-limit",
+    "linux-cgroup-processes-limit",
+    "scrollback-limit",
+    "window-height",
+    "window-position-x",
+    "window-position-y",
+    "window-width",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class ParserInventoryRow:
@@ -138,7 +151,21 @@ def diagnostic_family(row: ParserInventoryRow) -> str:
 
 def diagnostic_override_evidence(option: str, row: ParserInventoryRow) -> str | None:
     if option not in BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS:
-        return None
+        if option not in INTEGER_DIAGNOSTIC_ORACLE_OPTIONS:
+            return None
+        if row.family != "integer scalar":
+            raise ValueError(
+                f"{option} is listed in the Experiment 87 integer diagnostic oracle "
+                f"but parser family is {row.family!r}"
+            )
+        return (
+            "Experiment 87 shared integer diagnostic oracle covers representative "
+            "non-default values, empty resets, missing-value diagnostics, "
+            "config-file invalid-value diagnostics with line/key/error, CLI "
+            "invalid-value diagnostics with argument position/key/error, and "
+            "invalid-value state retention; "
+            "`roastty/src/config/mod.rs::config_integer_diagnostic_family_oracle`"
+        )
     if row.family != "boolean":
         raise ValueError(
             f"{option} is listed in the Experiment 86 boolean diagnostic oracle "
@@ -209,10 +236,11 @@ def build_rows(
         )
 
     extra = sorted(set(parser_rows) - set(canonical_options))
-    missing_overrides = sorted(BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS - set(canonical_options))
+    override_options = BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS | INTEGER_DIAGNOSTIC_ORACLE_OPTIONS
+    missing_overrides = sorted(override_options - set(canonical_options))
     if missing_overrides:
         raise ValueError(
-            "Experiment 86 boolean diagnostic oracle options missing from canonical "
+            "Diagnostic oracle options missing from canonical "
             f"inventory: {', '.join(missing_overrides)}"
         )
     return rows, missing, extra
