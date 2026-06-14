@@ -1185,3 +1185,5 @@ remains open.
   — **Pass**
 - [Experiment 114: Terminal VT KAM runtime split](114-terminal-vt-kam-runtime-split.md)
   — **Pass**
+- [Experiment 115: Link open URL runtime split](115-link-open-url-runtime-split.md)
+  — **Designed**
