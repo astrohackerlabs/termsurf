@@ -18395,6 +18395,102 @@ mod tests {
     }
 
     #[test]
+    fn click_repeat_interval_config_parser_family_oracle() {
+        fn line(cfg: &Config, key: &str) -> String {
+            let prefix = format!("{} = ", key);
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap()
+                .to_string()
+        }
+
+        for (value, expected) in [
+            ("0", 0),
+            ("+25", 25),
+            ("-0", 0),
+            ("1_000", 1000),
+            ("1__0", 10),
+            ("4294967295", u32::MAX),
+        ] {
+            let mut cfg = Config::default();
+            cfg.click_repeat_interval = 777;
+            cfg.set("click-repeat-interval", Some(value)).unwrap();
+            assert_eq!(cfg.click_repeat_interval, expected, "value {value:?}");
+            assert_eq!(
+                line(&cfg, "click-repeat-interval"),
+                format!("click-repeat-interval = {expected}")
+            );
+        }
+
+        let mut cfg = Config::default();
+        cfg.set("click-repeat-interval", Some("250")).unwrap();
+        cfg.set("click-repeat-interval", Some("")).unwrap();
+        assert_eq!(cfg.click_repeat_interval, 0);
+        assert_eq!(
+            line(&cfg, "click-repeat-interval"),
+            "click-repeat-interval = 0"
+        );
+        assert_eq!(
+            cfg.set("click-repeat-interval", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        for value in [
+            "1.5",
+            "0x10",
+            "0b10",
+            "-1",
+            "4294967296",
+            "+",
+            "-",
+            "_1",
+            "1_",
+            " 10",
+            "10 ",
+            "\t10",
+            "10\t",
+        ] {
+            assert_eq!(
+                cfg.set("click-repeat-interval", Some(value)),
+                Err(ConfigSetError::InvalidValue),
+                "click-repeat-interval rejects {value:?}"
+            );
+        }
+
+        let mut retained = Config::default();
+        let diagnostics = retained.load_str(
+            "click-repeat-interval = 333\n\
+             click-repeat-interval = nope\n",
+        );
+        assert_eq!(retained.click_repeat_interval, 333);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "click-repeat-interval".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+
+        let diagnostics = cfg.set_cli_args(["--click-repeat-interval=125"]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(cfg.click_repeat_interval, 125);
+
+        cfg.set("click-repeat-interval", Some("0")).unwrap();
+        assert_eq!(cfg.click_repeat_interval, 0);
+        let mut finalized = cfg.clone();
+        finalized.finalize();
+        assert_eq!(finalized.click_repeat_interval, 500);
+        assert_eq!(cfg.click_repeat_interval, 0);
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.click_repeat_interval, 0);
+    }
+
+    #[test]
     fn config_set_routes_enum_fields() {
         // Every enum key, set to a (mostly non-default) valid keyword, routes to
         // the right field — verified by reading it back through `format_config`.

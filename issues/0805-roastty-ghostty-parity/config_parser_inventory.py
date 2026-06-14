@@ -39,6 +39,7 @@ ENUM_ORACLE_TEST = "enum_config_parser_family_oracle"
 COLOR_ORACLE_TEST = "color_config_parser_family_oracle"
 METRIC_MODIFIER_ORACLE_TEST = "metric_modifier_config_parser_family_oracle"
 BACKGROUND_BLUR_ORACLE_TEST = "background_blur_config_parser_family_oracle"
+CLICK_REPEAT_ORACLE_TEST = "click_repeat_interval_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -322,6 +323,7 @@ def build_rows(
     color_oracle_present: bool,
     metric_modifier_oracle_present: bool,
     background_blur_oracle_present: bool,
+    click_repeat_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -475,6 +477,14 @@ def build_rows(
                 "values, diagnostics, CLI, formatting, and clone semantics"
             )
             missing_evidence = "None for direct background-blur parser semantics."
+        elif click_repeat_oracle_present and option == "click-repeat-interval":
+            status = "Oracle complete"
+            evidence = (
+                "Click repeat interval parser oracle covers base-10 u32 values, "
+                "missing values, empty resets, invalid values, diagnostics, CLI, "
+                "formatting, clone semantics, and parser/finalization boundary"
+            )
+            missing_evidence = "None for direct click-repeat-interval parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -529,6 +539,7 @@ def main() -> int:
     color_oracle_present = COLOR_ORACLE_TEST in roastty_source
     metric_modifier_oracle_present = METRIC_MODIFIER_ORACLE_TEST in roastty_source
     background_blur_oracle_present = BACKGROUND_BLUR_ORACLE_TEST in roastty_source
+    click_repeat_oracle_present = CLICK_REPEAT_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -548,13 +559,16 @@ def main() -> int:
         color_oracle_present,
         metric_modifier_oracle_present,
         background_blur_oracle_present,
+        click_repeat_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        29
+        30
+        if click_repeat_oracle_present
+        else 29
         if background_blur_oracle_present
         else 28
         if metric_modifier_oracle_present

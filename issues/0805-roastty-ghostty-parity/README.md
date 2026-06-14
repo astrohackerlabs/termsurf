@@ -469,6 +469,11 @@ experiment files until they are proven.
   default `false`, direct empty parser input is invalid, and malformed numeric
   boundaries such as leading or trailing underscores are rejected while interior
   underscores, including doubled interior underscores, are accepted like Zig.
+- **Click repeat interval parser stays separate from finalization.** Experiment
+  30 proved canonical `click-repeat-interval`: parser-level values use base-10
+  `u32` syntax, raw-empty values reset to `0`, missing values are required,
+  whitespace-padded integers and base prefixes are rejected, and `0` remains `0`
+  until finalization later resolves the platform/default repeat interval.
 
 ## Verification
 
@@ -532,4 +537,4 @@ remains open.
 - [Experiment 29: Background blur parser oracle](29-background-blur-parser-oracle.md)
   — **Pass**
 - [Experiment 30: Click repeat interval parser oracle](30-click-repeat-interval-parser-oracle.md)
-  — **Designed**
+  — **Pass**
