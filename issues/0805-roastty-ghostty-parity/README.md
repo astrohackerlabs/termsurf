@@ -451,6 +451,12 @@ experiment files until they are proven.
   values return the not-implemented parser error, raw-empty `link =` resets to
   defaults before parser dispatch, diagnostics preserve that distinction, and
   truly unknown keys still report `UnknownField`.
+- **`link` is an intentional no-output formatter row.** Experiment 50 found that
+  pinned Ghostty's canonical `link` option has a `RepeatableLink.formatEntry`
+  method that intentionally emits nothing because `link` cannot currently be
+  set. Formatter inventories and oracles should count `link` as a canonical
+  no-output row rather than forcing a nonexistent Roastty
+  `Config::format_config` helper.
 - **Enum parser rows share exact keyword semantics plus compatibility
   branches.** Experiment 26 proved the 52 enum rows: required and optional enum
   fields accept exact keywords only, missing values are required, raw-empty
@@ -682,4 +688,4 @@ remains open.
 - [Experiment 49: Config default files load oracle](49-config-default-files-load-oracle.md)
   — **Pass**
 - [Experiment 50: Non-default formatter facet audit](50-non-default-formatter-facet-audit.md)
-  — **Designed**
+  — **Pass**

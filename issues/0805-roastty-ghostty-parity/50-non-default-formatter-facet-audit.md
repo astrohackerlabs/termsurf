@@ -138,3 +138,80 @@ Optional finding:
 
 Final re-review verdict: **Approved**. The reviewer confirmed the no-output
 criterion and found no new required issues.
+
+## Result
+
+**Result:** Pass
+
+Added a formatter-facet inventory generator and generated
+`config-formatter-inventory.md`. The audit found:
+
+- 203 canonical Ghostty formatter rows.
+- 203 Roastty formatter rows.
+- 0 missing canonical formatter rows.
+- 0 extra formatter rows.
+- 1 intentional no-output row: canonical `link`, matching pinned Ghostty's
+  `RepeatableLink.formatEntry` behavior.
+- 0 `Oracle complete` rows and 203 `Audit covered` rows, so CFG-218 correctly
+  remains `Gap`.
+
+The generator updates CFG-218 to point at the formatter inventory and leaves
+CFG-217 untouched. CFG-218 now has a concrete proof surface for future
+formatter-family or option-specific oracle experiments.
+
+Verification:
+
+```text
+ghostty_canonical=203
+roastty_formatter_rows=203
+missing_canonical_formatter_rows=0
+extra_formatter_rows=0
+oracle_complete=0
+audit_covered=203
+gap=0
+no_output_rows=1
+```
+
+Matrix assertion output:
+
+```text
+formatter_rows=203 incomplete=203 cfg218=Gap
+```
+
+Additional verification:
+
+- `cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle`
+  passed.
+- `git diff --check` passed.
+
+## Conclusion
+
+CFG-218 remains open, but it is now concrete. The next formatter work can raise
+formatter families from `Audit covered` to `Oracle complete` with targeted
+non-default formatter oracles, starting with the cheapest broad families such as
+primitive bool/integer/float/string formatting or optional-value formatting.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.
+
+The reviewer independently verified:
+
+- the formatter inventory has 203 rows, 203 `Audit covered` rows, 0
+  `Oracle complete` rows, 0 `Gap` rows, and 1 no-output row;
+- `link` is modeled as no-output and is supported by pinned Ghostty's
+  `RepeatableLink.formatEntry`;
+- CFG-217 remains `Pass`;
+- CFG-218 remains `Gap` and points to `config-formatter-inventory.md`;
+- the README marks Experiment 50 `Pass` and records the `link` no-output
+  learning;
+- `cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle`
+  passed;
+- `git diff --check` passed.
+
+The reviewer did not run the formatter inventory generator because it writes
+files, but inspected the generated output and approved the completed experiment.
