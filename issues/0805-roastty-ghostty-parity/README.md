@@ -502,3 +502,4 @@ remains open.
 - [Experiment 25: Unsupported parser oracle](25-unsupported-parser-oracle.md) —
   **Pass**
 - [Experiment 26: Enum parser oracle](26-enum-parser-oracle.md) — **Pass**
+- [Experiment 27: Color parser oracle](27-color-parser-oracle.md) — **Designed**
