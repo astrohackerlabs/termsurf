@@ -667,3 +667,4 @@ remains open.
   — **Pass**
 - [Experiment 46: Key remap parser oracle](46-key-remap-parser-oracle.md) —
   **Pass**
+- [Experiment 47: Theme parser oracle](47-theme-parser-oracle.md) — **Designed**
