@@ -22,7 +22,7 @@ use super::osc;
 use super::page::SemanticPrompt;
 use super::page_list::{
     CodepointMapEntry, DragGeometry, GridRef, GridRefPointError, PageListAllocError,
-    PageOutputFormat, PageStringWithPinMap, Pin, RenderRowSnapshot,
+    PageOutputFormat, PageStringWithPinMap, Pin, PromptClickMode, RenderRowSnapshot,
 };
 use super::screen::{
     BasicPrintError, EraseDisplayError, Screen, ScreenCursorHyperlinkId, ScreenFormatter,
@@ -62,11 +62,18 @@ pub(crate) struct Terminal {
     title: TerminalTitle,
     pwd: TerminalPwd,
     mouse_shape: mouse::MouseShape,
+    title_report: bool,
     next_implicit_hyperlink_id: u32,
     previous_char: Option<char>,
     pending_clipboard_events: Vec<TerminalClipboardEvent>,
+    pending_bell_count: usize,
     default_cursor_visual_style: cursor::VisualStyle,
     default_cursor_blink: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PromptClickAction {
+    Bytes(Vec<u8>),
 }
 
 #[derive(Debug)]
@@ -778,6 +785,7 @@ pub(crate) enum TerminalInitError {
 pub(crate) struct TerminalInitOptions {
     pub(crate) cursor_visual_style: cursor::VisualStyle,
     pub(crate) cursor_blink: Option<bool>,
+    pub(crate) title_report: bool,
 }
 
 impl Default for TerminalInitOptions {
@@ -785,6 +793,7 @@ impl Default for TerminalInitOptions {
         Self {
             cursor_visual_style: cursor::VisualStyle::Block,
             cursor_blink: None,
+            title_report: false,
         }
     }
 }
@@ -801,6 +810,7 @@ struct TerminalStreamHandler<'a> {
     title: &'a mut TerminalTitle,
     pwd: &'a mut TerminalPwd,
     mouse_shape: &'a mut mouse::MouseShape,
+    title_report: &'a bool,
     next_implicit_hyperlink_id: &'a mut u32,
     previous_char: &'a mut Option<char>,
     dcs: &'a mut dcs::Handler,
@@ -810,6 +820,7 @@ struct TerminalStreamHandler<'a> {
     kitty_config: &'a mut KittyGraphicsConfig,
     flags: &'a mut TerminalFlags,
     pending_clipboard_events: &'a mut Vec<TerminalClipboardEvent>,
+    pending_bell_count: &'a mut usize,
     default_cursor_visual_style: cursor::VisualStyle,
     default_cursor_blink: Option<bool>,
 }
@@ -1064,9 +1075,11 @@ impl Terminal {
             title: TerminalTitle::default(),
             pwd: TerminalPwd::default(),
             mouse_shape: mouse::MouseShape::Text,
+            title_report: options.title_report,
             next_implicit_hyperlink_id: 0,
             previous_char: None,
             pending_clipboard_events: Vec::new(),
+            pending_bell_count: 0,
             default_cursor_visual_style: options.cursor_visual_style,
             default_cursor_blink: options.cursor_blink,
         })
@@ -1091,9 +1104,11 @@ impl Terminal {
             title,
             pwd,
             mouse_shape,
+            title_report,
             next_implicit_hyperlink_id,
             previous_char,
             pending_clipboard_events,
+            pending_bell_count,
             flags,
             default_cursor_visual_style,
             default_cursor_blink,
@@ -1111,6 +1126,7 @@ impl Terminal {
             title,
             pwd,
             mouse_shape,
+            title_report,
             next_implicit_hyperlink_id,
             previous_char,
             dcs,
@@ -1120,6 +1136,7 @@ impl Terminal {
             kitty_config,
             flags,
             pending_clipboard_events,
+            pending_bell_count,
             default_cursor_visual_style: *default_cursor_visual_style,
             default_cursor_blink: *default_cursor_blink,
         };
@@ -1144,6 +1161,10 @@ impl Terminal {
 
     pub(crate) fn drain_clipboard_events(&mut self) -> Vec<TerminalClipboardEvent> {
         std::mem::take(&mut self.pending_clipboard_events)
+    }
+
+    pub(crate) fn take_pending_bell_count(&mut self) -> usize {
+        std::mem::take(&mut self.pending_bell_count)
     }
 
     pub(crate) fn title(&self) -> &str {
@@ -1191,6 +1212,10 @@ impl Terminal {
         callback: Option<TerminalTitleChangedCallback>,
     ) {
         self.effects.title_changed = callback;
+    }
+
+    pub(crate) fn set_title_report(&mut self, enabled: bool) {
+        self.title_report = enabled;
     }
 
     pub(crate) fn set_size_callback(&mut self, callback: Option<TerminalSizeCallback>) {
@@ -1894,6 +1919,52 @@ impl Terminal {
     /// emits `\x1bO…` vs `\x1b[…`).
     pub(crate) fn cursor_keys_enabled(&self) -> bool {
         self.modes.get(modes::Mode::CursorKeys)
+    }
+
+    pub(crate) fn prompt_click_action(
+        &self,
+        viewport: super::point::Coordinate,
+    ) -> Option<PromptClickAction> {
+        if self.screens.active_key() == TerminalScreenKey::Alternate {
+            return None;
+        }
+        let screen = self.screens.active();
+        let mode = screen.prompt_click_mode();
+        if mode == PromptClickMode::None || !screen.cursor_is_at_prompt() || screen.has_selection()
+        {
+            return None;
+        }
+
+        match mode {
+            PromptClickMode::None => None,
+            PromptClickMode::ClickEvents => Some(PromptClickAction::Bytes(
+                format!("\x1b[<0;{};{}M", viewport.x + 1, viewport.y + 1).into_bytes(),
+            )),
+            PromptClickMode::Line
+            | PromptClickMode::Multiple
+            | PromptClickMode::ConservativeVertical
+            | PromptClickMode::SmartVertical => {
+                let movement = screen.prompt_click_move_for_viewport(viewport)?;
+                let left = if self.cursor_keys_enabled() {
+                    b"\x1bOD".as_slice()
+                } else {
+                    b"\x1b[D".as_slice()
+                };
+                let right = if self.cursor_keys_enabled() {
+                    b"\x1bOC".as_slice()
+                } else {
+                    b"\x1b[C".as_slice()
+                };
+                let mut bytes = Vec::new();
+                for _ in 0..movement.left {
+                    bytes.extend_from_slice(left);
+                }
+                for _ in 0..movement.right {
+                    bytes.extend_from_slice(right);
+                }
+                Some(PromptClickAction::Bytes(bytes))
+            }
+        }
     }
 
     pub(crate) fn scroll_viewport_to_top(&mut self) {
@@ -3673,6 +3744,7 @@ impl TerminalStreamHandler<'_> {
     }
 
     fn bell(&mut self) {
+        *self.pending_bell_count = (*self.pending_bell_count).saturating_add(1);
         if let Some(callback) = self.effects.bell {
             unsafe {
                 callback(self.effects.handle, self.effects.userdata);
@@ -3768,6 +3840,9 @@ impl TerminalStreamHandler<'_> {
 
     fn size_report(&mut self, request: size_report::Request) {
         if request == size_report::Request::Csi21T {
+            if !*self.title_report {
+                return;
+            }
             self.write_pty_response(&format!("\x1b]l{}\x1b\\", self.title.as_str()));
             return;
         }
@@ -4145,6 +4220,15 @@ impl TerminalStreamHandler<'_> {
         prompt: super::semantic_prompt::SemanticPrompt<'_>,
     ) -> Result<(), TerminalStreamError> {
         use super::semantic_prompt::Action;
+
+        if matches!(
+            prompt.action,
+            Action::FreshLineNewPrompt | Action::NewCommand | Action::PromptStart
+        ) {
+            self.screens
+                .active_mut()
+                .set_prompt_click_mode(prompt_click_mode(prompt));
+        }
 
         match prompt.action {
             Action::FreshLine => self.semantic_prompt_fresh_line(),
@@ -4688,6 +4772,21 @@ fn rgb_tuple(rgb: color::Rgb) -> (u8, u8, u8) {
     (rgb.r, rgb.g, rgb.b)
 }
 
+fn prompt_click_mode(prompt: super::semantic_prompt::SemanticPrompt<'_>) -> PromptClickMode {
+    if prompt.click_events() == Some(true) {
+        return PromptClickMode::ClickEvents;
+    }
+    match prompt.click() {
+        Some(super::semantic_prompt::Click::Line) => PromptClickMode::Line,
+        Some(super::semantic_prompt::Click::Multiple) => PromptClickMode::Multiple,
+        Some(super::semantic_prompt::Click::ConservativeVertical) => {
+            PromptClickMode::ConservativeVertical
+        }
+        Some(super::semantic_prompt::Click::SmartVertical) => PromptClickMode::SmartVertical,
+        None => PromptClickMode::None,
+    }
+}
+
 fn rgb_from_tuple(rgb: (u8, u8, u8)) -> color::Rgb {
     color::Rgb::new(rgb.0, rgb.1, rgb.2)
 }
@@ -4802,10 +4901,16 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
     use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::MutexGuard;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const TMUX_SIMPLE_LAYOUT: &str = "d962,80x24,0,0,42";
+    static TEST_BELL_CALLBACK_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn test_bell_callback(_: *mut c_void, _: *mut c_void) {
+        TEST_BELL_CALLBACK_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
 
     fn enter_tmux_dcs(terminal: &mut Terminal) {
         terminal.next_slice(b"\x1bP1000p").unwrap();
@@ -4836,6 +4941,29 @@ mod tests {
             .unwrap();
         assert_eq!(terminal.tmux_windows.len(), 1);
         terminal.clear_pty_response();
+    }
+
+    #[test]
+    fn bell_runtime_pending_count_accumulates_without_callback() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal.next_slice(b"\x07hello\x07").unwrap();
+
+        assert_eq!(terminal.take_pending_bell_count(), 2);
+        assert_eq!(terminal.take_pending_bell_count(), 0);
+        assert!(terminal.plain_screen(false).contains("hello"));
+    }
+
+    #[test]
+    fn bell_runtime_pending_count_preserves_callback_effect() {
+        TEST_BELL_CALLBACK_COUNT.store(0, Ordering::SeqCst);
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+        terminal.set_bell_callback(Some(test_bell_callback));
+
+        terminal.next_slice(b"\x07\x07").unwrap();
+
+        assert_eq!(terminal.take_pending_bell_count(), 2);
+        assert_eq!(TEST_BELL_CALLBACK_COUNT.load(Ordering::SeqCst), 2);
     }
 
     fn terminal_with_lines(lines: &[&str]) -> Terminal {
@@ -7616,6 +7744,7 @@ mod tests {
             TerminalInitOptions {
                 cursor_visual_style: cursor::VisualStyle::Bar,
                 cursor_blink: Some(false),
+                ..TerminalInitOptions::default()
             },
         )
         .unwrap();
@@ -7636,6 +7765,7 @@ mod tests {
             TerminalInitOptions {
                 cursor_visual_style: cursor::VisualStyle::Underline,
                 cursor_blink: Some(false),
+                ..TerminalInitOptions::default()
             },
         )
         .unwrap();
@@ -7660,6 +7790,7 @@ mod tests {
                 TerminalInitOptions {
                     cursor_visual_style: cursor::VisualStyle::Block,
                     cursor_blink: configured,
+                    ..TerminalInitOptions::default()
                 },
             )
             .unwrap();
@@ -7678,6 +7809,7 @@ mod tests {
             TerminalInitOptions {
                 cursor_visual_style: cursor::VisualStyle::Block,
                 cursor_blink: None,
+                ..TerminalInitOptions::default()
             },
         )
         .unwrap();
@@ -9416,6 +9548,62 @@ mod tests {
 
         terminal.next_slice(b"\x1b]8;;\x1b\\").unwrap();
         assert_eq!(terminal.cursor_hyperlink_for_tests(), None);
+    }
+
+    #[test]
+    fn terminal_stream_title_report_disabled_by_default() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+
+        terminal
+            .next_slice(b"\x1b]0;secret title\x07\x1b[21t")
+            .unwrap();
+
+        assert_eq!(terminal.title_for_tests(), "secret title");
+        assert!(terminal.pty_response_for_tests().is_empty());
+    }
+
+    #[test]
+    fn terminal_stream_title_report_enabled_reports_current_osc_title() {
+        let mut terminal = Terminal::init_with_options(
+            10,
+            2,
+            None,
+            TerminalInitOptions {
+                title_report: true,
+                ..TerminalInitOptions::default()
+            },
+        )
+        .unwrap();
+
+        terminal
+            .next_slice(b"\x1b]2;visible title\x1b\\\x1b[21t")
+            .unwrap();
+
+        assert_eq!(terminal.title_for_tests(), "visible title");
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1b]lvisible title\x1b\\"
+        );
+    }
+
+    #[test]
+    fn terminal_stream_title_report_runtime_toggle_preserves_title() {
+        let mut terminal = Terminal::init(10, 2, None).unwrap();
+        terminal.next_slice(b"\x1b]0;toggle title\x07").unwrap();
+
+        terminal.next_slice(b"\x1b[21t").unwrap();
+        assert!(terminal.pty_response_for_tests().is_empty());
+
+        terminal.set_title_report(true);
+        terminal.next_slice(b"\x1b[21t").unwrap();
+        assert_eq!(
+            terminal.take_pty_response_for_tests(),
+            b"\x1b]ltoggle title\x1b\\"
+        );
+
+        terminal.set_title_report(false);
+        terminal.next_slice(b"\x1b[21t").unwrap();
+        assert!(terminal.pty_response_for_tests().is_empty());
     }
 
     #[test]

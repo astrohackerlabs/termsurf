@@ -13,8 +13,8 @@ use super::kitty::graphics_storage::{
 use super::page::{Cell, SemanticContent, SemanticPrompt, Wide};
 use super::page_list::{
     BasicCellWriteError, CodepointMapEntry, DragGeometry, GridRef, GridRefPointError, Node,
-    PageList, PageListAllocError, PageOutputFormat, PageStringWithPinMap, Pin, RenderRowSnapshot,
-    SelectLineOptions, StyledCellWriteError,
+    PageList, PageListAllocError, PageOutputFormat, PageStringWithPinMap, Pin, PromptClickMode,
+    PromptClickMove, RenderRowSnapshot, SelectLineOptions, StyledCellWriteError,
 };
 use super::point;
 use super::selection;
@@ -35,6 +35,7 @@ pub(super) struct Screen {
     kitty_images: ImageStorage,
     pages: PageList,
     selection: Option<selection::Selection>,
+    prompt_click_mode: PromptClickMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +180,7 @@ impl Screen {
             kitty_images: ImageStorage::new(),
             pages: PageList::init(cols, rows, max_scrollback_rows)?,
             selection: None,
+            prompt_click_mode: PromptClickMode::None,
         })
     }
 
@@ -1238,6 +1240,55 @@ impl Screen {
             self.cursor.semantic_content,
             SemanticContent::Prompt | SemanticContent::Input
         )
+    }
+
+    pub(super) fn set_prompt_click_mode(&mut self, mode: PromptClickMode) {
+        self.prompt_click_mode = mode;
+    }
+
+    pub(super) fn prompt_click_mode(&self) -> PromptClickMode {
+        self.prompt_click_mode
+    }
+
+    pub(super) fn has_selection(&self) -> bool {
+        self.selection.is_some()
+    }
+
+    pub(super) fn prompt_click_move_for_viewport(
+        &self,
+        viewport: point::Coordinate,
+    ) -> Option<PromptClickMove> {
+        let Some(click_pin) = self.pages.pin(point::Point::viewport(viewport)) else {
+            return None;
+        };
+        let Some(cursor_pin) = self.pages.pin(point::Point::active(point::Coordinate::new(
+            self.cursor.x,
+            self.cursor.y.into(),
+        ))) else {
+            return None;
+        };
+        let cursor_cell_semantic = self.pages.pin_semantic_content(cursor_pin);
+        if self.cursor.semantic_content != SemanticContent::Input
+            && cursor_cell_semantic != Some(SemanticContent::Input)
+        {
+            return None;
+        }
+        let prompt_pin = self.pages.prompt_pin_left_up(cursor_pin);
+        if let Some(prompt_pin) = prompt_pin {
+            if self
+                .pages
+                .pin_before(click_pin, prompt_pin)
+                .unwrap_or(false)
+            {
+                return None;
+            }
+        }
+        Some(self.pages.prompt_click_move(
+            cursor_pin,
+            self.cursor.semantic_content,
+            click_pin,
+            self.prompt_click_mode,
+        ))
     }
 
     fn after_explicit_linefeed(&mut self) -> Result<(), BasicCellWriteError> {

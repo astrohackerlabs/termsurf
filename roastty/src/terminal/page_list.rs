@@ -40,7 +40,7 @@ enum Scroll {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
+pub(super) enum Direction {
     RightDown,
     LeftUp,
 }
@@ -499,17 +499,17 @@ struct StyledPageFormat<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PromptClickMove {
-    left: usize,
-    right: usize,
+pub(super) struct PromptClickMove {
+    pub(super) left: usize,
+    pub(super) right: usize,
 }
 
 impl PromptClickMove {
-    const ZERO: Self = Self { left: 0, right: 0 };
+    pub(super) const ZERO: Self = Self { left: 0, right: 0 };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PromptClickMode {
+pub(super) enum PromptClickMode {
     None,
     ClickEvents,
     Line,
@@ -3173,6 +3173,15 @@ impl PageList {
         }
     }
 
+    pub(super) fn prompt_pin_left_up(&self, pin: Pin) -> Option<Pin> {
+        self.prompt_iterator_from_pin(Direction::LeftUp, pin, None)
+            .next()
+    }
+
+    pub(super) fn pin_semantic_content(&self, pin: Pin) -> Option<SemanticContent> {
+        self.pin_cell(pin).map(|cell| cell.semantic_content())
+    }
+
     fn empty_prompt_iterator(&self, direction: Direction) -> PromptIterator<'_> {
         PromptIterator {
             list: self,
@@ -3585,7 +3594,7 @@ impl PageList {
         output
     }
 
-    fn prompt_click_move(
+    pub(super) fn prompt_click_move(
         &self,
         cursor_pin: Pin,
         cursor_state_semantic: SemanticContent,

@@ -307,6 +307,47 @@ experiment files until they are proven.
   wherever possible. Until a later experiment intentionally tests custom
   Roastty-only config options, keep these files aligned so Ghostty and Roastty
   should look nearly identical except for app naming.
+- **Runtime parity for config options must exercise parsed config.** Existing C
+  surface configuration tests can prove embedded ABI launch behavior, but they
+  do not prove user config options such as `command` and `input` unless the test
+  drives parsed app config or config loading. Future CFG-223 experiments should
+  keep parsed-config runtime effects separate from direct surface-config
+  behavior.
+- **Process lifecycle parity needs branch-specific oracles.** Ghostty handles
+  abnormal child exit before normal `wait-after-command` close/hold behavior,
+  and uses a `<=` runtime threshold. Future process lifecycle experiments must
+  either prove the abnormal-exit branch directly or run commands beyond the
+  configured threshold when proving the normal child-exit branch.
+- **Child-exit parity has separable layers.** Roastty now proves the PTY
+  child-exit exit-code/runtime payload reaches the app as `show_child_exited`,
+  but terminal fallback text, abnormal-exit close/hold policy after
+  handled/unhandled actions, and app quit policy remain separate lifecycle gaps.
+- **Child-exit fallback policy is branch-specific.** Abnormal exits use
+  `runtime_ms <= abnormal-command-exit-runtime`, try the app action first, and
+  hold after GUI or terminal fallback handling; normal exits can write fallback
+  text when unhandled but still follow `wait-after-command` close/hold policy.
+- **macOS quit-after-last-window parity is a config bridge.** Pinned Ghostty's
+  macOS app returns `derivedConfig.shouldQuitAfterLastWindowClosed` from
+  `applicationShouldTerminateAfterLastWindowClosed`, while
+  `quit-after-last-window-closed-delay` is documented and implemented upstream
+  as Linux/GTK-only. Keep broad macOS app/window/menu lifecycle walkthrough work
+  separate from this narrow quit-after-last-window bridge.
+- **`title-report` is a gated runtime disclosure.** Pinned Ghostty defaults
+  `title-report` to `false` and drops CSI `21t` report-title requests at the
+  surface config layer unless enabled. Roastty must keep OSC-driven title
+  reports off by default and refresh the gate when config updates, while
+  configured/static surface-title reporting remains a separate UI/runtime gap.
+- **Surface titles must avoid terminal callbacks in worker PTYs.** Roastty's
+  Termio worker rejects terminals with callbacks installed, so non-empty OSC/PTY
+  title changes should travel through `TermioPump`. Configured static titles and
+  direct command argv[0] startup titles are now proven separately from
+  empty-title/PWD fallback semantics, which remain a CFG-223 gap.
+- **`scrollback-limit` runtime parity has two tiers.** Roastty's terminal core
+  currently models scrollback capacity in rows, while pinned Ghostty documents
+  `scrollback-limit` as a byte quota. A focused experiment may prove the
+  important `scrollback-limit = 0` no-history behavior, but exact nonzero
+  byte-quota parity must remain a separate gap until Roastty has a byte-accurate
+  oracle.
 - **App-facing ABI parity must be scoped before diffing.** Roastty's C header is
   intentionally larger than Ghostty's header, so full symbol-count equality is
   the wrong oracle. Experiment 4 uses Swift app-source identifiers as the
@@ -394,6 +435,207 @@ experiment files until they are proven.
   or option-specific oracles and 81 options that still need explicit
   `ConfigDiagnostic` proof. CFG-219 now has a concrete row inventory and remains
   `Gap` until every diagnostic row is `Oracle complete`.
+- **Boolean diagnostic rows can be promoted by an exact row table.** Experiment
+  86 promoted the 39 direct boolean diagnostic rows by iterating every
+  incomplete boolean option, checking exact true/false tokens, empty reset, bare
+  true, file and CLI diagnostics, and invalid-value state retention. CFG-219 now
+  has 161 `Oracle complete` rows and 42 remaining incomplete diagnostic rows.
+- **Integer diagnostics share missing-value behavior across required and
+  optional fields.** Experiment 87 promoted the ten integer scalar diagnostic
+  rows and confirmed that empty values reset optional integer fields, while bare
+  missing values report `ConfigSetError::ValueRequired` for both required and
+  optional integer fields. CFG-219 now has 171 `Oracle complete` rows and 32
+  remaining incomplete diagnostic rows.
+- **Float diagnostics can reuse formatted-state assertions.** Experiment 88
+  promoted the nine float scalar diagnostic rows with finite non-default values,
+  empty reset checks, missing-value diagnostics, file and CLI invalid-value
+  diagnostics, and state-retention checks through `format_config` output.
+  CFG-219 now has 180 `Oracle complete` rows and 23 remaining incomplete
+  diagnostic rows.
+- **String diagnostics are missing-value diagnostics.** Experiment 89 promoted
+  the nine string diagnostic rows and corrected the diagnostic inventory family
+  from invalid-value wording to required-value wording. Explicit string values,
+  including NUL-containing strings, are accepted; missing values report
+  `ConfigSetError::ValueRequired` and preserve prior state. CFG-219 now has 189
+  `Oracle complete` rows and 14 remaining incomplete diagnostic rows.
+- **Duration zero values need internal-state checks.** Experiment 90 promoted
+  the four duration diagnostic rows and confirmed that invalid duration values
+  report `ConfigSetError::InvalidValue`, missing values report
+  `ConfigSetError::ValueRequired`, and both preserve prior state. Duration zero
+  formats as an empty value, so tests must also assert internal zero state to
+  distinguish zero from empty-reset semantics. CFG-219 now has 193
+  `Oracle complete` rows and 10 remaining incomplete diagnostic rows.
+- **Working-directory diagnostics are source-specific required-value checks.**
+  Experiment 91 promoted the `working-directory` diagnostic row and confirmed
+  that bare config-file keys plus missing/all-whitespace CLI values report
+  `ConfigSetError::ValueRequired` while preserving prior state. Config-file
+  whitespace after `=` is normalized as an empty reset, not a diagnostic.
+  CFG-219 now has 194 `Oracle complete` rows and 9 remaining incomplete
+  diagnostic rows.
+- **Path diagnostics are missing-value diagnostics, with CLI base expansion.**
+  Experiment 92 promoted the three path diagnostic rows and confirmed that
+  explicit required, optional, quoted, and NUL-containing path values are
+  accepted, raw empty values reset, parsed-empty values are no-ops, and missing
+  config-file/CLI values report `ConfigSetError::ValueRequired` while preserving
+  state. CLI parsing can expand existing relative path state, so diagnostic
+  state-retention tests should use absolute setup paths. CFG-219 now has 197
+  `Oracle complete` rows and 6 remaining incomplete diagnostic rows.
+- **Command-palette diagnostics are structured invalid-value checks.**
+  Experiment 93 promoted `command-palette-entry` and confirmed that malformed
+  structured entries report `ConfigSetError::InvalidValue`, config-file
+  diagnostics preserve line/key/error while later valid entries still load, and
+  CLI diagnostics preserve argument position/key/error while retaining prior and
+  later valid entries. Empty and missing direct values restore defaults. CFG-219
+  now has 198 `Oracle complete` rows and 5 remaining incomplete diagnostic rows.
+- **Font RepeatableString diagnostics are missing-value diagnostics.**
+  Experiment 94 promoted `font-family`, `font-family-bold`,
+  `font-family-italic`, `font-family-bold-italic`, and `font-feature`, and
+  confirmed that explicit values, including NUL-containing values, append and
+  format while raw empty values reset. Missing direct, config-file, and CLI
+  values report `ConfigSetError::ValueRequired` while preserving prior state.
+  CFG-219 now has 203 `Oracle complete` rows and 0 remaining incomplete
+  diagnostic rows.
+- **Finalization parity needs row-level runtime-context proof.** Experiment 95
+  split CFG-220 into 17 pinned Ghostty `Config.finalize` behaviors. Existing
+  Roastty tests prove 14 rows, while click-repeat interval app OS defaulting,
+  unfocused split opacity clamping, and auto-update-channel release-channel
+  defaulting remain audit-covered follow-ups. CFG-220 remains `Gap` with 14
+  `Oracle complete` rows, 3 incomplete rows, and 0 structural finalization gaps.
+- **Unfocused split opacity finalization is already proven by the split visual
+  oracle.** Experiment 96 promoted FINAL-010 by citing
+  `split_visual_config_defaults_parse_format_and_finalize`, which proves default
+  formatting plus below-minimum, above-maximum, and config-file parsed
+  out-of-range clamps. CFG-220 remains `Gap` with 15 `Oracle complete` rows, 2
+  incomplete rows, and 0 structural finalization gaps.
+- **Pinned Ghostty's auto-update channel finalizes to `tip`.** Experiment 97
+  promoted FINAL-015 by proving the pinned Ghostty `1.3.2-dev` prerelease build
+  derives `build_config.release_channel = tip`, and Roastty's
+  `config_finalize_scalar_tail` proves unset `auto-update-channel` finalizes to
+  `Tip` while explicit values are preserved. CFG-220 remains `Gap` with 16
+  `Oracle complete` rows, 1 incomplete row, and 0 structural finalization gaps.
+- **Click-repeat interval finalization uses the platform OS helper.** Experiment
+  98 updated Roastty to match pinned Ghostty's
+  `internal_os.clickInterval() orelse 500` behavior by routing finalization
+  through `mouse::click_interval().unwrap_or(500)`, with deterministic test
+  coverage for OS-provided values, fallback 500, nonzero preservation, and the
+  parser/finalize boundary. CFG-220 now has 17 `Oracle complete` rows and 0
+  incomplete finalization rows, so validation/finalization parity is `Pass`.
+- **CFG-221 now has an explicit load/precedence manifest.** Experiment 99 split
+  source precedence into 18 pinned Ghostty load rows. Existing Roastty tests
+  prove 15 rows; full end-to-end load pipeline order remains audit-covered, and
+  default template creation plus recursive replay placement before the initial
+  command suffix are structural gaps. CFG-221 remains `Gap` with 15
+  `Oracle complete` rows, 3 incomplete rows, and 2 load gaps.
+- **Default config template creation includes content parity.** Experiment 100
+  promoted `LOAD-008` by creating the missing default config template at the
+  same selected target as pinned Ghostty and proving the generated file matches
+  the pinned template text after substituting the selected path. CFG-221 now has
+  16 `Oracle complete` rows, 2 incomplete rows, and 1 load gap.
+- **Recursive config-file replay must stay before the initial-command suffix.**
+  Experiment 101 added an internal replay boundary matching pinned Ghostty's
+  `-e` marker behavior. Recursive `config-file` replay entries are now inserted
+  before that boundary, keep file/config-entry representation, and replay as
+  config while the original initial-command suffix remains unchanged. CFG-221
+  now has 17 `Oracle complete` rows, 1 incomplete row, and 0 load gaps.
+- **Config load precedence now has full pipeline proof.** Experiment 102 added a
+  focused pipeline oracle proving Roastty starts from defaults, then applies
+  default files, CLI args, recursive config files, and finalization in pinned
+  Ghostty order. All 18 CFG-221 load rows are now `Oracle complete`, so config
+  source precedence and repeated-file load semantics are `Pass`.
+- **CFG-222 reload parity now has an explicit manifest.** Experiment 103 split
+  config reload behavior into 14 pinned Ghostty reload rows. Existing Roastty
+  tests and source evidence prove 12 rows, while surface reload still needs to
+  clear active key tables and apply configured font-size changes without
+  overriding manually adjusted font sizes.
+- **Surface config reload must clear active key tables.** Experiment 104 matched
+  pinned Ghostty's `Surface.updateConfig` behavior by clearing
+  `active_key_tables` during Roastty surface config update and emitting the
+  existing deactivate-all notification when a stack was active. CFG-222 now has
+  one remaining reload gap: configured font-size reload behavior with manual
+  adjustment preservation.
+- **Config reload parity is now complete.** Experiment 105 matched pinned
+  Ghostty's reload font-size rule: unadjusted surfaces adopt the reloaded
+  configured font size, manual font-size adjustments are preserved across
+  reload, and reset-font-size targets the newly reloaded configured font size.
+  All 14 CFG-222 reload rows are now `Oracle complete`, so config reload
+  behavior is `Pass`.
+- **CFG-223 now has a runtime/UI effect manifest.** Experiment 106 split broad
+  runtime and UI config effects into 14 rows. Existing Roastty tests and
+  divergence records close 6 rows, while mouse/click/cursor behavior, broad font
+  runtime behavior, renderer-visible effects, terminal toggles beyond VT KAM,
+  PTY/process launch effects beyond initial command and inherited working
+  directory, macOS app/window/menu workflows, notifications/bell/link behavior,
+  and platform-specific classifications remain gaps.
+- **Mouse runtime coverage must stay split by behavior.** Experiment 107 split
+  the broad `RUNTIME-004` row into eight mouse subrows. Mouse reporting/toggle,
+  mouse shift capture, scroll multiplier, and click-repeat timing are now
+  `Oracle complete`; `cursor-click-to-move`, `mouse-hide-while-typing`,
+  `right-click-action`, and `middle-click-action` remain explicit runtime/UI
+  gaps.
+- **OSC 133 prompt-click options belong to prompt-start commands.** Experiment
+  108 found that `OSC 133;B` starts input but must not clear the prompt-click
+  mode from `OSC 133;A;click_events=1` or `OSC 133;A;cl=line`. Roastty now
+  persists prompt-click mode across input/output semantic markers and guards
+  `cursor-click-to-move` with pty-backed surface mouse tests.
+- **Middle-click paste follows copy-on-select, but not mouse reporting.**
+  Experiment 109 matched pinned Ghostty's `middle-click-action` behavior:
+  `primary-paste` reads the selection clipboard for `copy-on-select = true` or
+  `false`, falls back to standard when selection clipboards are unsupported,
+  reads standard for `copy-on-select = clipboard`, and does not bypass terminal
+  mouse reporting.
+- **Right-click actions run only after mouse reporting declines the event.**
+  Experiment 110 matched pinned Ghostty's `right-click-action` behavior for
+  `ignore`, `paste`, `copy`, `copy-or-paste`, and non-link `context-menu`.
+  Reporting-mode right clicks clear selection, reset selection gesture state,
+  dispatch the mouse report, and skip right-click action side effects; link
+  context-menu behavior remains tracked under notification/link runtime parity.
+- **Mouse hiding belongs after fallthrough keybindings and before encoding.**
+  Experiment 111 matched pinned Ghostty's `mouse-hide-while-typing` behavior:
+  text key presses hide the mouse once, releases and empty-text keys do not
+  hide, unconsumed configured bindings still hide before encoded fallthrough
+  input, mouse movement/button/scroll show the mouse again, and disabling the
+  option by config update shows an already-hidden mouse.
+- **Platform-specific runtime effects need classification, not blanket
+  closure.** Experiment 112 generated a platform runtime manifest for every
+  `gtk-*`, `linux-*`, and `macos-*` canonical option. GTK/Linux rows are not
+  applicable to Roastty's macOS runtime, `macos-option-as-alt` is covered by
+  input guards, and remaining macOS app behavior stays owned by `RUNTIME-011`.
+- **Broad runtime rows should split proven slices from real gaps.** Experiment
+  113 split PTY/process launch coverage so initial-command, environment, and
+  working-directory behavior are guarded separately while config-level command,
+  startup input, wait/abnormal-exit, and quit policy remain explicit gaps.
+- **Terminal runtime toggles should not hide under broad terminal gaps.**
+  Experiment 114 split `vt-kam-allowed` into its own guarded runtime row while
+  scrollback, alternate screen, shell integration, terminfo, title reporting,
+  and remaining terminal behavior stay explicit gaps.
+- **Deterministic link/open-url behavior can be guarded separately from GUI link
+  UX.** Experiment 115 split URL link finalization, renderer link ranges,
+  explicit open-url dispatch, and OSC8 copy-url bindings from the bell,
+  notification, hover, preview, and context/menu gaps.
+- **Live BEL dispatch must avoid terminal callbacks.** Experiment 123 found that
+  Roastty's embedded C bell callback path is intentionally unavailable to
+  `TermioWorker` terminals because workers reject callback-installed terminals.
+  Live PTY-backed BEL parity therefore flows through terminal pending bell
+  counts, `TermioPump::bell_count`, and surface `ROASTTY_ACTION_RING_BELL`
+  dispatch with a 100ms repeated-BEL throttle.
+- **Shell integration parity has a proven Termio env slice.** Experiment 124
+  split terminal identity, resource-backed `TERMINFO`, explicit env override
+  ordering, shell feature env, and zsh bootstrap behavior out of the broader
+  terminal runtime gap. Those behaviors are guarded by child-visible Termio
+  runtime tests plus a static Ghostty/Roastty marker check; exact nonzero
+  scrollback byte quota and configured/static surface-title reporting remain
+  separate terminal gaps.
+- **Renderer control parity is separate from visible renderer parity.**
+  Experiment 125 split `window-vsync` present scheduling, cursor blink
+  timing/reset behavior, focus/occlusion control, and live renderer rebuild
+  requests from the broader renderer gap. Visible opacity, blur, padding, cursor
+  shape/style rendering, window padding color, custom shader output, and GUI
+  visual effects still need focused runtime or walkthrough proof.
+- **Font-size runtime updates should be idempotent.** Experiment 125 found that
+  applying an unchanged font size dirtied ABI-only surfaces because
+  `set_font_size_points` always requested a render. The setter now returns
+  without requesting render when the requested point size is already active,
+  preserving real font-change reload behavior while keeping no-op updates quiet.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -956,4 +1198,85 @@ remains open.
 - [Experiment 85: Invalid diagnostic facet audit](85-invalid-diagnostic-facet-audit.md)
   — **Pass**
 - [Experiment 86: Boolean diagnostic oracle](86-boolean-diagnostic-oracle.md) —
-  **Designed**
+  **Pass**
+- [Experiment 87: Integer diagnostic oracle](87-integer-diagnostic-oracle.md) —
+  **Pass**
+- [Experiment 88: Float diagnostic oracle](88-float-diagnostic-oracle.md) —
+  **Pass**
+- [Experiment 89: String diagnostic oracle](89-string-diagnostic-oracle.md) —
+  **Pass**
+- [Experiment 90: Duration diagnostic oracle](90-duration-diagnostic-oracle.md)
+  — **Pass**
+- [Experiment 91: Working directory diagnostic oracle](91-working-directory-diagnostic-oracle.md)
+  — **Pass**
+- [Experiment 92: Path diagnostic oracle](92-path-diagnostic-oracle.md) —
+  **Pass**
+- [Experiment 93: Command palette diagnostic oracle](93-command-palette-diagnostic-oracle.md)
+  — **Pass**
+- [Experiment 94: Font diagnostic oracle](94-font-diagnostic-oracle.md) —
+  **Pass**
+- [Experiment 95: Finalization facet inventory](95-finalization-facet-inventory.md)
+  — **Pass**
+- [Experiment 96: Unfocused split opacity finalization](96-unfocused-split-opacity-finalization.md)
+  — **Pass**
+- [Experiment 97: Auto-update channel finalization](97-auto-update-channel-finalization.md)
+  — **Pass**
+- [Experiment 98: Click repeat interval finalization](98-click-repeat-interval-finalization.md)
+  — **Pass**
+- [Experiment 99: Source precedence load inventory](99-source-precedence-load-inventory.md)
+  — **Pass**
+- [Experiment 100: Default config template creation](100-default-config-template-creation.md)
+  — **Pass**
+- [Experiment 101: Recursive replay suffix placement](101-recursive-replay-suffix.md)
+  — **Pass**
+- [Experiment 102: Full load pipeline order](102-full-load-pipeline-order.md) —
+  **Pass**
+- [Experiment 103: Config reload inventory](103-config-reload-inventory.md) —
+  **Partial**
+- [Experiment 104: Reload clears key tables](104-reload-clears-key-tables.md) —
+  **Pass**
+- [Experiment 105: Reload font size](105-reload-font-size.md) — **Pass**
+- [Experiment 106: Runtime UI effects inventory](106-runtime-ui-effects-inventory.md)
+  — **Partial**
+- [Experiment 107: Mouse runtime subinventory](107-mouse-runtime-subinventory.md)
+  — **Partial**
+- [Experiment 108: Cursor click to move runtime](108-cursor-click-to-move-runtime.md)
+  — **Pass**
+- [Experiment 109: Middle click action runtime](109-middle-click-action-runtime.md)
+  — **Pass**
+- [Experiment 110: Right click action runtime](110-right-click-action-runtime.md)
+  — **Pass**
+- [Experiment 111: Mouse hide while typing runtime](111-mouse-hide-while-typing-runtime.md)
+  — **Pass**
+- [Experiment 112: Platform runtime classification](112-platform-runtime-classification.md)
+  — **Pass**
+- [Experiment 113: PTY process runtime split](113-pty-process-runtime-split.md)
+  — **Pass**
+- [Experiment 114: Terminal VT KAM runtime split](114-terminal-vt-kam-runtime-split.md)
+  — **Pass**
+- [Experiment 115: Link open URL runtime split](115-link-open-url-runtime-split.md)
+  — **Pass**
+- [Experiment 116: Process command input runtime split](116-process-command-input-runtime-split.md)
+  — **Pass**
+- [Experiment 117: Scrollback limit runtime split](117-scrollback-limit-runtime-split.md)
+  — **Pass**
+- [Experiment 118: Wait after command runtime split](118-wait-after-command-runtime-split.md)
+  — **Pass**
+- [Experiment 119: Child exited action payload split](119-child-exited-action-payload-split.md)
+  — **Pass**
+- [Experiment 120: Child exited fallback policy split](120-child-exited-fallback-policy-split.md)
+  — **Pass**
+- [Experiment 121: macOS quit lifecycle policy split](121-macos-quit-lifecycle-policy-split.md)
+  — **Pass**
+- [Experiment 122: Title report runtime split](122-title-report-runtime-split.md)
+  — **Pass**
+- [Experiment 123: Bell runtime dispatch split](123-bell-runtime-dispatch-split.md)
+  — **Pass**
+- [Experiment 124: Shell integration runtime split](124-shell-integration-runtime-split.md)
+  — **Pass**
+- [Experiment 125: Renderer control runtime split](125-renderer-control-runtime-split.md)
+  — **Pass**
+- [Experiment 126: Surface title runtime split](126-surface-title-runtime-split.md)
+  — **Pass**
+- [Experiment 127: Title PWD fallback runtime](127-title-pwd-fallback-runtime.md)
+  — **Designed**

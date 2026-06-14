@@ -29,7 +29,7 @@ use crate::font::metrics::Modifier as MetricModifier;
 use crate::input::key_mods::{self, Mods, RemapSet, RemapSetParseError};
 use crate::input::link;
 use crate::os::homedir::expand_home;
-use crate::os::{desktop, passwd, resources_dir};
+use crate::os::{desktop, mouse, passwd, resources_dir};
 use crate::terminal::color::{Palette as TerminalPalette, PaletteMask, Rgb, DEFAULT_PALETTE};
 use crate::terminal::cursor;
 use crate::terminal::selection_codepoints::DEFAULT_WORD_BOUNDARIES;
@@ -42,6 +42,9 @@ use std::path::{Component, Path, PathBuf};
 /// The pinned Ghostty source for Issue 802 is `1.3.2-dev`, which upstream
 /// classifies as the prerelease `tip` channel in build config.
 const PINNED_BUILD_RELEASE_CHANNEL: ReleaseChannel = ReleaseChannel::Tip;
+
+const DEFAULT_CONFIG_TEMPLATE: &str =
+    include_str!("../../../vendor/ghostty/src/config/config-template");
 
 /// Default URL/path regex from pinned upstream
 /// `vendor/ghostty/src/config/url.zig`. This is config data for the default
@@ -1164,7 +1167,7 @@ impl Config {
         begin_cli_batch: bool,
     ) -> Result<(), ConfigSetError> {
         self.set_from_source(key, value, source)?;
-        self.replay_entries.push(ConfigReplayEntry {
+        self.replay_entries.push(ConfigReplayEntry::Config {
             key: key.to_string(),
             value: value.map(ToString::to_string),
             source,
@@ -1182,23 +1185,59 @@ impl Config {
         target: &mut Config,
     ) -> Result<(), ConfigSetError> {
         let mut cli_replay_active = false;
+        let mut initial_command_args: Option<Vec<String>> = None;
         for entry in entries {
-            if entry.source == ConfigSetSource::Cli && entry.begin_cli_batch {
+            if let Some(args) = initial_command_args.as_mut() {
+                match entry {
+                    ConfigReplayEntry::InitialCommandMarker => {}
+                    ConfigReplayEntry::InitialCommandArg(arg) => args.push(arg.clone()),
+                    ConfigReplayEntry::Config { key, value, .. } => {
+                        args.push(match value {
+                            Some(value) => format!("{key}={value}"),
+                            None => key.clone(),
+                        });
+                    }
+                }
+                continue;
+            }
+            let ConfigReplayEntry::Config {
+                key,
+                value,
+                source,
+                begin_cli_batch,
+            } = entry
+            else {
+                if cli_replay_active {
+                    target.end_cli_replay();
+                    cli_replay_active = false;
+                }
+                match entry {
+                    ConfigReplayEntry::InitialCommandMarker => {
+                        initial_command_args = Some(Vec::new());
+                    }
+                    ConfigReplayEntry::InitialCommandArg(arg) => {
+                        if let Some(args) = initial_command_args.as_mut() {
+                            args.push(arg.clone());
+                        }
+                    }
+                    ConfigReplayEntry::Config { .. } => unreachable!(),
+                }
+                continue;
+            };
+            if *source == ConfigSetSource::Cli && *begin_cli_batch {
                 if cli_replay_active {
                     target.end_cli_replay();
                 }
                 target.begin_cli_replay();
                 cli_replay_active = true;
-            } else if entry.source == ConfigSetSource::Cli && !cli_replay_active {
+            } else if *source == ConfigSetSource::Cli && !cli_replay_active {
                 target.begin_cli_replay();
                 cli_replay_active = true;
-            } else if entry.source != ConfigSetSource::Cli && cli_replay_active {
+            } else if *source != ConfigSetSource::Cli && cli_replay_active {
                 target.end_cli_replay();
                 cli_replay_active = false;
             }
-            if let Err(error) =
-                target.set_from_source(&entry.key, entry.value.as_deref(), entry.source)
-            {
+            if let Err(error) = target.set_from_source(key, value.as_deref(), *source) {
                 if cli_replay_active {
                     target.end_cli_replay();
                 }
@@ -1207,6 +1246,9 @@ impl Config {
         }
         if cli_replay_active {
             target.end_cli_replay();
+        }
+        if let Some(args) = initial_command_args {
+            target.initial_command = Some(Command::Direct(args));
         }
         Ok(())
     }
@@ -1223,6 +1265,16 @@ impl Config {
         self.font_family_bold.overwrite_next = false;
         self.font_family_italic.overwrite_next = false;
         self.font_family_bold_italic.overwrite_next = false;
+    }
+
+    #[cfg(test)]
+    fn append_initial_command_replay_suffix_for_test(&mut self, args: &[&str]) {
+        self.replay_entries
+            .push(ConfigReplayEntry::InitialCommandMarker);
+        self.replay_entries.extend(
+            args.iter()
+                .map(|arg| ConfigReplayEntry::InitialCommandArg((*arg).to_string())),
+        );
     }
 
     fn set_from_source(
@@ -2343,6 +2395,22 @@ impl Config {
     }
 
     #[cfg(test)]
+    fn finalize_with_click_interval_for_test(&mut self, click_interval: Option<u32>) {
+        let mut report = ConfigFinalizeReport::default();
+        self.finalize_scalars_with_click_interval(
+            &mut report,
+            &ConfigFinalizeContext {
+                app_runtime: ConfigAppRuntime::None,
+                probable_cli: true,
+                env_shell: None,
+                passwd_shell: None,
+                passwd_home: None,
+            },
+            click_interval,
+        );
+    }
+
+    #[cfg(test)]
     fn finalize_with_app_runtime_for_test(
         &mut self,
         app_runtime: ConfigAppRuntime,
@@ -2540,6 +2608,15 @@ impl Config {
         report: &mut ConfigFinalizeReport,
         context: &ConfigFinalizeContext,
     ) {
+        self.finalize_scalars_with_click_interval(report, context, mouse::click_interval());
+    }
+
+    fn finalize_scalars_with_click_interval(
+        &mut self,
+        report: &mut ConfigFinalizeReport,
+        context: &ConfigFinalizeContext,
+        click_interval: Option<u32>,
+    ) {
         if self.font_family.count() != 0 {
             if self.font_family_bold.count() == 0 {
                 self.font_family_bold = self.font_family.clone();
@@ -2559,9 +2636,7 @@ impl Config {
         self.finalize_working_directory(context);
         self.finalize_gtk_single_instance(context);
 
-        if self.click_repeat_interval == 0 {
-            self.click_repeat_interval = 500;
-        }
+        self.finalize_click_repeat_interval_with(click_interval);
         self.mouse_scroll_multiplier.precision =
             self.mouse_scroll_multiplier.precision.clamp(0.01, 10_000.0);
         self.mouse_scroll_multiplier.discrete =
@@ -2581,6 +2656,12 @@ impl Config {
         }
         self.faint_opacity = self.faint_opacity.clamp(0.0, 1.0);
         self.key_remap.finalize();
+    }
+
+    fn finalize_click_repeat_interval_with(&mut self, click_interval: Option<u32>) {
+        if self.click_repeat_interval == 0 {
+            self.click_repeat_interval = click_interval.unwrap_or(500);
+        }
     }
 
     fn finalize_link_url(&mut self) {
@@ -2722,6 +2803,10 @@ impl Config {
         let mut report = DefaultConfigLoadReport::default();
         let legacy_xdg = paths.legacy_xdg;
         let preferred_xdg = paths.preferred_xdg;
+        let template_target = paths
+            .preferred_app_support
+            .clone()
+            .or_else(|| preferred_xdg.clone());
         let legacy_xdg_status = self.load_default_file_candidate(legacy_xdg.clone(), &mut report);
         if legacy_xdg_status.present() {
             report.xdg_loaded = true;
@@ -2758,12 +2843,47 @@ impl Config {
                 }
             }
         }
+        if !report.xdg_loaded && !report.app_support_loaded {
+            if let Some(path) = template_target {
+                match write_default_config_template(&path) {
+                    Ok(()) => report.template_created = Some(path),
+                    Err(error) => {
+                        report.template_error = Some(DefaultConfigTemplateError { path, error })
+                    }
+                }
+            }
+        }
         report
     }
 
     /// Load default config files using the environment-derived default paths.
     pub(crate) fn load_default_files(&mut self) -> DefaultConfigLoadReport {
         self.load_default_files_from_paths(loader::default_config_paths())
+    }
+
+    #[cfg(test)]
+    fn load_pipeline_for_test<'a, I>(
+        paths: DefaultConfigPaths,
+        cli_args: I,
+        cli_base: &std::path::Path,
+    ) -> (Config, ConfigLoadPipelineReport)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let mut config = Config::default();
+        let default_files = config.load_default_files_from_paths(paths);
+        let cli_diagnostics = config.set_cli_args_from_base(cli_args, cli_base);
+        let recursive = config.load_recursive_files_from_config();
+        let finalization = config.finalize_with_report();
+        (
+            config,
+            ConfigLoadPipelineReport {
+                default_files,
+                cli_diagnostics,
+                recursive,
+                finalization,
+            },
+        )
     }
 
     fn load_default_file_candidate(
@@ -2879,6 +2999,11 @@ impl Config {
     pub(crate) fn load_recursive_files_from_config(&mut self) -> ConfigRecursiveLoadReport {
         let mut report = ConfigRecursiveLoadReport::default();
         let mut loaded = HashSet::new();
+        let replay_suffix = self
+            .replay_entries
+            .iter()
+            .position(|entry| matches!(entry, ConfigReplayEntry::InitialCommandMarker))
+            .map(|index| self.replay_entries.split_off(index));
         let mut index = 0;
         while index < self.config_file.list.len() {
             let path = self.config_file.list[index].path().to_string();
@@ -2916,8 +3041,22 @@ impl Config {
                 }),
             }
         }
+        if let Some(replay_suffix) = replay_suffix {
+            self.replay_entries.extend(replay_suffix);
+        }
         report
     }
+}
+
+fn default_config_template_for_path(path: &Path) -> String {
+    DEFAULT_CONFIG_TEMPLATE.replace("{[path]s}", &path.display().to_string())
+}
+
+fn write_default_config_template(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, default_config_template_for_path(path))
 }
 
 /// The result of `Config::load_optional_file` (upstream `OptionalFileAction`).
@@ -2968,6 +3107,13 @@ pub(crate) struct DefaultConfigFileError {
     pub error: std::io::Error,
 }
 
+/// A nonfatal error encountered while creating the default config template.
+#[derive(Debug)]
+pub(crate) struct DefaultConfigTemplateError {
+    pub path: PathBuf,
+    pub error: std::io::Error,
+}
+
 /// Summary of default config file loading.
 #[derive(Debug, Default)]
 pub(crate) struct DefaultConfigLoadReport {
@@ -2977,6 +3123,16 @@ pub(crate) struct DefaultConfigLoadReport {
     pub app_support_loaded: bool,
     pub duplicate_xdg: Option<(PathBuf, PathBuf)>,
     pub duplicate_app_support: Option<(PathBuf, PathBuf)>,
+    pub template_created: Option<PathBuf>,
+    pub template_error: Option<DefaultConfigTemplateError>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ConfigLoadPipelineReport {
+    pub default_files: DefaultConfigLoadReport,
+    pub cli_diagnostics: Vec<ConfigDiagnostic>,
+    pub recursive: ConfigRecursiveLoadReport,
+    pub finalization: ConfigFinalizeReport,
 }
 
 #[derive(Debug, Default)]
@@ -3150,11 +3306,15 @@ enum ConfigSetSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ConfigReplayEntry {
-    key: String,
-    value: Option<String>,
-    source: ConfigSetSource,
-    begin_cli_batch: bool,
+enum ConfigReplayEntry {
+    Config {
+        key: String,
+        value: Option<String>,
+        source: ConfigSetSource,
+        begin_cli_batch: bool,
+    },
+    InitialCommandMarker,
+    InitialCommandArg(String),
 }
 
 /// An error parsing a `RepeatableConfigPath` (upstream `error.ValueRequired`).
@@ -8934,7 +9094,7 @@ mod tests {
         WindowDecorationParseError, WindowNewTabPosition, WindowPadding, WindowPaddingBalance,
         WindowPaddingColor, WindowPaddingParseError, WindowSaveState, WindowShowTabBar,
         WindowSubtitle, WindowTheme, WorkingDirectory, WorkingDirectoryParseError,
-        DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
+        DEFAULT_CONFIG_TEMPLATE, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
     };
     use crate::input::key_mods::{self, Mods};
     use crate::input::link::{Action as LinkAction, Highlight as LinkHighlight};
@@ -10789,6 +10949,261 @@ mod tests {
         let mut out = String::new();
         cfg.format_config(&mut out);
         assert!(out.lines().any(|line| line == "config-file = "));
+    }
+
+    #[test]
+    fn config_path_diagnostic_family_oracle() {
+        struct OptionalPathCase {
+            key: &'static str,
+            get_value: fn(&Config) -> Option<ConfigFilePath>,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        fn config_lines(cfg: &Config, key: &str) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+                .collect()
+        }
+
+        let optional_cases = [
+            OptionalPathCase {
+                key: "background-image",
+                get_value: |cfg| cfg.background_image.clone(),
+            },
+            OptionalPathCase {
+                key: "bell-audio-path",
+                get_value: |cfg| cfg.bell_audio_path.clone(),
+            },
+        ];
+
+        for case in optional_cases {
+            let default_line = config_line(&Config::default(), case.key);
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some("/tmp/required.dat")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Required("/tmp/required.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = /tmp/required.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("?/tmp/optional.dat")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Optional("/tmp/optional.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = ?/tmp/optional.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("\"?/tmp/literal.dat\"")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Required("?/tmp/literal.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = ?/tmp/literal.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("?\"/tmp/quoted optional.dat\""))
+                .unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Optional(
+                    "/tmp/quoted optional.dat".to_string()
+                ))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = ?/tmp/quoted optional.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("/tmp/bad\0path.dat")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Required("/tmp/bad\0path.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = /tmp/bad\0path.dat", case.key))
+            );
+
+            let before = config_line(&cfg, case.key);
+            for parsed_empty in ["?", "\"\"", "?\"\""] {
+                cfg.set(case.key, Some(parsed_empty)).unwrap();
+                assert_eq!(
+                    config_line(&cfg, case.key),
+                    before,
+                    "{} parsed-empty value {parsed_empty:?} is a no-op",
+                    case.key
+                );
+            }
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!((case.get_value)(&cfg), None);
+            assert_eq!(
+                config_line(&cfg, case.key),
+                default_line,
+                "{} raw empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some("?/tmp/optional.dat")).unwrap();
+            let before = config_line(&file_cfg, case.key);
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                config_line(&file_cfg, case.key),
+                before,
+                "{} missing file value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some("/tmp/required.dat")).unwrap();
+            let before = config_line(&cli_cfg, case.key);
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                config_line(&cli_cfg, case.key),
+                before,
+                "{} missing CLI value preserves previous state",
+                case.key
+            );
+        }
+
+        let mut cfg = Config::default();
+        cfg.set("config-file", Some("/tmp/required.conf")).unwrap();
+        cfg.set("config-file", Some("?/tmp/optional.conf")).unwrap();
+        cfg.set("config-file", Some("\"?/tmp/literal.conf\""))
+            .unwrap();
+        cfg.set("config-file", Some("?\"/tmp/quoted optional.conf\""))
+            .unwrap();
+        cfg.set("config-file", Some("/tmp/bad\0path.conf")).unwrap();
+        assert_eq!(
+            cfg.config_file.list,
+            vec![
+                ConfigFilePath::Required("/tmp/required.conf".to_string()),
+                ConfigFilePath::Optional("/tmp/optional.conf".to_string()),
+                ConfigFilePath::Required("?/tmp/literal.conf".to_string()),
+                ConfigFilePath::Optional("/tmp/quoted optional.conf".to_string()),
+                ConfigFilePath::Required("/tmp/bad\0path.conf".to_string()),
+            ]
+        );
+        assert_eq!(
+            config_lines(&cfg, "config-file"),
+            vec![
+                "config-file = /tmp/required.conf",
+                "config-file = ?/tmp/optional.conf",
+                "config-file = ?/tmp/literal.conf",
+                "config-file = ?/tmp/quoted optional.conf",
+                "config-file = /tmp/bad\0path.conf",
+            ]
+        );
+
+        let before = config_lines(&cfg, "config-file");
+        for parsed_empty in ["?", "\"\"", "?\"\""] {
+            cfg.set("config-file", Some(parsed_empty)).unwrap();
+            assert_eq!(
+                config_lines(&cfg, "config-file"),
+                before,
+                "config-file parsed-empty value {parsed_empty:?} is a no-op"
+            );
+        }
+
+        cfg.set("config-file", Some("")).unwrap();
+        assert!(cfg.config_file.list.is_empty());
+        assert_eq!(config_lines(&cfg, "config-file"), vec!["config-file = "]);
+
+        assert_eq!(
+            cfg.set("config-file", None),
+            Err(ConfigSetError::ValueRequired),
+            "config-file bare missing value is required"
+        );
+
+        let mut file_cfg = Config::default();
+        file_cfg
+            .set("config-file", Some("/tmp/required.conf"))
+            .unwrap();
+        let before = config_lines(&file_cfg, "config-file");
+        let diagnostics = file_cfg.load_str("\nconfig-file\n");
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "config-file".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "config-file file missing-value diagnostic preserves line/key/error"
+        );
+        assert_eq!(
+            config_lines(&file_cfg, "config-file"),
+            before,
+            "config-file missing file value preserves previous state"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg
+            .set("config-file", Some("?/tmp/optional.conf"))
+            .unwrap();
+        let before = config_lines(&cli_cfg, "config-file");
+        let diagnostics = cli_cfg.set_cli_args(["--config-file"]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "config-file".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "config-file CLI missing-value diagnostic preserves argument position/key/error"
+        );
+        assert_eq!(
+            config_lines(&cli_cfg, "config-file"),
+            before,
+            "config-file missing CLI value preserves previous state"
+        );
     }
 
     #[test]
@@ -12922,6 +13337,92 @@ mod tests {
     }
 
     #[test]
+    fn config_recursive_replay_entries_insert_before_initial_command_suffix() {
+        let dir = unique_config_test_dir("recursive-replay-suffix");
+        let child = dir.join("child.conf");
+        write_config_file(&child, "title = Recursive Title\n");
+        let child = std::fs::canonicalize(&child).unwrap();
+
+        let mut cfg = Config::default();
+        assert!(cfg
+            .set_cli_args_from_base(
+                [format!("--config-file={}", child.display()).as_str()],
+                &dir,
+            )
+            .is_empty());
+        cfg.append_initial_command_replay_suffix_for_test(&["printf", "hello"]);
+        let report = cfg.load_recursive_files_from_config();
+
+        assert!(report.errors.is_empty());
+        assert!(report.cycles.is_empty());
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(cfg.title.as_deref(), Some("Recursive Title"));
+
+        let marker_index = cfg
+            .replay_entries
+            .iter()
+            .position(|entry| matches!(entry, ConfigReplayEntry::InitialCommandMarker))
+            .expect("marker");
+        let recursive_index = cfg
+            .replay_entries
+            .iter()
+            .position(|entry| replay_config_key(entry) == Some("title"))
+            .expect("recursive title replay entry");
+        assert!(recursive_index < marker_index);
+        assert_eq!(
+            replay_config_entry(&cfg.replay_entries[recursive_index]),
+            (
+                "title",
+                Some("Recursive Title"),
+                ConfigSetSource::File,
+                false
+            )
+        );
+        assert_eq!(
+            &cfg.replay_entries[marker_index..],
+            &[
+                ConfigReplayEntry::InitialCommandMarker,
+                ConfigReplayEntry::InitialCommandArg("printf".to_string()),
+                ConfigReplayEntry::InitialCommandArg("hello".to_string()),
+            ]
+        );
+
+        let mut replayed = Config::default();
+        cfg.replay_into(&mut replayed).unwrap();
+        assert_eq!(replayed.title.as_deref(), Some("Recursive Title"));
+        assert_eq!(
+            replayed.initial_command,
+            Some(Command::Direct(vec![
+                "printf".to_string(),
+                "hello".to_string()
+            ]))
+        );
+
+        let mut bad_order = Config::default();
+        let entries = vec![
+            ConfigReplayEntry::InitialCommandMarker,
+            ConfigReplayEntry::InitialCommandArg("printf".to_string()),
+            ConfigReplayEntry::Config {
+                key: "title".to_string(),
+                value: Some("Wrong Side".to_string()),
+                source: ConfigSetSource::File,
+                begin_cli_batch: false,
+            },
+        ];
+        Config::replay_entries_into(&entries, &mut bad_order).unwrap();
+        assert_eq!(bad_order.title, Config::default().title);
+        assert_eq!(
+            bad_order.initial_command,
+            Some(Command::Direct(vec![
+                "printf".to_string(),
+                "title=Wrong Side".to_string()
+            ]))
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn config_default_files_parser_family_oracle() {
         let mut cfg = Config::default();
         assert!(cfg.config_default_files);
@@ -12985,10 +13486,13 @@ mod tests {
         assert_eq!(cfg.title.as_deref(), Some("CLI Only"));
         assert_eq!(cfg.fullscreen, Fullscreen::False);
         assert_eq!(cfg.replay_entries.len(), 2);
-        assert!(cfg
-            .replay_entries
-            .iter()
-            .all(|entry| entry.source == ConfigSetSource::Cli));
+        assert!(cfg.replay_entries.iter().all(|entry| matches!(
+            entry,
+            ConfigReplayEntry::Config {
+                source: ConfigSetSource::Cli,
+                ..
+            }
+        )));
 
         let mut cfg = Config::default();
         let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
@@ -17470,6 +17974,31 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
+    fn expected_default_config_template(path: &std::path::Path) -> String {
+        DEFAULT_CONFIG_TEMPLATE.replace("{[path]s}", &path.display().to_string())
+    }
+
+    fn replay_config_entry(
+        entry: &ConfigReplayEntry,
+    ) -> (&str, Option<&str>, ConfigSetSource, bool) {
+        match entry {
+            ConfigReplayEntry::Config {
+                key,
+                value,
+                source,
+                begin_cli_batch,
+            } => (key, value.as_deref(), *source, *begin_cli_batch),
+            other => panic!("expected config replay entry, got {other:?}"),
+        }
+    }
+
+    fn replay_config_key(entry: &ConfigReplayEntry) -> Option<&str> {
+        match entry {
+            ConfigReplayEntry::Config { key, .. } => Some(key),
+            _ => None,
+        }
+    }
+
     // Serializes all process-global env/cwd mutation across test threads so the
     // HOME/cwd guards below cannot race (Issue 801, Exp 837). Poison-resilient:
     // the lock guards no data (a pure serialization mutex over `()`), so a test
@@ -17767,6 +18296,203 @@ mod tests {
     }
 
     #[test]
+    fn config_load_default_files_creates_app_support_template_when_all_missing() {
+        let dir = unique_config_test_dir("default-template-app");
+        let legacy_xdg = dir.join("xdg-legacy");
+        let preferred_xdg = dir.join("xdg-preferred");
+        let legacy_app = dir.join("app-legacy");
+        let preferred_app = dir.join("nested").join("app-preferred");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(legacy_xdg),
+            preferred_xdg: Some(preferred_xdg.clone()),
+            legacy_app_support: Some(legacy_app),
+            preferred_app_support: Some(preferred_app.clone()),
+        });
+
+        assert!(!report.xdg_loaded);
+        assert!(!report.app_support_loaded);
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.template_created, Some(preferred_app.clone()));
+        assert!(report.template_error.is_none());
+        assert!(!preferred_xdg.exists());
+        assert_eq!(
+            std::fs::read_to_string(&preferred_app).unwrap(),
+            expected_default_config_template(&preferred_app)
+        );
+        assert!(!std::fs::read_to_string(&preferred_app)
+            .unwrap()
+            .contains("{[path]s}"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_creates_xdg_template_without_app_support_target() {
+        let dir = unique_config_test_dir("default-template-xdg");
+        let legacy_xdg = dir.join("xdg-legacy");
+        let preferred_xdg = dir.join("nested").join("xdg-preferred");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(legacy_xdg),
+            preferred_xdg: Some(preferred_xdg.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+
+        assert!(!report.xdg_loaded);
+        assert!(!report.app_support_loaded);
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.template_created, Some(preferred_xdg.clone()));
+        assert!(report.template_error.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&preferred_xdg).unwrap(),
+            expected_default_config_template(&preferred_xdg)
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_suppresses_template_when_candidate_loaded_or_errors() {
+        let loaded_dir = unique_config_test_dir("default-template-loaded");
+        let loaded_xdg = loaded_dir.join("xdg");
+        let loaded_template = loaded_dir.join("template");
+        write_config_file(&loaded_xdg, "fullscreen = true\n");
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(loaded_xdg.clone()),
+            preferred_xdg: Some(loaded_template.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+
+        assert!(report.xdg_loaded);
+        assert_eq!(report.loaded.len(), 1);
+        assert_eq!(report.loaded[0].path, loaded_xdg);
+        assert_eq!(report.template_created, None);
+        assert!(report.template_error.is_none());
+        assert!(!loaded_template.exists());
+        std::fs::remove_dir_all(&loaded_dir).ok();
+
+        let error_dir = unique_config_test_dir("default-template-error");
+        let error_xdg = error_dir.join("is-directory");
+        let error_template = error_dir.join("template");
+        std::fs::create_dir_all(&error_xdg).unwrap();
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(error_xdg.clone()),
+            preferred_xdg: Some(error_template.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+
+        assert!(report.xdg_loaded);
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].path, error_xdg);
+        assert_eq!(report.template_created, None);
+        assert!(report.template_error.is_none());
+        assert!(!error_template.exists());
+        std::fs::remove_dir_all(&error_dir).ok();
+    }
+
+    #[test]
+    fn config_load_default_files_records_template_creation_errors_without_aborting() {
+        let dir = unique_config_test_dir("default-template-error-record");
+        let protected_dir = dir.join("protected");
+        let preferred_xdg = protected_dir.join("config.roastty");
+        std::fs::create_dir_all(&protected_dir).unwrap();
+        std::fs::set_permissions(&protected_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let mut cfg = Config::default();
+        let report = cfg.load_default_files_from_paths(DefaultConfigPaths {
+            legacy_xdg: Some(dir.join("missing-legacy")),
+            preferred_xdg: Some(preferred_xdg.clone()),
+            legacy_app_support: None,
+            preferred_app_support: None,
+        });
+        std::fs::set_permissions(&protected_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!report.xdg_loaded);
+        assert!(!report.app_support_loaded);
+        assert!(report.loaded.is_empty());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.template_created, None);
+        let template_error = report.template_error.unwrap();
+        assert_eq!(template_error.path, preferred_xdg);
+        assert_eq!(
+            template_error.error.kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_load_pipeline_applies_default_cli_recursive_then_finalize_order() {
+        let dir = unique_config_test_dir("load-pipeline-order");
+        let default_file = dir.join("default.conf");
+        let recursive_file = dir.join("recursive.conf");
+        write_config_file(
+            &default_file,
+            "title = Default Title\n\
+             font-size = 11\n",
+        );
+        write_config_file(
+            &recursive_file,
+            "title = Recursive Title\n\
+             window-height = 2\n\
+             window-width = 3\n",
+        );
+
+        let config_file_arg = format!("--config-file={}", recursive_file.display());
+        let (cfg, report) = Config::load_pipeline_for_test(
+            DefaultConfigPaths {
+                legacy_xdg: Some(default_file.clone()),
+                preferred_xdg: None,
+                legacy_app_support: None,
+                preferred_app_support: None,
+            },
+            [
+                "--title=CLI Title",
+                "--font-size=12",
+                config_file_arg.as_str(),
+                "not-a-flag",
+            ],
+            &dir,
+        );
+
+        assert_eq!(cfg.term, Config::default().term);
+        assert_eq!(report.default_files.loaded.len(), 1);
+        assert_eq!(report.default_files.loaded[0].path, default_file);
+        assert_eq!(
+            report.cli_diagnostics,
+            vec![ConfigDiagnostic {
+                line: 4,
+                key: "not-a-flag".to_string(),
+                error: ConfigSetError::UnknownField,
+            }]
+        );
+        assert_eq!(report.recursive.loaded.len(), 1);
+        assert_eq!(report.recursive.loaded[0].path, recursive_file);
+        assert_eq!(report.finalization, ConfigFinalizeReport::default());
+
+        assert_eq!(cfg.title.as_deref(), Some("Recursive Title"));
+        assert_eq!(cfg.font_size, 12.0);
+        assert_eq!(cfg.window_width, 10);
+        assert_eq!(cfg.window_height, 4);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn config_set_cli_args_applies_and_collects_diagnostics() {
         let has = |cfg: &Config, key: &str, val: &str| {
             let mut out = String::new();
@@ -17864,25 +18590,22 @@ mod tests {
         );
 
         assert_eq!(cfg.replay_entries.len(), 4);
-        assert_eq!(cfg.replay_entries[0].key, "term");
         assert_eq!(
-            cfg.replay_entries[0].value.as_deref(),
-            Some("xterm-256color")
+            replay_config_entry(&cfg.replay_entries[0]),
+            ("term", Some("xterm-256color"), ConfigSetSource::File, false)
         );
-        assert_eq!(cfg.replay_entries[0].source, ConfigSetSource::File);
-        assert!(!cfg.replay_entries[0].begin_cli_batch);
-        assert_eq!(cfg.replay_entries[1].key, "title");
-        assert_eq!(cfg.replay_entries[1].value.as_deref(), Some("File Title"));
-        assert_eq!(cfg.replay_entries[1].source, ConfigSetSource::File);
-        assert!(!cfg.replay_entries[1].begin_cli_batch);
-        assert_eq!(cfg.replay_entries[2].key, "window-theme");
-        assert_eq!(cfg.replay_entries[2].value.as_deref(), Some("dark"));
-        assert_eq!(cfg.replay_entries[2].source, ConfigSetSource::Cli);
-        assert!(cfg.replay_entries[2].begin_cli_batch);
-        assert_eq!(cfg.replay_entries[3].key, "auto-update");
-        assert_eq!(cfg.replay_entries[3].value.as_deref(), Some("download"));
-        assert_eq!(cfg.replay_entries[3].source, ConfigSetSource::Cli);
-        assert!(!cfg.replay_entries[3].begin_cli_batch);
+        assert_eq!(
+            replay_config_entry(&cfg.replay_entries[1]),
+            ("title", Some("File Title"), ConfigSetSource::File, false)
+        );
+        assert_eq!(
+            replay_config_entry(&cfg.replay_entries[2]),
+            ("window-theme", Some("dark"), ConfigSetSource::Cli, true)
+        );
+        assert_eq!(
+            replay_config_entry(&cfg.replay_entries[3]),
+            ("auto-update", Some("download"), ConfigSetSource::Cli, false)
+        );
     }
 
     #[test]
@@ -18409,11 +19132,14 @@ mod tests {
         cfg.finalize();
 
         assert_eq!(cfg.replay_entries, before);
-        assert!(cfg.replay_entries.iter().any(|entry| entry.key == "theme"));
+        assert!(cfg
+            .replay_entries
+            .iter()
+            .any(|entry| replay_config_key(entry) == Some("theme")));
         assert!(!cfg
             .replay_entries
             .iter()
-            .any(|entry| entry.key == "background"));
+            .any(|entry| replay_config_key(entry) == Some("background")));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -18630,7 +19356,7 @@ mod tests {
         assert_eq!(
             dark.replay_entries
                 .iter()
-                .filter(|entry| entry.key == "theme")
+                .filter(|entry| replay_config_key(entry) == Some("theme"))
                 .count(),
             1
         );
@@ -18642,7 +19368,7 @@ mod tests {
     fn config_conditional_theme_replay_failure_returns_error() {
         let mut cfg = Config::default();
         cfg.conditional_set.insert(conditional::Key::Theme);
-        cfg.replay_entries.push(ConfigReplayEntry {
+        cfg.replay_entries.push(ConfigReplayEntry::Config {
             key: "not-a-real-field".to_string(),
             value: Some("x".to_string()),
             source: ConfigSetSource::File,
@@ -19100,6 +19826,165 @@ mod tests {
             vec!["file-a", "file-b", "cli-a", "cli-b", "manual"]
         );
         assert!(!cloned.font_feature.overwrite_next);
+    }
+
+    #[test]
+    fn config_font_diagnostic_family_oracle() {
+        struct FontDiagnosticCase {
+            key: &'static str,
+            first: &'static str,
+            second: &'static str,
+            nul_value: &'static str,
+            get_list: fn(&Config) -> Vec<String>,
+        }
+
+        fn config_lines(cfg: &Config, key: &str) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+                .collect()
+        }
+
+        let cases = [
+            FontDiagnosticCase {
+                key: "font-family",
+                first: "Regular A",
+                second: "Regular B",
+                nul_value: "Regular\0C",
+                get_list: |cfg| cfg.font_family.list.clone(),
+            },
+            FontDiagnosticCase {
+                key: "font-family-bold",
+                first: "Bold A",
+                second: "Bold B",
+                nul_value: "Bold\0C",
+                get_list: |cfg| cfg.font_family_bold.list.clone(),
+            },
+            FontDiagnosticCase {
+                key: "font-family-italic",
+                first: "Italic A",
+                second: "Italic B",
+                nul_value: "Italic\0C",
+                get_list: |cfg| cfg.font_family_italic.list.clone(),
+            },
+            FontDiagnosticCase {
+                key: "font-family-bold-italic",
+                first: "Bold Italic A",
+                second: "Bold Italic B",
+                nul_value: "Bold Italic\0C",
+                get_list: |cfg| cfg.font_family_bold_italic.list.clone(),
+            },
+            FontDiagnosticCase {
+                key: "font-feature",
+                first: "calt",
+                second: "-liga",
+                nul_value: "ss01\0on",
+                get_list: |cfg| cfg.font_feature.list.clone(),
+            },
+        ];
+        assert_eq!(cases.len(), 5);
+
+        for case in cases {
+            let default_lines = config_lines(&Config::default(), case.key);
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(case.first)).unwrap();
+            cfg.set(case.key, Some(case.second)).unwrap();
+            assert_eq!(
+                (case.get_list)(&cfg),
+                vec![case.first.to_string(), case.second.to_string()],
+                "{} appends representative explicit values",
+                case.key
+            );
+            assert_eq!(
+                config_lines(&cfg, case.key),
+                vec![
+                    format!("{} = {}", case.key, case.first),
+                    format!("{} = {}", case.key, case.second),
+                ],
+                "{} formats appended values in order",
+                case.key
+            );
+
+            cfg.set(case.key, Some(case.nul_value)).unwrap();
+            assert_eq!(
+                (case.get_list)(&cfg),
+                vec![
+                    case.first.to_string(),
+                    case.second.to_string(),
+                    case.nul_value.to_string(),
+                ],
+                "{} accepts explicit NUL-containing value",
+                case.key
+            );
+            assert_eq!(
+                config_lines(&cfg, case.key).last().cloned(),
+                Some(format!("{} = {}", case.key, case.nul_value)),
+                "{} formats explicit NUL-containing value",
+                case.key
+            );
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!((case.get_list)(&cfg), Vec::<String>::new());
+            assert_eq!(
+                config_lines(&cfg, case.key),
+                default_lines,
+                "{} raw empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.first)).unwrap();
+            let before = config_lines(&file_cfg, case.key);
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                config_lines(&file_cfg, case.key),
+                before,
+                "{} missing file value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.first)).unwrap();
+            let before = config_lines(&cli_cfg, case.key);
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                config_lines(&cli_cfg, case.key),
+                before,
+                "{} missing CLI value preserves previous state",
+                case.key
+            );
+        }
     }
 
     #[test]
@@ -21668,6 +22553,132 @@ mod tests {
     }
 
     #[test]
+    fn config_command_palette_diagnostic_oracle() {
+        fn command_lines(cfg: &Config) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|line| line.starts_with("command-palette-entry = "))
+                .map(str::to_string)
+                .collect()
+        }
+
+        let default = Config::default().command_palette_entry;
+        assert_eq!(default.entries.len(), 88);
+
+        let mut cfg = Config::default();
+        cfg.set("command-palette-entry", Some("clear")).unwrap();
+        assert!(cfg.command_palette_entry.entries.is_empty());
+        assert_eq!(command_lines(&cfg), vec!["command-palette-entry = "]);
+
+        cfg.set(
+            "command-palette-entry",
+            Some("title:Reset,description:\"Reset font\",action:csi:0m"),
+        )
+        .unwrap();
+        cfg.set(
+            "command-palette-entry",
+            Some("title:Copy,action:copy_to_clipboard"),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.command_palette_entry.entries,
+            vec![
+                CommandPaletteEntry::new("Reset", "Reset font", "csi:0m"),
+                CommandPaletteEntry::new("Copy", "", "copy_to_clipboard:mixed"),
+            ]
+        );
+        assert_eq!(
+            command_lines(&cfg),
+            vec![
+                "command-palette-entry = title:\"Reset\",description:\"Reset font\",action:\"csi:0m\"",
+                "command-palette-entry = title:\"Copy\",action:\"copy_to_clipboard:mixed\"",
+            ]
+        );
+
+        let before = cfg.command_palette_entry.clone();
+        for bad in [
+            "title:Only Title",
+            "action:ignore",
+            "title:x,action:no_such_action",
+            "title:x,unknown:y,action:ignore",
+            "title:\"unterminated,action:ignore",
+            "title:\"bad\\q\",action:ignore",
+        ] {
+            assert_eq!(
+                cfg.set("command-palette-entry", Some(bad)),
+                Err(ConfigSetError::InvalidValue),
+                "{bad}"
+            );
+            assert_eq!(
+                cfg.command_palette_entry, before,
+                "direct invalid command-palette value preserves state for {bad}"
+            );
+        }
+
+        cfg.set("command-palette-entry", Some("")).unwrap();
+        assert_eq!(cfg.command_palette_entry, default);
+        cfg.set("command-palette-entry", Some("clear")).unwrap();
+        assert!(cfg.command_palette_entry.entries.is_empty());
+        cfg.set("command-palette-entry", None).unwrap();
+        assert_eq!(cfg.command_palette_entry, default);
+
+        let mut file_cfg = Config::default();
+        let diagnostics = file_cfg.load_str(
+            "command-palette-entry = clear\n\
+             command-palette-entry = title:Valid,action:reset\n\
+             command-palette-entry = title:Invalid,action:nope\n\
+             command-palette-entry = title:Also Valid,action:goto_split:right\n",
+        );
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 3,
+                key: "command-palette-entry".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }],
+            "config-file invalid command-palette value preserves line/key/error"
+        );
+        assert_eq!(
+            file_cfg.command_palette_entry.entries,
+            vec![
+                CommandPaletteEntry::new("Valid", "", "reset"),
+                CommandPaletteEntry::new("Also Valid", "", "goto_split:right"),
+            ],
+            "config-file loading continues after invalid command-palette value"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg.set("command-palette-entry", Some("clear")).unwrap();
+        cli_cfg
+            .set("command-palette-entry", Some("title:Prior,action:reset"))
+            .unwrap();
+        let diagnostics = cli_cfg.set_cli_args([
+            "--command-palette-entry=title:First,action:csi:0m",
+            "--command-palette-entry=title:Bad,action:nope",
+            "--command-palette-entry=title:Last,action:goto_split:left",
+        ]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "command-palette-entry".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }],
+            "CLI invalid command-palette value preserves argument position/key/error"
+        );
+        assert_eq!(
+            cli_cfg.command_palette_entry.entries,
+            vec![
+                CommandPaletteEntry::new("Prior", "", "reset"),
+                CommandPaletteEntry::new("First", "", "csi:0m"),
+                CommandPaletteEntry::new("Last", "", "goto_split:left"),
+            ],
+            "CLI invalid command-palette value preserves prior state and later valid args"
+        );
+    }
+
+    #[test]
     fn command_palette_entry_config_parse_format_reset_and_diagnose() {
         let mut cfg = Config::default();
         assert_eq!(cfg.command_palette_entry.entries.len(), 88);
@@ -22730,18 +23741,23 @@ mod tests {
             discrete: 20_000.0,
         };
 
-        cfg.finalize();
+        cfg.finalize_with_click_interval_for_test(Some(321));
 
-        assert_eq!(cfg.click_repeat_interval, 500);
+        assert_eq!(cfg.click_repeat_interval, 321);
         assert_eq!(cfg.mouse_scroll_multiplier.precision, 0.01);
         assert_eq!(cfg.mouse_scroll_multiplier.discrete, 10_000.0);
+
+        let mut fallback = Config::default();
+        fallback.click_repeat_interval = 0;
+        fallback.finalize_with_click_interval_for_test(None);
+        assert_eq!(fallback.click_repeat_interval, 500);
 
         cfg.click_repeat_interval = 250;
         cfg.mouse_scroll_multiplier = MouseScrollMultiplier {
             precision: 0.5,
             discrete: 2.0,
         };
-        cfg.finalize();
+        cfg.finalize_with_click_interval_for_test(Some(321));
         assert_eq!(cfg.click_repeat_interval, 250);
         assert_eq!(cfg.mouse_scroll_multiplier.precision, 0.5);
         assert_eq!(cfg.mouse_scroll_multiplier.discrete, 2.0);
@@ -23320,8 +24336,8 @@ mod tests {
         cfg.set("click-repeat-interval", Some("0")).unwrap();
         assert_eq!(cfg.click_repeat_interval, 0);
         let mut finalized = cfg.clone();
-        finalized.finalize();
-        assert_eq!(finalized.click_repeat_interval, 500);
+        finalized.finalize_click_repeat_interval_with(Some(321));
+        assert_eq!(finalized.click_repeat_interval, 321);
         assert_eq!(cfg.click_repeat_interval, 0);
 
         let cloned = cfg.clone();
@@ -27026,6 +28042,283 @@ mod tests {
     }
 
     #[test]
+    fn config_boolean_diagnostic_family_oracle() {
+        struct BooleanDiagnosticCase {
+            key: &'static str,
+            get: fn(&Config) -> bool,
+        }
+
+        let cases = [
+            BooleanDiagnosticCase {
+                key: "background-image-repeat",
+                get: |cfg| cfg.bg_image_repeat,
+            },
+            BooleanDiagnosticCase {
+                key: "background-opacity-cells",
+                get: |cfg| cfg.background_opacity_cells,
+            },
+            BooleanDiagnosticCase {
+                key: "clipboard-paste-bracketed-safe",
+                get: |cfg| cfg.clipboard_paste_bracketed_safe,
+            },
+            BooleanDiagnosticCase {
+                key: "clipboard-paste-protection",
+                get: |cfg| cfg.clipboard_paste_protection,
+            },
+            BooleanDiagnosticCase {
+                key: "clipboard-trim-trailing-spaces",
+                get: |cfg| cfg.clipboard_trim_trailing_spaces,
+            },
+            BooleanDiagnosticCase {
+                key: "cursor-click-to-move",
+                get: |cfg| cfg.cursor_click_to_move,
+            },
+            BooleanDiagnosticCase {
+                key: "desktop-notifications",
+                get: |cfg| cfg.desktop_notifications,
+            },
+            BooleanDiagnosticCase {
+                key: "focus-follows-mouse",
+                get: |cfg| cfg.focus_follows_mouse,
+            },
+            BooleanDiagnosticCase {
+                key: "font-thicken",
+                get: |cfg| cfg.font_thicken,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-opengl-debug",
+                get: |cfg| cfg.gtk_opengl_debug,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-titlebar",
+                get: |cfg| cfg.gtk_titlebar,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-titlebar-hide-when-maximized",
+                get: |cfg| cfg.gtk_titlebar_hide_when_maximized,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-wide-tabs",
+                get: |cfg| cfg.gtk_wide_tabs,
+            },
+            BooleanDiagnosticCase {
+                key: "initial-window",
+                get: |cfg| cfg.initial_window,
+            },
+            BooleanDiagnosticCase {
+                key: "link-url",
+                get: |cfg| cfg.link_url,
+            },
+            BooleanDiagnosticCase {
+                key: "linux-cgroup-hard-fail",
+                get: |cfg| cfg.linux_cgroup_hard_fail,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-applescript",
+                get: |cfg| cfg.macos_applescript,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-auto-secure-input",
+                get: |cfg| cfg.macos_auto_secure_input,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-secure-input-indication",
+                get: |cfg| cfg.macos_secure_input_indication,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-window-shadow",
+                get: |cfg| cfg.macos_window_shadow,
+            },
+            BooleanDiagnosticCase {
+                key: "maximize",
+                get: |cfg| cfg.maximize,
+            },
+            BooleanDiagnosticCase {
+                key: "mouse-hide-while-typing",
+                get: |cfg| cfg.mouse_hide_while_typing,
+            },
+            BooleanDiagnosticCase {
+                key: "mouse-reporting",
+                get: |cfg| cfg.mouse_reporting,
+            },
+            BooleanDiagnosticCase {
+                key: "palette-generate",
+                get: |cfg| cfg.palette_generate,
+            },
+            BooleanDiagnosticCase {
+                key: "palette-harmonious",
+                get: |cfg| cfg.palette_harmonious,
+            },
+            BooleanDiagnosticCase {
+                key: "progress-style",
+                get: |cfg| cfg.progress_style,
+            },
+            BooleanDiagnosticCase {
+                key: "quick-terminal-autohide",
+                get: |cfg| cfg.quick_terminal_autohide,
+            },
+            BooleanDiagnosticCase {
+                key: "quit-after-last-window-closed",
+                get: |cfg| cfg.quit_after_last_window_closed,
+            },
+            BooleanDiagnosticCase {
+                key: "selection-clear-on-copy",
+                get: |cfg| cfg.selection_clear_on_copy,
+            },
+            BooleanDiagnosticCase {
+                key: "selection-clear-on-typing",
+                get: |cfg| cfg.selection_clear_on_typing,
+            },
+            BooleanDiagnosticCase {
+                key: "split-inherit-working-directory",
+                get: |cfg| cfg.split_inherit_working_directory,
+            },
+            BooleanDiagnosticCase {
+                key: "tab-inherit-working-directory",
+                get: |cfg| cfg.tab_inherit_working_directory,
+            },
+            BooleanDiagnosticCase {
+                key: "title-report",
+                get: |cfg| cfg.title_report,
+            },
+            BooleanDiagnosticCase {
+                key: "vt-kam-allowed",
+                get: |cfg| cfg.vt_kam_allowed,
+            },
+            BooleanDiagnosticCase {
+                key: "wait-after-command",
+                get: |cfg| cfg.wait_after_command,
+            },
+            BooleanDiagnosticCase {
+                key: "window-inherit-font-size",
+                get: |cfg| cfg.window_inherit_font_size,
+            },
+            BooleanDiagnosticCase {
+                key: "window-inherit-working-directory",
+                get: |cfg| cfg.window_inherit_working_directory,
+            },
+            BooleanDiagnosticCase {
+                key: "window-step-resize",
+                get: |cfg| cfg.window_step_resize,
+            },
+            BooleanDiagnosticCase {
+                key: "window-vsync",
+                get: |cfg| cfg.window_vsync,
+            },
+        ];
+        assert_eq!(cases.len(), 39);
+
+        for case in cases {
+            let default_value = (case.get)(&Config::default());
+
+            for value in ["1", "t", "T", "true"] {
+                let mut cfg = Config::default();
+                cfg.set(case.key, Some("false")).unwrap();
+                cfg.set(case.key, Some(value)).unwrap();
+                assert!((case.get)(&cfg), "{} parses {value:?} as true", case.key);
+            }
+
+            for value in ["0", "f", "F", "false"] {
+                let mut cfg = Config::default();
+                cfg.set(case.key, Some("true")).unwrap();
+                cfg.set(case.key, Some(value)).unwrap();
+                assert!(!(case.get)(&cfg), "{} parses {value:?} as false", case.key);
+            }
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(if default_value { "false" } else { "true" }))
+                .unwrap();
+            assert_ne!(
+                (case.get)(&cfg),
+                default_value,
+                "{} setup must differ from default before empty reset",
+                case.key
+            );
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get)(&cfg),
+                default_value,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            cfg.set(case.key, Some("false")).unwrap();
+            cfg.set(case.key, None).unwrap();
+            assert!((case.get)(&cfg), "{} bare file value sets true", case.key);
+
+            for prior in [false, true] {
+                let mut file_cfg = Config::default();
+                file_cfg
+                    .set(case.key, Some(if prior { "true" } else { "false" }))
+                    .unwrap();
+                let diagnostics = file_cfg.load_str(&format!("\n{} = yes\n", case.key));
+                assert_eq!(
+                    diagnostics,
+                    vec![ConfigDiagnostic {
+                        line: 2,
+                        key: case.key.to_string(),
+                        error: ConfigSetError::InvalidValue,
+                    }],
+                    "{} file diagnostic preserves line/key/error after prior {prior}",
+                    case.key
+                );
+                assert_eq!(
+                    (case.get)(&file_cfg),
+                    prior,
+                    "{} invalid file value preserves previous {prior}",
+                    case.key
+                );
+
+                let mut cli_cfg = Config::default();
+                cli_cfg
+                    .set(case.key, Some(if prior { "true" } else { "false" }))
+                    .unwrap();
+                let arg = format!("--{}=yes", case.key);
+                let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+                assert_eq!(
+                    diagnostics,
+                    vec![ConfigDiagnostic {
+                        line: 1,
+                        key: case.key.to_string(),
+                        error: ConfigSetError::InvalidValue,
+                    }],
+                    "{} CLI diagnostic preserves argument position/key/error after prior {prior}",
+                    case.key
+                );
+                assert_eq!(
+                    (case.get)(&cli_cfg),
+                    prior,
+                    "{} invalid CLI value preserves previous {prior}",
+                    case.key
+                );
+            }
+
+            let bare_arg = format!("--{}", case.key);
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some("false")).unwrap();
+            assert_eq!(cli_cfg.set_cli_args([bare_arg.as_str()]), vec![]);
+            assert!(
+                (case.get)(&cli_cfg),
+                "{} bare CLI value sets true",
+                case.key
+            );
+
+            let empty_arg = format!("--{}=", case.key);
+            let mut cli_cfg = Config::default();
+            cli_cfg
+                .set(case.key, Some(if default_value { "false" } else { "true" }))
+                .unwrap();
+            assert_eq!(cli_cfg.set_cli_args([empty_arg.as_str()]), vec![]);
+            assert_eq!(
+                (case.get)(&cli_cfg),
+                default_value,
+                "{} empty CLI value resets to default",
+                case.key
+            );
+        }
+    }
+
+    #[test]
     fn integer_config_parser_family_oracle() {
         let mut cfg = Config::default();
 
@@ -27120,6 +28413,197 @@ mod tests {
                 cfg.set("font-thicken-strength", Some(value)),
                 Err(ConfigSetError::InvalidValue),
                 "font-thicken-strength rejects {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_integer_diagnostic_family_oracle() {
+        struct IntegerDiagnosticCase {
+            key: &'static str,
+            valid: &'static str,
+            invalid: &'static str,
+            expected_valid_line: &'static str,
+            get_line: fn(&Config) -> Option<String>,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        let cases = [
+            IntegerDiagnosticCase {
+                key: "abnormal-command-exit-runtime",
+                valid: "1234",
+                invalid: "-1",
+                expected_valid_line: "abnormal-command-exit-runtime = 1234",
+                get_line: |cfg| config_line(cfg, "abnormal-command-exit-runtime"),
+            },
+            IntegerDiagnosticCase {
+                key: "font-thicken-strength",
+                valid: "128",
+                invalid: "256",
+                expected_valid_line: "font-thicken-strength = 128",
+                get_line: |cfg| config_line(cfg, "font-thicken-strength"),
+            },
+            IntegerDiagnosticCase {
+                key: "image-storage-limit",
+                valid: "0x20",
+                invalid: "4294967296",
+                expected_valid_line: "image-storage-limit = 32",
+                get_line: |cfg| config_line(cfg, "image-storage-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "linux-cgroup-memory-limit",
+                valid: "0x1_000",
+                invalid: "-1",
+                expected_valid_line: "linux-cgroup-memory-limit = 4096",
+                get_line: |cfg| config_line(cfg, "linux-cgroup-memory-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "linux-cgroup-processes-limit",
+                valid: "0xff",
+                invalid: "-1",
+                expected_valid_line: "linux-cgroup-processes-limit = 255",
+                get_line: |cfg| config_line(cfg, "linux-cgroup-processes-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "scrollback-limit",
+                valid: "0x20",
+                invalid: "-1",
+                expected_valid_line: "scrollback-limit = 32",
+                get_line: |cfg| config_line(cfg, "scrollback-limit"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-height",
+                valid: "30",
+                invalid: "-1",
+                expected_valid_line: "window-height = 30",
+                get_line: |cfg| config_line(cfg, "window-height"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-position-x",
+                valid: "-0X10",
+                invalid: "-32769",
+                expected_valid_line: "window-position-x = -16",
+                get_line: |cfg| config_line(cfg, "window-position-x"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-position-y",
+                valid: "+0B111",
+                invalid: "32768",
+                expected_valid_line: "window-position-y = 7",
+                get_line: |cfg| config_line(cfg, "window-position-y"),
+            },
+            IntegerDiagnosticCase {
+                key: "window-width",
+                valid: "120",
+                invalid: "-1",
+                expected_valid_line: "window-width = 120",
+                get_line: |cfg| config_line(cfg, "window-width"),
+            },
+        ];
+        assert_eq!(cases.len(), 10);
+
+        for case in cases {
+            let default_line = (case.get_line)(&Config::default());
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(case.valid)).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(case.expected_valid_line),
+                "{} accepts representative non-default value",
+                case.key
+            );
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg),
+                default_line,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&file_cfg);
+            let diagnostics = file_cfg.load_str(&format!("\n{} = {}\n", case.key, case.invalid));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} file diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&file_cfg),
+                before,
+                "{} invalid file value preserves previous state",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&cli_cfg);
+            let arg = format!("--{}={}", case.key, case.invalid);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} CLI diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&cli_cfg),
+                before,
+                "{} invalid CLI value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
             );
         }
     }
@@ -27222,6 +28706,190 @@ mod tests {
     }
 
     #[test]
+    fn config_float_diagnostic_family_oracle() {
+        struct FloatDiagnosticCase {
+            key: &'static str,
+            valid: &'static str,
+            invalid: &'static str,
+            expected_valid_line: &'static str,
+            get_line: fn(&Config) -> Option<String>,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        let cases = [
+            FloatDiagnosticCase {
+                key: "background-image-opacity",
+                valid: "0.25",
+                invalid: "abc",
+                expected_valid_line: "background-image-opacity = 0.25",
+                get_line: |cfg| config_line(cfg, "background-image-opacity"),
+            },
+            FloatDiagnosticCase {
+                key: "background-opacity",
+                valid: "0.25",
+                invalid: "abc",
+                expected_valid_line: "background-opacity = 0.25",
+                get_line: |cfg| config_line(cfg, "background-opacity"),
+            },
+            FloatDiagnosticCase {
+                key: "bell-audio-volume",
+                valid: "0.125",
+                invalid: "abc",
+                expected_valid_line: "bell-audio-volume = 0.125",
+                get_line: |cfg| config_line(cfg, "bell-audio-volume"),
+            },
+            FloatDiagnosticCase {
+                key: "cursor-opacity",
+                valid: "0.5",
+                invalid: "abc",
+                expected_valid_line: "cursor-opacity = 0.5",
+                get_line: |cfg| config_line(cfg, "cursor-opacity"),
+            },
+            FloatDiagnosticCase {
+                key: "faint-opacity",
+                valid: "0.25",
+                invalid: "abc",
+                expected_valid_line: "faint-opacity = 0.25",
+                get_line: |cfg| config_line(cfg, "faint-opacity"),
+            },
+            FloatDiagnosticCase {
+                key: "font-size",
+                valid: "13.5",
+                invalid: "abc",
+                expected_valid_line: "font-size = 13.5",
+                get_line: |cfg| config_line(cfg, "font-size"),
+            },
+            FloatDiagnosticCase {
+                key: "minimum-contrast",
+                valid: "2.5",
+                invalid: "abc",
+                expected_valid_line: "minimum-contrast = 2.5",
+                get_line: |cfg| config_line(cfg, "minimum-contrast"),
+            },
+            FloatDiagnosticCase {
+                key: "quick-terminal-animation-duration",
+                valid: "0.75",
+                invalid: "abc",
+                expected_valid_line: "quick-terminal-animation-duration = 0.75",
+                get_line: |cfg| config_line(cfg, "quick-terminal-animation-duration"),
+            },
+            FloatDiagnosticCase {
+                key: "unfocused-split-opacity",
+                valid: "0.25",
+                invalid: "abc",
+                expected_valid_line: "unfocused-split-opacity = 0.25",
+                get_line: |cfg| config_line(cfg, "unfocused-split-opacity"),
+            },
+        ];
+        assert_eq!(cases.len(), 9);
+
+        for case in cases {
+            let default_line = (case.get_line)(&Config::default());
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(case.valid)).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(case.expected_valid_line),
+                "{} accepts representative non-default value",
+                case.key
+            );
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg),
+                default_line,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&file_cfg);
+            let diagnostics = file_cfg.load_str(&format!("\n{} = {}\n", case.key, case.invalid));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} file diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&file_cfg),
+                before,
+                "{} invalid file value preserves previous state",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&cli_cfg);
+            let arg = format!("--{}={}", case.key, case.invalid);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} CLI diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&cli_cfg),
+                before,
+                "{} invalid CLI value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+        }
+    }
+
+    #[test]
     fn string_config_parser_family_oracle() {
         assert_eq!(
             parse_string_field(None),
@@ -27248,6 +28916,489 @@ mod tests {
         assert_eq!(cfg.title, Some("title\0suffix".to_string()));
         cfg.set("title", Some("")).unwrap();
         assert_eq!(cfg.title, None);
+    }
+
+    #[test]
+    fn config_string_diagnostic_family_oracle() {
+        struct StringDiagnosticCase {
+            key: &'static str,
+            valid: &'static str,
+            nul_value: &'static str,
+            expected_valid_line: &'static str,
+            expected_nul_line: &'static str,
+            get_line: fn(&Config) -> Option<String>,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        let cases = [
+            StringDiagnosticCase {
+                key: "class",
+                valid: "com.example.Roastty",
+                nul_value: "class\0suffix",
+                expected_valid_line: "class = com.example.Roastty",
+                expected_nul_line: "class = class\0suffix",
+                get_line: |cfg| config_line(cfg, "class"),
+            },
+            StringDiagnosticCase {
+                key: "enquiry-response",
+                valid: "hello",
+                nul_value: "hello\0suffix",
+                expected_valid_line: "enquiry-response = hello",
+                expected_nul_line: "enquiry-response = hello\0suffix",
+                get_line: |cfg| config_line(cfg, "enquiry-response"),
+            },
+            StringDiagnosticCase {
+                key: "gtk-quick-terminal-namespace",
+                valid: "roastty-panel",
+                nul_value: "namespace\0suffix",
+                expected_valid_line: "gtk-quick-terminal-namespace = roastty-panel",
+                expected_nul_line: "gtk-quick-terminal-namespace = namespace\0suffix",
+                get_line: |cfg| config_line(cfg, "gtk-quick-terminal-namespace"),
+            },
+            StringDiagnosticCase {
+                key: "language",
+                valid: "en_US.UTF-8",
+                nul_value: "lang\0suffix",
+                expected_valid_line: "language = en_US.UTF-8",
+                expected_nul_line: "language = lang\0suffix",
+                get_line: |cfg| config_line(cfg, "language"),
+            },
+            StringDiagnosticCase {
+                key: "macos-custom-icon",
+                valid: "/tmp/Roastty.icns",
+                nul_value: "icon\0suffix",
+                expected_valid_line: "macos-custom-icon = /tmp/Roastty.icns",
+                expected_nul_line: "macos-custom-icon = icon\0suffix",
+                get_line: |cfg| config_line(cfg, "macos-custom-icon"),
+            },
+            StringDiagnosticCase {
+                key: "term",
+                valid: "xterm-roastty-test",
+                nul_value: "term\0suffix",
+                expected_valid_line: "term = xterm-roastty-test",
+                expected_nul_line: "term = term\0suffix",
+                get_line: |cfg| config_line(cfg, "term"),
+            },
+            StringDiagnosticCase {
+                key: "title",
+                valid: "TermSurf",
+                nul_value: "title\0suffix",
+                expected_valid_line: "title = TermSurf",
+                expected_nul_line: "title = title\0suffix",
+                get_line: |cfg| config_line(cfg, "title"),
+            },
+            StringDiagnosticCase {
+                key: "window-title-font-family",
+                valid: "SF Pro",
+                nul_value: "font\0suffix",
+                expected_valid_line: "window-title-font-family = SF Pro",
+                expected_nul_line: "window-title-font-family = font\0suffix",
+                get_line: |cfg| config_line(cfg, "window-title-font-family"),
+            },
+            StringDiagnosticCase {
+                key: "x11-instance-name",
+                valid: "roastty-dev",
+                nul_value: "instance\0suffix",
+                expected_valid_line: "x11-instance-name = roastty-dev",
+                expected_nul_line: "x11-instance-name = instance\0suffix",
+                get_line: |cfg| config_line(cfg, "x11-instance-name"),
+            },
+        ];
+        assert_eq!(cases.len(), 9);
+
+        for case in cases {
+            let default_line = (case.get_line)(&Config::default());
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(case.valid)).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(case.expected_valid_line),
+                "{} accepts representative non-empty string",
+                case.key
+            );
+
+            cfg.set(case.key, Some(case.nul_value)).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(case.expected_nul_line),
+                "{} accepts explicit NUL-containing string",
+                case.key
+            );
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg),
+                default_line,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&file_cfg);
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&file_cfg),
+                before,
+                "{} missing file value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&cli_cfg);
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&cli_cfg),
+                before,
+                "{} missing CLI value preserves previous state",
+                case.key
+            );
+        }
+    }
+
+    #[test]
+    fn config_duration_diagnostic_family_oracle() {
+        struct DurationDiagnosticCase {
+            key: &'static str,
+            valid: &'static str,
+            invalid: &'static str,
+            expected_valid_line: &'static str,
+            get_line: fn(&Config) -> Option<String>,
+            zero_is_set: fn(&Config) -> bool,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        let cases = [
+            DurationDiagnosticCase {
+                key: "notify-on-command-finish-after",
+                valid: "2s",
+                invalid: "forever",
+                expected_valid_line: "notify-on-command-finish-after = 2s",
+                get_line: |cfg| config_line(cfg, "notify-on-command-finish-after"),
+                zero_is_set: |cfg| cfg.notify_on_command_finish_after == Duration { duration: 0 },
+            },
+            DurationDiagnosticCase {
+                key: "quit-after-last-window-closed-delay",
+                valid: "1s 250ms",
+                invalid: "forever",
+                expected_valid_line: "quit-after-last-window-closed-delay = 1s 250ms",
+                get_line: |cfg| config_line(cfg, "quit-after-last-window-closed-delay"),
+                zero_is_set: |cfg| {
+                    cfg.quit_after_last_window_closed_delay == Some(Duration { duration: 0 })
+                },
+            },
+            DurationDiagnosticCase {
+                key: "resize-overlay-duration",
+                valid: "250ms",
+                invalid: "forever",
+                expected_valid_line: "resize-overlay-duration = 250ms",
+                get_line: |cfg| config_line(cfg, "resize-overlay-duration"),
+                zero_is_set: |cfg| cfg.resize_overlay_duration == Duration { duration: 0 },
+            },
+            DurationDiagnosticCase {
+                key: "undo-timeout",
+                valid: "1m 30s",
+                invalid: "forever",
+                expected_valid_line: "undo-timeout = 1m 30s",
+                get_line: |cfg| config_line(cfg, "undo-timeout"),
+                zero_is_set: |cfg| cfg.undo_timeout == Duration { duration: 0 },
+            },
+        ];
+        assert_eq!(cases.len(), 4);
+
+        for case in cases {
+            let default_line = (case.get_line)(&Config::default());
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(case.valid)).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(case.expected_valid_line),
+                "{} accepts representative non-default duration",
+                case.key
+            );
+
+            cfg.set(case.key, Some("0")).unwrap();
+            let expected_zero_line = format!("{} = ", case.key);
+            assert_eq!(
+                (case.get_line)(&cfg).as_deref(),
+                Some(expected_zero_line.as_str()),
+                "{} formats zero duration as an empty value",
+                case.key
+            );
+            assert!(
+                (case.zero_is_set)(&cfg),
+                "{} zero duration remains explicitly configured",
+                case.key
+            );
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get_line)(&cfg),
+                default_line,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&file_cfg);
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&file_cfg),
+                before,
+                "{} missing file value preserves previous state",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&file_cfg);
+            let diagnostics = file_cfg.load_str(&format!("\n{} = {}\n", case.key, case.invalid));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} file invalid-value diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&file_cfg),
+                before,
+                "{} invalid file value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&cli_cfg);
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&cli_cfg),
+                before,
+                "{} missing CLI value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some(case.valid)).unwrap();
+            let before = (case.get_line)(&cli_cfg);
+            let arg = format!("--{}={}", case.key, case.invalid);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::InvalidValue,
+                }],
+                "{} CLI invalid-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                (case.get_line)(&cli_cfg),
+                before,
+                "{} invalid CLI value preserves previous state",
+                case.key
+            );
+        }
+    }
+
+    #[test]
+    fn config_working_directory_diagnostic_oracle() {
+        fn config_line(cfg: &Config) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with("working-directory = "))
+                .map(str::to_string)
+        }
+
+        let default_line = config_line(&Config::default());
+
+        let mut cfg = Config::default();
+        cfg.set("working-directory", Some("home")).unwrap();
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Home));
+        assert_eq!(
+            config_line(&cfg).as_deref(),
+            Some("working-directory = home")
+        );
+
+        cfg.set("working-directory", Some("inherit")).unwrap();
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Inherit));
+        assert_eq!(
+            config_line(&cfg).as_deref(),
+            Some("working-directory = inherit")
+        );
+
+        cfg.set("working-directory", Some("\"/tmp/roast dir\""))
+            .unwrap();
+        assert_eq!(
+            cfg.working_directory,
+            Some(WorkingDirectory::Path("/tmp/roast dir".to_string()))
+        );
+        assert_eq!(
+            config_line(&cfg).as_deref(),
+            Some("working-directory = /tmp/roast dir")
+        );
+
+        cfg.set("working-directory", Some("")).unwrap();
+        assert_eq!(cfg.working_directory, Config::default().working_directory);
+        assert_eq!(config_line(&cfg), default_line);
+
+        assert_eq!(
+            cfg.set("working-directory", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("working-directory", Some("   ")),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        let mut file_cfg = Config::default();
+        file_cfg.set("working-directory", Some("home")).unwrap();
+        let before = config_line(&file_cfg);
+        let diagnostics = file_cfg.load_str("\nworking-directory\n");
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "working-directory".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "file missing-value diagnostic preserves line/key/error"
+        );
+        assert_eq!(
+            config_line(&file_cfg),
+            before,
+            "missing file value preserves previous state"
+        );
+
+        let mut file_cfg = Config::default();
+        file_cfg.set("working-directory", Some("inherit")).unwrap();
+        let diagnostics = file_cfg.load_str("\nworking-directory =    \n");
+        assert_eq!(
+            diagnostics,
+            Vec::<ConfigDiagnostic>::new(),
+            "config-file whitespace after '=' is normalized as an empty reset"
+        );
+        assert_eq!(
+            file_cfg.working_directory,
+            Config::default().working_directory
+        );
+        assert_eq!(
+            config_line(&file_cfg),
+            default_line,
+            "config-file whitespace after '=' resets to default"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg
+            .set("working-directory", Some("\"/tmp/cli dir\""))
+            .unwrap();
+        let before = config_line(&cli_cfg);
+        let diagnostics = cli_cfg.set_cli_args(["--working-directory"]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "working-directory".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "CLI missing-value diagnostic preserves argument position/key/error"
+        );
+        assert_eq!(
+            config_line(&cli_cfg),
+            before,
+            "missing CLI value preserves previous state"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg.set("working-directory", Some("home")).unwrap();
+        let before = config_line(&cli_cfg);
+        let diagnostics = cli_cfg.set_cli_args(["--working-directory=   "]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "working-directory".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "CLI whitespace-value diagnostic preserves argument position/key/error"
+        );
+        assert_eq!(
+            config_line(&cli_cfg),
+            before,
+            "whitespace CLI value preserves previous state"
+        );
     }
 
     #[test]

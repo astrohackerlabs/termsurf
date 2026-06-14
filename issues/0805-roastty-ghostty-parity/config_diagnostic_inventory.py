@@ -17,6 +17,114 @@ from pathlib import Path
 
 PARSER_ROW_RE = re.compile(r"^\| PARSE-\d+ \|")
 
+BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "background-image-repeat",
+    "background-opacity-cells",
+    "clipboard-paste-bracketed-safe",
+    "clipboard-paste-protection",
+    "clipboard-trim-trailing-spaces",
+    "cursor-click-to-move",
+    "desktop-notifications",
+    "focus-follows-mouse",
+    "font-thicken",
+    "gtk-opengl-debug",
+    "gtk-titlebar",
+    "gtk-titlebar-hide-when-maximized",
+    "gtk-wide-tabs",
+    "initial-window",
+    "link-url",
+    "linux-cgroup-hard-fail",
+    "macos-applescript",
+    "macos-auto-secure-input",
+    "macos-secure-input-indication",
+    "macos-window-shadow",
+    "maximize",
+    "mouse-hide-while-typing",
+    "mouse-reporting",
+    "palette-generate",
+    "palette-harmonious",
+    "progress-style",
+    "quick-terminal-autohide",
+    "quit-after-last-window-closed",
+    "selection-clear-on-copy",
+    "selection-clear-on-typing",
+    "split-inherit-working-directory",
+    "tab-inherit-working-directory",
+    "title-report",
+    "vt-kam-allowed",
+    "wait-after-command",
+    "window-inherit-font-size",
+    "window-inherit-working-directory",
+    "window-step-resize",
+    "window-vsync",
+}
+
+INTEGER_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "abnormal-command-exit-runtime",
+    "font-thicken-strength",
+    "image-storage-limit",
+    "linux-cgroup-memory-limit",
+    "linux-cgroup-processes-limit",
+    "scrollback-limit",
+    "window-height",
+    "window-position-x",
+    "window-position-y",
+    "window-width",
+}
+
+FLOAT_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "background-image-opacity",
+    "background-opacity",
+    "bell-audio-volume",
+    "cursor-opacity",
+    "faint-opacity",
+    "font-size",
+    "minimum-contrast",
+    "quick-terminal-animation-duration",
+    "unfocused-split-opacity",
+}
+
+STRING_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "class",
+    "enquiry-response",
+    "gtk-quick-terminal-namespace",
+    "language",
+    "macos-custom-icon",
+    "term",
+    "title",
+    "window-title-font-family",
+    "x11-instance-name",
+}
+
+DURATION_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "notify-on-command-finish-after",
+    "quit-after-last-window-closed-delay",
+    "resize-overlay-duration",
+    "undo-timeout",
+}
+
+WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "working-directory",
+}
+
+PATH_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "background-image",
+    "bell-audio-path",
+    "config-file",
+}
+
+COMMAND_PALETTE_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "command-palette-entry",
+}
+
+FONT_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "font-family",
+    "font-family-bold",
+    "font-family-bold-italic",
+    "font-family-italic",
+    "font-feature",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class ParserInventoryRow:
@@ -76,22 +184,170 @@ def parse_parser_inventory(path: Path) -> dict[str, ParserInventoryRow]:
     return rows
 
 
-def diagnostic_family(row: ParserInventoryRow) -> str:
+def diagnostic_family(option: str, row: ParserInventoryRow) -> str:
+    if option in FONT_DIAGNOSTIC_ORACLE_OPTIONS:
+        return "required-value diagnostic"
     if row.family == "unsupported":
         return "not-implemented diagnostic"
-    if row.family in {"path", "font", "key binding", "custom parse_cli"}:
+    if row.family in {"font", "key binding", "custom parse_cli"}:
         return "stateful parser diagnostic"
     if row.family in {"command palette", "window padding", "packed flags"}:
         return "structured value diagnostic"
-    if row.family in {"boolean", "enum", "integer scalar", "float scalar", "string"}:
+    if row.family in {"boolean", "enum", "integer scalar", "float scalar"}:
         return "scalar invalid-value diagnostic"
+    if row.family == "string":
+        return "required-value diagnostic"
     if row.family == "color":
         return "color invalid-value diagnostic"
     if row.family == "duration":
         return "duration invalid-value diagnostic"
     if row.family == "working directory":
         return "required-value diagnostic"
+    if row.family == "path":
+        return "required-value diagnostic"
     return "custom diagnostic"
+
+
+def diagnostic_override_evidence(option: str, row: ParserInventoryRow) -> str | None:
+    if option not in BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS:
+        if option in DURATION_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "duration":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 90 duration diagnostic oracle "
+                    f"but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 90 shared duration diagnostic oracle covers "
+                "representative non-default values, zero-duration formatting, "
+                "empty resets, missing-value diagnostics, config-file invalid-value "
+                "diagnostics with line/key/error, CLI invalid-value diagnostics with "
+                "argument position/key/error, and diagnostic state retention; "
+                "`roastty/src/config/mod.rs::config_duration_diagnostic_family_oracle`"
+            )
+        if option in WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "working directory":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 91 working-directory "
+                    f"diagnostic oracle but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 91 working-directory diagnostic oracle covers home, "
+                "inherit, and quoted path acceptance, empty resets, config-file "
+                "whitespace reset behavior, config-file missing-value diagnostics "
+                "with line/key/error, CLI missing/all-whitespace diagnostics with "
+                "argument position/key/error, and required-value state retention; "
+                "`roastty/src/config/mod.rs::config_working_directory_diagnostic_oracle`"
+            )
+        if option in PATH_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "path":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 92 path diagnostic oracle "
+                    f"but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 92 shared path diagnostic oracle covers required, "
+                "optional, quoted literal marker, quoted optional, and embedded-NUL "
+                "path acceptance, raw-empty resets, parsed-empty no-op behavior, "
+                "config-file missing-value diagnostics with line/key/error, CLI "
+                "missing-value diagnostics with argument position/key/error, and "
+                "missing-value state retention; "
+                "`roastty/src/config/mod.rs::config_path_diagnostic_family_oracle`"
+            )
+        if option in COMMAND_PALETTE_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "command palette":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 93 command-palette "
+                    f"diagnostic oracle but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 93 command-palette diagnostic oracle covers clear, "
+                "valid structured entries, empty/default resets, malformed direct "
+                "values, config-file invalid-value diagnostics with line/key/error "
+                "and continued loading, CLI invalid-value diagnostics with argument "
+                "position/key/error, and invalid-value state retention; "
+                "`roastty/src/config/mod.rs::config_command_palette_diagnostic_oracle`"
+            )
+        if option in FONT_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "font":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 94 font diagnostic oracle "
+                    f"but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 94 shared font diagnostic oracle covers explicit "
+                "repeatable string acceptance, NUL-containing value acceptance, "
+                "empty resets, direct missing-value errors, config-file "
+                "missing-value diagnostics with line/key/error, CLI missing-value "
+                "diagnostics with argument position/key/error, and missing-value "
+                "state retention; "
+                "`roastty/src/config/mod.rs::config_font_diagnostic_family_oracle`"
+            )
+        if option in STRING_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "string":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 89 string diagnostic oracle "
+                    f"but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 89 shared string diagnostic oracle covers explicit "
+                "string acceptance, NUL-containing string acceptance, empty resets, "
+                "config-file missing-value diagnostics with line/key/error, CLI "
+                "missing-value diagnostics with argument position/key/error, and "
+                "missing-value state retention; "
+                "`roastty/src/config/mod.rs::config_string_diagnostic_family_oracle`"
+            )
+        if option in FLOAT_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "float scalar":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 88 float diagnostic oracle "
+                    f"but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 88 shared float diagnostic oracle covers representative "
+                "non-default values, empty resets, missing-value diagnostics, "
+                "config-file invalid-value diagnostics with line/key/error, CLI "
+                "invalid-value diagnostics with argument position/key/error, and "
+                "invalid-value state retention; "
+                "`roastty/src/config/mod.rs::config_float_diagnostic_family_oracle`"
+            )
+        if option not in INTEGER_DIAGNOSTIC_ORACLE_OPTIONS:
+            return None
+        if row.family != "integer scalar":
+            raise ValueError(
+                f"{option} is listed in the Experiment 87 integer diagnostic oracle "
+                f"but parser family is {row.family!r}"
+            )
+        return (
+            "Experiment 87 shared integer diagnostic oracle covers representative "
+            "non-default values, empty resets, missing-value diagnostics, "
+            "config-file invalid-value diagnostics with line/key/error, CLI "
+            "invalid-value diagnostics with argument position/key/error, and "
+            "invalid-value state retention; "
+            "`roastty/src/config/mod.rs::config_integer_diagnostic_family_oracle`"
+        )
+    if row.family != "boolean":
+        raise ValueError(
+            f"{option} is listed in the Experiment 86 boolean diagnostic oracle "
+            f"but parser family is {row.family!r}"
+        )
+    return (
+        "Experiment 86 shared boolean diagnostic oracle covers exact upstream "
+        "true/false tokens, bare true, empty reset, config-file invalid-value "
+        "diagnostics with line/key/error, CLI invalid-value diagnostics with "
+        "argument position/key/error, and invalid-value state retention; "
+        "`roastty/src/config/mod.rs::config_boolean_diagnostic_family_oracle`"
+    )
+
+
+def complete_missing_evidence(option: str, override_evidence: str | None) -> str:
+    if override_evidence is not None and (
+        option in STRING_DIAGNOSTIC_ORACLE_OPTIONS
+        or option in WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS
+        or option in PATH_DIAGNOSTIC_ORACLE_OPTIONS
+        or option in FONT_DIAGNOSTIC_ORACLE_OPTIONS
+    ):
+        return "None for missing-value diagnostic behavior."
+    return "None for invalid-value diagnostic behavior."
 
 
 def build_rows(
@@ -119,21 +375,26 @@ def build_rows(
             )
             continue
 
-        has_diagnostics = "diagnostic" in parser_row.evidence.lower()
+        override_evidence = diagnostic_override_evidence(option, parser_row)
+        has_diagnostics = (
+            override_evidence is not None or "diagnostic" in parser_row.evidence.lower()
+        )
         rows.append(
             DiagnosticRow(
                 option=option,
                 parser_path=parser_row.parser_path,
                 parser_family=parser_row.family,
-                diagnostic_family=diagnostic_family(parser_row),
+                diagnostic_family=diagnostic_family(option, parser_row),
                 status="Oracle complete" if has_diagnostics else "Audit covered",
                 evidence=(
-                    parser_row.evidence
-                    if has_diagnostics
+                    override_evidence
+                    if override_evidence is not None
+                    else parser_row.evidence
+                    if "diagnostic" in parser_row.evidence.lower()
                     else "Parser row identified; diagnostic-specific proof still required"
                 ),
                 missing_evidence=(
-                    "None for invalid-value diagnostic behavior."
+                    complete_missing_evidence(option, override_evidence)
                     if has_diagnostics
                     else (
                         "Needs explicit ConfigDiagnostic proof for invalid values, "
@@ -145,6 +406,23 @@ def build_rows(
         )
 
     extra = sorted(set(parser_rows) - set(canonical_options))
+    override_options = (
+        BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS
+        | INTEGER_DIAGNOSTIC_ORACLE_OPTIONS
+        | FLOAT_DIAGNOSTIC_ORACLE_OPTIONS
+        | STRING_DIAGNOSTIC_ORACLE_OPTIONS
+        | DURATION_DIAGNOSTIC_ORACLE_OPTIONS
+        | WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS
+        | PATH_DIAGNOSTIC_ORACLE_OPTIONS
+        | COMMAND_PALETTE_DIAGNOSTIC_ORACLE_OPTIONS
+        | FONT_DIAGNOSTIC_ORACLE_OPTIONS
+    )
+    missing_overrides = sorted(override_options - set(canonical_options))
+    if missing_overrides:
+        raise ValueError(
+            "Diagnostic oracle options missing from canonical "
+            f"inventory: {', '.join(missing_overrides)}"
+        )
     return rows, missing, extra
 
 
@@ -215,9 +493,9 @@ def update_cfg219(
         if line.startswith("| CFG-219 |"):
             status = "Pass" if incomplete_count == 0 else "Gap"
             notes = (
-                f"Experiment 85 inventories diagnostic coverage: {oracle_count} rows "
-                f"Oracle complete; {incomplete_count} rows are not Oracle complete "
-                f"and {gap_count} rows are diagnostic gaps."
+                f"Diagnostic inventory coverage: {oracle_count} rows Oracle "
+                f"complete; {incomplete_count} rows are not Oracle complete and "
+                f"{gap_count} rows are diagnostic gaps."
             )
             line = (
                 "| CFG-219 | Invalid-value diagnostics | Ghostty reports "
