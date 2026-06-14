@@ -486,6 +486,13 @@ experiment files until they are proven.
   skipped, every parse resets the list, raw-empty config values reset to `null`,
   direct missing or empty child-parser values are required, all-empty or invalid
   lists are rejected, and the 65th color exceeds the upstream 64-color cap.
+- **Selection word chars parse through Ghostty string escapes.** Experiment 33
+  proved canonical `selection-word-chars`: parsed lists always begin with null,
+  explicit empty values are valid and leave only that null boundary, missing
+  values are required, literal characters plus `\t`, `\\`, and `\u{...}` escapes
+  are accepted, invalid escapes preserve the previous valid list, formatter
+  output skips the leading null, invalid Unicode codepoints are skipped, and
+  output stops before the upstream 4096-byte buffer cap.
 
 ## Verification
 
@@ -555,4 +562,4 @@ remains open.
 - [Experiment 32: macOS icon screen color parser oracle](32-macos-icon-screen-color-parser-oracle.md)
   — **Pass**
 - [Experiment 33: Selection word chars parser oracle](33-selection-word-chars-parser-oracle.md)
-  — **Designed**
+  — **Pass**

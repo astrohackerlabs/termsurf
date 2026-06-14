@@ -154,3 +154,84 @@ Fresh-context adversarial subagent review completed before implementation.
 **Verdict:** Approved.
 
 No findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented the focused `selection_word_chars_config_parser_family_oracle` test
+and promoted only canonical `selection-word-chars` in the CFG-217 parser
+inventory. The generated inventory now reports:
+
+- `ghostty_canonical=203`
+- `roastty_parser_rows=203`
+- `missing_dispatch_rows=0`
+- `extra_parser_rows=0`
+- `oracle_complete=174`
+- `audit_covered=29`
+- `gap=0`
+
+The matrix assertion verified that `selection-word-chars` is now
+`Oracle complete`, no parser row is `Gap`, and CFG-217 still remains `Gap` with
+owner `Experiment 33`.
+
+Verification commands run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml selection_word_chars_config_parser_family_oracle
+cargo test --manifest-path roastty/Cargo.toml selection_word_chars_parse_cli_parses_codepoints
+cargo test --manifest-path roastty/Cargo.toml selection_word_chars_format_entry_reencodes_codepoints
+cargo test --manifest-path roastty/Cargo.toml selection_behavior_config_routes_and_formats
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+python3 - <<'PY'
+from pathlib import Path
+
+matrix_rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-matrix.md').read_text().splitlines():
+    if line.startswith('| CFG-'):
+        matrix_rows.append([cell.strip() for cell in line.strip('|').split('|')])
+cfg217 = next(row for row in matrix_rows if row[0] == 'CFG-217')
+assert cfg217[4] == 'Gap', cfg217
+assert 'config-parser-inventory.md' in cfg217[6], cfg217
+assert cfg217[11] == 'Experiment 33', cfg217
+
+parser_rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-parser-inventory.md').read_text().splitlines():
+    if line.startswith('| PARSE-'):
+        parser_rows.append([cell.strip() for cell in line.strip('|').split('|')])
+assert len(parser_rows) == 203, len(parser_rows)
+selection = [row for row in parser_rows if row[1] == '`selection-word-chars`']
+assert len(selection) == 1, selection
+assert selection[0][4] == 'Oracle complete', selection[0]
+assert sum(row[4] == 'Oracle complete' for row in parser_rows) == 174
+assert all(row[4] != 'Gap' for row in parser_rows)
+print(f'parser_rows={len(parser_rows)} selection_word_chars={selection[0][4]} cfg217={cfg217[4]}')
+PY
+cargo fmt --manifest-path roastty/Cargo.toml
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+```
+
+## Conclusion
+
+`selection-word-chars` matches the pinned Ghostty direct parser boundary for the
+covered `SelectionWordChars` semantics: the default boundary list, default
+formatting, null-prefixed parsed lists, literal and escaped codepoints, explicit
+empty values, missing values, invalid escapes preserving earlier valid values,
+config diagnostics, CLI parsing, formatter UTF-8 re-encoding, skipped invalid
+Unicode codepoints, the formatter's 4096-byte cap, and clone semantics. CFG-217
+remains open because 29 parser rows are still only `Audit covered`.
+
+## Completion Review
+
+Fresh-context adversarial subagent review completed after implementation and
+verification.
+
+**Verdict:** Approved.
+
+No findings.

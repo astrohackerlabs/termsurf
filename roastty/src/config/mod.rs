@@ -12888,6 +12888,122 @@ mod tests {
     }
 
     #[test]
+    fn selection_word_chars_config_parser_family_oracle() {
+        let sp = ' ' as u32;
+        let tab = '\t' as u32;
+        let semi = ';' as u32;
+        let comma = ',' as u32;
+
+        let selection_line = |cfg: &Config| {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with("selection-word-chars = "))
+                .unwrap()
+                .to_string()
+        };
+
+        let mut cfg = Config::default();
+        assert_eq!(
+            cfg.selection_word_chars.codepoints,
+            DEFAULT_WORD_BOUNDARIES.to_vec()
+        );
+        assert_eq!(
+            selection_line(&cfg),
+            "selection-word-chars =  \t'\"│`|:;,()[]{}<>$"
+        );
+
+        cfg.set("selection-word-chars", Some(" \t;,")).unwrap();
+        assert_eq!(
+            cfg.selection_word_chars.codepoints,
+            vec![0, sp, tab, semi, comma]
+        );
+        assert_eq!(selection_line(&cfg), "selection-word-chars =  \t;,");
+
+        cfg.set("selection-word-chars", Some(" \\t;,")).unwrap();
+        assert_eq!(
+            cfg.selection_word_chars.codepoints,
+            vec![0, sp, tab, semi, comma]
+        );
+
+        cfg.set("selection-word-chars", Some("\\\\;")).unwrap();
+        assert_eq!(
+            cfg.selection_word_chars.codepoints,
+            vec![0, '\\' as u32, semi]
+        );
+
+        cfg.set("selection-word-chars", Some("\\u{2502};")).unwrap();
+        assert_eq!(cfg.selection_word_chars.codepoints, vec![0, 0x2502, semi]);
+        assert_eq!(selection_line(&cfg), "selection-word-chars = │;");
+
+        cfg.set("selection-word-chars", Some("")).unwrap();
+        assert_eq!(cfg.selection_word_chars.codepoints, vec![0]);
+        assert_eq!(selection_line(&cfg), "selection-word-chars = ");
+
+        assert_eq!(
+            cfg.set("selection-word-chars", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        cfg.set("selection-word-chars", Some("ab")).unwrap();
+        assert_eq!(
+            cfg.set("selection-word-chars", Some("\\q")),
+            Err(ConfigSetError::InvalidValue)
+        );
+        assert_eq!(
+            cfg.selection_word_chars.codepoints,
+            vec![0, 'a' as u32, 'b' as u32]
+        );
+
+        let diagnostics = cfg.load_str("selection-word-chars = \\q\n");
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "selection-word-chars".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+        assert_eq!(
+            cfg.selection_word_chars.codepoints,
+            vec![0, 'a' as u32, 'b' as u32]
+        );
+
+        let mut cli_cfg = Config::default();
+        assert_eq!(
+            cli_cfg.set_cli_args(["--selection-word-chars= _"]),
+            Vec::<ConfigDiagnostic>::new()
+        );
+        assert_eq!(
+            cli_cfg.selection_word_chars.codepoints,
+            vec![0, sp, '_' as u32]
+        );
+
+        let fmt = |codepoints: Vec<u32>| {
+            let mut out = String::new();
+            SelectionWordChars { codepoints }
+                .format_entry(&mut EntryFormatter::new("selection-word-chars", &mut out));
+            out
+        };
+        assert_eq!(
+            fmt(vec![0, semi, comma, 0x2502]),
+            "selection-word-chars = ;,│\n"
+        );
+        assert_eq!(
+            fmt(vec![0, 'A' as u32, 0xD800, 'B' as u32]),
+            "selection-word-chars = AB\n"
+        );
+        let mut capped = vec![0u32];
+        capped.extend(std::iter::repeat('x' as u32).take(4097));
+        assert_eq!(
+            fmt(capped),
+            format!("selection-word-chars = {}\n", "x".repeat(4096))
+        );
+
+        let cloned = cli_cfg.clone();
+        assert_eq!(cloned, cli_cfg);
+    }
+
+    #[test]
     fn clipboard_codepoint_map_parse_cli_parses_entries() {
         let entry = |lo: u32, hi: u32, r: ClipboardReplacement| ClipboardCodepointMapEntry {
             range: [lo, hi],

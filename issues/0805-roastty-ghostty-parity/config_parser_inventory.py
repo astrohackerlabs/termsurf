@@ -42,6 +42,7 @@ BACKGROUND_BLUR_ORACLE_TEST = "background_blur_config_parser_family_oracle"
 CLICK_REPEAT_ORACLE_TEST = "click_repeat_interval_config_parser_family_oracle"
 CURSOR_STYLE_BLINK_ORACLE_TEST = "cursor_style_blink_config_parser_family_oracle"
 MACOS_ICON_SCREEN_COLOR_ORACLE_TEST = "macos_icon_screen_color_config_parser_family_oracle"
+SELECTION_WORD_CHARS_ORACLE_TEST = "selection_word_chars_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -328,6 +329,7 @@ def build_rows(
     click_repeat_oracle_present: bool,
     cursor_style_blink_oracle_present: bool,
     macos_icon_screen_color_oracle_present: bool,
+    selection_word_chars_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -506,6 +508,15 @@ def build_rows(
                 "values, diagnostics, CLI, formatting, and clone semantics"
             )
             missing_evidence = "None for direct macos-icon-screen-color parser semantics."
+        elif selection_word_chars_oracle_present and option == "selection-word-chars":
+            status = "Oracle complete"
+            evidence = (
+                "Selection word chars parser oracle covers default boundaries, "
+                "literal and escaped codepoints, null seeding, empty values, "
+                "missing values, invalid escapes, diagnostics, CLI, formatting, "
+                "the 4096-byte cap, and clone semantics"
+            )
+            missing_evidence = "None for direct selection-word-chars parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -563,6 +574,7 @@ def main() -> int:
     click_repeat_oracle_present = CLICK_REPEAT_ORACLE_TEST in roastty_source
     cursor_style_blink_oracle_present = CURSOR_STYLE_BLINK_ORACLE_TEST in roastty_source
     macos_icon_screen_color_oracle_present = MACOS_ICON_SCREEN_COLOR_ORACLE_TEST in roastty_source
+    selection_word_chars_oracle_present = SELECTION_WORD_CHARS_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -585,13 +597,16 @@ def main() -> int:
         click_repeat_oracle_present,
         cursor_style_blink_oracle_present,
         macos_icon_screen_color_oracle_present,
+        selection_word_chars_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        32
+        33
+        if selection_word_chars_oracle_present
+        else 32
         if macos_icon_screen_color_oracle_present
         else 31
         if cursor_style_blink_oracle_present
