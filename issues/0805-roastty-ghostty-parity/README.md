@@ -1179,3 +1179,5 @@ remains open.
   — **Pass**
 - [Experiment 113: PTY process runtime split](113-pty-process-runtime-split.md)
   — **Pass**
+- [Experiment 114: Terminal VT KAM runtime split](114-terminal-vt-kam-runtime-split.md)
+  — **Designed**
