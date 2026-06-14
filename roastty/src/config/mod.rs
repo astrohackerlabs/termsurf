@@ -28257,6 +28257,135 @@ mod tests {
     }
 
     #[test]
+    fn config_working_directory_diagnostic_oracle() {
+        fn config_line(cfg: &Config) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with("working-directory = "))
+                .map(str::to_string)
+        }
+
+        let default_line = config_line(&Config::default());
+
+        let mut cfg = Config::default();
+        cfg.set("working-directory", Some("home")).unwrap();
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Home));
+        assert_eq!(
+            config_line(&cfg).as_deref(),
+            Some("working-directory = home")
+        );
+
+        cfg.set("working-directory", Some("inherit")).unwrap();
+        assert_eq!(cfg.working_directory, Some(WorkingDirectory::Inherit));
+        assert_eq!(
+            config_line(&cfg).as_deref(),
+            Some("working-directory = inherit")
+        );
+
+        cfg.set("working-directory", Some("\"/tmp/roast dir\""))
+            .unwrap();
+        assert_eq!(
+            cfg.working_directory,
+            Some(WorkingDirectory::Path("/tmp/roast dir".to_string()))
+        );
+        assert_eq!(
+            config_line(&cfg).as_deref(),
+            Some("working-directory = /tmp/roast dir")
+        );
+
+        cfg.set("working-directory", Some("")).unwrap();
+        assert_eq!(cfg.working_directory, Config::default().working_directory);
+        assert_eq!(config_line(&cfg), default_line);
+
+        assert_eq!(
+            cfg.set("working-directory", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("working-directory", Some("   ")),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        let mut file_cfg = Config::default();
+        file_cfg.set("working-directory", Some("home")).unwrap();
+        let before = config_line(&file_cfg);
+        let diagnostics = file_cfg.load_str("\nworking-directory\n");
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "working-directory".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "file missing-value diagnostic preserves line/key/error"
+        );
+        assert_eq!(
+            config_line(&file_cfg),
+            before,
+            "missing file value preserves previous state"
+        );
+
+        let mut file_cfg = Config::default();
+        file_cfg.set("working-directory", Some("inherit")).unwrap();
+        let diagnostics = file_cfg.load_str("\nworking-directory =    \n");
+        assert_eq!(
+            diagnostics,
+            Vec::<ConfigDiagnostic>::new(),
+            "config-file whitespace after '=' is normalized as an empty reset"
+        );
+        assert_eq!(
+            file_cfg.working_directory,
+            Config::default().working_directory
+        );
+        assert_eq!(
+            config_line(&file_cfg),
+            default_line,
+            "config-file whitespace after '=' resets to default"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg
+            .set("working-directory", Some("\"/tmp/cli dir\""))
+            .unwrap();
+        let before = config_line(&cli_cfg);
+        let diagnostics = cli_cfg.set_cli_args(["--working-directory"]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "working-directory".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "CLI missing-value diagnostic preserves argument position/key/error"
+        );
+        assert_eq!(
+            config_line(&cli_cfg),
+            before,
+            "missing CLI value preserves previous state"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg.set("working-directory", Some("home")).unwrap();
+        let before = config_line(&cli_cfg);
+        let diagnostics = cli_cfg.set_cli_args(["--working-directory=   "]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "working-directory".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "CLI whitespace-value diagnostic preserves argument position/key/error"
+        );
+        assert_eq!(
+            config_line(&cli_cfg),
+            before,
+            "whitespace CLI value preserves previous state"
+        );
+    }
+
+    #[test]
     fn duration_config_parser_family_oracle() {
         let dur = |duration| Ok(Duration { duration });
 

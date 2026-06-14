@@ -424,6 +424,13 @@ experiment files until they are proven.
   formats as an empty value, so tests must also assert internal zero state to
   distinguish zero from empty-reset semantics. CFG-219 now has 193
   `Oracle complete` rows and 10 remaining incomplete diagnostic rows.
+- **Working-directory diagnostics are source-specific required-value checks.**
+  Experiment 91 promoted the `working-directory` diagnostic row and confirmed
+  that bare config-file keys plus missing/all-whitespace CLI values report
+  `ConfigSetError::ValueRequired` while preserving prior state. Config-file
+  whitespace after `=` is normalized as an empty reset, not a diagnostic.
+  CFG-219 now has 194 `Oracle complete` rows and 9 remaining incomplete
+  diagnostic rows.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -996,4 +1003,4 @@ remains open.
 - [Experiment 90: Duration diagnostic oracle](90-duration-diagnostic-oracle.md)
   — **Pass**
 - [Experiment 91: Working directory diagnostic oracle](91-working-directory-diagnostic-oracle.md)
-  — **Designed**
+  — **Pass**

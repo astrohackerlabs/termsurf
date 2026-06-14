@@ -103,6 +103,10 @@ DURATION_DIAGNOSTIC_ORACLE_OPTIONS = {
     "undo-timeout",
 }
 
+WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "working-directory",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class ParserInventoryRow:
@@ -198,6 +202,20 @@ def diagnostic_override_evidence(option: str, row: ParserInventoryRow) -> str | 
                 "argument position/key/error, and diagnostic state retention; "
                 "`roastty/src/config/mod.rs::config_duration_diagnostic_family_oracle`"
             )
+        if option in WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "working directory":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 91 working-directory "
+                    f"diagnostic oracle but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 91 working-directory diagnostic oracle covers home, "
+                "inherit, and quoted path acceptance, empty resets, config-file "
+                "whitespace reset behavior, config-file missing-value diagnostics "
+                "with line/key/error, CLI missing/all-whitespace diagnostics with "
+                "argument position/key/error, and required-value state retention; "
+                "`roastty/src/config/mod.rs::config_working_directory_diagnostic_oracle`"
+            )
         if option in STRING_DIAGNOSTIC_ORACLE_OPTIONS:
             if row.family != "string":
                 raise ValueError(
@@ -256,7 +274,10 @@ def diagnostic_override_evidence(option: str, row: ParserInventoryRow) -> str | 
 
 
 def complete_missing_evidence(option: str, override_evidence: str | None) -> str:
-    if override_evidence is not None and option in STRING_DIAGNOSTIC_ORACLE_OPTIONS:
+    if override_evidence is not None and (
+        option in STRING_DIAGNOSTIC_ORACLE_OPTIONS
+        or option in WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS
+    ):
         return "None for missing-value diagnostic behavior."
     return "None for invalid-value diagnostic behavior."
 
@@ -323,6 +344,7 @@ def build_rows(
         | FLOAT_DIAGNOSTIC_ORACLE_OPTIONS
         | STRING_DIAGNOSTIC_ORACLE_OPTIONS
         | DURATION_DIAGNOSTIC_ORACLE_OPTIONS
+        | WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS
     )
     missing_overrides = sorted(override_options - set(canonical_options))
     if missing_overrides:
