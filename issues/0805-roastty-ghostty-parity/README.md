@@ -484,3 +484,5 @@ remains open.
   — **Pass**
 - [Experiment 24: Packed flags parser oracle](24-packed-flags-parser-oracle.md)
   — **Pass**
+- [Experiment 25: Unsupported parser oracle](25-unsupported-parser-oracle.md) —
+  **Designed**
