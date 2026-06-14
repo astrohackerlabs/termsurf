@@ -212,6 +212,9 @@ const ROASTTY_ACTION_KEY_TABLE: c_int = 45;
 const ROASTTY_ACTION_COLOR_CHANGE: c_int = 46;
 #[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
 const ROASTTY_ACTION_CONFIG_CHANGE: c_int = 48;
+
+const ROASTTY_MOUSE_VISIBLE: c_int = 0;
+const ROASTTY_MOUSE_HIDDEN: c_int = 1;
 #[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
 const ROASTTY_ACTION_RING_BELL: c_int = 50;
 #[allow(dead_code)] // reserved ABI tag; roastty emits it in Phase C
@@ -1302,6 +1305,7 @@ pub union RoasttyActionU {
     start_search: RoasttyActionStartSearch,
     key_table: RoasttyActionKeyTable,
     key_sequence: RoasttyActionKeySequence,
+    mouse_visibility: c_int,
 }
 
 #[repr(C)]
@@ -1362,6 +1366,7 @@ fn action_u_from_storage(tag: c_int, storage: [usize; 8]) -> RoasttyActionU {
             }
         }
         ROASTTY_ACTION_NAVIGATE_SEARCH => u.raw = [storage[0], 0, 0],
+        ROASTTY_ACTION_MOUSE_VISIBILITY => u.mouse_visibility = storage[0] as c_int,
         ROASTTY_ACTION_KEY_TABLE => {
             u.key_table = RoasttyActionKeyTable {
                 tag: storage[0] as c_int,
@@ -1425,6 +1430,7 @@ fn action_u_to_storage(tag: c_int, u: &RoasttyActionU) -> [usize; 8] {
             ROASTTY_ACTION_PROMPT_TITLE => s[0] = u.prompt_title as usize,
             ROASTTY_ACTION_RELOAD_CONFIG => s[0] = usize::from(u.reload_config.soft),
             ROASTTY_ACTION_NAVIGATE_SEARCH => s[0] = u.raw[0],
+            ROASTTY_ACTION_MOUSE_VISIBILITY => s[0] = u.mouse_visibility as usize,
             ROASTTY_ACTION_KEY_TABLE => {
                 s[0] = u.key_table.tag as usize;
                 if u.key_table.tag == ROASTTY_KEY_TABLE_ACTIVATE {
@@ -2660,6 +2666,8 @@ struct Surface {
     cursor_click_to_move: bool,
     right_click_action: config::RightClickAction,
     middle_click_action: config::MiddleClickAction,
+    mouse_hide_while_typing: bool,
+    mouse_hidden: bool,
     mouse_scroll_multiplier: config::MouseScrollMultiplier,
     click_repeat_interval_ns: u64,
     preedit: Option<String>,
@@ -3640,6 +3648,10 @@ impl Surface {
         self.cursor_click_to_move = parsed.cursor_click_to_move;
         self.right_click_action = parsed.right_click_action;
         self.middle_click_action = parsed.middle_click_action;
+        self.mouse_hide_while_typing = parsed.mouse_hide_while_typing;
+        if !self.mouse_hide_while_typing {
+            self.show_mouse();
+        }
         self.mouse_reporting = parsed.mouse_reporting;
         self.mouse_scroll_multiplier = parsed.mouse_scroll_multiplier;
         self.click_repeat_interval_ns = click_repeat_interval_ns(&parsed);
@@ -4337,6 +4349,12 @@ impl Surface {
         let mut storage = [0usize; 8];
         storage[0] = needle.as_ptr() as usize;
         self.perform_action_result(ROASTTY_ACTION_START_SEARCH, storage)
+    }
+
+    fn perform_mouse_visibility(&self, visibility: c_int) -> bool {
+        let mut storage = [0usize; 8];
+        storage[0] = visibility as usize;
+        self.perform_action_result(ROASTTY_ACTION_MOUSE_VISIBILITY, storage)
     }
 
     #[allow(dead_code)]
@@ -5574,10 +5592,36 @@ impl Surface {
         self.request_render();
     }
 
+    fn hide_mouse(&mut self) {
+        if self.mouse_hidden {
+            return;
+        }
+        self.mouse_hidden = true;
+        let _ = self.perform_mouse_visibility(ROASTTY_MOUSE_HIDDEN);
+    }
+
+    fn show_mouse(&mut self) {
+        if !self.mouse_hidden {
+            return;
+        }
+        self.mouse_hidden = false;
+        let _ = self.perform_mouse_visibility(ROASTTY_MOUSE_VISIBLE);
+    }
+
+    fn hide_mouse_for_key_event(&mut self, event: &key::KeyEvent) {
+        if self.mouse_hide_while_typing
+            && event.action == key::KeyAction::Press
+            && !event.utf8.is_empty()
+        {
+            self.hide_mouse();
+        }
+    }
+
     fn mouse_pos(&mut self, x: f64, y: f64, mods: c_int) {
         if self.app.is_null() {
             return;
         }
+        self.show_mouse();
         self.mouse.mods = key_mods_from_raw(mods);
         self.mouse.position = if x.is_finite() && y.is_finite() {
             Some((x, y))
@@ -5612,6 +5656,7 @@ impl Surface {
             return false;
         };
 
+        self.show_mouse();
         self.mouse.mods = key_mods_from_raw(mods);
         self.mouse.buttons[mouse_button_index(button)] = Some(state);
         let action = match state {
@@ -5773,6 +5818,7 @@ impl Surface {
         if self.app.is_null() || !x.is_finite() || !y.is_finite() {
             return;
         }
+        self.show_mouse();
         self.mouse.scroll = Some((x, y, scroll_mods as u8));
         let precision = scroll_mods as u8 & 1 != 0;
         let (cell_width, cell_height) = self.mouse_scroll_cell_size();
@@ -6852,11 +6898,7 @@ impl Surface {
                     if event.action != key::KeyAction::Release {
                         self.last_consumed_default_binding = None;
                     }
-                    if self.vt_kam_allowed && self.terminal_kam_enabled() {
-                        true
-                    } else {
-                        self.write_encoded_key_event(&event)
-                    }
+                    self.write_fallthrough_key_event(&event)
                 }
             };
         }
@@ -6879,10 +6921,7 @@ impl Surface {
             if event.action != key::KeyAction::Release {
                 self.last_consumed_default_binding = None;
             }
-            if self.vt_kam_allowed && self.terminal_kam_enabled() {
-                return true;
-            }
-            return self.write_encoded_key_event(&event);
+            return self.write_fallthrough_key_event(&event);
         }
         if let Some(ConfigKeybindSetEntry::Leader { trigger, set }) =
             self.configured_root_sequence_entry(&event)
@@ -6897,10 +6936,7 @@ impl Surface {
             if event.action != key::KeyAction::Release {
                 self.last_consumed_default_binding = None;
             }
-            if self.vt_kam_allowed && self.terminal_kam_enabled() {
-                return true;
-            }
-            return self.write_encoded_key_event(&event);
+            return self.write_fallthrough_key_event(&event);
         }
         if let Some(binding) = default_key_event_binding(&event) {
             if let Some(consumed) = self.dispatch_default_binding(binding) {
@@ -6909,10 +6945,7 @@ impl Surface {
             if event.action != key::KeyAction::Release {
                 self.last_consumed_default_binding = None;
             }
-            if self.vt_kam_allowed && self.terminal_kam_enabled() {
-                return true;
-            }
-            return self.write_encoded_key_event(&event);
+            return self.write_fallthrough_key_event(&event);
         }
         if let Some(binding) = self.configured_catch_all_binding(&event) {
             if let Some(consumed) = self.dispatch_configured_binding(binding) {
@@ -6921,18 +6954,20 @@ impl Surface {
             if event.action != key::KeyAction::Release {
                 self.last_consumed_default_binding = None;
             }
-            if self.vt_kam_allowed && self.terminal_kam_enabled() {
-                return true;
-            }
-            return self.write_encoded_key_event(&event);
+            return self.write_fallthrough_key_event(&event);
         }
         if event.action != key::KeyAction::Release {
             self.last_consumed_default_binding = None;
         }
+        self.write_fallthrough_key_event(&event)
+    }
+
+    fn write_fallthrough_key_event(&mut self, event: &key::KeyEvent) -> bool {
         if self.vt_kam_allowed && self.terminal_kam_enabled() {
             return true;
         }
-        self.write_encoded_key_event(&event)
+        self.hide_mouse_for_key_event(event);
+        self.write_encoded_key_event(event)
     }
 
     fn terminal_kam_enabled(&self) -> bool {
@@ -17713,6 +17748,7 @@ pub extern "C" fn roastty_surface_new(
         cursor_click_to_move,
         right_click_action,
         middle_click_action,
+        mouse_hide_while_typing,
         mouse_reporting,
         mouse_scroll_multiplier,
         click_repeat_interval_ns,
@@ -17739,6 +17775,7 @@ pub extern "C" fn roastty_surface_new(
                 parsed.cursor_click_to_move,
                 parsed.right_click_action,
                 parsed.middle_click_action,
+                parsed.mouse_hide_while_typing,
                 parsed.mouse_reporting,
                 parsed.mouse_scroll_multiplier,
                 click_repeat_interval_ns(&parsed),
@@ -17761,6 +17798,7 @@ pub extern "C" fn roastty_surface_new(
             true,
             config::RightClickAction::ContextMenu,
             config::MiddleClickAction::PrimaryPaste,
+            false,
             true,
             config::MouseScrollMultiplier::default(),
             500_000_000,
@@ -17818,6 +17856,8 @@ pub extern "C" fn roastty_surface_new(
         cursor_click_to_move,
         right_click_action,
         middle_click_action,
+        mouse_hide_while_typing,
+        mouse_hidden: false,
         mouse_scroll_multiplier,
         click_repeat_interval_ns,
         preedit: None,
@@ -19642,6 +19682,27 @@ mod tests {
         handle
     }
 
+    fn new_test_config_with_mouse_hide_while_typing(enabled: bool) -> RoasttyConfig {
+        let handle = roastty_config_new();
+        let config = config_from_handle(handle).unwrap();
+        config.parsed.mouse_hide_while_typing = enabled;
+        config.sync_from_parsed_config();
+        handle
+    }
+
+    fn new_test_config_with_mouse_hide_while_typing_and_keybind(
+        enabled: bool,
+        keybind: &[u8],
+    ) -> RoasttyConfig {
+        let handle = roastty_config_new();
+        let config = config_from_handle(handle).unwrap();
+        config.parsed.mouse_hide_while_typing = enabled;
+        clear_test_keybinds(config);
+        config.store_keybind(parse_config_keybind(keybind).unwrap());
+        config.sync_from_parsed_config();
+        handle
+    }
+
     fn new_test_config_with_font_size(font_size: f32) -> RoasttyConfig {
         let handle = roastty_config_new();
         config_from_handle(handle).unwrap().parsed.font_size = font_size;
@@ -20841,6 +20902,26 @@ mod tests {
             unshifted_codepoint: b'x' as u32,
             composing: false,
         }
+    }
+
+    fn input_key(action: key::KeyAction, keycode: u32, text: &'static [u8]) -> RoasttyInputKey {
+        RoasttyInputKey {
+            action: key_action_to_int(action),
+            mods: ROASTTY_MODS_NONE,
+            consumed_mods: ROASTTY_MODS_NONE,
+            keycode,
+            text: text.as_ptr().cast::<c_char>(),
+            unshifted_codepoint: text.first().copied().unwrap_or_default() as u32,
+            composing: false,
+        }
+    }
+
+    fn mouse_visibility_records() -> Vec<c_int> {
+        action_records()
+            .into_iter()
+            .filter(|record| record.action_tag == ROASTTY_ACTION_MOUSE_VISIBILITY)
+            .map(|record| record.storage[0] as c_int)
+            .collect()
     }
 
     fn send_key(surface: RoasttySurface, event: KeyEvent) -> bool {
@@ -22356,6 +22437,162 @@ mod tests {
         roastty_surface_free(surface);
         roastty_app_free(app);
         roastty_config_free(updated);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_hide_while_typing_disabled_does_not_emit_visibility() {
+        let config = new_test_config_with_mouse_hide_while_typing(false);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+
+        assert!(mouse_visibility_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_hide_while_typing_hides_once_for_text_key_press() {
+        let config = new_test_config_with_mouse_hide_while_typing(true);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+
+        assert_eq!(mouse_visibility_records(), vec![ROASTTY_MOUSE_HIDDEN]);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_hide_while_typing_ignores_release_and_empty_text() {
+        let config = new_test_config_with_mouse_hide_while_typing(true);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Release, 0x0007, b"x\0")
+        ));
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"\0")
+        ));
+
+        assert!(mouse_visibility_records().is_empty());
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_hide_while_typing_mouse_events_show_hidden_mouse() {
+        let config = new_test_config_with_mouse_hide_while_typing(true);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        set_surface_test_geometry(surface, 10, 5, 10, 20);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+        reset_action_records(true);
+        roastty_surface_mouse_pos(surface, 1.0, 1.0, ROASTTY_MODS_NONE);
+        assert_eq!(mouse_visibility_records(), vec![ROASTTY_MOUSE_VISIBLE]);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+        reset_action_records(true);
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            mouse_button_to_int(mouse::MouseButton::Left),
+            ROASTTY_MODS_NONE
+        ));
+        assert_eq!(mouse_visibility_records(), vec![ROASTTY_MOUSE_VISIBLE]);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+        reset_action_records(true);
+        roastty_surface_mouse_scroll(surface, 0.0, 1.0, 0);
+        assert_eq!(mouse_visibility_records(), vec![ROASTTY_MOUSE_VISIBLE]);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_hide_while_typing_config_update_shows_and_disables_existing_surface() {
+        let config = new_test_config_with_mouse_hide_while_typing(true);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+        reset_action_records(true);
+        let disabled = new_test_config_with_mouse_hide_while_typing(false);
+        roastty_surface_update_config(surface, disabled);
+        assert_eq!(mouse_visibility_records(), vec![ROASTTY_MOUSE_VISIBLE]);
+
+        reset_action_records(true);
+        assert!(!roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+        assert!(mouse_visibility_records().is_empty());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(disabled);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_hide_while_typing_unconsumed_binding_hides_before_encoding() {
+        let _guard = pty_command_lock();
+        let config =
+            new_test_config_with_mouse_hide_while_typing_and_keybind(true, b"unconsumed:x=quit");
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker(
+            "stty raw -echo; printf ready; byte=$(dd bs=1 count=1 2>/dev/null); printf out:%s \"$byte\"; sleep 1",
+        ));
+        wait_for_surface_plain_screen(app, surface, "ready");
+
+        assert!(roastty_surface_key(
+            surface,
+            input_key(key::KeyAction::Press, 0x0007, b"x\0")
+        ));
+
+        wait_for_surface_plain_screen(app, surface, "out:x");
+        let records = action_records();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].action_tag, ROASTTY_ACTION_QUIT);
+        assert_eq!(records[1].action_tag, ROASTTY_ACTION_MOUSE_VISIBILITY);
+        assert_eq!(records[1].storage[0] as c_int, ROASTTY_MOUSE_HIDDEN);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
         roastty_config_free(config);
     }
 

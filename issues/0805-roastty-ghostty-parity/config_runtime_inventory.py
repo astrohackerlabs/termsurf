@@ -173,15 +173,18 @@ ROWS = [
         ghostty_reference="`vendor/ghostty/src/config/Config.zig` `mouse-hide-while-typing`; `vendor/ghostty/src/Surface.zig` key input mouse hide/show paths",
         roastty_reference="`roastty/src/lib.rs` key input and macOS mouse shape/action callbacks",
         family="mouse",
-        status="Gap",
+        status="Oracle complete",
         evidence=(
-            "`mouse-hide-while-typing` is parsed and formatted, but CFG-223 "
-            "still needs runtime/UI proof that typing hides the mouse and "
-            "mouse use shows it again."
+            "`mouse_hide_while_typing_*` tests prove enabled text-key presses "
+            "emit hidden once, key releases and empty-text presses do not hide, "
+            "mouse position/button/scroll events emit visible when hidden, "
+            "config update disables hiding and shows a hidden mouse, and "
+            "unconsumed configured bindings still hide before encoded "
+            "fallthrough input."
         ),
-        missing_evidence="Add a runtime or GUI test for hide-on-typing/show-on-mouse behavior.",
-        guard_tier="Tier 3",
-        guard_command="TBD by future CFG-223 mouse-hide-while-typing experiment.",
+        missing_evidence="None for libroastty mouse-hide-while-typing runtime visibility actions.",
+        guard_tier="Tier 2",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml mouse_hide_while_typing`",
     ),
     RuntimeRow(
         id="RUNTIME-004G",

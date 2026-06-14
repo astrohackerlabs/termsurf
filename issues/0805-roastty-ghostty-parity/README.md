@@ -548,6 +548,12 @@ experiment files until they are proven.
   Reporting-mode right clicks clear selection, reset selection gesture state,
   dispatch the mouse report, and skip right-click action side effects; link
   context-menu behavior remains tracked under notification/link runtime parity.
+- **Mouse hiding belongs after fallthrough keybindings and before encoding.**
+  Experiment 111 matched pinned Ghostty's `mouse-hide-while-typing` behavior:
+  text key presses hide the mouse once, releases and empty-text keys do not
+  hide, unconsumed configured bindings still hide before encoded fallthrough
+  input, mouse movement/button/scroll show the mouse again, and disabling the
+  option by config update shows an already-hidden mouse.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1159,4 +1165,4 @@ remains open.
 - [Experiment 110: Right click action runtime](110-right-click-action-runtime.md)
   — **Pass**
 - [Experiment 111: Mouse hide while typing runtime](111-mouse-hide-while-typing-runtime.md)
-  — **Designed**
+  — **Pass**

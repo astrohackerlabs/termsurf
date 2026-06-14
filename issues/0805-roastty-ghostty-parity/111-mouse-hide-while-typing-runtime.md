@@ -151,3 +151,81 @@ Fix:
 
 Re-review verdict: **Approved**. The reviewer confirmed the prior required and
 optional findings are resolved and found no remaining required design issues.
+
+## Result
+
+**Result:** Pass
+
+Roastty now stores `mouse-hide-while-typing` as surface runtime state, tracks
+whether the mouse is hidden, and emits idempotent
+`ROASTTY_ACTION_MOUSE_VISIBILITY` actions through the same callback path the
+macOS app consumes. The typed action union and test recorder now preserve the
+mouse visibility payload, so tests assert hidden versus visible rather than only
+the action tag.
+
+The key path now uses a shared fallthrough helper: VT KAM still consumes before
+typing-hide behavior, but unconsumed or performable-unperformed bindings fall
+through to the Ghostty-equivalent hide-before-encode point. Mouse position,
+mouse button, and mouse scroll restore visibility before continuing their normal
+handling. Surface config update shows the mouse immediately when the option is
+disabled while hidden.
+
+Focused tests prove:
+
+- disabled config emits no mouse visibility action for typed text;
+- enabled config hides once for repeated text-key presses;
+- key release and empty-text press events do not hide;
+- mouse movement, button, and scroll each show a hidden mouse;
+- disabling the option on an existing hidden surface emits visible and prevents
+  later text-key hides;
+- an unconsumed configured binding still performs its action, emits hidden, and
+  encodes the key to the PTY.
+
+`RUNTIME-004F` is promoted to `Oracle complete`. `CFG-223` remains `Gap` because
+seven runtime/UI rows are still incomplete.
+
+Verification passed:
+
+```text
+cargo test --manifest-path roastty/Cargo.toml mouse_hide_while_typing
+# 6 passed
+
+cargo test --manifest-path roastty/Cargo.toml mouse_runtime
+# 5 passed
+
+cargo test --manifest-path roastty/Cargo.toml surface_key_configured
+# 11 passed
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# runtime_rows=21 oracle_complete=13 closed=14 audit_covered=0 incomplete=7 gap=7 cfg223=Gap
+```
+
+## Conclusion
+
+`mouse-hide-while-typing` now has a durable Tier 2 runtime guard through
+`cargo test --manifest-path roastty/Cargo.toml mouse_hide_while_typing`. The
+explicit mouse runtime subrows are now complete; the remaining CFG-223 gaps are
+broader font, renderer, terminal, PTY/process, macOS app, notification/link, and
+platform-classification runtime rows.
+
+## Completion Review
+
+Fresh-context Codex adversarial reviewer `Mill` returned **Approved** with no
+required findings.
+
+The reviewer independently verified:
+
+- the result was still uncommitted before review;
+- `cargo test --manifest-path roastty/Cargo.toml mouse_hide_while_typing`;
+- `cargo test --manifest-path roastty/Cargo.toml mouse_runtime`;
+- `cargo test --manifest-path roastty/Cargo.toml surface_key_configured`;
+- `cargo fmt --manifest-path roastty/Cargo.toml --check`;
+- Prettier check for the touched issue docs;
+- `git diff --check`;
+- runtime inventory assertions showing `RUNTIME-004F` is `Oracle complete` and
+  `CFG-223` remains `Gap`.
+
+The reviewer skipped normal `python3 -m py_compile` because it writes
+`__pycache__`, and instead used a non-writing `ast.parse` syntax check.
