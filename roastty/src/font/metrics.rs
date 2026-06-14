@@ -459,9 +459,7 @@ impl Modifier {
         }
 
         if let Some(prefix) = input.strip_suffix('%') {
-            let percent: f64 = prefix
-                .parse()
-                .map_err(|_| ModifierParseError::InvalidFormat)?;
+            let percent = parse_zig_float_f64(prefix)?;
             let percent = percent / 100.0;
             // A percent of <= -1 (i.e. "-100%" or more negative) clamps the
             // multiplier to 0; otherwise the stored value is 1 + the fraction.
@@ -471,9 +469,7 @@ impl Modifier {
             return Ok(Modifier::Percent(1.0 + percent));
         }
 
-        let absolute: i32 = input
-            .parse()
-            .map_err(|_| ModifierParseError::InvalidFormat)?;
+        let absolute = parse_zig_i32_dec(input)?;
         Ok(Modifier::Absolute(absolute))
     }
 
@@ -513,6 +509,159 @@ impl Modifier {
             Modifier::Percent(p) => v * p.max(0.0),
             Modifier::Absolute(abs) => v + abs as f64,
         }
+    }
+}
+
+fn parse_zig_i32_dec(input: &str) -> Result<i32, ModifierParseError> {
+    let (negative, digits) = match input.as_bytes().first() {
+        Some(b'+') => (false, &input[1..]),
+        Some(b'-') => (true, &input[1..]),
+        Some(_) => (false, input),
+        None => return Err(ModifierParseError::InvalidFormat),
+    };
+
+    if digits.is_empty()
+        || digits.as_bytes().first() == Some(&b'_')
+        || digits.as_bytes().last() == Some(&b'_')
+    {
+        return Err(ModifierParseError::InvalidFormat);
+    }
+
+    let limit = if negative {
+        i32::MAX as i64 + 1
+    } else {
+        i32::MAX as i64
+    };
+    let mut acc: i64 = 0;
+    let mut previous_was_digit = false;
+    for byte in digits.bytes() {
+        if byte == b'_' {
+            if !previous_was_digit {
+                return Err(ModifierParseError::InvalidFormat);
+            }
+            previous_was_digit = false;
+            continue;
+        }
+
+        let digit = (byte as char)
+            .to_digit(10)
+            .ok_or(ModifierParseError::InvalidFormat)? as i64;
+        acc = acc
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(digit))
+            .filter(|value| *value <= limit)
+            .ok_or(ModifierParseError::InvalidFormat)?;
+        previous_was_digit = true;
+    }
+
+    if !previous_was_digit {
+        return Err(ModifierParseError::InvalidFormat);
+    }
+
+    let signed = if negative { -acc } else { acc };
+    i32::try_from(signed).map_err(|_| ModifierParseError::InvalidFormat)
+}
+
+fn parse_zig_float_f64(value: &str) -> Result<f64, ModifierParseError> {
+    let (negative, body) = split_float_sign(value)?;
+    if body.is_empty() {
+        return Err(ModifierParseError::InvalidFormat);
+    }
+    let normalized = normalize_zig_float(value, negative, body)?;
+    parse_c_float_f64(&normalized)
+}
+
+fn split_float_sign(value: &str) -> Result<(bool, &str), ModifierParseError> {
+    match value.as_bytes().first() {
+        Some(b'+') => Ok((false, &value[1..])),
+        Some(b'-') => Ok((true, &value[1..])),
+        Some(_) => Ok((false, value)),
+        None => Err(ModifierParseError::InvalidFormat),
+    }
+}
+
+fn normalize_zig_float(
+    value: &str,
+    negative: bool,
+    body: &str,
+) -> Result<String, ModifierParseError> {
+    if value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Err(ModifierParseError::InvalidFormat);
+    }
+    if body.to_ascii_lowercase().starts_with("nan(") {
+        return Err(ModifierParseError::InvalidFormat);
+    }
+
+    if body.starts_with("0x") || body.starts_with("0X") {
+        validate_zig_hex_float_separators(body)?;
+        let mut normalized = String::new();
+        if negative {
+            normalized.push('-');
+        } else if value.starts_with('+') {
+            normalized.push('+');
+        }
+        normalized.push_str(&remove_zig_digit_separators(body, 16)?);
+        Ok(normalized)
+    } else {
+        remove_zig_digit_separators(value, 10)
+    }
+}
+
+fn parse_c_float_f64(value: &str) -> Result<f64, ModifierParseError> {
+    let c_value = std::ffi::CString::new(value).map_err(|_| ModifierParseError::InvalidFormat)?;
+    let mut end: *mut libc::c_char = std::ptr::null_mut();
+    let parsed = unsafe { libc::strtod(c_value.as_ptr(), &mut end) };
+    let expected_end = unsafe { c_value.as_ptr().add(value.len()) as *mut libc::c_char };
+    if end == expected_end {
+        Ok(parsed)
+    } else {
+        Err(ModifierParseError::InvalidFormat)
+    }
+}
+
+fn remove_zig_digit_separators(value: &str, base: u32) -> Result<String, ModifierParseError> {
+    let bytes = value.as_bytes();
+    for (idx, byte) in bytes.iter().enumerate() {
+        if *byte == b'_' {
+            let prev = idx.checked_sub(1).and_then(|prev| bytes.get(prev)).copied();
+            let next = bytes.get(idx + 1).copied();
+            if !prev.is_some_and(|ch| is_float_digit(ch, base))
+                || !next.is_some_and(|ch| is_float_digit(ch, base))
+            {
+                return Err(ModifierParseError::InvalidFormat);
+            }
+        }
+    }
+    Ok(value.chars().filter(|ch| *ch != '_').collect())
+}
+
+fn validate_zig_hex_float_separators(value: &str) -> Result<(), ModifierParseError> {
+    let bytes = value.as_bytes();
+    let mut in_exponent = false;
+    for (idx, byte) in bytes.iter().enumerate() {
+        match *byte {
+            b'p' | b'P' => in_exponent = true,
+            b'_' => {
+                let prev = idx.checked_sub(1).and_then(|prev| bytes.get(prev)).copied();
+                let next = bytes.get(idx + 1).copied();
+                let base = if in_exponent { 10 } else { 16 };
+                if !prev.is_some_and(|ch| is_float_digit(ch, base))
+                    || !next.is_some_and(|ch| is_float_digit(ch, base))
+                {
+                    return Err(ModifierParseError::InvalidFormat);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn is_float_digit(byte: u8, base: u32) -> bool {
+    match base {
+        10 => byte.is_ascii_digit(),
+        16 => byte.is_ascii_hexdigit(),
+        _ => false,
     }
 }
 
@@ -934,6 +1083,22 @@ mod tests {
         assert!(approx(percent_of(Modifier::parse("20%").unwrap()), 1.2));
         assert!(approx(percent_of(Modifier::parse("-20%").unwrap()), 0.8));
         assert!(approx(percent_of(Modifier::parse("0%").unwrap()), 1.0));
+        assert!(approx(
+            percent_of(Modifier::parse("1_0.5%").unwrap()),
+            1.105
+        ));
+        assert!(approx(percent_of(Modifier::parse("0x1p4%").unwrap()), 1.16));
+        assert!(approx(
+            percent_of(Modifier::parse("0X1.8P1%").unwrap()),
+            1.03
+        ));
+        assert_eq!(percent_of(Modifier::parse("Inf%").unwrap()), f64::INFINITY);
+        assert_eq!(percent_of(Modifier::parse("-Inf%").unwrap()), 0.0);
+        assert_eq!(
+            percent_of(Modifier::parse("1e309%").unwrap()),
+            f64::INFINITY
+        );
+        assert!(percent_of(Modifier::parse("nAn%").unwrap()).is_nan());
     }
 
     #[test]
@@ -947,14 +1112,40 @@ mod tests {
         assert_eq!(Modifier::parse("5").unwrap(), Modifier::Absolute(5));
         assert_eq!(Modifier::parse("-3").unwrap(), Modifier::Absolute(-3));
         assert_eq!(Modifier::parse("+5").unwrap(), Modifier::Absolute(5));
+        assert_eq!(Modifier::parse("1_000").unwrap(), Modifier::Absolute(1000));
+        assert_eq!(
+            Modifier::parse("2147483647").unwrap(),
+            Modifier::Absolute(i32::MAX)
+        );
+        assert_eq!(
+            Modifier::parse("-2147483648").unwrap(),
+            Modifier::Absolute(i32::MIN)
+        );
     }
 
     #[test]
     fn modifier_parse_errors() {
-        assert!(Modifier::parse("").is_err());
-        assert!(Modifier::parse("abc").is_err());
-        assert!(Modifier::parse("abc%").is_err());
-        assert!(Modifier::parse("%").is_err());
+        for value in [
+            "",
+            "abc",
+            "abc%",
+            "%",
+            "2147483648",
+            "-2147483649",
+            "0x10",
+            "1.5",
+            "_1",
+            "1_",
+            "1__0",
+            "+_1",
+            "_1%",
+            "1__0%",
+            "0x1p%",
+            "0x1p_4%",
+            "nan(payload)%",
+        ] {
+            assert!(Modifier::parse(value).is_err(), "{value:?} should fail");
+        }
     }
 
     #[test]

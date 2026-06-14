@@ -18037,6 +18037,215 @@ mod tests {
     }
 
     #[test]
+    fn metric_modifier_config_parser_family_oracle() {
+        fn line(cfg: &Config, key: &str) -> String {
+            let prefix = format!("{} = ", key);
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap()
+                .to_string()
+        }
+
+        fn assert_percent(value: MetricModifier, expected: f64) {
+            match value {
+                MetricModifier::Percent(actual) => assert_eq!(actual, expected),
+                other => panic!("expected percent modifier, got {other:?}"),
+            }
+        }
+
+        fn assert_percent_nan(value: MetricModifier) {
+            match value {
+                MetricModifier::Percent(actual) => assert!(actual.is_nan()),
+                other => panic!("expected percent modifier, got {other:?}"),
+            }
+        }
+
+        let mut cfg = Config::default();
+        let cases = [
+            ("adjust-box-thickness", "1", "adjust-box-thickness = 1"),
+            ("adjust-cell-height", "-2", "adjust-cell-height = -2"),
+            ("adjust-cell-width", "+3", "adjust-cell-width = 3"),
+            ("adjust-cursor-height", "4", "adjust-cursor-height = 4"),
+            (
+                "adjust-cursor-thickness",
+                "5",
+                "adjust-cursor-thickness = 5",
+            ),
+            ("adjust-font-baseline", "25%", "adjust-font-baseline = 25%"),
+            (
+                "adjust-icon-height",
+                "0x1p4%",
+                "adjust-icon-height = 15.999999999999993%",
+            ),
+            (
+                "adjust-overline-position",
+                "-50%",
+                "adjust-overline-position = -50%",
+            ),
+            (
+                "adjust-overline-thickness",
+                "-150%",
+                "adjust-overline-thickness = -100%",
+            ),
+            (
+                "adjust-strikethrough-position",
+                "1_000",
+                "adjust-strikethrough-position = 1000",
+            ),
+            (
+                "adjust-strikethrough-thickness",
+                "1_0.5%",
+                "adjust-strikethrough-thickness = 10.499999999999998%",
+            ),
+            (
+                "adjust-underline-position",
+                "Inf%",
+                "adjust-underline-position = inf%",
+            ),
+            (
+                "adjust-underline-thickness",
+                "nAn%",
+                "adjust-underline-thickness = nan%",
+            ),
+        ];
+        for (key, value, expected) in cases {
+            cfg.set(key, Some(value)).unwrap();
+            assert_eq!(line(&cfg, key), expected);
+        }
+
+        assert_eq!(
+            cfg.adjust_strikethrough_position,
+            Some(MetricModifier::Absolute(1000))
+        );
+        assert_eq!(cfg.adjust_icon_height, Some(MetricModifier::Percent(1.16)));
+        assert_eq!(
+            cfg.adjust_strikethrough_thickness,
+            Some(MetricModifier::Percent(1.105))
+        );
+        assert_eq!(
+            cfg.adjust_overline_thickness,
+            Some(MetricModifier::Percent(0.0))
+        );
+        assert_eq!(
+            cfg.adjust_underline_position,
+            Some(MetricModifier::Percent(f64::INFINITY))
+        );
+        assert_percent_nan(cfg.adjust_underline_thickness.unwrap());
+
+        cfg.set("adjust-cell-width", Some("2147483647")).unwrap();
+        assert_eq!(
+            cfg.adjust_cell_width,
+            Some(MetricModifier::Absolute(i32::MAX))
+        );
+        cfg.set("adjust-cell-width", Some("-2147483648")).unwrap();
+        assert_eq!(
+            cfg.adjust_cell_width,
+            Some(MetricModifier::Absolute(i32::MIN))
+        );
+        cfg.set("adjust-cell-width", Some("")).unwrap();
+        assert_eq!(cfg.adjust_cell_width, None);
+        assert_eq!(line(&cfg, "adjust-cell-width"), "adjust-cell-width = ");
+        assert_eq!(
+            cfg.set("adjust-cell-width", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        cfg.set("adjust-cell-height", Some("+0")).unwrap();
+        assert_eq!(cfg.adjust_cell_height, Some(MetricModifier::Absolute(0)));
+        cfg.set("adjust-cell-height", Some("-0")).unwrap();
+        assert_eq!(cfg.adjust_cell_height, Some(MetricModifier::Absolute(0)));
+        for value in [
+            "2147483648",
+            "-2147483649",
+            "0x10",
+            "0b10",
+            "1.5",
+            "_1",
+            "1_",
+            "1__0",
+            "+_1",
+            "-_1",
+        ] {
+            assert_eq!(
+                cfg.set("adjust-cell-height", Some(value)),
+                Err(ConfigSetError::InvalidValue),
+                "adjust-cell-height rejects {value:?}"
+            );
+        }
+
+        for (value, expected) in [
+            ("+infinity%", f64::INFINITY),
+            ("-infinity%", 0.0),
+            ("1e309%", f64::INFINITY),
+            ("0x1.8P1%", 1.03),
+            ("1_000%", 11.0),
+        ] {
+            cfg.set("adjust-font-baseline", Some(value)).unwrap();
+            assert_percent(cfg.adjust_font_baseline.unwrap(), expected);
+        }
+        cfg.set("adjust-font-baseline", Some("NaN%")).unwrap();
+        assert_percent_nan(cfg.adjust_font_baseline.unwrap());
+
+        for value in [
+            "%",
+            "+%",
+            "abc%",
+            "_1%",
+            "1_%",
+            "1__0%",
+            "0x%",
+            "0x.p1%",
+            "0x1p%",
+            "0x1p_4%",
+            "0x1p4_%",
+            "nan(payload)%",
+        ] {
+            assert_eq!(
+                cfg.set("adjust-font-baseline", Some(value)),
+                Err(ConfigSetError::InvalidValue),
+                "adjust-font-baseline rejects {value:?}"
+            );
+        }
+
+        let diagnostics = cfg.load_str(
+            "adjust-cell-width = 12\n\
+             adjust-cell-height = nope\n\
+             adjust-font-baseline\n\
+             adjust-cell-width =\n",
+        );
+        assert_eq!(cfg.adjust_cell_width, None);
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "adjust-cell-height".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 3,
+                    key: "adjust-font-baseline".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+            ]
+        );
+
+        let diagnostics = cfg.set_cli_args(["--adjust-cell-width=13", "--adjust-cell-height=25%"]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(cfg.adjust_cell_width, Some(MetricModifier::Absolute(13)));
+        assert_eq!(cfg.adjust_cell_height, Some(MetricModifier::Percent(1.25)));
+        cfg.set("adjust-font-baseline", Some("25%")).unwrap();
+        cfg.set("adjust-underline-thickness", Some("25%")).unwrap();
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.adjust_cell_width, cfg.adjust_cell_width);
+        assert_eq!(cloned.adjust_cell_height, cfg.adjust_cell_height);
+    }
+
+    #[test]
     fn config_set_routes_enum_fields() {
         // Every enum key, set to a (mostly non-default) valid keyword, routes to
         // the right field — verified by reading it back through `format_config`.

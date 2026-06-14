@@ -178,6 +178,7 @@ assert all(row[4] != 'Gap' for row in parser_rows)
 print(f'parser_rows={len(parser_rows)} metric_modifier_oracle={len(metric_rows)} cfg217={cfg217[4]}')
 PY
 cargo fmt --manifest-path roastty/Cargo.toml
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
 prettier --write --prose-wrap always --print-width 80 \
   issues/0805-roastty-ghostty-parity/28-metric-modifier-parser-oracle.md \
   issues/0805-roastty-ghostty-parity/README.md \
@@ -204,3 +205,128 @@ design and returned `CHANGES REQUIRED`.
 The same adversarial subagent re-reviewed only the fix and returned
 `VERDICT: APPROVED`, confirming that the prior finding was resolved and that no
 new Required findings were introduced.
+
+## Result
+
+**Result:** Pass
+
+Implemented the metric modifier parser oracle and promoted all 13
+`parse_metric_modifier` rows to `Oracle complete`.
+
+Changes made:
+
+- `roastty/src/font/metrics.rs`
+  - Replaced Rust built-in numeric parsing in `Modifier::parse` with
+    Zig-compatible parsing:
+    - absolute values use base-10 signed `i32` semantics;
+    - percentage bodies use Zig-compatible `f64` parsing;
+    - hexadecimal floats, special values, overflow, and interior underscores are
+      accepted where Zig accepts them;
+    - malformed separators, malformed hexadecimal floats, invalid base prefixes
+      in absolute mode, over-wide integers, and payload NaNs are rejected.
+  - Extended lower-level metric parser tests for the Zig-specific numeric cases.
+- `roastty/src/config/mod.rs`
+  - Added `metric_modifier_config_parser_family_oracle`.
+  - Covered all 13 adjustment keys, formatter output, empty reset, missing
+    values, invalid values, diagnostics, CLI parsing, and clone behavior.
+  - Verified Zig formatter parity for floating precision artifacts such as
+    `0x1p4%` round-tripping as `15.999999999999993%`.
+- `issues/0805-roastty-ghostty-parity/config_parser_inventory.py`
+  - Added the metric modifier oracle marker and Experiment 28 ownership.
+  - Promotes only rows whose parser path includes `parse_metric_modifier`.
+- `issues/0805-roastty-ghostty-parity/config-parser-inventory.md`
+  - Regenerated with 169 `Oracle complete`, 34 `Audit covered`, and 0 `Gap`
+    rows.
+- `issues/0805-roastty-ghostty-parity/config-matrix.md`
+  - Regenerated CFG-217 with Experiment 28 as owner and the updated parser
+    counts.
+- `issues/0805-roastty-ghostty-parity/README.md`
+  - Added the metric modifier learning and updated this experiment to `Pass`.
+
+Verification run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml metric_modifier_config_parser_family_oracle
+cargo test --manifest-path roastty/Cargo.toml font_metric_adjust_config_parse_format_reset_load_and_clone
+cargo test --manifest-path roastty/Cargo.toml modifier_parse
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+python3 - <<'PY'
+from pathlib import Path
+
+matrix_rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-matrix.md').read_text().splitlines():
+    if line.startswith('| CFG-'):
+        matrix_rows.append([cell.strip() for cell in line.strip('|').split('|')])
+cfg217 = next(row for row in matrix_rows if row[0] == 'CFG-217')
+assert cfg217[4] == 'Gap', cfg217
+assert 'config-parser-inventory.md' in cfg217[6], cfg217
+assert cfg217[11] == 'Experiment 28', cfg217
+
+parser_rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-parser-inventory.md').read_text().splitlines():
+    if line.startswith('| PARSE-'):
+        parser_rows.append([cell.strip() for cell in line.strip('|').split('|')])
+assert len(parser_rows) == 203, len(parser_rows)
+metric_rows = [row for row in parser_rows if 'parse_metric_modifier' in row[2]]
+assert len(metric_rows) == 13, len(metric_rows)
+assert all(row[4] == 'Oracle complete' for row in metric_rows)
+assert sum(row[4] == 'Oracle complete' for row in parser_rows) == 169
+assert all(row[4] != 'Gap' for row in parser_rows)
+print(f'parser_rows={len(parser_rows)} metric_modifier_oracle={len(metric_rows)} cfg217={cfg217[4]}')
+PY
+cargo fmt --manifest-path roastty/Cargo.toml
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/28-metric-modifier-parser-oracle.md \
+  issues/0805-roastty-ghostty-parity/README.md \
+  issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md
+git diff --check
+```
+
+Observed verification output:
+
+- `metric_modifier_config_parser_family_oracle`: passed.
+- `font_metric_adjust_config_parse_format_reset_load_and_clone`: passed.
+- `modifier_parse`: passed.
+- Parser generator:
+  - `ghostty_canonical=203`;
+  - `roastty_parser_rows=203`;
+  - `missing_dispatch_rows=0`;
+  - `extra_parser_rows=0`;
+  - `oracle_complete=169`;
+  - `audit_covered=34`;
+  - `gap=0`.
+- Matrix assertion:
+  - `parser_rows=203`;
+  - `metric_modifier_oracle=13`;
+  - `cfg217=Gap`.
+- `python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py`:
+  passed.
+- `git diff --check`: passed.
+
+## Conclusion
+
+The metric modifier parser family now has a durable Tier 1 oracle. Roastty now
+matches pinned Ghostty's metric modifier parser boundary for all 13 canonical
+adjustment options, including Zig-specific integer and float syntax and
+formatter-visible floating precision behavior.
+
+CFG-217 remains `Gap` because 34 parser rows are still only `Audit covered`. The
+next experiment should continue with another bounded parser family from those
+remaining rows.
+
+## Completion Review
+
+Adversarial subagent `019ec3f5-e8d4-7de1-ac20-cd67194a1679` reviewed the
+completed experiment and returned `VERDICT: APPROVED`.
+
+- **Optional:** The recorded verification omitted the
+  `python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py`
+  check that was run during implementation.
+- **Fix:** Added the `py_compile` command and observed pass result to this
+  experiment file.

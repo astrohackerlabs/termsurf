@@ -453,6 +453,15 @@ experiment files until they are proven.
   raw-empty values reset to defaults, invalid colors and padded sentinel
   keywords are rejected, diagnostics preserve earlier valid values, and
   formatter output canonicalizes colors to lowercase hex or sentinel keywords.
+- **Metric modifier parser rows use Zig numeric syntax.** Experiment 28 proved
+  the 13 `parse_metric_modifier` rows: absolute values use Ghostty's
+  `std.fmt.parseInt(i32, input, 10)` shape, percentage bodies use
+  `std.fmt.parseFloat(f64, ...)`, values at or below `-100%` clamp to `0`,
+  special floats such as `nan`, `inf`, and `infinity` are accepted in the
+  percentage branch, hexadecimal floats and interior underscores are accepted
+  where Zig accepts them, malformed separators and payload NaNs are rejected,
+  and formatter output intentionally preserves Zig-style floating precision
+  artifacts such as `15.999999999999993%`.
 
 ## Verification
 
@@ -512,4 +521,4 @@ remains open.
 - [Experiment 26: Enum parser oracle](26-enum-parser-oracle.md) — **Pass**
 - [Experiment 27: Color parser oracle](27-color-parser-oracle.md) — **Pass**
 - [Experiment 28: Metric modifier parser oracle](28-metric-modifier-parser-oracle.md)
-  — **Designed**
+  — **Pass**
