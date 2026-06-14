@@ -955,3 +955,5 @@ remains open.
   — **Pass**
 - [Experiment 85: Invalid diagnostic facet audit](85-invalid-diagnostic-facet-audit.md)
   — **Pass**
+- [Experiment 86: Boolean diagnostic oracle](86-boolean-diagnostic-oracle.md) —
+  **Designed**
