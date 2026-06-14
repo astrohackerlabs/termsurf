@@ -474,6 +474,11 @@ experiment files until they are proven.
   `u32` syntax, raw-empty values reset to `0`, missing values are required,
   whitespace-padded integers and base prefixes are rejected, and `0` remains `0`
   until finalization later resolves the platform/default repeat interval.
+- **Cursor style blink is optional bool dispatch.** Experiment 31 proved the
+  canonical `cursor-style-blink` parser row: default `null` formats as blank,
+  bare/missing values set `true`, raw-empty config values reset to `null`, exact
+  Ghostty bool spellings set `true` or `false`, and uppercase words,
+  whitespace-padded values, and numeric values outside `0`/`1` are rejected.
 
 ## Verification
 
@@ -539,4 +544,4 @@ remains open.
 - [Experiment 30: Click repeat interval parser oracle](30-click-repeat-interval-parser-oracle.md)
   — **Pass**
 - [Experiment 31: Cursor style blink parser oracle](31-cursor-style-blink-parser-oracle.md)
-  — **Designed**
+  — **Pass**

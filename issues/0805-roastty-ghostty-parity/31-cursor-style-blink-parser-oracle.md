@@ -162,3 +162,113 @@ The reviewer verified the optional-bool semantics against pinned Ghostty:
 type, empty set values reset to the default, bare bool values parse as
 `parseBool(value orelse "t")`, and accepted bool spellings are exactly `1`, `t`,
 `T`, `true`, `0`, `f`, `F`, and `false`.
+
+## Result
+
+**Result:** Pass
+
+Implemented the cursor style blink parser oracle and promoted the canonical
+`cursor-style-blink` row to `Oracle complete`.
+
+Changes made:
+
+- `roastty/src/config/mod.rs`
+  - Added `cursor_style_blink_config_parser_family_oracle`.
+  - Covered default blank formatting, bare/missing `true`, all pinned Ghostty
+    bool spellings, raw-empty unset, invalid values, diagnostics, CLI parsing,
+    formatting, and clone behavior.
+- `issues/0805-roastty-ghostty-parity/config_parser_inventory.py`
+  - Added the cursor-style-blink oracle marker and Experiment 31 ownership.
+  - Promotes only canonical `cursor-style-blink`.
+- `issues/0805-roastty-ghostty-parity/config-parser-inventory.md`
+  - Regenerated with 172 `Oracle complete`, 31 `Audit covered`, and 0 `Gap`
+    rows.
+- `issues/0805-roastty-ghostty-parity/config-matrix.md`
+  - Regenerated CFG-217 with Experiment 31 as owner and the updated parser
+    counts.
+- `issues/0805-roastty-ghostty-parity/README.md`
+  - Added the cursor style blink learning and updated this experiment to `Pass`.
+
+Verification run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml cursor_style_blink_config_parser_family_oracle
+cargo test --manifest-path roastty/Cargo.toml cursor_style_blink_accepts_unset_true_false_and_diagnoses
+cargo test --manifest-path roastty/Cargo.toml boolean_config_parser_family_oracle
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+python3 - <<'PY'
+from pathlib import Path
+
+matrix_rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-matrix.md').read_text().splitlines():
+    if line.startswith('| CFG-'):
+        matrix_rows.append([cell.strip() for cell in line.strip('|').split('|')])
+cfg217 = next(row for row in matrix_rows if row[0] == 'CFG-217')
+assert cfg217[4] == 'Gap', cfg217
+assert 'config-parser-inventory.md' in cfg217[6], cfg217
+assert cfg217[11] == 'Experiment 31', cfg217
+
+parser_rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-parser-inventory.md').read_text().splitlines():
+    if line.startswith('| PARSE-'):
+        parser_rows.append([cell.strip() for cell in line.strip('|').split('|')])
+assert len(parser_rows) == 203, len(parser_rows)
+cursor_blink = [row for row in parser_rows if row[1] == '`cursor-style-blink`']
+assert len(cursor_blink) == 1, cursor_blink
+assert cursor_blink[0][4] == 'Oracle complete', cursor_blink[0]
+assert sum(row[4] == 'Oracle complete' for row in parser_rows) == 172
+assert all(row[4] != 'Gap' for row in parser_rows)
+print(f'parser_rows={len(parser_rows)} cursor_style_blink={cursor_blink[0][4]} cfg217={cfg217[4]}')
+PY
+cargo fmt --manifest-path roastty/Cargo.toml
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/31-cursor-style-blink-parser-oracle.md \
+  issues/0805-roastty-ghostty-parity/README.md \
+  issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md
+git diff --check
+```
+
+Observed verification output:
+
+- `cursor_style_blink_config_parser_family_oracle`: passed.
+- `cursor_style_blink_accepts_unset_true_false_and_diagnoses`: passed.
+- `boolean_config_parser_family_oracle`: passed.
+- Parser generator:
+  - `ghostty_canonical=203`;
+  - `roastty_parser_rows=203`;
+  - `missing_dispatch_rows=0`;
+  - `extra_parser_rows=0`;
+  - `oracle_complete=172`;
+  - `audit_covered=31`;
+  - `gap=0`.
+- Matrix assertion:
+  - `parser_rows=203`;
+  - `cursor_style_blink=Oracle complete`;
+  - `cfg217=Gap`.
+- `python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py`:
+  passed, and the generated `__pycache__` directory was removed.
+- `git diff --check`: passed.
+
+## Conclusion
+
+The canonical `cursor-style-blink` parser row now has a durable Tier 1 oracle.
+Roastty matches pinned Ghostty's parser boundary for optional `?bool` dispatch:
+default unset, raw-empty reset to `None`, bare/missing `true`, exact bool
+spellings, invalid values, diagnostics, CLI, formatting, and clone behavior.
+
+CFG-217 remains `Gap` because 31 parser rows are still only `Audit covered`. The
+next experiment should continue with another bounded parser row or family from
+those remaining rows.
+
+## Completion Review
+
+Adversarial subagent `019ec41a-99c2-7503-8d43-499277004bed` reviewed the
+completed experiment and returned `VERDICT: APPROVED` with no findings.

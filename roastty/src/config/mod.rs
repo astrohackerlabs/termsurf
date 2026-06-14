@@ -18491,6 +18491,96 @@ mod tests {
     }
 
     #[test]
+    fn cursor_style_blink_config_parser_family_oracle() {
+        fn line(cfg: &Config, key: &str) -> String {
+            let prefix = format!("{} = ", key);
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap()
+                .to_string()
+        }
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.cursor_style_blink, None);
+        assert_eq!(line(&cfg, "cursor-style-blink"), "cursor-style-blink = ");
+
+        cfg.set("cursor-style-blink", None).unwrap();
+        assert_eq!(cfg.cursor_style_blink, Some(true));
+        assert_eq!(
+            line(&cfg, "cursor-style-blink"),
+            "cursor-style-blink = true"
+        );
+
+        for value in ["1", "t", "T", "true"] {
+            let mut cfg = Config::default();
+            cfg.set("cursor-style-blink", Some("false")).unwrap();
+            cfg.set("cursor-style-blink", Some(value)).unwrap();
+            assert_eq!(
+                cfg.cursor_style_blink,
+                Some(true),
+                "cursor-style-blink parses {value:?} as true"
+            );
+            assert_eq!(
+                line(&cfg, "cursor-style-blink"),
+                "cursor-style-blink = true"
+            );
+        }
+
+        for value in ["0", "f", "F", "false"] {
+            let mut cfg = Config::default();
+            cfg.set("cursor-style-blink", Some("true")).unwrap();
+            cfg.set("cursor-style-blink", Some(value)).unwrap();
+            assert_eq!(
+                cfg.cursor_style_blink,
+                Some(false),
+                "cursor-style-blink parses {value:?} as false"
+            );
+            assert_eq!(
+                line(&cfg, "cursor-style-blink"),
+                "cursor-style-blink = false"
+            );
+        }
+
+        cfg.set("cursor-style-blink", Some("true")).unwrap();
+        cfg.set("cursor-style-blink", Some("")).unwrap();
+        assert_eq!(cfg.cursor_style_blink, None);
+        assert_eq!(line(&cfg, "cursor-style-blink"), "cursor-style-blink = ");
+
+        for value in ["yes", "TRUE", "False", "2", "-1", " true", "true "] {
+            assert_eq!(
+                cfg.set("cursor-style-blink", Some(value)),
+                Err(ConfigSetError::InvalidValue),
+                "cursor-style-blink rejects {value:?}"
+            );
+        }
+
+        let mut retained = Config::default();
+        let diagnostics = retained.load_str(
+            "cursor-style-blink = false\n\
+             cursor-style-blink = maybe\n",
+        );
+        assert_eq!(retained.cursor_style_blink, Some(false));
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "cursor-style-blink".to_string(),
+                error: ConfigSetError::InvalidValue,
+            }]
+        );
+
+        let diagnostics = cfg.set_cli_args(["--cursor-style-blink=true"]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(cfg.cursor_style_blink, Some(true));
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
+        assert_eq!(cloned.cursor_style_blink, Some(true));
+    }
+
+    #[test]
     fn config_set_routes_enum_fields() {
         // Every enum key, set to a (mostly non-default) valid keyword, routes to
         // the right field — verified by reading it back through `format_config`.

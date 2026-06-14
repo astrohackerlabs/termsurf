@@ -40,6 +40,7 @@ COLOR_ORACLE_TEST = "color_config_parser_family_oracle"
 METRIC_MODIFIER_ORACLE_TEST = "metric_modifier_config_parser_family_oracle"
 BACKGROUND_BLUR_ORACLE_TEST = "background_blur_config_parser_family_oracle"
 CLICK_REPEAT_ORACLE_TEST = "click_repeat_interval_config_parser_family_oracle"
+CURSOR_STYLE_BLINK_ORACLE_TEST = "cursor_style_blink_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -324,6 +325,7 @@ def build_rows(
     metric_modifier_oracle_present: bool,
     background_blur_oracle_present: bool,
     click_repeat_oracle_present: bool,
+    cursor_style_blink_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -485,6 +487,14 @@ def build_rows(
                 "formatting, clone semantics, and parser/finalization boundary"
             )
             missing_evidence = "None for direct click-repeat-interval parser semantics."
+        elif cursor_style_blink_oracle_present and option == "cursor-style-blink":
+            status = "Oracle complete"
+            evidence = (
+                "Cursor style blink parser oracle covers optional bool defaults, "
+                "bare true, bool spellings, empty unset, invalid values, "
+                "diagnostics, CLI, formatting, and clone semantics"
+            )
+            missing_evidence = "None for direct cursor-style-blink parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -540,6 +550,7 @@ def main() -> int:
     metric_modifier_oracle_present = METRIC_MODIFIER_ORACLE_TEST in roastty_source
     background_blur_oracle_present = BACKGROUND_BLUR_ORACLE_TEST in roastty_source
     click_repeat_oracle_present = CLICK_REPEAT_ORACLE_TEST in roastty_source
+    cursor_style_blink_oracle_present = CURSOR_STYLE_BLINK_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -560,13 +571,16 @@ def main() -> int:
         metric_modifier_oracle_present,
         background_blur_oracle_present,
         click_repeat_oracle_present,
+        cursor_style_blink_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        30
+        31
+        if cursor_style_blink_oracle_present
+        else 30
         if click_repeat_oracle_present
         else 29
         if background_blur_oracle_present
