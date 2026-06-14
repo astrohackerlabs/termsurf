@@ -2659,6 +2659,8 @@ struct Surface {
     initial_input: Option<Vec<u8>>,
     surface_wait_after_command: bool,
     wait_after_command: bool,
+    abnormal_command_exit_runtime_ms: u32,
+    launched_command_label: Option<String>,
     context: c_int,
     font_size_points: f32,
     original_font_size_points: f32,
@@ -3602,6 +3604,30 @@ fn default_finalized_config() -> config::Config {
     config
 }
 
+fn command_label(command: &config::Command) -> String {
+    match command {
+        config::Command::Shell(command) => command.clone(),
+        config::Command::Direct(args) => args.join(" "),
+    }
+}
+
+fn effective_command_label(
+    surface_command: Option<&str>,
+    initial_command: Option<&config::Command>,
+    config_command: Option<&config::Command>,
+) -> Option<String> {
+    if let Some(command) = surface_command {
+        return Some(command.to_owned());
+    }
+    if let Some(command) = initial_command {
+        return Some(command_label(command));
+    }
+    if let Some(command) = config_command {
+        return Some(command_label(command));
+    }
+    Some(default_shell_program().to_string_lossy().into_owned())
+}
+
 fn color_scheme_conditional_theme(color_scheme: c_int) -> Option<config::conditional::Theme> {
     match color_scheme {
         ROASTTY_COLOR_SCHEME_LIGHT => Some(config::conditional::Theme::Light),
@@ -3677,6 +3703,7 @@ impl Surface {
         self.mouse_scroll_multiplier = parsed.mouse_scroll_multiplier;
         self.click_repeat_interval_ns = click_repeat_interval_ns(&parsed);
         self.wait_after_command = self.surface_wait_after_command || parsed.wait_after_command;
+        self.abnormal_command_exit_runtime_ms = parsed.abnormal_command_exit_runtime;
         let _ = self.deactivate_all_key_tables();
         let configured_font_size = parsed.font_size.clamp(1.0, 255.0);
         self.original_font_size_points = configured_font_size;
@@ -3909,6 +3936,8 @@ impl Surface {
         } else {
             None
         };
+        self.launched_command_label =
+            effective_command_label(surface_command, initial_command, config_command);
         append_ui_key_trace(format!(
             "rust surface_start_termio surface_command={} initial_command={} config_command={} cwd={} env_count={} term={}",
             surface_command.unwrap_or("<none>"),
@@ -4398,6 +4427,52 @@ impl Surface {
         storage[0] = child_exit.exit_code as usize;
         storage[1] = child_exit.runtime_ms as usize;
         self.perform_action_result(ROASTTY_ACTION_SHOW_CHILD_EXITED, storage)
+    }
+
+    fn write_terminal_bytes(&mut self, bytes: &[u8]) -> bool {
+        let Some(worker) = &self.termio_worker else {
+            return false;
+        };
+        worker.with_termio_mut(|termio| match termio.terminal_mut().next_slice(bytes) {
+            Ok(()) | Err(TerminalStreamError::ManagedCellUnsupported) => true,
+            Err(_) => false,
+        })
+    }
+
+    fn write_normal_child_exit_fallback(&mut self) -> bool {
+        self.write_terminal_bytes(
+            b"\r\nProcess exited. Press any key to close the terminal.\x1b[?25l\x1b[2l\x1b[=0u",
+        )
+    }
+
+    fn write_abnormal_child_exit_fallback(&mut self, child_exit: termio::TermioChildExit) -> bool {
+        let command = self
+            .launched_command_label
+            .clone()
+            .unwrap_or_else(|| default_shell_program().to_string_lossy().into_owned());
+        let message = format!(
+            "\r\nGhostty failed to launch the requested command:\r\n\r\n{command}\r\n\r\nRuntime: {} ms\r\n\r\nPress any key to close the window.\x1b[?25l",
+            child_exit.runtime_ms
+        );
+        self.write_terminal_bytes(message.as_bytes())
+    }
+
+    fn handle_child_exited(&mut self, child_exit: termio::TermioChildExit) {
+        let handled = self.perform_child_exited(child_exit);
+        let abnormal = child_exit.runtime_ms <= u64::from(self.abnormal_command_exit_runtime_ms);
+        if abnormal {
+            if !handled {
+                self.write_abnormal_child_exit_fallback(child_exit);
+            }
+            return;
+        }
+
+        if !handled {
+            self.write_normal_child_exit_fallback();
+        }
+        if !self.wait_after_command {
+            self.request_close();
+        }
     }
 
     fn perform_start_search_result(&self, needle: &CStr) -> bool {
@@ -7176,10 +7251,7 @@ impl Surface {
                     if pump.child_exited && !self.child_exit_handled {
                         self.child_exit_handled = true;
                         if let Some(child_exit) = pump.child_exit {
-                            self.perform_child_exited(child_exit);
-                        }
-                        if !self.wait_after_command {
-                            self.request_close();
+                            self.handle_child_exited(child_exit);
                         }
                     }
                 }
@@ -17855,6 +17927,7 @@ pub extern "C" fn roastty_surface_new(
         mouse_scroll_multiplier,
         click_repeat_interval_ns,
         parsed_wait_after_command,
+        parsed_abnormal_command_exit_runtime,
         window_vsync,
         config_conditional_state,
     ) = app_from_handle(app)
@@ -17883,6 +17956,7 @@ pub extern "C" fn roastty_surface_new(
                 parsed.mouse_scroll_multiplier,
                 click_repeat_interval_ns(&parsed),
                 parsed.wait_after_command,
+                parsed.abnormal_command_exit_runtime,
                 parsed.window_vsync,
                 app.config_conditional_state,
             )
@@ -17907,6 +17981,7 @@ pub extern "C" fn roastty_surface_new(
             config::MouseScrollMultiplier::default(),
             500_000_000,
             false,
+            config::Config::default().abnormal_command_exit_runtime,
             true,
             config::conditional::State::default(),
         ));
@@ -17935,6 +18010,8 @@ pub extern "C" fn roastty_surface_new(
         initial_input: copied_config_string(config.initial_input).map(String::into_bytes),
         surface_wait_after_command,
         wait_after_command,
+        abnormal_command_exit_runtime_ms: parsed_abnormal_command_exit_runtime,
+        launched_command_label: None,
         context: valid_surface_context(config.context).unwrap_or(0),
         font_size_points,
         original_font_size_points: font_size_points,
@@ -20818,17 +20895,33 @@ mod tests {
         eof: bool,
         child_exited: bool,
     ) -> termio::TermioPump {
+        test_pump_with_child_exit(
+            bytes_read,
+            bytes_written,
+            pending_write_bytes,
+            eof,
+            child_exited.then_some(termio::TermioChildExit {
+                exit_code: 0,
+                runtime_ms: 1_000,
+            }),
+        )
+    }
+
+    fn test_pump_with_child_exit(
+        bytes_read: usize,
+        bytes_written: usize,
+        pending_write_bytes: usize,
+        eof: bool,
+        child_exit: Option<termio::TermioChildExit>,
+    ) -> termio::TermioPump {
         termio::TermioPump {
             readiness: PtyReadiness::default(),
             bytes_read,
             eof,
             bytes_written,
             pending_write_bytes,
-            child_exited,
-            child_exit: child_exited.then_some(termio::TermioChildExit {
-                exit_code: 0,
-                runtime_ms: 1,
-            }),
+            child_exited: child_exit.is_some(),
+            child_exit,
         }
     }
 
@@ -21773,6 +21866,188 @@ mod tests {
             .expect("show child exited action");
 
         assert_eq!(record.child_exited.expect("child exited payload").0, 5);
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 1);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn child_exited_fallback_policy_runtime_normal_unhandled_writes_text_and_closes() {
+        let _pty_guard = pty_command_lock();
+        let _close_guard = CLOSE_LOCK.lock().unwrap();
+        let config = new_test_config_from_str(
+            "abnormal-command-exit-runtime = 1\ncommand = sleep 0.05; exit 5\n",
+        );
+        let app = new_test_app_with_action_and_close_config(false, config);
+        let surface = new_test_surface(app);
+
+        let text = surface_snapshot_text_after_start_until(
+            app,
+            surface,
+            "Process exited. Press any key to close the terminal.",
+        );
+        let cursor_visible = surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio(|termio| termio.terminal().cursor_visible());
+
+        assert!(text.contains("Process exited. Press any key to close the terminal."));
+        assert!(!cursor_visible);
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 1);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn child_exited_fallback_policy_runtime_normal_handled_skips_text_and_closes() {
+        let _pty_guard = pty_command_lock();
+        let _close_guard = CLOSE_LOCK.lock().unwrap();
+        let config = new_test_config_from_str(
+            "abnormal-command-exit-runtime = 1\ncommand = sleep 0.05; exit 7\n",
+        );
+        let app = new_test_app_with_action_and_close_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        wait_until(|| {
+            roastty_app_tick(app);
+            CLOSE_COUNT.load(Ordering::SeqCst) == 1
+        });
+        let text = surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio(|termio| termio.terminal().plain_screen(false));
+
+        assert!(!text.contains("Process exited. Press any key to close the terminal."));
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 1);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn child_exited_fallback_policy_runtime_abnormal_handled_holds_without_text() {
+        let _pty_guard = pty_command_lock();
+        let _close_guard = CLOSE_LOCK.lock().unwrap();
+        let threshold_ms = 60_000;
+        let config = new_test_config_from_str(&format!(
+            "abnormal-command-exit-runtime = {threshold_ms}\ncommand = exit 13\n",
+        ));
+        let app = new_test_app_with_action_and_close_config(true, config);
+        let surface = new_test_surface(app);
+
+        assert_eq!(roastty_surface_start(surface), ROASTTY_SUCCESS);
+        wait_until(|| {
+            roastty_app_tick(app);
+            roastty_surface_process_exited(surface)
+                && action_records()
+                    .iter()
+                    .any(|record| record.action_tag == ROASTTY_ACTION_SHOW_CHILD_EXITED)
+        });
+        let text = surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio(|termio| termio.terminal().plain_screen(false));
+
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 0);
+        assert!(!text.contains("Ghostty failed to launch the requested command:"));
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn child_exited_fallback_policy_runtime_abnormal_unhandled_writes_text_and_holds() {
+        let _pty_guard = pty_command_lock();
+        let _close_guard = CLOSE_LOCK.lock().unwrap();
+        let threshold_ms = 60_000;
+        let config = new_test_config_from_str(&format!(
+            "abnormal-command-exit-runtime = {threshold_ms}\ncommand = exit 13\n",
+        ));
+        let app = new_test_app_with_action_and_close_config(false, config);
+        let surface = new_test_surface(app);
+
+        let text = surface_snapshot_text_after_start_until(
+            app,
+            surface,
+            "Press any key to close the window.",
+        );
+        let cursor_visible = surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio(|termio| termio.terminal().cursor_visible());
+
+        assert!(text.contains("Ghostty failed to launch the requested command:"));
+        assert!(text.contains("exit 13"));
+        assert!(text.contains("Runtime:"));
+        assert!(text.contains("Press any key to close the window."));
+        assert!(!cursor_visible);
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 0);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn child_exited_fallback_policy_runtime_equal_threshold_is_abnormal() {
+        let _close_guard = CLOSE_LOCK.lock().unwrap();
+        let config = new_test_config_from_str("abnormal-command-exit-runtime = 77\n");
+        let app = new_test_app_with_action_and_close_config(true, config);
+        let surface = new_test_surface(app);
+
+        apply_test_pump(
+            surface,
+            test_pump_with_child_exit(
+                0,
+                0,
+                0,
+                false,
+                Some(termio::TermioChildExit {
+                    exit_code: 0,
+                    runtime_ms: 77,
+                }),
+            ),
+        );
+
+        assert!(roastty_surface_process_exited(surface));
+        assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 0);
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn child_exited_fallback_policy_runtime_above_threshold_is_normal() {
+        let _close_guard = CLOSE_LOCK.lock().unwrap();
+        let config = new_test_config_from_str("abnormal-command-exit-runtime = 77\n");
+        let app = new_test_app_with_action_and_close_config(true, config);
+        let surface = new_test_surface(app);
+
+        apply_test_pump(
+            surface,
+            test_pump_with_child_exit(
+                0,
+                0,
+                0,
+                false,
+                Some(termio::TermioChildExit {
+                    exit_code: 0,
+                    runtime_ms: 78,
+                }),
+            ),
+        );
+
+        assert!(roastty_surface_process_exited(surface));
         assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst), 1);
         roastty_surface_free(surface);
         roastty_app_free(app);

@@ -322,6 +322,10 @@ experiment files until they are proven.
   child-exit exit-code/runtime payload reaches the app as `show_child_exited`,
   but terminal fallback text, abnormal-exit close/hold policy after
   handled/unhandled actions, and app quit policy remain separate lifecycle gaps.
+- **Child-exit fallback policy is branch-specific.** Abnormal exits use
+  `runtime_ms <= abnormal-command-exit-runtime`, try the app action first, and
+  hold after GUI or terminal fallback handling; normal exits can write fallback
+  text when unhandled but still follow `wait-after-command` close/hold policy.
 - **`scrollback-limit` runtime parity has two tiers.** Roastty's terminal core
   currently models scrollback capacity in rows, while pinned Ghostty documents
   `scrollback-limit` as a byte quota. A focused experiment may prove the
@@ -1221,4 +1225,4 @@ remains open.
 - [Experiment 119: Child exited action payload split](119-child-exited-action-payload-split.md)
   — **Pass**
 - [Experiment 120: Child exited fallback policy split](120-child-exited-fallback-policy-split.md)
-  — **Designed**
+  — **Pass**

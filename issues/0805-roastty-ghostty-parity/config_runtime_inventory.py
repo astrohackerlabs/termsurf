@@ -431,22 +431,43 @@ ROWS = [
         guard_command="`cargo test --manifest-path roastty/Cargo.toml child_exited_payload_runtime && cargo test --manifest-path roastty/Cargo.toml wait_after_command_runtime && cargo test --manifest-path roastty/Cargo.toml process_exited && cargo test --manifest-path roastty/Cargo.toml close_surface`",
     ),
     RuntimeRow(
-        id="RUNTIME-010B2B2",
-        behavior="PTY/process terminal fallback child-exit text, abnormal-exit close/hold policy, quit-after-last-window-closed, quit-after-last-window-closed-delay, and remaining lifecycle policy effects",
+        id="RUNTIME-010B2B2A",
+        behavior="PTY/process terminal fallback child-exit text and abnormal-command-exit-runtime close/hold policy",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `abnormal-command-exit-runtime`; `vendor/ghostty/src/Surface.zig::childExited` and `childExitedAbnormally`",
+        roastty_reference="`roastty/src/lib.rs` child-exit fallback text, abnormal runtime classification, action handling, and close/hold policy",
+        family="process",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 120 adds `child_exited_fallback_policy_runtime_*` "
+            "tests proving normal unhandled exits write the pinned normal "
+            "fallback text and still close by default, normal handled exits "
+            "skip fallback text and still use normal close/hold policy, "
+            "abnormal handled exits hold without fallback text, abnormal "
+            "unhandled exits write the pinned Ghostty abnormal fallback labels "
+            "plus launched command and runtime text and hold, equality with "
+            "`abnormal-command-exit-runtime` is abnormal, and above-threshold "
+            "runtime is normal."
+        ),
+        missing_evidence="None for child-exit terminal fallback text and abnormal-command-exit-runtime close/hold policy covered by these guards.",
+        guard_tier="Tier 2",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml child_exited_fallback_policy_runtime && cargo test --manifest-path roastty/Cargo.toml child_exited_payload_runtime && cargo test --manifest-path roastty/Cargo.toml wait_after_command_runtime && cargo test --manifest-path roastty/Cargo.toml process_exited && cargo test --manifest-path roastty/Cargo.toml close_surface`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-010B2B2B",
+        behavior="PTY/process quit-after-last-window-closed, quit-after-last-window-closed-delay, and remaining lifecycle policy effects",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig` `abnormal-command-exit-runtime` and quit policy fields; `vendor/ghostty/src/Surface.zig::childExited`; app lifecycle quit policy paths",
-        roastty_reference="`roastty/src/lib.rs::start_termio`, app lifecycle callbacks, process exit handling, terminal fallback text, and macOS app lifecycle",
+        roastty_reference="`roastty/src/lib.rs::start_termio`, app lifecycle callbacks, process exit handling, and macOS app lifecycle",
         family="process",
         status="Gap",
         evidence=(
-            "Experiments 118 and 119 split out normal `wait-after-command` "
-            "child-exit close/hold behavior and child-exit payload/action "
-            "dispatch. Terminal fallback child-exit text, abnormal-exit "
-            "close/hold policy after handled or unhandled actions, "
-            "`quit-after-last-window-closed`, `quit-after-last-window-closed-delay`, "
-            "and remaining app lifecycle policy behavior still need focused "
-            "runtime or GUI proof or fixes."
+            "Experiments 118 through 120 split out normal `wait-after-command` "
+            "child-exit close/hold behavior, child-exit payload/action "
+            "dispatch, terminal fallback text, and abnormal-exit close/hold "
+            "policy. `quit-after-last-window-closed`, "
+            "`quit-after-last-window-closed-delay`, and remaining app lifecycle "
+            "policy behavior still need focused runtime or GUI proof or fixes."
         ),
-        missing_evidence="Add runtime proof or fixes for terminal fallback child-exit text, abnormal-exit close/hold policy after handled or unhandled actions, quit-after-last-window-closed, quit-after-last-window-closed-delay, and remaining lifecycle policy behavior.",
+        missing_evidence="Add runtime proof or fixes for quit-after-last-window-closed, quit-after-last-window-closed-delay, and remaining lifecycle policy behavior.",
         guard_tier="Tier 2",
         guard_command="TBD by future CFG-223 PTY/process lifecycle experiment.",
     ),
@@ -566,7 +587,8 @@ EXPECTED_IDS = [
     "RUNTIME-010B1",
     "RUNTIME-010B2A",
     "RUNTIME-010B2B1",
-    "RUNTIME-010B2B2",
+    "RUNTIME-010B2B2A",
+    "RUNTIME-010B2B2B",
     "RUNTIME-011",
     "RUNTIME-012A",
     "RUNTIME-012B",

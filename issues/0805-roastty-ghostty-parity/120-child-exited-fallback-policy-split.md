@@ -210,3 +210,100 @@ The reviewer confirmed the abnormal fallback finding is resolved by the specific
 fallback text requirements and by storing the effective launched command label.
 They also confirmed the build-check suggestion is resolved and found no new
 required issues.
+
+## Result
+
+**Result:** Pass
+
+Roastty now stores the parsed abnormal-exit runtime threshold per surface, keeps
+it refreshed on config update, records the effective launched command label, and
+routes child exits through a Ghostty-shaped branch helper. Normal exits dispatch
+`show_child_exited`, write the normal fallback text only when the app does not
+handle the action, and then follow the existing `wait-after-command` close/hold
+policy. Abnormal exits use `runtime_ms <= abnormal-command-exit-runtime`,
+dispatch `show_child_exited`, and then hold after either handled GUI action or
+unhandled terminal fallback text.
+
+The abnormal fallback text now includes the pinned Ghostty headline, launched
+command, `Runtime:` label, and `Press any key to close the window.` instruction.
+Both terminal fallback paths also hide the terminal cursor. The synthetic pump
+helper now defaults to a normal-runtime child exit; exact threshold tests use a
+custom child-exit payload so equality and above-threshold classification are
+deterministic.
+
+Verification passed:
+
+```sh
+cargo test --manifest-path roastty/Cargo.toml child_exited_fallback_policy_runtime
+cargo test --manifest-path roastty/Cargo.toml child_exited_payload_runtime
+cargo test --manifest-path roastty/Cargo.toml wait_after_command_runtime
+cargo test --manifest-path roastty/Cargo.toml process_exited
+cargo test --manifest-path roastty/Cargo.toml close_surface
+cargo build --manifest-path roastty/Cargo.toml
+cargo fmt --manifest-path roastty/Cargo.toml -- --check
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+
+inventory = Path("issues/0805-roastty-ghostty-parity/config-runtime-inventory.md").read_text()
+matrix = Path("issues/0805-roastty-ghostty-parity/config-matrix.md").read_text()
+
+rows = {}
+for line in inventory.splitlines():
+    if not line.startswith("| RUNTIME-"):
+        continue
+    cells = [cell.strip() for cell in line.strip("|").split("|")]
+    rows[cells[0]] = cells
+
+assert "RUNTIME-010B2B2" not in rows, rows.get("RUNTIME-010B2B2")
+assert len(rows) == 29, len(rows)
+assert rows["RUNTIME-010B2B2A"][5] == "Oracle complete", rows["RUNTIME-010B2B2A"]
+assert (
+    "child_exited_fallback_policy_runtime" in rows["RUNTIME-010B2B2A"][6]
+    or "child_exited_fallback_policy_runtime" in rows["RUNTIME-010B2B2A"][9]
+), rows["RUNTIME-010B2B2A"]
+assert rows["RUNTIME-010B2B2A"][7].startswith("None"), rows["RUNTIME-010B2B2A"]
+assert rows["RUNTIME-010B2B2B"][5] == "Gap", rows["RUNTIME-010B2B2B"]
+behavior = rows["RUNTIME-010B2B2B"][1]
+for term in (
+    "quit-after-last-window-closed",
+    "quit-after-last-window-closed-delay",
+    "lifecycle",
+):
+    assert term in behavior, (term, rows["RUNTIME-010B2B2B"])
+cfg223 = next(line for line in matrix.splitlines() if line.startswith("| CFG-223 "))
+assert "| Gap " in cfg223, cfg223
+PY
+```
+
+The inventory now reports:
+
+```text
+runtime_rows=29
+oracle_complete=22
+closed=23
+audit_covered=0
+incomplete=6
+gap=6
+cfg223=Gap
+```
+
+## Conclusion
+
+`RUNTIME-010B2B2` is split. `RUNTIME-010B2B2A` is `Oracle complete` for
+child-exit terminal fallback text and abnormal-command-exit-runtime close/hold
+policy. `RUNTIME-010B2B2B` remains a `Gap` for `quit-after-last-window-closed`,
+`quit-after-last-window-closed-delay`, and remaining app lifecycle policy
+behavior.
+
+## Completion Review
+
+Fresh-context adversarial review: **Approved**.
+
+The reviewer found no required issues. They independently verified that the
+result had not been committed yet, reran the focused child-exit fallback,
+child-exit payload, wait-after-command, process-exited, close-surface, build,
+Rust format, Prettier, `git diff --check`, and matrix assertion gates, and
+confirmed the generated inventory/matrix content with the read-only assertion.
