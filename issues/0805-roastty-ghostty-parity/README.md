@@ -466,3 +466,5 @@ remains open.
   — **Pass**
 - [Experiment 22: Command palette parser oracle](22-command-palette-parser-oracle.md)
   — **Pass**
+- [Experiment 23: Window padding parser oracle](23-window-padding-parser-oracle.md)
+  — **Designed**
