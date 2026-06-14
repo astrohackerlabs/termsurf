@@ -531,3 +531,5 @@ remains open.
   — **Pass**
 - [Experiment 29: Background blur parser oracle](29-background-blur-parser-oracle.md)
   — **Pass**
+- [Experiment 30: Click repeat interval parser oracle](30-click-repeat-interval-parser-oracle.md)
+  — **Designed**
