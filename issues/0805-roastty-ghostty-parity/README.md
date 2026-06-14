@@ -1033,3 +1033,5 @@ remains open.
   — **Pass**
 - [Experiment 94: Font diagnostic oracle](94-font-diagnostic-oracle.md) —
   **Pass**
+- [Experiment 95: Finalization facet inventory](95-finalization-facet-inventory.md)
+  — **Designed**
