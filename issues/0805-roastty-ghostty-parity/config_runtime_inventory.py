@@ -79,26 +79,134 @@ ROWS = [
         guard_command="`cargo test --manifest-path roastty/Cargo.toml selection`",
     ),
     RuntimeRow(
-        id="RUNTIME-004",
-        behavior="mouse reporting, click, cursor, and scroll effects",
+        id="RUNTIME-004A",
+        behavior="mouse-reporting config and toggle_mouse_reporting runtime effects",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig` mouse/click fields; `vendor/ghostty/src/Surface.zig` mouse handlers",
-        roastty_reference="`roastty/src/lib.rs` mouse handlers, selection gestures, and mouse encoder",
+        roastty_reference="`roastty/src/lib.rs` `mouse_reporting`, `mouse_report_context`, `roastty_surface_mouse_captured`, and `toggle_mouse_reporting`",
+        family="mouse",
+        status="Oracle complete",
+        evidence=(
+            "`mouse_runtime_reporting_config_and_toggle_gate_capture` proves "
+            "the configured `mouse-reporting` value gates terminal mouse "
+            "capture, the `toggle_mouse_reporting` runtime action flips that "
+            "gate, and surface config update refreshes the existing surface."
+        ),
+        missing_evidence="None for mouse-reporting config/toggle runtime behavior.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml mouse_runtime_reporting_config_and_toggle_gate_capture`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004B",
+        behavior="mouse-shift-capture config and XTSHIFTESCAPE runtime effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `mouse-shift-capture`; `vendor/ghostty/src/Surface.zig::mouseShiftCapture`",
+        roastty_reference="`roastty/src/lib.rs::mouse_shift_capture`; `roastty/src/config/mod.rs::MouseShiftCapture::capture_shift`",
+        family="mouse",
+        status="Oracle complete",
+        evidence=(
+            "`mouse_runtime_shift_capture_uses_app_config_and_terminal_flag` "
+            "proves surface mouse shift capture combines app config and the "
+            "terminal XTSHIFTESCAPE flag, including `never` and `always` "
+            "overrides."
+        ),
+        missing_evidence="None for mouse-shift-capture runtime decision behavior.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml mouse_runtime_shift_capture_uses_app_config_and_terminal_flag`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004C",
+        behavior="mouse-scroll-multiplier runtime scroll step effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `mouse-scroll-multiplier`; `vendor/ghostty/src/Surface.zig::scrollCallback`",
+        roastty_reference="`roastty/src/lib.rs::mouse_scroll_steps` and surface config update",
+        family="mouse",
+        status="Oracle complete",
+        evidence=(
+            "`mouse_runtime_scroll_multiplier_drives_precision_and_discrete_steps` "
+            "proves precision and discrete scroll paths use configured "
+            "multipliers and that surface config update refreshes the runtime "
+            "scroll multiplier."
+        ),
+        missing_evidence="None for mouse-scroll-multiplier runtime step behavior.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml mouse_runtime_scroll_multiplier_drives_precision_and_discrete_steps`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004D",
+        behavior="click-repeat-interval selection timing effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `click-repeat-interval`; `vendor/ghostty/src/Surface.zig` selection gesture press repeat",
+        roastty_reference="`roastty/src/lib.rs::click_repeat_interval_ns` and `selection_press`",
+        family="mouse",
+        status="Oracle complete",
+        evidence=(
+            "`mouse_runtime_click_repeat_interval_drives_selection_timing` "
+            "proves configured click-repeat timing controls whether repeated "
+            "left clicks advance the selection gesture or restart it."
+        ),
+        missing_evidence="None for click-repeat-interval selection timing behavior.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml mouse_runtime_click_repeat_interval_drives_selection_timing`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004E",
+        behavior="cursor-click-to-move runtime prompt movement effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `cursor-click-to-move`; `vendor/ghostty/src/Surface.zig` prompt click movement",
+        roastty_reference="`roastty/src/lib.rs` mouse handlers and terminal prompt tracking",
         family="mouse",
         status="Gap",
         evidence=(
-            "Roastty has mouse reporting, scroll, selection gesture, and mouse "
-            "encoder tests, but CFG-223 still needs one explicit row tying all "
-            "config-driven click/cursor actions to pinned Ghostty behavior: "
-            "`cursor-click-to-move`, `mouse-hide-while-typing`, "
-            "`right-click-action`, and `middle-click-action` are not yet "
-            "covered by this generated runtime inventory."
+            "`cursor-click-to-move` is parsed and formatted, but CFG-223 still "
+            "needs a runtime oracle showing prompt click movement matches "
+            "pinned Ghostty behavior."
         ),
-        missing_evidence=(
-            "Add a focused runtime oracle for config-driven mouse/click/cursor "
-            "effects, or split this row into smaller Oracle-complete rows."
-        ),
+        missing_evidence="Add a prompt-aware runtime test for cursor-click-to-move enabled and disabled behavior.",
         guard_tier="Tier 2",
-        guard_command="TBD by future CFG-223 mouse runtime experiment.",
+        guard_command="TBD by future CFG-223 cursor-click-to-move runtime experiment.",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004F",
+        behavior="mouse-hide-while-typing runtime cursor visibility effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `mouse-hide-while-typing`; `vendor/ghostty/src/Surface.zig` key input mouse hide/show paths",
+        roastty_reference="`roastty/src/lib.rs` key input and macOS mouse shape/action callbacks",
+        family="mouse",
+        status="Gap",
+        evidence=(
+            "`mouse-hide-while-typing` is parsed and formatted, but CFG-223 "
+            "still needs runtime/UI proof that typing hides the mouse and "
+            "mouse use shows it again."
+        ),
+        missing_evidence="Add a runtime or GUI test for hide-on-typing/show-on-mouse behavior.",
+        guard_tier="Tier 3",
+        guard_command="TBD by future CFG-223 mouse-hide-while-typing experiment.",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004G",
+        behavior="right-click-action runtime effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `right-click-action`; `vendor/ghostty/src/Surface.zig` right-click action dispatch",
+        roastty_reference="`roastty/src/lib.rs` mouse button handlers and app runtime actions",
+        family="mouse",
+        status="Gap",
+        evidence=(
+            "`right-click-action` is parsed and formatted, but CFG-223 still "
+            "needs runtime proof for context-menu, paste, copy, "
+            "copy-or-paste, and ignore behavior."
+        ),
+        missing_evidence="Add focused runtime/UI tests for every right-click-action variant.",
+        guard_tier="Tier 3",
+        guard_command="TBD by future CFG-223 right-click-action experiment.",
+    ),
+    RuntimeRow(
+        id="RUNTIME-004H",
+        behavior="middle-click-action runtime effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `middle-click-action`; `vendor/ghostty/src/Surface.zig` middle-click action dispatch",
+        roastty_reference="`roastty/src/lib.rs` mouse button handlers and clipboard paste paths",
+        family="mouse",
+        status="Gap",
+        evidence=(
+            "`middle-click-action` is parsed and formatted, but CFG-223 still "
+            "needs runtime proof for primary-paste and ignore behavior."
+        ),
+        missing_evidence="Add focused runtime/UI tests for middle-click-action variants.",
+        guard_tier="Tier 2",
+        guard_command="TBD by future CFG-223 middle-click-action experiment.",
     ),
     RuntimeRow(
         id="RUNTIME-005",
@@ -275,7 +383,29 @@ ROWS = [
     ),
 ]
 
-EXPECTED_IDS = [f"RUNTIME-{index:03d}" for index in range(1, 15)]
+EXPECTED_IDS = [
+    "RUNTIME-001",
+    "RUNTIME-002",
+    "RUNTIME-003",
+    "RUNTIME-004A",
+    "RUNTIME-004B",
+    "RUNTIME-004C",
+    "RUNTIME-004D",
+    "RUNTIME-004E",
+    "RUNTIME-004F",
+    "RUNTIME-004G",
+    "RUNTIME-004H",
+    "RUNTIME-005",
+    "RUNTIME-006",
+    "RUNTIME-007",
+    "RUNTIME-008",
+    "RUNTIME-009",
+    "RUNTIME-010",
+    "RUNTIME-011",
+    "RUNTIME-012",
+    "RUNTIME-013",
+    "RUNTIME-014",
+]
 
 
 def validate_rows(rows: list[RuntimeRow]) -> None:

@@ -19571,6 +19571,16 @@ mod tests {
         handle
     }
 
+    fn new_test_config_with_mouse_shift_capture(
+        mouse_shift_capture: config::MouseShiftCapture,
+    ) -> RoasttyConfig {
+        let handle = roastty_config_new();
+        let config = config_from_handle(handle).unwrap();
+        config.parsed.mouse_shift_capture = mouse_shift_capture;
+        config.sync_from_parsed_config();
+        handle
+    }
+
     unsafe extern "C" fn wakeup_cb(userdata: *mut c_void) {
         WAKEUP_COUNT.fetch_add(1, Ordering::SeqCst);
         WAKEUP_USERDATA.store(userdata as usize, Ordering::SeqCst);
@@ -21450,6 +21460,186 @@ mod tests {
         assert_eq!(default[1], (1, 2, 3));
         assert_eq!(default[17], (0x1e, 0x22, 0x27));
         assert_eq!(default[240], (0x55, 0x55, 0x55));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_runtime_reporting_config_and_toggle_gate_capture() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_mouse_behavior(false, 1.0, 3.0, 500);
+        let app = roastty_app_new(ptr::null(), config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_test_geometry(surface, 10, 5, 10, 20);
+        set_surface_worker_mouse_tracking(surface, true);
+
+        assert!(!roastty_surface_mouse_captured(surface));
+        assert!(surface_binding_action(surface, b"toggle_mouse_reporting"));
+        assert!(roastty_surface_mouse_captured(surface));
+        assert!(surface_binding_action(surface, b"toggle_mouse_reporting"));
+        assert!(!roastty_surface_mouse_captured(surface));
+
+        let enabled = new_test_config_with_mouse_behavior(true, 1.0, 3.0, 500);
+        roastty_surface_update_config(surface, enabled);
+        assert!(roastty_surface_mouse_captured(surface));
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(enabled);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_runtime_shift_capture_uses_app_config_and_terminal_flag() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_mouse_shift_capture(config::MouseShiftCapture::False);
+        let app = roastty_app_new(ptr::null(), config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+
+        assert!(!surface_from_handle(surface).unwrap().mouse_shift_capture());
+
+        surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio_mut(|termio| {
+                termio
+                    .terminal_mut()
+                    .next_slice(b"\x1b[>1s")
+                    .expect("set XTSHIFTESCAPE enabled");
+            });
+        assert!(surface_from_handle(surface).unwrap().mouse_shift_capture());
+
+        let never = new_test_config_with_mouse_shift_capture(config::MouseShiftCapture::Never);
+        roastty_app_update_config(app, never);
+        assert!(!surface_from_handle(surface).unwrap().mouse_shift_capture());
+
+        let always = new_test_config_with_mouse_shift_capture(config::MouseShiftCapture::Always);
+        roastty_app_update_config(app, always);
+        surface_from_handle(surface)
+            .unwrap()
+            .termio_worker
+            .as_ref()
+            .unwrap()
+            .with_termio_mut(|termio| {
+                termio
+                    .terminal_mut()
+                    .next_slice(b"\x1b[>0s")
+                    .expect("set XTSHIFTESCAPE disabled");
+            });
+        assert!(surface_from_handle(surface).unwrap().mouse_shift_capture());
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(always);
+        roastty_config_free(never);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_runtime_scroll_multiplier_drives_precision_and_discrete_steps() {
+        let config = new_test_config_with_mouse_behavior(true, 0.5, 2.0, 500);
+        let app = roastty_app_new(ptr::null(), config);
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+
+        assert_eq!(
+            surface_ref.mouse_scroll_steps(0.0, 19.0, true, 10, 20),
+            (0, 0)
+        );
+        assert_eq!(
+            surface_ref.mouse_scroll_steps(0.0, 21.0, true, 10, 20),
+            (0, 1)
+        );
+        assert_eq!(
+            surface_ref.mouse_scroll_steps(0.0, -1.0, false, 10, 20),
+            (0, -2)
+        );
+        assert_eq!(
+            surface_ref.mouse_scroll_steps(2.4, 0.0, false, 10, 20),
+            (2, 0)
+        );
+
+        let updated = new_test_config_with_mouse_behavior(true, 2.0, 4.0, 500);
+        roastty_surface_update_config(surface, updated);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        assert_eq!(
+            surface_ref.mouse_scroll_steps(0.0, 10.0, true, 10, 20),
+            (0, 1)
+        );
+        assert_eq!(
+            surface_ref.mouse_scroll_steps(0.0, 1.0, false, 10, 20),
+            (0, 4)
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(updated);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn mouse_runtime_click_repeat_interval_drives_selection_timing() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_mouse_behavior(false, 1.0, 3.0, 100);
+        let app = roastty_app_new(ptr::null(), config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker =
+            Some(test_worker("printf word; sleep 1"));
+        set_surface_test_geometry(surface, 10, 5, 10, 20);
+        wait_for_surface_plain_screen(app, surface, "word");
+
+        SELECTION_TEST_CLOCK_NS.with(|clock| clock.set(Some(1_000_000)));
+        roastty_surface_mouse_pos(surface, 5.0, 5.0, ROASTTY_MODS_NONE);
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            mouse_button_to_int(mouse::MouseButton::Left),
+            ROASTTY_MODS_NONE
+        ));
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .selection_gesture
+                .click_count(),
+            1
+        );
+
+        SELECTION_TEST_CLOCK_NS.with(|clock| clock.set(Some(50_000_000)));
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            mouse_button_to_int(mouse::MouseButton::Left),
+            ROASTTY_MODS_NONE
+        ));
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .selection_gesture
+                .click_count(),
+            2
+        );
+
+        SELECTION_TEST_CLOCK_NS.with(|clock| clock.set(Some(200_000_000)));
+        assert!(!roastty_surface_mouse_button(
+            surface,
+            ROASTTY_MOUSE_BUTTON_PRESS,
+            mouse_button_to_int(mouse::MouseButton::Left),
+            ROASTTY_MODS_NONE
+        ));
+        SELECTION_TEST_CLOCK_NS.with(|clock| clock.set(None));
+        assert_eq!(
+            surface_from_handle(surface)
+                .unwrap()
+                .selection_gesture
+                .click_count(),
+            1
+        );
 
         roastty_surface_free(surface);
         roastty_app_free(app);

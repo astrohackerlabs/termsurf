@@ -525,6 +525,12 @@ experiment files until they are proven.
   PTY/process launch effects beyond initial command and inherited working
   directory, macOS app/window/menu workflows, notifications/bell/link behavior,
   and platform-specific classifications remain gaps.
+- **Mouse runtime coverage must stay split by behavior.** Experiment 107 split
+  the broad `RUNTIME-004` row into eight mouse subrows. Mouse reporting/toggle,
+  mouse shift capture, scroll multiplier, and click-repeat timing are now
+  `Oracle complete`; `cursor-click-to-move`, `mouse-hide-while-typing`,
+  `right-click-action`, and `middle-click-action` remain explicit runtime/UI
+  gaps.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1128,4 +1134,4 @@ remains open.
 - [Experiment 106: Runtime UI effects inventory](106-runtime-ui-effects-inventory.md)
   — **Partial**
 - [Experiment 107: Mouse runtime subinventory](107-mouse-runtime-subinventory.md)
-  — **Designed**
+  — **Partial**

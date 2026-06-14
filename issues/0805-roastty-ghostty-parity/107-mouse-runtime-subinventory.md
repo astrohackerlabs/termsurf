@@ -68,6 +68,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runt
   --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
   --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
 
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/config-matrix.md \
+  issues/0805-roastty-ghostty-parity/config-runtime-inventory.md
+
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 from pathlib import Path
 
@@ -135,3 +139,81 @@ Adversarial design review by fresh-context Codex subagent `Curie`:
   rejects unsuffixed `RUNTIME-004`, asserts exact mouse subrow statuses, and
   requires the unproven cursor/mouse/right-click/middle-click options to appear
   on dedicated gap rows.
+- **Re-review verdict:** Approved. The reviewer confirmed the strengthened
+  assertion resolves the finding and introduces no new required findings.
+
+## Result
+
+**Result:** Partial
+
+`RUNTIME-004` was split into eight explicit mouse runtime subrows:
+
+- `RUNTIME-004A`: `mouse-reporting` config and `toggle_mouse_reporting` runtime
+  effects — `Oracle complete`;
+- `RUNTIME-004B`: `mouse-shift-capture` config and terminal `XTSHIFTESCAPE`
+  effects — `Oracle complete`;
+- `RUNTIME-004C`: `mouse-scroll-multiplier` runtime scroll-step effects —
+  `Oracle complete`;
+- `RUNTIME-004D`: `click-repeat-interval` selection timing effects —
+  `Oracle complete`;
+- `RUNTIME-004E`: `cursor-click-to-move` prompt movement effects — `Gap`;
+- `RUNTIME-004F`: `mouse-hide-while-typing` cursor visibility effects — `Gap`;
+- `RUNTIME-004G`: `right-click-action` effects — `Gap`;
+- `RUNTIME-004H`: `middle-click-action` effects — `Gap`.
+
+The generated runtime inventory now has 21 rows: 9 rows are `Oracle complete`,
+10 rows are closed, 11 rows are incomplete, and 11 rows remain runtime gaps.
+CFG-223 remains `Gap`.
+
+Verification passed:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml mouse_runtime
+# 5 passed; 0 failed
+
+cargo test --manifest-path roastty/Cargo.toml mouse_shift_capture
+# 6 passed; 0 failed
+
+cargo test --manifest-path roastty/Cargo.toml mouse_scroll
+# 14 passed; 0 failed
+
+cargo test --manifest-path roastty/Cargo.toml selection
+# 171 passed; 0 failed
+
+cargo fmt --manifest-path roastty/Cargo.toml
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# runtime_rows=21 oracle_complete=9 closed=10 audit_covered=0 incomplete=11 gap=11 cfg223=Gap
+
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/config-matrix.md \
+  issues/0805-roastty-ghostty-parity/config-runtime-inventory.md
+```
+
+## Result Review
+
+Adversarial result review by fresh-context Codex subagent `Hume`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The documented verification was not reproducible as
+  written because `config_runtime_inventory.py` emits compact markdown tables,
+  while the checked-in inventory and matrix are Prettier-formatted. Running the
+  generator immediately before `prettier --check` would fail unless the
+  generated files were formatted first.
+- **Fix:** The verification and result command blocks now include
+  `prettier --write --prose-wrap always --print-width 80` for the generated
+  matrix and runtime inventory immediately after generator execution.
+- **Re-review verdict:** Approved. The reviewer confirmed the experiment now
+  documents a reproducible generator -> formatter -> check workflow and found no
+  new required findings.
+
+## Conclusion
+
+Mouse runtime parity is no longer hidden behind one ambiguous row. The
+libroastty-level mouse reporting, shift-capture, scroll multiplier, and
+click-repeat timing effects now have durable guards. The remaining mouse gaps
+are the UI/action behaviors that need more specific experiments:
+`cursor-click-to-move`, `mouse-hide-while-typing`, `right-click-action`, and
+`middle-click-action`.
