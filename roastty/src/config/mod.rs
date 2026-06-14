@@ -15190,6 +15190,130 @@ mod tests {
     }
 
     #[test]
+    fn window_enum_config_formatter_family_oracle() {
+        let fmt = |v: &dyn Fn(&mut EntryFormatter)| {
+            let mut out = String::new();
+            let mut f = EntryFormatter::new("a", &mut out);
+            v(&mut f);
+            out
+        };
+        let formatted_lines = |cfg: &Config| -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines().map(str::to_string).collect()
+        };
+        let line = |lines: &[String], key: &str| -> String {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted config line for {key}"))
+                .clone()
+        };
+        let index = |lines: &[String], key: &str| -> usize {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .position(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted config line for {key}"))
+        };
+
+        for (variant, kw) in [
+            (WindowTheme::Auto, "auto"),
+            (WindowTheme::System, "system"),
+            (WindowTheme::Light, "light"),
+            (WindowTheme::Dark, "dark"),
+            (WindowTheme::Ghostty, "ghostty"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {kw}\n"));
+        }
+        for (variant, kw) in [
+            (WindowSaveState::Default, "default"),
+            (WindowSaveState::Never, "never"),
+            (WindowSaveState::Always, "always"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {kw}\n"));
+        }
+        for (variant, kw) in [
+            (WindowNewTabPosition::Current, "current"),
+            (WindowNewTabPosition::End, "end"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {kw}\n"));
+        }
+        for (variant, kw) in [
+            (WindowShowTabBar::Always, "always"),
+            (WindowShowTabBar::Auto, "auto"),
+            (WindowShowTabBar::Never, "never"),
+        ] {
+            assert_eq!(fmt(&|f| variant.format_entry(f)), format!("a = {kw}\n"));
+        }
+
+        let default = Config::default();
+        let default_lines = formatted_lines(&default);
+        assert_eq!(line(&default_lines, "window-theme"), "window-theme = auto");
+        assert_eq!(
+            line(&default_lines, "window-save-state"),
+            "window-save-state = default"
+        );
+        assert_eq!(
+            line(&default_lines, "window-new-tab-position"),
+            "window-new-tab-position = current"
+        );
+        assert_eq!(
+            line(&default_lines, "window-show-tab-bar"),
+            "window-show-tab-bar = auto"
+        );
+
+        let mut cfg = Config::default();
+        cfg.set("window-theme", Some("dark")).unwrap();
+        cfg.set("window-save-state", Some("always")).unwrap();
+        cfg.set("window-new-tab-position", Some("end")).unwrap();
+        cfg.set("window-show-tab-bar", Some("never")).unwrap();
+
+        let lines = formatted_lines(&cfg);
+        assert_eq!(line(&lines, "window-theme"), "window-theme = dark");
+        assert_eq!(
+            line(&lines, "window-save-state"),
+            "window-save-state = always"
+        );
+        assert_eq!(
+            line(&lines, "window-new-tab-position"),
+            "window-new-tab-position = end"
+        );
+        assert_eq!(
+            line(&lines, "window-show-tab-bar"),
+            "window-show-tab-bar = never"
+        );
+
+        for key in [
+            "window-theme",
+            "window-save-state",
+            "window-new-tab-position",
+            "window-show-tab-bar",
+        ] {
+            cfg.set(key, Some("")).unwrap();
+        }
+
+        let reset_lines = formatted_lines(&cfg);
+        for key in [
+            "window-theme",
+            "window-save-state",
+            "window-new-tab-position",
+            "window-show-tab-bar",
+        ] {
+            assert_eq!(line(&reset_lines, key), line(&default_lines, key));
+        }
+
+        assert!(index(&lines, "window-subtitle") < index(&lines, "window-theme"));
+        assert!(index(&lines, "window-theme") < index(&lines, "window-colorspace"));
+        assert!(index(&lines, "window-colorspace") < index(&lines, "window-save-state"));
+        assert!(index(&lines, "window-save-state") < index(&lines, "window-new-tab-position"));
+        assert!(index(&lines, "window-new-tab-position") < index(&lines, "window-show-tab-bar"));
+        assert!(index(&lines, "window-show-tab-bar") < index(&lines, "window-titlebar-background"));
+        assert!(index(&lines, "window-titlebar-background") < index(&lines, "resize-overlay"));
+    }
+
+    #[test]
     fn enum_format_entries_shader_mouse() {
         let fmt = |v: &dyn Fn(&mut EntryFormatter)| {
             let mut out = String::new();

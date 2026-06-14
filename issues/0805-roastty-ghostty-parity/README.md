@@ -332,6 +332,12 @@ experiment files until they are proven.
   together because they share mouse/click enum formatting, while preserving the
   separate status of window, platform, quick-terminal, and packed/list formatter
   rows.
+- **Window enum rows need a narrower family than all window formatters.**
+  Experiment 75 promoted only `window-theme`, `window-save-state`,
+  `window-new-tab-position`, and `window-show-tab-bar` by proving every enum
+  keyword, default/non-default formatted output, raw-empty resets, and local
+  order, while leaving `window-decoration`, padding, titlebar colors,
+  resize-overlay, and platform-specific window rows for later proof.
 - **Full-header ABI gaps must be split into symbol and semantic outcomes.**
   Experiment 5 proved the mapped Ghostty header can be closed at the
   declaration/export level while still recording honest semantic divergences for
@@ -869,4 +875,4 @@ remains open.
 - [Experiment 74: Click action formatter oracle](74-click-action-formatter-oracle.md)
   — **Pass**
 - [Experiment 75: Window enum formatter oracle](75-window-enum-formatter-oracle.md)
-  — **Designed**
+  — **Pass**
