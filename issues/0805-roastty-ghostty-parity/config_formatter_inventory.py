@@ -32,6 +32,7 @@ FONT_SCALAR_ORACLE_TEST = "font_scalar_config_formatter_family_oracle"
 FONT_REPEATABLE_STRING_ORACLE_TEST = "font_repeatable_string_config_formatter_family_oracle"
 FONT_STYLE_ORACLE_TEST = "font_style_config_formatter_family_oracle"
 FONT_VARIATION_ORACLE_TEST = "font_variation_config_formatter_family_oracle"
+CODEPOINT_MAP_ORACLE_TEST = "codepoint_map_config_formatter_family_oracle"
 METRIC_MODIFIER_ORACLE_TEST = "metric_modifier_config_formatter_family_oracle"
 WINDOW_PADDING_ORACLE_TEST = "window_padding_config_formatter_family_oracle"
 REPEATABLE_PATH_ORACLE_TEST = "repeatable_path_config_formatter_family_oracle"
@@ -71,6 +72,10 @@ FONT_VARIATION_OPTIONS = {
     "font-variation-bold",
     "font-variation-italic",
     "font-variation-bold-italic",
+}
+CODEPOINT_MAP_OPTIONS = {
+    "font-codepoint-map",
+    "clipboard-codepoint-map",
 }
 OPTIONAL_COLOR_OPTIONS = {
     "bold-color",
@@ -182,6 +187,8 @@ def formatter_family(option: str, path_text: str, call_text: str) -> str:
         return "font style"
     if option in FONT_VARIATION_OPTIONS:
         return "font variation"
+    if option in CODEPOINT_MAP_OPTIONS:
+        return "codepoint map"
     if "font_" in call_text or "Font" in call_text:
         return "font"
     if "window_padding" in call_text:
@@ -338,6 +345,7 @@ def build_rows(
     font_repeatable_string_oracle_present: bool,
     font_style_oracle_present: bool,
     font_variation_oracle_present: bool,
+    codepoint_map_oracle_present: bool,
     metric_modifier_oracle_present: bool,
     window_padding_oracle_present: bool,
     repeatable_path_oracle_present: bool,
@@ -499,6 +507,17 @@ def build_rows(
                 "raw-empty resets, and representative order checks"
             )
             missing_evidence = "None for font variation formatter rows."
+        elif codepoint_map_oracle_present and family == "codepoint map":
+            status = "Oracle complete"
+            evidence = (
+                "Codepoint map formatter oracle covers empty-map void output, "
+                "single-codepoint and range-key output, uppercase zero-padded "
+                "hex formatting, font descriptor family output, clipboard "
+                "codepoint replacement output, clipboard string replacement "
+                "output, empty-string replacement output, raw-empty resets, "
+                "and representative order checks"
+            )
+            missing_evidence = "None for codepoint map formatter rows."
         elif metric_modifier_oracle_present and family == "metric modifier":
             status = "Oracle complete"
             evidence = (
@@ -609,6 +628,7 @@ def main() -> int:
     )
     font_style_oracle_present = FONT_STYLE_ORACLE_TEST in roastty_source
     font_variation_oracle_present = FONT_VARIATION_ORACLE_TEST in roastty_source
+    codepoint_map_oracle_present = CODEPOINT_MAP_ORACLE_TEST in roastty_source
     metric_modifier_oracle_present = METRIC_MODIFIER_ORACLE_TEST in roastty_source
     window_padding_oracle_present = WINDOW_PADDING_ORACLE_TEST in roastty_source
     repeatable_path_oracle_present = REPEATABLE_PATH_ORACLE_TEST in roastty_source
@@ -630,6 +650,7 @@ def main() -> int:
         font_repeatable_string_oracle_present,
         font_style_oracle_present,
         font_variation_oracle_present,
+        codepoint_map_oracle_present,
         metric_modifier_oracle_present,
         window_padding_oracle_present,
         repeatable_path_oracle_present,
@@ -645,7 +666,9 @@ def main() -> int:
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        68
+        69
+        if codepoint_map_oracle_present
+        else 68
         if font_variation_oracle_present
         else 67
         if font_style_oracle_present

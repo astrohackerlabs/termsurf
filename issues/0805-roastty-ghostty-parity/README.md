@@ -556,6 +556,13 @@ experiment files until they are proven.
   populated lists format one `axis=value` line per item in insertion order,
   hexadecimal floats normalize to decimal output, infinities and `nan` use
   canonical lowercase display, and raw-empty values reset to void output.
+- **Codepoint-map formatter rows share uppercase range formatting.** Experiment
+  69 promoted `font-codepoint-map` and `clipboard-codepoint-map`. Empty maps
+  format as one void line, populated maps format one `U+XXXX[-U+YYYY]=value`
+  line per entry in insertion order, hex codepoints are uppercase and
+  zero-padded, font values are descriptor family strings, and clipboard values
+  are either `U+XXXX` replacement codepoints or literal strings.
+  `font-shaping-break` remains unpromoted because it is a packed flag formatter.
 - **Enum parser rows share exact keyword semantics plus compatibility
   branches.** Experiment 26 proved the 52 enum rows: required and optional enum
   fields accept exact keywords only, missing values are required, raw-empty
@@ -825,4 +832,4 @@ remains open.
 - [Experiment 68: Font variation formatter oracle](68-font-variation-formatter-oracle.md)
   — **Pass**
 - [Experiment 69: Codepoint map formatter oracle](69-codepoint-map-formatter-oracle.md)
-  — **Designed**
+  — **Pass**

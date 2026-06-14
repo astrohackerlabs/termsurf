@@ -130,3 +130,53 @@ sections, scopes promotion to exactly `font-codepoint-map` and
 `clipboard-codepoint-map`, explicitly keeps `font-shaping-break` unpromoted,
 matches pinned Ghostty formatter behavior, and has concrete count and matrix
 assertions for the 131/72/0 to 133/70/0 transition.
+
+## Result
+
+**Result:** Pass
+
+Implemented `codepoint_map_config_formatter_family_oracle` and promoted the two
+`codepoint map` formatter rows in the CFG-218 inventory.
+
+Verification commands:
+
+- `cargo test --manifest-path roastty/Cargo.toml codepoint_map_config_formatter_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml codepoint_map_config_parser_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml clipboard_codepoint_map_format_entry`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_codepoint_map_parses_ranges_and_formats_entries`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_clipboard_codepoint_map_routes_and_formats`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle`
+  passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_formatter_inventory.py --upstream vendor/ghostty/src/config/Config.zig --upstream-formatter-file vendor/ghostty/src/config/formatter_file.zig --upstream-formatter vendor/ghostty/src/config/formatter.zig --roastty roastty/src/config/mod.rs --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md --output issues/0805-roastty-ghostty-parity/config-formatter-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md`
+  reported:
+  - `ghostty_canonical=203`;
+  - `roastty_formatter_rows=203`;
+  - `missing_canonical_formatter_rows=0`;
+  - `extra_formatter_rows=0`;
+  - `oracle_complete=133`;
+  - `audit_covered=70`;
+  - `gap=0`;
+  - `no_output_rows=1`.
+- The matrix assertion passed.
+
+## Conclusion
+
+The `font-codepoint-map` and `clipboard-codepoint-map` formatter rows now have a
+focused formatter oracle. CFG-218 remains `Gap`, but its formatter inventory
+moved from 131 `Oracle complete` / 72 `Audit covered` / 0 gaps to 133
+`Oracle complete` / 70 `Audit covered` / 0 gaps. The remaining incomplete
+formatter rows are the packed-flag `font-shaping-break` row plus the 69
+remaining `custom format_entry` rows.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.

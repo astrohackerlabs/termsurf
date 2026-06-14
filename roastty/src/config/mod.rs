@@ -17331,6 +17331,91 @@ mod tests {
     }
 
     #[test]
+    fn codepoint_map_config_formatter_family_oracle() {
+        fn formatted_lines(cfg: &Config) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines().map(ToString::to_string).collect()
+        }
+
+        fn lines_for(lines: &[String], key: &str) -> Vec<String> {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .filter(|line| line.starts_with(&prefix))
+                .cloned()
+                .collect()
+        }
+
+        fn index(lines: &[String], key: &str) -> usize {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .position(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted line for {key}"))
+        }
+
+        let mut cfg = Config::default();
+        let default_lines = formatted_lines(&cfg);
+        assert_eq!(
+            lines_for(&default_lines, "font-codepoint-map"),
+            vec!["font-codepoint-map = "]
+        );
+        assert_eq!(
+            lines_for(&default_lines, "clipboard-codepoint-map"),
+            vec!["clipboard-codepoint-map = "]
+        );
+
+        cfg.set("font-codepoint-map", Some("U+0001-U+0003, U+0005 = Emoji"))
+            .unwrap();
+        cfg.set("font-codepoint-map", Some("U+ABCD = Symbols"))
+            .unwrap();
+        cfg.set("clipboard-codepoint-map", Some("U+2500=U+002D"))
+            .unwrap();
+        cfg.set("clipboard-codepoint-map", Some("U+2501-U+2503=|"))
+            .unwrap();
+        cfg.set("clipboard-codepoint-map", Some("U+03A3=SUM"))
+            .unwrap();
+        cfg.set("clipboard-codepoint-map", Some("U+2603=")).unwrap();
+
+        let lines = formatted_lines(&cfg);
+        assert_eq!(
+            lines_for(&lines, "font-codepoint-map"),
+            vec![
+                "font-codepoint-map = U+0001-U+0003=Emoji",
+                "font-codepoint-map = U+0005=Emoji",
+                "font-codepoint-map = U+ABCD=Symbols",
+            ]
+        );
+        assert_eq!(
+            lines_for(&lines, "clipboard-codepoint-map"),
+            vec![
+                "clipboard-codepoint-map = U+2500=U+002D",
+                "clipboard-codepoint-map = U+2501-U+2503=|",
+                "clipboard-codepoint-map = U+03A3=SUM",
+                "clipboard-codepoint-map = U+2603=",
+            ]
+        );
+
+        cfg.set("font-codepoint-map", Some("")).unwrap();
+        cfg.set("clipboard-codepoint-map", Some("")).unwrap();
+        let reset_lines = formatted_lines(&cfg);
+        assert_eq!(
+            lines_for(&reset_lines, "font-codepoint-map"),
+            vec!["font-codepoint-map = "]
+        );
+        assert_eq!(
+            lines_for(&reset_lines, "clipboard-codepoint-map"),
+            vec!["clipboard-codepoint-map = "]
+        );
+
+        assert!(index(&lines, "font-variation-bold-italic") < index(&lines, "font-codepoint-map"));
+        assert!(index(&lines, "font-codepoint-map") < index(&lines, "clipboard-codepoint-map"));
+        assert!(index(&lines, "clipboard-codepoint-map") < index(&lines, "font-thicken"));
+        assert!(index(&lines, "font-thicken-strength") < index(&lines, "font-shaping-break"));
+    }
+
+    #[test]
     fn key_remap_config_parser_family_oracle() {
         let mut cfg = Config::default();
         assert_eq!(cfg.key_remap.format_entries(), vec![String::new()]);
