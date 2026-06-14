@@ -10792,6 +10792,261 @@ mod tests {
     }
 
     #[test]
+    fn config_path_diagnostic_family_oracle() {
+        struct OptionalPathCase {
+            key: &'static str,
+            get_value: fn(&Config) -> Option<ConfigFilePath>,
+        }
+
+        fn config_line(cfg: &Config, key: &str) -> Option<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .find(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+        }
+
+        fn config_lines(cfg: &Config, key: &str) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines()
+                .filter(|line| line.starts_with(&format!("{key} = ")))
+                .map(str::to_string)
+                .collect()
+        }
+
+        let optional_cases = [
+            OptionalPathCase {
+                key: "background-image",
+                get_value: |cfg| cfg.background_image.clone(),
+            },
+            OptionalPathCase {
+                key: "bell-audio-path",
+                get_value: |cfg| cfg.bell_audio_path.clone(),
+            },
+        ];
+
+        for case in optional_cases {
+            let default_line = config_line(&Config::default(), case.key);
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some("/tmp/required.dat")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Required("/tmp/required.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = /tmp/required.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("?/tmp/optional.dat")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Optional("/tmp/optional.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = ?/tmp/optional.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("\"?/tmp/literal.dat\"")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Required("?/tmp/literal.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = ?/tmp/literal.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("?\"/tmp/quoted optional.dat\""))
+                .unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Optional(
+                    "/tmp/quoted optional.dat".to_string()
+                ))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = ?/tmp/quoted optional.dat", case.key))
+            );
+
+            cfg.set(case.key, Some("/tmp/bad\0path.dat")).unwrap();
+            assert_eq!(
+                (case.get_value)(&cfg),
+                Some(ConfigFilePath::Required("/tmp/bad\0path.dat".to_string()))
+            );
+            assert_eq!(
+                config_line(&cfg, case.key),
+                Some(format!("{} = /tmp/bad\0path.dat", case.key))
+            );
+
+            let before = config_line(&cfg, case.key);
+            for parsed_empty in ["?", "\"\"", "?\"\""] {
+                cfg.set(case.key, Some(parsed_empty)).unwrap();
+                assert_eq!(
+                    config_line(&cfg, case.key),
+                    before,
+                    "{} parsed-empty value {parsed_empty:?} is a no-op",
+                    case.key
+                );
+            }
+
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!((case.get_value)(&cfg), None);
+            assert_eq!(
+                config_line(&cfg, case.key),
+                default_line,
+                "{} raw empty value resets to default",
+                case.key
+            );
+
+            assert_eq!(
+                cfg.set(case.key, None),
+                Err(ConfigSetError::ValueRequired),
+                "{} bare missing value is required",
+                case.key
+            );
+
+            let mut file_cfg = Config::default();
+            file_cfg.set(case.key, Some("?/tmp/optional.dat")).unwrap();
+            let before = config_line(&file_cfg, case.key);
+            let diagnostics = file_cfg.load_str(&format!("\n{}\n", case.key));
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 2,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} file missing-value diagnostic preserves line/key/error",
+                case.key
+            );
+            assert_eq!(
+                config_line(&file_cfg, case.key),
+                before,
+                "{} missing file value preserves previous state",
+                case.key
+            );
+
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some("/tmp/required.dat")).unwrap();
+            let before = config_line(&cli_cfg, case.key);
+            let arg = format!("--{}", case.key);
+            let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+            assert_eq!(
+                diagnostics,
+                vec![ConfigDiagnostic {
+                    line: 1,
+                    key: case.key.to_string(),
+                    error: ConfigSetError::ValueRequired,
+                }],
+                "{} CLI missing-value diagnostic preserves argument position/key/error",
+                case.key
+            );
+            assert_eq!(
+                config_line(&cli_cfg, case.key),
+                before,
+                "{} missing CLI value preserves previous state",
+                case.key
+            );
+        }
+
+        let mut cfg = Config::default();
+        cfg.set("config-file", Some("/tmp/required.conf")).unwrap();
+        cfg.set("config-file", Some("?/tmp/optional.conf")).unwrap();
+        cfg.set("config-file", Some("\"?/tmp/literal.conf\""))
+            .unwrap();
+        cfg.set("config-file", Some("?\"/tmp/quoted optional.conf\""))
+            .unwrap();
+        cfg.set("config-file", Some("/tmp/bad\0path.conf")).unwrap();
+        assert_eq!(
+            cfg.config_file.list,
+            vec![
+                ConfigFilePath::Required("/tmp/required.conf".to_string()),
+                ConfigFilePath::Optional("/tmp/optional.conf".to_string()),
+                ConfigFilePath::Required("?/tmp/literal.conf".to_string()),
+                ConfigFilePath::Optional("/tmp/quoted optional.conf".to_string()),
+                ConfigFilePath::Required("/tmp/bad\0path.conf".to_string()),
+            ]
+        );
+        assert_eq!(
+            config_lines(&cfg, "config-file"),
+            vec![
+                "config-file = /tmp/required.conf",
+                "config-file = ?/tmp/optional.conf",
+                "config-file = ?/tmp/literal.conf",
+                "config-file = ?/tmp/quoted optional.conf",
+                "config-file = /tmp/bad\0path.conf",
+            ]
+        );
+
+        let before = config_lines(&cfg, "config-file");
+        for parsed_empty in ["?", "\"\"", "?\"\""] {
+            cfg.set("config-file", Some(parsed_empty)).unwrap();
+            assert_eq!(
+                config_lines(&cfg, "config-file"),
+                before,
+                "config-file parsed-empty value {parsed_empty:?} is a no-op"
+            );
+        }
+
+        cfg.set("config-file", Some("")).unwrap();
+        assert!(cfg.config_file.list.is_empty());
+        assert_eq!(config_lines(&cfg, "config-file"), vec!["config-file = "]);
+
+        assert_eq!(
+            cfg.set("config-file", None),
+            Err(ConfigSetError::ValueRequired),
+            "config-file bare missing value is required"
+        );
+
+        let mut file_cfg = Config::default();
+        file_cfg
+            .set("config-file", Some("/tmp/required.conf"))
+            .unwrap();
+        let before = config_lines(&file_cfg, "config-file");
+        let diagnostics = file_cfg.load_str("\nconfig-file\n");
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 2,
+                key: "config-file".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "config-file file missing-value diagnostic preserves line/key/error"
+        );
+        assert_eq!(
+            config_lines(&file_cfg, "config-file"),
+            before,
+            "config-file missing file value preserves previous state"
+        );
+
+        let mut cli_cfg = Config::default();
+        cli_cfg
+            .set("config-file", Some("?/tmp/optional.conf"))
+            .unwrap();
+        let before = config_lines(&cli_cfg, "config-file");
+        let diagnostics = cli_cfg.set_cli_args(["--config-file"]);
+        assert_eq!(
+            diagnostics,
+            vec![ConfigDiagnostic {
+                line: 1,
+                key: "config-file".to_string(),
+                error: ConfigSetError::ValueRequired,
+            }],
+            "config-file CLI missing-value diagnostic preserves argument position/key/error"
+        );
+        assert_eq!(
+            config_lines(&cli_cfg, "config-file"),
+            before,
+            "config-file missing CLI value preserves previous state"
+        );
+    }
+
+    #[test]
     fn bell_audio_path_parses_single_path_empty_optional_and_nul_values() {
         let mut cfg = Config::default();
         assert_eq!(cfg.bell_audio_path, None);

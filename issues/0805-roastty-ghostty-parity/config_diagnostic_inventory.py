@@ -107,6 +107,12 @@ WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS = {
     "working-directory",
 }
 
+PATH_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "background-image",
+    "bell-audio-path",
+    "config-file",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class ParserInventoryRow:
@@ -169,7 +175,7 @@ def parse_parser_inventory(path: Path) -> dict[str, ParserInventoryRow]:
 def diagnostic_family(row: ParserInventoryRow) -> str:
     if row.family == "unsupported":
         return "not-implemented diagnostic"
-    if row.family in {"path", "font", "key binding", "custom parse_cli"}:
+    if row.family in {"font", "key binding", "custom parse_cli"}:
         return "stateful parser diagnostic"
     if row.family in {"command palette", "window padding", "packed flags"}:
         return "structured value diagnostic"
@@ -182,6 +188,8 @@ def diagnostic_family(row: ParserInventoryRow) -> str:
     if row.family == "duration":
         return "duration invalid-value diagnostic"
     if row.family == "working directory":
+        return "required-value diagnostic"
+    if row.family == "path":
         return "required-value diagnostic"
     return "custom diagnostic"
 
@@ -215,6 +223,21 @@ def diagnostic_override_evidence(option: str, row: ParserInventoryRow) -> str | 
                 "with line/key/error, CLI missing/all-whitespace diagnostics with "
                 "argument position/key/error, and required-value state retention; "
                 "`roastty/src/config/mod.rs::config_working_directory_diagnostic_oracle`"
+            )
+        if option in PATH_DIAGNOSTIC_ORACLE_OPTIONS:
+            if row.family != "path":
+                raise ValueError(
+                    f"{option} is listed in the Experiment 92 path diagnostic oracle "
+                    f"but parser family is {row.family!r}"
+                )
+            return (
+                "Experiment 92 shared path diagnostic oracle covers required, "
+                "optional, quoted literal marker, quoted optional, and embedded-NUL "
+                "path acceptance, raw-empty resets, parsed-empty no-op behavior, "
+                "config-file missing-value diagnostics with line/key/error, CLI "
+                "missing-value diagnostics with argument position/key/error, and "
+                "missing-value state retention; "
+                "`roastty/src/config/mod.rs::config_path_diagnostic_family_oracle`"
             )
         if option in STRING_DIAGNOSTIC_ORACLE_OPTIONS:
             if row.family != "string":
@@ -277,6 +300,7 @@ def complete_missing_evidence(option: str, override_evidence: str | None) -> str
     if override_evidence is not None and (
         option in STRING_DIAGNOSTIC_ORACLE_OPTIONS
         or option in WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS
+        or option in PATH_DIAGNOSTIC_ORACLE_OPTIONS
     ):
         return "None for missing-value diagnostic behavior."
     return "None for invalid-value diagnostic behavior."
@@ -345,6 +369,7 @@ def build_rows(
         | STRING_DIAGNOSTIC_ORACLE_OPTIONS
         | DURATION_DIAGNOSTIC_ORACLE_OPTIONS
         | WORKING_DIRECTORY_DIAGNOSTIC_ORACLE_OPTIONS
+        | PATH_DIAGNOSTIC_ORACLE_OPTIONS
     )
     missing_overrides = sorted(override_options - set(canonical_options))
     if missing_overrides:

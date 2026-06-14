@@ -431,6 +431,14 @@ experiment files until they are proven.
   whitespace after `=` is normalized as an empty reset, not a diagnostic.
   CFG-219 now has 194 `Oracle complete` rows and 9 remaining incomplete
   diagnostic rows.
+- **Path diagnostics are missing-value diagnostics, with CLI base expansion.**
+  Experiment 92 promoted the three path diagnostic rows and confirmed that
+  explicit required, optional, quoted, and NUL-containing path values are
+  accepted, raw empty values reset, parsed-empty values are no-ops, and missing
+  config-file/CLI values report `ConfigSetError::ValueRequired` while preserving
+  state. CLI parsing can expand existing relative path state, so diagnostic
+  state-retention tests should use absolute setup paths. CFG-219 now has 197
+  `Oracle complete` rows and 6 remaining incomplete diagnostic rows.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1005,4 +1013,4 @@ remains open.
 - [Experiment 91: Working directory diagnostic oracle](91-working-directory-diagnostic-oracle.md)
   — **Pass**
 - [Experiment 92: Path diagnostic oracle](92-path-diagnostic-oracle.md) —
-  **Designed**
+  **Pass**
