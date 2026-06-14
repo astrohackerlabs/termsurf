@@ -538,6 +538,12 @@ experiment files until they are proven.
   parsed-empty values `?`, `""`, and `?""` are ignored, formatting emits one
   entry per path, and file/CLI loading expands relative paths against the
   correct base.
+- **Input parser validates before tag fallback.** Experiment 41 proved canonical
+  `input`: missing values are required, an exactly empty repeatable value clears
+  the list, non-empty entries validate with Zig string-literal syntax before any
+  append, `raw:` and `path:` select explicit storage, unknown-tag values fall
+  back to raw input, `raw:` may carry an empty payload, and invalid entries
+  leave the existing list unchanged.
 
 ## Verification
 
@@ -619,4 +625,4 @@ remains open.
 - [Experiment 39: Env parser oracle](39-env-parser-oracle.md) — **Pass**
 - [Experiment 40: Repeatable path parser oracle](40-repeatable-path-parser-oracle.md)
   — **Pass**
-- [Experiment 41: Input parser oracle](41-input-parser-oracle.md) — **Designed**
+- [Experiment 41: Input parser oracle](41-input-parser-oracle.md) — **Pass**

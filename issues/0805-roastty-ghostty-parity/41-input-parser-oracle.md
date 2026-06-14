@@ -146,3 +146,94 @@ Reviewed by an adversarial Codex subagent with fresh context.
 **Verdict:** Approved.
 
 Findings: none.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now exposes the existing `input` regression as
+`input_config_parser_family_oracle` and extends it to cover the direct
+`ReadableIo::parse_cli` and `RepeatableReadableIo::parse_cli` boundaries. The
+oracle proves required missing values, exact-empty repeatable resets, raw/path
+tag parsing, unknown-tag raw fallback, valid `raw:` empty payloads, invalid
+Zig-string-literal rejection before append, config-file diagnostics, CLI
+parsing, formatting, and clone semantics.
+
+The parser inventory generator now detects that oracle and promotes only
+canonical `input` to `Oracle complete`. The regenerated CFG-217 parser inventory
+reports 203 parser rows, 184 `Oracle complete`, 19 `Audit covered`, and 0 `Gap`.
+CFG-217 remains `Gap` because the remaining audit-only parser rows still need
+their own upstream-derived oracles.
+
+Verification run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml input_config_parser_family_oracle
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+python3 - <<'PY'
+from pathlib import Path
+
+rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-parser-inventory.md').read_text().splitlines():
+    if line.startswith('| PARSE-'):
+        rows.append([cell.strip() for cell in line.strip('|').split('|')])
+
+assert len(rows) == 203, len(rows)
+assert sum(row[4] == 'Oracle complete' for row in rows) == 184
+assert sum(row[4] == 'Audit covered' for row in rows) == 19
+assert not [row for row in rows if row[4] == 'Gap']
+row = next(row for row in rows if row[1] == '`input`')
+assert row[4] == 'Oracle complete', row
+
+cfg217 = None
+for line in Path('issues/0805-roastty-ghostty-parity/config-matrix.md').read_text().splitlines():
+    if line.startswith('| CFG-217 |'):
+        cfg217 = [cell.strip() for cell in line.strip('|').split('|')]
+        break
+assert cfg217 is not None
+assert cfg217[4] == 'Gap', cfg217
+assert cfg217[11] == 'Experiment 41', cfg217
+assert '184 parser rows Oracle complete' in cfg217[12], cfg217
+print('input_oracle_rows=1 oracle_complete=184 cfg217=Gap')
+PY
+cargo fmt --manifest-path roastty/Cargo.toml
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/README.md \
+  issues/0805-roastty-ghostty-parity/41-input-parser-oracle.md \
+  issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md
+git diff --check
+```
+
+Observed key outputs:
+
+- `test config::tests::input_config_parser_family_oracle ... ok`
+- `oracle_complete=184`
+- `audit_covered=19`
+- `gap=0`
+- `input_oracle_rows=1 oracle_complete=184 cfg217=Gap`
+
+## Conclusion
+
+Canonical `input` is no longer an audit-only parser row. Future parser work can
+focus on the 19 remaining audit-only rows: codepoint maps, font-family/style and
+variation helpers, key remap/keybind, theme, and `config-default-files`.
+
+## Completion Review
+
+Reviewed by an adversarial Codex subagent with fresh context.
+
+**Verdict:** Approved.
+
+Findings: none.
+
+The reviewer independently verified the focused Rust oracle, parser inventory
+counts, matrix assertion, Python compile check, `cargo fmt --check`, and
+`git diff --check`.

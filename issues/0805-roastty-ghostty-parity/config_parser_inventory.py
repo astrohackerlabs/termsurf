@@ -50,6 +50,7 @@ COMMAND_ORACLE_TEST = "command_config_parser_family_oracle"
 PALETTE_ORACLE_TEST = "palette_config_parser_family_oracle"
 ENV_ORACLE_TEST = "env_config_parser_family_oracle"
 REPEATABLE_PATH_ORACLE_TEST = "repeatable_path_config_parser_family_oracle"
+INPUT_ORACLE_TEST = "input_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -344,6 +345,7 @@ def build_rows(
     palette_oracle_present: bool,
     env_oracle_present: bool,
     repeatable_path_oracle_present: bool,
+    input_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -596,6 +598,15 @@ def build_rows(
                 "diagnostics, file/CLI base expansion, and clone semantics"
             )
             missing_evidence = "None for direct repeatable path parser semantics."
+        elif input_oracle_present and option == "input":
+            status = "Oracle complete"
+            evidence = (
+                "Input parser oracle covers missing values, empty reset, raw and "
+                "path tagged values, unknown-tag raw fallback, raw-empty payloads, "
+                "invalid string-literal rejection, diagnostics, CLI, formatting, "
+                "and clone semantics"
+            )
+            missing_evidence = "None for direct input parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -661,6 +672,7 @@ def main() -> int:
     palette_oracle_present = PALETTE_ORACLE_TEST in roastty_source
     env_oracle_present = ENV_ORACLE_TEST in roastty_source
     repeatable_path_oracle_present = REPEATABLE_PATH_ORACLE_TEST in roastty_source
+    input_oracle_present = INPUT_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -691,13 +703,16 @@ def main() -> int:
         palette_oracle_present,
         env_oracle_present,
         repeatable_path_oracle_present,
+        input_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        40
+        41
+        if input_oracle_present
+        else 40
         if repeatable_path_oracle_present
         else 39
         if env_oracle_present

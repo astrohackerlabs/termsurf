@@ -8901,15 +8901,15 @@ mod tests {
         QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReadableIo, ReleaseChannel,
         RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
         RepeatableConfigPathParseError, RepeatableFontVariation, RepeatableFontVariationParseError,
-        RepeatableReadableIo, RepeatableString, RepeatableStringMap, RepeatableStringMapParseError,
-        RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition, RightClickAction,
-        ScrollToBottom, Scrollbar, SelectionWordChars, SelectionWordCharsParseError,
-        ShellIntegration, ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor,
-        TerminalColor, Theme, ThemeParseError, WindowColorspace, WindowDecoration,
-        WindowDecorationParseError, WindowNewTabPosition, WindowPadding, WindowPaddingBalance,
-        WindowPaddingColor, WindowPaddingParseError, WindowSaveState, WindowShowTabBar,
-        WindowSubtitle, WindowTheme, WorkingDirectory, WorkingDirectoryParseError,
-        DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
+        RepeatableReadableIo, RepeatableReadableIoParseError, RepeatableString,
+        RepeatableStringMap, RepeatableStringMapParseError, RepeatableStringParseError,
+        ResizeOverlay, ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar,
+        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
+        ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme,
+        ThemeParseError, WindowColorspace, WindowDecoration, WindowDecorationParseError,
+        WindowNewTabPosition, WindowPadding, WindowPaddingBalance, WindowPaddingColor,
+        WindowPaddingParseError, WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme,
+        WorkingDirectory, WorkingDirectoryParseError, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
     };
     use crate::input::key_mods::{self, Mods};
     use crate::input::link::{Action as LinkAction, Highlight as LinkHighlight};
@@ -21839,7 +21839,7 @@ mod tests {
     }
 
     #[test]
-    fn input_config_parse_format_reset_load_cli_and_clone() {
+    fn input_config_parser_family_oracle() {
         let lines = |cfg: &Config| -> Vec<String> {
             let mut out = String::new();
             cfg.format_config(&mut out);
@@ -21848,6 +21848,52 @@ mod tests {
                 .map(str::to_string)
                 .collect()
         };
+
+        assert_eq!(
+            ReadableIo::parse_cli(""),
+            Err(RepeatableReadableIoParseError::ValueRequired)
+        );
+        assert_eq!(
+            ReadableIo::parse_cli("raw:hello\\n"),
+            Ok(ReadableIo::Raw("hello\\n".to_string()))
+        );
+        assert_eq!(
+            ReadableIo::parse_cli("path:/tmp/in.txt"),
+            Ok(ReadableIo::Path("/tmp/in.txt".to_string()))
+        );
+        assert_eq!(
+            ReadableIo::parse_cli("foo:bar"),
+            Ok(ReadableIo::Raw("foo:bar".to_string()))
+        );
+        assert_eq!(
+            ReadableIo::parse_cli("raw:"),
+            Ok(ReadableIo::Raw(String::new()))
+        );
+        assert_eq!(
+            ReadableIo::parse_cli("raw:\\q"),
+            Err(RepeatableReadableIoParseError::InvalidValue)
+        );
+
+        let mut direct = RepeatableReadableIo {
+            list: vec![ReadableIo::Raw("keep".to_string())],
+        };
+        assert_eq!(
+            direct.parse_cli(None),
+            Err(RepeatableReadableIoParseError::ValueRequired)
+        );
+        assert_eq!(direct.list, vec![ReadableIo::Raw("keep".to_string())]);
+        assert_eq!(
+            direct.parse_cli(Some("raw:\\q")),
+            Err(RepeatableReadableIoParseError::InvalidValue)
+        );
+        assert_eq!(direct.list, vec![ReadableIo::Raw("keep".to_string())]);
+        assert_eq!(direct.parse_cli(Some("")), Ok(()));
+        assert!(direct.list.is_empty());
+        assert_eq!(direct.parse_cli(Some("path:/tmp/direct")), Ok(()));
+        assert_eq!(
+            direct.list,
+            vec![ReadableIo::Path("/tmp/direct".to_string())]
+        );
 
         let mut cfg = Config::default();
         assert_eq!(cfg.input, RepeatableReadableIo::default());
