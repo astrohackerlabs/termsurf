@@ -933,3 +933,5 @@ remains open.
   **Pass**
 - [Experiment 82: macOS enum formatter oracle](82-macos-enum-formatter-oracle.md)
   — **Pass**
+- [Experiment 83: Misc direct enum formatter oracle](83-misc-direct-enum-formatter-oracle.md)
+  — **Designed**
