@@ -564,6 +564,12 @@ experiment files until they are proven.
   parsing accepts the Zig `f64` space including underscores, hex floats,
   NaN/Inf, overflow, and underflow, invalid values leave the list unchanged, and
   set-but-empty config dispatch resets the repeatable list.
+- **Codepoint maps split direct parsing from config reset.** Experiment 45
+  proved canonical `font-codepoint-map` and `clipboard-codepoint-map`: direct
+  empty input is invalid, set-but-empty config dispatch resets the map, range
+  keys use Ghostty's `U+...`/range/comma grammar, font maps store descriptor
+  family strings, and clipboard maps preserve pinned Ghostty `u21` behavior for
+  non-scalar-but-in-range keys and replacement codepoints.
 
 ## Verification
 
@@ -653,4 +659,4 @@ remains open.
 - [Experiment 44: Font variation parser oracle](44-font-variation-parser-oracle.md)
   — **Pass**
 - [Experiment 45: Codepoint map parser oracle](45-codepoint-map-parser-oracle.md)
-  — **Designed**
+  — **Pass**

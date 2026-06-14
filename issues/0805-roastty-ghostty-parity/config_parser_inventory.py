@@ -54,6 +54,7 @@ INPUT_ORACLE_TEST = "input_config_parser_family_oracle"
 REPEATABLE_STRING_FONT_ORACLE_TEST = "repeatable_string_font_config_parser_family_oracle"
 FONT_STYLE_ORACLE_TEST = "font_style_config_parser_family_oracle"
 FONT_VARIATION_ORACLE_TEST = "font_variation_config_parser_family_oracle"
+CODEPOINT_MAP_ORACLE_TEST = "codepoint_map_config_parser_family_oracle"
 
 REPEATABLE_STRING_FONT_OPTIONS = {
     "font-family",
@@ -75,6 +76,11 @@ FONT_VARIATION_OPTIONS = {
     "font-variation-bold",
     "font-variation-italic",
     "font-variation-bold-italic",
+}
+
+CODEPOINT_MAP_OPTIONS = {
+    "font-codepoint-map",
+    "clipboard-codepoint-map",
 }
 
 
@@ -374,6 +380,7 @@ def build_rows(
     repeatable_string_font_oracle_present: bool,
     font_style_oracle_present: bool,
     font_variation_oracle_present: bool,
+    codepoint_map_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -662,6 +669,16 @@ def build_rows(
                 "diagnostics, CLI, formatting, and clone semantics"
             )
             missing_evidence = "None for direct font-variation parser semantics."
+        elif codepoint_map_oracle_present and option in CODEPOINT_MAP_OPTIONS:
+            status = "Oracle complete"
+            evidence = (
+                "Codepoint map parser oracle covers missing values, direct empty "
+                "invalidity, config empty resets, Unicode range grammar, font "
+                "descriptor mappings, clipboard codepoint/string replacements, "
+                "u21 clipboard semantics, diagnostics, CLI, formatting, and clone "
+                "semantics"
+            )
+            missing_evidence = "None for direct codepoint-map parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -731,6 +748,7 @@ def main() -> int:
     repeatable_string_font_oracle_present = REPEATABLE_STRING_FONT_ORACLE_TEST in roastty_source
     font_style_oracle_present = FONT_STYLE_ORACLE_TEST in roastty_source
     font_variation_oracle_present = FONT_VARIATION_ORACLE_TEST in roastty_source
+    codepoint_map_oracle_present = CODEPOINT_MAP_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -765,13 +783,16 @@ def main() -> int:
         repeatable_string_font_oracle_present,
         font_style_oracle_present,
         font_variation_oracle_present,
+        codepoint_map_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        44
+        45
+        if codepoint_map_oracle_present
+        else 44
         if font_variation_oracle_present
         else 43
         if font_style_oracle_present

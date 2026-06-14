@@ -2178,8 +2178,12 @@ impl Config {
             "font-variation-bold-italic" => {
                 set_repeatable_font_variation(&mut self.font_variation_bold_italic, value)?
             }
-            "font-codepoint-map" => self.font_codepoint_map.parse_cli(value)?,
-            "clipboard-codepoint-map" => self.clipboard_codepoint_map.parse_cli(value)?,
+            "font-codepoint-map" => {
+                set_repeatable_codepoint_map(&mut self.font_codepoint_map, value)?
+            }
+            "clipboard-codepoint-map" => {
+                set_repeatable_clipboard_codepoint_map(&mut self.clipboard_codepoint_map, value)?
+            }
             // `BackgroundBlur::parse_cli` is `&mut self` (it overwrites `self` in
             // place), so its arm is inline: a set-but-empty value resets to the
             // default; otherwise parse in place (a missing value sets `.true`, the
@@ -3387,10 +3391,6 @@ impl RepeatableCodepointMap {
         input: Option<&str>,
     ) -> Result<(), RepeatableCodepointMapParseError> {
         let input = input.ok_or(RepeatableCodepointMapParseError::ValueRequired)?;
-        if input.is_empty() {
-            self.map = CodepointMap::default();
-            return Ok(());
-        }
         let eql = input
             .find('=')
             .ok_or(RepeatableCodepointMapParseError::InvalidValue)?;
@@ -3694,6 +3694,30 @@ fn set_repeatable_font_variation(
 ) -> Result<(), ConfigSetError> {
     if value == Some("") {
         *target = RepeatableFontVariation::default();
+        return Ok(());
+    }
+    target.parse_cli(value)?;
+    Ok(())
+}
+
+fn set_repeatable_codepoint_map(
+    target: &mut RepeatableCodepointMap,
+    value: Option<&str>,
+) -> Result<(), ConfigSetError> {
+    if value == Some("") {
+        *target = RepeatableCodepointMap::default();
+        return Ok(());
+    }
+    target.parse_cli(value)?;
+    Ok(())
+}
+
+fn set_repeatable_clipboard_codepoint_map(
+    target: &mut RepeatableClipboardCodepointMap,
+    value: Option<&str>,
+) -> Result<(), ConfigSetError> {
+    if value == Some("") {
+        *target = RepeatableClipboardCodepointMap::default();
         return Ok(());
     }
     target.parse_cli(value)?;
@@ -5996,10 +6020,6 @@ impl RepeatableClipboardCodepointMap {
         input: Option<&str>,
     ) -> Result<(), ClipboardCodepointMapParseError> {
         let input = input.ok_or(ClipboardCodepointMapParseError::ValueRequired)?;
-        if input.is_empty() {
-            self.map.clear();
-            return Ok(());
-        }
         let eql = input
             .find('=')
             .ok_or(ClipboardCodepointMapParseError::InvalidValue)?;
@@ -6009,9 +6029,6 @@ impl RepeatableClipboardCodepointMap {
 
         let replacement = if let Some(cp_str) = value.strip_prefix("U+") {
             let cp = parse_u21_hex(cp_str).ok_or(ClipboardCodepointMapParseError::InvalidValue)?;
-            if char::from_u32(cp).is_none() {
-                return Err(ClipboardCodepointMapParseError::InvalidValue);
-            }
             ClipboardReplacement::Codepoint(cp)
         } else {
             // `value` is already valid UTF-8 (it is a `&str`).
@@ -6023,9 +6040,6 @@ impl RepeatableClipboardCodepointMap {
             .next()
             .map_err(|_| ClipboardCodepointMapParseError::InvalidValue)?
         {
-            if !valid_clipboard_scalar_range(range) {
-                return Err(ClipboardCodepointMapParseError::InvalidValue);
-            }
             self.map.push(ClipboardCodepointMapEntry {
                 range,
                 replacement: replacement.clone(),
@@ -6058,13 +6072,6 @@ impl RepeatableClipboardCodepointMap {
             formatter.entry_str(&format!("{}={}", key, value));
         }
     }
-}
-
-fn valid_clipboard_scalar_range([start, end]: [u32; 2]) -> bool {
-    start <= end
-        && char::from_u32(start).is_some()
-        && char::from_u32(end).is_some()
-        && !(start <= 0xdfff && end >= 0xd800)
 }
 
 /// Parse a base-16 `u21` (upstream `std.fmt.parseInt(u21, _, 16)`); every error is
@@ -8898,17 +8905,18 @@ mod tests {
         QuickTerminalDimensions, QuickTerminalKeyboardInteractivity, QuickTerminalLayer,
         QuickTerminalPosition, QuickTerminalScreen, QuickTerminalSize, QuickTerminalSizeParseError,
         QuickTerminalSizeValue, QuickTerminalSpaceBehavior, ReadableIo, ReleaseChannel,
-        RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableConfigPath,
-        RepeatableConfigPathParseError, RepeatableFontVariation, RepeatableFontVariationParseError,
-        RepeatableReadableIo, RepeatableReadableIoParseError, RepeatableString,
-        RepeatableStringMap, RepeatableStringMapParseError, RepeatableStringParseError,
-        ResizeOverlay, ResizeOverlayPosition, RightClickAction, ScrollToBottom, Scrollbar,
-        SelectionWordChars, SelectionWordCharsParseError, ShellIntegration,
-        ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor, TerminalColor, Theme,
-        ThemeParseError, WindowColorspace, WindowDecoration, WindowDecorationParseError,
-        WindowNewTabPosition, WindowPadding, WindowPaddingBalance, WindowPaddingColor,
-        WindowPaddingParseError, WindowSaveState, WindowShowTabBar, WindowSubtitle, WindowTheme,
-        WorkingDirectory, WorkingDirectoryParseError, DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
+        RepeatableClipboardCodepointMap, RepeatableCodepointMap, RepeatableCodepointMapParseError,
+        RepeatableConfigPath, RepeatableConfigPathParseError, RepeatableFontVariation,
+        RepeatableFontVariationParseError, RepeatableReadableIo, RepeatableReadableIoParseError,
+        RepeatableString, RepeatableStringMap, RepeatableStringMapParseError,
+        RepeatableStringParseError, ResizeOverlay, ResizeOverlayPosition, RightClickAction,
+        ScrollToBottom, Scrollbar, SelectionWordChars, SelectionWordCharsParseError,
+        ShellIntegration, ShellIntegrationFeatures, SplitPreserveZoom, TerminalBoldColor,
+        TerminalColor, Theme, ThemeParseError, WindowColorspace, WindowDecoration,
+        WindowDecorationParseError, WindowNewTabPosition, WindowPadding, WindowPaddingBalance,
+        WindowPaddingColor, WindowPaddingParseError, WindowSaveState, WindowShowTabBar,
+        WindowSubtitle, WindowTheme, WorkingDirectory, WorkingDirectoryParseError,
+        DEFAULT_URL_REGEX, NS_PER_MS, NS_PER_S,
     };
     use crate::input::key_mods::{self, Mods};
     use crate::input::link::{Action as LinkAction, Highlight as LinkHighlight};
@@ -13100,11 +13108,47 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_codepoint_map_parse_cli_parses_entries() {
+    fn codepoint_map_config_parser_family_oracle() {
         let entry = |lo: u32, hi: u32, r: ClipboardReplacement| ClipboardCodepointMapEntry {
             range: [lo, hi],
             replacement: r,
         };
+
+        let mut font_direct = RepeatableCodepointMap::default();
+        assert_eq!(
+            font_direct.parse_cli(None),
+            Err(RepeatableCodepointMapParseError::ValueRequired)
+        );
+        assert_eq!(
+            font_direct.parse_cli(Some("")),
+            Err(RepeatableCodepointMapParseError::InvalidValue)
+        );
+        assert_eq!(font_direct.parse_cli(Some("U+ABCD = Symbols")), Ok(()));
+        assert_eq!(
+            font_direct.map.get(0xABCD).unwrap().family.as_deref(),
+            Some("Symbols")
+        );
+        assert_eq!(
+            font_direct.parse_cli(Some("U+0001-U+0003, U+0005 = Emoji")),
+            Ok(())
+        );
+        assert_eq!(
+            font_direct.map.get(0x0002).unwrap().family.as_deref(),
+            Some("Emoji")
+        );
+        assert_eq!(
+            font_direct.parse_cli(Some("U+ABCD")),
+            Err(RepeatableCodepointMapParseError::InvalidValue)
+        );
+        assert_eq!(
+            font_direct.parse_cli(Some("U+0003-U+0001=Bad")),
+            Err(RepeatableCodepointMapParseError::InvalidValue)
+        );
+        let mut out = String::new();
+        font_direct.format_entry(&mut EntryFormatter::new("font-codepoint-map", &mut out));
+        assert!(out.contains("font-codepoint-map = U+ABCD=Symbols\n"));
+        assert!(out.contains("font-codepoint-map = U+0001-U+0003=Emoji\n"));
+        assert!(out.contains("font-codepoint-map = U+0005=Emoji\n"));
 
         // Upstream `parseCLI` cases.
         let mut m = RepeatableClipboardCodepointMap::default();
@@ -13169,6 +13213,10 @@ mod tests {
             Err(ClipboardCodepointMapParseError::ValueRequired)
         );
         assert_eq!(
+            m.parse_cli(Some("")),
+            Err(ClipboardCodepointMapParseError::InvalidValue)
+        );
+        assert_eq!(
             m.parse_cli(Some("U+2500")), // no `=`
             Err(ClipboardCodepointMapParseError::InvalidValue)
         );
@@ -13184,18 +13232,15 @@ mod tests {
             m.parse_cli(Some("U+2500=U+")), // empty codepoint replacement
             Err(ClipboardCodepointMapParseError::InvalidValue)
         );
+        assert_eq!(m.parse_cli(Some("U+2500=U+110000")), Ok(()));
         assert_eq!(
-            m.parse_cli(Some("U+2500=U+110000")), // non-scalar replacement
-            Err(ClipboardCodepointMapParseError::InvalidValue)
+            m.map.last().unwrap().replacement,
+            ClipboardReplacement::Codepoint(0x110000)
         );
-        assert_eq!(
-            m.parse_cli(Some("U+D800=U+002D")), // surrogate range
-            Err(ClipboardCodepointMapParseError::InvalidValue)
-        );
-        assert_eq!(
-            m.parse_cli(Some("U+110000=U+002D")), // non-scalar range
-            Err(ClipboardCodepointMapParseError::InvalidValue)
-        );
+        assert_eq!(m.parse_cli(Some("U+D800=U+002D")), Ok(()));
+        assert_eq!(m.map.last().unwrap().range, [0xD800, 0xD800]);
+        assert_eq!(m.parse_cli(Some("U+110000=U+002D")), Ok(()));
+        assert_eq!(m.map.last().unwrap().range, [0x110000, 0x110000]);
 
         // Replacement-codepoint parser edges (raw `parseInt(u21, _, 16)` path).
         let cp = |s: &str| {
@@ -13218,6 +13263,75 @@ mod tests {
             cp("U+2500=U+200000"), // u21 overflow
             Err(ClipboardCodepointMapParseError::InvalidValue)
         );
+
+        let mut cfg = Config::default();
+        cfg.set("font-codepoint-map", Some("U+ABCD=Font")).unwrap();
+        cfg.set("clipboard-codepoint-map", Some("U+2500=U+002D"))
+            .unwrap();
+        cfg.set("font-codepoint-map", Some("")).unwrap();
+        cfg.set("clipboard-codepoint-map", Some("")).unwrap();
+        assert!(cfg.font_codepoint_map.map.is_empty());
+        assert!(cfg.clipboard_codepoint_map.map.is_empty());
+        assert_eq!(
+            cfg.set("font-codepoint-map", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+        assert_eq!(
+            cfg.set("clipboard-codepoint-map", None),
+            Err(ConfigSetError::ValueRequired)
+        );
+
+        let diagnostics = cfg.load_str(
+            "font-codepoint-map = U+1111=Font\n\
+             font-codepoint-map = U+0003-U+0001=Bad\n\
+             clipboard-codepoint-map = U+2500=U+002D\n\
+             clipboard-codepoint-map\n\
+             font-codepoint-map =\n\
+             clipboard-codepoint-map =\n",
+        );
+        assert!(cfg.font_codepoint_map.map.is_empty());
+        assert!(cfg.clipboard_codepoint_map.map.is_empty());
+        assert_eq!(
+            diagnostics,
+            vec![
+                ConfigDiagnostic {
+                    line: 2,
+                    key: "font-codepoint-map".to_string(),
+                    error: ConfigSetError::InvalidValue,
+                },
+                ConfigDiagnostic {
+                    line: 4,
+                    key: "clipboard-codepoint-map".to_string(),
+                    error: ConfigSetError::ValueRequired,
+                },
+            ]
+        );
+
+        let diagnostics = cfg.set_cli_args([
+            "--font-codepoint-map=U+ABCD=CLI Font",
+            "--clipboard-codepoint-map=U+110000=U+110000",
+        ]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            cfg.font_codepoint_map
+                .map
+                .get(0xABCD)
+                .unwrap()
+                .family
+                .as_deref(),
+            Some("CLI Font")
+        );
+        assert_eq!(
+            cfg.clipboard_codepoint_map.map,
+            vec![entry(
+                0x110000,
+                0x110000,
+                ClipboardReplacement::Codepoint(0x110000)
+            )]
+        );
+
+        let cloned = cfg.clone();
+        assert_eq!(cloned, cfg);
     }
 
     #[test]
