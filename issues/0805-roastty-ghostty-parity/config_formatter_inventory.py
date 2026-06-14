@@ -35,6 +35,7 @@ FONT_VARIATION_ORACLE_TEST = "font_variation_config_formatter_family_oracle"
 CODEPOINT_MAP_ORACLE_TEST = "codepoint_map_config_formatter_family_oracle"
 FONT_SHAPING_BREAK_ORACLE_TEST = "font_shaping_break_config_formatter_family_oracle"
 KEYWORD_ENUM_ORACLE_TEST = "keyword_enum_config_formatter_family_oracle"
+CLIPBOARD_ACCESS_ORACLE_TEST = "clipboard_access_config_formatter_family_oracle"
 METRIC_MODIFIER_ORACLE_TEST = "metric_modifier_config_formatter_family_oracle"
 WINDOW_PADDING_ORACLE_TEST = "window_padding_config_formatter_family_oracle"
 REPEATABLE_PATH_ORACLE_TEST = "repeatable_path_config_formatter_family_oracle"
@@ -85,6 +86,10 @@ KEYWORD_ENUM_OPTIONS = {
     "cursor-style",
     "mouse-shift-capture",
     "scrollbar",
+}
+CLIPBOARD_ACCESS_OPTIONS = {
+    "clipboard-read",
+    "clipboard-write",
 }
 OPTIONAL_COLOR_OPTIONS = {
     "bold-color",
@@ -202,6 +207,8 @@ def formatter_family(option: str, path_text: str, call_text: str) -> str:
         return "font shaping break"
     if option in KEYWORD_ENUM_OPTIONS:
         return "keyword enum"
+    if option in CLIPBOARD_ACCESS_OPTIONS:
+        return "clipboard access"
     if "font_" in call_text or "Font" in call_text:
         return "font"
     if "window_padding" in call_text:
@@ -361,6 +368,7 @@ def build_rows(
     codepoint_map_oracle_present: bool,
     font_shaping_break_oracle_present: bool,
     keyword_enum_oracle_present: bool,
+    clipboard_access_oracle_present: bool,
     metric_modifier_oracle_present: bool,
     window_padding_oracle_present: bool,
     repeatable_path_oracle_present: bool,
@@ -552,6 +560,16 @@ def build_rows(
                 "and representative order checks"
             )
             missing_evidence = "None for keyword enum formatter rows."
+        elif clipboard_access_oracle_present and family == "clipboard access":
+            status = "Oracle complete"
+            evidence = (
+                "Clipboard access formatter oracle covers allow, deny, and ask "
+                "keywords; direct enum formatter output; clipboard-read and "
+                "clipboard-write Config::set plus format_config output; "
+                "raw-empty resets to their distinct defaults; and representative "
+                "order checks"
+            )
+            missing_evidence = "None for clipboard access formatter rows."
         elif metric_modifier_oracle_present and family == "metric modifier":
             status = "Oracle complete"
             evidence = (
@@ -665,6 +683,7 @@ def main() -> int:
     codepoint_map_oracle_present = CODEPOINT_MAP_ORACLE_TEST in roastty_source
     font_shaping_break_oracle_present = FONT_SHAPING_BREAK_ORACLE_TEST in roastty_source
     keyword_enum_oracle_present = KEYWORD_ENUM_ORACLE_TEST in roastty_source
+    clipboard_access_oracle_present = CLIPBOARD_ACCESS_ORACLE_TEST in roastty_source
     metric_modifier_oracle_present = METRIC_MODIFIER_ORACLE_TEST in roastty_source
     window_padding_oracle_present = WINDOW_PADDING_ORACLE_TEST in roastty_source
     repeatable_path_oracle_present = REPEATABLE_PATH_ORACLE_TEST in roastty_source
@@ -689,6 +708,7 @@ def main() -> int:
         codepoint_map_oracle_present,
         font_shaping_break_oracle_present,
         keyword_enum_oracle_present,
+        clipboard_access_oracle_present,
         metric_modifier_oracle_present,
         window_padding_oracle_present,
         repeatable_path_oracle_present,
@@ -704,7 +724,9 @@ def main() -> int:
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        71
+        72
+        if clipboard_access_oracle_present
+        else 71
         if keyword_enum_oracle_present
         else 70
         if font_shaping_break_oracle_present

@@ -317,6 +317,11 @@ experiment files until they are proven.
   upstream tag keyword, raw-empty reset behavior, and representative
   `format_config` ordering while leaving unrelated custom formatters
   audit-covered.
+- **Shared enum options can still need scoped formatter proof.** Experiment 72
+  promoted `clipboard-read` and `clipboard-write` together because both use
+  Ghostty's `ClipboardAccess` enum, but the proof still checked each option's
+  distinct default and exact row ownership so unrelated enum-like formatters did
+  not advance by accident.
 - **Full-header ABI gaps must be split into symbol and semantic outcomes.**
   Experiment 5 proved the mapped Ghostty header can be closed at the
   declaration/export level while still recording honest semantic divergences for
@@ -848,4 +853,4 @@ remains open.
 - [Experiment 71: Keyword enum formatter oracle](71-keyword-enum-formatter-oracle.md)
   — **Pass**
 - [Experiment 72: Clipboard access formatter oracle](72-clipboard-access-formatter-oracle.md)
-  — **Designed**
+  — **Pass**
