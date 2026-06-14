@@ -81,7 +81,6 @@ cargo test --manifest-path roastty/Cargo.toml repeatable_path_config_parser_fami
 - Existing option-level and expansion tests still pass:
 
 ```bash
-cargo test --manifest-path roastty/Cargo.toml config_file_repeatable_path_parse_cli_matches_upstream
 cargo test --manifest-path roastty/Cargo.toml custom_shader_config_parse_format_reset_and_diagnose
 cargo test --manifest-path roastty/Cargo.toml custom_shader_expands_from_file_and_cli_bases
 cargo test --manifest-path roastty/Cargo.toml gtk_css_notifications_progress_config_parse_format_reset_and_diagnose
@@ -144,7 +143,6 @@ Suggested commands:
 
 ```bash
 cargo test --manifest-path roastty/Cargo.toml repeatable_path_config_parser_family_oracle
-cargo test --manifest-path roastty/Cargo.toml config_file_repeatable_path_parse_cli_matches_upstream
 cargo test --manifest-path roastty/Cargo.toml custom_shader_config_parse_format_reset_and_diagnose
 cargo test --manifest-path roastty/Cargo.toml custom_shader_expands_from_file_and_cli_bases
 cargo test --manifest-path roastty/Cargo.toml gtk_css_notifications_progress_config_parse_format_reset_and_diagnose
@@ -196,3 +194,120 @@ prettier --write --prose-wrap always --print-width 80 \
   issues/0805-roastty-ghostty-parity/config-matrix.md
 git diff --check
 ```
+
+## Result
+
+**Result:** Pass
+
+Roastty now has a focused repeatable path parser family oracle for the two
+canonical non-`config-file` rows:
+
+- `custom-shader`;
+- `gtk-custom-css`.
+
+Implementation notes:
+
+- Renamed and extended the lower-level repeatable path test as
+  `repeatable_path_config_parser_family_oracle`.
+- Added formatter checks for empty, required, optional, and quoted-literal
+  repeatable paths.
+- Taught `config_parser_inventory.py` to detect the repeatable path oracle,
+  promote only `custom-shader` and `gtk-custom-css`, and make CFG-217's owner
+  `Experiment 40` when this oracle is present.
+- Left `config-file` already Oracle complete and unchanged; the separate
+  `config-default-files` row remains outside this scope.
+
+Verification commands run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml repeatable_path_config_parser_family_oracle
+cargo test --manifest-path roastty/Cargo.toml custom_shader_config_parse_format_reset_and_diagnose
+cargo test --manifest-path roastty/Cargo.toml custom_shader_expands_from_file_and_cli_bases
+cargo test --manifest-path roastty/Cargo.toml gtk_css_notifications_progress_config_parse_format_reset_and_diagnose
+cargo test --manifest-path roastty/Cargo.toml gtk_custom_css_expands_from_file_and_cli_bases
+```
+
+Results:
+
+```text
+test config::tests::repeatable_path_config_parser_family_oracle ... ok
+test config::tests::custom_shader_config_parse_format_reset_and_diagnose ... ok
+test config::tests::custom_shader_expands_from_file_and_cli_bases ... ok
+test config::tests::gtk_css_notifications_progress_config_parse_format_reset_and_diagnose ... ok
+test config::tests::gtk_custom_css_expands_from_file_and_cli_bases ... ok
+```
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+```
+
+Result:
+
+```text
+ghostty_canonical=203
+roastty_parser_rows=203
+missing_canonical_parser_rows=0
+missing_dispatch_rows=0
+extra_parser_rows=0
+compatibility_only_parser_arms=5
+noncanonical_noncompat_parser_arms=0
+oracle_complete=183
+audit_covered=20
+gap=0
+```
+
+The matrix assertion passed and printed:
+
+```text
+repeatable_path_oracle_rows=2 oracle_complete=183 cfg217=Gap
+```
+
+Additional hygiene checks passed:
+
+```bash
+cargo fmt --manifest-path roastty/Cargo.toml
+python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+```
+
+## Conclusion
+
+The non-`config-file` repeatable path parser rows are now oracle-complete for
+CFG-217. The important upstream boundary is that raw empty values clear the
+list, while parsed-empty paths after optional-marker/quote handling are no-ops.
+CFG-217 remains `Gap` because 20 parser rows are still only audit-covered.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Changes required**, then fixed.
+
+Required finding:
+
+- The verification list still included the old
+  `config_file_repeatable_path_parse_cli_matches_upstream` test filter after the
+  test was renamed. That stale command exits successfully while running zero
+  tests.
+
+Fix:
+
+- Removed the stale test-filter command from both the pass criteria and the
+  suggested command list. The renamed
+  `repeatable_path_config_parser_family_oracle` test remains the direct shared
+  repeatable-path guard.
+
+The reviewer independently verified the focused repeatable-path and option-level
+tests, Rust format check, `git diff --check`, generated inventory counts, the
+two promoted target rows, `config-file` remaining Oracle complete,
+`config-default-files` remaining not Oracle complete, CFG-217's `Gap` status and
+Experiment 40 ownership, and that the result commit had not yet been made.
+
+Re-review verdict: **Approved**. The reviewer confirmed the stale zero-test
+command is absent from runnable verification lists and appears only in this
+review narrative.

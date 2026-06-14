@@ -531,6 +531,13 @@ experiment files until they are proven.
   `=` splits key from value, ASCII whitespace is trimmed around both sides,
   empty keys are accepted, empty parsed values delete a key, repeated keys
   overwrite, and equality ignores insertion order.
+- **Repeatable paths distinguish raw-empty reset from parsed-empty no-op.**
+  Experiment 40 proved canonical `custom-shader` and `gtk-custom-css`: missing
+  values are required, raw empty values clear the list, required paths append,
+  leading `?` paths append as optional, quoted leading `?` paths stay required,
+  parsed-empty values `?`, `""`, and `?""` are ignored, formatting emits one
+  entry per path, and file/CLI loading expands relative paths against the
+  correct base.
 
 ## Verification
 
@@ -611,4 +618,4 @@ remains open.
 - [Experiment 38: Palette parser oracle](38-palette-parser-oracle.md) — **Pass**
 - [Experiment 39: Env parser oracle](39-env-parser-oracle.md) — **Pass**
 - [Experiment 40: Repeatable path parser oracle](40-repeatable-path-parser-oracle.md)
-  — **Designed**
+  — **Pass**

@@ -10597,7 +10597,12 @@ mod tests {
     }
 
     #[test]
-    fn config_file_repeatable_path_parse_cli_matches_upstream() {
+    fn repeatable_path_config_parser_family_oracle() {
+        let empty = RepeatableConfigPath::default();
+        let mut out = String::new();
+        empty.format_entry(&mut EntryFormatter::new("path", &mut out));
+        assert_eq!(out, "path = \n");
+
         let mut paths = RepeatableConfigPath::default();
         assert_eq!(paths.parse_cli(Some("config.1")), Ok(()));
         assert_eq!(paths.parse_cli(Some("?config.2")), Ok(()));
@@ -10611,6 +10616,13 @@ mod tests {
                 ConfigFilePath::Required("?config.3".to_string()),
                 ConfigFilePath::Optional("config.4".to_string()),
             ]
+        );
+
+        let mut out = String::new();
+        paths.format_entry(&mut EntryFormatter::new("path", &mut out));
+        assert_eq!(
+            out,
+            "path = config.1\npath = ?config.2\npath = ?config.3\npath = ?config.4\n"
         );
 
         // Parsed-empty paths are ignored, not reset.

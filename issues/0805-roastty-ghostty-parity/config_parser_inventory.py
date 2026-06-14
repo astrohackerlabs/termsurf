@@ -49,6 +49,7 @@ QUICK_TERMINAL_SIZE_ORACLE_TEST = "quick_terminal_size_config_parser_family_orac
 COMMAND_ORACLE_TEST = "command_config_parser_family_oracle"
 PALETTE_ORACLE_TEST = "palette_config_parser_family_oracle"
 ENV_ORACLE_TEST = "env_config_parser_family_oracle"
+REPEATABLE_PATH_ORACLE_TEST = "repeatable_path_config_parser_family_oracle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -342,6 +343,7 @@ def build_rows(
     command_oracle_present: bool,
     palette_oracle_present: bool,
     env_oracle_present: bool,
+    repeatable_path_oracle_present: bool,
 ) -> tuple[list[ParserRow], list[str], list[str], list[str]]:
     arm_by_key: dict[str, ParserArm] = {}
     for arm in arms:
@@ -585,6 +587,15 @@ def build_rows(
                 "semantics"
             )
             missing_evidence = "None for direct env parser semantics."
+        elif repeatable_path_oracle_present and option in ("custom-shader", "gtk-custom-css"):
+            status = "Oracle complete"
+            evidence = (
+                "Repeatable path parser oracle covers missing values, raw-empty "
+                "reset, required and optional path append, quoted literal "
+                "question-mark paths, parsed-empty no-op behavior, formatting, "
+                "diagnostics, file/CLI base expansion, and clone semantics"
+            )
+            missing_evidence = "None for direct repeatable path parser semantics."
         elif option == "config-default-files":
             missing_evidence = (
                 "Direct parser and effective default-file load-order semantics must "
@@ -649,6 +660,7 @@ def main() -> int:
     command_oracle_present = COMMAND_ORACLE_TEST in roastty_source
     palette_oracle_present = PALETTE_ORACLE_TEST in roastty_source
     env_oracle_present = ENV_ORACLE_TEST in roastty_source
+    repeatable_path_oracle_present = REPEATABLE_PATH_ORACLE_TEST in roastty_source
     rows, missing, compatibility_only, noncanonical = build_rows(
         upstream,
         aliases,
@@ -678,13 +690,16 @@ def main() -> int:
         command_oracle_present,
         palette_oracle_present,
         env_oracle_present,
+        repeatable_path_oracle_present,
     )
     emit_inventory(rows, compatibility_only, args.output)
     incomplete = [row for row in rows if row.status != "Oracle complete"]
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        39
+        40
+        if repeatable_path_oracle_present
+        else 39
         if env_oracle_present
         else 38
         if palette_oracle_present
