@@ -83,3 +83,84 @@ Reviewed by a fresh-context Codex adversarial subagent.
 Verdict: **Approved**.
 
 Findings: none.
+
+## Result
+
+**Result:** Pass
+
+Added `window_padding_config_formatter_family_oracle` and promoted only
+formatter inventory rows whose family is `window padding`.
+
+The oracle proves representative window-padding formatter behavior through
+`Config::format_config`:
+
+- `window-padding-x` and `window-padding-y` format a single integer when both
+  sides match;
+- `window-padding-x` and `window-padding-y` format `left,right` when the two
+  sides differ;
+- `window-padding-balance` formats `false`, `true`, and `equal`;
+- `window-padding-color` formats `background`, `extend`, and `extend-always`;
+- raw-empty values reset the four rows to their defaults and then format those
+  defaults;
+- the four rows remain in formatter order: `window-padding-x`,
+  `window-padding-y`, `window-padding-balance`, `window-padding-color`.
+
+The regenerated formatter inventory now reports:
+
+```text
+ghostty_canonical=203
+roastty_formatter_rows=203
+missing_canonical_formatter_rows=0
+extra_formatter_rows=0
+oracle_complete=71
+audit_covered=132
+gap=0
+no_output_rows=1
+```
+
+CFG-218 remains `Gap`, as intended, because 132 formatter rows still need
+dedicated non-default formatter oracles.
+
+Verification:
+
+- `cargo test --manifest-path roastty/Cargo.toml window_padding_config_formatter_family_oracle`
+  passed.
+- `cargo test --manifest-path roastty/Cargo.toml config_default_format_oracle`
+  passed.
+- Matrix assertion passed: CFG-217 remains `Pass`; CFG-218 remains `Gap`;
+  primitive, metric modifier, and window padding formatter families are
+  `Oracle complete`; representative non-target formatter families remain
+  `Audit covered`.
+- `cargo fmt --manifest-path roastty/Cargo.toml --check` passed.
+- `prettier --write --prose-wrap always --print-width 80 issues/0805-roastty-ghostty-parity/53-window-padding-formatter-oracle.md issues/0805-roastty-ghostty-parity/README.md issues/0805-roastty-ghostty-parity/config-formatter-inventory.md issues/0805-roastty-ghostty-parity/config-matrix.md`
+  completed.
+- `git diff --check` passed.
+
+## Conclusion
+
+The window-padding formatter family is now oracle-complete. CFG-218 remains open
+with 132 audit-covered formatter rows. The next formatter experiments should
+target another coherent family such as repeatable paths, optional values,
+colors, or key remap formatting.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Initial verdict: **Changes required**.
+
+Required finding:
+
+- `roastty/src/config/mod.rs` still had a stale `WindowPadding` doc comment
+  saying the `formatEntry` formatter would be ported later, even though
+  Experiment 53 explicitly included correcting stale local formatter-pending
+  comments.
+
+Fix:
+
+- Updated the `WindowPadding` doc comment to remove the stale formatter-pending
+  sentence.
+
+Re-review verdict: **Approved**.
+
+Remaining findings: none.

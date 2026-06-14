@@ -4695,8 +4695,7 @@ pub(crate) enum WindowPaddingParseError {
 }
 
 /// The `window-padding-*` config (upstream `Config.WindowPadding`): a padding pair
-/// (a single value applies to both edges). The `formatEntry` formatter is ported
-/// later.
+/// (a single value applies to both edges).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct WindowPadding {
     pub top_left: u32,
@@ -17945,6 +17944,97 @@ mod tests {
         assert!(index(&lines, "adjust-cell-width") < index(&lines, "adjust-cell-height"));
         assert!(index(&lines, "adjust-cursor-thickness") < index(&lines, "adjust-cursor-height"));
         assert!(index(&lines, "adjust-box-thickness") < index(&lines, "adjust-icon-height"));
+    }
+
+    #[test]
+    fn window_padding_config_formatter_family_oracle() {
+        fn formatted_lines(cfg: &Config) -> Vec<String> {
+            let mut out = String::new();
+            cfg.format_config(&mut out);
+            out.lines().map(ToString::to_string).collect()
+        }
+
+        fn line(lines: &[String], key: &str) -> String {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted line for {key}"))
+                .clone()
+        }
+
+        fn index(lines: &[String], key: &str) -> usize {
+            let prefix = format!("{key} = ");
+            lines
+                .iter()
+                .position(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing formatted line for {key}"))
+        }
+
+        let mut cfg = Config::default();
+        let lines = formatted_lines(&cfg);
+        assert_eq!(line(&lines, "window-padding-x"), "window-padding-x = 2");
+        assert_eq!(line(&lines, "window-padding-y"), "window-padding-y = 2");
+        assert_eq!(
+            line(&lines, "window-padding-balance"),
+            "window-padding-balance = false"
+        );
+        assert_eq!(
+            line(&lines, "window-padding-color"),
+            "window-padding-color = background"
+        );
+
+        cfg.set("window-padding-x", Some("4")).unwrap();
+        cfg.set("window-padding-y", Some("6,8")).unwrap();
+        let lines = formatted_lines(&cfg);
+        assert_eq!(line(&lines, "window-padding-x"), "window-padding-x = 4");
+        assert_eq!(line(&lines, "window-padding-y"), "window-padding-y = 6,8");
+
+        cfg.set("window-padding-x", Some("10,12")).unwrap();
+        cfg.set("window-padding-y", Some("0")).unwrap();
+        let lines = formatted_lines(&cfg);
+        assert_eq!(line(&lines, "window-padding-x"), "window-padding-x = 10,12");
+        assert_eq!(line(&lines, "window-padding-y"), "window-padding-y = 0");
+
+        for (value, expected) in [
+            ("false", "window-padding-balance = false"),
+            ("true", "window-padding-balance = true"),
+            ("equal", "window-padding-balance = equal"),
+        ] {
+            cfg.set("window-padding-balance", Some(value)).unwrap();
+            let lines = formatted_lines(&cfg);
+            assert_eq!(line(&lines, "window-padding-balance"), expected);
+        }
+
+        for (value, expected) in [
+            ("background", "window-padding-color = background"),
+            ("extend", "window-padding-color = extend"),
+            ("extend-always", "window-padding-color = extend-always"),
+        ] {
+            cfg.set("window-padding-color", Some(value)).unwrap();
+            let lines = formatted_lines(&cfg);
+            assert_eq!(line(&lines, "window-padding-color"), expected);
+        }
+
+        cfg.set("window-padding-x", Some("")).unwrap();
+        cfg.set("window-padding-y", Some("")).unwrap();
+        cfg.set("window-padding-balance", Some("")).unwrap();
+        cfg.set("window-padding-color", Some("")).unwrap();
+        let lines = formatted_lines(&cfg);
+        assert_eq!(line(&lines, "window-padding-x"), "window-padding-x = 2");
+        assert_eq!(line(&lines, "window-padding-y"), "window-padding-y = 2");
+        assert_eq!(
+            line(&lines, "window-padding-balance"),
+            "window-padding-balance = false"
+        );
+        assert_eq!(
+            line(&lines, "window-padding-color"),
+            "window-padding-color = background"
+        );
+
+        assert!(index(&lines, "window-padding-x") < index(&lines, "window-padding-y"));
+        assert!(index(&lines, "window-padding-y") < index(&lines, "window-padding-balance"));
+        assert!(index(&lines, "window-padding-balance") < index(&lines, "window-padding-color"));
     }
 
     #[test]

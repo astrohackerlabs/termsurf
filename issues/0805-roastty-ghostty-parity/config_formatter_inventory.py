@@ -24,6 +24,7 @@ import config_inventory
 ENTRY_FORMATTER_RE = re.compile(r'EntryFormatter::new\(\s*"(?P<key>[^"]+)"', re.DOTALL)
 PRIMITIVE_ORACLE_TEST = "primitive_config_formatter_family_oracle"
 METRIC_MODIFIER_ORACLE_TEST = "metric_modifier_config_formatter_family_oracle"
+WINDOW_PADDING_ORACLE_TEST = "window_padding_config_formatter_family_oracle"
 PRIMITIVE_FAMILIES = {"boolean", "integer", "float", "string"}
 
 NO_OUTPUT_FORMATTERS = {
@@ -253,6 +254,7 @@ def build_rows(
     calls: list[FormatterCall],
     primitive_oracle_present: bool,
     metric_modifier_oracle_present: bool,
+    window_padding_oracle_present: bool,
 ) -> tuple[list[FormatterRow], list[str], list[str]]:
     call_by_key = {call.key: call for call in calls}
     canonical = set(upstream)
@@ -322,6 +324,14 @@ def build_rows(
                 "and representative order checks"
             )
             missing_evidence = "None for metric modifier formatter rows."
+        elif window_padding_oracle_present and family == "window padding":
+            status = "Oracle complete"
+            evidence = (
+                "Window padding formatter oracle covers single-value and two-value "
+                "padding output, every padding balance keyword, every padding color "
+                "keyword, empty resets, and representative order checks"
+            )
+            missing_evidence = "None for window padding formatter rows."
         rows.append(
             FormatterRow(
                 option=option,
@@ -364,11 +374,13 @@ def main() -> int:
     roastty_source = args.roastty.read_text()
     primitive_oracle_present = PRIMITIVE_ORACLE_TEST in roastty_source
     metric_modifier_oracle_present = METRIC_MODIFIER_ORACLE_TEST in roastty_source
+    window_padding_oracle_present = WINDOW_PADDING_ORACLE_TEST in roastty_source
     rows, missing, extra = build_rows(
         upstream,
         calls,
         primitive_oracle_present,
         metric_modifier_oracle_present,
+        window_padding_oracle_present,
     )
     emit_inventory(rows, extra, args.output)
 
@@ -376,7 +388,9 @@ def main() -> int:
     oracle_count = sum(row.status == "Oracle complete" for row in rows)
     gap_count = sum(row.status == "Gap" for row in rows)
     owner_experiment = (
-        52
+        53
+        if window_padding_oracle_present
+        else 52
         if metric_modifier_oracle_present
         else 51
         if primitive_oracle_present

@@ -467,6 +467,11 @@ experiment files until they are proven.
   adjust rows such as `adjust-font-baseline` still need the broader font
   formatter oracle even though they use the same local `format_metric_modifier`
   helper.
+- **Window padding formatter rows are a compact independent family.** Experiment
+  53 promoted the four rows classified as `window padding`. The formatter oracle
+  must cover both compact padding forms (`N` and `left,right`), every balance
+  keyword, every padding color keyword, empty resets, and the local order of the
+  four rows.
 - **Enum parser rows share exact keyword semantics plus compatibility
   branches.** Experiment 26 proved the 52 enum rows: required and optional enum
   fields accept exact keywords only, missing values are required, raw-empty
@@ -704,4 +709,4 @@ remains open.
 - [Experiment 52: Metric modifier formatter oracle](52-metric-modifier-formatter-oracle.md)
   — **Pass**
 - [Experiment 53: Window padding formatter oracle](53-window-padding-formatter-oracle.md)
-  — **Designed**
+  — **Pass**
