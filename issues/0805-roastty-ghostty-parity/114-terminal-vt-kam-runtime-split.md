@@ -132,3 +132,60 @@ Fix:
 Re-review verdict: **Approved**. Fresh-context reviewer `Hubble` confirmed the
 required stale-row check and optional evidence/guard assertions were resolved,
 with no new required findings.
+
+## Result
+
+**Result:** Pass
+
+Split the broad terminal runtime row into two rows:
+
+- `RUNTIME-009A` is `Oracle complete` for `vt-kam-allowed` terminal key gating.
+- `RUNTIME-009B` remains `Gap` for scrollback, alternate screen, shell
+  integration, terminfo, title reporting, and remaining terminal behavior
+  effects.
+
+The regenerated runtime inventory now reports 23 runtime rows, 16
+oracle-complete rows, 17 closed rows, and 6 gap rows. `CFG-223` remains `Gap`,
+as intended.
+
+Verification passed:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# runtime_rows=23 oracle_complete=16 closed=17 audit_covered=0 incomplete=6 gap=6 cfg223=Gap
+
+cargo test --manifest-path roastty/Cargo.toml vt_kam_allowed
+# 6 passed
+```
+
+The matrix assertion also passed, proving old `RUNTIME-009` is absent,
+`RUNTIME-009A` names the `vt_kam_allowed` guard in its evidence and guard cells,
+`RUNTIME-009B` remains `Gap`, and `CFG-223` remains `Gap`.
+
+## Conclusion
+
+`vt-kam-allowed` now has a narrow Tier 2 runtime guard instead of being buried
+inside a broad terminal gap. The remaining terminal runtime work is explicitly
+tracked by `RUNTIME-009B`.
+
+## Completion Review
+
+Fresh-context Codex reviewer `Maxwell` returned **Approved** with no findings.
+
+The reviewer verified:
+
+- the README records Experiment 114 as **Pass**;
+- this experiment file has `## Result` and `## Conclusion`;
+- `HEAD` was still the Experiment 114 plan commit before the result commit;
+- old `RUNTIME-009` is absent and `RUNTIME-009A` / `RUNTIME-009B` are present;
+- `RUNTIME-009A` is `Oracle complete` and names `vt_kam_allowed` in evidence and
+  guard cells;
+- `RUNTIME-009B` remains `Gap` and keeps scrollback, alternate screen, shell
+  integration, terminfo, title reporting, and remaining terminal behavior open;
+- `CFG-223` remains `Gap`;
+- generated counts match the recorded result;
+- `/tmp` regeneration, Python matrix assertions, `prettier --check`,
+  `git diff --check`, and
+  `cargo test --manifest-path roastty/Cargo.toml vt_kam_allowed` passed.

@@ -563,6 +563,10 @@ experiment files until they are proven.
   113 split PTY/process launch coverage so initial-command, environment, and
   working-directory behavior are guarded separately while config-level command,
   startup input, wait/abnormal-exit, and quit policy remain explicit gaps.
+- **Terminal runtime toggles should not hide under broad terminal gaps.**
+  Experiment 114 split `vt-kam-allowed` into its own guarded runtime row while
+  scrollback, alternate screen, shell integration, terminfo, title reporting,
+  and remaining terminal behavior stay explicit gaps.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1180,4 +1184,4 @@ remains open.
 - [Experiment 113: PTY process runtime split](113-pty-process-runtime-split.md)
   — **Pass**
 - [Experiment 114: Terminal VT KAM runtime split](114-terminal-vt-kam-runtime-split.md)
-  — **Designed**
+  — **Pass**

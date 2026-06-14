@@ -294,19 +294,36 @@ ROWS = [
         guard_command="TBD by future CFG-223 renderer runtime experiment.",
     ),
     RuntimeRow(
-        id="RUNTIME-009",
-        behavior="terminal behavior toggle effects",
-        ghostty_reference="`vendor/ghostty/src/config/Config.zig` terminal behavior fields; `vendor/ghostty/src/termio` and `Surface.zig`",
-        roastty_reference="`roastty/src/lib.rs` terminal/termio config use; `roastty/src/terminal`",
+        id="RUNTIME-009A",
+        behavior="vt-kam-allowed terminal key gating effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `vt-kam-allowed`; terminal ANSI KAM mode behavior",
+        roastty_reference="`roastty/src/lib.rs` `vt_kam_allowed` config state, terminal ANSI mode 2 gate, and key dispatch",
+        family="terminal",
+        status="Oracle complete",
+        evidence=(
+            "`vt_kam_allowed_*` tests prove the configured `vt-kam-allowed` "
+            "value gates terminal KAM key blocking, KAM-disabled terminals "
+            "continue to accept input, live config update toggles the existing "
+            "surface gate, and configured keybindings run before the KAM gate."
+        ),
+        missing_evidence="None for vt-kam-allowed terminal key gating behavior.",
+        guard_tier="Tier 2",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml vt_kam_allowed`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-009B",
+        behavior="scrollback, alternate screen, shell integration, terminfo, title reporting, and remaining terminal behavior effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` scrollback, shell integration, terminfo, title-report, and related terminal behavior fields",
+        roastty_reference="`roastty/src/lib.rs` terminal/termio config use; `roastty/src/termio.rs`; `roastty/src/terminal`",
         family="terminal",
         status="Gap",
         evidence=(
-            "`vt_kam_allowed_*` tests prove config-driven terminal key gating "
-            "and live update behavior, but this row also covers scrollback, "
-            "alternate screen, shell integration, terminfo, and title reporting, "
-            "which do not yet have a generated CFG-223 runtime oracle."
+            "Experiment 114 split out the proven `vt-kam-allowed` key-gating "
+            "slice. Runtime effects for scrollback, alternate screen, shell "
+            "integration, terminfo, title reporting, and other terminal "
+            "behavior toggles still need focused CFG-223 runtime proof or fixes."
         ),
-        missing_evidence="Split VT KAM into a narrower pass row or add runtime oracles for the full terminal toggle scope.",
+        missing_evidence="Add runtime proof for scrollback, alternate screen, shell integration, terminfo, title reporting, and remaining terminal behavior effects.",
         guard_tier="Tier 2",
         guard_command="TBD by future CFG-223 terminal runtime experiment.",
     ),
@@ -437,7 +454,8 @@ EXPECTED_IDS = [
     "RUNTIME-006",
     "RUNTIME-007",
     "RUNTIME-008",
-    "RUNTIME-009",
+    "RUNTIME-009A",
+    "RUNTIME-009B",
     "RUNTIME-010A",
     "RUNTIME-010B",
     "RUNTIME-011",
