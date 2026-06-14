@@ -891,3 +891,5 @@ remains open.
   — **Pass**
 - [Experiment 77: Quick terminal enum formatter oracle](77-quick-terminal-enum-formatter-oracle.md)
   — **Pass**
+- [Experiment 78: Command-finish notification formatter oracle](78-command-finish-notification-formatter-oracle.md)
+  — **Designed**
