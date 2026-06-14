@@ -162,16 +162,15 @@ ROWS = [
         ghostty_reference="`vendor/ghostty/src/config/Config.zig::finalize`, split opacity clamp",
         roastty_reference="`roastty/src/config/mod.rs::finalize_scalars` unfocused split opacity clamp",
         family="clamp finalization",
-        status="Audit covered",
+        status="Oracle complete",
         evidence=(
-            "Roastty implements the pinned 0.15..1.0 clamp in "
-            "`finalize_scalars`; parser and formatter facets for "
-            "`unfocused-split-opacity` are complete."
+            "`split_visual_config_defaults_parse_format_and_finalize` proves "
+            "the default value and formatting, below-minimum parsed values "
+            "clamping to 0.15 during finalization, above-maximum parsed values "
+            "clamping to 1.0 during finalization, and config-file parsed "
+            "out-of-range values clamping after finalization."
         ),
-        missing_evidence=(
-            "Needs a focused finalization oracle proving below-minimum, "
-            "above-maximum, and in-range `unfocused-split-opacity` behavior."
-        ),
+        missing_evidence="None for unfocused-split-opacity clamp finalization behavior.",
     ),
     FinalizationRow(
         behavior="minimum contrast clamp",

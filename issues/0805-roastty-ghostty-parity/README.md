@@ -460,6 +460,12 @@ experiment files until they are proven.
   unfocused split opacity clamping, and auto-update-channel release-channel
   defaulting remain audit-covered follow-ups. CFG-220 remains `Gap` with 14
   `Oracle complete` rows, 3 incomplete rows, and 0 structural finalization gaps.
+- **Unfocused split opacity finalization is already proven by the split visual
+  oracle.** Experiment 96 promoted FINAL-010 by citing
+  `split_visual_config_defaults_parse_format_and_finalize`, which proves default
+  formatting plus below-minimum, above-maximum, and config-file parsed
+  out-of-range clamps. CFG-220 remains `Gap` with 15 `Oracle complete` rows, 2
+  incomplete rows, and 0 structural finalization gaps.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1042,4 +1048,4 @@ remains open.
 - [Experiment 95: Finalization facet inventory](95-finalization-facet-inventory.md)
   — **Pass**
 - [Experiment 96: Unfocused split opacity finalization](96-unfocused-split-opacity-finalization.md)
-  — **Designed**
+  — **Pass**
