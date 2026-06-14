@@ -369,15 +369,18 @@ ROWS = [
         ghostty_reference="Pinned Ghostty GTK/Linux/platform-specific config runtime behavior",
         roastty_reference="Roastty macOS app and libroastty runtime",
         family="platform",
-        status="Gap",
+        status="Oracle complete",
         evidence=(
-            "Config parser/formatter rows list platform-specific settings, but "
-            "CFG-223 still needs a runtime classification pass marking GTK/Linux "
-            "effects not applicable to Roastty or proving macOS equivalents."
+            "`platform-runtime-classification.md` accounts for every `gtk-*`, "
+            "`linux-*`, and `macos-*` canonical option from the regenerated "
+            "config inventory. GTK and Linux runtime effects are marked not "
+            "applicable to Roastty's macOS runtime; `macos-option-as-alt` points "
+            "to existing key translation guards; remaining macOS app effects "
+            "stay owned by `RUNTIME-011`."
         ),
-        missing_evidence="Classify each platform-specific runtime effect as Not applicable, divergence, or pass.",
+        missing_evidence="None for platform-specific runtime classification; macOS app behavior gaps remain tracked by RUNTIME-011.",
         guard_tier="Tier 0",
-        guard_command="TBD by future CFG-223 platform classification experiment.",
+        guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/platform_runtime_classification.py --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md --output issues/0805-roastty-ghostty-parity/platform-runtime-classification.md`",
     ),
     RuntimeRow(
         id="RUNTIME-014",

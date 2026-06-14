@@ -147,3 +147,68 @@ Fix:
 
 Re-review verdict: **Approved**. The reviewer confirmed both prior required
 findings are resolved.
+
+## Result
+
+**Result:** Pass
+
+Added `platform_runtime_classification.py`, a bounded generator that extracts
+every `gtk-*`, `linux-*`, and `macos-*` canonical option from the regenerated
+config inventory and fails if any platform-prefixed option is unclassified or
+stale. The generated `platform-runtime-classification.md` accounts for 32
+platform-prefixed options:
+
+- 15 GTK/Linux rows are `Not applicable` to Roastty's macOS app/runtime.
+- `macos-option-as-alt` is `Oracle complete` through existing key translation
+  runtime guards.
+- 16 macOS app/UI rows remain `Gap` and are explicitly owned by `RUNTIME-011`,
+  so this experiment does not overclaim macOS app parity.
+
+`RUNTIME-013` is promoted to `Oracle complete` because platform-specific runtime
+effects are now classified and routed. `CFG-223` remains `Gap` because six
+runtime/UI rows are still incomplete.
+
+Verification passed:
+
+```text
+python3 issues/0805-roastty-ghostty-parity/config_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --output issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# ghostty_canonical=203 ghostty_aliases=8 ghostty_internal=6 roastty=203 represented=203 missing=0 extra=0
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/platform_runtime_classification.py \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/platform-runtime-classification.md
+# platform_options=32 gap=16 not_applicable=15 oracle_complete=1
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py \
+  --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+# runtime_rows=21 oracle_complete=14 closed=15 audit_covered=0 incomplete=6 gap=6 cfg223=Gap
+```
+
+## Conclusion
+
+`RUNTIME-013` now has a durable Tier 0 classification guard. The remaining
+CFG-223 gaps are real runtime/UI work: font, renderer presentation, terminal
+behavior toggles, PTY/process launch effects, macOS app/window/menu workflows,
+and notification/link behavior.
+
+## Completion Review
+
+Fresh-context Codex reviewer `Tesla` returned **Approved** with no findings.
+
+The reviewer confirmed:
+
+- `HEAD` was still the Experiment 112 plan commit and the result commit had not
+  been made yet.
+- The platform inventory has 32 platform-prefixed canonical options, with 0
+  unclassified rows and 0 stale rows.
+- The classification counts are 16 `Gap`, 15 `Not applicable`, and 1
+  `Oracle complete`.
+- `RUNTIME-013` is `Oracle complete`, `RUNTIME-011` and `RUNTIME-012` remain
+  `Gap`, and `CFG-223` remains `Gap`.
+- Python syntax checks, `prettier --check`, `git diff --check`, and the
+  `__pycache__` cleanliness check passed.

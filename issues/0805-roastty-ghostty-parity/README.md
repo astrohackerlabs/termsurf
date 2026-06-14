@@ -554,6 +554,11 @@ experiment files until they are proven.
   hide, unconsumed configured bindings still hide before encoded fallthrough
   input, mouse movement/button/scroll show the mouse again, and disabling the
   option by config update shows an already-hidden mouse.
+- **Platform-specific runtime effects need classification, not blanket
+  closure.** Experiment 112 generated a platform runtime manifest for every
+  `gtk-*`, `linux-*`, and `macos-*` canonical option. GTK/Linux rows are not
+  applicable to Roastty's macOS runtime, `macos-option-as-alt` is covered by
+  input guards, and remaining macOS app behavior stays owned by `RUNTIME-011`.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -1167,4 +1172,4 @@ remains open.
 - [Experiment 111: Mouse hide while typing runtime](111-mouse-hide-while-typing-runtime.md)
   — **Pass**
 - [Experiment 112: Platform runtime classification](112-platform-runtime-classification.md)
-  — **Designed**
+  — **Pass**
