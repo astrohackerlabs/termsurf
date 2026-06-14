@@ -1111,3 +1111,4 @@ remains open.
   **Partial**
 - [Experiment 104: Reload clears key tables](104-reload-clears-key-tables.md) —
   **Pass**
+- [Experiment 105: Reload font size](105-reload-font-size.md) — **Designed**
