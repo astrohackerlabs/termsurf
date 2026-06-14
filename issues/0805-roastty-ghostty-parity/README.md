@@ -557,6 +557,13 @@ experiment files until they are proven.
   `false` tokens select their special variants, every other supplied value is a
   named style without trimming or validation, direct empty input is an empty
   name, while set-but-empty config dispatch resets the field to `default`.
+- **Font variation values use Zig float syntax.** Experiment 44 proved canonical
+  `font-variation`, `font-variation-bold`, `font-variation-italic`, and
+  `font-variation-bold-italic`: values split on the first `=`, axis ids and
+  values trim ASCII space/tab, axis ids must be exactly four bytes, value
+  parsing accepts the Zig `f64` space including underscores, hex floats,
+  NaN/Inf, overflow, and underflow, invalid values leave the list unchanged, and
+  set-but-empty config dispatch resets the repeatable list.
 
 ## Verification
 
@@ -644,4 +651,4 @@ remains open.
 - [Experiment 43: Font style parser oracle](43-font-style-parser-oracle.md) —
   **Pass**
 - [Experiment 44: Font variation parser oracle](44-font-variation-parser-oracle.md)
-  — **Designed**
+  — **Pass**

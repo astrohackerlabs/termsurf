@@ -3334,8 +3334,7 @@ impl RepeatableFontVariation {
             .as_bytes()
             .try_into()
             .map_err(|_| RepeatableFontVariationParseError::InvalidValue)?;
-        let value = value
-            .parse::<f64>()
+        let value = parse_zig_float_f64(value)
             .map_err(|_| RepeatableFontVariationParseError::InvalidValue)?;
         self.list.push(FontVariation { id, value });
         Ok(())
@@ -16687,7 +16686,7 @@ mod tests {
     }
 
     #[test]
-    fn font_variation_config_parse_format_reset_load_cli_append_and_clone() {
+    fn font_variation_config_parser_family_oracle() {
         let lines = |cfg: &Config, key: &str| -> Vec<String> {
             let prefix = format!("{} = ", key);
             let mut out = String::new();
@@ -16719,27 +16718,94 @@ mod tests {
             direct.parse_cli(Some("wght=heavy")),
             Err(RepeatableFontVariationParseError::InvalidValue)
         );
+        for value in ["wght=0x1p", "wght=0x1p_4", "wght=0x1p4_", "wght=1_"] {
+            assert_eq!(
+                direct.parse_cli(Some(value)),
+                Err(RepeatableFontVariationParseError::InvalidValue),
+                "rejects {value:?}"
+            );
+        }
         direct.parse_cli(Some("wght =200")).unwrap();
         direct.parse_cli(Some("slnt= -15")).unwrap();
+        direct.parse_cli(Some("wdth=1_000.5")).unwrap();
+        direct.parse_cli(Some("opsz=0x1p4")).unwrap();
+        direct.parse_cli(Some("ital=0x1.8p1")).unwrap();
+        direct.parse_cli(Some("NAN1=nAn")).unwrap();
+        direct.parse_cli(Some("INF1=+Inf")).unwrap();
+        direct.parse_cli(Some("INF2=-iNf")).unwrap();
+        direct.parse_cli(Some("OVFL=1e309")).unwrap();
+        direct.parse_cli(Some("UNFL=0x1p-9999999999")).unwrap();
         assert_eq!(
-            direct.list,
-            vec![
+            &direct.list[..2],
+            [
                 FontVariation {
                     id: *b"wght",
-                    value: 200.0,
+                    value: 200.0
                 },
                 FontVariation {
                     id: *b"slnt",
-                    value: -15.0,
+                    value: -15.0
                 },
             ]
         );
+        assert_eq!(
+            direct.list[2],
+            FontVariation {
+                id: *b"wdth",
+                value: 1000.5
+            }
+        );
+        assert_eq!(
+            direct.list[3],
+            FontVariation {
+                id: *b"opsz",
+                value: 16.0
+            }
+        );
+        assert_eq!(
+            direct.list[4],
+            FontVariation {
+                id: *b"ital",
+                value: 3.0
+            }
+        );
+        assert_eq!(direct.list[5].id, *b"NAN1");
+        assert!(direct.list[5].value.is_nan());
+        assert_eq!(
+            direct.list[6],
+            FontVariation {
+                id: *b"INF1",
+                value: f64::INFINITY
+            }
+        );
+        assert_eq!(
+            direct.list[7],
+            FontVariation {
+                id: *b"INF2",
+                value: f64::NEG_INFINITY
+            }
+        );
+        assert_eq!(
+            direct.list[8],
+            FontVariation {
+                id: *b"OVFL",
+                value: f64::INFINITY
+            }
+        );
+        assert_eq!(
+            direct.list[9],
+            FontVariation {
+                id: *b"UNFL",
+                value: 0.0
+            }
+        );
         let mut direct_out = String::new();
         direct.format_entry(&mut EntryFormatter::new("font-variation", &mut direct_out));
-        assert_eq!(
-            direct_out,
-            "font-variation = wght=200\nfont-variation = slnt=-15\n"
-        );
+        assert!(direct_out.contains("font-variation = wght=200\n"));
+        assert!(direct_out.contains("font-variation = slnt=-15\n"));
+        assert!(direct_out.contains("font-variation = wdth=1000.5\n"));
+        assert!(direct_out.contains("font-variation = opsz=16\n"));
+        assert!(direct_out.contains("font-variation = NAN1=nan\n"));
 
         let mut cfg = Config::default();
         assert!(cfg.font_variation.list.is_empty());

@@ -185,3 +185,116 @@ Fix:
 **Re-review verdict:** Approved.
 
 Findings after fix: none.
+
+## Result
+
+**Result:** Pass.
+
+Roastty now exposes a focused `font_variation_config_parser_family_oracle` that
+covers direct `RepeatableFontVariation::parse_cli`, formatter output, set-empty
+reset dispatch, config-file diagnostics, CLI parsing, and clone semantics for
+all four canonical `font-variation*` fields. The implementation now parses
+variation values with the shared Zig-compatible `f64` parser instead of
+Rust-only `str::parse`, matching pinned Ghostty's `std.fmt.parseFloat(f64, ...)`
+value surface.
+
+The oracle proves required values, missing separator errors, short and long axis
+id rejection, invalid numeric rejection, first-equals splitting, ASCII space/tab
+trimming, append order, decimal values, underscores, hexadecimal floats, NaN/Inf
+spellings, overflow, underflow, empty config resets, file/CLI parsing,
+formatting, diagnostics, and clone semantics.
+
+The parser inventory generator now detects that oracle and promotes only the
+four canonical `font-variation*` rows to `Oracle complete`. The regenerated
+CFG-217 parser inventory reports 203 parser rows, 197 `Oracle complete`, 6
+`Audit covered`, and 0 `Gap`. CFG-217 remains `Gap` because the remaining
+audit-only parser rows still need their own upstream-derived oracles.
+
+Verification run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml font_variation_config_parser_family_oracle
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_parser_inventory.py \
+  --upstream vendor/ghostty/src/config/Config.zig \
+  --roastty roastty/src/config/mod.rs \
+  --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md \
+  --output issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+python3 - <<'PY'
+from pathlib import Path
+
+rows = []
+for line in Path('issues/0805-roastty-ghostty-parity/config-parser-inventory.md').read_text().splitlines():
+    if line.startswith('| PARSE-'):
+        rows.append([cell.strip() for cell in line.strip('|').split('|')])
+
+assert len(rows) == 203, len(rows)
+assert sum(row[4] == 'Oracle complete' for row in rows) == 197
+assert sum(row[4] == 'Audit covered' for row in rows) == 6
+assert not [row for row in rows if row[4] == 'Gap']
+expected_audit = {
+    '`clipboard-codepoint-map`',
+    '`config-default-files`',
+    '`font-codepoint-map`',
+    '`key-remap`',
+    '`keybind`',
+    '`theme`',
+}
+actual_audit = {row[1] for row in rows if row[4] == 'Audit covered'}
+assert actual_audit == expected_audit, sorted(actual_audit ^ expected_audit)
+for option in {
+    '`font-variation`',
+    '`font-variation-bold`',
+    '`font-variation-italic`',
+    '`font-variation-bold-italic`',
+}:
+    row = next(row for row in rows if row[1] == option)
+    assert row[4] == 'Oracle complete', row
+
+cfg217 = None
+for line in Path('issues/0805-roastty-ghostty-parity/config-matrix.md').read_text().splitlines():
+    if line.startswith('| CFG-217 |'):
+        cfg217 = [cell.strip() for cell in line.strip('|').split('|')]
+        break
+assert cfg217 is not None
+assert cfg217[4] == 'Gap', cfg217
+assert cfg217[11] == 'Experiment 44', cfg217
+assert '197 parser rows Oracle complete' in cfg217[12], cfg217
+print('font_variation_rows=4 oracle_complete=197 cfg217=Gap')
+PY
+cargo fmt --manifest-path roastty/Cargo.toml
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile issues/0805-roastty-ghostty-parity/config_parser_inventory.py
+rm -rf issues/0805-roastty-ghostty-parity/__pycache__
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0805-roastty-ghostty-parity/README.md \
+  issues/0805-roastty-ghostty-parity/44-font-variation-parser-oracle.md \
+  issues/0805-roastty-ghostty-parity/config-parser-inventory.md \
+  issues/0805-roastty-ghostty-parity/config-matrix.md
+git diff --check
+```
+
+Observed key outputs:
+
+- `test config::tests::font_variation_config_parser_family_oracle ... ok`
+- `oracle_complete=197`
+- `audit_covered=6`
+- `gap=0`
+- `font_variation_rows=4 oracle_complete=197 cfg217=Gap`
+
+## Conclusion
+
+The four `font-variation*` parser rows are no longer audit-only. Future parser
+work can focus on the 6 remaining audit-only rows: codepoint maps,
+`config-default-files`, key remap/keybind, and `theme`.
+
+## Completion Review
+
+Reviewed by an adversarial Codex subagent with fresh context.
+
+**Verdict:** Approved.
+
+Findings: none.
+
+The reviewer independently verified the focused Rust oracle, matrix assertion,
+Python compile check, `cargo fmt --check`, absence of `__pycache__`/`.pyc`
+artifacts, `git diff --check`, and that the result commit had not yet been made.
