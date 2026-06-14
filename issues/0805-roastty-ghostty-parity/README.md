@@ -768,3 +768,5 @@ remains open.
   — **Pass**
 - [Experiment 61: Optional color formatter oracle](61-optional-color-formatter-oracle.md)
   — **Pass**
+- [Experiment 62: Optional path formatter oracle](62-optional-path-formatter-oracle.md)
+  — **Designed**
