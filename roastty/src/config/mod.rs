@@ -27026,6 +27026,283 @@ mod tests {
     }
 
     #[test]
+    fn config_boolean_diagnostic_family_oracle() {
+        struct BooleanDiagnosticCase {
+            key: &'static str,
+            get: fn(&Config) -> bool,
+        }
+
+        let cases = [
+            BooleanDiagnosticCase {
+                key: "background-image-repeat",
+                get: |cfg| cfg.bg_image_repeat,
+            },
+            BooleanDiagnosticCase {
+                key: "background-opacity-cells",
+                get: |cfg| cfg.background_opacity_cells,
+            },
+            BooleanDiagnosticCase {
+                key: "clipboard-paste-bracketed-safe",
+                get: |cfg| cfg.clipboard_paste_bracketed_safe,
+            },
+            BooleanDiagnosticCase {
+                key: "clipboard-paste-protection",
+                get: |cfg| cfg.clipboard_paste_protection,
+            },
+            BooleanDiagnosticCase {
+                key: "clipboard-trim-trailing-spaces",
+                get: |cfg| cfg.clipboard_trim_trailing_spaces,
+            },
+            BooleanDiagnosticCase {
+                key: "cursor-click-to-move",
+                get: |cfg| cfg.cursor_click_to_move,
+            },
+            BooleanDiagnosticCase {
+                key: "desktop-notifications",
+                get: |cfg| cfg.desktop_notifications,
+            },
+            BooleanDiagnosticCase {
+                key: "focus-follows-mouse",
+                get: |cfg| cfg.focus_follows_mouse,
+            },
+            BooleanDiagnosticCase {
+                key: "font-thicken",
+                get: |cfg| cfg.font_thicken,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-opengl-debug",
+                get: |cfg| cfg.gtk_opengl_debug,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-titlebar",
+                get: |cfg| cfg.gtk_titlebar,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-titlebar-hide-when-maximized",
+                get: |cfg| cfg.gtk_titlebar_hide_when_maximized,
+            },
+            BooleanDiagnosticCase {
+                key: "gtk-wide-tabs",
+                get: |cfg| cfg.gtk_wide_tabs,
+            },
+            BooleanDiagnosticCase {
+                key: "initial-window",
+                get: |cfg| cfg.initial_window,
+            },
+            BooleanDiagnosticCase {
+                key: "link-url",
+                get: |cfg| cfg.link_url,
+            },
+            BooleanDiagnosticCase {
+                key: "linux-cgroup-hard-fail",
+                get: |cfg| cfg.linux_cgroup_hard_fail,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-applescript",
+                get: |cfg| cfg.macos_applescript,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-auto-secure-input",
+                get: |cfg| cfg.macos_auto_secure_input,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-secure-input-indication",
+                get: |cfg| cfg.macos_secure_input_indication,
+            },
+            BooleanDiagnosticCase {
+                key: "macos-window-shadow",
+                get: |cfg| cfg.macos_window_shadow,
+            },
+            BooleanDiagnosticCase {
+                key: "maximize",
+                get: |cfg| cfg.maximize,
+            },
+            BooleanDiagnosticCase {
+                key: "mouse-hide-while-typing",
+                get: |cfg| cfg.mouse_hide_while_typing,
+            },
+            BooleanDiagnosticCase {
+                key: "mouse-reporting",
+                get: |cfg| cfg.mouse_reporting,
+            },
+            BooleanDiagnosticCase {
+                key: "palette-generate",
+                get: |cfg| cfg.palette_generate,
+            },
+            BooleanDiagnosticCase {
+                key: "palette-harmonious",
+                get: |cfg| cfg.palette_harmonious,
+            },
+            BooleanDiagnosticCase {
+                key: "progress-style",
+                get: |cfg| cfg.progress_style,
+            },
+            BooleanDiagnosticCase {
+                key: "quick-terminal-autohide",
+                get: |cfg| cfg.quick_terminal_autohide,
+            },
+            BooleanDiagnosticCase {
+                key: "quit-after-last-window-closed",
+                get: |cfg| cfg.quit_after_last_window_closed,
+            },
+            BooleanDiagnosticCase {
+                key: "selection-clear-on-copy",
+                get: |cfg| cfg.selection_clear_on_copy,
+            },
+            BooleanDiagnosticCase {
+                key: "selection-clear-on-typing",
+                get: |cfg| cfg.selection_clear_on_typing,
+            },
+            BooleanDiagnosticCase {
+                key: "split-inherit-working-directory",
+                get: |cfg| cfg.split_inherit_working_directory,
+            },
+            BooleanDiagnosticCase {
+                key: "tab-inherit-working-directory",
+                get: |cfg| cfg.tab_inherit_working_directory,
+            },
+            BooleanDiagnosticCase {
+                key: "title-report",
+                get: |cfg| cfg.title_report,
+            },
+            BooleanDiagnosticCase {
+                key: "vt-kam-allowed",
+                get: |cfg| cfg.vt_kam_allowed,
+            },
+            BooleanDiagnosticCase {
+                key: "wait-after-command",
+                get: |cfg| cfg.wait_after_command,
+            },
+            BooleanDiagnosticCase {
+                key: "window-inherit-font-size",
+                get: |cfg| cfg.window_inherit_font_size,
+            },
+            BooleanDiagnosticCase {
+                key: "window-inherit-working-directory",
+                get: |cfg| cfg.window_inherit_working_directory,
+            },
+            BooleanDiagnosticCase {
+                key: "window-step-resize",
+                get: |cfg| cfg.window_step_resize,
+            },
+            BooleanDiagnosticCase {
+                key: "window-vsync",
+                get: |cfg| cfg.window_vsync,
+            },
+        ];
+        assert_eq!(cases.len(), 39);
+
+        for case in cases {
+            let default_value = (case.get)(&Config::default());
+
+            for value in ["1", "t", "T", "true"] {
+                let mut cfg = Config::default();
+                cfg.set(case.key, Some("false")).unwrap();
+                cfg.set(case.key, Some(value)).unwrap();
+                assert!((case.get)(&cfg), "{} parses {value:?} as true", case.key);
+            }
+
+            for value in ["0", "f", "F", "false"] {
+                let mut cfg = Config::default();
+                cfg.set(case.key, Some("true")).unwrap();
+                cfg.set(case.key, Some(value)).unwrap();
+                assert!(!(case.get)(&cfg), "{} parses {value:?} as false", case.key);
+            }
+
+            let mut cfg = Config::default();
+            cfg.set(case.key, Some(if default_value { "false" } else { "true" }))
+                .unwrap();
+            assert_ne!(
+                (case.get)(&cfg),
+                default_value,
+                "{} setup must differ from default before empty reset",
+                case.key
+            );
+            cfg.set(case.key, Some("")).unwrap();
+            assert_eq!(
+                (case.get)(&cfg),
+                default_value,
+                "{} empty value resets to default",
+                case.key
+            );
+
+            cfg.set(case.key, Some("false")).unwrap();
+            cfg.set(case.key, None).unwrap();
+            assert!((case.get)(&cfg), "{} bare file value sets true", case.key);
+
+            for prior in [false, true] {
+                let mut file_cfg = Config::default();
+                file_cfg
+                    .set(case.key, Some(if prior { "true" } else { "false" }))
+                    .unwrap();
+                let diagnostics = file_cfg.load_str(&format!("\n{} = yes\n", case.key));
+                assert_eq!(
+                    diagnostics,
+                    vec![ConfigDiagnostic {
+                        line: 2,
+                        key: case.key.to_string(),
+                        error: ConfigSetError::InvalidValue,
+                    }],
+                    "{} file diagnostic preserves line/key/error after prior {prior}",
+                    case.key
+                );
+                assert_eq!(
+                    (case.get)(&file_cfg),
+                    prior,
+                    "{} invalid file value preserves previous {prior}",
+                    case.key
+                );
+
+                let mut cli_cfg = Config::default();
+                cli_cfg
+                    .set(case.key, Some(if prior { "true" } else { "false" }))
+                    .unwrap();
+                let arg = format!("--{}=yes", case.key);
+                let diagnostics = cli_cfg.set_cli_args([arg.as_str()]);
+                assert_eq!(
+                    diagnostics,
+                    vec![ConfigDiagnostic {
+                        line: 1,
+                        key: case.key.to_string(),
+                        error: ConfigSetError::InvalidValue,
+                    }],
+                    "{} CLI diagnostic preserves argument position/key/error after prior {prior}",
+                    case.key
+                );
+                assert_eq!(
+                    (case.get)(&cli_cfg),
+                    prior,
+                    "{} invalid CLI value preserves previous {prior}",
+                    case.key
+                );
+            }
+
+            let bare_arg = format!("--{}", case.key);
+            let mut cli_cfg = Config::default();
+            cli_cfg.set(case.key, Some("false")).unwrap();
+            assert_eq!(cli_cfg.set_cli_args([bare_arg.as_str()]), vec![]);
+            assert!(
+                (case.get)(&cli_cfg),
+                "{} bare CLI value sets true",
+                case.key
+            );
+
+            let empty_arg = format!("--{}=", case.key);
+            let mut cli_cfg = Config::default();
+            cli_cfg
+                .set(case.key, Some(if default_value { "false" } else { "true" }))
+                .unwrap();
+            assert_eq!(cli_cfg.set_cli_args([empty_arg.as_str()]), vec![]);
+            assert_eq!(
+                (case.get)(&cli_cfg),
+                default_value,
+                "{} empty CLI value resets to default",
+                case.key
+            );
+        }
+    }
+
+    #[test]
     fn integer_config_parser_family_oracle() {
         let mut cfg = Config::default();
 

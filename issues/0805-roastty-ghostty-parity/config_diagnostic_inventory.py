@@ -17,6 +17,48 @@ from pathlib import Path
 
 PARSER_ROW_RE = re.compile(r"^\| PARSE-\d+ \|")
 
+BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS = {
+    "background-image-repeat",
+    "background-opacity-cells",
+    "clipboard-paste-bracketed-safe",
+    "clipboard-paste-protection",
+    "clipboard-trim-trailing-spaces",
+    "cursor-click-to-move",
+    "desktop-notifications",
+    "focus-follows-mouse",
+    "font-thicken",
+    "gtk-opengl-debug",
+    "gtk-titlebar",
+    "gtk-titlebar-hide-when-maximized",
+    "gtk-wide-tabs",
+    "initial-window",
+    "link-url",
+    "linux-cgroup-hard-fail",
+    "macos-applescript",
+    "macos-auto-secure-input",
+    "macos-secure-input-indication",
+    "macos-window-shadow",
+    "maximize",
+    "mouse-hide-while-typing",
+    "mouse-reporting",
+    "palette-generate",
+    "palette-harmonious",
+    "progress-style",
+    "quick-terminal-autohide",
+    "quit-after-last-window-closed",
+    "selection-clear-on-copy",
+    "selection-clear-on-typing",
+    "split-inherit-working-directory",
+    "tab-inherit-working-directory",
+    "title-report",
+    "vt-kam-allowed",
+    "wait-after-command",
+    "window-inherit-font-size",
+    "window-inherit-working-directory",
+    "window-step-resize",
+    "window-vsync",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class ParserInventoryRow:
@@ -94,6 +136,23 @@ def diagnostic_family(row: ParserInventoryRow) -> str:
     return "custom diagnostic"
 
 
+def diagnostic_override_evidence(option: str, row: ParserInventoryRow) -> str | None:
+    if option not in BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS:
+        return None
+    if row.family != "boolean":
+        raise ValueError(
+            f"{option} is listed in the Experiment 86 boolean diagnostic oracle "
+            f"but parser family is {row.family!r}"
+        )
+    return (
+        "Experiment 86 shared boolean diagnostic oracle covers exact upstream "
+        "true/false tokens, bare true, empty reset, config-file invalid-value "
+        "diagnostics with line/key/error, CLI invalid-value diagnostics with "
+        "argument position/key/error, and invalid-value state retention; "
+        "`roastty/src/config/mod.rs::config_boolean_diagnostic_family_oracle`"
+    )
+
+
 def build_rows(
     canonical_options: list[str],
     parser_rows: dict[str, ParserInventoryRow],
@@ -119,7 +178,10 @@ def build_rows(
             )
             continue
 
-        has_diagnostics = "diagnostic" in parser_row.evidence.lower()
+        override_evidence = diagnostic_override_evidence(option, parser_row)
+        has_diagnostics = (
+            override_evidence is not None or "diagnostic" in parser_row.evidence.lower()
+        )
         rows.append(
             DiagnosticRow(
                 option=option,
@@ -128,8 +190,10 @@ def build_rows(
                 diagnostic_family=diagnostic_family(parser_row),
                 status="Oracle complete" if has_diagnostics else "Audit covered",
                 evidence=(
-                    parser_row.evidence
-                    if has_diagnostics
+                    override_evidence
+                    if override_evidence is not None
+                    else parser_row.evidence
+                    if "diagnostic" in parser_row.evidence.lower()
                     else "Parser row identified; diagnostic-specific proof still required"
                 ),
                 missing_evidence=(
@@ -145,6 +209,12 @@ def build_rows(
         )
 
     extra = sorted(set(parser_rows) - set(canonical_options))
+    missing_overrides = sorted(BOOLEAN_DIAGNOSTIC_ORACLE_OPTIONS - set(canonical_options))
+    if missing_overrides:
+        raise ValueError(
+            "Experiment 86 boolean diagnostic oracle options missing from canonical "
+            f"inventory: {', '.join(missing_overrides)}"
+        )
     return rows, missing, extra
 
 
@@ -215,9 +285,9 @@ def update_cfg219(
         if line.startswith("| CFG-219 |"):
             status = "Pass" if incomplete_count == 0 else "Gap"
             notes = (
-                f"Experiment 85 inventories diagnostic coverage: {oracle_count} rows "
-                f"Oracle complete; {incomplete_count} rows are not Oracle complete "
-                f"and {gap_count} rows are diagnostic gaps."
+                f"Diagnostic inventory coverage: {oracle_count} rows Oracle "
+                f"complete; {incomplete_count} rows are not Oracle complete and "
+                f"{gap_count} rows are diagnostic gaps."
             )
             line = (
                 "| CFG-219 | Invalid-value diagnostics | Ghostty reports "

@@ -394,6 +394,11 @@ experiment files until they are proven.
   or option-specific oracles and 81 options that still need explicit
   `ConfigDiagnostic` proof. CFG-219 now has a concrete row inventory and remains
   `Gap` until every diagnostic row is `Oracle complete`.
+- **Boolean diagnostic rows can be promoted by an exact row table.** Experiment
+  86 promoted the 39 direct boolean diagnostic rows by iterating every
+  incomplete boolean option, checking exact true/false tokens, empty reset, bare
+  true, file and CLI diagnostics, and invalid-value state retention. CFG-219 now
+  has 161 `Oracle complete` rows and 42 remaining incomplete diagnostic rows.
 - **`py_compile` creates bytecode even with `PYTHONDONTWRITEBYTECODE=1`.** Treat
   `issues/0805-roastty-ghostty-parity/__pycache__/` as a generated verification
   artifact and remove it after running the inventory script compile check.
@@ -956,4 +961,4 @@ remains open.
 - [Experiment 85: Invalid diagnostic facet audit](85-invalid-diagnostic-facet-audit.md)
   — **Pass**
 - [Experiment 86: Boolean diagnostic oracle](86-boolean-diagnostic-oracle.md) —
-  **Designed**
+  **Pass**

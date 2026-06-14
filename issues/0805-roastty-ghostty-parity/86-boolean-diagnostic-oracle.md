@@ -143,3 +143,75 @@ Final verdict: Approved.
 Re-review confirmed the required finding and optional finding are resolved. The
 reviewer left a nit about one remaining "representative" wording in the Changes
 section; that wording was updated to "exact upstream true/false tokens."
+
+## Result
+
+**Result:** Pass
+
+The shared boolean diagnostic oracle now covers the 39 direct boolean options
+that were still `Audit covered` after Experiment 85. The oracle verifies every
+option's exact upstream boolean tokens, bare true behavior, empty reset to the
+option's default, config-file invalid-value diagnostics with line/key/error, CLI
+invalid-value diagnostics with argument position/key/error, and invalid-value
+state retention.
+
+The diagnostic inventory generator now has an exact Experiment 86 override list
+for those 39 options and validates that every override still maps to a canonical
+boolean parser-family row. Regeneration moved the direct boolean diagnostic rows
+to `Oracle complete`; `config-default-files` remains `Oracle complete` through
+its existing option-specific oracle. CFG-219 remains `Gap` because 42
+non-boolean diagnostic rows are still incomplete.
+
+Verification output:
+
+```text
+test config::tests::config_boolean_diagnostic_family_oracle ... ok
+ghostty_canonical=203
+diagnostic_rows=203
+missing_canonical_diagnostic_rows=0
+extra_diagnostic_rows=0
+oracle_complete=161
+audit_covered=42
+gap=0
+diagnostic_rows=203 boolean_rows=40 incomplete=42 cfg219=Gap
+```
+
+Additional checks passed:
+
+```bash
+cargo fmt --manifest-path roastty/Cargo.toml
+cargo test --manifest-path roastty/Cargo.toml config_boolean_diagnostic_family_oracle
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile issues/0805-roastty-ghostty-parity/config_diagnostic_inventory.py
+```
+
+## Conclusion
+
+Direct boolean diagnostic parity is now proven for CFG-219. Future diagnostic
+experiments can use the same shape for other scalar families: exact canonical
+row list, option-specific state accessor, invalid file and CLI diagnostic
+assertions, state-retention checks, regenerated inventory counts, and CFG-219
+remaining `Gap` until all diagnostic rows are complete.
+
+## Completion Review
+
+Adversarial reviewer: Codex subagent with fresh context.
+
+Initial verdict: Changes required.
+
+Required findings:
+
+- Invalid config-file diagnostics only proved state retention from a prior
+  `true` value, so a regression that incorrectly coerced invalid values to
+  `true` would still pass.
+- Invalid CLI diagnostics had the same prior-`true` retention gap.
+
+Fixes:
+
+- Updated the boolean diagnostic oracle to run every invalid file and CLI
+  diagnostic assertion after both prior `false` and prior `true` values and to
+  assert the value remains equal to the prior state.
+
+Final verdict: Approved.
+
+Re-review confirmed both retention gaps are fixed and reran the targeted boolean
+diagnostic test successfully.
