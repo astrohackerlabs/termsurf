@@ -587,3 +587,5 @@ remains open.
   — **Pass**
 - [Experiment 36: Quick terminal size parser oracle](36-quick-terminal-size-parser-oracle.md)
   — **Pass**
+- [Experiment 37: Command parser oracle](37-command-parser-oracle.md) —
+  **Designed**
