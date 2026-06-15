@@ -1539,11 +1539,10 @@ ROWS = [
             "Roastty crash reports. CFG-223 still needs real app walkthrough or "
             "focused macOS GUI tests for native menu display/validation, "
             "titlebar/fullscreen/quick-terminal visuals, screenshot/pixel "
-            "evidence, returned split-terminal object re-resolution and "
-            "focus/close commands, broader command-palette GUI behavior, and "
-            "deeper input navigation/pixel walkthroughs."
+            "evidence, broader command-palette GUI behavior, split visual/"
+            "layout parity, and deeper input navigation/pixel walkthroughs."
         ),
-        missing_evidence="Add focused live macOS app walkthrough rows and GUI guards for native menu display/validation, titlebar/fullscreen/quick-terminal visuals, screenshot/pixel evidence, returned split-terminal object re-resolution and focus/close commands, broader command-palette GUI behavior, and deeper input navigation/pixel walkthroughs.",
+        missing_evidence="Add focused live macOS app walkthrough rows and GUI guards for native menu display/validation, titlebar/fullscreen/quick-terminal visuals, screenshot/pixel evidence, broader command-palette GUI behavior, split visual/layout parity, and deeper input navigation/pixel walkthroughs.",
         guard_tier="Tier 3",
         guard_command="TBD by future CFG-223 macOS app walkthrough experiment.",
     ),
@@ -1568,9 +1567,35 @@ ROWS = [
             "diagnostic reports before launch and fails if a new Roastty crash "
             "report appears during the live window/tab/split/input workflow."
         ),
-        missing_evidence="None for the split-divider color crash path and new-crash-report guard. Broader split visual parity, menu/fullscreen/quick-terminal behavior, screenshots/pixels, and split object re-resolution remain in RUNTIME-011B2B.",
+        missing_evidence="None for the split-divider color crash path and new-crash-report guard. Broader split visual parity, menu/fullscreen/quick-terminal behavior, and screenshots/pixels remain in RUNTIME-011B2B.",
         guard_tier="Tier 3",
         guard_command="`(cd roastty && macos/build.nu --action test) && (cd roastty && macos/build.nu --action build) && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_applescript_workflow_runtime.py`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-011B2D",
+        behavior="live AppleScript split-terminal object lifecycle",
+        ghostty_reference="`vendor/ghostty/macos/Ghostty.sdef`; pinned Ghostty terminal `split`, `focus`, `close`, and stable terminal ID scripting",
+        roastty_reference="`roastty/macos/Roastty.sdef`; `roastty/macos/Sources/Features/AppleScript/ScriptTerminal.swift`; live debug `Roastty.app`",
+        family="macOS app",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 170 extends `macos_applescript_workflow_runtime.py` "
+            "to prove the returned split terminal object lifecycle in the live "
+            "debug app. The guard creates a split terminal from a controlled "
+            "surface configuration, asserts the returned terminal has a "
+            "non-empty stable ID, re-resolves that ID at application, window, "
+            "and selected-tab scope, sends `input text` to the re-resolved "
+            "split terminal and waits for the split child process to record an "
+            "exact marker, focuses the re-resolved split and confirms the "
+            "selected tab's focused terminal ID changed, closes the re-resolved "
+            "split terminal, confirms the selected tab terminal count "
+            "decreased, and confirms the closed terminal ID no longer resolves. "
+            "The same live guard keeps the absolute app bundle launch, isolated "
+            "config, scoped cleanup, and new-crash-report failure behavior."
+        ),
+        missing_evidence="None for live AppleScript split-terminal object ID re-resolution, input, focus, and close behavior. Split visual/layout parity, menu/fullscreen/quick-terminal behavior, screenshots/pixels, broader command-palette GUI behavior, and deeper keyboard/mouse walkthroughs remain in RUNTIME-011B2B.",
+        guard_tier="Tier 3",
+        guard_command="`(cd roastty && macos/build.nu --action build) && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_applescript_workflow_runtime.py`",
     ),
     RuntimeRow(
         id="RUNTIME-012A",
@@ -2011,6 +2036,7 @@ EXPECTED_IDS = [
     "RUNTIME-011B2A",
     "RUNTIME-011B2B",
     "RUNTIME-011B2C",
+    "RUNTIME-011B2D",
     "RUNTIME-012A",
     "RUNTIME-012B1",
     "RUNTIME-012B2A",

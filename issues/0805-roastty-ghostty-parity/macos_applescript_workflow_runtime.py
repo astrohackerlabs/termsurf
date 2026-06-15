@@ -148,13 +148,39 @@ def terminate_process(pid: int) -> None:
 def assert_inventory_split() -> None:
     runtime_inventory = (ISSUE / "config-runtime-inventory.md").read_text()
     config_matrix = (ISSUE / "config-matrix.md").read_text()
+    cfg223 = next(
+        (
+            [cell.strip() for cell in line.strip().strip("|").split("|")]
+            for line in config_matrix.splitlines()
+            if line.startswith("| CFG-223 |")
+        ),
+        None,
+    )
 
     require("| RUNTIME-011B2A" in runtime_inventory, "missing RUNTIME-011B2A row")
     require("| RUNTIME-011B2B" in runtime_inventory, "missing RUNTIME-011B2B row")
     require("| RUNTIME-011B2C" in runtime_inventory, "missing RUNTIME-011B2C row")
+    require("| RUNTIME-011B2D" in runtime_inventory, "missing RUNTIME-011B2D row")
     require(
         "live AppleScript-driven Roastty app workflow automation" in runtime_inventory,
         "missing AppleScript workflow evidence",
+    )
+    require(
+        "live AppleScript split-terminal object lifecycle" in runtime_inventory,
+        "missing split terminal lifecycle evidence",
+    )
+    require(
+        "re-resolves that ID at application, window, and selected-tab scope"
+        in runtime_inventory,
+        "missing split terminal re-resolution evidence",
+    )
+    require(
+        "selected tab's focused terminal ID changed" in runtime_inventory,
+        "missing split terminal focus evidence",
+    )
+    require(
+        "closed terminal ID no longer resolves" in runtime_inventory,
+        "missing split terminal close evidence",
     )
     require(
         "controlled child process records the `input text` marker" in runtime_inventory,
@@ -169,14 +195,18 @@ def assert_inventory_split() -> None:
         "remaining macOS GUI gap omitted visual evidence",
     )
     require(
+        "split visual/layout parity" in runtime_inventory,
+        "remaining macOS GUI gap omitted split visual evidence",
+    )
+    require(
         "fails if a new Roastty crash report appears" in runtime_inventory,
         "missing new crash-report guard evidence",
     )
-    require("68 rows Oracle complete" in config_matrix, "CFG-223 oracle count not updated")
-    require("71 rows closed" in config_matrix, "CFG-223 closed count not updated")
+    require("69 rows Oracle complete" in config_matrix, "CFG-223 oracle count not updated")
+    require("72 rows closed" in config_matrix, "CFG-223 closed count not updated")
     require("4 rows are incomplete" in config_matrix, "CFG-223 incomplete count changed")
     require("4 rows are runtime gaps" in config_matrix, "CFG-223 gap count changed")
-    require("| CFG-223 " in config_matrix and "| Gap    |" in config_matrix, "CFG-223 should remain Gap")
+    require(cfg223 is not None and len(cfg223) > 4 and cfg223[4] == "Gap", "CFG-223 should remain Gap")
 
 
 def main() -> int:
@@ -190,6 +220,7 @@ def main() -> int:
         config = temp / "config.roastty"
         marker_file = temp / "input-marker.txt"
         split_marker_file = temp / "split-marker.txt"
+        split_input_marker_file = temp / "split-input-marker.txt"
         config.write_text("macos-applescript = true\nquit-after-last-window-closed = true\n")
 
         command = (
@@ -197,7 +228,13 @@ def main() -> int:
             f"printf %s\\\\n \"$line\" > {marker_file}; "
             "sleep 30'"
         )
-        split_command = f"/bin/sh -c 'printf split-ok > {split_marker_file}; sleep 30'"
+        split_command = (
+            "/bin/sh -c 'printf split-ok > "
+            f"{split_marker_file}; "
+            "IFS= read -r line; "
+            f"printf %s\\\\n \"$line\" > {split_input_marker_file}; "
+            "sleep 30'"
+        )
         pid = launch_app(config)
 
         try:
@@ -206,6 +243,7 @@ def main() -> int:
             command_literal = quote_applescript(command)
             split_command_literal = quote_applescript(split_command)
             marker_literal = quote_applescript(MARKER)
+            split_marker_literal = quote_applescript("ISSUE805_EXP170_SPLIT_INPUT_MARKER")
 
             workflow = textwrap.dedent(
                 f"""
@@ -228,7 +266,30 @@ def main() -> int:
                   if selected of tab2 is not true then error "new tab did not select"
                   close tab tab2
                   delay 1
-                  split t0 direction right with configuration splitCfg
+                  set splitTerminal to split t0 direction right with configuration splitCfg
+                  delay 1
+                  set splitID to id of splitTerminal
+                  if splitID is "" then error "split terminal id was empty"
+                  set appResolved to terminal id splitID
+                  if (id of appResolved) is not splitID then error "app terminal id lookup returned wrong terminal"
+                  set windowResolved to terminal id splitID of w
+                  if (id of windowResolved) is not splitID then error "window terminal id lookup returned wrong terminal"
+                  set tabResolved to terminal id splitID of selected tab of w
+                  if (id of tabResolved) is not splitID then error "tab terminal id lookup returned wrong terminal"
+                  input text ({split_marker_literal} & linefeed) to tabResolved
+                  focus tabResolved
+                  delay 1
+                  if (id of focused terminal of selected tab of w) is not splitID then error "split terminal did not focus"
+                  set terminalCountBeforeClose to count of terminals of selected tab of w
+                  close tabResolved
+                  delay 1
+                  if (count of terminals of selected tab of w) is not terminalCountBeforeClose - 1 then error "split terminal close did not reduce terminal count"
+                  try
+                    set closedTerminalID to id of terminal id splitID
+                    error "closed split terminal id still resolved: " & closedTerminalID
+                  on error errText number errNum
+                    if errText starts with "closed split terminal id still resolved" then error errText number errNum
+                  end try
                 end tell
                 """
             )
@@ -256,6 +317,25 @@ def main() -> int:
                 )
                 raise AssertionError(
                     f"split terminal command marker was not recorded: {observed!r}"
+                )
+
+            deadline = time.monotonic() + 10
+            expected_split_input = "ISSUE805_EXP170_SPLIT_INPUT_MARKER"
+            while time.monotonic() < deadline:
+                if (
+                    split_input_marker_file.exists()
+                    and split_input_marker_file.read_text().strip() == expected_split_input
+                ):
+                    break
+                time.sleep(0.25)
+            else:
+                observed = (
+                    split_input_marker_file.read_text()
+                    if split_input_marker_file.exists()
+                    else "<missing>"
+                )
+                raise AssertionError(
+                    f"split input marker was not recorded by child process: {observed!r}"
                 )
         finally:
             terminate_process(pid)

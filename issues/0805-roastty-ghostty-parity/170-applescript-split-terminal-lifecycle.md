@@ -133,3 +133,86 @@ plausible against `Roastty.sdef` and the `ScriptTerminal`/`ScriptTab`/
 focus, and close/count behavior rather than no-error command execution, the
 build/runtime/prettier/diff hygiene checks are present, and the planned runtime
 count transition is consistent with the current 75/68/71/4/4 CFG-223 baseline.
+
+## Result
+
+**Result:** Pass
+
+The live AppleScript guard now proves the split-terminal object lifecycle
+against the built debug Roastty app:
+
+- the returned split terminal has a non-empty stable ID;
+- that ID re-resolves at application, window, and selected-tab scope;
+- `input text` sent to the selected-tab re-resolved terminal reaches the split
+  child process and records the exact `ISSUE805_EXP170_SPLIT_INPUT_MARKER`;
+- `focus` changes the selected tab's focused terminal ID to the split terminal
+  ID;
+- `close` reduces the selected tab terminal count and the closed terminal ID no
+  longer resolves;
+- the live guard still uses an isolated config, scoped debug app cleanup, and a
+  crash-report check.
+
+`config_runtime_inventory.py` now adds `RUNTIME-011B2D` as Oracle-complete for
+the live AppleScript split-terminal object lifecycle, and the remaining
+`RUNTIME-011B2B` gap no longer lists returned split-terminal object
+re-resolution or focus/close commands. CFG-223 remains `Gap`.
+
+Verification run:
+
+```text
+(cd roastty && macos/build.nu --action build)
+** BUILD SUCCEEDED **
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+runtime_rows=76
+oracle_complete=69
+closed=72
+audit_covered=0
+incomplete=4
+gap=4
+cfg223=Gap
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_applescript_workflow_runtime.py
+macos_applescript_workflow_runtime=pass
+
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/platform_runtime_classification.py --config-inventory issues/0805-roastty-ghostty-parity/config-inventory.md --output issues/0805-roastty-ghostty-parity/platform-runtime-classification.md
+platform_options=32
+gap=15
+not_applicable=15
+oracle_complete=2
+
+for f in issues/0805-roastty-ghostty-parity/*_runtime_parity.py issues/0805-roastty-ghostty-parity/terminal_runtime_residual_audit.py issues/0805-roastty-ghostty-parity/link_hover_preview_dispatch_parity.py issues/0805-roastty-ghostty-parity/link_hover_modifier_refresh_parity.py issues/0805-roastty-ghostty-parity/link_preview_context_runtime_parity.py; do
+  PYTHONDONTWRITEBYTECODE=1 python3 "$f" || exit 1
+done
+runtime_guards=pass
+
+prettier --write --prose-wrap always --print-width 80 issues/0805-roastty-ghostty-parity/README.md issues/0805-roastty-ghostty-parity/170-applescript-split-terminal-lifecycle.md issues/0805-roastty-ghostty-parity/config-runtime-inventory.md issues/0805-roastty-ghostty-parity/config-matrix.md issues/0805-roastty-ghostty-parity/platform-runtime-classification.md
+git diff --check
+```
+
+## Conclusion
+
+Experiment 170 closes the live AppleScript split-terminal object lifecycle
+slice. The macOS app gap is now narrower: native menu display/validation,
+titlebar/fullscreen/quick-terminal visuals, screenshot/pixel evidence, broader
+command-palette GUI behavior, split visual/layout parity, and deeper
+keyboard/mouse walkthroughs remain in `RUNTIME-011B2B`.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Verdict: **Approved**.
+
+Findings: none.
+
+The reviewer independently confirmed that the result commit had not yet been
+made, `RUNTIME-011B2D` is present and Oracle-complete, CFG-223 remains `Gap`
+with 76 runtime rows, 69 Oracle-complete rows, 72 closed rows, 4 incomplete
+rows, and 4 gaps, the AppleScript guard checks app/window/tab ID re-resolution,
+child-process marker side effects, focus state, close count decrement, and
+closed-ID non-resolution, the remaining visual/menu/fullscreen/
+quick-terminal/screenshot/split-layout/broader GUI gaps stay in
+`RUNTIME-011B2B`, the README marks Experiment 170 as `Pass`, the experiment has
+`Result` and `Conclusion`, the edited Python files parse, and `git diff --check`
+passes.

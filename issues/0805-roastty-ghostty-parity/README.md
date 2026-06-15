@@ -894,8 +894,14 @@ experiment files until they are proven.
   temp-file markers. The experiment also found and fixed two automation
   blockers: `roastty_config_get` did not expose `macos-applescript`, and
   ScriptWindow IDs based on AppKit tab-group identity did not survive tab-group
-  creation. Returned split-terminal object re-resolution and split focus/close
-  commands remain in `RUNTIME-011B2B`.
+  creation.
+- **Returned AppleScript split terminals need ID lifecycle proof.** Experiment
+  170 extended the live AppleScript guard so a returned split terminal must have
+  a stable ID, re-resolve from application/window/tab collections, receive
+  `input text` into its own controlled child process, become the focused
+  terminal after `focus`, and disappear from the selected tab after `close`.
+  Split object lifecycle is now proven; split visual/layout parity and broader
+  GUI walkthrough work remain in `RUNTIME-011B2B`.
 - **Live GUI guards must watch for crash reports.** A user-visible
   `Roastty[DEBUG] quit unexpectedly` dialog after Experiment 167 corresponded to
   fresh `roastty-*.ips` reports. The stack was `NSColor.getHue` →
@@ -1637,4 +1643,4 @@ remains open.
 - [Experiment 169: Config facet matrix reconciliation](169-config-facet-matrix-reconciliation.md)
   — **Pass**
 - [Experiment 170: AppleScript split terminal lifecycle](170-applescript-split-terminal-lifecycle.md)
-  — **Designed**
+  — **Pass**
