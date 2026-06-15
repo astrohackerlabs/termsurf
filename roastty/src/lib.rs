@@ -6371,6 +6371,10 @@ impl Surface {
             return;
         }
         self.mouse.over_link = false;
+        self.dispatch_link_hover_clear(shape);
+    }
+
+    fn dispatch_link_hover_clear(&mut self, shape: c_int) {
         let empty = CString::new("").expect("empty string has no interior NUL");
         let _ = self.perform_mouse_shape(shape);
         let _ = self.perform_mouse_over_link(&empty);
@@ -6429,6 +6433,25 @@ impl Surface {
             }
         }
         self.request_render();
+    }
+
+    fn refresh_link_hover_for_key_mods(&mut self, mods: key_mods::Mods) {
+        let mods = mods.binding();
+        if self.mouse.mods == mods {
+            return;
+        }
+        self.mouse.mods = mods;
+
+        let reporting = self.mouse_report_context().is_some();
+        let shift_override = reporting && self.mouse.mods.shift && !self.mouse_shift_capture();
+        if !reporting || shift_override {
+            self.mouse.link_point = None;
+            self.refresh_link_hover();
+        } else if !self.mouse.mods.shift {
+            self.mouse.link_point = None;
+            self.mouse.over_link = false;
+            self.dispatch_link_hover_clear(self.terminal_mouse_shape());
+        }
     }
 
     fn mouse_mods_with_capture(&self) -> key_mods::Mods {
@@ -7548,6 +7571,7 @@ impl Surface {
         }
         let event = self.remapped_key_event(&event.event);
         self.last_key_event = Some(event.clone());
+        self.refresh_link_hover_for_key_mods(event.mods);
         if self.consume_default_binding_release(&event) {
             return true;
         }
@@ -20491,6 +20515,18 @@ mod tests {
         handle
     }
 
+    fn new_test_config_with_link_previews_and_mouse_shift_capture(
+        link_previews: config::LinkPreviews,
+        mouse_shift_capture: config::MouseShiftCapture,
+    ) -> RoasttyConfig {
+        let handle = roastty_config_new();
+        let config = config_from_handle(handle).unwrap();
+        config.parsed.link_previews = link_previews;
+        config.parsed.mouse_shift_capture = mouse_shift_capture;
+        config.sync_from_parsed_config();
+        handle
+    }
+
     fn new_test_config_with_link_previews_and_links(
         link_previews: config::LinkPreviews,
         links: Vec<input::link::Link>,
@@ -25445,6 +25481,169 @@ mod tests {
             mouse_over_link_records(),
             vec!["https://example.com".to_string()]
         );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn link_hover_modifier_refresh_super_enables_regular_link_without_mouse_move() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_link_previews(config::LinkPreviews::True);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_test_geometry(surface, 80, 5, 10, 20);
+        write_surface_worker_bytes(surface, b"go https://example.com now");
+
+        roastty_surface_mouse_pos(surface, 65.0, 5.0, ROASTTY_MODS_NONE);
+        assert!(mouse_shape_records().is_empty());
+        assert!(mouse_over_link_records().is_empty());
+
+        send_key(
+            surface,
+            key_press(key::Key::MetaLeft, b"", 0, ROASTTY_MODS_SUPER),
+        );
+
+        assert_eq!(mouse_shape_records(), vec![ROASTTY_MOUSE_SHAPE_POINTER]);
+        assert_eq!(
+            mouse_over_link_records(),
+            vec!["https://example.com".to_string()]
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn link_hover_modifier_refresh_super_release_clears_regular_link() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_link_previews(config::LinkPreviews::True);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_test_geometry(surface, 80, 5, 10, 20);
+        write_surface_worker_bytes(surface, b"\x1b]22;crosshair\x07go https://example.com now");
+
+        roastty_surface_mouse_pos(surface, 65.0, 5.0, ROASTTY_MODS_SUPER);
+        reset_action_records(true);
+        send_key(
+            surface,
+            key_release(key::Key::MetaLeft, b"", 0, ROASTTY_MODS_NONE),
+        );
+
+        assert_eq!(mouse_shape_records(), vec![ROASTTY_MOUSE_SHAPE_CROSSHAIR]);
+        assert_eq!(mouse_over_link_records(), vec![String::new()]);
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn link_hover_modifier_refresh_super_enables_osc8_without_mouse_move() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_link_previews(config::LinkPreviews::Osc8);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_test_geometry(surface, 80, 5, 10, 20);
+        write_surface_worker_bytes(
+            surface,
+            b"\x1b]8;;https://osc8.example\x1b\\link\x1b]8;;\x1b\\ plain",
+        );
+
+        roastty_surface_mouse_pos(surface, 15.0, 5.0, ROASTTY_MODS_NONE);
+        assert!(mouse_shape_records().is_empty());
+        assert!(mouse_over_link_records().is_empty());
+
+        send_key(
+            surface,
+            key_press(key::Key::MetaLeft, b"", 0, ROASTTY_MODS_SUPER),
+        );
+
+        assert_eq!(mouse_shape_records(), vec![ROASTTY_MOUSE_SHAPE_POINTER]);
+        assert_eq!(
+            mouse_over_link_records(),
+            vec!["https://osc8.example".to_string()]
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn link_hover_modifier_refresh_respects_reporting_and_shift_override() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_link_previews(config::LinkPreviews::True);
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_test_geometry(surface, 80, 5, 10, 20);
+        write_surface_worker_bytes(surface, b"go https://example.com now");
+        set_surface_worker_mouse_tracking(surface, true);
+
+        roastty_surface_mouse_pos(surface, 65.0, 5.0, ROASTTY_MODS_NONE);
+        reset_action_records(true);
+        send_key(
+            surface,
+            key_press(key::Key::MetaLeft, b"", 0, ROASTTY_MODS_SUPER),
+        );
+        assert_eq!(mouse_over_link_records(), vec![String::new()]);
+
+        reset_action_records(true);
+        send_key(
+            surface,
+            key_press(
+                key::Key::ShiftLeft,
+                b"",
+                0,
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            ),
+        );
+
+        assert_eq!(mouse_shape_records(), vec![ROASTTY_MOUSE_SHAPE_POINTER]);
+        assert_eq!(
+            mouse_over_link_records(),
+            vec!["https://example.com".to_string()]
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+        roastty_config_free(config);
+    }
+
+    #[test]
+    fn link_hover_modifier_refresh_reporting_captured_shift_noops() {
+        let _guard = pty_command_lock();
+        let config = new_test_config_with_link_previews_and_mouse_shift_capture(
+            config::LinkPreviews::True,
+            config::MouseShiftCapture::Always,
+        );
+        let app = new_test_app_with_action_config(true, config);
+        let surface = new_test_surface(app);
+        surface_from_handle(surface).unwrap().termio_worker = Some(test_worker("sleep 1"));
+        set_surface_test_geometry(surface, 80, 5, 10, 20);
+        write_surface_worker_bytes(surface, b"go https://example.com now");
+        set_surface_worker_mouse_tracking(surface, true);
+
+        roastty_surface_mouse_pos(surface, 65.0, 5.0, ROASTTY_MODS_NONE);
+        reset_action_records(true);
+        send_key(
+            surface,
+            key_press(
+                key::Key::ShiftLeft,
+                b"",
+                0,
+                ROASTTY_MODS_SHIFT | ROASTTY_MODS_SUPER,
+            ),
+        );
+
+        assert!(mouse_shape_records().is_empty());
+        assert!(mouse_over_link_records().is_empty());
 
         roastty_surface_free(surface);
         roastty_app_free(app);

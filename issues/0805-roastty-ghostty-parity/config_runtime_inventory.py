@@ -1650,8 +1650,8 @@ ROWS = [
     RuntimeRow(
         id="RUNTIME-012B2B2B2B2B2",
         behavior="link hover preview surface action dispatch",
-        ghostty_reference="`vendor/ghostty/src/Surface.zig` `mouseRefreshLinks`, `linkAtPos`, mouse reporting gate, left-click drag suppression, `mouse_shape`, and `mouse_over_link` dispatch",
-        roastty_reference="`roastty/src/lib.rs` `refresh_link_hover`, link hover URL lookup, mouse reporting/shift override gate, left-click drag suppression, action ABI payloads, and `link_hover_preview_dispatch_*` tests",
+        ghostty_reference="`vendor/ghostty/src/Surface.zig` `mouseRefreshLinks`, `modsChanged`, `keyCallback`, `linkAtPos`, mouse reporting gate, left-click drag suppression, `mouse_shape`, and `mouse_over_link` dispatch",
+        roastty_reference="`roastty/src/lib.rs` `refresh_link_hover`, `refresh_link_hover_for_key_mods`, link hover URL lookup, mouse reporting/shift override gate, left-click drag suppression, action ABI payloads, and `link_hover_preview_dispatch_*`/`link_hover_modifier_refresh_*` tests",
         family="notifications",
         status="Oracle complete",
         evidence=(
@@ -1675,13 +1675,32 @@ ROWS = [
             "shift override allows refresh, and "
             "`link_hover_preview_dispatch_suppresses_left_drag_hover` proves "
             "left-drag hover suppression. "
+            "Experiment 162 extends the same surface-action slice to "
+            "key/modifier-driven hover refresh: "
+            "`link_hover_modifier_refresh_super_enables_regular_link_without_mouse_move` "
+            "proves a stationary super press can discover a regular detected "
+            "link despite the same-cell no-link cache, "
+            "`link_hover_modifier_refresh_super_release_clears_regular_link` "
+            "proves modifier release clears hover with the current terminal "
+            "mouse shape, "
+            "`link_hover_modifier_refresh_super_enables_osc8_without_mouse_move` "
+            "proves stationary OSC8 hover dispatch, "
+            "`link_hover_modifier_refresh_respects_reporting_and_shift_override` "
+            "proves the Ghostty reporting/shift branches for key-driven "
+            "refresh, and "
+            "`link_hover_modifier_refresh_reporting_captured_shift_noops` "
+            "proves captured shift under mouse reporting neither refreshes nor "
+            "clears. "
             "`link_hover_preview_dispatch_parity.py` statically checks pinned "
             "Ghostty anchors, Roastty implementation markers, tests, and this "
-            "inventory split."
+            "inventory split. "
+            "`link_hover_modifier_refresh_parity.py` statically checks pinned "
+            "Ghostty key/modifier anchors, Roastty implementation markers, "
+            "tests, and this inventory split."
         ),
         missing_evidence="None for deterministic surface-side link hover preview dispatch. Native preview display, native context/menu display, real pointer pixels, and OS URL-opening flows remain tracked by RUNTIME-012B2B2B2B2B3.",
         guard_tier="Tier 1",
-        guard_command="`cargo test --manifest-path roastty/Cargo.toml link_hover_preview_dispatch -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_preview_dispatch_parity.py`",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml link_hover_preview_dispatch -- --test-threads=1 && cargo test --manifest-path roastty/Cargo.toml link_hover_modifier_refresh -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_preview_dispatch_parity.py && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_modifier_refresh_parity.py`",
     ),
     RuntimeRow(
         id="RUNTIME-012B2B2B2B2B3",

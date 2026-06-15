@@ -112,3 +112,84 @@ The design has been updated to require the exact Ghostty branches, include
 
 The reviewer confirmed the required findings were resolved and approved the
 design for implementation.
+
+## Result
+
+**Result:** Pass
+
+Roastty now refreshes link hover state from key/modifier events when the active
+mouse modifiers change, matching pinned Ghostty's deterministic
+`keyCallback`/`modsChanged` branch. The implementation stores binding modifiers,
+invalidates the same-cell link cache before allowed refreshes, refreshes when
+mouse reporting is off or shift overrides reporting, clears with the current
+terminal mouse shape when reporting is active without shift, and leaves captured
+shift under reporting alone.
+
+Focused Rust tests prove stationary super press over a regular detected link,
+super release clearing, stationary super press over OSC8 text, mouse-reporting
+suppression with shift override, and the captured-shift no-op branch. The new
+`link_hover_modifier_refresh_parity.py` guard pins the Ghostty anchors, Roastty
+implementation markers, tests, and inventory wording.
+
+Verification run:
+
+```bash
+cargo fmt --manifest-path roastty/Cargo.toml
+```
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml link_hover_modifier_refresh -- --test-threads=1
+```
+
+Result: 5 passed.
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml link_hover_preview_dispatch -- --test-threads=1
+```
+
+Result: 5 passed.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_modifier_refresh_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_preview_dispatch_parity.py
+```
+
+Results: both guards passed.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+```
+
+Result: `runtime_rows=69`, `oracle_complete=62`, `closed=65`, `incomplete=4`,
+`gap=4`, `cfg223=Gap`.
+
+## Conclusion
+
+The deterministic surface-action portion of Ghostty link hover now covers both
+mouse-motion and key/modifier-driven refresh paths. This does not reduce the
+remaining CFG-223 gap count because the open notification/link row still tracks
+native GUI/OS effects: real app hover/cursor UI, native preview display, native
+context/menu display, and OS URL-opening walkthrough guards.
+
+## Completion Review
+
+**Reviewer:** Kierkegaard the 2nd (`019ecaa5-eb3a-7b31-abd4-9684ceee9466`)
+
+**Result:** Approved
+
+The reviewer found no required issues. They reviewed the Rust implementation,
+issue documentation, runtime inventory and matrix updates, and
+`link_hover_modifier_refresh_parity.py`.
+
+The reviewer independently ran:
+
+- `cargo fmt --manifest-path roastty/Cargo.toml --check`
+- `cargo test --manifest-path roastty/Cargo.toml link_hover_modifier_refresh -- --test-threads=1`
+- `cargo test --manifest-path roastty/Cargo.toml link_hover_preview_dispatch -- --test-threads=1`
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_modifier_refresh_parity.py`
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/link_hover_preview_dispatch_parity.py`
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md`
+- `git diff --check`
+
+All checks passed. The reviewer also confirmed the plan commit exists at
+`33ee7f4b6`.

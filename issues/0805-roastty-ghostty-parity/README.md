@@ -284,6 +284,11 @@ experiment files until they are proven.
   Experiment 161 showed that link-hover preview dispatch must use the
   surface-cached `link_previews` value, not only app-level parsed config, so
   `roastty_surface_update_config` changes are reflected by existing surfaces.
+- **Link hover parity includes key/modifier callbacks.** Experiment 162 showed
+  that pinned Ghostty refreshes hover state from `keyCallback` when mouse
+  modifiers change, not only from mouse-motion callbacks. Future hover GUI tests
+  should include stationary modifier press/release cases so the same-cell
+  no-link cache and mouse-reporting/shift branches stay covered.
 - **Device attributes can be config-derived terminal state.** Pinned Ghostty's
   primary device-attributes reply advertises feature `52` only when
   `clipboard-write != deny`. Roastty now treats that as terminal runtime state:
@@ -1561,4 +1566,4 @@ remains open.
 - [Experiment 161: Link hover preview dispatch](161-link-hover-preview-dispatch.md)
   — **Pass**
 - [Experiment 162: Link hover modifier refresh](162-link-hover-modifier-refresh.md)
-  — **Designed**
+  — **Pass**
