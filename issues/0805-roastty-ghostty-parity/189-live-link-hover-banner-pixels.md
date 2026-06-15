@@ -99,3 +99,76 @@ hover guard, and the copied SwiftUI `URLHoverBanner` source.
 Verdict: **Approved**.
 
 Findings: none.
+
+## Result
+
+**Result:** Partial
+
+The focused guard passed and split the deterministic SwiftUI URL-hover banner
+display out of the remaining residual GUI gap.
+
+Evidence:
+
+- `macos_live_link_hover_banner_pixels.py` launches the built debug app with an
+  isolated config, creates a real terminal surface, prints
+  `https://example.com/issue805-exp189-link-banner`, and captures the exact
+  focused CGWindowID before hover.
+- The guard injects Command-modified mouse movement until the live trace records
+  `cursorShape raw=3 pointerStyle=link` and
+  `mouseOverLink url=https://example.com/issue805-exp189-link-banner`.
+- The guard captures the same exact window after hover and compares the PNGs
+  with an embedded Swift sampler.
+- The recorded passing run measured 32674 changed pixels in the expected
+  bottom-left banner band, 373 changed pixels in the upper-left control band,
+  and 1086 changed pixels in the bottom-right control band.
+- No new Roastty crash report was written during the workflow.
+
+Updated inventory counts:
+
+- `runtime_rows=93`
+- `oracle_complete=89`
+- `closed=92`
+- `audit_covered=0`
+- `incomplete=1`
+- `gap=1`
+- `cfg223=Gap`
+- Remaining gap ID: `RUNTIME-012B2B2B2B2B3C`
+
+Verification logs:
+
+- `logs/issue805-exp189-build-1.log`
+- `logs/issue805-exp189-live-link-banner-3.log`
+- `logs/issue805-exp189-config-runtime-inventory-2.log`
+- `logs/issue805-exp189-residual-guard-1.log`
+- `logs/issue805-exp189-py-compile-2.log`
+- `logs/issue805-exp189-prettier-check-3.log`
+- `logs/issue805-exp189-diff-check-1.log`
+- `logs/issue805-exp189-broad-guard-sweep-2.log`
+
+This result does not claim real OS cursor pixels, external URL delivery, audible
+bell output, dock attention, OS notification delivery, or Quick Look/native link
+preview display beyond the copied SwiftUI `URLHoverBanner`.
+
+## Conclusion
+
+Roastty now has live app proof for the copied SwiftUI URL hover banner display.
+`RUNTIME-012B2B2B2B2B3C4` is Oracle complete, while `RUNTIME-012B2B2B2B2B3C`
+remains a `Gap` for OS-controlled notification, bell, real cursor-pixel, Quick
+Look/native preview, and external URL-handler effects that still lack
+deterministic VM evidence.
+
+## Completion Review
+
+Fresh-context Codex adversarial reviewer `Rawls the 3rd` reviewed the completed
+experiment, working-tree diff, relevant Swift/app sources, and verification
+logs.
+
+Verdict: **Approved**.
+
+Required findings: none.
+
+Optional finding resolved: the reviewer noted that the result originally cited
+`logs/issue805-exp189-config-runtime-inventory-1.log` while the canonical final
+verification run was `logs/issue805-exp189-config-runtime-inventory-2.log`. The
+verification log list now cites the final run and the other completion-gate
+logs.

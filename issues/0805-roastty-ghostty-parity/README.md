@@ -1037,6 +1037,13 @@ experiment files until they are proven.
   movement over a deterministic URL emits `cursorShape raw=3 pointerStyle=link`
   and the exact `mouseOverLink` URL in the real debug app. Native link preview
   display and real OS cursor pixels remain in `RUNTIME-012B2B2B2B2B3C`.
+- **The copied SwiftUI URL hover banner can be proven with localized pixels.**
+  Experiment 189 reused the live link-hover path and captured exact-window
+  before/after screenshots. A Swift sampler saw 32674 changed pixels in the
+  expected bottom-left banner band versus 373 in an upper-left control band and
+  1086 in a bottom-right control band, proving the visible `URLHoverBanner`
+  overlay without claiming real OS cursor pixels or Quick Look/native preview
+  behavior.
 - **Font-size runtime updates should be idempotent.** Experiment 125 found that
   applying an unchanged font size dirtied ABI-only surfaces because
   `set_font_size_points` always requested a render. The setter now returns
@@ -1805,4 +1812,4 @@ remains open.
 - [Experiment 188: Live link hover GUI proof](188-live-link-hover-gui-proof.md)
   — **Partial**
 - [Experiment 189: Live link hover banner pixels](189-live-link-hover-banner-pixels.md)
-  — **Designed**
+  — **Partial**

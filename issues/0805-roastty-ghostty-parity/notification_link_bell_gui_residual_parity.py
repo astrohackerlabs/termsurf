@@ -61,7 +61,7 @@ def main() -> int:
     require("Gap" in cfg223, f"CFG-223 should remain Gap: {cfg223}")
     require_text(
         matrix,
-        "Runtime inventory coverage: 88 rows Oracle complete; 91 rows closed; 1 rows are incomplete and 1 rows are runtime gaps.",
+        "Runtime inventory coverage: 89 rows Oracle complete; 92 rows closed; 1 rows are incomplete and 1 rows are runtime gaps.",
         "CFG-223 split counts",
     )
 
@@ -104,6 +104,14 @@ def main() -> int:
     require_text(hover, "mouseOverLink url=https://example.com/issue805-exp188-link-hover", "link-hover URL evidence")
     require_text(hover, "macos_live_link_hover_runtime.py", "link-hover live guard command")
 
+    banner_cells = row_cells(runtime, "RUNTIME-012B2B2B2B2B3C4")
+    banner = row_line(runtime, "RUNTIME-012B2B2B2B2B3C4")
+    require(banner_cells[4] == "notifications", f"unexpected banner row family: {banner_cells}")
+    require(banner_cells[5] == "Oracle complete", f"unexpected banner row status: {banner_cells}")
+    require_text(banner, "URL hover banner display pixels", "URL hover banner behavior")
+    require_text(banner, "32674 changed pixels", "URL hover banner pixel evidence")
+    require_text(banner, "macos_live_link_hover_banner_pixels.py", "URL hover banner live guard command")
+
     gap_cells = row_cells(runtime, "RUNTIME-012B2B2B2B2B3C")
     gap = row_line(runtime, "RUNTIME-012B2B2B2B2B3C")
     require(gap_cells[4] == "notifications", f"unexpected gap row family: {gap_cells}")
@@ -114,7 +122,7 @@ def main() -> int:
         "measurable dock-attention state",
         "bell border/title visible effects",
         "real OS cursor pixels",
-        "native link preview display",
+        "Quick Look/native link preview display beyond the copied SwiftUI URLHoverBanner",
         "external Launch Services handler delivery",
     ]:
         require_text(gap, needle, f"remaining exact gap slice {needle}")
@@ -137,6 +145,7 @@ def main() -> int:
     for guard in [
         ISSUE / "macos_native_context_menu_trace_runtime.py",
         ISSUE / "macos_controlled_url_open_runtime.py",
+        ISSUE / "macos_live_link_hover_banner_pixels.py",
     ]:
         result = subprocess.run(
             ["python3", str(guard)],

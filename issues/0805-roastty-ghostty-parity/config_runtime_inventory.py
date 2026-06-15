@@ -2144,7 +2144,7 @@ ROWS = [
             "`hoverUrl`, published hover state, `URLHoverBanner(url:)` rendering, "
             "middle truncation, and left/right banner hover switch."
         ),
-        missing_evidence="None for copied macOS link-hover banner source plumbing; real pointer/link cursor pixels and native link preview display remain tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for copied macOS link-hover banner source plumbing; live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, while real pointer/link cursor pixels and Quick Look/native link preview display remain tracked by RUNTIME-012B2B2B2B2B3C.",
         guard_tier="Tier 0",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_link_hover_banner_runtime_parity.py`",
     ),
@@ -2293,7 +2293,7 @@ ROWS = [
             "context-menu path constructs the expected menu items including "
             "`Paste`, split actions, and `Change Terminal Title...`."
         ),
-        missing_evidence="None for live native context-menu construction and item-list trace. Native link preview display and real OS cursor pixels remain tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for live native context-menu construction and item-list trace. Live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, while Quick Look/native link preview display and real OS cursor pixels remain tracked by RUNTIME-012B2B2B2B2B3C.",
         guard_tier="Tier 3",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_native_context_menu_trace_runtime.py`",
     ),
@@ -2340,15 +2340,40 @@ ROWS = [
             "`mouseOverLink url=https://example.com/issue805-exp188-link-hover` "
             "from the live app trace."
         ),
-        missing_evidence="None for live regular-link hover dispatch, cursor-shape request, and exact hovered URL routing to the app. Native link preview display and real OS cursor pixels remain tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for live regular-link hover dispatch, cursor-shape request, and exact hovered URL routing to the app. Live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, while Quick Look/native link preview display and real OS cursor pixels remain tracked by RUNTIME-012B2B2B2B2B3C.",
         guard_tier="Tier 3",
         guard_command="`cargo test --manifest-path roastty/Cargo.toml link_hover_preview_dispatch_scales_macos_point_coordinates -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_live_link_hover_runtime.py`",
     ),
     RuntimeRow(
+        id="RUNTIME-012B2B2B2B2B3C4",
+        behavior="live macOS URL hover banner display pixels",
+        ghostty_reference="Pinned Ghostty macOS URL hover banner display when `mouse_over_link` sets a hover URL",
+        roastty_reference="`roastty/macos/Sources/Helpers/URLHoverBanner.swift`; `roastty/macos/Sources/Roastty/Surface View/SurfaceView.swift`; `roastty/macos/Sources/Roastty/Roastty.App.swift` `setMouseOverLink`",
+        family="notifications",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 189 adds `macos_live_link_hover_banner_pixels.py`, "
+            "which launches the built debug app with an isolated config, "
+            "prints a deterministic URL in a real terminal, captures the exact "
+            "focused CGWindowID before hover, injects Command-modified mouse "
+            "movement until the trace records `cursorShape raw=3 "
+            "pointerStyle=link` plus "
+            "`mouseOverLink url=https://example.com/issue805-exp189-link-banner`, "
+            "captures the same window after hover, and compares the PNGs with "
+            "a Swift sampler. The recorded run saw 32674 changed pixels in "
+            "the expected bottom-left banner band versus 373 in the upper-left "
+            "control band and 1086 in the bottom-right control band, proving a "
+            "localized visible `URLHoverBanner` overlay."
+        ),
+        missing_evidence="None for live copied SwiftUI URL hover banner display. Quick Look/native link preview display and real OS cursor pixels remain tracked by RUNTIME-012B2B2B2B2B3C.",
+        guard_tier="Tier 3",
+        guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_live_link_hover_banner_pixels.py`",
+    ),
+    RuntimeRow(
         id="RUNTIME-012B2B2B2B2B3C",
-        behavior="remaining OS-controlled notification, bell, native preview, cursor-pixel, and external URL-handler GUI effects",
-        ghostty_reference="Pinned Ghostty macOS native notification, bell, preview, cursor-pixel, and external URL-handler behavior",
-        roastty_reference="`roastty/macos/Sources` native notification, bell, preview, cursor, and `NSWorkspace.open` handling",
+        behavior="remaining OS-controlled notification, bell, Quick Look/native preview, cursor-pixel, and external URL-handler GUI effects",
+        ghostty_reference="Pinned Ghostty macOS native notification, bell, Quick Look/native preview, cursor-pixel, and external URL-handler behavior",
+        roastty_reference="`roastty/macos/Sources` native notification, bell, Quick Look/native preview, cursor, and `NSWorkspace.open` handling",
         family="notifications",
         status="Gap",
         evidence=(
@@ -2360,11 +2385,13 @@ ROWS = [
             "construction into `RUNTIME-012B2B2B2B2B3C2`. Experiment 188 "
             "splits live regular-link hover dispatch, cursor-shape request, "
             "and exact hovered-URL app routing into "
-            "`RUNTIME-012B2B2B2B2B3C3`. The remaining unproven behavior is "
+            "`RUNTIME-012B2B2B2B2B3C3`. Experiment 189 splits live copied "
+            "SwiftUI URL hover banner display pixels into "
+            "`RUNTIME-012B2B2B2B2B3C4`. The remaining unproven behavior is "
             "limited to OS-controlled GUI effects that the current VM run did "
             "not expose deterministically."
         ),
-        missing_evidence="Still need deterministic proof for actual OS notification delivery/banner/sound after authorization is available, audible bell output, measurable dock-attention state, bell border/title visible effects, real OS cursor pixels, native link preview display, and external Launch Services handler delivery.",
+        missing_evidence="Still need deterministic proof for actual OS notification delivery/banner/sound after authorization is available, audible bell output, measurable dock-attention state, bell border/title visible effects, real OS cursor pixels, Quick Look/native link preview display beyond the copied SwiftUI URLHoverBanner, and external Launch Services handler delivery.",
         guard_tier="Tier 3",
         guard_command="TBD by future focused OS/native GUI experiment.",
     ),
@@ -2496,6 +2523,7 @@ EXPECTED_IDS = [
     "RUNTIME-012B2B2B2B2B3C1",
     "RUNTIME-012B2B2B2B2B3C2",
     "RUNTIME-012B2B2B2B2B3C3",
+    "RUNTIME-012B2B2B2B2B3C4",
     "RUNTIME-012B2B2B2B2B3C",
     "RUNTIME-013",
     "RUNTIME-014",
