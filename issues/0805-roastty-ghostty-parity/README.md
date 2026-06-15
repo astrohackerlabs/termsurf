@@ -667,6 +667,12 @@ experiment files until they are proven.
   desktop notification events through `TermioPump`, applies the
   `desktop-notifications` gate at the surface, and dispatches the app action
   with Ghostty's fixed 63-byte title and 255-byte body C-string truncation.
+- **The terminal residual gap was an audit problem, not a hidden runtime
+  toggle.** Experiment 142 exhaustively mapped pinned Ghostty `DerivedConfig`,
+  direct termio config uses, and stream-handler config updates to existing
+  completed rows. The remaining CFG-223 gaps are now explicitly non-terminal:
+  font renderer output, renderer-visible GUI/pixel effects, macOS app UI, and
+  native notification/link/bell presentation flows.
 - **ENQ responses must avoid terminal callbacks in worker PTYs.** Experiment 135
   found the same worker constraint applies to `enquiry-response`: embedded
   callback ENQ handling can remain for direct terminal users, but live
@@ -1387,4 +1393,4 @@ remains open.
 - [Experiment 141: Desktop notification runtime](141-desktop-notification-runtime.md)
   — **Pass**
 - [Experiment 142: Terminal runtime residual audit](142-terminal-runtime-residual-audit.md)
-  — **Designed**
+  — **Pass**

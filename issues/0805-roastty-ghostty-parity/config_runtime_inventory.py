@@ -863,36 +863,31 @@ ROWS = [
     ),
     RuntimeRow(
         id="RUNTIME-009B2B2B3B2B2B2B3",
-        behavior="other remaining terminal behavior effects",
-        ghostty_reference="remaining `vendor/ghostty/src/termio/stream_handler.zig` terminal behavior paths",
-        roastty_reference="`roastty/src/lib.rs` terminal/termio config use; `roastty/src/termio.rs`; `roastty/src/terminal`",
+        behavior="terminal-runtime residual audit for pinned Ghostty termio config paths",
+        ghostty_reference="`vendor/ghostty/src/termio/Termio.zig` `DerivedConfig`, direct `opts.full_config`/`opts.config` terminal uses, and `vendor/ghostty/src/termio/stream_handler.zig` `changeConfig` paths",
+        roastty_reference="completed runtime inventory rows for terminal/color config effects plus `terminal_runtime_residual_audit.py`",
         family="terminal",
-        status="Gap",
+        status="Oracle complete",
         evidence=(
-            "Experiments 117, 122, 124, 126, 127, 128, 129, 130, 131, 135, "
-            "136, 137, 138, 139, and 140 "
-            "split out zero/no-history scrollback, nonzero scrollback byte "
-            "quota, alternate-screen no-scrollback, CSI `21t` title-report "
-            "gating, shell-integration feature env and terminal identity, "
-            "per-shell helper rewrite coverage, zsh bootstrap, "
-            "configured/static non-empty surface title behavior, "
-            "stored-PWD title fallback/empty title app dispatch, common local "
-            "OSC 7 PWD validation, path normalization, surface PWD dispatch, "
-            "title fallback path behavior, and remaining OSC 7 URI edge "
-            "semantics, config-driven ENQ `enquiry-response` replies, and "
-            "`osc-color-report-format` OSC color query replies, and "
-            "`clipboard-write` primary device-attributes clipboard capability "
-            "advertisement, and live `cursor-style`/`cursor-style-blink` "
-            "default cursor runtime effects, and `image-storage-limit` kitty "
-            "graphics storage quota startup/live update effects, and "
-            "`grapheme-width-method` terminal default mode startup/reset "
-            "effects. "
-            "Other remaining terminal behavior toggles still need focused "
-            "CFG-223 runtime proof or fixes."
+            "Experiment 142 closes the vague terminal residual row with an "
+            "exhaustive source-to-inventory audit. "
+            "`terminal_runtime_residual_audit.py` enumerates pinned Ghostty "
+            "`DerivedConfig` fields, direct `opts.full_config` and "
+            "`opts.config` terminal-runtime uses, stream-handler "
+            "`changeConfig` fields, and the associated ENQ, OSC color, "
+            "device-attributes, color-scheme report, image quota, scrollback, "
+            "cursor default, color/palette, PWD/title, shell integration, and "
+            "grapheme-width paths. The guard maps those paths to existing "
+            "oracle-complete rows and proves there are no remaining pinned "
+            "Ghostty config-driven terminal-runtime fields hidden behind the "
+            "old residual bucket. Remaining CFG-223 gaps are now explicitly "
+            "non-terminal: font renderer output/live grid effects, "
+            "renderer-visible GUI/pixel effects, macOS app/window/tab/split/"
+            "menu UI, and native notification/link/bell presentation flows."
         ),
-        missing_evidence="Add runtime proof or fixes for other remaining terminal behavior effects.",
+        missing_evidence="None for the terminal-runtime residual audit of pinned Ghostty termio config paths.",
         guard_tier="Tier 2",
-        guard_command="TBD by future CFG-223 terminal runtime experiment.",
+        guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/terminal_runtime_residual_audit.py`",
     ),
     RuntimeRow(
         id="RUNTIME-010A",
