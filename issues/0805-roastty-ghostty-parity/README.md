@@ -1419,3 +1419,5 @@ remains open.
   — **Pass**
 - [Experiment 145: Font shaping break runtime](145-font-shaping-break-runtime.md)
   — **Pass**
+- [Experiment 146: Font thicken render runtime](146-font-thicken-render-runtime.md)
+  — **Designed**
