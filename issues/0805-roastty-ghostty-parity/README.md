@@ -296,6 +296,12 @@ experiment files until they are proven.
   this VM, so the durable proof is same-PID/same-window screenshots with a
   visible baseline-to-palette pixel delta and a post-Escape near-baseline
   control screenshot.
+- **Quick Terminal is a floating panel, not a layer-0 terminal window.**
+  Experiment 174 showed that live Quick Terminal GUI proof should diff PID-owned
+  CoreGraphics window ids, expect the new panel to use a nonzero popup/floating
+  layer, and capture that exact CGWindowID with `screencapture`. PID-only
+  screenshot helpers prefer layer-0 terminal windows and can capture the wrong
+  window while the Quick Terminal panel is visible.
 - **Passing behavior needs a durable but cheap guard.** Future experiments
   should record the cheapest sufficient regression guard for each passing parity
   row. Prefer static checks and unit tests when they prove the behavior; reserve
@@ -1679,4 +1685,4 @@ remains open.
 - [Experiment 173: macOS GUI state runtime](173-macos-gui-state-runtime.md) —
   **Pass**
 - [Experiment 174: Quick Terminal GUI runtime](174-quick-terminal-gui-runtime.md)
-  — **Designed**
+  — **Pass**
