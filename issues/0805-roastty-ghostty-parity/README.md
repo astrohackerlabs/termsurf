@@ -1736,3 +1736,5 @@ remains open.
   — **Pass**
 - [Experiment 180: Custom shader animation runtime](180-custom-shader-animation-runtime.md)
   — **Pass**
+- [Experiment 181: Background image renderer runtime](181-background-image-renderer-runtime.md)
+  — **Designed**
