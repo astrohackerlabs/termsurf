@@ -151,3 +151,73 @@ The reviewer found two required issues:
 
 The reviewer confirmed both prior findings were resolved and reported no new
 Required findings.
+
+## Result
+
+**Result:** Pass
+
+Roastty now has focused guards for the config-derived font-grid runtime slice:
+
+- `shared_grid_set_key_preserves_multiple_family_order` proves repeatable
+  configured font families preserve descriptor order and exact `font-style`
+  names are carried into descriptors.
+- `shared_grid_set_key_builds_style_ordered_descriptors` proves style-specific
+  family fields map to the correct style descriptor sections, and exact style
+  names disable broad bold/italic category matching.
+- `shared_grid_set_key_includes_codepoint_map` and
+  `shared_grid_set_build_grid_honors_codepoint_override` prove
+  `font-codepoint-map` changes the config-derived key and resolved face.
+- `shared_grid_set_build_grid_from_default_config` proves default config builds
+  a usable font grid.
+- `shared_grid_set_build_grid_honors_disabled_synthetic_styles` proves
+  `font-synthetic-style` flows into style completion.
+- `font_grid_runtime_parity.py` statically checks pinned Ghostty's derived font
+  config, font-grid ref, `setFontSize` renderer message, and font-size action
+  markers against Roastty's `DerivedConfig`, `Key`, `build_grid_from_config`,
+  codepoint-map/synthetic-style wiring, `build_live_renderer`, and Experiment
+  105 font-size state guards.
+
+`config_runtime_inventory.py` now splits the old font gap into `RUNTIME-007A` as
+Oracle complete and `RUNTIME-007B` as the reduced remaining font gap. The
+generated CFG-223 summary remains `Gap` with 41 runtime rows, 34 Oracle complete
+rows, 36 closed rows, and 5 remaining runtime gaps.
+
+Verification run:
+
+```bash
+cargo test --manifest-path roastty/Cargo.toml shared_grid_set
+cargo test --manifest-path roastty/Cargo.toml complete_styles
+cargo test --manifest-path roastty/Cargo.toml codepoint_override
+cargo test --manifest-path roastty/Cargo.toml surface_reload_font_size
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/font_grid_runtime_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/osc7_edge_runtime_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/osc7_pwd_normalization_runtime_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/title_pwd_fallback_runtime_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/scrollback_byte_limit_runtime_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/shell_startup_rewrite_runtime_parity.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/surface_title_runtime_parity.py
+```
+
+## Conclusion
+
+The config-derived font-grid slice is no longer part of the CFG-223 gap. Roastty
+proves parsed font family/style/codepoint-map/synthetic-style config feeds
+shared font grid construction, that surface-state font-size semantics are
+guarded by Experiment 105, and that initial live renderer creation uses
+`build_grid_from_config`. The remaining font work is intentionally limited to
+renderer-visible font output, OpenType feature/variation/thicken/metric effects,
+shaping-break behavior, glyph metrics as seen by the renderer, and live renderer
+font-grid rebuild/update after reload/manual font-size changes.
+
+## Completion Review
+
+**Reviewer:** Codex adversarial subagent with fresh context.
+
+**Verdict:** Approved.
+
+The reviewer reported no findings. It independently ran the requested focused
+Rust tests, `font_grid_runtime_parity.py`, `config_runtime_inventory.py` to
+temporary output, related static parity guards, `cargo fmt --check`, and
+`git diff --check`. It also confirmed the result commit had not already been
+made.

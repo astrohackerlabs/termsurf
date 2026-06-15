@@ -422,9 +422,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::config::{Config, FontStyle};
+    use crate::config::{Config, FontStyle, FontSyntheticStyle};
     use crate::font::codepoint_resolver::CodepointResolver;
-    use crate::font::collection::Collection;
+    use crate::font::collection::{Collection, Index};
     use crate::font::face::coretext::Face;
     use crate::font::Style;
 
@@ -551,6 +551,36 @@ mod tests {
     }
 
     #[test]
+    fn shared_grid_set_key_preserves_multiple_family_order() {
+        let mut cfg = Config::default();
+        cfg.font_family.parse_cli(Some("Regular First")).unwrap();
+        cfg.font_family.parse_cli(Some("Regular Second")).unwrap();
+        cfg.font_family_bold.parse_cli(Some("Bold First")).unwrap();
+        cfg.font_family_bold.parse_cli(Some("Bold Second")).unwrap();
+        cfg.font_style = FontStyle::Name("Book".to_string());
+        cfg.finalize();
+
+        let derived = DerivedConfig::from_config(&cfg);
+        let key = Key::new(&derived, 13.0);
+        let regular = key.descriptors_for_style(Style::Regular);
+        let bold = key.descriptors_for_style(Style::Bold);
+
+        assert_eq!(regular.len(), 2);
+        assert_eq!(regular[0].family.as_deref(), Some("Regular First"));
+        assert_eq!(regular[1].family.as_deref(), Some("Regular Second"));
+        assert_eq!(regular[0].style.as_deref(), Some("Book"));
+        assert_eq!(regular[1].style.as_deref(), Some("Book"));
+        assert!(!regular[0].bold);
+        assert!(!regular[1].bold);
+
+        assert_eq!(bold.len(), 2);
+        assert_eq!(bold[0].family.as_deref(), Some("Bold First"));
+        assert_eq!(bold[1].family.as_deref(), Some("Bold Second"));
+        assert!(bold[0].bold);
+        assert!(bold[1].bold);
+    }
+
+    #[test]
     fn shared_grid_set_key_includes_codepoint_map() {
         let mut cfg = Config::default();
         let base = Key::new(&DerivedConfig::from_config(&cfg), 13.0);
@@ -598,5 +628,37 @@ mod tests {
             regular.int(),
             "font-codepoint-map should change the resolved face"
         );
+    }
+
+    #[test]
+    fn shared_grid_set_build_grid_honors_disabled_synthetic_styles() {
+        let mut cfg = Config::default();
+        cfg.font_synthetic_style = FontSyntheticStyle {
+            bold: false,
+            italic: false,
+            bold_italic: false,
+        };
+
+        let mut grid = build_grid_from_config(&cfg, 13.0).expect("grid builds");
+        let collection = grid.resolver.collection_mut();
+        let bold_is_synthetic = collection
+            .get_face(Index::new(Style::Bold, 0))
+            .unwrap()
+            .synthetic_bold_width()
+            .is_some();
+        let italic_is_synthetic = collection
+            .get_face(Index::new(Style::Italic, 0))
+            .unwrap()
+            .is_skewed();
+        let bold_italic = collection
+            .get_face(Index::new(Style::BoldItalic, 0))
+            .unwrap();
+        let bold_italic_is_bold = bold_italic.synthetic_bold_width().is_some();
+        let bold_italic_is_italic = bold_italic.is_skewed();
+
+        assert!(!bold_is_synthetic);
+        assert!(!italic_is_synthetic);
+        assert!(!bold_italic_is_bold);
+        assert!(!bold_italic_is_italic);
     }
 }

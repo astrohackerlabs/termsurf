@@ -260,21 +260,54 @@ ROWS = [
         guard_command="`cargo test --manifest-path roastty/Cargo.toml surface_apply_config_updates_palette && cargo test --manifest-path roastty/Cargo.toml color_scheme`",
     ),
     RuntimeRow(
-        id="RUNTIME-007",
-        behavior="font selection, shaping, fallback, metrics, and font-size runtime effects",
-        ghostty_reference="`vendor/ghostty/src/config/Config.zig` font fields; `vendor/ghostty/src/Surface.zig` font grid/runtime update paths",
-        roastty_reference="`roastty/src/lib.rs` font-size runtime state; `roastty/src/font`",
+        id="RUNTIME-007A",
+        behavior="config-derived font grid construction and initial live renderer font-grid wiring",
+        ghostty_reference="`vendor/ghostty/src/Surface.zig` font grid setup, `updateConfig`, `setFontSize`, and font-size actions; `vendor/ghostty/src/font/SharedGridSet.zig` config-derived font grid keys",
+        roastty_reference="`roastty/src/font/shared_grid_set.rs` config-derived key/grid tests; `roastty/src/lib.rs` font-size surface state and initial live renderer font-grid construction",
+        family="font",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 132 splits out config-derived font grid runtime "
+            "construction. `shared_grid_set_key_*` tests prove configured font "
+            "families preserve descriptor order, exact `font-style*` names "
+            "override category bold/italic matching, font size changes the "
+            "grid key, and `font-codepoint-map` changes the key. "
+            "`shared_grid_set_build_grid_*` tests prove default config builds "
+            "a usable grid, codepoint-map overrides change resolved faces, and "
+            "`font-synthetic-style` controls synthetic style completion. "
+            "Experiment 105's `surface_reload_font_size_*` guard proves "
+            "surface-state font-size startup/reload/manual/reset semantics. "
+            "`font_grid_runtime_parity.py` statically checks pinned Ghostty's "
+            "derived font config, font grid ref, config reload, setFontSize "
+            "renderer message, and font-size action markers against Roastty's "
+            "DerivedConfig, Key, build_grid_from_config, codepoint-map, "
+            "synthetic-style, `build_live_renderer`, and font-size guards."
+        ),
+        missing_evidence="None for config-derived font grid construction, surface-state font-size semantics, and initial live renderer font-grid construction covered by these guards.",
+        guard_tier="Tier 2",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml shared_grid_set && cargo test --manifest-path roastty/Cargo.toml complete_styles && cargo test --manifest-path roastty/Cargo.toml codepoint_override && cargo test --manifest-path roastty/Cargo.toml surface_reload_font_size && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/font_grid_runtime_parity.py`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-007B",
+        behavior="remaining font renderer output and live font-grid update effects",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` font feature, variation, thicken, metric, and shaping fields; `vendor/ghostty/src/Surface.zig` font grid update paths; `vendor/ghostty/src/font` shaping/rendering paths",
+        roastty_reference="`roastty/src/font`; `roastty/src/renderer`; `roastty/src/lib.rs` live renderer font-grid update behavior",
         family="font",
         status="Gap",
         evidence=(
-            "Experiment 105 proves reload font-size behavior, but CFG-223 still "
-            "needs runtime proof for the broader font surface: configured font "
-            "families, fallback, shaping, glyph metrics, feature/variation "
-            "effects, and renderer-visible font changes."
+            "Experiment 105 proves surface-state font-size reload/manual/reset "
+            "semantics, and Experiment 132 split out config-derived font grid "
+            "construction plus initial live renderer grid wiring. Remaining "
+            "font parity still needs focused runtime/renderer or GUI proof for "
+            "OpenType feature and variation config effects, thicken and "
+            "thicken-strength rendering, metric adjustment, shaping-break "
+            "behavior, fallback/shaping visual output, glyph metrics as seen "
+            "by the renderer, and renderer grid rebuild/update after "
+            "reload/manual font-size changes."
         ),
-        missing_evidence="Add focused font runtime/renderer oracles beyond parser/formatter/default coverage.",
-        guard_tier="Tier 2",
-        guard_command="TBD by future CFG-223 font runtime experiment.",
+        missing_evidence="Add focused font renderer/runtime or GUI proof for feature/variation, thicken, metric adjustment, shaping-break, renderer-visible glyph output, glyph metrics, and live renderer grid update behavior after reload/manual font-size changes.",
+        guard_tier="Tier 3",
+        guard_command="TBD by future CFG-223 font renderer experiment.",
     ),
     RuntimeRow(
         id="RUNTIME-008A",
@@ -874,7 +907,8 @@ EXPECTED_IDS = [
     "RUNTIME-004H",
     "RUNTIME-005",
     "RUNTIME-006",
-    "RUNTIME-007",
+    "RUNTIME-007A",
+    "RUNTIME-007B",
     "RUNTIME-008A",
     "RUNTIME-008B",
     "RUNTIME-009A",

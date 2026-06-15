@@ -370,6 +370,12 @@ experiment files until they are proven.
   nushell `--execute` injection/fallback, zsh `ZDOTDIR`, and missing-resource
   fallback. Roastty now mirrors that helper surface with `ROASTTY_*` names while
   leaving script-body and live-shell PTY parity as separate concerns if needed.
+- **Font-grid parity has an initial-construction slice and an update slice.**
+  Roastty now proves parsed font family/style/codepoint-map/synthetic-style
+  config reaches config-derived shared font grid construction and initial live
+  renderer setup. Renderer-visible font output, feature/variation/thicken/metric
+  effects, and live renderer grid rebuild/update after reload/manual font-size
+  changes remain in the reduced font gap.
 - **App-facing ABI parity must be scoped before diffing.** Roastty's C header is
   intentionally larger than Ghostty's header, so full symbol-count equality is
   the wrong oracle. Experiment 4 uses Swift app-source identifiers as the
@@ -1309,4 +1315,4 @@ remains open.
 - [Experiment 130: Shell startup rewrite runtime](130-shell-startup-rewrite-runtime.md)
   — **Pass**
 - [Experiment 131: OSC 7 edge runtime](131-osc7-edge-runtime.md) — **Pass**
-- [Experiment 132: Font grid runtime](132-font-grid-runtime.md) — **Designed**
+- [Experiment 132: Font grid runtime](132-font-grid-runtime.md) — **Pass**
