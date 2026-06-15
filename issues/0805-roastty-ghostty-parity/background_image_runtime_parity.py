@@ -218,8 +218,6 @@ def main() -> int:
         row_gap,
         [
             ("Gap", "remaining renderer gap status"),
-            ("window-colorspace", "colorspace gap remains"),
-            ("alpha-blending", "alpha gap remains"),
             ("scroll-to-bottom.output", "scroll-to-bottom gap remains"),
         ],
     )
@@ -228,6 +226,8 @@ def main() -> int:
         "background-image-position",
         "background-image-fit",
         "background-image-repeat",
+        "window-colorspace",
+        "alpha-blending",
     ]:
         if forbidden in row_gap:
             raise AssertionError(f"{forbidden} still appears in remaining renderer gap")
@@ -238,8 +238,6 @@ def main() -> int:
             ('id="RUNTIME-008B2B2B2B2B2"', "source complete row"),
             ("background_image_runtime_parity.py", "source guard"),
             ('id="RUNTIME-008B2B2B2B2B"', "source remaining row"),
-            ("window-colorspace", "source remaining colorspace gap"),
-            ("alpha-blending", "source remaining alpha gap"),
             ("scroll-to-bottom.output", "source remaining scroll gap"),
         ],
     )
@@ -250,8 +248,8 @@ def main() -> int:
         [
             ("Runtime and UI effects", "CFG-223 row"),
             ("Gap", "CFG-223 remains open"),
-            ("79 rows Oracle complete", "CFG-223 oracle count"),
-            ("82 rows closed", "CFG-223 closed count"),
+            ("80 rows Oracle complete", "CFG-223 oracle count"),
+            ("83 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],

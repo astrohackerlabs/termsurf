@@ -793,7 +793,7 @@ ROWS = [
     ),
     RuntimeRow(
         id="RUNTIME-008B2B2B2B2B",
-        behavior="remaining renderer-visible colorspace, alpha blending, and scroll-to-bottom effects",
+        behavior="remaining renderer-visible scroll-to-bottom output effects",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig` renderer/window visual fields; `vendor/ghostty/src/renderer/generic.zig` derived renderer config and draw paths; `vendor/ghostty/src/Surface.zig` renderer config messages; screenshot/pixel walkthrough paths",
         roastty_reference="`roastty/src/lib.rs` live renderer and render state; `roastty/src/renderer`; copied macOS renderer/window host",
         family="renderer",
@@ -826,9 +826,10 @@ ROWS = [
             "renderer-visible effects rather than hidden broad GUI/pixel "
             "parity. Experiment 180 split out the custom shader animation "
             "draw-timer policy. Experiment 181 split out deterministic "
-            "background image renderer runtime behavior."
+            "background image renderer runtime behavior. Experiment 182 split "
+            "out deterministic color uniform behavior."
         ),
-        missing_evidence="Add runtime or renderer proof for `window-colorspace`; `alpha-blending`; and `scroll-to-bottom.output` renderer behavior.",
+        missing_evidence="Add runtime or renderer proof for `scroll-to-bottom.output` renderer behavior.",
         guard_tier="Tier 3",
         guard_command="TBD by future CFG-223 renderer visual experiments.",
     ),
@@ -853,7 +854,7 @@ ROWS = [
             "checks pinned Ghostty `syncDrawTimer`, Roastty implementation "
             "markers, tests, and this inventory split."
         ),
-        missing_evidence="None for custom-shader-animation focus/always/false draw-timer policy. Colorspace, alpha blending, and scroll-to-bottom renderer behavior remain in RUNTIME-008B2B2B2B2B; background image renderer behavior is tracked by RUNTIME-008B2B2B2B2B2.",
+        missing_evidence="None for custom-shader-animation focus/always/false draw-timer policy. `scroll-to-bottom.output` remains tracked by RUNTIME-008B2B2B2B2B; background image renderer behavior is tracked by RUNTIME-008B2B2B2B2B2 and color uniform behavior is tracked by RUNTIME-008B2B2B2B2B3.",
         guard_tier="Tier 2",
         guard_command="`cargo test --manifest-path roastty/Cargo.toml custom_shader_animation -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/custom_shader_animation_runtime_parity.py`",
     ),
@@ -883,9 +884,36 @@ ROWS = [
             "config-change, buffer, and draw anchors against Roastty's "
             "implementation, tests, and this inventory split."
         ),
-        missing_evidence="None for deterministic background image renderer runtime behavior. `window-colorspace`, `alpha-blending`, and `scroll-to-bottom.output` remain tracked by RUNTIME-008B2B2B2B2B.",
+        missing_evidence="None for deterministic background image renderer runtime behavior. `scroll-to-bottom.output` remains tracked by RUNTIME-008B2B2B2B2B; color uniform behavior is tracked by RUNTIME-008B2B2B2B2B3.",
         guard_tier="Tier 1",
         guard_command="`cargo test --manifest-path roastty/Cargo.toml background_image -- --test-threads=1 && cargo test --manifest-path roastty/Cargo.toml bg_image -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/background_image_runtime_parity.py`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-008B2B2B2B2B3",
+        behavior="colorspace and alpha-blending Metal uniform runtime behavior",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` `window-colorspace` and `alpha-blending`; `vendor/ghostty/src/renderer/generic.zig` color uniform bool setup; `vendor/ghostty/src/renderer/shaders/shaders.metal` color conversion and blending branches",
+        roastty_reference="`roastty/src/renderer/metal/shaders.rs` Metal uniform bool sourcing and tests; `roastty/src/renderer/metal/shaders.metal` color conversion and blending branches",
+        family="renderer",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 182 splits out deterministic `window-colorspace` and "
+            "`alpha-blending` Metal uniform behavior. `MetalUniforms::from_config` "
+            "sources parsed config into constructor-time uniforms, "
+            "`MetalUniforms::new` initializes the color bools through "
+            "`update_color_config`, and `update_color_config` maps sRGB/native "
+            "to all-false, Display P3/linear to `use_display_p3` plus "
+            "`use_linear_blending`, and Display P3/linear-corrected to all "
+            "three color bools. Layout tests prove the bool fields match the "
+            "Metal shader struct, and the copied Metal shader source consumes "
+            "`use_display_p3`, `use_linear_blending`, and "
+            "`use_linear_correction` in the same color conversion and blending "
+            "branches as pinned Ghostty. `color_uniform_runtime_parity.py` "
+            "statically checks the pinned Ghostty config, renderer, shader, "
+            "Roastty implementation, tests, and this inventory split."
+        ),
+        missing_evidence="None for deterministic colorspace and alpha-blending Metal uniform behavior. `scroll-to-bottom.output` remains tracked by RUNTIME-008B2B2B2B2B.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml update_color_config -- --test-threads=1 && cargo test --manifest-path roastty/Cargo.toml uniforms_new -- --test-threads=1 && cargo test --manifest-path roastty/Cargo.toml uniforms_from_config_sources_config_values -- --test-threads=1 && cargo test --manifest-path roastty/Cargo.toml metal_uniform_layout_matches_standard_shader_struct -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/color_uniform_runtime_parity.py`",
     ),
     RuntimeRow(
         id="RUNTIME-008B2B2B2B2C",
@@ -2314,6 +2342,7 @@ EXPECTED_IDS = [
     "RUNTIME-008B2B2B2B2B",
     "RUNTIME-008B2B2B2B2B1",
     "RUNTIME-008B2B2B2B2B2",
+    "RUNTIME-008B2B2B2B2B3",
     "RUNTIME-008B2B2B2B2C",
     "RUNTIME-008B2B2B2B2D",
     "RUNTIME-009A",

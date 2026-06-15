@@ -86,3 +86,63 @@ Fresh-context Codex adversarial review:
   uniform behavior, leaves `scroll-to-bottom.output` unpromoted, matches pinned
   Ghostty's bool mapping, and includes concrete verification plus hygiene
   checks.
+
+## Result
+
+**Result:** Pass
+
+Experiment 182 split `window-colorspace` and `alpha-blending` Metal uniform
+behavior out of `RUNTIME-008B2B2B2B2B` and into the new Oracle-complete
+`RUNTIME-008B2B2B2B2B3` row.
+
+Implementation notes:
+
+- Added `color_uniform_runtime_parity.py`, which checks pinned Ghostty's config,
+  renderer, and Metal shader bool anchors against Roastty's config fields,
+  uniform construction/update helpers, Metal shader source, focused tests,
+  generated inventory row, and CFG-223 counts.
+- Updated `config_runtime_inventory.py` so the residual renderer row now keeps
+  only `scroll-to-bottom.output`.
+- Regenerated `config-runtime-inventory.md` and `config-matrix.md`; CFG-223 now
+  reports 87 runtime rows, 80 Oracle-complete rows, 83 closed rows, 4 incomplete
+  rows, and 4 runtime gaps.
+- Updated affected guards to use `scroll-to-bottom.output` as the remaining
+  concrete renderer residual sentinel.
+
+Verification:
+
+- `cargo test --manifest-path roastty/Cargo.toml update_color_config -- --test-threads=1`
+  — 1 passed.
+- `cargo test --manifest-path roastty/Cargo.toml uniforms_new -- --test-threads=1`
+  — 3 passed.
+- `cargo test --manifest-path roastty/Cargo.toml uniforms_from_config_sources_config_values -- --test-threads=1`
+  — 1 passed.
+- `cargo test --manifest-path roastty/Cargo.toml metal_uniform_layout_matches_standard_shader_struct -- --test-threads=1`
+  — 1 passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/color_uniform_runtime_parity.py`
+  — passed.
+- `PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/renderer_visual_residual_audit.py`
+  — passed.
+- Additional affected guards passed: `background_image_runtime_parity.py`,
+  `custom_shader_animation_runtime_parity.py`, and
+  `metal_cursor_pixel_runtime_parity.py`.
+
+## Conclusion
+
+Colorspace and alpha-blending Metal uniform parity is no longer part of the
+renderer residual. The remaining `RUNTIME-008B2B2B2B2B` work is now explicitly
+limited to `scroll-to-bottom.output`.
+
+## Completion Review
+
+Fresh-context Codex adversarial result review:
+
+- Initial verdict: **Changes required**.
+- Required finding: previous completed rows still said colorspace/alpha behavior
+  remained in `RUNTIME-008B2B2B2B2B`.
+- Fix: updated those missing-evidence strings to say only
+  `scroll-to-bottom.output` remains in the residual, with background image and
+  color uniform behavior tracked by their new completed rows.
+- Re-review verdict: **Approved**. The reviewer confirmed the stale wording was
+  removed from the source and generated inventory, `__pycache__` was absent, and
+  `git diff --check` passed.

@@ -802,6 +802,11 @@ experiment files until they are proven.
   output, compositor routing, and live frame reset behavior. The remaining
   renderer residual is now `window-colorspace`, `alpha-blending`, and
   `scroll-to-bottom.output`.
+- **Colorspace and alpha parity are uniform booleans.** Experiment 182 split
+  `window-colorspace` and `alpha-blending` out of the renderer residual by
+  proving Ghostty and Roastty map them to the same Metal uniform bools:
+  `use_display_p3`, `use_linear_blending`, and `use_linear_correction`. The
+  remaining renderer residual is now only `scroll-to-bottom.output`.
 - **Facet inventories can outpace their aggregate matrix rows.** Experiment 169
   found CFG-217 through CFG-222 were complete in their generated facet
   inventories while the top-level matrix still reported stale `Gap` rows. The
@@ -1746,4 +1751,4 @@ remains open.
 - [Experiment 181: Background image renderer runtime](181-background-image-renderer-runtime.md)
   — **Pass**
 - [Experiment 182: Colorspace and alpha uniform runtime](182-colorspace-alpha-uniform-runtime.md)
-  — **Designed**
+  — **Pass**

@@ -169,10 +169,10 @@ def main() -> int:
         row_gap,
         [
             ("Gap", "renderer residual row status"),
-            ("window-colorspace", "concrete renderer gap evidence"),
+            ("scroll-to-bottom.output", "concrete renderer gap evidence"),
         ],
     )
-    if "window-colorspace" not in row_gap:
+    if "scroll-to-bottom.output" not in row_gap:
         raise AssertionError("renderer residual row still has unexpected missing-evidence wording")
 
     cfg223 = require_row(config_matrix, "CFG-223")
@@ -181,8 +181,8 @@ def main() -> int:
         [
             ("Runtime and UI effects", "CFG-223 row"),
             ("Gap", "CFG-223 status"),
-            ("79 rows Oracle complete", "CFG-223 oracle count"),
-            ("82 rows closed", "CFG-223 closed count"),
+            ("80 rows Oracle complete", "CFG-223 oracle count"),
+            ("83 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],

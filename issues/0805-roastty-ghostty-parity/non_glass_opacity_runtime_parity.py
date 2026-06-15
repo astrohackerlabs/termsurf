@@ -228,7 +228,7 @@ def main() -> int:
         row_gap,
         [
             ("Gap", "RUNTIME-008B2B2B2B2B status"),
-                        ("window-colorspace", "RUNTIME-008B2B2B2B2B concrete gap"),
+                        ("scroll-to-bottom.output", "RUNTIME-008B2B2B2B2B concrete gap"),
         ],
     )
     if "RUNTIME-008B2B2B2 |" in runtime_inventory:
@@ -238,8 +238,8 @@ def main() -> int:
     require_all(
         cfg223,
         [
-            ("79 rows Oracle complete", "CFG-223 oracle count"),
-            ("82 rows closed", "CFG-223 closed count"),
+            ("80 rows Oracle complete", "CFG-223 oracle count"),
+            ("83 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],

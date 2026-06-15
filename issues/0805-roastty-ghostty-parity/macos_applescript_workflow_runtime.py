@@ -235,8 +235,8 @@ def assert_inventory_split() -> None:
         "fails if a new Roastty crash report appears" in runtime_inventory,
         "missing new crash-report guard evidence",
     )
-    require("79 rows Oracle complete" in config_matrix, "CFG-223 oracle count not updated")
-    require("82 rows closed" in config_matrix, "CFG-223 closed count not updated")
+    require("80 rows Oracle complete" in config_matrix, "CFG-223 oracle count not updated")
+    require("83 rows closed" in config_matrix, "CFG-223 closed count not updated")
     require("4 rows are incomplete" in config_matrix, "CFG-223 incomplete count changed")
     require("4 rows are runtime gaps" in config_matrix, "CFG-223 gap count changed")
     require(cfg223 is not None and len(cfg223) > 4 and cfg223[4] == "Gap", "CFG-223 should remain Gap")

@@ -356,14 +356,22 @@ def main() -> int:
             "background-image-repeat",
         ],
     )
+    require_row_complete(
+        runtime_inventory,
+        "RUNTIME-008B2B2B2B2B3",
+        [
+            "colorspace and alpha-blending",
+            "use_display_p3",
+            "use_linear_blending",
+            "use_linear_correction",
+        ],
+    )
 
     residual = require_row(runtime_inventory, "RUNTIME-008B2B2B2B2B")
     require_all(
         residual,
         [
             ("Gap", "residual renderer row status"),
-            ("window-colorspace", "window colorspace gap"),
-            ("alpha-blending", "alpha blending gap"),
             ("scroll-to-bottom.output", "scroll-to-bottom output gap"),
             ("TBD by future CFG-223 renderer visual experiments", "future renderer guard"),
         ],
@@ -375,6 +383,8 @@ def main() -> int:
         "background-image-position",
         "background-image-fit",
         "background-image-repeat",
+        "window-colorspace",
+        "alpha-blending",
     ]:
         if forbidden in residual:
             raise AssertionError(f"{forbidden} still appears in residual renderer gap")
@@ -396,7 +406,9 @@ def main() -> int:
             ('id="RUNTIME-008B2B2B2B2B"', "source residual row"),
             ('id="RUNTIME-008B2B2B2B2B1"', "source custom shader animation row"),
             ('id="RUNTIME-008B2B2B2B2B2"', "source background image row"),
+            ('id="RUNTIME-008B2B2B2B2B3"', "source color uniform row"),
             ("background_image_runtime_parity.py", "source background image guard"),
+            ("color_uniform_runtime_parity.py", "source color uniform guard"),
             ("renderer_visual_residual_audit.py", "source residual guard"),
             ('id="RUNTIME-007B2B2B2B2"', "font gap remains tracked"),
             ('id="RUNTIME-011B2B"', "macOS walkthrough gap remains tracked"),
@@ -410,8 +422,8 @@ def main() -> int:
         [
             ("Runtime and UI effects", "CFG-223 row"),
             ("Gap", "CFG-223 remains open"),
-            ("79 rows Oracle complete", "CFG-223 oracle count"),
-            ("82 rows closed", "CFG-223 closed count"),
+            ("80 rows Oracle complete", "CFG-223 oracle count"),
+            ("83 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],
