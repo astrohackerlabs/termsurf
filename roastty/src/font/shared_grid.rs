@@ -495,6 +495,25 @@ mod tests {
         // A distinct glyph is a distinct key — the cache grows to two entries.
         grid.render_glyph(Index::default(), n, &opts).expect("'N'");
         assert_eq!(grid.glyphs.len(), 2);
+
+        // The same glyph with thickening enabled is a distinct render key.
+        let thick_opts = RenderOptions {
+            thicken: true,
+            ..opts
+        };
+        grid.render_glyph(Index::default(), m, &thick_opts)
+            .expect("thick 'M'");
+        assert_eq!(grid.glyphs.len(), 3);
+
+        // Strength is also part of upstream's packed key, so changing it cannot
+        // reuse the prior thickened rasterization.
+        let dim_thick_opts = RenderOptions {
+            thicken_strength: 128,
+            ..thick_opts
+        };
+        grid.render_glyph(Index::default(), m, &dim_thick_opts)
+            .expect("dim thick 'M'");
+        assert_eq!(grid.glyphs.len(), 4);
     }
 
     #[test]

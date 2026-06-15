@@ -1302,6 +1302,21 @@ mod tests {
     }
 
     #[test]
+    fn font_thicken_render_runtime_active_frame_sources_config() {
+        let term = terminal(4, 3);
+        let mut config = Config::default();
+        config.font_thicken = true;
+        config.font_thicken_strength = 128;
+        let knobs = FrameRenderKnobs::from_config(&config);
+        let state = FrameRenderState::from_terminal(&term);
+
+        let input = state.rebuild_input(&knobs);
+
+        assert!(input.row_format.thicken);
+        assert_eq!(input.row_format.thicken_strength, 128);
+    }
+
+    #[test]
     fn render_state_derives_visible_block_cursor_overlay() {
         let term = terminal(4, 3); // default: cursor visible, Block style
         let state = FrameRenderState::from_terminal(&term);

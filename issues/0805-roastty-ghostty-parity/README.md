@@ -735,7 +735,14 @@ experiment files until they are proven.
   renderer gap. Roastty now applies `FontShapingBreak` to row-local `RunOptions`
   in active frame row formatting, matching pinned Ghostty's renderer-side
   application after viewport cursor derivation. Remaining font work stays in
-  `RUNTIME-007B2B`.
+  `RUNTIME-007B2B2`.
+- **Font thickening has a deterministic non-`sbix` render slice.** Experiment
+  146 split `font-thicken` and `font-thicken-strength` option propagation,
+  shared glyph-cache key separation, and CoreText non-`sbix` canvas
+  padding/strength behavior out of the remaining font renderer gap. Bitmap/color
+  font thickening edge cases, feature/variation effects, metric adjustment,
+  fallback visual output, glyph metrics, and broad font pixel parity remain in
+  `RUNTIME-007B2B2`.
 - **Font-size runtime updates should be idempotent.** Experiment 125 found that
   applying an unchanged font size dirtied ABI-only surfaces because
   `set_font_size_points` always requested a render. The setter now returns
@@ -1420,4 +1427,4 @@ remains open.
 - [Experiment 145: Font shaping break runtime](145-font-shaping-break-runtime.md)
   — **Pass**
 - [Experiment 146: Font thicken render runtime](146-font-thicken-render-runtime.md)
-  — **Designed**
+  — **Pass**

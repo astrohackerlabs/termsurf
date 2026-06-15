@@ -349,7 +349,37 @@ ROWS = [
         guard_command="`cargo test --manifest-path roastty/Cargo.toml font_shaping_break_runtime && cargo test --manifest-path roastty/Cargo.toml apply_break_config_clears_cursor_x_when_off && cargo test --manifest-path roastty/Cargo.toml next_breaks_on_cursor && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/font_shaping_break_runtime_parity.py`",
     ),
     RuntimeRow(
-        id="RUNTIME-007B2B",
+        id="RUNTIME-007B2B1",
+        behavior="deterministic non-`sbix` font-thicken/font-thicken-strength renderer option propagation, glyph cache separation, and CoreText render mechanics",
+        ghostty_reference="`vendor/ghostty/src/renderer/generic.zig` `font_thicken` and `font_thicken_strength`; `vendor/ghostty/src/font/SharedGrid.zig` packed glyph key fields; `vendor/ghostty/src/font/face/coretext.zig` non-`sbix` thicken padding and grayscale strength",
+        roastty_reference="`roastty/src/renderer/frame_renderer.rs` frame render knobs and row-format input; `roastty/src/renderer/cell.rs` `RenderOptions`; `roastty/src/font/shared_grid.rs` glyph cache key; `roastty/src/font/face/coretext.rs` non-`sbix` thicken rendering",
+        family="font",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 146 splits out deterministic non-`sbix` "
+            "`font-thicken`/`font-thicken-strength` render mechanics without "
+            "claiming full font pixel parity. "
+            "`font_thicken_render_runtime_active_frame_sources_config` proves "
+            "active frame row-format input receives config-derived thicken "
+            "values. `render_options_plain_letter_has_no_constraint` proves "
+            "row/cell render options pass `thicken` and `thicken_strength` to "
+            "glyph rendering. `render_glyph_caches_by_key` proves the shared "
+            "glyph cache separates plain, thickened, and different-strength "
+            "renders of the same glyph. `render_glyph_thicken_pads_canvas` "
+            "proves CoreText non-`sbix` thickening grows the canvas by one "
+            "pixel on each edge, and `render_glyph_strength_dims_fill` proves "
+            "lower strength dims grayscale fill. "
+            "`font_thicken_render_runtime_parity.py` statically checks pinned "
+            "Ghostty's derived config, glyph render options, packed glyph key, "
+            "and CoreText thicken/strength markers against Roastty's wiring, "
+            "tests, and inventory split."
+        ),
+        missing_evidence="None for deterministic non-`sbix` font-thicken/font-thicken-strength option propagation, glyph cache separation, and CoreText render mechanics.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml render_glyph_caches_by_key && cargo test --manifest-path roastty/Cargo.toml render_options_plain_letter_has_no_constraint && cargo test --manifest-path roastty/Cargo.toml render_glyph_thicken_pads_canvas && cargo test --manifest-path roastty/Cargo.toml render_glyph_strength_dims_fill && cargo test --manifest-path roastty/Cargo.toml font_thicken_render_runtime && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/font_thicken_render_runtime_parity.py`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-007B2B2",
         behavior="remaining font renderer output effects",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig` font feature, variation, thicken, metric, and shaping fields; `vendor/ghostty/src/font` shaping/rendering paths",
         roastty_reference="`roastty/src/font`; `roastty/src/renderer` font shaping, metrics, glyph output, and visual renderer behavior",
@@ -363,13 +393,17 @@ ROWS = [
             "triggers after config reload and manual font-size changes. "
             "Experiment 145 split out deterministic `font-shaping-break` "
             "cursor-run break behavior through active frame row formatting. "
+            "Experiment 146 split out deterministic non-`sbix` "
+            "`font-thicken`/`font-thicken-strength` renderer option "
+            "propagation, glyph cache separation, and CoreText render "
+            "mechanics. "
             "Remaining font parity still needs focused runtime/renderer or GUI "
-            "proof for OpenType feature and variation config effects, thicken "
-            "and thicken-strength rendering, metric adjustment, fallback/"
-            "shaping visual output, glyph metrics as seen by the renderer, "
+            "proof for OpenType feature/variation config effects, metric "
+            "adjustment, fallback/shaping visual output, bitmap/color font "
+            "thickening edge cases, glyph metrics as seen by the renderer, "
             "and broader renderer-visible font pixel parity."
         ),
-        missing_evidence="Add focused font renderer/runtime or GUI proof for feature/variation, thicken, metric adjustment, renderer-visible glyph output, glyph metrics, and broader font pixel parity.",
+        missing_evidence="Add focused font renderer/runtime or GUI proof for feature/variation, metric adjustment, fallback/shaping visual output, bitmap/color font thickening edge cases, glyph metrics, and broader font pixel parity.",
         guard_tier="Tier 3",
         guard_command="TBD by future CFG-223 font renderer experiment.",
     ),
@@ -1289,7 +1323,8 @@ EXPECTED_IDS = [
     "RUNTIME-007A",
     "RUNTIME-007B1",
     "RUNTIME-007B2A",
-    "RUNTIME-007B2B",
+    "RUNTIME-007B2B1",
+    "RUNTIME-007B2B2",
     "RUNTIME-008A",
     "RUNTIME-008B1",
     "RUNTIME-008B2A",
