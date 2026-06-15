@@ -1357,3 +1357,5 @@ remains open.
   — **Pass**
 - [Experiment 137: Clipboard device attributes runtime](137-clipboard-device-attributes-runtime.md)
   — **Pass**
+- [Experiment 138: Cursor default runtime](138-cursor-default-runtime.md) —
+  **Designed**
