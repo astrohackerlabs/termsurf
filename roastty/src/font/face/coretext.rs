@@ -558,6 +558,23 @@ impl Face {
         unsafe { self.font.size() }
     }
 
+    /// Copy this face's CoreText font for Quick Look/Look Up attributed text.
+    /// Upstream passes an unscaled primary font to AppKit, undoing the backing
+    /// scale that terminal rendering applies to the font grid.
+    pub(crate) fn copy_quicklook_font(&self, content_scale_y: f64) -> CFRetained<CTFont> {
+        let scale = if content_scale_y.is_finite() && content_scale_y > 0.0 {
+            content_scale_y
+        } else {
+            1.0
+        };
+        // SAFETY: `self.font` is a live `CTFont`; a null matrix/descriptor keeps
+        // the same face attributes while applying the requested point size.
+        unsafe {
+            self.font
+                .copy_with_attributes(self.size() / scale, std::ptr::null(), None)
+        }
+    }
+
     /// The font's units per em (the head-table fallback).
     pub(crate) fn units_per_em(&self) -> u32 {
         // SAFETY: `self.font` is a live `CTFont`.

@@ -1515,20 +1515,31 @@ extension Roastty {
         }
 
         override func quickLook(with event: NSEvent) {
-            guard let surface = self.surface else { return super.quickLook(with: event) }
+            guard let surface = self.surface else {
+                appendUITestKeyTrace("quickLook fallback=no-surface")
+                return super.quickLook(with: event)
+            }
 
             // Grab the text under the cursor
             var text = roastty_text_s()
-            guard roastty_surface_quicklook_word(surface, &text) else { return super.quickLook(with: event) }
+            guard roastty_surface_quicklook_word(surface, &text) else {
+                appendUITestKeyTrace("quickLook fallback=no-word")
+                return super.quickLook(with: event)
+            }
             defer { roastty_surface_free_text(surface, &text) }
-            guard text.text_len > 0  else { return super.quickLook(with: event) }
+            guard text.text_len > 0  else {
+                appendUITestKeyTrace("quickLook fallback=empty-word")
+                return super.quickLook(with: event)
+            }
 
             // If we can get a font then we use the font. This should always work
             // since we always have a primary font. The only scenario this doesn't
             // work is if someone is using a non-CoreText build which would be
             // unofficial.
             var attributes: [ NSAttributedString.Key: Any ] = [:]
+            var fontPresent = false
             if let fontRaw = roastty_surface_quicklook_font(surface) {
+                fontPresent = true
                 // Memory management here is wonky: roastty_surface_quicklook_font
                 // will create a copy of a CTFont, Swift will auto-retain the
                 // unretained value passed into the dict, so we release the original.
@@ -1540,7 +1551,11 @@ extension Roastty {
             // Roastty coordinate system is top-left, convert to bottom-left for AppKit
             let pt = NSPoint(x: text.tl_px_x, y: frame.size.height - text.tl_px_y)
             let str = NSAttributedString.init(string: String(cString: text.text), attributes: attributes)
+            appendUITestKeyTrace(
+                "quickLook text=\(str.string) len=\(text.text_len) tl=(\(text.tl_px_x),\(text.tl_px_y)) appkit=(\(pt.x),\(pt.y)) fontPresent=\(fontPresent)"
+            )
             self.showDefinition(for: str, at: pt)
+            appendUITestKeyTrace("quickLook showDefinition=true")
         }
 
         override func menu(for event: NSEvent) -> NSMenu? {
@@ -1635,6 +1650,27 @@ extension Roastty {
                 return
             }
             appendUITestKeyTrace("contextMenu uiTestAction items=\(menu.items.map { $0.title }.joined(separator: "|"))")
+        }
+
+        @objc func showUITestQuickLook(_ sender: Any?) {
+            guard ProcessInfo.processInfo.environment["ROASTTY_UI_TEST_ENABLE_QUICKLOOK_ACTION"] == "1" else { return }
+            let event = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: CGPoint(x: bounds.midX, y: bounds.midY),
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window?.windowNumber ?? 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )
+            guard let event else {
+                appendUITestKeyTrace("quickLook uiTestAction=no-event")
+                return
+            }
+            appendUITestKeyTrace("quickLook uiTestAction=invoke")
+            quickLook(with: event)
         }
 
         // MARK: Menu Handlers

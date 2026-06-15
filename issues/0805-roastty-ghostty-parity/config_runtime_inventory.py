@@ -2144,7 +2144,7 @@ ROWS = [
             "`hoverUrl`, published hover state, `URLHoverBanner(url:)` rendering, "
             "middle truncation, and left/right banner hover switch."
         ),
-        missing_evidence="None for copied macOS link-hover banner source plumbing; live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and Quick Look/native link preview display remains tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for copied macOS link-hover banner source plumbing; live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and live Quick Look/native definition UI is tracked by RUNTIME-012B2B2B2B2B3C8.",
         guard_tier="Tier 0",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_link_hover_banner_runtime_parity.py`",
     ),
@@ -2293,7 +2293,7 @@ ROWS = [
             "context-menu path constructs the expected menu items including "
             "`Paste`, split actions, and `Change Terminal Title...`."
         ),
-        missing_evidence="None for live native context-menu construction and item-list trace. Live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and Quick Look/native link preview display remains tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for live native context-menu construction and item-list trace. Live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and live Quick Look/native definition UI is tracked by RUNTIME-012B2B2B2B2B3C8.",
         guard_tier="Tier 3",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_native_context_menu_trace_runtime.py`",
     ),
@@ -2340,7 +2340,7 @@ ROWS = [
             "`mouseOverLink url=https://example.com/issue805-exp188-link-hover` "
             "from the live app trace."
         ),
-        missing_evidence="None for live regular-link hover dispatch, cursor-shape request, and exact hovered URL routing to the app. Live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and Quick Look/native link preview display remains tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for live regular-link hover dispatch, cursor-shape request, and exact hovered URL routing to the app. Live copied SwiftUI URL hover banner display is tracked by RUNTIME-012B2B2B2B2B3C4, real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and live Quick Look/native definition UI is tracked by RUNTIME-012B2B2B2B2B3C8.",
         guard_tier="Tier 3",
         guard_command="`cargo test --manifest-path roastty/Cargo.toml link_hover_preview_dispatch_scales_macos_point_coordinates -- --test-threads=1 && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_live_link_hover_runtime.py`",
     ),
@@ -2365,7 +2365,7 @@ ROWS = [
             "control band and 1086 in the bottom-right control band, proving a "
             "localized visible `URLHoverBanner` overlay."
         ),
-        missing_evidence="None for live copied SwiftUI URL hover banner display. Real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and Quick Look/native link preview display remains tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for live copied SwiftUI URL hover banner display. Real OS link cursor pixels are tracked by RUNTIME-012B2B2B2B2B3C6, and live Quick Look/native definition UI is tracked by RUNTIME-012B2B2B2B2B3C8.",
         guard_tier="Tier 3",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_live_link_hover_banner_pixels.py`",
     ),
@@ -2419,7 +2419,7 @@ ROWS = [
             "bbox delta, proving macOS rendered a different link cursor over "
             "the live Roastty window."
         ),
-        missing_evidence="None for real OS-rendered normal and link cursor pixels in the live macOS app. Quick Look/native link preview display remains tracked by RUNTIME-012B2B2B2B2B3C.",
+        missing_evidence="None for real OS-rendered normal and link cursor pixels in the live macOS app. Live Quick Look/native definition UI is tracked by RUNTIME-012B2B2B2B2B3C8.",
         guard_tier="Tier 3",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_real_link_cursor_pixels.py`",
     ),
@@ -2451,10 +2451,40 @@ ROWS = [
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_live_bell_attention_dock_state.py`",
     ),
     RuntimeRow(
+        id="RUNTIME-012B2B2B2B2B3C8",
+        behavior="live macOS Quick Look/native definition UI",
+        ghostty_reference="Pinned Ghostty macOS `SurfaceView.quickLook(with:)`, `ghostty_surface_quicklook_word`, `ghostty_surface_quicklook_font`, and `showDefinition(for:at:)` behavior",
+        roastty_reference="`roastty/macos/Sources/Roastty/Surface View/SurfaceView_AppKit.swift` Quick Look handling; `roastty/src/lib.rs` `roastty_surface_quicklook_word` and `roastty_surface_quicklook_font`; `roastty/macos/Sources/Features/AppleScript/ScriptTerminal.swift` env-gated test action",
+        family="notifications",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 193 fixes `roastty_surface_quicklook_font` so Roastty "
+            "returns a copied primary CoreText font for Quick Look instead of "
+            "null, matching pinned Ghostty's CoreText path. It adds "
+            "`macos_live_quicklook_definition.py`, which launches the built "
+            "debug app with isolated config/defaults, paints the deterministic "
+            "word `serendipity` in a live terminal, moves the real mouse over "
+            "that word, and invokes an env-gated AppleScript `ui_test_quicklook` "
+            "action on the focused `SurfaceView`. The guard requires trace "
+            "evidence for `quickLook uiTestAction=invoke`, "
+            "`quickLook text=serendipity len=11 ... fontPresent=true`, and "
+            "`quickLook showDefinition=true`. The passing visible-UI run kept "
+            "the focused AX window bounds fixed at 800x600 points while the "
+            "guard waited for the post-Quick-Look CGWindow capture to expand "
+            "by at least 100 pixels at the same height and required at least "
+            "50000 nonblack pixels in the extra capture band, proving AppKit "
+            "displayed a native definition popover attached to the live "
+            "Roastty window."
+        ),
+        missing_evidence="None for live Quick Look/native definition word lookup, CoreText font attribute, `showDefinition(for:at:)` dispatch, and visible native definition UI pixels. This does not prove external Launch Services handler delivery or unrelated OS notification/audio/dock effects.",
+        guard_tier="Tier 3",
+        guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_live_quicklook_definition.py`",
+    ),
+    RuntimeRow(
         id="RUNTIME-012B2B2B2B2B3C",
-        behavior="remaining OS-controlled notification, audible bell, dock-attention, Quick Look/native preview, and external URL-handler GUI effects",
-        ghostty_reference="Pinned Ghostty macOS native notification, audible bell, dock-attention, Quick Look/native preview, and external URL-handler behavior",
-        roastty_reference="`roastty/macos/Sources` native notification, audible bell, dock-attention, Quick Look/native preview, and `NSWorkspace.open` handling",
+        behavior="remaining OS-controlled notification, audible bell, dock-attention, and external URL-handler GUI effects",
+        ghostty_reference="Pinned Ghostty macOS native notification, audible bell, dock-attention, and external URL-handler behavior",
+        roastty_reference="`roastty/macos/Sources` native notification, audible bell, dock-attention, and `NSWorkspace.open` handling",
         family="notifications",
         status="Gap",
         evidence=(
@@ -2474,11 +2504,14 @@ ROWS = [
             "OS-rendered link cursor pixels into "
             "`RUNTIME-012B2B2B2B2B3C6`. Experiment 192 splits live inactive-app "
             "Dock attention request dispatch and badge authorization capture "
-            "into `RUNTIME-012B2B2B2B2B3C7`. The remaining unproven behavior is "
+            "into `RUNTIME-012B2B2B2B2B3C7`. Experiment 193 splits live "
+            "Quick Look/native definition word lookup, CoreText font attribute, "
+            "`showDefinition(for:at:)` dispatch, and visible native definition "
+            "UI pixels into `RUNTIME-012B2B2B2B2B3C8`. The remaining unproven behavior is "
             "limited to OS-controlled GUI effects that the current VM run did "
             "not expose deterministically."
         ),
-        missing_evidence="Still need deterministic proof for actual OS notification delivery/banner/sound after authorization is available, audible bell output, OS-visible dock-attention bounce/state beyond AppKit request dispatch, Quick Look/native link preview display beyond the copied SwiftUI URLHoverBanner, and external Launch Services handler delivery.",
+        missing_evidence="Still need deterministic proof for actual OS notification delivery/banner/sound after authorization is available, audible bell output, OS-visible dock-attention bounce/state beyond AppKit request dispatch, and external Launch Services handler delivery.",
         guard_tier="Tier 3",
         guard_command="TBD by future focused OS/native GUI experiment.",
     ),
@@ -2614,6 +2647,7 @@ EXPECTED_IDS = [
     "RUNTIME-012B2B2B2B2B3C5",
     "RUNTIME-012B2B2B2B2B3C6",
     "RUNTIME-012B2B2B2B2B3C7",
+    "RUNTIME-012B2B2B2B2B3C8",
     "RUNTIME-012B2B2B2B2B3C",
     "RUNTIME-013",
     "RUNTIME-014",

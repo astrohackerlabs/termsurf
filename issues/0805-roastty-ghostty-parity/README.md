@@ -1035,9 +1035,9 @@ experiment files until they are proven.
   content scale before point-to-cell conversion fixed live regular-link hover
   dispatch on Retina displays. The live guard now proves Command-modified mouse
   movement over a deterministic URL emits `cursorShape raw=3 pointerStyle=link`
-  and the exact `mouseOverLink` URL in the real debug app. Native link preview
-  display remains in `RUNTIME-012B2B2B2B2B3C`; real OS link cursor pixels are
-  now tracked separately by `RUNTIME-012B2B2B2B2B3C6`.
+  and the exact `mouseOverLink` URL in the real debug app. Real OS link cursor
+  pixels are now tracked separately by `RUNTIME-012B2B2B2B2B3C6`; live Quick
+  Look/native definition UI is tracked separately by `RUNTIME-012B2B2B2B2B3C8`.
 - **The copied SwiftUI URL hover banner can be proven with localized pixels.**
   Experiment 189 reused the live link-hover path and captured exact-window
   before/after screenshots. A Swift sampler saw 32674 changed pixels in the
@@ -1071,6 +1071,18 @@ experiment files until they are proven.
   explains why the app does not set a badge label in this VM. CFG-223 now has 92
   Oracle-complete runtime rows and 95 closed rows, while OS-visible Dock
   bounce/state remains in the residual gap.
+- **Quick Look definition UI needs the CoreText font ABI.** Experiment 193 found
+  that Roastty's `roastty_surface_quicklook_font` still returned null, while
+  pinned Ghostty returns a copied primary CoreText font for
+  `showDefinition(for:at:)`. Fixing that ABI let the live guard prove
+  `fontPresent=true`, exact word selection for `serendipity`, and visible native
+  AppKit definition UI: the guard waits for the post-Quick-Look window capture
+  to expand by at least 100 pixels at the same height and requires at least
+  50000 nonblack pixels in the extra native-popover band. The latest exact
+  dimensions and pixel counts stay in
+  `logs/issue805-exp193-quicklook-latest.json` because AppKit popover geometry
+  can drift by a few pixels between runs. CFG-223 now has 93 Oracle-complete
+  runtime rows and 96 closed rows.
 - **Font-size runtime updates should be idempotent.** Experiment 125 found that
   applying an unchanged font size dirtied ABI-only surfaces because
   `set_font_size_points` always requested a render. The setter now returns
@@ -1847,4 +1859,4 @@ remains open.
 - [Experiment 192: Live dock attention state](192-live-dock-attention-state.md)
   — **Partial**
 - [Experiment 193: Live Quick Look definition dispatch](193-live-quicklook-definition.md)
-  — **Designed**
+  — **Pass**

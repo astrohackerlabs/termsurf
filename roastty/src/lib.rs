@@ -19201,8 +19201,26 @@ pub extern "C" fn roastty_inspector_text(inspector: RoasttyInspector, text: *con
 }
 
 #[no_mangle]
-pub extern "C" fn roastty_surface_quicklook_font(_surface: RoasttySurface) -> *mut c_void {
-    ptr::null_mut()
+pub extern "C" fn roastty_surface_quicklook_font(surface: RoasttySurface) -> *mut c_void {
+    let Some(surface) = surface_from_handle(surface) else {
+        return ptr::null_mut();
+    };
+    let scale_y = Surface::sanitized_scale(surface.scale_factor_y);
+    let Some(renderer) = surface.renderer.as_mut() else {
+        return ptr::null_mut();
+    };
+    let Ok(face) = renderer
+        .shared_grid
+        .resolver
+        .collection_mut()
+        .get_face(font::collection::Index::default())
+    else {
+        return ptr::null_mut();
+    };
+    let font = face.copy_quicklook_font(scale_y);
+    objc2_core_foundation::CFRetained::into_raw(font)
+        .as_ptr()
+        .cast()
 }
 
 #[no_mangle]

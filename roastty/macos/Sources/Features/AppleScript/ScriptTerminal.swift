@@ -77,6 +77,11 @@ final class ScriptTerminal: NSObject {
             surfaceView?.performSelector(onMainThread: #selector(Roastty.SurfaceView.showUITestContextMenu(_:)), with: nil, waitUntilDone: true)
             return true
         }
+        if action == "ui_test_quicklook" {
+            guard ProcessInfo.processInfo.environment["ROASTTY_UI_TEST_ENABLE_QUICKLOOK_ACTION"] == "1" else { return false }
+            surfaceView?.performSelector(onMainThread: #selector(Roastty.SurfaceView.showUITestQuickLook(_:)), with: nil, waitUntilDone: true)
+            return true
+        }
         if action.hasPrefix("ui_test_open_url:") {
             guard ProcessInfo.processInfo.environment["ROASTTY_UI_TEST_ENABLE_OPEN_URL_ACTION"] == "1" else { return false }
             let url = String(action.dropFirst("ui_test_open_url:".count))

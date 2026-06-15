@@ -61,7 +61,7 @@ def main() -> int:
     require("Gap" in cfg223, f"CFG-223 should remain Gap: {cfg223}")
     require_text(
         matrix,
-        "Runtime inventory coverage: 92 rows Oracle complete; 95 rows closed; 1 rows are incomplete and 1 rows are runtime gaps.",
+        "Runtime inventory coverage: 93 rows Oracle complete; 96 rows closed; 1 rows are incomplete and 1 rows are runtime gaps.",
         "CFG-223 split counts",
     )
 
@@ -141,6 +141,16 @@ def main() -> int:
     require_text(attention, "authorizationStatus=1 badgeSetting=2", "badge authorization evidence")
     require_text(attention, "macos_live_bell_attention_dock_state.py", "attention live guard command")
 
+    quicklook_cells = row_cells(runtime, "RUNTIME-012B2B2B2B2B3C8")
+    quicklook = row_line(runtime, "RUNTIME-012B2B2B2B2B3C8")
+    require(quicklook_cells[4] == "notifications", f"unexpected Quick Look row family: {quicklook_cells}")
+    require(quicklook_cells[5] == "Oracle complete", f"unexpected Quick Look row status: {quicklook_cells}")
+    require_text(quicklook, "Quick Look/native definition UI", "Quick Look behavior")
+    require_text(quicklook, "fontPresent=true", "Quick Look CoreText font evidence")
+    require_text(quicklook, "showDefinition=true", "Quick Look showDefinition evidence")
+    require_text(quicklook, "at least 50000 nonblack pixels", "Quick Look native popover threshold evidence")
+    require_text(quicklook, "macos_live_quicklook_definition.py", "Quick Look live guard command")
+
     gap_cells = row_cells(runtime, "RUNTIME-012B2B2B2B2B3C")
     gap = row_line(runtime, "RUNTIME-012B2B2B2B2B3C")
     require(gap_cells[4] == "notifications", f"unexpected gap row family: {gap_cells}")
@@ -149,11 +159,11 @@ def main() -> int:
         "actual OS notification delivery/banner/sound",
         "audible bell output",
         "OS-visible dock-attention bounce/state beyond AppKit request dispatch",
-        "Quick Look/native link preview display beyond the copied SwiftUI URLHoverBanner",
         "external Launch Services handler delivery",
     ]:
         require_text(gap, needle, f"remaining exact gap slice {needle}")
     require_absent(gap, "real OS cursor pixels", "closed real OS cursor gap")
+    require_absent(gap, "Quick Look/native link preview display", "stale remaining Quick Look gap")
 
     result = subprocess.run(
         ["python3", str(LIVE_GUARD)],
@@ -177,6 +187,7 @@ def main() -> int:
         ISSUE / "macos_live_bell_title_border_pixels.py",
         ISSUE / "macos_real_link_cursor_pixels.py",
         ISSUE / "macos_live_bell_attention_dock_state.py",
+        ISSUE / "macos_live_quicklook_definition.py",
     ]:
         result = subprocess.run(
             ["python3", str(guard)],
