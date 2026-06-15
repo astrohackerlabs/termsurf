@@ -1678,3 +1678,5 @@ remains open.
 - [Experiment 172: Native menu runtime](172-native-menu-runtime.md) — **Pass**
 - [Experiment 173: macOS GUI state runtime](173-macos-gui-state-runtime.md) —
   **Pass**
+- [Experiment 174: Quick Terminal GUI runtime](174-quick-terminal-gui-runtime.md)
+  — **Designed**
