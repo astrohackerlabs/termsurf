@@ -1394,3 +1394,5 @@ remains open.
   — **Pass**
 - [Experiment 142: Terminal runtime residual audit](142-terminal-runtime-residual-audit.md)
   — **Pass**
+- [Experiment 143: Font live grid update runtime](143-font-live-grid-update-runtime.md)
+  — **Designed**
