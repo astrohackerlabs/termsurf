@@ -1719,3 +1719,5 @@ remains open.
   — **Pass**
 - [Experiment 178: GUI cursor pixel runtime](178-gui-cursor-pixel-runtime.md) —
   **Pass**
+- [Experiment 179: Renderer visual residual audit](179-renderer-visual-residual-audit.md)
+  — **Designed**
