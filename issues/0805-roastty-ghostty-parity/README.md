@@ -308,6 +308,12 @@ experiment files until they are proven.
   PID-owned layer-0 CGWindowID, and sampling stable visible regions inside each
   pane. Broad right-third sampling can hit renderer wrap gaps, so the durable
   oracle avoids the titlebar, divider, window edges, and known wrap bands.
+- **Hidden titlebar proof needs a positive control.** Experiment 176 showed that
+  `macos-titlebar-style = hidden` can be proven by comparing it to a
+  `transparent` control window, both launched from the debug app with isolated
+  config. On this VM, `AXFocused` on the window remains false even when the app
+  is active; the stable focus proof is exact frontmost Unix PID plus `AXMain` on
+  the target window and on the process `AXFocusedWindow`.
 - **Passing behavior needs a durable but cheap guard.** Future experiments
   should record the cheapest sufficient regression guard for each passing parity
   row. Prefer static checks and unit tests when they prove the behavior; reserve
@@ -1695,4 +1701,4 @@ remains open.
 - [Experiment 175: macOS split layout runtime](175-macos-split-layout-runtime.md)
   — **Pass**
 - [Experiment 176: macOS hidden titlebar runtime](176-macos-hidden-titlebar-runtime.md)
-  — **Designed**
+  — **Pass**

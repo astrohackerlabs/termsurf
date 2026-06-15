@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live macOS split-layout GUI guard for Issue 805 CFG-223."""
+"""Live macOS titlebar GUI guard for Issue 805 CFG-223."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import json
 import os
 import re
-import shlex
 import subprocess
 import tempfile
 import textwrap
@@ -95,7 +94,7 @@ def wait_for_crash_report_settle(before: set[Path]) -> set[Path]:
     return observed
 
 
-def launch_app(config: Path) -> int:
+def launch_app(config: Path, suite_suffix: str) -> int:
     before = scoped_pids()
     require(not before, f"debug Roastty app is already running: {sorted(before)}")
     result = subprocess.run(
@@ -107,7 +106,7 @@ def launch_app(config: Path) -> int:
             "--env",
             "ROASTTY_CLEAR_USER_DEFAULTS=1",
             "--env",
-            "ROASTTY_USER_DEFAULTS_SUITE=com.termsurf.roastty.issue805.exp175",
+            f"ROASTTY_USER_DEFAULTS_SUITE=com.termsurf.roastty.issue805.exp176.{suite_suffix}",
             str(APP),
         ],
         cwd=ROOT,
@@ -209,14 +208,24 @@ def windows_for_pid(pid: int) -> list[WindowInfo]:
     return parse_windows(result.stdout)
 
 
-def primary_window(pid: int) -> WindowInfo:
+def primary_window(pid: int, focused_bounds: Rect) -> WindowInfo:
     windows = [
         window
         for window in windows_for_pid(pid)
-        if window.layer == 0 and window.bounds.width >= 300 and window.bounds.height >= 200
+        if window.layer == 0
+        and window.bounds.width >= 300
+        and window.bounds.height >= 200
+        and window.bounds == focused_bounds
     ]
-    require(windows, f"no primary PID-owned layer-0 window for {pid}")
-    return max(windows, key=lambda window: window.bounds.area)
+    require(
+        windows,
+        f"no PID-owned layer-0 window for {pid} matched focused bounds {focused_bounds}",
+    )
+    require(
+        len(windows) == 1,
+        f"expected exactly one focused PID-owned layer-0 window for {pid}, got {windows}",
+    )
+    return windows[0]
 
 
 def capture_window_id(window_id: int, output: Path) -> tuple[int, int]:
@@ -253,33 +262,76 @@ def capture_window_id(window_id: int, output: Path) -> tuple[int, int]:
     return int(width_match.group(1)), int(height_match.group(1))
 
 
-def wait_for_file(path: Path, description: str, timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.is_file() and path.read_text().strip() == "ready":
-            return
-        time.sleep(0.25)
-    raise AssertionError(f"timed out waiting for {description}: {path}")
-
-
-def write_painter(path: Path, marker: Path, color_sequence: str, background: str) -> None:
-    path.write_text(
-        textwrap.dedent(
-            f"""
-            from pathlib import Path
-            import sys
-            import time
-
-            Path({str(marker)!r}).write_text("ready")
-            block = (" " * 260 + "\\n") * 80
-            for _ in range(80):
-                sys.stdout.write("\\x1b[?25l\\x1b]11;{background}\\x07\\x1b[H\\x1b[{color_sequence}m" + block)
-                sys.stdout.flush()
-                time.sleep(0.2)
-            time.sleep(30)
-            """
-        ).lstrip()
+def create_terminal_window(command: str) -> str:
+    app_literal = quote_applescript(APP)
+    command_literal = quote_applescript(command)
+    script = textwrap.dedent(
+        f"""
+        tell application {app_literal}
+          activate
+          set cfg to new surface configuration from {{command:{command_literal}, wait after command:true}}
+          new window with configuration cfg
+          delay 1
+          set w to front window
+          set t0 to focused terminal of selected tab of w
+          if (id of t0) is "" then error "terminal id was empty"
+          return id of t0
+        end tell
+        """
     )
+    return run_osascript(script, timeout=30).stdout.strip()
+
+
+def focus_evidence(pid: int) -> dict[str, object]:
+    app_literal = quote_applescript(APP)
+    run_osascript(f"tell application {app_literal} to activate", timeout=10)
+    script = textwrap.dedent(
+        f"""
+        tell application "System Events"
+          set roasttyProc to first application process whose unix id is {pid}
+          set frontmost of roasttyProc to true
+          delay 0.25
+          perform action "AXRaise" of window 1 of roasttyProc
+          delay 0.25
+          set frontPID to unix id of first application process whose frontmost is true
+          if frontPID is not {pid} then error "frontmost PID mismatch: " & frontPID
+          set mainValue to value of attribute "AXMain" of window 1 of roasttyProc
+          set focusedWindow to value of attribute "AXFocusedWindow" of roasttyProc
+          set focusedWindowMainValue to value of attribute "AXMain" of focusedWindow
+          set focusedPosition to value of attribute "AXPosition" of focusedWindow
+          set focusedSize to value of attribute "AXSize" of focusedWindow
+          set focusedX to item 1 of focusedPosition as integer
+          set focusedY to item 2 of focusedPosition as integer
+          set focusedWidth to item 1 of focusedSize as integer
+          set focusedHeight to item 2 of focusedSize as integer
+          return (frontPID as text) & linefeed & (mainValue as text) & linefeed & (focusedWindowMainValue as text) & linefeed & (focusedX as text) & linefeed & (focusedY as text) & linefeed & (focusedWidth as text) & linefeed & (focusedHeight as text)
+        end tell
+        """
+    )
+    result = run_osascript(script, timeout=15)
+    parts = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    require(len(parts) == 7, f"unexpected focus evidence: {result.stdout!r}")
+    require(int(parts[0]) == pid, f"frontmost PID mismatch: {parts}")
+    require(parts[1].lower() == "true", f"AXMain should be true: {parts}")
+    require(parts[2].lower() == "true", f"AXFocusedWindow AXMain should be true: {parts}")
+    bounds = Rect(
+        x=int(parts[3]),
+        y=int(parts[4]),
+        width=int(parts[5]),
+        height=int(parts[6]),
+    )
+    return {
+        "front_pid": int(parts[0]),
+        "ax_main": parts[1],
+        "focused_window_ax_main": parts[2],
+        "focused_window_bounds": {
+            "x": bounds.x,
+            "y": bounds.y,
+            "width": bounds.width,
+            "height": bounds.height,
+        },
+        "focused_bounds": bounds,
+    }
 
 
 def write_sampler(path: Path) -> None:
@@ -288,18 +340,13 @@ def write_sampler(path: Path) -> None:
 import AppKit
 import Foundation
 
-struct Counts: Codable {
-    let samples: Int
-    let redDominant: Int
-    let blueDominant: Int
-    let other: Int
-}
-
 struct Metrics: Codable {
     let width: Int
     let height: Int
-    let left: Counts
-    let right: Counts
+    let samples: Int
+    let red: Int
+    let yellow: Int
+    let green: Int
 }
 
 func fail(_ message: String) -> Never {
@@ -317,51 +364,45 @@ else {
     fail("failed to load image")
 }
 
-func classify(_ x: Int, _ y: Int) -> String {
+func classify(_ x: Int, _ y: Int) -> String? {
     guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
-        return "other"
+        return nil
     }
     let r = Int((color.redComponent * 255).rounded())
     let g = Int((color.greenComponent * 255).rounded())
     let b = Int((color.blueComponent * 255).rounded())
-    if r >= 120 && r >= g + 45 && r >= b + 45 {
+    if r >= 190 && g <= 120 && b <= 120 {
         return "red"
     }
-    if b >= 120 && b >= r + 45 && b >= g + 45 {
-        return "blue"
+    if r >= 190 && g >= 145 && b <= 110 {
+        return "yellow"
     }
-    return "other"
-}
-
-func sample(xStart: Int, xEnd: Int, yStart: Int, yEnd: Int) -> Counts {
-    var samples = 0
-    var red = 0
-    var blue = 0
-    var other = 0
-    let columns = 12
-    let rows = 12
-    for xi in 0..<columns {
-        let x = xStart + ((xEnd - xStart) * xi) / max(columns - 1, 1)
-        for yi in 0..<rows {
-            let y = yStart + ((yEnd - yStart) * yi) / max(rows - 1, 1)
-            samples += 1
-            switch classify(x, y) {
-            case "red": red += 1
-            case "blue": blue += 1
-            default: other += 1
-            }
-        }
+    if g >= 145 && r <= 120 && b <= 140 {
+        return "green"
     }
-    return Counts(samples: samples, redDominant: red, blueDominant: blue, other: other)
+    return nil
 }
 
 let width = bitmap.pixelsWide
 let height = bitmap.pixelsHigh
-let yStart = max(140, height / 8)
-let yEnd = max(yStart + 1, height * 3 / 5)
-let left = sample(xStart: max(5, width / 16), xEnd: max(width / 16 + 1, width / 5), yStart: yStart, yEnd: yEnd)
-let right = sample(xStart: min(width - 2, width * 33 / 64), xEnd: min(width - 1, width * 43 / 64), yStart: yStart, yEnd: yEnd)
-let metrics = Metrics(width: width, height: height, left: left, right: right)
+let xMax = min(width - 1, 180)
+let yMax = min(height - 1, 90)
+var samples = 0
+var red = 0
+var yellow = 0
+var green = 0
+for x in stride(from: 0, through: xMax, by: 2) {
+    for y in stride(from: 0, through: yMax, by: 2) {
+        samples += 1
+        switch classify(x, y) {
+        case "red": red += 1
+        case "yellow": yellow += 1
+        case "green": green += 1
+        default: break
+        }
+    }
+}
+let metrics = Metrics(width: width, height: height, samples: samples, red: red, yellow: yellow, green: green)
 let encoder = JSONEncoder()
 encoder.outputFormatting = [.sortedKeys]
 let data = try! encoder.encode(metrics)
@@ -370,7 +411,7 @@ print(String(data: data, encoding: .utf8)!)
     )
 
 
-def sample_colors(sampler: Path, screenshot: Path) -> dict[str, object]:
+def sample_titlebar(sampler: Path, screenshot: Path) -> dict[str, int]:
     result = subprocess.run(
         ["swift", str(sampler), str(screenshot)],
         cwd=ROOT,
@@ -387,64 +428,86 @@ def sample_colors(sampler: Path, screenshot: Path) -> dict[str, object]:
     return json.loads(result.stdout)
 
 
-def assert_split_colors(metrics: dict[str, object]) -> None:
-    width = int(metrics["width"])
-    height = int(metrics["height"])
-    left = metrics["left"]
-    right = metrics["right"]
-    require(isinstance(left, dict) and isinstance(right, dict), f"bad metrics: {metrics}")
-    require(width > 0 and height > 0, f"screenshot dimensions were empty: {width}x{height}")
-
-    left_samples = int(left["samples"])
-    right_samples = int(right["samples"])
-    left_red = int(left["redDominant"])
-    left_blue = int(left["blueDominant"])
-    right_red = int(right["redDominant"])
-    right_blue = int(right["blueDominant"])
-
-    require(left_samples > 0 and right_samples > 0, f"no samples collected: {metrics}")
-    require(left_red / left_samples >= 0.70, f"left pane is not red-dominant: {metrics}")
-    require(right_blue / right_samples >= 0.70, f"right pane is not blue-dominant: {metrics}")
-    require(left_blue / left_samples <= 0.10, f"left pane also looks blue: {metrics}")
-    require(right_red / right_samples <= 0.10, f"right pane also looks red: {metrics}")
-
-
-def write_debug_artifacts(screenshot: Path, metrics: dict[str, object]) -> None:
-    debug_png = Path("/tmp/termsurf-issue805-exp175-split-layout.png")
-    debug_json = Path("/tmp/termsurf-issue805-exp175-split-layout.json")
-    if screenshot.is_file():
-        debug_png.write_bytes(screenshot.read_bytes())
-    debug_json.write_text(json.dumps(metrics, sort_keys=True, indent=2) + "\n")
-
-
-def create_split_window(red_command: str, blue_command: str) -> tuple[str, str, int]:
-    app_literal = quote_applescript(APP)
-    red_literal = quote_applescript(red_command)
-    blue_literal = quote_applescript(blue_command)
-    script = textwrap.dedent(
-        f"""
-        tell application {app_literal}
-          activate
-          set redCfg to new surface configuration from {{command:{red_literal}, wait after command:true}}
-          set blueCfg to new surface configuration from {{command:{blue_literal}, wait after command:true}}
-          new window with configuration redCfg
-          delay 1
-          set w to front window
-          set t0 to focused terminal of selected tab of w
-          if (id of t0) is "" then error "initial terminal id was empty"
-          set t1 to split t0 direction right with configuration blueCfg
-          delay 2
-          if (id of t1) is "" then error "split terminal id was empty"
-          if (count of terminals of selected tab of w) is not 2 then error "selected tab did not have exactly two terminals"
-          return (id of t0) & linefeed & (id of t1) & linefeed & (count of terminals of selected tab of w)
-        end tell
-        """
+def write_config(path: Path, style: str) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "macos-applescript = true",
+                "quit-after-last-window-closed = true",
+                "cursor-style-blink = false",
+                "font-size = 16",
+                "window-width = 100",
+                "window-height = 30",
+                "background = #20242c",
+                "background-opacity = 1",
+                f"macos-titlebar-style = {style}",
+                "",
+            ]
+        )
     )
-    result = run_osascript(script, timeout=30)
-    parts = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    require(len(parts) == 3, f"unexpected split workflow output: {result.stdout!r}")
-    require(parts[0] != parts[1], f"split reused terminal id: {parts}")
-    return parts[0], parts[1], int(parts[2])
+
+
+def run_case(style: str, temp: Path, sampler: Path) -> dict[str, object]:
+    config = temp / f"{style}.roastty"
+    screenshot = temp / f"{style}.png"
+    write_config(config, style)
+    pid = launch_app(config, style)
+    terminal_id = ""
+    try:
+        wait_for_app(pid)
+        terminal_id = create_terminal_window("/bin/sh -c 'sleep 60'")
+        evidence = focus_evidence(pid)
+        focused_bounds = evidence.pop("focused_bounds")
+        require(isinstance(focused_bounds, Rect), f"unexpected focused bounds: {focused_bounds!r}")
+        window = primary_window(pid, focused_bounds)
+        width, height = capture_window_id(window.id, screenshot)
+        metrics = sample_titlebar(sampler, screenshot)
+        require(width > 0 and height > 0, f"{style} screenshot dimensions were empty: {width}x{height}")
+        require(metrics["width"] == width and metrics["height"] == height, f"{style} sampler dimensions mismatch")
+        debug_png = Path(f"/tmp/termsurf-issue805-exp176-{style}-titlebar.png")
+        debug_json = Path(f"/tmp/termsurf-issue805-exp176-{style}-titlebar.json")
+        debug_png.write_bytes(screenshot.read_bytes())
+        debug_json.write_text(
+            json.dumps(
+                {
+                    "style": style,
+                    "pid": pid,
+                    "terminal_id": terminal_id,
+                    "window_id": window.id,
+                    "window": {
+                        "x": window.bounds.x,
+                        "y": window.bounds.y,
+                        "width": window.bounds.width,
+                        "height": window.bounds.height,
+                        "layer": window.layer,
+                        "name": window.name,
+                    },
+                    "focus": evidence,
+                    "metrics": metrics,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n"
+        )
+        return {"style": style, "pid": pid, "terminal_id": terminal_id, "window_id": window.id, "metrics": metrics}
+    finally:
+        terminate_process(pid)
+
+
+def assert_titlebar_metrics(control: dict[str, object], hidden: dict[str, object]) -> None:
+    control_metrics = control["metrics"]
+    hidden_metrics = hidden["metrics"]
+    require(isinstance(control_metrics, dict) and isinstance(hidden_metrics, dict), "bad titlebar metrics")
+    for color in ["red", "yellow", "green"]:
+        require(
+            int(control_metrics[color]) >= 20,
+            f"transparent control did not expose enough {color} traffic-light pixels: {control_metrics}",
+        )
+        require(
+            int(hidden_metrics[color]) <= 3,
+            f"hidden titlebar still exposes {color} traffic-light pixels: {hidden_metrics}",
+        )
 
 
 def assert_inventory_split() -> None:
@@ -459,12 +522,11 @@ def assert_inventory_split() -> None:
         None,
     )
 
-    require("| RUNTIME-011B2I" in runtime_inventory, "missing RUNTIME-011B2I row")
-    require("live right-split visual layout proof" in runtime_inventory, "missing split-layout evidence")
-    require("red-dominant" in runtime_inventory, "missing red sampled-region evidence")
-    require("blue-dominant" in runtime_inventory, "missing blue sampled-region evidence")
+    require("| RUNTIME-011B2J" in runtime_inventory, "missing RUNTIME-011B2J row")
+    require("live hidden-titlebar visual proof" in runtime_inventory, "missing hidden-titlebar evidence")
+    require("red/yellow/green traffic-light" in runtime_inventory, "missing traffic-light evidence")
+    require("frontmost process Unix PID" in runtime_inventory, "missing frontmost PID evidence")
     require("broader titlebar behavior" in runtime_inventory, "remaining macOS GUI gap omitted titlebar evidence")
-    require("broader split variants" in runtime_inventory, "remaining macOS GUI gap omitted broader split evidence")
     require("75 rows Oracle complete" in config_matrix, "CFG-223 oracle count not updated")
     require("78 rows closed" in config_matrix, "CFG-223 closed count not updated")
     require("4 rows are incomplete" in config_matrix, "CFG-223 incomplete count changed")
@@ -478,71 +540,26 @@ def main() -> int:
     require(LIST_WINDOWS.is_file(), f"window list helper missing: {LIST_WINDOWS}")
 
     crash_reports_before = crash_reports()
-
-    with tempfile.TemporaryDirectory(prefix="termsurf-issue805-exp175-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="termsurf-issue805-exp176-") as temp_dir:
         temp = Path(temp_dir)
-        red_script = temp / "red_pane.py"
-        blue_script = temp / "blue_pane.py"
-        red_marker = temp / "red-ready.txt"
-        blue_marker = temp / "blue-ready.txt"
-        sampler = temp / "sample_split_colors.swift"
-        screenshot = temp / "split-layout.png"
-        config = temp / "config.roastty"
-        write_painter(red_script, red_marker, "48;2;255;0;0", "#ff0000")
-        write_painter(blue_script, blue_marker, "48;2;0;0;255", "#0000ff")
+        sampler = temp / "sample_titlebar.swift"
         write_sampler(sampler)
-        config.write_text(
-            "\n".join(
-                [
-                    "macos-applescript = true",
-                    "quit-after-last-window-closed = true",
-                    "cursor-style-blink = false",
-                    "font-size = 16",
-                    "window-width = 120",
-                    "window-height = 34",
-                    "background-opacity = 1",
-                    "",
-                ]
-            )
-        )
-
-        pid = launch_app(config)
-        try:
-            wait_for_app(pid)
-            red_command = f"python3 {shlex.quote(str(red_script))}"
-            blue_command = f"python3 {shlex.quote(str(blue_script))}"
-            left_id, right_id, terminal_count = create_split_window(red_command, blue_command)
-            require(terminal_count == 2, f"unexpected terminal count after split: {terminal_count}")
-            wait_for_file(red_marker, "red painter")
-            wait_for_file(blue_marker, "blue painter")
-
-            deadline = time.monotonic() + 10
-            observed: WindowInfo | None = None
-            while time.monotonic() < deadline:
-                observed = primary_window(pid)
-                if observed.bounds.width >= 600 and observed.bounds.height >= 250:
-                    break
-                time.sleep(0.25)
-            require(observed is not None, "primary window did not appear")
-
-            time.sleep(2)
-            width, height = capture_window_id(observed.id, screenshot)
-            require(width > 0 and height > 0, f"split screenshot dimensions were empty: {width}x{height}")
-            metrics = sample_colors(sampler, screenshot)
-            write_debug_artifacts(screenshot, metrics)
-            assert_split_colors(metrics)
-        finally:
-            terminate_process(pid)
+        control = run_case("transparent", temp, sampler)
+        hidden = run_case("hidden", temp, sampler)
+        assert_titlebar_metrics(control, hidden)
 
     new_crash_reports = wait_for_crash_report_settle(crash_reports_before)
     require(
         not new_crash_reports,
-        "Roastty wrote crash reports during split layout workflow: "
+        "Roastty wrote crash reports during titlebar workflow: "
         + ", ".join(str(path) for path in sorted(new_crash_reports)),
     )
 
     assert_inventory_split()
-    print(f"macos_split_layout_runtime=pass left_terminal={left_id} right_terminal={right_id}")
+    print(
+        "macos_titlebar_runtime=pass "
+        f"transparent_window={control['window_id']} hidden_window={hidden['window_id']}"
+    )
     return 0
 
 

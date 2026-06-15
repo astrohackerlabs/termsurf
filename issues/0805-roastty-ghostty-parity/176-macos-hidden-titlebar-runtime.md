@@ -123,6 +123,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_nativ
 PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_gui_state_runtime.py
 PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_quick_terminal_runtime.py
 PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_split_layout_runtime.py
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_titlebar_runtime.py
 ```
 
 - Format and hygiene:
@@ -199,3 +200,98 @@ the proof criteria and saved evidence, and makes missing frontmost/main proof a
 fail condition.
 
 Final design verdict: **Approved**.
+
+## Result
+
+**Result:** Pass
+
+Experiment 176 added `macos_titlebar_runtime.py`, a live macOS GUI guard for
+`macos-titlebar-style = hidden`.
+
+The guard launches the debug Roastty app bundle twice with isolated temporary
+config and defaults: once with `macos-titlebar-style = transparent` as the
+positive control, and once with `macos-titlebar-style = hidden` as the test
+case. Each run creates a terminal window through the app's AppleScript
+interface, activates the exact launched process, proves the frontmost Unix PID
+matches the launched debug-app PID, raises the target window, proves the window
+is `AXMain`, proves the process `AXFocusedWindow` is also main, finds the exact
+PID-owned foreground layer-0 CGWindowID whose CoreGraphics bounds match the
+accessibility-focused window bounds, captures that window with
+`screencapture -l`, and samples the top-left titlebar region with a Swift image
+sampler.
+
+The transparent control screenshot contained red/yellow/green traffic-light
+samples. The hidden-style screenshot contained no traffic-light samples above
+the guard threshold. This proves the hidden-titlebar style has a visible runtime
+effect in the actual macOS app without claiming broader titlebar parity.
+
+Debug artifacts from the passing run:
+
+- `/tmp/termsurf-issue805-exp176-transparent-titlebar.png`
+- `/tmp/termsurf-issue805-exp176-transparent-titlebar.json`
+- `/tmp/termsurf-issue805-exp176-hidden-titlebar.png`
+- `/tmp/termsurf-issue805-exp176-hidden-titlebar.json`
+
+Verification run:
+
+```bash
+(cd roastty && macos/build.nu --action build)
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_titlebar_runtime.py
+```
+
+Output:
+
+```text
+macos_titlebar_runtime=pass transparent_window=1806 hidden_window=1819
+```
+
+Inventory impact:
+
+- Added `RUNTIME-011B2J` for live hidden-titlebar visual proof.
+- CFG-223 now has 82 runtime rows.
+- CFG-223 now has 75 `Oracle complete` rows.
+- CFG-223 now has 78 closed rows.
+- CFG-223 still has 4 incomplete rows, all `Gap`.
+- CFG-223 remains `Gap`.
+- `RUNTIME-011B2B` remains open for broader titlebar behavior, broader split
+  interactions, cursor/pointer pixels, broader screenshot/pixel parity, and
+  broader GUI walkthrough effects.
+
+## Conclusion
+
+The hidden-titlebar runtime slice is now covered by a durable live GUI guard
+with a positive traffic-light control and exact-window screenshot evidence.
+Future titlebar or GUI pixel experiments should use the same pattern: launch the
+debug app with isolated config, prove frontmost/main-window state immediately
+before capture, prove the main accessibility window maps to the captured
+CGWindowID, and pair absence checks with a positive control.
+
+## Result Review
+
+Fresh-context adversarial reviewer `Nash the 3rd` reviewed the completed
+experiment result and initially returned `CHANGES REQUIRED`.
+
+Required findings:
+
+- The first implementation proved `AXMain`/`AXFocusedWindow` for `window 1` but
+  selected the screenshot target through a separate CoreGraphics
+  `primary_window(pid)` lookup. If multiple PID-owned layer-0 windows existed,
+  the guard could prove one window was main while capturing another.
+- The recorded verification command used
+  `cd roastty && macos/build.nu --action build` followed by the Python guard
+  path, which would leave the shell in `roastty/` and make the relative issue
+  path invalid.
+
+Fixes made:
+
+- `macos_titlebar_runtime.py` now reads the `AXFocusedWindow` position and size,
+  then selects the exact PID-owned layer-0 CoreGraphics window whose bounds
+  match that focused accessibility window before capture.
+- The verification command now uses
+  `(cd roastty && macos/build.nu --action build)`, so the Python guard still
+  runs from the repository root.
+
+Re-review verdict: **Approved**. The reviewer confirmed both required findings
+were resolved and that no new required findings were introduced.
+
+Final result verdict: **Approved**.
