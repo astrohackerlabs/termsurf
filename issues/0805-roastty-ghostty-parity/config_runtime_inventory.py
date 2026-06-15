@@ -200,7 +200,7 @@ ROWS = [
             "semantics; refreshes existing surfaces on config update; and "
             "does not bypass terminal mouse reporting."
         ),
-        missing_evidence="None for non-link right-click-action surface runtime behavior; link-specific context-menu behavior remains tracked by RUNTIME-012B2B2B.",
+        missing_evidence="None for non-link right-click-action surface runtime behavior; link-specific context-menu behavior remains tracked by RUNTIME-012B2B2B2.",
         guard_tier="Tier 3",
         guard_command="`cargo test --manifest-path roastty/Cargo.toml right_click_action`",
     ),
@@ -1483,7 +1483,7 @@ ROWS = [
             "`bell-features = attention`, `bell-features = title`, and "
             "`bell-features = border` gates."
         ),
-        missing_evidence="None for copied macOS bell presentation plumbing source parity; actual OS/audio/dock/border/title runtime side effects remain tracked by RUNTIME-012B2B2B.",
+        missing_evidence="None for copied macOS bell presentation plumbing source parity; actual OS/audio/dock/border/title runtime side effects remain tracked by RUNTIME-012B2B2B2.",
         guard_tier="Tier 0",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/bell_runtime_dispatch_parity.py && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/bell_presentation_runtime_parity.py`",
     ),
@@ -1507,12 +1507,40 @@ ROWS = [
             "construction, `requireFocus` userInfo, delivery, delayed focused "
             "cleanup, and click-to-focus routing."
         ),
-        missing_evidence="None for copied macOS user-notification presentation/lifecycle source parity; Ghostty core rate limiting and live OS banner/sound behavior remain tracked by RUNTIME-012B2B2B.",
+        missing_evidence="None for copied macOS user-notification presentation/lifecycle source parity; live OS banner/sound behavior remains tracked by RUNTIME-012B2B2B2.",
         guard_tier="Tier 0",
         guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_user_notification_runtime_parity.py`",
     ),
     RuntimeRow(
-        id="RUNTIME-012B2B2B",
+        id="RUNTIME-012B2B2B1",
+        behavior="desktop notification rate limiting",
+        ghostty_reference="`vendor/ghostty/src/App.zig` `last_notification_time` / `last_notification_digest`; `vendor/ghostty/src/Surface.zig::showDesktopNotification` one-second and five-second suppression",
+        roastty_reference="`roastty/src/lib.rs` app-level desktop notification limiter and surface dispatch tests",
+        family="notifications",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 156 ports pinned Ghostty's desktop notification rate "
+            "limiting into Roastty's app-level live surface dispatch. "
+            "`surface_desktop_notification_runtime_*` tests prove "
+            "`desktop-notifications = false` suppresses before limiter state "
+            "updates, delivered notifications update app-level limiter state, "
+            "second notifications inside one second are suppressed without "
+            "state updates, delimiterless `title || body` identity matches "
+            "Ghostty's digest input, identical notifications before five "
+            "seconds are suppressed without state updates, identical "
+            "notifications after five seconds dispatch again, and limiter "
+            "state is shared across surfaces on the same app. "
+            "`desktop_notification_rate_limit_runtime_parity.py` statically "
+            "checks pinned Ghostty's limiter source and Roastty's constants, "
+            "state, explicit-time helper, delimiterless identity, tests, and "
+            "inventory/matrix split."
+        ),
+        missing_evidence="None for desktop notification rate-limit runtime behavior.",
+        guard_tier="Tier 1",
+        guard_command="`cargo test --manifest-path roastty/Cargo.toml surface_desktop_notification_runtime && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/desktop_notification_rate_limit_runtime_parity.py`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-012B2B2B2",
         behavior="remaining notification/link/bell GUI effects",
         ghostty_reference="`vendor/ghostty/src/config/Config.zig` notification, link preview, and app-notification fields; `vendor/ghostty/src/Surface.zig` notification/link hover/menu paths; macOS native notification and link handling",
         roastty_reference="`roastty/macos/Sources` notification, pointer, preview, and context/menu handling beyond copied bell and user-notification plumbing",
@@ -1526,14 +1554,13 @@ ROWS = [
             "`desktop-notifications` config gate. Experiment 153 split out "
             "copied macOS bell presentation plumbing. Experiment 155 split "
             "out copied macOS user-notification presentation and lifecycle "
-            "plumbing. Command-finish notifications, app-notifications, "
-            "native desktop notification rate limiting, actual OS "
-            "banner/sound delivery, actual audio/dock/border/title GUI "
-            "effects, link hover/cursor UI, link previews in the real app, "
-            "and context/menu link flows still need focused runtime or GUI "
-            "proof."
+            "plumbing. Experiment 156 split out desktop notification rate "
+            "limiting. Command-finish notifications, app-notifications, actual "
+            "OS banner/sound delivery, actual audio/dock/border/title GUI "
+            "effects, link hover/cursor UI, link previews in the real app, and "
+            "context/menu link flows still need focused runtime or GUI proof."
         ),
-        missing_evidence="Add command-finish notification, app-notification, native notification rate limiting and live OS delivery, actual bell side-effect, app hover/cursor, preview, and context/menu link runtime or GUI walkthrough guards.",
+        missing_evidence="Add command-finish notification, app-notification, live OS notification delivery, actual bell side-effect, app hover/cursor, preview, and context/menu link runtime or GUI walkthrough guards.",
         guard_tier="Tier 3",
         guard_command="TBD by future CFG-223 notification/link GUI or runtime experiment.",
     ),
@@ -1635,7 +1662,8 @@ EXPECTED_IDS = [
     "RUNTIME-012B2A",
     "RUNTIME-012B2B1",
     "RUNTIME-012B2B2A",
-    "RUNTIME-012B2B2B",
+    "RUNTIME-012B2B2B1",
+    "RUNTIME-012B2B2B2",
     "RUNTIME-013",
     "RUNTIME-014",
 ]

@@ -263,19 +263,18 @@ def main() -> int:
         ],
     )
 
-    row_gap = require_row(runtime_inventory, "RUNTIME-012B2B2B")
+    row_gap = require_row(runtime_inventory, "RUNTIME-012B2B2B2")
     require_all(
         row_gap,
         [
-            ("Gap", "RUNTIME-012B2B2B status"),
-            ("Command-finish notifications", "RUNTIME-012B2B2B command finish gap"),
-            ("app-notifications", "RUNTIME-012B2B2B app notifications gap"),
-            ("native desktop notification rate limiting", "RUNTIME-012B2B2B native notification gap"),
-            ("actual OS banner/sound delivery", "RUNTIME-012B2B2B OS notification delivery gap"),
-            ("actual audio/dock/border/title GUI effects", "RUNTIME-012B2B2B actual GUI effect gap"),
-            ("hover/cursor UI", "RUNTIME-012B2B2B hover cursor gap"),
-            ("link previews", "RUNTIME-012B2B2B link preview gap"),
-            ("context/menu link flows", "RUNTIME-012B2B2B context menu gap"),
+            ("Gap", "RUNTIME-012B2B2B2 status"),
+            ("Command-finish notifications", "RUNTIME-012B2B2B2 command finish gap"),
+            ("app-notifications", "RUNTIME-012B2B2B2 app notifications gap"),
+            ("actual OS banner/sound delivery", "RUNTIME-012B2B2B2 OS notification delivery gap"),
+            ("actual audio/dock/border/title GUI effects", "RUNTIME-012B2B2B2 actual GUI effect gap"),
+            ("hover/cursor UI", "RUNTIME-012B2B2B2 hover cursor gap"),
+            ("link previews", "RUNTIME-012B2B2B2 link preview gap"),
+            ("context/menu link flows", "RUNTIME-012B2B2B2 context menu gap"),
         ],
     )
     if "RUNTIME-012B2B |" in runtime_inventory:
@@ -285,8 +284,8 @@ def main() -> int:
     require_all(
         cfg223,
         [
-            ("57 rows Oracle complete", "CFG-223 oracle count"),
-            ("59 rows closed", "CFG-223 closed count"),
+            ("58 rows Oracle complete", "CFG-223 oracle count"),
+            ("60 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],

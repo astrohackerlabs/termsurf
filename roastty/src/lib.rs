@@ -235,6 +235,9 @@ const ROASTTY_KEY_TABLE_DEACTIVATE_ALL: c_int = 2;
 const MAX_ACTIVE_KEY_TABLES: usize = 8;
 const DESKTOP_NOTIFICATION_TITLE_LIMIT: usize = 63;
 const DESKTOP_NOTIFICATION_BODY_LIMIT: usize = 255;
+const DESKTOP_NOTIFICATION_RATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
+const DESKTOP_NOTIFICATION_IDENTICAL_RATE_LIMIT: std::time::Duration =
+    std::time::Duration::from_secs(5);
 
 const ROASTTY_INSPECTOR_TOGGLE: c_int = 0;
 const ROASTTY_INSPECTOR_SHOW: c_int = 1;
@@ -2538,9 +2541,29 @@ struct App {
     keybind_tables: Vec<ConfigKeybindTable>,
     initial_surface_pending: bool,
     surfaces: Vec<NonNull<Surface>>,
+    last_notification_time: Option<std::time::Instant>,
+    last_notification_identity: Vec<u8>,
 }
 
 impl App {
+    fn allow_desktop_notification_at(&mut self, now: std::time::Instant, identity: &[u8]) -> bool {
+        if let Some(last) = self.last_notification_time {
+            if now.duration_since(last) < DESKTOP_NOTIFICATION_RATE_LIMIT {
+                return false;
+            }
+            if self.last_notification_identity == identity
+                && now.duration_since(last) < DESKTOP_NOTIFICATION_IDENTICAL_RATE_LIMIT
+            {
+                return false;
+            }
+        }
+
+        self.last_notification_time = Some(now);
+        self.last_notification_identity.clear();
+        self.last_notification_identity.extend_from_slice(identity);
+        true
+    }
+
     fn key_event_binding(&self, event: &key::KeyEvent) -> Option<ConfiguredBindingMatch> {
         configured_key_event_binding(&self.keybind_triggers, event)
     }
@@ -4630,13 +4653,31 @@ impl Surface {
         self.perform_action_result(ROASTTY_ACTION_OPEN_URL, storage)
     }
 
-    fn perform_desktop_notification(&self, notification: &TerminalDesktopNotification) -> bool {
+    fn perform_desktop_notification(&mut self, notification: &TerminalDesktopNotification) -> bool {
+        self.perform_desktop_notification_at(notification, std::time::Instant::now())
+    }
+
+    fn perform_desktop_notification_at(
+        &mut self,
+        notification: &TerminalDesktopNotification,
+        now: std::time::Instant,
+    ) -> bool {
         if !self.desktop_notifications {
             return false;
         }
 
         let title = nul_terminated_truncated(&notification.title, DESKTOP_NOTIFICATION_TITLE_LIMIT);
         let body = nul_terminated_truncated(&notification.body, DESKTOP_NOTIFICATION_BODY_LIMIT);
+        let mut identity = Vec::with_capacity(title.len() + body.len());
+        identity.extend_from_slice(&title[..title.len().saturating_sub(1)]);
+        identity.extend_from_slice(&body[..body.len().saturating_sub(1)]);
+        let Some(app) = app_from_handle(self.app) else {
+            return false;
+        };
+        if !app.allow_desktop_notification_at(now, &identity) {
+            return false;
+        }
+
         let mut storage = [0usize; 8];
         storage[0] = title.as_ptr() as usize;
         storage[1] = body.as_ptr() as usize;
@@ -14724,6 +14765,8 @@ pub extern "C" fn roastty_app_new(
         keybind_tables,
         initial_surface_pending: true,
         surfaces: Vec::new(),
+        last_notification_time: None,
+        last_notification_identity: Vec::new(),
     }))
     .cast()
 }
@@ -23546,6 +23589,9 @@ mod tests {
         );
 
         assert!(action_records().is_empty());
+        let app_ref = app_from_handle(app).unwrap();
+        assert!(app_ref.last_notification_time.is_none());
+        assert!(app_ref.last_notification_identity.is_empty());
 
         roastty_surface_free(surface);
         roastty_app_free(app);
@@ -23577,6 +23623,130 @@ mod tests {
         assert!(body.bytes().all(|byte| byte == b'B'));
 
         roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    fn desktop_notification(title: &[u8], body: &[u8]) -> TerminalDesktopNotification {
+        TerminalDesktopNotification {
+            title: title.to_vec(),
+            body: body.to_vec(),
+        }
+    }
+
+    fn desktop_notification_state(app: RoasttyApp) -> (Option<Instant>, Vec<u8>) {
+        let app_ref = app_from_handle(app).unwrap();
+        (
+            app_ref.last_notification_time,
+            app_ref.last_notification_identity.clone(),
+        )
+    }
+
+    #[test]
+    fn surface_desktop_notification_runtime_rate_limits_without_sleeping() {
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        let start = Instant::now();
+
+        assert!(
+            surface_ref.perform_desktop_notification_at(&desktop_notification(b"a", b"bc"), start)
+        );
+        assert_eq!(action_records().len(), 1);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(start), b"abc".to_vec())
+        );
+
+        assert!(!surface_ref.perform_desktop_notification_at(
+            &desktop_notification(b"different", b"payload"),
+            start + Duration::from_millis(999)
+        ));
+        assert_eq!(action_records().len(), 1);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(start), b"abc".to_vec())
+        );
+
+        let second = start + Duration::from_millis(1001);
+        assert!(surface_ref
+            .perform_desktop_notification_at(&desktop_notification(b"other", b"payload"), second));
+        assert_eq!(action_records().len(), 2);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(second), b"otherpayload".to_vec())
+        );
+
+        assert!(!surface_ref.perform_desktop_notification_at(
+            &desktop_notification(b"other", b"payload"),
+            second + Duration::from_secs(4)
+        ));
+        assert_eq!(action_records().len(), 2);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(second), b"otherpayload".to_vec())
+        );
+
+        let third = second + Duration::from_millis(5001);
+        assert!(surface_ref
+            .perform_desktop_notification_at(&desktop_notification(b"other", b"payload"), third));
+        assert_eq!(action_records().len(), 3);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(third), b"otherpayload".to_vec())
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_desktop_notification_runtime_uses_delimiterless_identity() {
+        let app = new_test_app_with_action(true);
+        let surface = new_test_surface(app);
+        let surface_ref = surface_from_handle(surface).unwrap();
+        let start = Instant::now();
+
+        assert!(
+            surface_ref.perform_desktop_notification_at(&desktop_notification(b"a", b"bc"), start)
+        );
+        assert!(!surface_ref.perform_desktop_notification_at(
+            &desktop_notification(b"ab", b"c"),
+            start + Duration::from_secs(4)
+        ));
+        assert_eq!(action_records().len(), 1);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(start), b"abc".to_vec())
+        );
+
+        roastty_surface_free(surface);
+        roastty_app_free(app);
+    }
+
+    #[test]
+    fn surface_desktop_notification_runtime_rate_limit_is_app_level() {
+        let app = new_test_app_with_action(true);
+        let surface_a = new_test_surface(app);
+        let surface_b = new_test_surface(app);
+        let start = Instant::now();
+
+        assert!(surface_from_handle(surface_a)
+            .unwrap()
+            .perform_desktop_notification_at(&desktop_notification(b"first", b""), start));
+        assert!(!surface_from_handle(surface_b)
+            .unwrap()
+            .perform_desktop_notification_at(
+                &desktop_notification(b"second", b""),
+                start + Duration::from_millis(999)
+            ));
+        assert_eq!(action_records().len(), 1);
+        assert_eq!(
+            desktop_notification_state(app),
+            (Some(start), b"first".to_vec())
+        );
+
+        roastty_surface_free(surface_b);
+        roastty_surface_free(surface_a);
         roastty_app_free(app);
     }
 

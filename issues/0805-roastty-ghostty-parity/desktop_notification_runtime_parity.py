@@ -178,12 +178,11 @@ def main() -> int:
         ],
     )
 
-    row_gap = require_row(runtime_inventory, "RUNTIME-012B2B2B")
+    row_gap = require_row(runtime_inventory, "RUNTIME-012B2B2B2")
     require_all(
         row_gap,
         [
             ("Gap", "remaining row status"),
-            ("native desktop notification rate limiting", "remaining native notification rate limit gap"),
             ("actual OS banner/sound delivery", "remaining OS delivery gap"),
             ("Command-finish notifications", "remaining command notification gap"),
             ("link previews", "remaining link preview gap"),
@@ -196,8 +195,8 @@ def main() -> int:
         [
             ("Runtime and UI effects", "CFG-223 row"),
             ("Gap", "CFG-223 status"),
-            ("57 rows Oracle complete", "CFG-223 oracle count"),
-            ("59 rows closed", "CFG-223 closed count"),
+            ("58 rows Oracle complete", "CFG-223 oracle count"),
+            ("60 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],

@@ -134,3 +134,77 @@ update limiter state. The revised design stores `title || body` bytes after
 truncation, factors the limiter behind an explicit `Instant` helper, and names
 the no-state-update and cross-surface app-level cases. The reviewer approved the
 revised design.
+
+## Result
+
+**Result:** Pass
+
+Roastty now applies Ghostty-style app-level desktop notification rate limiting
+before dispatching `ROASTTY_ACTION_DESKTOP_NOTIFICATION`:
+
+- `desktop-notifications = false` still suppresses before limiter state updates;
+- delivered notifications update app-level limiter state;
+- a second notification inside one second is suppressed without updating limiter
+  state;
+- the identity check uses the delimiterless truncated `title || body` byte
+  stream that pinned Ghostty feeds to Wyhash;
+- identical notifications before five seconds are suppressed without updating
+  limiter state;
+- identical notifications after five seconds dispatch again and update state;
+- limiter state is shared across surfaces on the same app.
+
+The inventory split is now:
+
+- `RUNTIME-012B2B2B1`: **Oracle complete** for desktop notification rate
+  limiting;
+- `RUNTIME-012B2B2B2`: **Gap** for command-finish notifications,
+  `app-notifications`, live OS banner/sound delivery, actual bell side effects,
+  link hover/cursor UI, link previews, and context/menu link flows.
+
+Verification passed:
+
+```text
+cargo test --manifest-path roastty/Cargo.toml surface_desktop_notification_runtime
+6 passed; 0 failed
+
+desktop_notification_rate_limit_runtime_parity=pass
+desktop_notification_runtime_parity=pass
+macos_user_notification_runtime_parity=pass
+terminal_runtime_residual_audit=pass
+```
+
+The runtime inventory generator reported:
+
+```text
+runtime_rows=64
+oracle_complete=58
+closed=60
+audit_covered=0
+incomplete=4
+gap=4
+cfg223=Gap
+```
+
+All `*_runtime_parity.py` guards passed, and
+`cargo fmt --manifest-path roastty/Cargo.toml --check` plus `git diff --check`
+passed.
+
+## Conclusion
+
+Desktop notification rate limiting is now closed for runtime parity. The
+remaining notification/link/bell row is narrower and no longer includes Ghostty
+core notification throttling; future experiments should target live OS
+notification delivery, command/app notification generation, actual bell side
+effects, or link UI behavior.
+
+## Completion Review
+
+**Reviewer:** Kepler the 2nd
+
+**Verdict:** Approve
+
+The reviewer found no required issues. They independently verified the focused
+Rust tests, the new rate-limit guard, adjacent notification/bell guards, the
+full `*_runtime_parity.py` loop, terminal residual audit, Rust formatting, and
+diff hygiene. They also confirmed the result commit had not been made before the
+completion review.

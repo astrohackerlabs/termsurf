@@ -667,7 +667,7 @@ experiment files until they are proven.
   title bell prefix, and separate `bell-features = system`, `audio`,
   `attention`, `title`, and `border` gates after expected Roastty renames.
   Actual OS/audio/dock/border/title side effects still need GUI or platform
-  walkthrough proof in `RUNTIME-012B2B2B`.
+  walkthrough proof in `RUNTIME-012B2B2B2`.
 - **OSC desktop notifications need a PTY event queue.** Experiment 141 found
   that Roastty already parsed OSC 9 and OSC 777 desktop notification commands,
   but the live terminal path dropped them. PTY-backed parity now queues terminal
@@ -679,9 +679,16 @@ experiment files until they are proven.
   registration, foreground presentation gate, authorization/settings gate,
   surface notification content/request lifecycle, identifier cleanup, delayed
   focused cleanup, and click-to-focus routing after expected Roastty renames.
-  Ghostty core desktop-notification rate limiting, command-finish notifications,
-  app-notifications, live OS banner/sound delivery, actual bell side effects,
-  and link UI flows remain in `RUNTIME-012B2B2B`.
+  Command-finish notifications, app-notifications, live OS banner/sound
+  delivery, actual bell side effects, and link UI flows remain in
+  `RUNTIME-012B2B2B2`.
+- **Desktop notification throttling is app-level runtime state.** Experiment 156
+  split Ghostty's one-second desktop-notification throttle and five-second
+  identical-notification suppression out of the remaining notification gap.
+  Roastty now stores app-level limiter state, compares the delimiterless
+  truncated `title || body` byte stream that Ghostty feeds to Wyhash, suppresses
+  without updating state, and shares the limiter across surfaces on the same
+  app.
 - **The terminal residual gap was an audit problem, not a hidden runtime
   toggle.** Experiment 142 exhaustively mapped pinned Ghostty `DerivedConfig`,
   direct termio config uses, and stream-handler config updates to existing
@@ -1512,4 +1519,4 @@ remains open.
 - [Experiment 155: macOS user notification runtime](155-macos-user-notification-runtime.md)
   — **Pass**
 - [Experiment 156: Desktop notification rate limit](156-desktop-notification-rate-limit.md)
-  — **Designed**
+  — **Pass**

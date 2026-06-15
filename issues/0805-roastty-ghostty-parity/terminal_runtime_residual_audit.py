@@ -139,7 +139,7 @@ def main() -> int:
             ('id="RUNTIME-007B2B2B2B"', "font gap remains tracked"),
             ("RUNTIME-008B2B2B2B", "renderer gap remains tracked"),
             ("RUNTIME-011B", "macOS gap remains tracked"),
-            ("RUNTIME-012B2B2B", "notification/link GUI gap remains tracked"),
+            ("RUNTIME-012B2B2B2", "notification/link GUI gap remains tracked"),
         ],
     )
 
@@ -149,8 +149,8 @@ def main() -> int:
         [
             ("Runtime and UI effects", "CFG-223 row"),
             ("Gap", "CFG-223 remains open"),
-            ("57 rows Oracle complete", "CFG-223 oracle count"),
-            ("59 rows closed", "CFG-223 closed count"),
+            ("58 rows Oracle complete", "CFG-223 oracle count"),
+            ("60 rows closed", "CFG-223 closed count"),
             ("4 rows are incomplete", "CFG-223 incomplete count"),
             ("4 rows are runtime gaps", "CFG-223 gap count"),
         ],
