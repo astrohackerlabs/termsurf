@@ -1295,3 +1295,5 @@ remains open.
   — **Pass**
 - [Experiment 129: Scrollback byte limit runtime](129-scrollback-byte-limit-runtime.md)
   — **Pass**
+- [Experiment 130: Shell startup rewrite runtime](130-shell-startup-rewrite-runtime.md)
+  — **Designed**
