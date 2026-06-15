@@ -1871,3 +1871,5 @@ remains open.
   — **Pass**
 - [Experiment 194: Launch Services URL handler delivery](194-launch-services-url-handler-delivery.md)
   — **Pass**
+- [Experiment 195: Live user notification delivery](195-live-user-notification-delivery.md)
+  — **Designed**
