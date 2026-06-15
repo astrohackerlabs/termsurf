@@ -1604,3 +1604,5 @@ remains open.
   — **Pass**
 - [Experiment 166: macOS app workflow plumbing](166-macos-app-workflow-plumbing.md)
   — **Pass**
+- [Experiment 167: macOS AppleScript workflow runtime](167-macos-applescript-workflow-runtime.md)
+  — **Designed**
