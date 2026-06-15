@@ -1728,3 +1728,5 @@ remains open.
   **Pass**
 - [Experiment 179: Renderer visual residual audit](179-renderer-visual-residual-audit.md)
   — **Pass**
+- [Experiment 180: Custom shader animation runtime](180-custom-shader-animation-runtime.md)
+  — **Designed**
