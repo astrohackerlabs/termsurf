@@ -1461,3 +1461,5 @@ remains open.
   **Pass**
 - [Experiment 150: Font metric modifier runtime](150-font-metric-modifier-runtime.md)
   — **Pass**
+- [Experiment 151: macOS glass visual runtime](151-macos-glass-visual-runtime.md)
+  — **Designed**
