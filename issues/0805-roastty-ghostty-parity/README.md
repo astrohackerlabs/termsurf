@@ -1511,3 +1511,5 @@ remains open.
   — **Pass**
 - [Experiment 155: macOS user notification runtime](155-macos-user-notification-runtime.md)
   — **Pass**
+- [Experiment 156: Desktop notification rate limit](156-desktop-notification-rate-limit.md)
+  — **Designed**
