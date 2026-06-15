@@ -1293,3 +1293,5 @@ remains open.
   — **Pass**
 - [Experiment 128: OSC 7 PWD normalization runtime](128-osc7-pwd-normalization-runtime.md)
   — **Pass**
+- [Experiment 129: Scrollback byte limit runtime](129-scrollback-byte-limit-runtime.md)
+  — **Designed**
