@@ -1543,3 +1543,5 @@ remains open.
   — **Pass**
 - [Experiment 159: macOS link hover banner plumbing](159-macos-link-hover-banner-plumbing.md)
   — **Pass**
+- [Experiment 160: Link preview context runtime](160-link-preview-context-runtime.md)
+  — **Designed**
