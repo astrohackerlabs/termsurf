@@ -1658,3 +1658,5 @@ remains open.
   — **Pass**
 - [Experiment 171: AppleScript keyboard and mouse events](171-applescript-keyboard-mouse-events.md)
   — **Pass**
+- [Experiment 172: Native menu runtime](172-native-menu-runtime.md) —
+  **Designed**
