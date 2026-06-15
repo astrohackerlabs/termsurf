@@ -1316,3 +1316,5 @@ remains open.
   — **Pass**
 - [Experiment 131: OSC 7 edge runtime](131-osc7-edge-runtime.md) — **Pass**
 - [Experiment 132: Font grid runtime](132-font-grid-runtime.md) — **Pass**
+- [Experiment 133: Renderer knobs runtime](133-renderer-knobs-runtime.md) —
+  **Designed**
