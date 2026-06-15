@@ -713,9 +713,9 @@ experiment files until they are proven.
   `background-opacity` at renderer use like pinned Ghostty, and unit/static
   guards prove opacity conversion, `background-opacity-cells`,
   `window-padding-color` padding-extension decisions, and `font-thicken` knob
-  sourcing. Background blur, real compositor opacity, window padding layout
-  pixels, cursor style shape/rendering pixels, custom shader output, and broader
-  GUI/pixel parity remain in the renderer visual gap.
+  sourcing. macOS glass host behavior, non-glass compositor opacity, window
+  padding layout pixels, cursor style shape/rendering pixels, custom shader
+  output, and broader GUI/pixel parity remain in the renderer visual gap.
 - **Selected cursor render data is not the same as full cursor priority or GUI
   pixels.** Experiment 134 split deterministic active cursor overlay/uniform
   branches, cursor color/text-color resolution, selected cursor sprite/glyph
@@ -727,9 +727,9 @@ experiment files until they are proven.
   helper.** Experiment 144 routed active frame cursor derivation through the
   shared Ghostty-port cursor priority helper and derives preedit priority from
   the real render method's `preedit` argument. Password/preedit priority is now
-  split out as `RUNTIME-008B2B1`; GUI cursor pixels, blur, compositor opacity,
-  padding pixels, custom shader output, and broader GUI/pixel parity remain in
-  `RUNTIME-008B2B2`.
+  split out as `RUNTIME-008B2B1`; GUI cursor pixels, macOS glass/non-glass
+  compositor visuals, padding pixels, custom shader output, and broader GUI/
+  pixel parity remain in `RUNTIME-008B2B2`.
 - **Font shaping break is renderer row-format state.** Experiment 145 split
   `font-shaping-break` cursor-run break behavior out of the remaining font
   renderer gap. Roastty now applies `FontShapingBreak` to row-local `RunOptions`
@@ -752,10 +752,18 @@ experiment files until they are proven.
 - **Window padding layout is renderer size state.** Experiment 148 split
   deterministic `window-padding-x`/`window-padding-y` scaling,
   `window-padding-balance` math, active live renderer padded `Size`/grid wiring,
-  and padded PTY row/column state out of the renderer GUI gap. Background blur,
-  real compositor opacity, GUI cursor pixels, custom shader output, broader
-  GUI/pixel parity, and screenshot-level padding pixel proof remain in
-  `RUNTIME-008B2B2B`.
+  and padded PTY row/column state out of the renderer GUI gap. After Experiment
+  151, non-glass compositor opacity, GUI cursor pixels, custom shader output,
+  broader GUI/pixel parity, and screenshot-level padding pixel proof remain in
+  `RUNTIME-008B2B2B2`.
+- **macOS glass blur/opacity lives in the copied app host.** Experiment 151
+  proved that `TerminalViewContainer.swift` is identical to pinned Ghostty after
+  expected Ghostty-to-Roastty renames, including `NSGlassEffectView`,
+  `macosGlassRegular`, `macosGlassClear`, background opacity tinting, corner
+  radius, inactive tint overlay, and safe-area top-inset handling. Non-glass
+  compositor opacity, GUI cursor pixels, custom shader output, broader GUI/
+  pixel parity, and screenshot-level padding pixel proof remain in
+  `RUNTIME-008B2B2B2`.
 - **Font variations are style-specific font descriptors.** Experiment 149 split
   deterministic `font-variation*` config propagation out of the remaining font
   renderer gap by threading the four parsed variation lists into regular, bold,
@@ -1462,4 +1470,4 @@ remains open.
 - [Experiment 150: Font metric modifier runtime](150-font-metric-modifier-runtime.md)
   — **Pass**
 - [Experiment 151: macOS glass visual runtime](151-macos-glass-visual-runtime.md)
-  — **Designed**
+  — **Pass**

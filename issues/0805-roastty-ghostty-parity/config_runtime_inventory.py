@@ -659,10 +659,31 @@ ROWS = [
         guard_command="`cargo test --manifest-path roastty/Cargo.toml window_padding_layout_runtime && cargo test --manifest-path roastty/Cargo.toml size_balance_padding && cargo test --manifest-path roastty/Cargo.toml size_grid_and_terminal && cargo test --manifest-path roastty/Cargo.toml coordinate_conversion && PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/window_padding_layout_runtime_parity.py`",
     ),
     RuntimeRow(
-        id="RUNTIME-008B2B2B",
-        behavior="remaining renderer-visible effects: background blur, real compositor opacity, GUI cursor pixels, custom shader output, broader GUI/pixel parity, and screenshot-level padding pixel proof",
-        ghostty_reference="`vendor/ghostty/src/config/Config.zig` renderer/window visual fields; `vendor/ghostty/src/renderer/generic.zig` derived renderer config and draw paths; `vendor/ghostty/src/Surface.zig` renderer config messages",
-        roastty_reference="`roastty/src/lib.rs` live renderer and render state; `roastty/src/renderer`; copied macOS renderer host",
+        id="RUNTIME-008B2B2B1",
+        behavior="macOS glass background blur and opacity host behavior",
+        ghostty_reference="`vendor/ghostty/macos/Sources/Features/Terminal/TerminalViewContainer.swift` `backgroundBlur`, `backgroundOpacity`, `NSGlassEffectView`, tint overlay, corner radius, and safe-area inset handling",
+        roastty_reference="`roastty/macos/Sources/Features/Terminal/TerminalViewContainer.swift` copied glass host after Ghostty-to-Roastty renames",
+        family="renderer",
+        status="Oracle complete",
+        evidence=(
+            "Experiment 151 splits out the macOS glass blur/opacity host "
+            "slice. `macos_glass_visual_runtime_parity.py` proves "
+            "`TerminalViewContainer.swift` is identical after expected "
+            "Ghostty-to-Roastty product/type renames and asserts the "
+            "`NSGlassEffectView`, `macosGlassRegular`, `macosGlassClear`, "
+            "`backgroundOpacity`, `withAlphaComponent`, corner-radius, "
+            "inactive tint overlay, and safe-area top-inset markers that "
+            "implement pinned Ghostty's glass host behavior."
+        ),
+        missing_evidence="None for macOS glass background blur and opacity host behavior. Non-glass compositor opacity and screenshot-level visual proof remain outside this slice.",
+        guard_tier="Tier 0",
+        guard_command="`PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_glass_visual_runtime_parity.py`",
+    ),
+    RuntimeRow(
+        id="RUNTIME-008B2B2B2",
+        behavior="remaining renderer-visible effects: non-glass compositor opacity, GUI cursor pixels, custom shader output, broader GUI/pixel parity, and screenshot-level padding pixel proof",
+        ghostty_reference="`vendor/ghostty/src/config/Config.zig` renderer/window visual fields; `vendor/ghostty/src/renderer/generic.zig` derived renderer config and draw paths; `vendor/ghostty/src/Surface.zig` renderer config messages; non-glass macOS opacity/window host paths",
+        roastty_reference="`roastty/src/lib.rs` live renderer and render state; `roastty/src/renderer`; copied macOS renderer/window host",
         family="renderer",
         status="Gap",
         evidence=(
@@ -678,12 +699,13 @@ ROWS = [
             "active frame renderer path. Experiment 148 split out "
             "deterministic window-padding scaling, balance layout math, "
             "active live renderer padded Size/grid wiring, and padded PTY "
-            "row/column state. CFG-223 still needs representative runtime or "
-            "GUI proof for background blur, real compositor opacity, GUI "
-            "cursor pixels, custom shader output, broader GUI/pixel parity, "
-            "and screenshot-level padding pixel proof."
+            "row/column state. Experiment 151 split out copied macOS "
+            "`macos-glass*` blur/opacity host behavior. CFG-223 still needs "
+            "representative runtime or GUI proof for non-glass compositor "
+            "opacity, GUI cursor pixels, custom shader output, broader GUI/"
+            "pixel parity, and screenshot-level padding pixel proof."
         ),
-        missing_evidence="Add renderer/runtime or GUI smoke rows for background blur, real compositor opacity, GUI cursor pixels, custom shader output, broader GUI/pixel parity, and screenshot-level padding pixel proof.",
+        missing_evidence="Add renderer/runtime or GUI smoke rows for non-glass compositor opacity, GUI cursor pixels, custom shader output, broader GUI/pixel parity, and screenshot-level padding pixel proof.",
         guard_tier="Tier 3",
         guard_command="TBD by future CFG-223 renderer visual experiment.",
     ),
@@ -1470,7 +1492,8 @@ EXPECTED_IDS = [
     "RUNTIME-008B2A",
     "RUNTIME-008B2B1",
     "RUNTIME-008B2B2A",
-    "RUNTIME-008B2B2B",
+    "RUNTIME-008B2B2B1",
+    "RUNTIME-008B2B2B2",
     "RUNTIME-009A",
     "RUNTIME-009B1",
     "RUNTIME-009B2A",

@@ -97,3 +97,106 @@ Roastty `TerminalViewContainer.swift` files normalize to no diff after expected
 renames, the scope is limited to source-level macOS glass host parity, and the
 verification covers the static guard, inventory regeneration, residual audit,
 runtime parity guards, and diff hygiene.
+
+## Result
+
+**Result:** Pass
+
+Implemented the static macOS glass visual runtime parity guard and split the
+renderer-visible runtime inventory:
+
+- `RUNTIME-008B2B2B1`: **Oracle complete** for copied macOS glass background
+  blur and opacity host behavior.
+- `RUNTIME-008B2B2B2`: **Gap** for the remaining renderer-visible visual work:
+  non-glass compositor opacity, GUI cursor pixels, custom shader output, broader
+  GUI/pixel parity, and screenshot-level padding pixel proof.
+
+The new guard proves that pinned Ghostty's
+`vendor/ghostty/macos/Sources/Features/Terminal/TerminalViewContainer.swift` and
+Roastty's `roastty/macos/Sources/Features/Terminal/TerminalViewContainer.swift`
+are identical after expected Ghostty-to-Roastty renames. It also asserts the
+glass runtime markers that matter for this slice: `NSGlassEffectView`,
+`macosGlassRegular`, `macosGlassClear`, `backgroundOpacity`,
+`withAlphaComponent`, corner radius, inactive tint overlay, and safe-area
+top-inset handling.
+
+Verification passed:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/macos_glass_visual_runtime_parity.py
+```
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/config_runtime_inventory.py --output issues/0805-roastty-ghostty-parity/config-runtime-inventory.md --matrix issues/0805-roastty-ghostty-parity/config-matrix.md
+```
+
+Output:
+
+```text
+runtime_rows=59
+oracle_complete=53
+closed=55
+audit_covered=0
+incomplete=4
+gap=4
+cfg223=Gap
+```
+
+```bash
+for guard in issues/0805-roastty-ghostty-parity/*_runtime_parity.py; do
+  PYTHONDONTWRITEBYTECODE=1 python3 "$guard" || exit 1
+done
+```
+
+The full runtime parity loop passed.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 issues/0805-roastty-ghostty-parity/terminal_runtime_residual_audit.py
+```
+
+Output:
+
+```text
+terminal_runtime_residual_audit=pass
+```
+
+```bash
+python3 -m py_compile issues/0805-roastty-ghostty-parity/macos_glass_visual_runtime_parity.py
+```
+
+## Conclusion
+
+Roastty's copied macOS `TerminalViewContainer` preserves pinned Ghostty's
+`macos-glass*` blur and background-opacity host behavior at the source level.
+This closes that deterministic copied-host slice without overclaiming GUI pixel
+parity.
+
+CFG-223 remains open with four unresolved runtime gaps: remaining font renderer
+output effects, remaining renderer-visible visual effects, macOS app workflow/UI
+effects, and notification/link/bell presentation flows.
+
+## Completion Review
+
+Adversarial subagent `019ec9f9-b417-76e0-9638-830214c9910b` reviewed the
+completed experiment with fresh context.
+
+Initial verdict: `CHANGES REQUIRED`.
+
+Required finding:
+
+- `README.md` still said macOS glass blur/opacity remained in the old
+  `RUNTIME-008B2B2B` bucket even though this experiment split it into
+  `RUNTIME-008B2B2B1` and the remaining `RUNTIME-008B2B2B2` gap.
+
+Fix:
+
+- Updated the stale Experiment 148 learning to state that, after Experiment 151,
+  only non-glass compositor opacity, GUI cursor pixels, custom shader output,
+  broader GUI/pixel parity, and screenshot-level padding pixel proof remain in
+  `RUNTIME-008B2B2B2`.
+
+Re-review verdict: `APPROVED`.
+
+The reviewer independently verified the macOS glass guard, regenerated runtime
+inventory counts, terminal runtime residual audit, full runtime parity guard
+loop, and `git diff --check`.
