@@ -8,18 +8,19 @@ convert only the user-facing identity surfaces required by Issue 808 while
 leaving upstream Ghostty implementation names intact.
 
 This experiment should keep `ghostboard/` as the internal source folder while
-making the shipped macOS app and helper CLI appear as TermSurf. The app bundle
-should be `TermSurf.app`, the executable and helper CLI should be `termsurf`,
-configuration should load from `~/.config/termsurf/config`, and the primary app
-icon should use the current Wezboard icon. It must not port the TermSurf
-protocol yet and must not run the historical wholesale Ghostty-to-TermSurf
-rename.
+making the built macOS app appear as TermSurf. The app bundle should be
+`TermSurf.app`, its bundle executable should be `termsurf`, configuration should
+load from `~/.config/termsurf/config`, and the primary app icon should use the
+current Wezboard icon. It must not port the TermSurf protocol yet, must not
+install a standalone CLI tool, and must not run the historical wholesale
+Ghostty-to-TermSurf rename.
 
 ## Changes
 
-- `ghostboard/src/build/GhosttyExe.zig` — make the installed/helper executable
-  name `termsurf` while continuing to use `src/main.zig` and the existing
-  Ghostty entrypoint internally.
+- macOS app build settings only — make the app bundle executable name `termsurf`
+  while continuing to use the existing Ghostty entrypoint internally. Do not
+  make `emit-exe` imply installation, and do not install a standalone CLI in
+  this experiment.
 - `ghostboard/src/main_ghostty.zig` and closely related CLI/help text only if
   needed — update user-facing CLI usage text from `ghostty`/`Ghostty.app` to
   `termsurf`/`TermSurf.app`.
@@ -109,24 +110,21 @@ Those may be revisited only if later experiments prove they are required.
 
 7. Launch the built app by absolute path, confirm a process is running from
    `TermSurf.app/Contents/MacOS/termsurf`, then terminate only that process.
-8. Verify the helper CLI is named `termsurf` in `ghostboard/zig-out/bin` when
-   `zig build -Demit-exe=true` is used, and that `termsurf +help` reports
-   user-facing TermSurf naming.
-9. Verify config discovery with a temporary home or explicit test harness so
+8. Verify config discovery with a temporary home or explicit test harness so
    `~/.config/termsurf/config` is the default path for the app built from
    `ghostboard/`. If a direct runtime assertion is not practical in this
    experiment, add a focused Zig test or command output that proves
    `config.file_load.defaultXdgPath` and the preferred default path resolve to
    the TermSurf config location. Also verify the no-config case creates the
    template at `~/.config/termsurf/config`, not Application Support.
-10. Verify the primary built app icon deterministically:
-    - name `wezboard/assets/icon/wezboard-icon.svg` as the source asset;
-    - generate or install the app icon assets from that source;
-    - inspect the built `TermSurf.app` bundle to find the icon resource used by
-      `CFBundleIconFile`/asset catalog output;
-    - compare the generated built icon against the Wezboard-derived source using
-      a reproducible hash or pixel comparison, and record the command output.
-11. Confirm the diff did not touch protocol, `webtui`, or `roamium` code.
+9. Verify the primary built app icon deterministically:
+   - name `wezboard/assets/icon/wezboard-icon.svg` as the source asset;
+   - generate the app icon assets from that source;
+   - inspect the built `TermSurf.app` bundle to find the icon resource used by
+     `CFBundleIconFile`/asset catalog output;
+   - compare the generated built icon against the Wezboard-derived source using
+     a reproducible hash or pixel comparison, and record the command output.
+10. Confirm the diff did not touch protocol, `webtui`, or `roamium` code.
 
 Pass criteria:
 
@@ -134,7 +132,6 @@ Pass criteria:
 - The app executable is `Contents/MacOS/termsurf`.
 - The app display name, Dock/menu/about-facing bundle name, and bundle
   identifier are TermSurf/TermSurf-owned.
-- The helper CLI build emits `termsurf`, not `ghostty`.
 - The default config path is `~/.config/termsurf/config`.
 - On macOS, the no-config template is created at `~/.config/termsurf/config`,
   not Application Support.
@@ -143,6 +140,8 @@ Pass criteria:
   proves it.
 - Internal Ghostty implementation names remain mostly unchanged, limited to the
   exceptions required for user-facing identity.
+- The experiment does not install a standalone CLI and does not make `emit-exe`
+  imply installation.
 - No protocol, `webtui`, or `roamium` changes are made.
 
 Fail criteria:
@@ -153,6 +152,7 @@ Fail criteria:
   surfaces.
 - The config path still defaults to `~/.config/ghostty/config`.
 - The icon remains the upstream Ghostty icon.
+- The experiment installs a standalone CLI or changes `emit-exe` semantics.
 - The experiment drifts into TermSurf protocol implementation.
 
 ## Notes
