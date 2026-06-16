@@ -3214,12 +3214,19 @@ fn enqueue_present_tick(
     ptr: SendSurfacePtr,
     running: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
+    append_ui_key_trace("rust present_driver_enqueue_tick");
     dispatch2::DispatchQueue::main().exec_async(move || {
+        let tick_started = std::time::Instant::now();
+        append_ui_key_trace("rust present_driver_tick begin");
         // Re-bind the whole `SendSurfacePtr` (Rust 2021 disjoint capture would otherwise grab
         // the `!Send` `*mut Surface` field directly, bypassing the Send wrapper).
         let ptr = ptr;
         use std::sync::atomic::Ordering;
         if !running.load(Ordering::SeqCst) {
+            append_ui_key_trace(format!(
+                "rust present_driver_tick end reason=stopped-before-surface duration_ms={:.3}",
+                tick_started.elapsed().as_secs_f64() * 1000.0
+            ));
             return;
         }
         // SAFETY: main thread + running == true → the surface is alive (free flips running false
@@ -3237,6 +3244,10 @@ fn enqueue_present_tick(
             surface.present_live();
             surface.dirty = false;
         }
+        append_ui_key_trace(format!(
+            "rust present_driver_tick end duration_ms={:.3}",
+            tick_started.elapsed().as_secs_f64() * 1000.0
+        ));
     });
 }
 
@@ -4421,6 +4432,16 @@ impl Surface {
         if !self.should_present_live() {
             return;
         }
+        let present_started = std::time::Instant::now();
+        append_ui_key_trace(format!(
+            "rust present_live begin dirty={} has_renderer={} columns={} rows={} width_px={} height_px={}",
+            self.dirty,
+            self.renderer.is_some(),
+            self.size.columns,
+            self.size.rows,
+            self.size.width_px,
+            self.size.height_px
+        ));
         let config = self.active_config();
         if self.renderer.is_none() {
             self.renderer = build_live_renderer(
@@ -4584,6 +4605,10 @@ impl Surface {
                 eprintln!("[roastty] live present error: {e:?}");
             }
         });
+        append_ui_key_trace(format!(
+            "rust present_live end duration_ms={:.3}",
+            present_started.elapsed().as_secs_f64() * 1000.0
+        ));
     }
 
     fn scroll_to_bottom_on_output_before_present(&mut self, config: &config::Config) {
@@ -15267,15 +15292,24 @@ pub extern "C" fn roastty_app_free(app: RoasttyApp) {
 
 #[no_mangle]
 pub extern "C" fn roastty_app_tick(app: RoasttyApp) {
+    let tick_started = std::time::Instant::now();
     let surfaces = app_from_handle(app)
         .map(|app| app.surfaces.clone())
         .unwrap_or_default();
+    append_ui_key_trace(format!("rust app_tick begin surfaces={}", surfaces.len()));
+    let mut drained = 0usize;
     for mut surface in surfaces {
         let surface = unsafe { surface.as_mut() };
         if surface.app == app {
             surface.tick_termio();
+            drained += 1;
         }
     }
+    append_ui_key_trace(format!(
+        "rust app_tick end drained_surfaces={} duration_ms={:.3}",
+        drained,
+        tick_started.elapsed().as_secs_f64() * 1000.0
+    ));
 }
 
 #[no_mangle]
@@ -19319,6 +19353,13 @@ fn trace_hex(bytes: &[u8]) -> String {
         .join("")
 }
 
+fn trace_timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("ts_ns={}", now.as_nanos())
+}
+
 fn trace_input_text_hex(event: &RoasttyInputKey) -> String {
     if event.text.is_null() {
         return String::new();
@@ -19340,7 +19381,7 @@ pub(crate) fn append_ui_key_trace(line: impl AsRef<str>) {
         return;
     };
 
-    let _ = writeln!(file, "{}", line.as_ref());
+    let _ = writeln!(file, "{} {}", trace_timestamp(), line.as_ref());
 }
 
 /// Embedded by-value `surface_key` (the app's path) — supersedes the opaque

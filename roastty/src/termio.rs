@@ -483,6 +483,10 @@ impl TermioWorker {
     }
 
     pub(crate) fn queue_write(&self, bytes: &[u8]) -> Result<(), TermioWorkerError> {
+        crate::append_ui_key_trace(format!(
+            "rust termio_worker_queue_write len={}",
+            bytes.len()
+        ));
         self.commands
             .send(TermioWorkerCommand::Write(bytes.to_vec()))
             .map_err(|_| TermioWorkerError::CommandDisconnected)
@@ -543,10 +547,12 @@ fn run_termio_worker(
             }
         }
 
+        let pump_started = std::time::Instant::now();
         let pump = {
             let mut termio = termio.lock().expect("termio worker mutex poisoned");
             termio.pump_once(pump_timeout_ms, max_read_bytes)
         };
+        let pump_duration_ms = pump_started.elapsed().as_secs_f64() * 1000.0;
 
         match pump {
             Ok(pump) => {
@@ -577,6 +583,15 @@ fn run_termio_worker(
                 let bytes_read = pump.bytes_read;
                 let bytes_written = pump.bytes_written;
                 let pending_write_bytes = pump.pending_write_bytes;
+                if should_emit {
+                    crate::append_ui_key_trace(format!(
+                        "rust termio_worker_pump emit bytes_read={} bytes_written={} pending_write={} duration_ms={:.3}",
+                        bytes_read,
+                        bytes_written,
+                        pending_write_bytes,
+                        pump_duration_ms
+                    ));
+                }
                 if should_emit && events.send(TermioWorkerEvent::Pump(pump)).is_err() {
                     crate::append_ui_key_trace(
                         "rust termio_worker_loop exit reason=event-receiver-disconnected",
@@ -597,7 +612,7 @@ fn run_termio_worker(
             }
             Err(err) => {
                 crate::append_ui_key_trace(format!(
-                    "rust termio_worker_loop exit reason=pump-error error={err:?}"
+                    "rust termio_worker_loop exit reason=pump-error duration_ms={pump_duration_ms:.3} error={err:?}"
                 ));
                 let _ = events.send(TermioWorkerEvent::Error(format!("{err:?}")));
                 break;

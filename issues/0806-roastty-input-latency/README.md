@@ -82,4 +82,4 @@ work.
 ## Experiments
 
 - [Experiment 1: Measure live input latency](01-measure-live-input-latency.md) —
-  **Designed**
+  **Pass**

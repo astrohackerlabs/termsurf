@@ -1846,7 +1846,8 @@ extension Roastty {
 
         private static func appendUITestTrace(_ line: String) {
             guard let path = ProcessInfo.processInfo.environment["ROASTTY_UI_KEY_TRACE_PATH"] else { return }
-            let data = Data((line + "\n").utf8)
+            let ns = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+            let data = Data(("ts_ns=\(ns) \(line)\n").utf8)
             if FileManager.default.fileExists(atPath: path),
                let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
                 defer { try? handle.close() }

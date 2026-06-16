@@ -192,6 +192,11 @@ extension Roastty {
             ProcessInfo.processInfo.environment["ROASTTY_UI_KEY_TRACE_PATH"]
         }
 
+        private var uiTestTraceTimestamp: String {
+            let ns = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+            return "ts_ns=\(ns)"
+        }
+
         // True when we've consumed a left mouse-down only to move focus and
         // should suppress the matching mouse-up from being reported.
         private var suppressNextLeftMouseUp: Bool = false
@@ -1462,16 +1467,30 @@ extension Roastty {
                 appendUITestKeyTrace(
                     "keyAction text=\(text) \(Self.uiTestTextDetails(text)) composing=\(composing) keycode=\(key_ev.keycode) mods=\(key_ev.mods) consumedMods=\(key_ev.consumed_mods)"
                 )
+                let start = Date()
                 let result = text.withCString { ptr in
                     key_ev.text = ptr
                     return roastty_surface_key(surface, key_ev)
                 }
-                appendUITestKeyTrace("keyAction result=\(result) path=roastty_surface_key text")
+                appendUITestKeyTrace(
+                    String(
+                        format: "keyAction result=%@ path=roastty_surface_key text duration_ms=%.3f",
+                        result ? "true" : "false",
+                        Date().timeIntervalSince(start) * 1000
+                    )
+                )
                 return result
             } else {
                 appendUITestKeyTrace("keyAction raw composing=\(composing)")
+                let start = Date()
                 let result = roastty_surface_key(surface, key_ev)
-                appendUITestKeyTrace("keyAction result=\(result) path=roastty_surface_key raw")
+                appendUITestKeyTrace(
+                    String(
+                        format: "keyAction result=%@ path=roastty_surface_key raw duration_ms=%.3f",
+                        result ? "true" : "false",
+                        Date().timeIntervalSince(start) * 1000
+                    )
+                )
                 return result
             }
         }
@@ -2193,7 +2212,7 @@ extension Roastty.SurfaceView: NSTextInputClient {
 
     private func appendUITestKeyTrace(_ line: String) {
         guard let path = uiTestKeyTracePath else { return }
-        let data = Data((line + "\n").utf8)
+        let data = Data(("\(uiTestTraceTimestamp) \(line)\n").utf8)
         if FileManager.default.fileExists(atPath: path),
            let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
             defer { try? handle.close() }

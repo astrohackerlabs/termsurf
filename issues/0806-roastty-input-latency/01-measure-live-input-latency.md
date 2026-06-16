@@ -118,3 +118,137 @@ Fresh-context adversarial re-review returned `APPROVED`.
 - The reviewer confirmed the hygiene checks are now explicit.
 - The reviewer confirmed the ReleaseLocal build and launch path is now explicit.
 - No new required findings were reported.
+
+## Result
+
+**Result:** Pass
+
+The latency reproduced in the current `ReleaseLocal` app.
+
+Command:
+
+```bash
+scripts/roastty-app/issue806-exp1-latency.sh
+```
+
+Artifacts:
+
+- Harness log: `logs/issue806-exp1-20260615-204522.harness.log`
+- Trace: `logs/issue806-exp1-20260615-204522.trace`
+- Summary: `logs/issue806-exp1-20260615-204522-summary.txt`
+- Sample: `logs/issue806-exp1-20260615-204522.sample.txt`
+- Build log: `logs/issue806-exp1-20260615-204522-build.log`
+- Before screenshot:
+  `/Users/astrohacker/.cache/termsurf/shots/issue806-exp1-20260615-204522-before-20260615-204547.png`
+- After screenshot:
+  `/Users/astrohacker/.cache/termsurf/shots/issue806-exp1-20260615-204522-after-20260615-204628.png`
+
+Measured timings:
+
+- Synthetic typing call returned in `163.382ms`.
+- Accessibility-visible terminal output containing the marker appeared after
+  `34411.614ms`.
+- Marker file creation was observed after `37039.313ms`.
+
+The focus oracle proved the harness targeted Roastty before typing:
+
+```text
+frontmost-name=roastty
+frontmost-pid=68413
+roast-frontmost=true
+focused-role=AXTextArea
+focused-description=text entry area
+```
+
+The profiler identified the root cause more clearly than the trace summary.
+During the stall, the main thread was inside AppKit key handling and blocked on
+the shared `TermioWorker` mutex:
+
+```text
+Roastty.SurfaceView.keyDown(with:)
+  Roastty.SurfaceView.keyAction(...)
+    roastty_surface_key
+      roastty::Surface::write_encoded_key_event
+        roastty::termio::TermioWorker::with_termio
+          _pthread_mutex_firstfit_lock_wait
+            __psynch_mutexwait
+```
+
+The largest sampled stack count was:
+
+```text
+2659 samples:
+  Surface::write_encoded_key_event
+    TermioWorker::with_termio
+      Mutex::lock
+        __psynch_mutexwait
+```
+
+Another `232` samples were blocked in `TermioWorker::with_termio_mut` from the
+same key handling path. The worker thread sample showed it spending the same
+window in `poll`, which matches the code path where `run_termio_worker` holds
+the `Termio` mutex while calling `termio.pump_once(10, 4096)`. Because key
+encoding synchronously reads terminal key-encoding state through
+`Surface::key_encode_options()` and checks KAM through
+`Surface::terminal_kam_enabled()`, every typed character can block behind the
+worker's polling loop. Rapid synthetic typing amplifies this into a many-second
+queue of main-thread key handling stalls.
+
+The trace corroborates the diagnosis:
+
+- `keyDown` and `keyAction` events are present for the typed command.
+- individual `keyAction result=true` durations reach `931.861ms`, `710.630ms`,
+  `677.503ms`, and many other hundreds-of-milliseconds stalls;
+- termio pump events eventually drain and `present_live` eventually completes;
+- the visible marker arrives only after the accumulated key handling stalls.
+
+Hygiene checks run:
+
+```bash
+cargo fmt -- roastty/src/lib.rs roastty/src/termio.rs
+cargo fmt --check --manifest-path roastty/Cargo.toml
+cargo test --manifest-path roastty/Cargo.toml termio_worker --lib
+bash -n scripts/roastty-app/issue806-exp1-latency.sh
+git diff --check
+scripts/roastty-app/issue806-exp1-latency.sh
+```
+
+Notes:
+
+- `cargo test --manifest-path roastty/Cargo.toml termio_worker --lib` compiled
+  successfully but matched zero tests. The ReleaseLocal harness build is the
+  meaningful compile gate for the edited Rust/Swift app code in this experiment.
+- The trace contains some interleaved lines because multiple threads append to
+  the same file. The profiler sample and per-event timestamps were still
+  sufficient to identify the blocking stage.
+- No product behavior fix was made in this experiment.
+
+## Conclusion
+
+The root cause for the reproduced 34-37 second input delay is main-thread
+keyboard handling contending on the `TermioWorker` mutex. `Surface::key` reaches
+`Surface::write_encoded_key_event`, which synchronously calls
+`key_encode_options()` and `terminal_kam_enabled()`. Those functions lock the
+same `Termio` mutex that the worker holds while blocking in `pump_once`.
+
+The next experiment should fix the latency by removing `Termio` mutex access
+from the synchronous key handling path. A focused fix is to cache the terminal
+key-encoding options and KAM state on `Surface`, refresh that cache from worker
+pump results or event-drain time, and make `write_encoded_key_event` use the
+cached values before queueing bytes.
+
+## Completion Review
+
+Fresh-context adversarial review returned `APPROVED` with no findings.
+
+The reviewer independently checked that the implementation stayed
+measurement-only, the harness targets `ReleaseLocal`, the result documentation
+and README status are present, the reproduction evidence supports the `>30s`
+latency claim, and the sample supports the mutex-contention root cause. The
+reviewer also ran these read-only checks successfully:
+
+```bash
+cargo fmt --check --manifest-path roastty/Cargo.toml
+bash -n scripts/roastty-app/issue806-exp1-latency.sh
+git diff --check
+```
