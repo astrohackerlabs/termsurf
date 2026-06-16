@@ -238,4 +238,4 @@ and against `ghostboard-legacy/` where useful.
 - [Experiment 16: Record TabReady state](16-record-tab-ready-state.md) —
   **Pass**
 - [Experiment 17: Reply to QueryLast from state](17-query-last-from-state.md) —
-  **Designed**
+  **Pass**

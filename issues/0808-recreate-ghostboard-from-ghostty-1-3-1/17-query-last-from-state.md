@@ -88,3 +88,87 @@ matches Wezboard's state-backed behavior while excluding `BrowserReady`,
 rendering, and browser launch, and verification covers no-state, success,
 empty-profile success, profile mismatch, builds, runtime regression checks,
 cleanup, and `git diff --check`.
+
+## Result
+
+**Result:** Pass
+
+Implemented state-backed `QueryLastRequest` handling in
+`ghostboard/src/apprt/termsurf.zig`.
+
+The socket handler now passes the decoded `QueryLastRequest` into
+`sendQueryLastReply`. The reply helper reads `last_browser_pane` under the state
+mutex, verifies that the stored pane still exists, applies the optional profile
+filter, and fills `QueryLastReply.pane_id`, `tab_id`, and `profile` from the
+recorded pane state. It preserves the Wezboard-compatible error strings for the
+no-pane, stale-pane, and profile-mismatch cases.
+
+Verification passed:
+
+- `zig fmt src/apprt/termsurf.zig src/main_c.zig src/build/SharedDeps.zig`
+  passed.
+- Native GhosttyKit framework build passed:
+  `logs/ghostboard-exp17-zig-native-xcframework-20260616-105017.log`.
+- macOS app build passed:
+  `logs/ghostboard-exp17-macos-build-debug-20260616-105043.log`.
+- Runtime harness passed:
+  `logs/ghostboard-exp17-runtime-harness-20260616-105343.log`.
+- Runtime app log: `logs/ghostboard-exp17-runtime-app-20260616-105343.log`.
+- `git diff --check` passed.
+
+Observed successful runtime checks:
+
+```text
+PASS: QueryLast before TabReady returns no-browser-pane error
+PASS: browser socket received pane-a CreateTab
+PASS: QueryLast default returns last pane state
+PASS: QueryLast empty profile returns last pane state
+PASS: QueryLast mismatched profile returns profile error
+PASS: fresh TUI client received HelloReply
+PASS: app exited after SIGTERM
+PASS: socket file removed after shutdown
+PASS: no stale TermSurf process remains
+PASS: app log contains TermSurf socket listening
+PASS: app log contains QueryLastReply sends
+PASS: app log contains pending=false TabReady
+PASS: no BrowserReady emitted
+PASS: no CaContext emitted
+PASS: no overlay presentation message emitted
+PASS: no browser launch message emitted
+runtime verification passed
+```
+
+The passing harness verified these concrete replies:
+
+- before `TabReady`, `QueryLastRequest(profile=default)` returned
+  `error = "No browser pane yet"`;
+- after `SetOverlay -> ServerRegister -> CreateTab -> TabReady(pane-a, 42)`,
+  `QueryLastRequest(profile=default)` returned `pane_id = "pane-a"`,
+  `tab_id = 42`, `profile = "default"`, and empty `error`;
+- `QueryLastRequest(profile="")` returned the same last pane;
+- `QueryLastRequest(profile="other")` returned
+  `error = "No matching pane for profile"`.
+
+## Conclusion
+
+Ghostboard now answers `QueryLastRequest` from the pane/tab state introduced by
+Experiments 14 through 16. This gives `webtui` a usable last-browser-pane lookup
+after a browser reports `TabReady`, while keeping browser launch,
+`BrowserReady`, CALayerHost overlay presentation, and input forwarding out of
+scope for this experiment.
+
+## Result Review
+
+Fresh-context adversarial result review returned **APPROVED** with no required,
+optional, or nit findings.
+
+The reviewer confirmed:
+
+- the changed scope is limited to the expected source file and issue docs;
+- `QueryLastRequest` behavior matches the Wezboard reference;
+- the runtime harness exercises no-state, success, empty-profile, and profile
+  mismatch cases;
+- the README status is `Pass`;
+- the experiment file has `Result` and `Conclusion`;
+- the result commit had not been made before review;
+- `git diff --check` and `zig fmt --check` pass.

@@ -273,7 +273,7 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
                             .{ query.*.pane_id, query.*.profile },
                         );
                     }
-                    sendQueryLastReply(fd) catch |err| {
+                    sendQueryLastReply(fd, req) catch |err| {
                         log.warn("TermSurf QueryLastReply failed fd={} err={}", .{ fd, err });
                         return;
                     };
@@ -449,10 +449,30 @@ fn sendHelloReply(fd: std.posix.fd_t) !void {
     log.info("TermSurf HelloReply sent", .{});
 }
 
-fn sendQueryLastReply(fd: std.posix.fd_t) !void {
+fn sendQueryLastReply(fd: std.posix.fd_t, req: ?*c.Termsurf__QueryLastRequest) !void {
     var reply: c.Termsurf__QueryLastReply = undefined;
     c.termsurf__query_last_reply__init(&reply);
-    reply.@"error" = @constCast("No browser pane yet");
+
+    var pane_id_buf: [max_pane_id_len]u8 = undefined;
+    var pane_id_len: usize = 0;
+    var profile_buf: [max_profile_len]u8 = undefined;
+    var profile_len: usize = 0;
+
+    const requested_profile = if (req) |query| cString(query.*.profile) else "";
+    const error_msg = fillQueryLastReply(
+        &reply,
+        requested_profile,
+        &pane_id_buf,
+        &pane_id_len,
+        &profile_buf,
+        &profile_len,
+    );
+    if (error_msg) |err| {
+        reply.@"error" = @constCast(err.ptr);
+    } else {
+        reply.pane_id = @constCast(pane_id_buf[0..pane_id_len :0].ptr);
+        reply.profile = @constCast(profile_buf[0..profile_len :0].ptr);
+    }
 
     var wrapper: c.Termsurf__TermSurfMessage = undefined;
     c.termsurf__term_surf_message__init(&wrapper);
@@ -461,6 +481,41 @@ fn sendQueryLastReply(fd: std.posix.fd_t) !void {
 
     try sendProtobuf(fd, &wrapper);
     log.info("TermSurf QueryLastReply sent", .{});
+}
+
+fn fillQueryLastReply(
+    reply: *c.Termsurf__QueryLastReply,
+    requested_profile: []const u8,
+    pane_id_buf: []u8,
+    pane_id_len: *usize,
+    profile_buf: []u8,
+    profile_len: *usize,
+) ?[:0]const u8 {
+    state_mutex.lock();
+    defer state_mutex.unlock();
+
+    if (last_browser_pane_len == 0) {
+        return "No browser pane yet";
+    }
+
+    const pane = findPane(last_browser_pane[0..last_browser_pane_len]) orelse {
+        return "Last pane no longer exists";
+    };
+
+    if (requested_profile.len > 0 and
+        !std.mem.eql(u8, panes[pane].profileName(), requested_profile))
+    {
+        return "No matching pane for profile";
+    }
+
+    if (!copyText(pane_id_buf, pane_id_len, panes[pane].paneId())) {
+        return "Last pane id is too long";
+    }
+    if (!copyText(profile_buf, profile_len, panes[pane].profileName())) {
+        return "Last pane profile is too long";
+    }
+    reply.tab_id = panes[pane].tab_id;
+    return null;
 }
 
 fn sendQueryDevtoolsReply(fd: std.posix.fd_t, req: ?*c.Termsurf__QueryDevtoolsRequest) !void {
