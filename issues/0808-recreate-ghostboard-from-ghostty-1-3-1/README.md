@@ -248,4 +248,4 @@ and against `ghostboard-legacy/` where useful.
 - [Experiment 21: Send BrowserReady after TabReady](21-send-browser-ready.md) —
   **Pass**
 - [Experiment 22: Forward Resize on overlay updates](22-forward-resize-on-overlay-updates.md)
-  — **Designed**
+  — **Pass**

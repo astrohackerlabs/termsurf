@@ -137,6 +137,19 @@ const BrowserReadySnapshot = struct {
     }
 };
 
+const ResizeSnapshot = struct {
+    browser_fd: std.posix.fd_t = -1,
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+    tab_id: i64 = 0,
+    pixel_width: u64 = 0,
+    pixel_height: u64 = 0,
+
+    fn paneId(self: *const ResizeSnapshot) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+};
+
 var mutex: std.Thread.Mutex = .{};
 var clients_mutex: std.Thread.Mutex = .{};
 var state_mutex: std.Thread.Mutex = .{};
@@ -712,6 +725,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
     var spawn_browser_len: usize = 0;
     var spawn_listen_socket_buf: [max_listen_socket_len]u8 = undefined;
     var spawn_listen_socket_len: usize = 0;
+    var resize_snapshot: ?ResizeSnapshot = null;
 
     state_mutex.lock();
 
@@ -723,11 +737,17 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         panes[pane_index].tui_fd = tui_fd;
         const server_index = findServer(profile, browser);
         const pane_count = if (server_index) |index| servers[index].pane_count else 0;
+        resize_snapshot = snapshotResize(&panes[pane_index]);
         log.info(
             "SetOverlay: updated pane_id={s} profile={s} browser={s} pane_count={}",
             .{ pane_id, profile, browser, pane_count },
         );
         state_mutex.unlock();
+        if (resize_snapshot) |snapshot| {
+            sendResize(&snapshot) catch |err| {
+                log.warn("Resize send failed pane_id={s} err={}", .{ snapshot.paneId(), err });
+            };
+        }
         return;
     }
 
@@ -848,6 +868,45 @@ fn sendCreateTab(fd: std.posix.fd_t, pane: *const PaneState) !void {
 
     try sendProtobuf(fd, &wrapper);
     log.info("sent CreateTab: pane_id={s} url={s}", .{ pane.paneId(), pane.url[0..pane.url_len] });
+}
+
+fn snapshotResize(pane: *const PaneState) ?ResizeSnapshot {
+    if (pane.tab_id == 0) return null;
+    const server_index = findServer(pane.profileName(), pane.browserName()) orelse return null;
+    if (servers[server_index].attached_fd < 0) return null;
+
+    var snapshot: ResizeSnapshot = .{
+        .browser_fd = servers[server_index].attached_fd,
+        .tab_id = pane.tab_id,
+        .pixel_width = pane.width * fallback_cell_width,
+        .pixel_height = pane.height * fallback_cell_height,
+    };
+    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+    return snapshot;
+}
+
+fn sendResize(snapshot: *const ResizeSnapshot) !void {
+    var resize: c.Termsurf__Resize = undefined;
+    c.termsurf__resize__init(&resize);
+    resize.tab_id = snapshot.tab_id;
+    resize.pixel_width = snapshot.pixel_width;
+    resize.pixel_height = snapshot.pixel_height;
+    resize.screen_x = 0.0;
+    resize.screen_y = 0.0;
+    resize.screen_width = 0.0;
+    resize.screen_height = 0.0;
+    resize.screen_scale = 0.0;
+
+    var wrapper: c.Termsurf__TermSurfMessage = undefined;
+    c.termsurf__term_surf_message__init(&wrapper);
+    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_RESIZE;
+    wrapper.unnamed_0.resize = &resize;
+
+    try sendProtobuf(snapshot.browser_fd, &wrapper);
+    log.info(
+        "Resize: pane_id={s} tab_id={} pixel={}x{}",
+        .{ snapshot.paneId(), snapshot.tab_id, snapshot.pixel_width, snapshot.pixel_height },
+    );
 }
 
 fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
@@ -1214,6 +1273,7 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_HELLO_REQUEST => "HelloRequest",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_HELLO_REPLY => "HelloReply",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_CREATE_TAB => "CreateTab",
+        c.TERMSURF__TERM_SURF_MESSAGE__MSG_RESIZE => "Resize",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_TAB_READY => "TabReady",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_QUERY_LAST_REQUEST => "QueryLastRequest",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_QUERY_LAST_REPLY => "QueryLastReply",
