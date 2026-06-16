@@ -84,3 +84,60 @@ blocker, that `build.zig` currently creates the executable without installing it
 in the `.none` runtime, that the `.none` helper behavior already exists in
 `src/main_ghostty.zig`, and that the verification covers positive and negative
 CLI install behavior.
+
+## Result
+
+**Result:** Fail
+
+Experiment 35 tried the approved `build.zig` wiring: install the already-created
+main executable in the `.none` runtime branch when `config.emit_exe` is true.
+That change correctly caused the build graph to attempt `install termsurf` and
+`compile exe termsurf`, but the helper CLI did not compile.
+
+The failure is in the existing `.none` helper path, not in the artifact name.
+Zig 0.15 no longer provides `std.io.getStdOut()`, and
+`ghostboard/src/main_ghostty.zig` still uses it in the `.none` runtime usage
+message path. Because fixing `src/main_ghostty.zig` was outside the approved
+Experiment 35 file set, the `build.zig` implementation change was reverted and
+the experiment is recorded as a failed attempt.
+
+### Verification
+
+- `zig fmt ghostboard/build.zig` succeeded.
+- `logs/ghostboard-exp35-positive-cli-build-20260616.log` records the attempted
+  positive build:
+  - command:
+    `cd ghostboard && rm -rf zig-out && zig build -Demit-macos-app=false -Demit-xcframework=false -Demit-docs=false`;
+  - the build attempted `install termsurf`;
+  - the build attempted `compile exe termsurf`;
+  - the build failed with
+    `src/main_ghostty.zig:75:30: error: root source file struct 'Io' has no member named 'getStdOut'`;
+  - no `zig-out/bin/termsurf` executable was produced.
+- The attempted `build.zig` change was reverted after the failure, so no product
+  code remains changed by this experiment.
+- `git diff --check` succeeded after the revert.
+
+## Conclusion
+
+The build graph wiring idea is still likely necessary, but Experiment 35 proved
+that it is not sufficient by itself. Before the helper can be installed as
+`zig-out/bin/termsurf`, the `.none` helper CLI path in `src/main_ghostty.zig`
+must be updated for Zig 0.15's stdout API.
+
+The next experiment should fix the helper CLI compile error and then repeat the
+minimal install wiring with both positive and negative checks:
+
+- `emit-exe=true` produces and runs `zig-out/bin/termsurf`;
+- `emit-exe=false` does not produce `zig-out/bin/termsurf`;
+- no `zig-out/bin/ghostty` is produced.
+
+## Completion Review
+
+A fresh-context adversarial reviewer returned **APPROVED** with no required,
+optional, or nit findings.
+
+The reviewer confirmed that the result is correctly marked **Fail**, the README
+status matches, the verification log supports the `install termsurf` /
+`compile exe termsurf` attempt and `std.io.getStdOut()` failure, product code
+was reverted, only the two issue docs remain modified, the conclusion identifies
+the next concrete experiment, and the result commit had not yet been made.
