@@ -263,3 +263,5 @@ and against `ghostboard-legacy/` where useful.
   — **Pass**
 - [Experiment 29: Validate Roamium normal tab lifecycle](29-validate-roamium-normal-tab-lifecycle.md)
   — **Fail**
+- [Experiment 30: Validate Chromium-output Roamium lifecycle](30-validate-chromium-output-roamium-lifecycle.md)
+  — **Designed**
