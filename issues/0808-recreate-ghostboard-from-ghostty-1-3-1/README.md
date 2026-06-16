@@ -223,3 +223,5 @@ and against `ghostboard-legacy/` where useful.
 - [Experiment 7: Start the TermSurf GUI socket](07-start-termsurf-gui-socket.md)
   — **Pass**
 - [Experiment 8: Decode HelloRequest](08-decode-hello-request.md) — **Pass**
+- [Experiment 9: Reply to QueryTabsRequest](09-query-tabs-reply.md) —
+  **Designed**
