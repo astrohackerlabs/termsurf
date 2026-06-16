@@ -272,4 +272,4 @@ and against `ghostboard-legacy/` where useful.
 - [Experiment 33: Acceptance audit and walkthrough](33-acceptance-audit-and-walkthrough.md)
   — **Partial**
 - [Experiment 34: Fix CLI and Zig app names](34-fix-cli-and-zig-app-names.md) —
-  **Designed**
+  **Partial**

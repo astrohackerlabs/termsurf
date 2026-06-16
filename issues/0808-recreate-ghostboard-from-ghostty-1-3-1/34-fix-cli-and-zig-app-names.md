@@ -112,3 +112,101 @@ The reviewer raised one optional finding: the design planned to update
 check that its examples stopped pointing at `Ghostty.app`. The finding was
 accepted, and the verification criteria now require the local macOS agent guide
 to use `TermSurf.app` where it names the current app bundle output.
+
+## Result
+
+**Result:** Partial
+
+Experiment 34 fixed the stale Ghostty artifact names that were inside the
+declared build helper paths. The macOS Zig app install path now copies
+`TermSurf.app`, and the app bundle contains `Contents/MacOS/termsurf`. The Zig
+standalone executable target is now named `termsurf` in source and in the
+attempted standalone GTK-runtime build.
+
+The experiment is partial because the local VM still cannot complete the
+standalone GTK-runtime executable build. The failing build gets as far as
+`install termsurf` / `compile exe termsurf`, but then fails because the VM does
+not have `gtk4` and `libadwaita-1` dynamic libraries. Therefore, this experiment
+proves the executable target was renamed, but it does not yet prove a working
+`zig-out/bin/termsurf` standalone command.
+
+### Changes
+
+- `ghostboard/src/build/GhosttyExe.zig`
+  - changed the main executable artifact name from `ghostty` to `termsurf`;
+  - changed the adjacent NixOS warning from "ghostty binary" to "termsurf
+    binary".
+- `ghostboard/src/build/GhosttyXcodebuild.zig`
+  - changed the Xcode app copy path from `Ghostty.app` to `TermSurf.app`;
+  - changed the Zig run helper from `Contents/MacOS/ghostty` to
+    `Contents/MacOS/termsurf`;
+  - updated directly adjacent step text/comments to say TermSurf for the
+    user-facing app.
+- `ghostboard/macos/AGENTS.md`
+  - updated local build and AppleScript examples from `Ghostty.app` to
+    `TermSurf.app`.
+
+### Verification
+
+- `zig fmt ghostboard/src/build/GhosttyExe.zig ghostboard/src/build/GhosttyXcodebuild.zig`
+  succeeded.
+- `prettier --write --prose-wrap always --print-width 80 ghostboard/macos/AGENTS.md`
+  succeeded.
+- `git diff --check` succeeded.
+- `logs/ghostboard-exp34-static-name-checks-20260616.log` shows:
+  - `ghostboard/src/build/GhosttyExe.zig` uses `.name = "termsurf"`;
+  - `ghostboard/src/build/GhosttyXcodebuild.zig` uses `TermSurf.app`;
+  - `ghostboard/src/build/GhosttyXcodebuild.zig` uses `Contents/MacOS/termsurf`;
+  - `ghostboard/macos/AGENTS.md` examples use `TermSurf.app`.
+- `logs/ghostboard-exp34-zig-build-emit-macos-app-final-20260616.log` shows
+  `cd ghostboard && rm -rf zig-out && zig build -Demit-macos-app=true` succeeded
+  with `exit=0`.
+- `logs/ghostboard-exp34-bundle-artifact-check-20260616.log` shows:
+  - `zig-out/TermSurf.app` exists;
+  - `zig-out/TermSurf.app/Contents/MacOS/termsurf` is executable;
+  - `zig-out/Ghostty.app` does not exist;
+  - `CFBundleName = TermSurf`;
+  - `CFBundleExecutable = termsurf`.
+- The `termsurf_executable=0` and `ghostty_app_exists=1` values in the artifact
+  logs are shell `test` exit statuses: `0` means the executable test passed, and
+  `1` means the `Ghostty.app` existence test failed as expected.
+- `logs/ghostboard-exp34-zig-build-gtk-emit-exe-20260616.log` shows:
+  - the standalone build attempted `install termsurf`;
+  - the standalone build attempted `compile exe termsurf`;
+  - the build failed because `gtk4` and `libadwaita-1` were not found.
+- `git status --short --untracked-files=all` showed only the declared files:
+  - `ghostboard/macos/AGENTS.md`;
+  - `ghostboard/src/build/GhosttyExe.zig`;
+  - `ghostboard/src/build/GhosttyXcodebuild.zig`.
+
+## Conclusion
+
+The stale `Ghostty.app` and `Contents/MacOS/ghostty` macOS Zig wrapper paths are
+fixed, and the standalone executable target is now named `termsurf`. This
+removes the naming bug that made the macOS Zig app install path fail after the
+app bundle was renamed to `TermSurf.app`.
+
+Issue 808 should remain open. The next experiment should decide how the macOS
+CLI command requirement is satisfied in this port: either by building a
+standalone `zig-out/bin/termsurf` helper for the `.none` macOS runtime, or by
+documenting and implementing an equivalent installed command that dispatches
+into `TermSurf.app/Contents/MacOS/termsurf`. That experiment will need to touch
+the build/install wiring directly, because Experiment 34 intentionally did not
+change `build.zig` install semantics.
+
+## Completion Review
+
+A fresh-context adversarial reviewer first returned **CHANGES REQUIRED**. The
+reviewer found that the result cited
+`logs/ghostboard-exp34-zig-build-emit-macos-app-final-20260616.log` as proof of
+the clean macOS Zig app build, but the log file was empty.
+
+The finding was accepted. The macOS Zig app build verification was rerun with an
+explicit transcript wrapper that records the command, `exit=0`, artifact paths,
+bundle executable checks, and plist values in the cited log.
+
+A fresh-context re-reviewer returned **APPROVED**. The re-reviewer confirmed
+that the log now proves the command and `exit=0`, and independently checked that
+`TermSurf.app` exists, `Contents/MacOS/termsurf` is executable, `Ghostty.app` is
+absent, and bundle metadata reports `CFBundleName = TermSurf` and
+`CFBundleExecutable = termsurf`.
