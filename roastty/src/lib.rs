@@ -112,6 +112,7 @@ const ROASTTY_INVALID_VALUE: c_int = 2;
 const ROASTTY_OUT_OF_SPACE: c_int = 3;
 const ROASTTY_NO_VALUE: c_int = 4;
 const ROASTTY_BUILD_MODE_DEBUG: c_int = 0;
+const ROASTTY_BUILD_MODE_RELEASE_FAST: c_int = 2;
 
 const DEFAULT_FONT_SIZE_POINTS: f32 = 13.0;
 
@@ -14148,7 +14149,11 @@ pub extern "C" fn roastty_init(argc: usize, argv: *mut *mut c_char) -> c_int {
 #[no_mangle]
 pub extern "C" fn roastty_info() -> RoasttyInfo {
     RoasttyInfo {
-        build_mode: ROASTTY_BUILD_MODE_DEBUG,
+        build_mode: if cfg!(debug_assertions) {
+            ROASTTY_BUILD_MODE_DEBUG
+        } else {
+            ROASTTY_BUILD_MODE_RELEASE_FAST
+        },
         version: VERSION.as_ptr().cast::<c_char>(),
         version_len: VERSION.len() - 1,
     }

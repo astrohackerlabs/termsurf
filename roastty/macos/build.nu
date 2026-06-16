@@ -57,6 +57,12 @@ def main [
         []
     }
 
+    let local_arch_args = if ($scheme == "Roastty") and ($configuration in [Debug ReleaseLocal]) {
+        [ARCHS=arm64 ONLY_ACTIVE_ARCH=YES]
+    } else {
+        []
+    }
+
     (^env -i
         $"HOME=($env.HOME)"
         "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
@@ -66,6 +72,7 @@ def main [
         -scheme $scheme
         -configuration $configuration
         $"SYMROOT=($build_dir)"
+        ...$local_arch_args
         ...$test_runner_args
         ...$skip_testing
         ...$skip_unit_testing
