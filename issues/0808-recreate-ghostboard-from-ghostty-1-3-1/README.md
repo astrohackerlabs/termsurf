@@ -273,3 +273,5 @@ and against `ghostboard-legacy/` where useful.
   — **Partial**
 - [Experiment 34: Fix CLI and Zig app names](34-fix-cli-and-zig-app-names.md) —
   **Partial**
+- [Experiment 35: Install macOS helper CLI](35-install-macos-helper-cli.md) —
+  **Designed**
