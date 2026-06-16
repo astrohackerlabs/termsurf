@@ -175,4 +175,4 @@ and against `ghostboard-legacy/` where useful.
 - [Experiment 1: Import Ghostty 1.3.1 subtree](01-import-ghostty-1-3-1-subtree.md)
   — **Pass**
 - [Experiment 2: Build the pristine Ghostty import](02-build-pristine-ghostty-import.md)
-  — **Designed**
+  — **Partial**

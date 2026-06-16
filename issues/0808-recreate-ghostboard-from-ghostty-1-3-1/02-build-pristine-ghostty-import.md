@@ -104,3 +104,114 @@ Fresh-context adversarial review returned `APPROVED`.
   macOS commands match `ghostboard/macos/AGENTS.md`, and the expected app output
   path matches `ghostboard/macos/build/Debug/Ghostty.app`.
 - No required findings were reported.
+
+## Result
+
+**Result:** Partial
+
+Tooling and preflight checks passed:
+
+- `command -v zig` returned `/opt/homebrew/bin/zig`.
+- `zig version` returned `0.15.2`, matching `ghostboard/build.zig.zon`'s
+  `.minimum_zig_version = "0.15.2"`.
+- `command -v nu` returned `/opt/homebrew/bin/nu`.
+- `xcode-select -p` returned `/Applications/Xcode.app/Contents/Developer`.
+- `xcodebuild -version` returned:
+
+  ```text
+  Xcode 26.6
+  Build version 17F109
+  ```
+
+- `git status --short` was clean before building.
+
+The underlying Ghostty library build succeeded:
+
+```bash
+cd ghostboard
+zig build -Demit-macos-app=false
+```
+
+The build emitted `libtool` alignment warnings from archive members, but exited
+with status `0`.
+
+The macOS Debug app build failed:
+
+```bash
+cd ghostboard
+macos/build.nu --configuration Debug --action build
+```
+
+The failure was captured in:
+
+```text
+logs/ghostboard-exp2-macos-build.log
+```
+
+The log shows the link step for `ghostty.debug.dylib` failed:
+
+```text
+Ld /Users/astrohacker/dev/termsurf/ghostboard/macos/build/Debug/Ghostty.app/Contents/MacOS/ghostty.debug.dylib normal (in target 'Ghostty' from project 'Ghostty')
+Undefined symbols for architecture arm64:
+ld: symbol(s) not found for architecture arm64
+/Users/astrohacker/dev/termsurf/ghostboard/macos/Ghostty.xcodeproj: Ghostty: clang: error: linker command failed with exit code 1 (use -v to see invocation)
+** BUILD FAILED **
+```
+
+Representative unresolved symbol groups in the log include:
+
+- `spirv_cross::CompilerMSL::*` and `spirv_cross::CompilerGLSL::*`;
+- `glslang::*`;
+- `ImGuiStorage::GetInt`;
+- `spv::SpvBuildLogger::getAllMessages`;
+- `_libintl_*`;
+- `_sentry_*`;
+- `_ghostty_simd_*`;
+- `___extenddftf2` and `___extendxftf2`.
+
+`ghostboard/macos/build/Debug/Ghostty.app` was created, but it is incomplete:
+
+- `ghostboard/macos/build/Debug/Ghostty.app/Contents/MacOS/ghostty` is missing.
+- `ghostboard/macos/build/Debug/Ghostty.app/Contents/MacOS/ghostty.debug.dylib`
+  is missing.
+
+Generated build outputs are ignored. `git status --short` remained clean after
+the build attempts. `git status --ignored --short ghostboard logs` showed only
+ignored generated outputs:
+
+```text
+!! ghostboard/.zig-cache/
+!! ghostboard/macos/GhosttyKit.xcframework/
+!! ghostboard/macos/build/
+!! ghostboard/zig-out/
+!! logs/
+```
+
+No branding, config-path, icon, CLI, build-system, protocol, `webtui`, or
+`roamium` changes were made in this experiment.
+
+## Completion Review
+
+Fresh-context adversarial completion review returned `APPROVED`.
+
+- The reviewer confirmed `git status --short` showed only the two issue
+  documentation edits.
+- The reviewer confirmed the README marks Experiment 2 as `Partial`.
+- The reviewer confirmed this experiment records the partial result, successful
+  preflight and library build, failed macOS app link, incomplete app bundle,
+  ignored generated outputs, and no source changes.
+- The reviewer confirmed the build log contains the `ghostty.debug.dylib` link
+  failure, undefined symbols, and `** BUILD FAILED **`.
+- The reviewer confirmed both `Contents/MacOS/ghostty` and `ghostty.debug.dylib`
+  are missing from the generated app bundle.
+- The reviewer confirmed `git status --ignored --short ghostboard logs` shows
+  only ignored generated outputs.
+- No required findings were reported.
+
+## Conclusion
+
+The pristine import can build the underlying Ghostty library, but the macOS app
+does not yet link in this environment. The next experiment should investigate
+and fix the Debug app link failure, focusing on why the Xcode target links
+`libghostty.a` without resolving the required Spirv-Cross, glslang, libintl,
+Sentry, SIMD, and compiler-rt symbols.
