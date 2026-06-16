@@ -245,3 +245,5 @@ and against `ghostboard-legacy/` where useful.
   — **Pass**
 - [Experiment 20: Spawn browser process for SetOverlay](20-spawn-browser-process.md)
   — **Pass**
+- [Experiment 21: Send BrowserReady after TabReady](21-send-browser-ready.md) —
+  **Designed**
