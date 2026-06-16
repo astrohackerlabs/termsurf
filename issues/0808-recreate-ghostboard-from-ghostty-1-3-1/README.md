@@ -275,3 +275,5 @@ and against `ghostboard-legacy/` where useful.
   **Partial**
 - [Experiment 35: Install macOS helper CLI](35-install-macos-helper-cli.md) —
   **Fail**
+- [Experiment 36: Fix and install helper CLI](36-fix-and-install-helper-cli.md)
+  — **Designed**
