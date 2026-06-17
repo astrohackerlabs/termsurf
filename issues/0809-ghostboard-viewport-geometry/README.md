@@ -178,3 +178,5 @@ work together, not just individually.
 - [Experiment 1: Geometry observability harness](01-geometry-observability-harness.md)
   — **Pass**
 - [Experiment 2: Initial viewport fill](02-initial-viewport-fill.md) — **Pass**
+- [Experiment 3: Window resize follow](03-window-resize-follow.md) —
+  **Designed**
