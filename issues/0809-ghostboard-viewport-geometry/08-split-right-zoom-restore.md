@@ -223,3 +223,142 @@ The design was reviewed by a fresh-context Codex adversarial subagent.
 Verdict: **Approved**.
 
 The reviewer reported no findings.
+
+## Result
+
+**Result:** Pass.
+
+The `split-right-zoom` scenario is implemented in
+`scripts/ghostboard-geometry-matrix.sh`. The harness now:
+
+- accepts `split-right-zoom` in addition to the prior scenarios;
+- adds scenario-local keybindings:
+  - `keybind = ctrl+d=new_split:right`;
+  - `keybind = ctrl+z=toggle_split_zoom`;
+- creates a right-side split from the browser-owning pane;
+- records the post-split frame/pixels as the restore baseline;
+- focuses the browser-owning pane with real mouse input before invoking zoom;
+- toggles split zoom through Control-Z;
+- verifies that AppKit, Zig, and Roamium all resize the original browser pane
+  back to the full single-pane geometry;
+- verifies a positive hit test inside the zoomed browser overlay;
+- toggles split zoom again through Control-Z;
+- verifies that AppKit, Zig, and Roamium all resize the original browser pane
+  back to the split baseline;
+- captures post-zoom and post-unzoom screenshots;
+- verifies a positive hit test inside the restored browser overlay;
+- verifies the right sibling pane area does not route input to the original
+  browser context after unzoom.
+
+This experiment required a small Ghostboard product fix in
+`ghostboard/src/apprt/termsurf.zig`. The first passing zoom attempt exposed that
+unzoom restored the AppKit and Zig geometry to `912x986`, but Roamium only
+received the logical fallback resize `570x580`. The root cause was that
+`overlayPresentedPixels` used the stale CA-context dimensions
+`ca_pixel_width/ca_pixel_height` as proof that the browser was already sized to
+the AppKit-presented pixel size. Those CA-context dimensions are the size
+reported when the context was created; after pane layout changes, the browser's
+actual size is the last resize sent to Roamium. The fix makes corrective-resize
+deduplication rely on `last_resize_pixel_width/last_resize_pixel_height`
+instead.
+
+The scenario also learned that `new_split:right` leaves focus on the newly
+created sibling pane. To make `toggle_split_zoom` target the browser-owning pane
+instead of the sibling pane, the harness focuses the browser overlay with a real
+mouse click after split creation and before Control-Z.
+
+Final passing artifacts:
+
+- split-right-zoom app log:
+  `logs/ghostboard-geometry-split-right-zoom-app-20260617-085230.log`
+- split-right-zoom harness log:
+  `logs/ghostboard-geometry-split-right-zoom-harness-20260617-085230.log`
+- split-right-zoom initial screenshot:
+  `logs/ghostboard-geometry-split-right-zoom-screenshot-20260617-085230.png`
+- split-right-zoom post-zoom screenshot:
+  `logs/ghostboard-geometry-split-right-zoom-zoom-screenshot-20260617-085230.png`
+- split-right-zoom post-unzoom screenshot:
+  `logs/ghostboard-geometry-split-right-zoom-unzoom-screenshot-20260617-085230.png`
+- split-right-zoom Roamium trace:
+  `logs/ghostboard-geometry-split-right-zoom-roamium-20260617-085230.log`
+- initial-open regression app log:
+  `logs/ghostboard-geometry-initial-open-app-20260617-085253.log`
+- initial-open regression harness log:
+  `logs/ghostboard-geometry-initial-open-harness-20260617-085253.log`
+- split-right regression app log:
+  `logs/ghostboard-geometry-split-right-app-20260617-085259.log`
+- split-right regression harness log:
+  `logs/ghostboard-geometry-split-right-harness-20260617-085259.log`
+- split-right-resize regression app log:
+  `logs/ghostboard-geometry-split-right-resize-app-20260617-085340.log`
+- split-right-resize regression harness log:
+  `logs/ghostboard-geometry-split-right-resize-harness-20260617-085340.log`
+- split-right-equalize regression app log:
+  `logs/ghostboard-geometry-split-right-equalize-app-20260617-085423.log`
+- split-right-equalize regression harness log:
+  `logs/ghostboard-geometry-split-right-equalize-harness-20260617-085423.log`
+- window-resize regression app log:
+  `logs/ghostboard-geometry-window-resize-app-20260617-085514.log`
+- window-resize regression harness log:
+  `logs/ghostboard-geometry-window-resize-harness-20260617-085514.log`
+- split-down regression app log:
+  `logs/ghostboard-geometry-split-down-app-20260617-085526.log`
+- split-down regression harness log:
+  `logs/ghostboard-geometry-split-down-harness-20260617-085526.log`
+
+Key runtime evidence from the passing `split-right-zoom` run:
+
+- initial frame: `944x493`, AppKit pixel size `1888x986`;
+- post-split restore baseline: `456x493`, AppKit pixel size `912x986`;
+- post-zoom frame: `944x493`, AppKit pixel size `1888x986`;
+- post-unzoom frame: `456x493`, AppKit pixel size `912x986`;
+- pane id: `252677D9-C383-4202-A201-B2961E35F923`;
+- browser tab id: `1`;
+- context id: `522695247`;
+- browser-pane focus point before zoom: `276,414`;
+- positive post-zoom hit point: `520,414`;
+- positive post-unzoom hit point: `276,414`;
+- sibling negative post-unzoom point: `756,414`.
+
+Verification commands run:
+
+```bash
+cd ghostboard
+zig fmt src/apprt/termsurf.zig
+zig build -Demit-macos-app=false
+macos/build.nu --scheme Ghostty --configuration Debug --action build
+cd ..
+bash -n scripts/ghostboard-geometry-matrix.sh
+git diff --check
+scripts/ghostboard-geometry-matrix.sh split-right-zoom
+scripts/ghostboard-geometry-matrix.sh initial-open
+scripts/ghostboard-geometry-matrix.sh split-right
+scripts/ghostboard-geometry-matrix.sh split-right-resize
+scripts/ghostboard-geometry-matrix.sh split-right-equalize
+scripts/ghostboard-geometry-matrix.sh window-resize
+scripts/ghostboard-geometry-matrix.sh split-down
+```
+
+The required adjacent regression sweep was run serially, and `window-resize` and
+`split-down` were also run because the product fix touched shared resize
+bookkeeping.
+
+## Completion Review
+
+The completed experiment was reviewed by a fresh-context Codex adversarial
+subagent.
+
+Verdict: **Approved**.
+
+The reviewer reported no findings.
+
+## Conclusion
+
+The zoom/maximize matrix row passes for a two-pane split-right layout. A browser
+in the original left pane expands with the zoomed pane, restores to the split
+baseline after unzoom, and keeps AppKit, Zig, Roamium, screenshot, and input-hit
+evidence aligned through both transitions.
+
+The next experiment should move to the next untested matrix row, most likely
+closing a sibling pane and proving the browser expands with the remaining owning
+pane.

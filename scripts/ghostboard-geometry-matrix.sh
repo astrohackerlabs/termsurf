@@ -17,6 +17,8 @@ SCREENSHOT="$LOG_DIR/ghostboard-geometry-${SCENARIO}-screenshot-${TS}.png"
 SCREENSHOT_GROW="$LOG_DIR/ghostboard-geometry-${SCENARIO}-grow-screenshot-${TS}.png"
 SCREENSHOT_SHRINK="$LOG_DIR/ghostboard-geometry-${SCENARIO}-shrink-screenshot-${TS}.png"
 SCREENSHOT_SPLIT="$LOG_DIR/ghostboard-geometry-${SCENARIO}-split-screenshot-${TS}.png"
+SCREENSHOT_ZOOM="$LOG_DIR/ghostboard-geometry-${SCENARIO}-zoom-screenshot-${TS}.png"
+SCREENSHOT_UNZOOM="$LOG_DIR/ghostboard-geometry-${SCENARIO}-unzoom-screenshot-${TS}.png"
 ROAMIUM_TRACE="$LOG_DIR/ghostboard-geometry-${SCENARIO}-roamium-${TS}.log"
 PID=""
 
@@ -270,6 +272,33 @@ compare_split_right_equalize_pair() {
     }'
 }
 
+compare_split_right_zoom_pair() {
+  local pair="$1"
+  local target="$2"
+  local split="$3"
+  local tolerance="$4"
+  local width height target_width target_height split_width
+  width="$(pair_width "$pair")"
+  height="$(pair_height "$pair")"
+  target_width="$(pair_width "$target")"
+  target_height="$(pair_height "$target")"
+  split_width="$(pair_width "$split")"
+  awk \
+    -v width="$width" \
+    -v height="$height" \
+    -v target_width="$target_width" \
+    -v target_height="$target_height" \
+    -v split_width="$split_width" \
+    -v tolerance="$tolerance" \
+    'BEGIN {
+      width_delta = width - target_width
+      if (width_delta < 0) width_delta = -width_delta
+      height_delta = height - target_height
+      if (height_delta < 0) height_delta = -height_delta
+      exit !((width > split_width) && (width_delta <= tolerance) && (height_delta <= tolerance))
+    }'
+}
+
 wait_for_appkit_pixels_after() {
   local start_line="$1"
   local ref_pixel="$2"
@@ -480,6 +509,50 @@ wait_for_split_right_equalize_pixels_after() {
   fail "timed out waiting for $label"
 }
 
+wait_for_split_right_zoom_frame_after() {
+  local start_line="$1"
+  local pane_id="$2"
+  local context_id="$3"
+  local target_frame="$4"
+  local split_frame="$5"
+  local label="$6"
+  local attempts="${7:-30}"
+  local line frame_size
+  for _ in $(seq 1 "$attempts"); do
+    while IFS= read -r line; do
+      frame_size="$(extract_frame_size "$line")"
+      if [ -n "$frame_size" ] && [ "$frame_size" != "$line" ] && compare_split_right_zoom_pair "$frame_size" "$target_frame" "$split_frame" 8; then
+        printf '%s\n' "$line"
+        return 0
+      fi
+    done < <(tail -n +"$((start_line + 1))" "$APP_LOG" | grep -E "TermSurf geometry layer=appkit event=presented .*pane_id:${pane_id} .*context_id=${context_id}" || true)
+    delay 1
+  done
+  fail "timed out waiting for $label"
+}
+
+wait_for_split_right_zoom_pixels_after() {
+  local start_line="$1"
+  local pane_id="$2"
+  local context_id="$3"
+  local target_pixel="$4"
+  local split_pixel="$5"
+  local label="$6"
+  local attempts="${7:-30}"
+  local line pixel
+  for _ in $(seq 1 "$attempts"); do
+    while IFS= read -r line; do
+      pixel="$(extract_appkit_pixel "$line")"
+      if [ -n "$pixel" ] && compare_split_right_zoom_pair "$pixel" "$target_pixel" "$split_pixel" 16; then
+        printf '%s\n' "$line"
+        return 0
+      fi
+    done < <(tail -n +"$((start_line + 1))" "$APP_LOG" | grep -E "TermSurf geometry layer=appkit event=presented_pixels .*pane_id:${pane_id} .*context_id=${context_id}" || true)
+    delay 1
+  done
+  fail "timed out waiting for $label"
+}
+
 wait_for_hit_after() {
   local start_line="$1"
   local context_id="$2"
@@ -557,7 +630,7 @@ click_global_point() {
 }
 
 case "$SCENARIO" in
-  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize) ;;
+  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -585,7 +658,7 @@ window-save-state = never
 initial-command = direct:$COMMAND
 EOF
 
-if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ]; then
+if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ] || [ "$SCENARIO" = "split-right-zoom" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+d=new_split:right
 EOF
@@ -600,6 +673,12 @@ fi
 if [ "$SCENARIO" = "split-right-equalize" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+e=equalize_splits
+EOF
+fi
+
+if [ "$SCENARIO" = "split-right-zoom" ]; then
+  cat >>"$CONFIG" <<'EOF'
+keybind = ctrl+z=toggle_split_zoom
 EOF
 fi
 
@@ -729,6 +808,10 @@ if [ "$SCENARIO" = "window-resize" ]; then
 fi
 if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-down" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ]; then
   log "split_screenshot=$SCREENSHOT_SPLIT"
+fi
+if [ "$SCENARIO" = "split-right-zoom" ]; then
+  log "zoom_screenshot=$SCREENSHOT_ZOOM"
+  log "unzoom_screenshot=$SCREENSHOT_UNZOOM"
 fi
 
 GHOSTTY_CONFIG_PATH="$CONFIG" \
@@ -1108,6 +1191,117 @@ if [ "$SCENARIO" = "split-right-equalize" ]; then
   EQUALIZE_NEGATIVE_START_LINE="$(log_line_count)"
   click_global_point "$EQUALIZE_NEGATIVE_X" "$EQUALIZE_NEGATIVE_Y" "equalize_sibling_negative"
   wait_for_negative_hit_after "$EQUALIZE_NEGATIVE_START_LINE" "$CONTEXT_ID" "split-right equalized sibling-pane negative hit-test" allow-absent
+fi
+
+if [ "$SCENARIO" = "split-right-zoom" ]; then
+  SPLIT_START_LINE="$(log_line_count)"
+  SPLIT_TRACE_START_LINE="$(trace_line_count)"
+  log "split_keybind=ctrl+d=new_split:right"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 2 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+
+  SPLIT_PRESENT_LINE="$(wait_for_split_right_frame_after "$SPLIT_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$OVERLAY_FRAME_SIZE" "split-right AppKit overlay frame")"
+  SPLIT_PIXELS_LINE="$(wait_for_split_right_pixels_after "$SPLIT_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$APPKIT_PIXEL" "split-right AppKit presented pixels")"
+  SPLIT_FRAME_SIZE="$(extract_frame_size "$SPLIT_PRESENT_LINE")"
+  SPLIT_FRAME_X="$(extract_frame_x "$SPLIT_PRESENT_LINE")"
+  SPLIT_PIXEL="$(extract_appkit_pixel "$SPLIT_PIXELS_LINE")"
+  SPLIT_PIXEL_WIDTH="${SPLIT_PIXEL%x*}"
+  SPLIT_PIXEL_HEIGHT="${SPLIT_PIXEL#*x}"
+  log "PASS: observed split-right AppKit overlay frame overlay_frame_size=$SPLIT_FRAME_SIZE"
+  log "PASS: observed split-right AppKit presented pixels appkit_pixel=$SPLIT_PIXEL"
+  log "split_overlay_frame_size=$SPLIT_FRAME_SIZE"
+  log "split_overlay_frame_x=$SPLIT_FRAME_X"
+  log "split_appkit_pixel=$SPLIT_PIXEL"
+  require_log_after "$SPLIT_START_LINE" "TermSurf geometry layer=zig event=appkit_presented_pixels .*pane_id:${PANE_ID} .*appkit_pixel=${SPLIT_PIXEL}" "Zig records split-right AppKit presented pixel size"
+  require_trace_after "$SPLIT_TRACE_START_LINE" "resize tab_id=${BROWSER_TAB_ID} pane_id=${PANE_ID} pixel_width=${SPLIT_PIXEL_WIDTH} pixel_height=${SPLIT_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied split-right resize to AppKit pixel size via ts_set_view_size"
+
+  SPLIT_FOCUS_WIN_LINE="$(window_bounds)" || fail "failed to resolve split window bounds for window id=$WID"
+  IFS=$'\t' read -r _SPLIT_FOCUS_WID SPLIT_FOCUS_WX SPLIT_FOCUS_WY SPLIT_FOCUS_WW SPLIT_FOCUS_WH <<<"$SPLIT_FOCUS_WIN_LINE"
+  SPLIT_FRAME_WIDTH="$(pair_width "$SPLIT_FRAME_SIZE")"
+  SPLIT_FOCUS_X="$(awk -v wx="$SPLIT_FOCUS_WX" -v frame_x="$SPLIT_FRAME_X" -v frame_w="$SPLIT_FRAME_WIDTH" 'BEGIN { print int(wx + frame_x + (frame_w / 2) + 0.5) }')"
+  SPLIT_FOCUS_Y=$((SPLIT_FOCUS_WY + SPLIT_FOCUS_WH / 2))
+  SPLIT_FOCUS_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$SPLIT_FOCUS_X" "$SPLIT_FOCUS_Y" "split_focus_browser"
+  SPLIT_FOCUS_HIT_LINE="$(wait_for_hit_after "$SPLIT_FOCUS_HIT_START_LINE" "$CONTEXT_ID" "split-right browser-pane focus hit-test")"
+  log "PASS: focused split-right browser pane before zoom"
+  require_text "$SPLIT_FOCUS_HIT_LINE" "overlay_frame=" "split-right browser-pane focus hit-test includes current overlay frame"
+  require_text "$SPLIT_FOCUS_HIT_LINE" "web_point={" "split-right browser-pane focus hit-test includes webview-relative point"
+
+  ZOOM_START_LINE="$(log_line_count)"
+  ZOOM_TRACE_START_LINE="$(trace_line_count)"
+  log "zoom_keybind=ctrl+z=toggle_split_zoom"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 6 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+
+  ZOOM_PRESENT_LINE="$(wait_for_split_right_zoom_frame_after "$ZOOM_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$OVERLAY_FRAME_SIZE" "$SPLIT_FRAME_SIZE" "split-right zoomed AppKit overlay frame")"
+  ZOOM_PIXELS_LINE="$(wait_for_split_right_zoom_pixels_after "$ZOOM_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$APPKIT_PIXEL" "$SPLIT_PIXEL" "split-right zoomed AppKit presented pixels")"
+  ZOOM_FRAME_SIZE="$(extract_frame_size "$ZOOM_PRESENT_LINE")"
+  ZOOM_FRAME_X="$(extract_frame_x "$ZOOM_PRESENT_LINE")"
+  ZOOM_PIXEL="$(extract_appkit_pixel "$ZOOM_PIXELS_LINE")"
+  ZOOM_PIXEL_WIDTH="${ZOOM_PIXEL%x*}"
+  ZOOM_PIXEL_HEIGHT="${ZOOM_PIXEL#*x}"
+  log "PASS: observed split-right zoomed AppKit overlay frame overlay_frame_size=$ZOOM_FRAME_SIZE"
+  log "PASS: observed split-right zoomed AppKit presented pixels appkit_pixel=$ZOOM_PIXEL"
+  log "zoom_overlay_frame_size=$ZOOM_FRAME_SIZE"
+  log "zoom_overlay_frame_x=$ZOOM_FRAME_X"
+  log "zoom_appkit_pixel=$ZOOM_PIXEL"
+  require_log_after "$ZOOM_START_LINE" "TermSurf geometry layer=zig event=appkit_presented_pixels .*pane_id:${PANE_ID} .*appkit_pixel=${ZOOM_PIXEL}" "Zig records split-right zoomed AppKit presented pixel size"
+  require_trace_after "$ZOOM_TRACE_START_LINE" "resize tab_id=${BROWSER_TAB_ID} pane_id=${PANE_ID} pixel_width=${ZOOM_PIXEL_WIDTH} pixel_height=${ZOOM_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied split-right zoomed resize to AppKit pixel size via ts_set_view_size"
+  screencapture -x -o -l"$WID" "$SCREENSHOT_ZOOM"
+  log "zoom_screenshot_exit=$?"
+
+  ZOOM_WIN_LINE="$(window_bounds)" || fail "failed to resolve zoomed window bounds for window id=$WID"
+  IFS=$'\t' read -r _ZOOM_WID ZOOM_WX ZOOM_WY ZOOM_WW ZOOM_WH <<<"$ZOOM_WIN_LINE"
+  ZOOM_FRAME_WIDTH="$(pair_width "$ZOOM_FRAME_SIZE")"
+  ZOOM_INSIDE_X="$(awk -v wx="$ZOOM_WX" -v frame_x="$ZOOM_FRAME_X" -v frame_w="$ZOOM_FRAME_WIDTH" 'BEGIN { print int(wx + frame_x + (frame_w / 2) + 0.5) }')"
+  ZOOM_INSIDE_Y=$((ZOOM_WY + ZOOM_WH / 2))
+  ZOOM_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$ZOOM_INSIDE_X" "$ZOOM_INSIDE_Y" "zoom_inside"
+  ZOOM_HIT_LINE="$(wait_for_hit_after "$ZOOM_HIT_START_LINE" "$CONTEXT_ID" "split-right zoomed AppKit hit-test")"
+  log "PASS: observed split-right zoomed AppKit hit-test"
+  require_text "$ZOOM_HIT_LINE" "overlay_frame=" "split-right zoomed hit-test includes current overlay frame"
+  require_text "$ZOOM_HIT_LINE" "web_point={" "split-right zoomed hit-test includes webview-relative point"
+
+  UNZOOM_START_LINE="$(log_line_count)"
+  UNZOOM_TRACE_START_LINE="$(trace_line_count)"
+  log "unzoom_keybind=ctrl+z=toggle_split_zoom"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 6 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+
+  UNZOOM_PRESENT_LINE="$(wait_for_split_right_equalize_frame_after "$UNZOOM_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$SPLIT_FRAME_SIZE" "$ZOOM_FRAME_SIZE" "split-right unzoomed AppKit overlay frame")"
+  UNZOOM_PIXELS_LINE="$(wait_for_split_right_equalize_pixels_after "$UNZOOM_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$SPLIT_PIXEL" "$ZOOM_PIXEL" "split-right unzoomed AppKit presented pixels")"
+  UNZOOM_FRAME_SIZE="$(extract_frame_size "$UNZOOM_PRESENT_LINE")"
+  UNZOOM_FRAME_X="$(extract_frame_x "$UNZOOM_PRESENT_LINE")"
+  UNZOOM_PIXEL="$(extract_appkit_pixel "$UNZOOM_PIXELS_LINE")"
+  UNZOOM_PIXEL_WIDTH="${UNZOOM_PIXEL%x*}"
+  UNZOOM_PIXEL_HEIGHT="${UNZOOM_PIXEL#*x}"
+  log "PASS: observed split-right unzoomed AppKit overlay frame overlay_frame_size=$UNZOOM_FRAME_SIZE"
+  log "PASS: observed split-right unzoomed AppKit presented pixels appkit_pixel=$UNZOOM_PIXEL"
+  log "unzoom_overlay_frame_size=$UNZOOM_FRAME_SIZE"
+  log "unzoom_overlay_frame_x=$UNZOOM_FRAME_X"
+  log "unzoom_appkit_pixel=$UNZOOM_PIXEL"
+  require_log_after "$UNZOOM_START_LINE" "TermSurf geometry layer=zig event=appkit_presented_pixels .*pane_id:${PANE_ID} .*appkit_pixel=${UNZOOM_PIXEL}" "Zig records split-right unzoomed AppKit presented pixel size"
+  require_trace_after "$UNZOOM_TRACE_START_LINE" "resize tab_id=${BROWSER_TAB_ID} pane_id=${PANE_ID} pixel_width=${UNZOOM_PIXEL_WIDTH} pixel_height=${UNZOOM_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied split-right unzoomed resize to AppKit pixel size via ts_set_view_size"
+  screencapture -x -o -l"$WID" "$SCREENSHOT_UNZOOM"
+  log "unzoom_screenshot_exit=$?"
+
+  UNZOOM_WIN_LINE="$(window_bounds)" || fail "failed to resolve unzoomed window bounds for window id=$WID"
+  IFS=$'\t' read -r _UNZOOM_WID UNZOOM_WX UNZOOM_WY UNZOOM_WW UNZOOM_WH <<<"$UNZOOM_WIN_LINE"
+  UNZOOM_FRAME_WIDTH="$(pair_width "$UNZOOM_FRAME_SIZE")"
+  UNZOOM_INSIDE_X="$(awk -v wx="$UNZOOM_WX" -v frame_x="$UNZOOM_FRAME_X" -v frame_w="$UNZOOM_FRAME_WIDTH" 'BEGIN { print int(wx + frame_x + (frame_w / 2) + 0.5) }')"
+  UNZOOM_INSIDE_Y=$((UNZOOM_WY + UNZOOM_WH / 2))
+  UNZOOM_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$UNZOOM_INSIDE_X" "$UNZOOM_INSIDE_Y" "unzoom_inside"
+  UNZOOM_HIT_LINE="$(wait_for_hit_after "$UNZOOM_HIT_START_LINE" "$CONTEXT_ID" "split-right unzoomed AppKit hit-test")"
+  log "PASS: observed split-right unzoomed AppKit hit-test"
+  require_text "$UNZOOM_HIT_LINE" "overlay_frame=" "split-right unzoomed hit-test includes current overlay frame"
+  require_text "$UNZOOM_HIT_LINE" "web_point={" "split-right unzoomed hit-test includes webview-relative point"
+
+  UNZOOM_NEGATIVE_X="$(awk -v wx="$UNZOOM_WX" -v frame_x="$UNZOOM_FRAME_X" -v frame_w="$UNZOOM_FRAME_WIDTH" -v ww="$UNZOOM_WW" 'BEGIN { print int(wx + frame_x + frame_w + ((ww - frame_x - frame_w) / 2) + 0.5) }')"
+  UNZOOM_NEGATIVE_Y="$UNZOOM_INSIDE_Y"
+  UNZOOM_NEGATIVE_START_LINE="$(log_line_count)"
+  click_global_point "$UNZOOM_NEGATIVE_X" "$UNZOOM_NEGATIVE_Y" "unzoom_sibling_negative"
+  wait_for_negative_hit_after "$UNZOOM_NEGATIVE_START_LINE" "$CONTEXT_ID" "split-right unzoomed sibling-pane negative hit-test" allow-absent
 fi
 
 if [ "$SCENARIO" = "split-down" ]; then

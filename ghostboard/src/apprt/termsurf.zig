@@ -1311,10 +1311,11 @@ pub fn overlayPresentedPixels(pane_id: []const u8, pixel_width: u64, pixel_heigh
 
             const already_requested =
                 pane.last_resize_pixel_width == pixel_width and pane.last_resize_pixel_height == pixel_height;
-            const browser_already_sized =
-                pane.ca_pixel_width == pixel_width and pane.ca_pixel_height == pixel_height;
 
-            if (!browser_already_sized and !already_requested and (!unchanged_appkit or pane.ca_context_id != 0)) {
+            // The CA context dimensions are the size reported when the context
+            // was created. After pane layout changes, the browser's actual
+            // size is the last resize we sent, so use that as the de-dupe key.
+            if (!already_requested and (!unchanged_appkit or pane.ca_context_id != 0)) {
                 resize_snapshot = trace_snapshot;
             }
         }
