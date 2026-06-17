@@ -14,6 +14,7 @@ URL="${TERMSURF_GEOMETRY_URL:-https://example.com}"
 APP_LOG="$LOG_DIR/ghostboard-geometry-${SCENARIO}-app-${TS}.log"
 HARNESS_LOG="$LOG_DIR/ghostboard-geometry-${SCENARIO}-harness-${TS}.log"
 SCREENSHOT="$LOG_DIR/ghostboard-geometry-${SCENARIO}-screenshot-${TS}.png"
+ROAMIUM_TRACE="$LOG_DIR/ghostboard-geometry-${SCENARIO}-roamium-${TS}.log"
 PID=""
 
 mkdir -p "$LOG_DIR"
@@ -67,6 +68,16 @@ require_log() {
   local pattern="$1"
   local label="$2"
   if grep -E "$pattern" "$APP_LOG" >/dev/null 2>&1; then
+    log "PASS: $label"
+  else
+    fail "missing $label"
+  fi
+}
+
+require_trace() {
+  local needle="$1"
+  local label="$2"
+  if grep -F "$needle" "$ROAMIUM_TRACE" >/dev/null 2>&1; then
     log "PASS: $label"
   else
     fail "missing $label"
@@ -157,6 +168,7 @@ log "web=$WEB"
 log "roamium=$ROAMIUM"
 log "url=$URL"
 log "app_log=$APP_LOG"
+log "roamium_trace=$ROAMIUM_TRACE"
 log "screenshot=$SCREENSHOT"
 
 GHOSTTY_CONFIG_PATH="$CONFIG" \
@@ -164,13 +176,15 @@ GHOSTTY_LOG=stderr \
 TERMSURF_GEOMETRY_TRACE=1 \
 TERMSURF_GEOMETRY_SCENARIO="$SCENARIO" \
 TERMSURF_INPUT_TRACE=1 \
+TERMSURF_PDF_INPUT_TRACE=1 \
+TERMSURF_PDF_INPUT_TRACE_FILE="$ROAMIUM_TRACE" \
   "$APP_BIN" >"$APP_LOG" 2>&1 &
 PID="$!"
 log "pid=$PID"
 
-wait_for_log 'TermSurf geometry layer=appkit event=presented' "AppKit overlay presentation"
+wait_for_log 'TermSurf geometry layer=appkit event=presented ' "AppKit overlay presentation"
 
-PRESENTED_LINE="$(grep -E 'TermSurf geometry layer=appkit event=presented' "$APP_LOG" | tail -1)"
+PRESENTED_LINE="$(grep -E 'TermSurf geometry layer=appkit event=presented ' "$APP_LOG" | tail -1)"
 WID="$(printf '%s\n' "$PRESENTED_LINE" | sed -E 's/.*identity=window_id:([^ ]+) .*/\1/')"
 case "$WID" in
   ''|*[!0-9]*) fail "failed to extract numeric AppKit window id from presented geometry: $PRESENTED_LINE" ;;
@@ -197,7 +211,7 @@ delay 1
 
 require_log 'TermSurf geometry layer=zig' "Zig geometry record"
 require_log 'TermSurf geometry layer=bridge' "bridge geometry record"
-require_log 'TermSurf geometry layer=appkit event=presented' "AppKit presented geometry record"
+require_log 'TermSurf geometry layer=appkit event=presented ' "AppKit presented geometry record"
 require_log 'TermSurf geometry layer=appkit event=hit_test .*hit=true' "AppKit hit-test geometry record"
 require_log "scenario=${SCENARIO}" "scenario id in geometry records"
 
@@ -205,7 +219,8 @@ TAB_READY_LINE="$(grep -E 'TermSurf geometry layer=zig event=tab_ready' "$APP_LO
 CA_CONTEXT_LINE="$(grep -E 'TermSurf geometry layer=zig event=ca_context' "$APP_LOG" | tail -1)"
 ZIG_PRESENT_LINE="$(grep -E 'TermSurf geometry layer=zig event=present_overlay_call' "$APP_LOG" | tail -1)"
 BRIDGE_PRESENT_LINE="$(grep -E 'TermSurf geometry layer=bridge event=present_target_found' "$APP_LOG" | tail -1)"
-APPKIT_PRESENT_LINE="$(grep -E 'TermSurf geometry layer=appkit event=presented' "$APP_LOG" | tail -1)"
+APPKIT_PRESENT_LINE="$(grep -E 'TermSurf geometry layer=appkit event=presented ' "$APP_LOG" | tail -1)"
+APPKIT_PIXELS_LINE="$(grep -E 'TermSurf geometry layer=appkit event=presented_pixels' "$APP_LOG" | tail -1)"
 HIT_TEST_LINE="$(grep -E 'TermSurf geometry layer=appkit event=hit_test .*hit=true' "$APP_LOG" | tail -1)"
 
 [ -n "$TAB_READY_LINE" ] || fail "missing Zig tab_ready geometry line"
@@ -213,6 +228,7 @@ HIT_TEST_LINE="$(grep -E 'TermSurf geometry layer=appkit event=hit_test .*hit=tr
 [ -n "$ZIG_PRESENT_LINE" ] || fail "missing Zig present_overlay_call geometry line"
 [ -n "$BRIDGE_PRESENT_LINE" ] || fail "missing bridge present_target_found geometry line"
 [ -n "$APPKIT_PRESENT_LINE" ] || fail "missing AppKit presented geometry line"
+[ -n "$APPKIT_PIXELS_LINE" ] || fail "missing AppKit presented-pixels geometry line"
 [ -n "$HIT_TEST_LINE" ] || fail "missing AppKit hit-test geometry line"
 
 PANE_ID="$(printf '%s\n' "$CA_CONTEXT_LINE" | sed -E 's/.*pane_id:([^ ]+).*/\1/')"
@@ -229,6 +245,10 @@ BROWSER_PIXEL="$(printf '%s\n' "$ZIG_PRESENT_LINE" | sed -E 's/.*browser_pixel=(
 [ -n "$BROWSER_PIXEL" ] || fail "could not extract Zig browser pixel size"
 OVERLAY_FRAME="$(printf '%s\n' "$APPKIT_PRESENT_LINE" | sed -E 's/.*overlay_frame=([^ ]+ [^ ]+ [^ ]+ [^ ]+) root_frame=.*/\1/')"
 [ -n "$OVERLAY_FRAME" ] && [ "$OVERLAY_FRAME" != "none" ] || fail "could not extract AppKit overlay frame"
+APPKIT_PIXEL="$(printf '%s\n' "$APPKIT_PIXELS_LINE" | sed -E 's/.*appkit_pixel=([^ ]+).*/\1/')"
+[ -n "$APPKIT_PIXEL" ] || fail "could not extract AppKit presented pixel size"
+APPKIT_PIXEL_WIDTH="${APPKIT_PIXEL%x*}"
+APPKIT_PIXEL_HEIGHT="${APPKIT_PIXEL#*x}"
 
 log "correlation_pane_id=$PANE_ID"
 log "correlation_browser_tab_id=$BROWSER_TAB_ID"
@@ -236,6 +256,7 @@ log "correlation_context_id=$CONTEXT_ID"
 log "correlation_grid=$GRID"
 log "correlation_browser_pixel=$BROWSER_PIXEL"
 log "correlation_overlay_frame=$OVERLAY_FRAME"
+log "correlation_appkit_pixel=$APPKIT_PIXEL"
 log "correlation_scenario=$SCENARIO"
 log "correlation_timestamp=$TS"
 log "correlation_app_log=$APP_LOG"
@@ -257,11 +278,16 @@ require_text "$BRIDGE_PRESENT_LINE" "context_id=${CONTEXT_ID}" "bridge shares co
 require_text "$APPKIT_PRESENT_LINE" "grid=${GRID}" "AppKit shares grid"
 require_text "$APPKIT_PRESENT_LINE" "browser_pixel=${BROWSER_PIXEL}" "AppKit shares browser pixel"
 require_text "$APPKIT_PRESENT_LINE" "context_id=${CONTEXT_ID}" "AppKit shares context"
+require_text "$APPKIT_PIXELS_LINE" "appkit_pixel=${APPKIT_PIXEL}" "AppKit reports presented pixel size"
+require_log "TermSurf geometry layer=zig event=appkit_presented_pixels .*pane_id:${PANE_ID} .*appkit_pixel=${APPKIT_PIXEL}" "Zig records AppKit presented pixel size"
+require_log "TermSurf geometry layer=zig event=appkit_corrective_resize .*pane_id:${PANE_ID} .*appkit_pixel=${APPKIT_PIXEL}" "Zig sends corrective resize for AppKit pixel size"
 require_log "TermSurf geometry layer=appkit .*context_id=${CONTEXT_ID}" "AppKit shares context id"
 require_text "$HIT_TEST_LINE" "context_id=${CONTEXT_ID}" "hit-test shares context"
 require_text "$HIT_TEST_LINE" "hit=true" "hit-test is inside overlay"
 require_text "$HIT_TEST_LINE" "web_point={" "hit-test includes webview-relative point"
 require_log "TermSurf geometry .*scenario=${SCENARIO}" "timestamped run contains scenario id"
 require_log 'window_id:[^ ]+ surface_id:[^ ]+ selected_tab_id:[^ ]+ pane_id:[^ ]+ browser_tab_id:[^ ]+' "canonical identity tuple fields"
+require_readable "$ROAMIUM_TRACE"
+require_trace "resize tab_id=${BROWSER_TAB_ID} pane_id=${PANE_ID} pixel_width=${APPKIT_PIXEL_WIDTH} pixel_height=${APPKIT_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied resize to AppKit pixel size via ts_set_view_size"
 
 log "PASS: scenario $SCENARIO"

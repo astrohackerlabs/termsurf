@@ -210,3 +210,120 @@ A focused re-review returned **APPROVED**. The reviewer confirmed the
 browser-side proof, callback sequencing, duplicate suppression requirement, and
 stable C ABI signature all resolved the prior findings. No new required findings
 were reported.
+
+## Result
+
+**Result:** Pass
+
+Experiment 2 fixed the initial viewport-fill failure by resizing Roamium to the
+actual AppKit-presented overlay pixel size.
+
+Implemented files:
+
+- `ghostboard/src/apprt/termsurf.zig`
+  - added AppKit-presented pixel state to each pane;
+  - added `overlayPresentedPixels`, which snapshots pane/server state under
+    `state_mutex`, releases the mutex, and sends a corrective `Resize` when the
+    AppKit-presented pixel size differs from the current browser size;
+  - suppresses unchanged duplicate resizes using the last requested resize size;
+  - added geometry records for `appkit_presented_pixels` and
+    `appkit_corrective_resize`.
+- `ghostboard/src/main_c.zig`
+  - exported `termsurf_overlay_presented_pixels`.
+- `ghostboard/include/ghostty.h`
+  - declared the new exported callback for Swift.
+- `ghostboard/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
+  - computes `appkit_pixel = round(overlay_frame * backing_scale)` after
+    presentation;
+  - logs `presented_pixels`;
+  - calls `termsurf_overlay_presented_pixels`.
+- `scripts/ghostboard-geometry-matrix.sh`
+  - enables Roamium's `TERMSURF_PDF_INPUT_TRACE`;
+  - records a run-specific Roamium trace file;
+  - requires AppKit, Zig, and Roamium to agree on the corrected pixel size.
+
+Verification passed:
+
+```bash
+cd ghostboard
+zig fmt src/apprt/termsurf.zig src/main_c.zig
+```
+
+```bash
+cd ghostboard
+swiftlint lint --strict --fix \
+  "macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift"
+swiftlint lint --strict \
+  "macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift"
+```
+
+```bash
+bash -n scripts/ghostboard-geometry-matrix.sh
+```
+
+```bash
+cd ghostboard
+zig build -Demit-macos-app=false
+macos/build.nu --scheme Ghostty --configuration Debug --action build
+```
+
+```bash
+scripts/ghostboard-geometry-matrix.sh initial-open
+```
+
+```bash
+git diff --check
+```
+
+Passing `initial-open` artifacts:
+
+- app log: `logs/ghostboard-geometry-initial-open-app-20260617-072837.log`
+- harness log:
+  `logs/ghostboard-geometry-initial-open-harness-20260617-072837.log`
+- Roamium trace:
+  `logs/ghostboard-geometry-initial-open-roamium-20260617-072837.log`
+- screenshot:
+  `logs/ghostboard-geometry-initial-open-screenshot-20260617-072837.png`
+
+The passing run proved:
+
+- initial browser size from Roamium was still the old fallback size:
+  `CaContext ... pixel=780x320`;
+- AppKit presented the overlay at `overlay_frame={{8, 17}, {624, 272}}` with
+  `backing_scale=2.0`;
+- AppKit reported `appkit_pixel=1248x544`;
+- Zig recorded `appkit_presented_pixels ... appkit_pixel=1248x544`;
+- Zig sent `appkit_corrective_resize ... appkit_pixel=1248x544`;
+- Zig sent `Resize ... pixel=1248x544`;
+- Roamium's own trace recorded:
+  `resize tab_id=1 pane_id=A59654BE-BAF0-42B7-9068-FC9C476EC3F1 pixel_width=1248 pixel_height=544 ... ffi=ts_set_view_size`;
+- the screenshot shows Example Domain filling the browser viewport instead of
+  leaving the old dark gap to the right and below;
+- hit testing still passed with `hit=true` and a webview-relative point.
+
+## Completion Review
+
+A fresh-context adversarial completion reviewer returned **APPROVED** with no
+required findings. The reviewer confirmed the implementation stayed within the
+initial viewport-fill scope, AppKit/Zig/Roamium evidence proved the corrected
+pixel size, the screenshot supported the visual fix, and the result commit had
+not yet been made.
+
+The reviewer had one optional suggestion: make the Roamium trace assertion check
+the correlated resize dimensions and `ffi=ts_set_view_size` on the same trace
+line. The harness was tightened accordingly, and
+`scripts/ghostboard-geometry-matrix.sh initial-open` passed again with the final
+`20260617-072837` artifacts.
+
+## Conclusion
+
+The initial browser-open matrix row now passes. The root cause was that
+Ghostboard sized Roamium from fallback `10x20` cell dimensions while AppKit was
+presenting the native overlay from actual cell metrics and backing scale.
+Ghostboard now reports the actual presented AppKit pixel size back into the Zig
+TermSurf hub and sends Roamium a corrective `Resize` through the existing
+protocol.
+
+The next experiment should extend the same evidence pattern to the first dynamic
+geometry transition, most likely window resize larger/smaller, and prove the
+browser continues to follow the owning pane after the initial correction.

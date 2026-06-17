@@ -169,6 +169,14 @@ pub export fn termsurf_ipc_stop() void {
     termsurf.stop();
 }
 
+pub export fn termsurf_overlay_presented_pixels(
+    pane_id: [*:0]const u8,
+    pixel_width: u64,
+    pixel_height: u64,
+) void {
+    termsurf.overlayPresentedPixels(std.mem.span(pane_id), pixel_width, pixel_height);
+}
+
 pub export fn termsurf_forward_key_event(
     pane_id: [*:0]const u8,
     event_type: [*:0]const u8,

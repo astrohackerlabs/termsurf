@@ -591,13 +591,24 @@ extension Ghostty {
             }
 
             termsurfOverlayHostLayer?.frame = CGRect(origin: .zero, size: frame.size)
-            termsurfOverlayHostLayer?.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+            let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+            termsurfOverlayHostLayer?.contentsScale = backingScale
+            let appkitPixelWidth = UInt64((frame.width * backingScale).rounded())
+            let appkitPixelHeight = UInt64((frame.height * backingScale).rounded())
             termSurfLogGeometry(
                 event: "presented",
                 grid: grid,
                 browserPixel: browserPixel,
                 contextID: contextID,
                 note: "overlay-presented")
+            termsurfLogGeometry(
+                "layer=appkit event=presented_pixels scenario=\(termsurfGeometryScenario()) identity=\(termSurfGeometryIdentity()) grid=\(grid) browser_pixel=\(browserPixel) appkit_pixel=\(appkitPixelWidth)x\(appkitPixelHeight) backing_scale=\(backingScale) context_id=\(contextID) visible=true note=reported-presented-pixels")
+            id.uuidString.withCString { paneIDPointer in
+                termsurf_overlay_presented_pixels(
+                    paneIDPointer,
+                    appkitPixelWidth,
+                    appkitPixelHeight)
+            }
 
             AppDelegate.logger.info(
                 "TermSurf overlay presented pane_id=\(self.id.uuidString) context_id=\(contextID) frame=\(NSStringFromRect(frame)) pixel=\(pixelWidth)x\(pixelHeight)")

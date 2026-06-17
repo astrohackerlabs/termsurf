@@ -75,6 +75,10 @@ const PaneState = struct {
     ca_context_id: u64 = 0,
     ca_pixel_width: u64 = 0,
     ca_pixel_height: u64 = 0,
+    appkit_pixel_width: u64 = 0,
+    appkit_pixel_height: u64 = 0,
+    last_resize_pixel_width: u64 = 0,
+    last_resize_pixel_height: u64 = 0,
     tui_fd: std.posix.fd_t = -1,
 
     fn paneId(self: *const PaneState) []const u8 {
@@ -266,6 +270,22 @@ fn geometryTraceClear(event: []const u8, snapshot: *const ClearOverlaySnapshot, 
     log.info(
         "TermSurf geometry layer=zig event={s} scenario={s} identity=window_id:unknown:appkit-only surface_id:unknown:appkit-only selected_tab_id:unknown:appkit-only pane_id:{s} browser_tab_id:unknown:clearing visible=false note={s}",
         .{ event, geometryScenario(), snapshot.paneId(), note },
+    );
+}
+
+fn geometryTraceAppKitPixels(event: []const u8, snapshot: *const ResizeSnapshot, note: []const u8) void {
+    if (!geometryTraceEnabled()) return;
+    log.info(
+        "TermSurf geometry layer=zig event={s} scenario={s} identity=window_id:unknown:appkit-only surface_id:unknown:appkit-only selected_tab_id:unknown:appkit-only pane_id:{s} browser_tab_id:{} appkit_pixel={}x{} visible=true note={s}",
+        .{
+            event,
+            geometryScenario(),
+            snapshot.paneId(),
+            snapshot.tab_id,
+            snapshot.pixel_width,
+            snapshot.pixel_height,
+            note,
+        },
     );
 }
 
@@ -1251,6 +1271,7 @@ fn sendResize(snapshot: *const ResizeSnapshot) !void {
     wrapper.unnamed_0.resize = &resize;
 
     try sendProtobuf(snapshot.browser_fd, &wrapper);
+    markResizeSent(snapshot);
     log.info(
         "Resize: pane_id={s} tab_id={} pixel={}x{}",
         .{ snapshot.paneId(), snapshot.tab_id, snapshot.pixel_width, snapshot.pixel_height },
@@ -1261,6 +1282,74 @@ fn sendResize(snapshot: *const ResizeSnapshot) !void {
             .{ geometryScenario(), snapshot.paneId(), snapshot.tab_id, snapshot.pixel_width, snapshot.pixel_height },
         );
     }
+}
+
+fn markResizeSent(snapshot: *const ResizeSnapshot) void {
+    state_mutex.lock();
+    defer state_mutex.unlock();
+
+    const pane_index = findPane(snapshot.paneId()) orelse return;
+    panes[pane_index].last_resize_pixel_width = snapshot.pixel_width;
+    panes[pane_index].last_resize_pixel_height = snapshot.pixel_height;
+}
+
+pub fn overlayPresentedPixels(pane_id: []const u8, pixel_width: u64, pixel_height: u64) void {
+    var trace_snapshot: ?ResizeSnapshot = null;
+    var resize_snapshot: ?ResizeSnapshot = null;
+
+    state_mutex.lock();
+    if (findPane(pane_id)) |pane_index| {
+        var pane = &panes[pane_index];
+        const unchanged_appkit =
+            pane.appkit_pixel_width == pixel_width and pane.appkit_pixel_height == pixel_height;
+
+        pane.appkit_pixel_width = pixel_width;
+        pane.appkit_pixel_height = pixel_height;
+
+        if (pixel_width != 0 and pixel_height != 0) {
+            trace_snapshot = snapshotResizeForPixels(pane, pixel_width, pixel_height);
+
+            const already_requested =
+                pane.last_resize_pixel_width == pixel_width and pane.last_resize_pixel_height == pixel_height;
+            const browser_already_sized =
+                pane.ca_pixel_width == pixel_width and pane.ca_pixel_height == pixel_height;
+
+            if (!browser_already_sized and !already_requested and (!unchanged_appkit or pane.ca_context_id != 0)) {
+                resize_snapshot = trace_snapshot;
+            }
+        }
+    } else {
+        log.warn("AppKit overlay pixels ignored: no pane pane_id={s}", .{pane_id});
+    }
+    state_mutex.unlock();
+
+    if (trace_snapshot) |snapshot| {
+        geometryTraceAppKitPixels("appkit_presented_pixels", &snapshot, "received-appkit-presented-pixels");
+    }
+    if (resize_snapshot) |snapshot| {
+        geometryTraceAppKitPixels("appkit_corrective_resize", &snapshot, "sending-browser-resize");
+        sendResize(&snapshot) catch |err| {
+            log.warn(
+                "AppKit corrective resize failed pane_id={s} pixel={}x{} err={}",
+                .{ snapshot.paneId(), snapshot.pixel_width, snapshot.pixel_height, err },
+            );
+        };
+    }
+}
+
+fn snapshotResizeForPixels(pane: *const PaneState, pixel_width: u64, pixel_height: u64) ?ResizeSnapshot {
+    if (pane.tab_id == 0) return null;
+    const server_index = findServer(pane.profileName(), pane.browserName()) orelse return null;
+    if (servers[server_index].attached_fd < 0) return null;
+
+    var snapshot: ResizeSnapshot = .{
+        .browser_fd = servers[server_index].attached_fd,
+        .tab_id = pane.tab_id,
+        .pixel_width = pixel_width,
+        .pixel_height = pixel_height,
+    };
+    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+    return snapshot;
 }
 
 fn handleModeChanged(req: ?*c.Termsurf__ModeChanged) void {
