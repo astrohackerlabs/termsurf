@@ -197,3 +197,5 @@ work together, not just individually.
   **Pass**
 - [Experiment 12: New terminal tab visibility](12-new-terminal-tab-visibility.md)
   — **Pass**
+- [Experiment 13: Open browser in new tab](13-open-browser-in-new-tab.md) —
+  **Designed**
