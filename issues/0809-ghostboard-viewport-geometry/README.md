@@ -202,3 +202,5 @@ work together, not just individually.
 - [Experiment 14: Close browser tab](14-close-browser-tab.md) — **Pass**
 - [Experiment 15: Open browser in new window](15-open-browser-in-new-window.md)
   — **Pass**
+- [Experiment 16: Multiple windows with browsers](16-multiple-windows-with-browsers.md)
+  — **Designed**
