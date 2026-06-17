@@ -636,6 +636,9 @@ extension Ghostty {
             guard let surface = self.surface else { return }
             guard self.focused != focused else { return }
             self.focused = focused
+            id.uuidString.withCString { paneID in
+                termsurf_pane_focus_changed(paneID, focused ? 1 : 0)
+            }
 
             // If we lost our focus then remove the mouse event suppression so
             // our mouse release event leaving the surface can properly be

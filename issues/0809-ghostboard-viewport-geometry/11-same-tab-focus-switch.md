@@ -250,3 +250,188 @@ Final verdict: **Approved**.
 The reviewer confirmed the same-frame/same-pixel invariant is now explicitly
 tested after browser refocus, the Roamium focus trace concern is addressed, and
 no new Required findings were introduced.
+
+## Result
+
+**Result:** Pass
+
+Implementation:
+
+- `scripts/ghostboard-geometry-matrix.sh`
+  - added `split-right-focus-switch`;
+  - added negative Roamium trace assertions for sibling keyboard input;
+  - added post-boundary AppKit frame and AppKit-presented pixel invariants;
+  - added real mouse focus steps for the sibling pane and browser-owning pane;
+  - added an explicit Browse-mode transition before requiring browser keyboard
+    forwarding.
+- `ghostboard/macos/Sources/App/macOS/ghostty-bridging-header.h`
+  - exported `termsurf_pane_focus_changed`.
+- `ghostboard/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
+  - reports per-surface focus changes from `focusDidChange`, the lower-level
+    focus path that also receives first-responder transitions.
+- `ghostboard/src/main_c.zig`
+  - exports `termsurf_pane_focus_changed` to Swift.
+- `ghostboard/src/apprt/termsurf.zig`
+  - maps pane focus changes to the existing TermSurf `FocusChanged` protocol
+    message for the owning browser tab, with `focused=true` gated on both
+    terminal pane focus and webtui Browse mode.
+
+Important learnings:
+
+- The first focus bridge was too high-level when attached to
+  `BaseTerminalController.syncFocusToSurfaceTree`. Some real mouse focus
+  transitions reached `SurfaceView.focusDidChange` without producing the
+  TermSurf focus notification. Moving the bridge call into
+  `SurfaceView.focusDidChange` made Roamium focus traces deterministic.
+- Clicking inside the browser overlay can route mouse events to Roamium without
+  necessarily proving that the terminal surface focus changed. The harness now
+  separates pane-focus clicks from overlay hit-test clicks.
+- Browser keyboard forwarding is intentionally gated on `pane.browsing`.
+  Refocusing the pane is not enough; the harness must press Enter in webtui
+  Control mode, wait for `ModeChanged: ... browsing=true`, and only then require
+  browser key events in Roamium.
+- Browser focus forwarding must follow the same rule as keyboard forwarding:
+  pane focus in webtui Control mode must not send `focused=true` to Roamium.
+  Focus loss still sends `focused=false`, and entering Browse mode in the
+  focused pane sends `focused=true`.
+
+Verification performed:
+
+- Markdown was formatted:
+
+  ```bash
+  prettier --write --prose-wrap always --print-width 80 \
+    issues/0809-ghostboard-viewport-geometry/README.md \
+    issues/0809-ghostboard-viewport-geometry/11-same-tab-focus-switch.md
+  ```
+
+- Shell syntax passed:
+
+  ```bash
+  bash -n scripts/ghostboard-geometry-matrix.sh
+  ```
+
+- Zig formatting and build passed:
+
+  ```bash
+  cd ghostboard
+  zig fmt src/apprt/termsurf.zig src/main_c.zig
+  zig build -Demit-macos-app=false
+  ```
+
+- Swift lint and app build passed:
+
+  ```bash
+  cd ghostboard
+  swiftlint lint --strict --fix \
+    "macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift" \
+    "macos/Sources/Features/Terminal/BaseTerminalController.swift" \
+    "macos/Sources/App/macOS/ghostty-bridging-header.h"
+  swiftlint lint --strict \
+    "macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift" \
+    "macos/Sources/Features/Terminal/BaseTerminalController.swift" \
+    "macos/Sources/App/macOS/ghostty-bridging-header.h"
+  macos/build.nu --scheme Ghostty --configuration Debug --action build
+  ```
+
+- The new scenario passed:
+
+  ```bash
+  scripts/ghostboard-geometry-matrix.sh split-right-focus-switch
+  ```
+
+  Passing evidence:
+
+  - app log:
+    `logs/ghostboard-geometry-split-right-focus-switch-app-20260617-103845.log`
+  - Roamium trace:
+    `logs/ghostboard-geometry-split-right-focus-switch-roamium-20260617-103845.log`
+  - harness log:
+    `logs/ghostboard-geometry-split-right-focus-switch-harness-20260617-103845.log`
+  - screenshot:
+    `logs/ghostboard-geometry-split-right-focus-switch-split-screenshot-20260617-103845.png`
+
+- Adjacent regression scenarios passed serially:
+
+  ```bash
+  scripts/ghostboard-geometry-matrix.sh initial-open
+  scripts/ghostboard-geometry-matrix.sh split-right
+  scripts/ghostboard-geometry-matrix.sh split-right-close-sibling
+  scripts/ghostboard-geometry-matrix.sh split-right-close-browser-pane
+  ```
+
+  Passing evidence:
+
+  - `initial-open`:
+    `logs/ghostboard-geometry-initial-open-harness-20260617-103907.log`
+  - `split-right`:
+    `logs/ghostboard-geometry-split-right-harness-20260617-103913.log`
+  - `split-right-close-sibling`:
+    `logs/ghostboard-geometry-split-right-close-sibling-harness-20260617-103955.log`
+  - `split-right-close-browser-pane`:
+    `logs/ghostboard-geometry-split-right-close-browser-pane-harness-20260617-104005.log`
+
+- Whitespace check passed:
+
+  ```bash
+  git diff --check
+  ```
+
+The final `split-right-focus-switch` run proved the sibling click did not route
+to the original browser context, sibling keyboard input stayed terminal-side,
+Roamium received `focused=false` for the original browser pane, the original
+browser AppKit frame and AppKit-presented pixel size stayed unchanged while the
+sibling pane was focused, browser refocus produced a fresh hit-test against the
+original context with the split baseline frame, raw Control-mode refocus did not
+send stale `focused=true` to Roamium, webtui entered Browse mode, Roamium then
+received `focused=true`, and browser keyboard input reached the original Roamium
+browser tab and pane.
+
+## Completion Review
+
+The first completion review was performed by a fresh-context Codex adversarial
+subagent.
+
+Verdict: **Changes required**.
+
+Findings:
+
+- Required: `paneFocusChanged` forwarded `focused=true` to Roamium even when the
+  pane was focused in webtui Control mode, before `ModeChanged(browsing=true)`.
+  This created stale or duplicate focus events and diverged from the Wezboard
+  behavior where browser focus true is gated on Browse mode.
+- Required: the harness encoded that stale pre-Browse `focused=true` as a pass
+  condition instead of rejecting it.
+
+Fixes:
+
+- Added `focused` tracking to `PaneState`.
+- Changed `paneFocusChanged` so focus loss sends `focused=false`, but focus gain
+  sends `focused=true` only if the pane is already browsing.
+- Changed `handleModeChanged` so entering Browse sends `focused=true` only when
+  the pane is currently focused, while leaving Browse sends `focused=false`.
+- Changed `split-right-focus-switch` to require no Roamium `focused=true` after
+  raw Control-mode browser pane focus/refocus, then require `focused=true` only
+  after the explicit Browse-mode transition.
+
+The fixes were re-reviewed by the same fresh-context Codex adversarial subagent.
+
+Final verdict: **Approved**.
+
+The reviewer confirmed both Required findings were resolved: `focused=true` is
+now gated on `focused && browsing`, the harness rejects pre-Browse browser focus
+true events, the corrected passing logs support the fix, and no new Required
+findings were introduced.
+
+## Conclusion
+
+Same-tab focus switching now passes for a split-right layout. Ghostboard reports
+browser-pane focus changes to Roamium through the TermSurf protocol only when
+the focused pane is in Browse mode, preserves the browser overlay geometry while
+focus moves to a sibling terminal pane, and restores browser mouse and keyboard
+interactivity for the original browser context after focus returns and webtui
+enters Browse mode.
+
+The next experiment should move to the next viewport matrix row: creating a new
+terminal tab and proving the existing browser overlay is hidden when its owning
+tab is no longer selected.

@@ -70,6 +70,7 @@ const PaneState = struct {
     width: u64 = 0,
     height: u64 = 0,
     browsing: bool = false,
+    focused: bool = false,
     inspected_tab_id: i64 = 0,
     tab_id: i64 = 0,
     ca_context_id: u64 = 0,
@@ -1370,8 +1371,38 @@ fn handleModeChanged(req: ?*c.Termsurf__ModeChanged) void {
     };
 
     panes[pane_index].browsing = browsing;
-    focus_changed = snapshotFocusChanged(&panes[pane_index], browsing);
+    if (browsing) {
+        if (panes[pane_index].focused) {
+            focus_changed = snapshotFocusChanged(&panes[pane_index], true);
+        }
+    } else {
+        focus_changed = snapshotFocusChanged(&panes[pane_index], false);
+    }
     log.info("ModeChanged: pane_id={s} browsing={}", .{ pane_id, browsing });
+    state_mutex.unlock();
+
+    if (focus_changed) |snapshot| {
+        sendFocusChanged(&snapshot) catch |err| {
+            log.warn("FocusChanged send failed pane_id={s} err={}", .{ snapshot.paneId(), err });
+        };
+    }
+}
+
+pub fn paneFocusChanged(pane_id: []const u8, focused: bool) void {
+    var focus_changed: ?FocusChangedSnapshot = null;
+
+    state_mutex.lock();
+    if (findPane(pane_id)) |pane_index| {
+        panes[pane_index].focused = focused;
+        if (focused) {
+            if (panes[pane_index].browsing) {
+                focus_changed = snapshotFocusChanged(&panes[pane_index], true);
+            }
+        } else {
+            focus_changed = snapshotFocusChanged(&panes[pane_index], false);
+        }
+        log.info("Pane focus changed: pane_id={s} focused={}", .{ pane_id, focused });
+    }
     state_mutex.unlock();
 
     if (focus_changed) |snapshot| {

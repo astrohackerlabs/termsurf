@@ -22,6 +22,8 @@ SCREENSHOT_UNZOOM="$LOG_DIR/ghostboard-geometry-${SCENARIO}-unzoom-screenshot-${
 SCREENSHOT_CLOSE="$LOG_DIR/ghostboard-geometry-${SCENARIO}-close-screenshot-${TS}.png"
 ROAMIUM_TRACE="$LOG_DIR/ghostboard-geometry-${SCENARIO}-roamium-${TS}.log"
 SIBLING_ALIVE_COMMAND="$RUN_DIR/sibling-alive-command.txt"
+SIBLING_FOCUS_COMMAND="$RUN_DIR/sibling-focus-command.txt"
+BROWSER_FOCUS_COMMAND="$RUN_DIR/browser-focus-command.txt"
 PID=""
 
 mkdir -p "$LOG_DIR"
@@ -134,6 +136,16 @@ require_trace_after() {
   else
     fail "missing $label"
   fi
+}
+
+require_no_trace_after() {
+  local start_line="$1"
+  local needle="$2"
+  local label="$3"
+  if tail -n +"$((start_line + 1))" "$ROAMIUM_TRACE" | grep -F "$needle" >/dev/null 2>&1; then
+    fail "$label"
+  fi
+  log "PASS: $label"
 }
 
 require_text() {
@@ -613,6 +625,40 @@ wait_for_negative_hit_after() {
   fi
 }
 
+require_no_different_appkit_frame_after() {
+  local start_line="$1"
+  local pane_id="$2"
+  local context_id="$3"
+  local expected_frame="$4"
+  local label="$5"
+  local line
+  line="$(tail -n +"$((start_line + 1))" "$APP_LOG" |
+    grep -E "TermSurf geometry layer=appkit event=presented .*pane_id:${pane_id} .*context_id=${context_id}" |
+    grep -Fv "overlay_frame=$expected_frame" |
+    tail -1 || true)"
+  if [ -n "$line" ]; then
+    fail "$label changed frame: $line"
+  fi
+  log "PASS: $label"
+}
+
+require_no_different_appkit_pixels_after() {
+  local start_line="$1"
+  local pane_id="$2"
+  local context_id="$3"
+  local expected_pixels="$4"
+  local label="$5"
+  local line
+  line="$(tail -n +"$((start_line + 1))" "$APP_LOG" |
+    grep -E "TermSurf geometry layer=appkit event=presented_pixels .*pane_id:${pane_id} .*context_id=${context_id}" |
+    grep -Fv "appkit_pixel=$expected_pixels" |
+    tail -1 || true)"
+  if [ -n "$line" ]; then
+    fail "$label changed pixels: $line"
+  fi
+  log "PASS: $label"
+}
+
 window_bounds() {
   swift "$WINDOW_BOUNDS" "$WID"
 }
@@ -652,13 +698,13 @@ click_negative_global_point() {
   local label="$3"
   log "${label}_input_point=${x},${y}"
   swift "$ROOT/scripts/ghostty-app/inject.swift" move "$x" "$y" >>"$HARNESS_LOG" 2>&1
-  delay 0.25
+  delay 0.75
   NEGATIVE_HIT_START_LINE="$(log_line_count)"
   swift "$ROOT/scripts/ghostty-app/inject.swift" click "$x" "$y" left 1 >>"$HARNESS_LOG" 2>&1
 }
 
 case "$SCENARIO" in
-  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane) ;;
+  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -686,7 +732,7 @@ window-save-state = never
 initial-command = direct:$COMMAND
 EOF
 
-if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ] || [ "$SCENARIO" = "split-right-zoom" ]; then
+if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ] || [ "$SCENARIO" = "split-right-zoom" ] || [ "$SCENARIO" = "split-right-focus-switch" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+d=new_split:right
 EOF
@@ -863,6 +909,11 @@ fi
 if [ "$SCENARIO" = "split-right-close-browser-pane" ]; then
   log "close_screenshot=$SCREENSHOT_CLOSE"
   log "sibling_alive_command=$SIBLING_ALIVE_COMMAND"
+fi
+if [ "$SCENARIO" = "split-right-focus-switch" ]; then
+  log "split_screenshot=$SCREENSHOT_SPLIT"
+  log "sibling_focus_command=$SIBLING_FOCUS_COMMAND"
+  log "browser_focus_command=$BROWSER_FOCUS_COMMAND"
 fi
 
 GHOSTTY_CONFIG_PATH="$CONFIG" \
@@ -1098,6 +1149,117 @@ if [ "$SCENARIO" = "split-right" ]; then
   SPLIT_NEGATIVE_Y="$SPLIT_INSIDE_Y"
   click_negative_global_point "$SPLIT_NEGATIVE_X" "$SPLIT_NEGATIVE_Y" "split_sibling_negative"
   wait_for_negative_hit_after "$NEGATIVE_HIT_START_LINE" "$CONTEXT_ID" "split-right sibling-pane negative hit-test" allow-absent
+fi
+
+if [ "$SCENARIO" = "split-right-focus-switch" ]; then
+  SPLIT_START_LINE="$(log_line_count)"
+  SPLIT_TRACE_START_LINE="$(trace_line_count)"
+  log "split_keybind=ctrl+d=new_split:right"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 2 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+
+  SPLIT_PRESENT_LINE="$(wait_for_split_right_frame_after "$SPLIT_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$OVERLAY_FRAME_SIZE" "split-right AppKit overlay frame")"
+  SPLIT_PIXELS_LINE="$(wait_for_split_right_pixels_after "$SPLIT_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$APPKIT_PIXEL" "split-right AppKit presented pixels")"
+  SPLIT_FRAME="$(printf '%s\n' "$SPLIT_PRESENT_LINE" | sed -E 's/.*overlay_frame=(\{\{[^}]+\}, \{[^}]+\}\}).*/\1/')"
+  SPLIT_FRAME_SIZE="$(extract_frame_size "$SPLIT_PRESENT_LINE")"
+  SPLIT_FRAME_X="$(extract_frame_x "$SPLIT_PRESENT_LINE")"
+  SPLIT_FRAME_Y="$(extract_frame_y "$SPLIT_PRESENT_LINE")"
+  SPLIT_FRAME_WIDTH="$(pair_width "$SPLIT_FRAME_SIZE")"
+  SPLIT_PIXEL="$(extract_appkit_pixel "$SPLIT_PIXELS_LINE")"
+  SPLIT_PIXEL_WIDTH="${SPLIT_PIXEL%x*}"
+  SPLIT_PIXEL_HEIGHT="${SPLIT_PIXEL#*x}"
+  log "PASS: observed split-right AppKit overlay frame overlay_frame_size=$SPLIT_FRAME_SIZE"
+  log "PASS: observed split-right AppKit presented pixels appkit_pixel=$SPLIT_PIXEL"
+  log "split_overlay_frame=$SPLIT_FRAME"
+  log "split_overlay_frame_size=$SPLIT_FRAME_SIZE"
+  log "split_overlay_frame_x=$SPLIT_FRAME_X"
+  log "split_overlay_frame_y=$SPLIT_FRAME_Y"
+  log "split_appkit_pixel=$SPLIT_PIXEL"
+  require_log_after "$SPLIT_START_LINE" "TermSurf geometry layer=zig event=appkit_presented_pixels .*pane_id:${PANE_ID} .*appkit_pixel=${SPLIT_PIXEL}" "Zig records split-right AppKit presented pixel size"
+  require_trace_after "$SPLIT_TRACE_START_LINE" "resize tab_id=${BROWSER_TAB_ID} pane_id=${PANE_ID} pixel_width=${SPLIT_PIXEL_WIDTH} pixel_height=${SPLIT_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied split-right resize to AppKit pixel size via ts_set_view_size"
+
+  SPLIT_WIN_LINE="$(window_bounds)" || fail "failed to resolve split window bounds for window id=$WID"
+  IFS=$'\t' read -r _SPLIT_WID SPLIT_WX SPLIT_WY SPLIT_WW SPLIT_WH <<<"$SPLIT_WIN_LINE"
+  INITIAL_FRAME_WIDTH="$(pair_width "$OVERLAY_FRAME_SIZE")"
+  BROWSER_FOCUS_X="$(awk -v wx="$SPLIT_WX" -v frame_x="$SPLIT_FRAME_X" -v frame_w="$SPLIT_FRAME_WIDTH" 'BEGIN { print int(wx + frame_x + (frame_w / 2) + 0.5) }')"
+  BROWSER_FOCUS_Y=$((SPLIT_WY + SPLIT_WH / 2))
+  BROWSER_PANE_FOCUS_X="$BROWSER_FOCUS_X"
+  BROWSER_PANE_FOCUS_Y=$((SPLIT_WY + SPLIT_WH - 40))
+  SIBLING_FOCUS_X="$(awk -v wx="$SPLIT_WX" -v frame_x="$SPLIT_FRAME_X" -v split_w="$SPLIT_FRAME_WIDTH" -v initial_w="$INITIAL_FRAME_WIDTH" 'BEGIN { print int(wx + frame_x + split_w + ((initial_w - split_w) / 2) + 0.5) }')"
+  SIBLING_FOCUS_Y="$BROWSER_FOCUS_Y"
+
+  BROWSER_PRIME_TRACE_START_LINE="$(trace_line_count)"
+  click_global_point "$BROWSER_PANE_FOCUS_X" "$BROWSER_PANE_FOCUS_Y" "browser_prime_terminal_focus"
+
+  BROWSER_PRIME_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$BROWSER_FOCUS_X" "$BROWSER_FOCUS_Y" "browser_prime_focus"
+  BROWSER_PRIME_HIT_LINE="$(wait_for_hit_after "$BROWSER_PRIME_HIT_START_LINE" "$CONTEXT_ID" "same-tab browser prime focus hit-test")"
+  require_text "$BROWSER_PRIME_HIT_LINE" "web_point={" "browser prime focus hit-test includes webview-relative point"
+  require_no_trace_after "$BROWSER_PRIME_TRACE_START_LINE" "focus-changed tab=${BROWSER_TAB_ID} pane=${PANE_ID} ffi=ts_set_focus focused=true" "browser pane focus in Control mode did not focus Roamium before Browse mode"
+
+  SIBLING_FOCUS_TRACE_START_LINE="$(trace_line_count)"
+  click_negative_global_point "$SIBLING_FOCUS_X" "$SIBLING_FOCUS_Y" "sibling_focus"
+  wait_for_negative_hit_after "$NEGATIVE_HIT_START_LINE" "$CONTEXT_ID" "same-tab sibling focus negative hit-test" allow-absent
+
+  SIBLING_KEY_START_LINE="$(log_line_count)"
+  printf 'ISSUE809_EXP11_SIBLING_FOCUS\n' >"$SIBLING_FOCUS_COMMAND"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$SIBLING_FOCUS_COMMAND" >>"$HARNESS_LOG" 2>&1
+  SIBLING_KEY_SEEN=""
+  for _ in $(seq 1 10); do
+    if tail -n +"$((SIBLING_KEY_START_LINE + 1))" "$APP_LOG" | grep -E "TermSurf geometry layer=appkit event=key_down .*overlay_frame=none .*visible=false .*focused=true" >/dev/null 2>&1; then
+      SIBLING_KEY_SEEN="1"
+      break
+    fi
+    delay 1
+  done
+  [ -n "$SIBLING_KEY_SEEN" ] || fail "sibling terminal pane did not receive keyboard events after focus switch"
+  log "PASS: sibling terminal pane received keyboard events after focus switch"
+  require_no_trace_after "$SIBLING_FOCUS_TRACE_START_LINE" "key-event tab=${BROWSER_TAB_ID} pane=${PANE_ID}" "sibling terminal marker did not reach original browser context"
+  require_trace_after "$SIBLING_FOCUS_TRACE_START_LINE" "focus-changed tab=${BROWSER_TAB_ID} pane=${PANE_ID} ffi=ts_set_focus focused=false" "Roamium observed original browser pane focus=false after sibling focus"
+  require_no_different_appkit_frame_after "$SIBLING_KEY_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$SPLIT_FRAME" "sibling focus kept original browser AppKit frame unchanged"
+  require_no_different_appkit_pixels_after "$SIBLING_KEY_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$SPLIT_PIXEL" "sibling focus kept original browser AppKit pixels unchanged"
+
+  BROWSER_REFOCUS_TRACE_START_LINE="$(trace_line_count)"
+  click_global_point "$BROWSER_PANE_FOCUS_X" "$BROWSER_PANE_FOCUS_Y" "browser_refocus_terminal_focus"
+
+  BROWSER_REFOCUS_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$BROWSER_FOCUS_X" "$BROWSER_FOCUS_Y" "browser_refocus"
+  BROWSER_REFOCUS_HIT_LINE="$(wait_for_hit_after "$BROWSER_REFOCUS_HIT_START_LINE" "$CONTEXT_ID" "same-tab browser refocus hit-test")"
+  BROWSER_REFOCUS_FRAME_SIZE="$(extract_frame_size "$BROWSER_REFOCUS_HIT_LINE")"
+  BROWSER_REFOCUS_FRAME_X="$(extract_frame_x "$BROWSER_REFOCUS_HIT_LINE")"
+  BROWSER_REFOCUS_FRAME_Y="$(extract_frame_y "$BROWSER_REFOCUS_HIT_LINE")"
+  [ "$BROWSER_REFOCUS_FRAME_SIZE" = "$SPLIT_FRAME_SIZE" ] || fail "browser refocus hit-test frame size changed: expected=$SPLIT_FRAME_SIZE actual=$BROWSER_REFOCUS_FRAME_SIZE"
+  [ "$BROWSER_REFOCUS_FRAME_X" = "$SPLIT_FRAME_X" ] || fail "browser refocus hit-test frame x changed: expected=$SPLIT_FRAME_X actual=$BROWSER_REFOCUS_FRAME_X"
+  [ "$BROWSER_REFOCUS_FRAME_Y" = "$SPLIT_FRAME_Y" ] || fail "browser refocus hit-test frame y changed: expected=$SPLIT_FRAME_Y actual=$BROWSER_REFOCUS_FRAME_Y"
+  log "PASS: browser refocus hit-test uses split baseline overlay frame"
+  require_text "$BROWSER_REFOCUS_HIT_LINE" "web_point={" "browser refocus hit-test includes webview-relative point"
+  require_no_different_appkit_frame_after "$BROWSER_REFOCUS_HIT_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$SPLIT_FRAME" "browser refocus kept original browser AppKit frame unchanged"
+  require_no_different_appkit_pixels_after "$BROWSER_REFOCUS_HIT_START_LINE" "$PANE_ID" "$CONTEXT_ID" "$SPLIT_PIXEL" "browser refocus kept original browser AppKit pixels unchanged"
+  require_no_trace_after "$BROWSER_REFOCUS_TRACE_START_LINE" "focus-changed tab=${BROWSER_TAB_ID} pane=${PANE_ID} ffi=ts_set_focus focused=true" "browser refocus in Control mode did not focus Roamium before Browse mode"
+
+  BROWSER_MODE_START_LINE="$(log_line_count)"
+  BROWSER_MODE_TRACE_START_LINE="$(trace_line_count)"
+  log "browser_refocus_mode_key=enter=Mode::Browse"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
+  wait_for_log_after "$BROWSER_MODE_START_LINE" "ModeChanged: pane_id=${PANE_ID} browsing=true" "webtui entered browse mode after browser refocus"
+  require_trace_after "$BROWSER_MODE_TRACE_START_LINE" "focus-changed tab=${BROWSER_TAB_ID} pane=${PANE_ID} ffi=ts_set_focus focused=true" "Roamium observed original browser pane focus=true after browse mode"
+
+  BROWSER_KEY_START_LINE="$(trace_line_count)"
+  printf 'ISSUE809_EXP11_BROWSER_REFOCUS\n' >"$BROWSER_FOCUS_COMMAND"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$BROWSER_FOCUS_COMMAND" >>"$HARNESS_LOG" 2>&1
+  BROWSER_KEY_SEEN=""
+  for _ in $(seq 1 10); do
+    if tail -n +"$((BROWSER_KEY_START_LINE + 1))" "$ROAMIUM_TRACE" | grep -F "key-event tab=${BROWSER_TAB_ID} pane=${PANE_ID}" >/dev/null 2>&1; then
+      BROWSER_KEY_SEEN="1"
+      break
+    fi
+    delay 1
+  done
+  [ -n "$BROWSER_KEY_SEEN" ] || fail "browser refocus keyboard marker did not reach original browser context"
+  log "PASS: browser refocus keyboard marker reached original browser context"
+
+  screencapture -x -o -l"$WID" "$SCREENSHOT_SPLIT"
+  log "focus_switch_screenshot_exit=$?"
 fi
 
 if [ "$SCENARIO" = "split-right-resize" ]; then
