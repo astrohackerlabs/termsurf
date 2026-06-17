@@ -210,3 +210,5 @@ work together, not just individually.
   **Pass**
 - [Experiment 19: Minimize, hide, and restore](19-minimize-hide-restore.md) —
   **Pass**
+- [Experiment 20: Font-size cell metrics](20-font-size-cell-metrics.md) —
+  **Designed**
