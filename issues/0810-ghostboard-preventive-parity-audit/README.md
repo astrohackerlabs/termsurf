@@ -147,3 +147,5 @@ The final issue conclusion should include:
 - [Experiment 2: Protocol feature parity](02-protocol-feature-parity.md) —
   **Pass**
 - [Experiment 3: Direct browser paths](03-direct-browser-paths.md) — **Pass**
+- [Experiment 4: Historical issue inventory](04-historical-issue-inventory.md) —
+  **Designed**
