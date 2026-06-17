@@ -152,4 +152,4 @@ The final issue conclusion should include:
 - [Experiment 5: Batch H restored Ghostboard audit](05-batch-h-restored-ghostboard.md)
   — **Pass**
 - [Experiment 6: Batch G PDF and browser API audit](06-batch-g-pdf-browser-api.md)
-  — **Designed**
+  — **Pass**
