@@ -2,19 +2,19 @@
 
 ## Open
 
-| #                                                         | Title                                | Opened     |
-| --------------------------------------------------------- | ------------------------------------ | ---------- |
-| [0756](0756-surfari/README.md)                            | Surfari — WebKit engine for TermSurf | 2026-03-16 |
-| [0795](0795-pdf-native-print/README.md)                   | PDF Native Print                     | 2026-05-30 |
-| [0797](0797-pdf-core-workflow-coverage/README.md)         | PDF Core Workflow Coverage           | 2026-05-30 |
-| [0798](0798-pdf-advanced-features/README.md)              | PDF Advanced Features                | 2026-05-30 |
-| [0803](0803-roastty-debug-overlay/README.md)              | Roastty Debug Overlay                | 2026-06-13 |
-| [0810](0810-ghostboard-preventive-parity-audit/README.md) | Ghostboard Preventive Parity Audit   | 2026-06-17 |
+| #                                                 | Title                                | Opened     |
+| ------------------------------------------------- | ------------------------------------ | ---------- |
+| [0756](0756-surfari/README.md)                    | Surfari — WebKit engine for TermSurf | 2026-03-16 |
+| [0795](0795-pdf-native-print/README.md)           | PDF Native Print                     | 2026-05-30 |
+| [0797](0797-pdf-core-workflow-coverage/README.md) | PDF Core Workflow Coverage           | 2026-05-30 |
+| [0798](0798-pdf-advanced-features/README.md)      | PDF Advanced Features                | 2026-05-30 |
+| [0803](0803-roastty-debug-overlay/README.md)      | Roastty Debug Overlay                | 2026-06-13 |
 
 ## Closed
 
 | #                                                             | Title                                                                         | Opened     | Closed     |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0810](0810-ghostboard-preventive-parity-audit/README.md)     | Ghostboard Preventive Parity Audit                                            | 2026-06-17 | 2026-06-17 |
 | [0809](0809-ghostboard-viewport-geometry/README.md)           | Ghostboard Viewport Geometry                                                  | 2026-06-17 | 2026-06-17 |
 | [0808](0808-recreate-ghostboard-from-ghostty-1-3-1/README.md) | Re-create Ghostboard from Ghostty 1.3.1                                       | 2026-06-16 | 2026-06-16 |
 | [0807](0807-restore-ghostboard-code/README.md)                | Restore Ghostboard Code                                                       | 2026-06-16 | 2026-06-16 |

@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-17"
+closed = "2026-06-17"
 +++
 
 # Issue 810: Ghostboard Preventive Parity Audit
@@ -165,3 +166,82 @@ The final issue conclusion should include:
   — **Pass**
 - [Experiment 12: Batch A early prototypes audit](12-batch-a-early-prototypes.md)
   — **Pass**
+
+## Conclusion
+
+Issue 810 completed the preventive Ghostboard parity audit without changing
+application code. It mapped the protocol surface, audited direct Roamium paths,
+inventoried all prior issue folders, and classified every historical issue batch
+from `0001` through `0809`.
+
+### Highly Likely Findings
+
+1. **Cursor feedback is missing or incomplete in Ghostboard.** Roamium emits
+   `CursorChanged`, and Wezboard has GUI-side cursor handling, but Ghostboard
+   appears to name the message without dispatching or applying it. This was
+   independently reinforced by the protocol audit, restored-Ghostboard audit,
+   and historical mouse/cursor issues.
+2. **GUI active/inactive signaling is missing or incomplete.** `SetGuiActive` is
+   GUI-owned state, so webtui's direct Roamium socket cannot replace it.
+   Wezboard sends app/window activation state; Ghostboard does not show an
+   equivalent runtime path.
+3. **The one-DevTools-per-tab guard is likely missing.** Historical Issues 686
+   and 687 show duplicate DevTools sessions for one inspected tab can recreate a
+   Chromium crash class. Current Ghostboard evidence validates that an inspected
+   tab exists, but does not show a guard that rejects a second DevTools frontend
+   for the same tab.
+4. **Restored Ghostboard build/install/browser-discovery workflow is
+   incomplete.** The audit repeatedly found risk around named/default browser
+   launch, installed-vs-debug binary selection, socket discovery, app identity,
+   and config paths.
+5. **`HelloReply` is likely incomplete.** Ghostboard replies to `HelloRequest`,
+   but the audit found likely missing homepage and browser-list configuration
+   needed by `web`.
+
+### Maybe Findings
+
+- **Browser state and interruption flows:** loading/title/hover target/console,
+  dialogs, HTTP auth, renderer crash recovery, color scheme, target blank,
+  refresh/reload, copy-current-URL, and default white background have static or
+  partial evidence but need focused Ghostboard runtime proof.
+- **Input and focus:** keyboard matrix, Cmd/menu shortcuts, clipboard behavior,
+  mode transitions, focus stealing, dimming/inactive feedback, caret visibility,
+  mouse click/hover/scroll, double/triple-click, modifier clicks, drag
+  selection, and mouse performance need targeted regression coverage.
+- **Profile, tab, and process lifecycle:** multi-profile isolation,
+  multi-pane/multi-tab routing, warm reconnect, server reuse, close/reopen
+  behavior, stale process cleanup, DevTools target lookup, and profile display
+  have credible code shape but need focused runtime matrices.
+- **Packaging and identity:** app bundle naming, config locations, release
+  packaging, normal launch environment, and debug-vs-installed binary selection
+  need a hardening pass.
+- **Performance methodology:** old CEF/XPC performance bugs do not directly
+  apply to CALayerHost/Roamium, but the historical issues justify later
+  lightweight performance and repeated-run smoke tests after functional parity.
+
+### No Findings Summary
+
+Most historical CEF, Electron, XPC, WebView, IOSurface copy, benchmark-harness,
+website, and exploratory architecture rows do not indicate current
+Ghostboard-owned bugs. They were still audited as historical evidence; the
+current architecture generally supersedes them with socket/protobuf IPC,
+Roamium, direct webtui browser sockets, and CALayerHost presentation.
+
+### Recommended Follow-Up Issues
+
+1. Fix and test GUI-owned protocol gaps: `CursorChanged` and `SetGuiActive`.
+2. Restore and test the one-DevTools-per-tab guard, including duplicate launch
+   rejection and close/reopen behavior.
+3. Harden Ghostboard launch/config/install workflow, including named/default
+   browser launch and `HelloReply` homepage/browser-list data.
+4. Build a focused input regression matrix for keyboard, mouse, scroll,
+   clipboard, focus, caret, drag selection, and mode transitions.
+5. Build a focused lifecycle matrix for multi-profile, multi-pane, multi-tab,
+   DevTools, reconnect, close/reopen, and process cleanup behavior.
+6. Add browser-state walkthrough coverage for title/loading/hover/console,
+   dialogs/auth/crash, color scheme, target blank, reload, copy URL, and default
+   page background.
+
+The audit produced a ranked list of likely follow-up work and satisfied the
+acceptance criteria. Future issues should prove or reject these findings with
+runtime tests before making fixes.
