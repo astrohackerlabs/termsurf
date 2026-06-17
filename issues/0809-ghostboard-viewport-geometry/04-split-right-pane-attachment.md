@@ -203,3 +203,118 @@ Fixes:
 
 Re-review verdict: **Approved**. The reviewer confirmed both required findings
 were resolved and reported no new required findings.
+
+## Result
+
+**Result:** Pass.
+
+The `split-right` scenario is implemented in
+`scripts/ghostboard-geometry-matrix.sh`. The harness now:
+
+- accepts `split-right` in addition to `initial-open` and `window-resize`;
+- adds the scenario-local config line `keybind = ctrl+d=new_split:right`;
+- injects Control-D with `scripts/ghostty-app/inject.swift`;
+- waits for a post-split AppKit presentation for the original pane/context;
+- verifies that the original browser overlay width shrinks while height remains
+  stable;
+- verifies that AppKit-presented pixel width shrinks while pixel height remains
+  stable;
+- verifies that Zig records the post-split AppKit-presented pixel size for the
+  original pane;
+- verifies that Roamium applies the post-split AppKit pixel size with
+  `ffi=ts_set_view_size` after the split key injection;
+- captures a post-split screenshot;
+- verifies a positive hit test inside the resized browser overlay;
+- verifies a negative hit test in the right sibling pane area, proving the old
+  full-width browser frame is no longer routing input to the original browser
+  context.
+
+No Ghostboard product source changes were needed for this row. Current
+Ghostboard already keeps the browser attached to the original pane and resizes
+it correctly after a right-side split.
+
+Final passing artifacts:
+
+- split-right app log:
+  `logs/ghostboard-geometry-split-right-app-20260617-075653.log`
+- split-right harness log:
+  `logs/ghostboard-geometry-split-right-harness-20260617-075653.log`
+- split-right initial screenshot:
+  `logs/ghostboard-geometry-split-right-screenshot-20260617-075653.png`
+- split-right post-split screenshot:
+  `logs/ghostboard-geometry-split-right-split-screenshot-20260617-075653.png`
+- split-right Roamium trace:
+  `logs/ghostboard-geometry-split-right-roamium-20260617-075653.log`
+- initial-open regression app log:
+  `logs/ghostboard-geometry-initial-open-app-20260617-075316.log`
+- initial-open regression harness log:
+  `logs/ghostboard-geometry-initial-open-harness-20260617-075316.log`
+- initial-open regression screenshot:
+  `logs/ghostboard-geometry-initial-open-screenshot-20260617-075316.png`
+- initial-open regression Roamium trace:
+  `logs/ghostboard-geometry-initial-open-roamium-20260617-075316.log`
+- window-resize regression app log:
+  `logs/ghostboard-geometry-window-resize-app-20260617-075254.log`
+- window-resize regression harness log:
+  `logs/ghostboard-geometry-window-resize-harness-20260617-075254.log`
+- window-resize regression Roamium trace:
+  `logs/ghostboard-geometry-window-resize-roamium-20260617-075254.log`
+
+Key passing evidence from the `split-right` run:
+
+- pre-split AppKit overlay frame: `624x272`, AppKit pixel size: `1248x544`;
+- post-split AppKit overlay frame: `296x272`, AppKit pixel size: `592x544`;
+- the original pane id remained `A59654BE-BAF0-42B7-9068-FC9C476EC3F1`;
+- the original browser tab id remained `1`;
+- Roamium applied the post-split resize with `ffi=ts_set_view_size`;
+- the post-split positive click reported `hit=true` with a current `web_point`;
+- the right-sibling negative click did not route to the original browser
+  context.
+
+Verification commands run:
+
+```bash
+bash -n scripts/ghostboard-geometry-matrix.sh
+git diff --check
+scripts/ghostboard-geometry-matrix.sh split-right
+scripts/ghostboard-geometry-matrix.sh window-resize
+scripts/ghostboard-geometry-matrix.sh initial-open
+```
+
+The post-split screenshot was visually inspected. It shows the browser filling
+only the left pane while the new shell split occupies the right pane.
+
+One attempted parallel regression run launched `initial-open` and
+`window-resize` simultaneously. `window-resize` passed, but `initial-open`
+failed to observe its click hit-test because GUI focus/input can be stolen when
+two TermSurf app windows are automated at once. Re-running `initial-open`
+serially passed. Geometry/input matrix scenarios should be run serially unless
+the harness is explicitly changed to isolate focus and input per window.
+
+## Conclusion
+
+The horizontal split-right matrix row passes in current Ghostboard. The browser
+stays attached to its original pane, resizes to the left pane's narrower
+viewport, forwards the corrected size to Roamium, and stops accepting input in
+the new right sibling pane.
+
+## Completion Review
+
+The completed experiment was reviewed by a fresh-context Codex adversarial
+subagent.
+
+Initial verdict: **Changes required**.
+
+- Required finding: the post-split Roamium resize assertion used
+  `require_trace`, which searched the whole Roamium trace and could accept stale
+  pre-split trace evidence if the same pixel size appeared earlier.
+
+Fix:
+
+- The harness now records the Roamium trace line count before injecting the
+  split keybinding and uses `require_trace_after` for the post-split Roamium
+  resize assertion.
+
+Re-review verdict: **Approved**. The reviewer confirmed the stale Roamium trace
+finding was resolved, verified `bash -n scripts/ghostboard-geometry-matrix.sh`
+and `git diff --check`, and reported no new required findings.

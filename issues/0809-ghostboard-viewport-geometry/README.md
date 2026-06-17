@@ -180,4 +180,4 @@ work together, not just individually.
 - [Experiment 2: Initial viewport fill](02-initial-viewport-fill.md) — **Pass**
 - [Experiment 3: Window resize follow](03-window-resize-follow.md) — **Pass**
 - [Experiment 4: Split-right pane attachment](04-split-right-pane-attachment.md)
-  — **Designed**
+  — **Pass**
