@@ -224,3 +224,5 @@ work together, not just individually.
   — **Pass**
 - [Experiment 26: Keyboard input after tab and window switch](26-keyboard-input-after-tab-window-switch.md)
   — **Pass**
+- [Experiment 27: Full matrix regression sweep](27-full-matrix-regression-sweep.md)
+  — **Designed**
