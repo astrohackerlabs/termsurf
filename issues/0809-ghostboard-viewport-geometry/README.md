@@ -183,3 +183,5 @@ work together, not just individually.
   — **Pass**
 - [Experiment 5: Split-down pane attachment](05-split-down-pane-attachment.md) —
   **Pass**
+- [Experiment 6: Split-right divider resize](06-split-right-divider-resize.md) —
+  **Designed**
