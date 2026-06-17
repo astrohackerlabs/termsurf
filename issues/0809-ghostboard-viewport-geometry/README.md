@@ -208,3 +208,5 @@ work together, not just individually.
   — **Partial**
 - [Experiment 18: Fullscreen and unfullscreen](18-fullscreen-unfullscreen.md) —
   **Pass**
+- [Experiment 19: Minimize, hide, and restore](19-minimize-hide-restore.md) —
+  **Designed**
