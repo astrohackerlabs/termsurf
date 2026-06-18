@@ -1413,7 +1413,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|named-roamium-debug-launch|named-roamium-invalid-env|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -1452,6 +1452,46 @@ fi
 
 if [ "$SCENARIO" = "named-roamium-invalid-env" ]; then
   ROAMIUM_PATH_FOR_APP="roamium"
+fi
+
+if [ "$SCENARIO" = "launch-discovery-contract" ]; then
+  NAMED_COMMAND="$RUN_DIR/run-web-named.sh"
+  INVALID_ENV_COMMAND="$RUN_DIR/run-web-invalid-env.sh"
+  cat >"$NAMED_COMMAND" <<EOF
+#!/usr/bin/env bash
+exec "$WEB" "$URL"
+EOF
+  cat >"$INVALID_ENV_COMMAND" <<EOF
+#!/usr/bin/env bash
+exec "$WEB" "$URL"
+EOF
+  chmod +x "$NAMED_COMMAND" "$INVALID_ENV_COMMAND"
+  log "scenario=$SCENARIO"
+  log "run_dir=$RUN_DIR"
+  log "app=$APP"
+  log "web=$WEB"
+  log "roamium=$ROAMIUM"
+  log "url=$URL"
+  log "absolute_command=$COMMAND"
+  log "named_command=$NAMED_COMMAND"
+  log "invalid_env_command=$INVALID_ENV_COMMAND"
+  log "named_roamium_env=$ROAMIUM"
+  log "invalid_roamium_env=roamium"
+  grep -F -- "exec \"$WEB\" --browser \"$ROAMIUM\" \"$URL\"" "$COMMAND" >/dev/null 2>&1 || fail "absolute launch command does not use explicit --browser path"
+  log "PASS: absolute launch command uses explicit --browser path"
+  grep -F -- "--browser" "$NAMED_COMMAND" >/dev/null 2>&1 && fail "named launch command unexpectedly contains --browser"
+  grep -F -- "exec \"$WEB\" \"$URL\"" "$NAMED_COMMAND" >/dev/null 2>&1 || fail "named launch command does not omit --browser"
+  log "PASS: named/default launch command omits --browser"
+  [ "${ROAMIUM:0:1}" = "/" ] || fail "debug Roamium path is not absolute: $ROAMIUM"
+  log "PASS: named Roamium debug env is absolute"
+  grep -F -- "--browser" "$INVALID_ENV_COMMAND" >/dev/null 2>&1 && fail "invalid-env command unexpectedly contains --browser"
+  [ "roamium" != "${ROAMIUM}" ] || fail "invalid-env sentinel equals debug Roamium path"
+  case "roamium" in
+    /*) fail "invalid-env sentinel is unexpectedly absolute" ;;
+  esac
+  log "PASS: invalid named Roamium env sentinel is relative"
+  log "PASS: scenario launch-discovery-contract"
+  exit 0
 fi
 
 if [ "$SCENARIO" = "terminal-scrollback-movement" ]; then

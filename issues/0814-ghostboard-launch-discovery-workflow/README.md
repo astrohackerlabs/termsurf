@@ -33,9 +33,12 @@ Verification should include:
 - stale installed binaries are not accidentally used during debug testing;
 - failure messages are clear when a browser cannot be resolved.
 
+The debug launch/discovery contract is documented in
+[Ghostboard Launch Discovery](../../docs/ghostboard-launch-discovery.md).
+
 ## Experiments
 
 - [Experiment 1: Resolve named Roamium for debug launch](01-resolve-named-roamium-debug-launch.md)
   — **Pass**
 - [Experiment 2: Document launch discovery contract](02-document-launch-discovery-contract.md)
-  — **Designed**
+  — **Pass**

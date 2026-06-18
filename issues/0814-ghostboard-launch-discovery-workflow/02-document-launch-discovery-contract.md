@@ -104,3 +104,82 @@ Fresh-context adversarial review by Codex subagent `Erdos`:
   if available because the experiment may edit the shell harness.
 - **Resolution:** Accepted the optional finding and added the shellcheck check
   to the static verification list.
+
+## Result
+
+**Result:** Pass
+
+Implemented the launch/discovery contract documentation and added a no-GUI
+contract check to the Ghostboard geometry harness.
+
+Changes:
+
+- Added `docs/ghostboard-launch-discovery.md` describing:
+  - direct debug app launch from
+    `ghostboard/macos/build/Debug/TermSurf.app/Contents/MacOS/termsurf`;
+  - `TERMSURF_SOCKET` discovery by webtui;
+  - absolute `--browser` spawn behavior;
+  - default/named `roamium` resolution through absolute `TERMSURF_ROAMIUM_PATH`;
+  - clear failure for missing, empty, or relative named Roamium paths;
+  - the debug-vs-installed boundary between Issue 814 and Issue 819.
+- Linked that document from the Issue 814 README analysis.
+- Added `scripts/ghostboard-geometry-matrix.sh launch-discovery-contract`, which
+  exits before GUI launch and proves:
+  - explicit absolute-path launch uses `--browser`;
+  - named/default launch omits `--browser`;
+  - the debug named Roamium environment path is absolute;
+  - the invalid-env sentinel remains relative.
+
+Verification commands:
+
+1. `prettier --write --prose-wrap always --print-width 80 docs/ghostboard-launch-discovery.md issues/0814-ghostboard-launch-discovery-workflow/README.md issues/0814-ghostboard-launch-discovery-workflow/02-document-launch-discovery-contract.md`
+2. `bash -n scripts/ghostboard-geometry-matrix.sh`
+3. `shellcheck scripts/ghostboard-geometry-matrix.sh` if available.
+4. `scripts/ghostboard-geometry-matrix.sh launch-discovery-contract`
+5. `git diff --check`
+
+Notes:
+
+- `shellcheck` is not installed on this VM, so that optional check was skipped.
+- The existing `named-roamium-debug-launch` and `named-roamium-invalid-env`
+  runtime assertions were not changed in this experiment. Experiment 1 remains
+  the runtime evidence for those full GUI paths.
+
+Final contract evidence:
+
+- Harness:
+  `logs/ghostboard-geometry-launch-discovery-contract-harness-20260617-211011.log`
+
+The contract run proved:
+
+- the absolute launch command includes `--browser` with the debug Roamium path;
+- the named/default launch command omits `--browser`;
+- the named Roamium debug environment is absolute; and
+- the invalid named Roamium environment sentinel is relative.
+
+## Conclusion
+
+The Issue 814 launch/discovery contract is now explicit and covered by a cheap
+regression check. Debug runs have documented rules for socket discovery,
+absolute browser paths, named/default Roamium resolution, invalid named-browser
+failure, and stale installed-path avoidance.
+
+Installed distribution identity and normal installed Roamium discovery remain
+out of scope for Issue 814 and belong to Issue 819.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Newton`:
+
+- **Verdict:** Approved.
+- **Findings:** None.
+- **Verification reviewed:** `bash -n scripts/ghostboard-geometry-matrix.sh`,
+  `git diff --check`, the unavailable `shellcheck` note, the uncommitted result
+  state, the `Pass` README status, the Result/Conclusion sections, and the
+  no-GUI `launch-discovery-contract` scenario.
+- **Evidence:** The reviewer confirmed the new contract scenario exits before
+  GUI launch and checks the documented command/environment contract. The
+  reviewer also confirmed the Ghostboard resolver behavior matches the docs and
+  that Experiment 1 remains the runtime evidence for socket discovery, named
+  Roamium resolution, invalid-env failure, no pending server, and stale
+  installed-path avoidance.
