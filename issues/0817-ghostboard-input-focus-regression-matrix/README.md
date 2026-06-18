@@ -35,3 +35,8 @@ The matrix should cover:
 The first experiments should establish reliable automation and pass/fail
 criteria. The matrix should stay small enough to run repeatedly, with slower
 manual or screenshot-heavy cases separated from fast smoke tests.
+
+## Experiments
+
+- [Experiment 1: Establish input/focus baseline matrix](01-establish-input-focus-baseline.md)
+  — **Designed**
