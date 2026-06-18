@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-18"
+closed = "2026-06-18"
 +++
 
 # Issue 822: Restore Ghostboard Cmd-Key Browser Forwarding
@@ -102,3 +103,23 @@ not in browse mode.
 
 - [Experiment 1: Restore Browse-Mode Command Navigation Forwarding](01-restore-browse-command-navigation.md)
   — **Pass**
+
+## Conclusion
+
+Ghostboard now restores browser-owned Command navigation shortcuts in browse
+mode without reintroducing legacy XPC. AppKit key equivalents for `Cmd+[`,
+`Cmd+]`, and `Cmd+R` are recognized before Ghostty binding/menu fallback, but
+they are consumed only when the existing TermSurf browser forwarding path
+accepts the event.
+
+The new `browser-command-navigation` smoke proves:
+
+- pre-browse `Cmd+[` does not reach Roamium;
+- browse-mode `Cmd+[` reaches Roamium as `windows_key_code=219` with Command
+  modifier `8` and navigates Back;
+- browse-mode `Cmd+]` reaches Roamium as `windows_key_code=221` with Command
+  modifier `8` and navigates Forward.
+
+The existing `copy-current-url-smoke` still passes, proving Control-mode `Cmd+C`
+continues to copy the current URL and Browse-mode `Cmd+C` does not run the
+Ghostboard URL-copy action.
