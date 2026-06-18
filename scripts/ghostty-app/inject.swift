@@ -1,7 +1,7 @@
 // Issue 802 / Exp 5 — CGEvent mouse injector (keyboard goes via osascript).
 // Coordinates are global points (same units as CGWindowBounds from winid.swift).
 //   inject.swift move  <x> <y>
-//   inject.swift click <x> <y> [left|right|middle] [count]
+//   inject.swift click <x> <y> [left|right|middle] [count] [control|command|shift|option]
 //   inject.swift drag  <x1> <y1> <x2> <y2>
 //   inject.swift scroll <x> <y> <lines>      (positive = up, negative = down)
 //   inject.swift key <virtual-key-code> [control] [command] [shift] [option]
@@ -48,15 +48,24 @@ case "move":
 case "click":
     let p = CGPoint(x: n(2), y: n(3))
     let which = a.count > 4 ? a[4] : "left"
-    let count = a.count > 5 ? (Int(a[5]) ?? 1) : 1
+    let count: Int
+    let modifierStart: Int
+    if a.count > 5, let parsedCount = Int(a[5]) {
+        count = parsedCount
+        modifierStart = 6
+    } else {
+        count = 1
+        modifierStart = 5
+    }
+    let eventFlags = flags(a.dropFirst(modifierStart))
     let (down, up, b): (CGEventType, CGEventType, CGMouseButton) =
         which == "right" ? (.rightMouseDown, .rightMouseUp, .right)
         : which == "middle" ? (.otherMouseDown, .otherMouseUp, .center)
         : (.leftMouseDown, .leftMouseUp, .left)
     post(ev(.mouseMoved, p, b))
     for i in 1...count {
-        let d = ev(down, p, b); d?.setIntegerValueField(.mouseEventClickState, value: Int64(i)); post(d)
-        let u = ev(up, p, b); u?.setIntegerValueField(.mouseEventClickState, value: Int64(i)); post(u)
+        let d = ev(down, p, b); d?.flags = eventFlags; d?.setIntegerValueField(.mouseEventClickState, value: Int64(i)); post(d)
+        let u = ev(up, p, b); u?.flags = eventFlags; u?.setIntegerValueField(.mouseEventClickState, value: Int64(i)); post(u)
     }
 
 case "drag":

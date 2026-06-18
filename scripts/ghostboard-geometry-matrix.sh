@@ -73,6 +73,8 @@ CRASH_TYPE_COMMAND="$RUN_DIR/renderer-crash-type-command.txt"
 COLOR_WEB_ROOT="$RUN_DIR/color-scheme-site"
 COLOR_TYPE_COMMAND="$RUN_DIR/color-scheme-type-command.txt"
 COPY_URL_WEB_ROOT="$RUN_DIR/copy-current-url-site"
+INPUT_WEB_ROOT="$RUN_DIR/browser-input-site"
+INPUT_TYPE_COMMAND="$RUN_DIR/browser-input-type-command.txt"
 NEW_TAB_COMMAND_LOG="$RUN_DIR/new-tab-command.log"
 NEW_TAB_MARKER_COMMAND="$RUN_DIR/new-tab-marker-command.txt"
 SECOND_BROWSER_COMMAND="$RUN_DIR/second-browser-command.txt"
@@ -1663,7 +1665,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -2222,6 +2224,171 @@ PY
   log "copy_current_url_web_root=$COPY_URL_WEB_ROOT"
   log "copy_current_url_http_pid=$HTTP_PID"
   log "copy_current_url_url=$URL"
+fi
+
+if [ "$SCENARIO" = "browser-input-granularity" ]; then
+  INPUT_HTTP_PORT="$(python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+)"
+  mkdir -p "$INPUT_WEB_ROOT"
+  cat >"$INPUT_WEB_ROOT/index.html" <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Issue 817 Input Initial</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+        color: #111111;
+        font: 16px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      #text-input {
+        position: absolute;
+        left: 60px;
+        top: 60px;
+        width: 320px;
+        height: 32px;
+        font: 18px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      #next-control {
+        position: absolute;
+        left: 60px;
+        top: 112px;
+        width: 220px;
+        height: 32px;
+      }
+      #click-zone {
+        position: absolute;
+        left: 60px;
+        top: 168px;
+        width: 320px;
+        height: 48px;
+        border: 1px solid #333333;
+        line-height: 48px;
+        user-select: none;
+      }
+      #drag-input {
+        position: absolute;
+        left: 60px;
+        top: 248px;
+        width: 420px;
+        height: 36px;
+        font: 18px -apple-system, BlinkMacSystemFont, sans-serif;
+        line-height: 36px;
+      }
+      #result {
+        position: absolute;
+        left: 60px;
+        top: 320px;
+      }
+    </style>
+    <script>
+      let seq = 0;
+
+      function safe(value) {
+        return String(value).replace(/[^A-Za-z0-9_.:-]/g, "_");
+      }
+
+      function report(kind, detail = "") {
+        seq += 1;
+        const marker = `ISSUE817_INPUT seq=${seq} kind=${kind} ${detail}`.trim();
+        console.log(marker);
+        document.title = `Issue 817 Input ${kind} ${seq}`;
+        const result = document.getElementById("result");
+        if (result) result.textContent = marker;
+      }
+
+      function inputState(label) {
+        const input = document.getElementById("text-input");
+        return `label=${label} value=${safe(input.value)} start=${input.selectionStart} end=${input.selectionEnd} active=${safe(document.activeElement.id)}`;
+      }
+
+      window.addEventListener("DOMContentLoaded", () => {
+        const input = document.getElementById("text-input");
+        const next = document.getElementById("next-control");
+        const clickZone = document.getElementById("click-zone");
+        const dragInput = document.getElementById("drag-input");
+
+        input.addEventListener("focus", () => report("focus", inputState("input-focus")));
+        input.addEventListener("input", () => report("input", inputState("input")));
+        input.addEventListener("keyup", (event) => {
+          report("keyup", `${inputState(safe(event.key))} key=${safe(event.key)}`);
+        });
+        next.addEventListener("focus", () => report("focus", `active=${safe(document.activeElement.id)}`));
+        next.addEventListener("click", () => report("enter", `active=${safe(document.activeElement.id)}`));
+
+        clickZone.addEventListener("click", (event) => {
+          report("click", `detail=${event.detail} shift=${event.shiftKey} meta=${event.metaKey} alt=${event.altKey} ctrl=${event.ctrlKey}`);
+        });
+        clickZone.addEventListener("dblclick", (event) => {
+          report("dblclick", `detail=${event.detail}`);
+        });
+
+        dragInput.addEventListener("mouseup", () => {
+          setTimeout(() => {
+            const text = dragInput.value.substring(dragInput.selectionStart, dragInput.selectionEnd);
+            report("selection", `text=${safe(text)} start=${dragInput.selectionStart} end=${dragInput.selectionEnd} active=${safe(document.activeElement.id)}`);
+          }, 0);
+        });
+
+        document.addEventListener("copy", () => {
+          setTimeout(() => {
+            const active = document.activeElement;
+            let text = window.getSelection().toString();
+            if (active && active.id === "drag-input") {
+              text = active.value.substring(active.selectionStart, active.selectionEnd);
+            }
+            report("copy", `text=${safe(text)} active=${safe(active ? active.id : "")}`);
+          }, 0);
+        });
+
+        report("ready", "url=" + safe(window.location.href));
+      });
+    </script>
+  </head>
+  <body>
+    <input id="text-input" autocomplete="off" spellcheck="false" />
+    <button id="next-control">ISSUE817 next control</button>
+    <div id="click-zone">ISSUE817_CLICK_ZONE</div>
+    <input id="drag-input" readonly value="ISSUE817_BROWSER_DRAG_TEXT" />
+    <div id="result">ISSUE817_INPUT_BOOT</div>
+  </body>
+</html>
+EOF
+  python3 -m http.server "$INPUT_HTTP_PORT" --bind 127.0.0.1 --directory "$INPUT_WEB_ROOT" >>"$HARNESS_LOG" 2>&1 &
+  HTTP_PID="$!"
+  URL="http://127.0.0.1:${INPUT_HTTP_PORT}/index.html"
+  for _ in $(seq 1 30); do
+    if python3 - "$URL" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+    then
+      break
+    fi
+    delay 0.25
+  done
+  python3 - "$URL" <<'PY' >/dev/null 2>&1 || fail "browser-input HTTP fixture did not become ready"
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+  log "browser_input_web_root=$INPUT_WEB_ROOT"
+  log "browser_input_http_pid=$HTTP_PID"
+  log "browser_input_url=$URL"
 fi
 
 COMMAND="$RUN_DIR/run-web.sh"
@@ -3142,6 +3309,10 @@ fi
 if [ "$SCENARIO" = "copy-current-url-smoke" ]; then
   log "webtui_state_trace=$WEBTUI_STATE_TRACE"
 fi
+if [ "$SCENARIO" = "browser-input-granularity" ]; then
+  log "webtui_state_trace=$WEBTUI_STATE_TRACE"
+  log "browser_input_type_command=$INPUT_TYPE_COMMAND"
+fi
 if [ "$SCENARIO" = "window-resize" ]; then
   log "grow_screenshot=$SCREENSHOT_GROW"
   log "shrink_screenshot=$SCREENSHOT_SHRINK"
@@ -3734,6 +3905,104 @@ if [ "$SCENARIO" = "copy-current-url-smoke" ]; then
   BROWSE_CLIPBOARD_AFTER="$(pbpaste)"
   [ "$BROWSE_CLIPBOARD_AFTER" = "$BROWSE_COPY_SENTINEL" ] || fail "Browse-mode Cmd+C overwrote clipboard: got=$BROWSE_CLIPBOARD_AFTER expected=$BROWSE_COPY_SENTINEL"
   log "PASS: Browse-mode Cmd+C left copy-current-URL guard inactive"
+fi
+
+if [ "$SCENARIO" = "browser-input-granularity" ]; then
+  wait_for_state_trace "event=url_changed.*url=${URL}" "webtui browser-input fixture URL" 45
+  wait_for_state_trace "event=console_message.*message=ISSUE817_INPUT .*kind=ready" "browser-input fixture ready marker" 45
+
+  enter_browser_browse "browser_input" "$PANE_ID" "$BROWSER_TAB_ID"
+
+  read -r INPUT_X INPUT_Y <<<"$(global_point_for_web_point "$WIN_LINE" "$APPKIT_PRESENT_LINE" 120 78)"
+  read -r CLICK_X CLICK_Y <<<"$(global_point_for_web_point "$WIN_LINE" "$APPKIT_PRESENT_LINE" 120 192)"
+  read -r DRAG_START_X DRAG_START_Y <<<"$(global_point_for_web_point "$WIN_LINE" "$APPKIT_PRESENT_LINE" 65 266)"
+  read -r DRAG_END_X DRAG_END_Y <<<"$(global_point_for_web_point "$WIN_LINE" "$APPKIT_PRESENT_LINE" 360 266)"
+
+  INPUT_FOCUS_START_LINE="$(state_trace_line_count)"
+  click_global_point "$INPUT_X" "$INPUT_Y" "browser_input_text_field"
+  wait_for_state_trace_after "$INPUT_FOCUS_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=focus .*active=text-input" "page focused text input" 45
+
+  INPUT_TOKEN="issue817"
+  printf '%s' "$INPUT_TOKEN" >"$INPUT_TYPE_COMMAND"
+  INPUT_TYPE_START_LINE="$(state_trace_line_count)"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$INPUT_TYPE_COMMAND" >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$INPUT_TYPE_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=input .*value=${INPUT_TOKEN} .*start=8 .*end=8 .*active=text-input" "page received typed token" 45
+
+  LEFT_START_LINE="$(state_trace_line_count)"
+  log "browser_input_special_key=left-arrow"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 123 >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$LEFT_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=keyup .*label=ArrowLeft .*value=${INPUT_TOKEN} .*start=7 .*end=7 .*key=ArrowLeft" "page observed left-arrow caret movement" 45
+
+  INSERT_START_LINE="$(state_trace_line_count)"
+  printf 'x' >"$INPUT_TYPE_COMMAND"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$INPUT_TYPE_COMMAND" >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$INSERT_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=input .*value=issue81x7 .*start=8 .*end=8 .*active=text-input" "page inserted character at caret" 45
+
+  BACKSPACE_START_LINE="$(state_trace_line_count)"
+  log "browser_input_special_key=backspace"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 51 >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$BACKSPACE_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=input .*value=${INPUT_TOKEN} .*start=7 .*end=7 .*active=text-input" "page observed backspace deletion" 45
+
+  TAB_START_LINE="$(state_trace_line_count)"
+  log "browser_input_special_key=tab"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 48 >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$TAB_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=focus .*active=next-control" "page observed tab focus movement" 45
+
+  ENTER_START_LINE="$(state_trace_line_count)"
+  log "browser_input_special_key=enter"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$ENTER_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=enter .*active=next-control" "page observed enter activation" 45
+
+  SINGLE_CLICK_START_LINE="$(state_trace_line_count)"
+  click_global_point "$CLICK_X" "$CLICK_Y" "browser_input_single_click"
+  wait_for_state_trace_after "$SINGLE_CLICK_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=click .*detail=1 .*shift=false" "page observed single click" 45
+
+  delay 1
+  DOUBLE_CLICK_START_LINE="$(state_trace_line_count)"
+  log "browser_input_double_click_point=${CLICK_X},${CLICK_Y}"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" move "$CLICK_X" "$CLICK_Y" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" click "$CLICK_X" "$CLICK_Y" left 2 >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$DOUBLE_CLICK_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=click .*detail=2" "page observed double-click detail" 45
+  wait_for_state_trace_after "$DOUBLE_CLICK_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=dblclick .*detail=2" "page observed dblclick event" 45
+
+  delay 1
+  MODIFIER_CLICK_START_LINE="$(state_trace_line_count)"
+  log "browser_input_modifier_click_point=${CLICK_X},${CLICK_Y}"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" move "$CLICK_X" "$CLICK_Y" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" click "$CLICK_X" "$CLICK_Y" left 1 shift >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$MODIFIER_CLICK_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=click .*detail=1 .*shift=true" "page observed modifier click" 45
+
+  delay 1
+  TRIPLE_CLICK_START_LINE="$(state_trace_line_count)"
+  log "browser_input_triple_click_point=${CLICK_X},${CLICK_Y}"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" move "$CLICK_X" "$CLICK_Y" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" click "$CLICK_X" "$CLICK_Y" left 3 >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$TRIPLE_CLICK_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=click .*detail=3" "page observed triple-click detail" 45
+
+  DRAG_START_LINE="$(state_trace_line_count)"
+  log "browser_input_drag_points=${DRAG_START_X},${DRAG_START_Y}-${DRAG_END_X},${DRAG_END_Y}"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" drag "$DRAG_START_X" "$DRAG_START_Y" "$DRAG_END_X" "$DRAG_END_Y" >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$DRAG_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=selection .*text=ISSUE817_BROWSER_DRAG_TEXT" "page observed browser drag selection" 45
+
+  BROWSER_SELECTION_SENTINEL="ISSUE817_TERMINAL_SELECTION_SENTINEL_${TS}"
+  printf '%s' "$BROWSER_SELECTION_SENTINEL" | pbcopy
+  BROWSER_SELECTION_CLIPBOARD_BEFORE="$(pbpaste)"
+  [ "$BROWSER_SELECTION_CLIPBOARD_BEFORE" = "$BROWSER_SELECTION_SENTINEL" ] || fail "failed to set clipboard sentinel before browser selection copy"
+  SELECTION_COPY_START_LINE="$(state_trace_line_count)"
+  log "browser_input_selection_copy_key=cmd+c"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 8 command >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$SELECTION_COPY_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=copy .*text=ISSUE817_BROWSER_DRAG_TEXT" "page observed browser selection copy" 45
+  for _ in $(seq 1 20); do
+    BROWSER_SELECTION_CLIPBOARD_AFTER="$(pbpaste)"
+    if [ "$BROWSER_SELECTION_CLIPBOARD_AFTER" = "ISSUE817_BROWSER_DRAG_TEXT" ]; then
+      break
+    fi
+    delay 0.25
+  done
+  [ "$BROWSER_SELECTION_CLIPBOARD_AFTER" = "ISSUE817_BROWSER_DRAG_TEXT" ] || fail "browser selection copy did not win clipboard: got=$BROWSER_SELECTION_CLIPBOARD_AFTER"
+  log "PASS: browser drag selection copied browser text, proving terminal selection did not intercept Browse-mode Cmd+C"
+
+  leave_browser_browse "browser_input" "$PANE_ID" "$BROWSER_TAB_ID"
 fi
 
 if [ "$SCENARIO" = "named-roamium-debug-launch" ]; then

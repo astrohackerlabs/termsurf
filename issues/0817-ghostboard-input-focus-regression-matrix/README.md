@@ -41,4 +41,4 @@ manual or screenshot-heavy cases separated from fast smoke tests.
 - [Experiment 1: Establish input/focus baseline matrix](01-establish-input-focus-baseline.md)
   — **Partial**
 - [Experiment 2: Prove browser input granularity](02-prove-browser-input-granularity.md)
-  — **Designed**
+  — **Partial**

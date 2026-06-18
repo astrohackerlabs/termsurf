@@ -145,3 +145,107 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Partial
+
+Implemented a focused browser-input granularity scenario. The scenario drives
+real Ghostboard/AppKit input into a local browser fixture and asserts
+browser-observed state through webtui state-trace console/title markers.
+
+Changes made:
+
+- `scripts/ghostboard-geometry-matrix.sh`
+  - Added the `browser-input-granularity` scenario.
+  - Added a local HTML fixture that reports typed input, caret/selection state,
+    focus, enter activation, click detail counts, modifier-click flags,
+    drag-selected browser text, and copy events.
+  - Added assertions for ordinary text input, left arrow, inserted character,
+    backspace, tab focus movement, enter activation, single-click, double-click,
+    `dblclick`, modifier-click, triple-click, drag selection, and Browse-mode
+    copy of the browser-selected text.
+- `scripts/ghostty-app/inject.swift`
+  - Extended `click` so optional `control`, `command`, `shift`, and `option`
+    flags are attached to mouse down/up events after an optional click count.
+  - Fixed parsing so `click x y left shift` attaches `shift` even when the click
+    count is omitted.
+
+Verification:
+
+- `bash -n scripts/ghostboard-geometry-matrix.sh` — pass.
+- `swiftc -typecheck scripts/ghostty-app/inject.swift` — pass.
+- `git diff --check` — pass.
+- `scripts/ghostboard-geometry-matrix.sh browser-input-granularity` — partial:
+  the scenario passed through keyboard, caret/focus, click-count, and
+  modifier-click assertions, then failed at browser drag selection.
+
+Runtime evidence:
+
+- Harness log:
+  `logs/ghostboard-geometry-browser-input-granularity-harness-20260618-004310.log`.
+- App log:
+  `logs/ghostboard-geometry-browser-input-granularity-app-20260618-004310.log`.
+- Roamium trace:
+  `logs/ghostboard-geometry-browser-input-granularity-roamium-20260618-004310.log`.
+- webtui state trace:
+  `logs/ghostboard-geometry-browser-input-granularity-webtui-20260618-004310.log`.
+- Screenshot:
+  `logs/ghostboard-geometry-browser-input-granularity-screenshot-20260618-004310.png`.
+
+The partial run proves:
+
+- typed token `issue817` reached the browser input;
+- left arrow moved the caret to `selectionStart=7`;
+- typing `x` inserted at the caret;
+- backspace restored the token and caret state;
+- tab moved focus to the next browser control;
+- enter activated that focused control;
+- single-click, double-click, and triple-click reached the page with detail
+  counts `1`, `2`, and `3`;
+- modifier-click reached the page with `shift=true`.
+
+The run failed at drag selection. Roamium received `MouseEvent` down/up and
+`MouseMove`, but the browser-reported selection remained empty:
+
+- The webtui trace recorded
+  `ISSUE817_INPUT seq=35 kind=selection text= start=0 end=0 active=drag-input`.
+- The Roamium trace recorded the drag sequence, but the final drag move reached
+  Roamium with `modifiers=0`, so Chromium did not see a left-button drag
+  continuing through the move.
+
+That points to a Ghostboard-owned drag-forwarding gap. This experiment did not
+land the app fix because the approved design explicitly limited implementation
+to the harness and injector. The Ghostboard drag fix needs its own
+design-reviewed experiment.
+
+## Conclusion
+
+Issue 817 now has a focused runtime guard for browser-observed text input,
+special-key editing, logical caret/focus state, click counts, and
+modifier-click. The remaining failing row is browser drag selection, which also
+blocks direct proof of terminal-selection suppression.
+
+The next experiment should be a narrow Ghostboard app fix for TermSurf drag
+forwarding: preserve the active mouse-button modifier on AppKit drag-generated
+TermSurf mouse moves, rebuild Ghostboard, rerun `browser-input-granularity`, and
+prove browser drag selection plus terminal-selection suppression.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Faraday`:
+
+- **Initial verdict:** Changes required.
+- **Finding 1:** The first result draft exceeded the approved experiment scope
+  by including a Ghostboard app source change. Fixed by removing the app source
+  change from this experiment and recording that the app fix needs its own
+  design-reviewed experiment.
+- **Finding 2:** The first result draft claimed terminal-selection suppression
+  was proven by the clipboard copy path. Fixed by reclassifying the result as
+  `Partial` and recording drag selection plus terminal-selection suppression as
+  remaining blocked rows.
+- **Optional finding:** `inject.swift` silently dropped click modifiers when the
+  click count was omitted. Fixed by parsing click count and modifier-start
+  separately.
+- **Final verdict:** Approved. The reviewer confirmed both Required findings and
+  the Optional finding were resolved, with no new Required findings.
