@@ -34,3 +34,8 @@ Candidate coverage:
 
 The final design should separate fast CI-suitable checks from slower diagnostic
 benchmarks.
+
+## Experiments
+
+- [Experiment 1: Add bounded performance smoke runner](01-add-bounded-performance-smoke-runner.md)
+  — **Designed**
