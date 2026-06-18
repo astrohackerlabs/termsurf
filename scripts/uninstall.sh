@@ -5,7 +5,7 @@ COMPONENT="${1:-}"
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component>"
-  echo "Components: wezboard, roamium, webtui, all"
+  echo "Components: wezboard, ghostboard, roamium, webtui, all"
   exit 1
 fi
 
@@ -34,6 +34,15 @@ uninstall_wezboard() {
   echo "  Removed: $APP"
 }
 
+uninstall_ghostboard() {
+  local APP="/Applications/TermSurf Ghostboard.app"
+
+  echo "==> Uninstalling Ghostboard..."
+  rm -rf "$APP"
+
+  echo "  Removed: $APP"
+}
+
 uninstall_webtui() {
   echo "==> Uninstalling webtui..."
   rm -f /usr/local/bin/web
@@ -44,17 +53,19 @@ uninstall_webtui() {
 case "$COMPONENT" in
   roamium)    uninstall_roamium ;;
   wezboard)   uninstall_wezboard ;;
+  ghostboard) uninstall_ghostboard ;;
   webtui)     uninstall_webtui ;;
   all)
     uninstall_roamium
     uninstall_wezboard
+    uninstall_ghostboard
     uninstall_webtui
     echo ""
     echo "Done (all)."
     ;;
   *)
     echo "Unknown component: $COMPONENT"
-    echo "Components: wezboard, roamium, webtui, all"
+    echo "Components: wezboard, ghostboard, roamium, webtui, all"
     exit 1
     ;;
 esac

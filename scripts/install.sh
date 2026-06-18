@@ -5,12 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CHROMIUM_OUT="$REPO_DIR/chromium/src/out/Default"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+GHOSTBOARD_RELEASE_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf Ghostboard.app"
 
 COMPONENT="${1:-}"
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component>"
-  echo "Components: wezboard, roamium, webtui, all"
+  echo "Components: wezboard, ghostboard, roamium, webtui, all"
+  exit 1
+fi
+
+if [ "$COMPONENT" = "ghostboard" ] && [ ! -x "$GHOSTBOARD_RELEASE_APP/Contents/MacOS/ghostboard" ]; then
+  echo "Error: Release app not found at $GHOSTBOARD_RELEASE_APP"
+  echo "Run: scripts/build.sh ghostboard --release"
   exit 1
 fi
 
@@ -83,6 +90,30 @@ install_wezboard() {
   echo "  App: $APP"
 }
 
+install_ghostboard() {
+  local APP_SRC="$GHOSTBOARD_RELEASE_APP"
+  local APP="/Applications/TermSurf Ghostboard.app"
+
+  if [ ! -x "$APP_SRC/Contents/MacOS/ghostboard" ]; then
+    echo "Error: Release app not found at $APP_SRC"
+    echo "Run: scripts/build.sh ghostboard --release"
+    exit 1
+  fi
+
+  echo "==> Installing Ghostboard to $APP..."
+  rm -rf "$APP"
+  cp -R "$APP_SRC" "$APP"
+
+  echo "==> Codesigning..."
+  codesign --force --deep --sign - "$APP" || true
+
+  if [ -x "$LSREGISTER" ]; then
+    "$LSREGISTER" -f -R -trusted "$APP" || true
+  fi
+
+  echo "  App: $APP"
+}
+
 install_webtui() {
   local WEB="$REPO_DIR/target/release/web"
 
@@ -102,17 +133,19 @@ install_webtui() {
 case "$COMPONENT" in
   roamium)    install_roamium ;;
   wezboard)   install_wezboard ;;
+  ghostboard) install_ghostboard ;;
   webtui)     install_webtui ;;
   all)
     install_roamium
     install_wezboard
+    install_ghostboard
     install_webtui
     echo ""
     echo "Done (all)."
     ;;
   *)
     echo "Unknown component: $COMPONENT"
-    echo "Components: wezboard, roamium, webtui, all"
+    echo "Components: wezboard, ghostboard, roamium, webtui, all"
     exit 1
     ;;
 esac

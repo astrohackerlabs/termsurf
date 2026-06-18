@@ -20,7 +20,7 @@ for arg in "$@"; do
     -*)
       echo "Unknown flag: $arg"
       echo "Usage: $0 <component> [--release] [--clean] [--open]"
-      echo "Components: wezboard, roamium, webtui, chromium, all"
+      echo "Components: wezboard, ghostboard, roamium, webtui, chromium, all"
       exit 1
       ;;
     *)
@@ -36,7 +36,7 @@ done
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: wezboard, roamium, webtui, chromium, all"
+  echo "Components: wezboard, ghostboard, roamium, webtui, chromium, all"
   exit 1
 fi
 
@@ -115,22 +115,42 @@ build_wezboard() {
   fi
 }
 
+build_ghostboard() {
+  local CONFIGURATION="Debug"
+  if $RELEASE; then
+    CONFIGURATION="Release"
+  fi
+
+  cd "$REPO_DIR/ghostboard/macos"
+  if $CLEAN; then
+    echo "==> Cleaning Ghostboard ($CONFIGURATION)..."
+    ./build.nu --configuration "$CONFIGURATION" --action clean
+  fi
+
+  echo "==> Building Ghostboard ($CONFIGURATION)..."
+  ./build.nu --configuration "$CONFIGURATION" --action build
+  echo "  Ghostboard: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf Ghostboard.app"
+  echo "  Ghostboard executable: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf Ghostboard.app/Contents/MacOS/ghostboard"
+}
+
 case "$COMPONENT" in
   chromium)   build_chromium ;;
   webtui)     build_webtui ;;
   roamium)    build_roamium ;;
   wezboard)   build_wezboard ;;
+  ghostboard) build_ghostboard ;;
   all)
     build_chromium
     build_webtui
     build_roamium
     build_wezboard
+    build_ghostboard
     echo ""
     echo "Done (all)."
     ;;
   *)
     echo "Unknown component: $COMPONENT"
-    echo "Components: wezboard, roamium, webtui, chromium, all"
+    echo "Components: wezboard, ghostboard, roamium, webtui, chromium, all"
     exit 1
     ;;
 esac

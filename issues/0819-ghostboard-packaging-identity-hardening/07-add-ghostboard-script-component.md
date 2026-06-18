@@ -185,3 +185,102 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Partial
+
+Implemented Ghostboard as a repo-level component for local build/install script
+surfaces, but the privileged `/Applications` install/uninstall smoke could not
+run in this session because non-interactive sudo required a password.
+
+Changed files:
+
+- `scripts/build.sh`
+  - Added `ghostboard` to usage and component lists.
+  - Added `build_ghostboard`, which runs
+    `ghostboard/macos/build.nu --configuration Debug --action build` by default
+    and `Release` with `--release`.
+  - Added Ghostboard to `all`.
+- `scripts/install.sh`
+  - Added `ghostboard` to usage and component lists.
+  - Added a pre-sudo missing-release-app check for the direct `ghostboard`
+    component so `scripts/install.sh ghostboard` can print
+    `Run: scripts/build.sh ghostboard --release` before requesting privileges.
+  - Added `install_ghostboard`, which copies
+    `ghostboard/macos/build/Release/TermSurf Ghostboard.app` to
+    `/Applications/TermSurf Ghostboard.app`, ad-hoc codesigns it, and registers
+    it with LaunchServices when `lsregister` is available.
+  - Added Ghostboard to `all`.
+- `scripts/uninstall.sh`
+  - Added `ghostboard` to usage and component lists.
+  - Added `uninstall_ghostboard`, which removes
+    `/Applications/TermSurf Ghostboard.app`.
+  - Added Ghostboard to `all`.
+
+Verification passed:
+
+```bash
+bash -n scripts/build.sh scripts/install.sh scripts/uninstall.sh
+git diff --check
+rg -n 'ghostboard|Components:' scripts/build.sh scripts/install.sh scripts/uninstall.sh
+scripts/build.sh ghostboard
+test -x 'ghostboard/macos/build/Debug/TermSurf Ghostboard.app/Contents/MacOS/ghostboard'
+scripts/ghostboard-geometry-matrix.sh ghostboard-config-paths
+scripts/build.sh ghostboard --release
+test -x 'ghostboard/macos/build/Release/TermSurf Ghostboard.app/Contents/MacOS/ghostboard'
+```
+
+The debug Ghostboard build succeeded through `scripts/build.sh ghostboard`, and
+the config-path smoke passed against the script-built app. The release
+Ghostboard build succeeded through `scripts/build.sh ghostboard --release`, and
+the release executable exists at the expected path.
+
+The privileged install/uninstall smoke was attempted with a non-interactive sudo
+guard:
+
+```bash
+sudo -n scripts/install.sh ghostboard && \
+  test -x '/Applications/TermSurf Ghostboard.app/Contents/MacOS/ghostboard' && \
+  sudo -n scripts/uninstall.sh ghostboard && \
+  test ! -e '/Applications/TermSurf Ghostboard.app'
+```
+
+It failed before touching `/Applications`:
+
+```text
+sudo: a password is required
+```
+
+No existing `/Applications/TermSurf Ghostboard.app` was present before the smoke
+attempt.
+
+The builds emitted existing warnings unrelated to this experiment:
+
+- SwiftLint optional `Data` to `String` conversion warning in
+  `SurfaceView_AppKit.swift`.
+- Existing dSYM warnings for missing ImGui symbols in `libghostty.a(ext.o)`.
+
+## Conclusion
+
+Ghostboard is now wired into the repo-level build/install/uninstall scripts and
+both Debug and Release app bundle paths build successfully. The result remains
+Partial because the required `/Applications` install/uninstall smoke could not
+be run without an interactive sudo password. A later experiment or manual
+follow-up must run:
+
+```bash
+sudo scripts/install.sh ghostboard
+test -x '/Applications/TermSurf Ghostboard.app/Contents/MacOS/ghostboard'
+sudo scripts/uninstall.sh ghostboard
+test ! -e '/Applications/TermSurf Ghostboard.app'
+```
+
+before Issue 819 can treat Ghostboard install/uninstall support as fully
+verified.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Carver the 2nd`:
+
+- **Verdict:** Approved.
