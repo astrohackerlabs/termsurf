@@ -757,6 +757,8 @@ fn main() -> io::Result<()> {
                     if let Some((accepted, prompt_text)) = reply {
                         let tab_id = dialog.tab_id;
                         let request_id = dialog.request_id;
+                        let dialog_type = dialog.dialog_type.clone();
+                        let message = dialog.message.clone();
                         let previous_mode = dialog.previous_mode.clone();
                         if let Some(ref bc) = browser_conn {
                             bc.send_javascript_dialog_reply(request_id, accepted, &prompt_text);
@@ -767,6 +769,19 @@ fn main() -> io::Result<()> {
                                 request_id,
                                 accepted,
                                 &prompt_text,
+                            );
+                        }
+                        if let Some(trace) = state_trace.as_mut() {
+                            trace.write(
+                                "javascript_dialog_reply",
+                                &[
+                                    ("tab_id", tab_id.to_string()),
+                                    ("request_id", request_id.to_string()),
+                                    ("dialog_type", dialog_type),
+                                    ("message", message),
+                                    ("accepted", accepted.to_string()),
+                                    ("prompt_text", prompt_text.clone()),
+                                ],
                             );
                         }
                         pending_dialog = None;
@@ -1264,6 +1279,19 @@ fn main() -> io::Result<()> {
                         if !duplicate {
                             let previous_mode = mode.clone();
                             mode = Mode::Dialog;
+                            if let Some(trace) = state_trace.as_mut() {
+                                trace.write(
+                                    "javascript_dialog_request",
+                                    &[
+                                        ("tab_id", tab_id.to_string()),
+                                        ("request_id", request_id.to_string()),
+                                        ("dialog_type", dialog_type.clone()),
+                                        ("origin_url", origin_url.clone()),
+                                        ("message", message.clone()),
+                                        ("default_prompt_text", default_prompt_text.clone()),
+                                    ],
+                                );
+                            }
                             pending_dialog = Some(PendingJsDialog {
                                 tab_id,
                                 request_id,

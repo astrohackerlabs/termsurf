@@ -163,3 +163,103 @@ Fresh-context adversarial review by Codex subagent `Locke`:
   `beforeunload` remains only a Partial outcome.
 - **Re-review verdict:** Approved. The reviewer confirmed the pass bar now
   requires beforeunload and no new required findings were introduced.
+
+## Result
+
+**Result:** Pass.
+
+Implemented a focused `javascript-dialog-smoke` scenario in
+`scripts/ghostboard-geometry-matrix.sh`, test-only webtui dialog state trace
+events, and stable Roamium dialog request/reply trace lines. The runtime smoke
+passed every required JavaScript dialog case under debug Ghostboard:
+
+| Case                 | Result | Evidence                                                             |
+| -------------------- | ------ | -------------------------------------------------------------------- |
+| Initial-load alert   | Pass   | Request reached webtui, Enter reply accepted, page reported resumed. |
+| Delayed alert        | Pass   | Request reached webtui, Enter reply accepted, page reported resumed. |
+| Confirm accept       | Pass   | `y` reply accepted, page reported `true`.                            |
+| Confirm cancel       | Pass   | `n` reply canceled, page reported `false`.                           |
+| Prompt accept        | Pass   | Typed `-typed`, accepted, page reported `seed-typed`.                |
+| Prompt cancel        | Pass   | Esc reply canceled, page reported `null`.                            |
+| Beforeunload stay    | Pass   | Sticky activation proved, `n` reply canceled, no away URL/title.     |
+| Beforeunload proceed | Pass   | Sticky activation proved, `y` reply accepted, page navigated away.   |
+
+Final successful runtime command:
+
+```bash
+scripts/ghostboard-geometry-matrix.sh javascript-dialog-smoke
+```
+
+Final evidence artifacts:
+
+- Harness log:
+  `logs/ghostboard-geometry-javascript-dialog-smoke-harness-20260617-230358.log`
+- App log:
+  `logs/ghostboard-geometry-javascript-dialog-smoke-app-20260617-230358.log`
+- Roamium trace:
+  `logs/ghostboard-geometry-javascript-dialog-smoke-roamium-20260617-230358.log`
+- Webtui state trace:
+  `logs/ghostboard-geometry-javascript-dialog-smoke-webtui-20260617-230358.log`
+- Screenshot:
+  `logs/ghostboard-geometry-javascript-dialog-smoke-screenshot-20260617-230358.png`
+
+Changed files:
+
+- `scripts/ghostboard-geometry-matrix.sh`
+  - Adds the `javascript-dialog-smoke` fixture, local HTTP server, runtime
+    assertions, Roamium trace checks, webtui dialog trace checks, page-result
+    checks, and beforeunload stay/proceed checks.
+- `webtui/src/main.rs`
+  - Adds test-only `javascript_dialog_request` and `javascript_dialog_reply`
+    state trace events under `TERMSURF_WEBTUI_STATE_TRACE_FILE`.
+- `roamium/src/dispatch.rs`
+  - Writes JavaScript dialog request/reply lines to the stable Roamium trace.
+
+Verification run:
+
+```bash
+prettier --check --prose-wrap always --print-width 80 issues/0816-ghostboard-browser-state-interruptions/README.md issues/0816-ghostboard-browser-state-interruptions/03-prove-javascript-dialogs.md
+cargo fmt -- webtui/src/main.rs roamium/src/dispatch.rs
+cargo fmt --check -- webtui/src/main.rs roamium/src/dispatch.rs
+cargo check -p webtui
+cargo check -p roamium
+./scripts/build.sh webtui
+./scripts/build.sh roamium
+bash -n scripts/ghostboard-geometry-matrix.sh
+git diff --check
+scripts/ghostboard-geometry-matrix.sh javascript-dialog-smoke
+```
+
+`shellcheck scripts/ghostboard-geometry-matrix.sh` could not be run because
+`shellcheck` is not installed on this VM.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Hypatia`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The first result write-up claimed the initial-load alert
+  was replayed, but the final trace did not contain a `javascript-dialog-replay`
+  event.
+- **Required finding:** The beforeunload stay check only rejected the away page
+  title and did not also reject a `url_changed` event for the away URL.
+- **Resolution:** Accepted both findings. Removed the unproven Roamium
+  JavaScript dialog replay cache and revised the result/conclusion to claim only
+  the direct initial-load delivery proven by the run. Added a URL-level negative
+  assertion for beforeunload stay and reran `javascript-dialog-smoke`
+  successfully with final evidence timestamp `20260617-230358`.
+- **Re-review verdict:** Approved. The reviewer confirmed the prior required
+  findings were resolved and no new required findings were introduced.
+
+## Conclusion
+
+JavaScript dialog parity is proven for the current Ghostboard/webtui/Roamium
+stack. Dialog requests are protocol events, webtui renders and replies through
+terminal input, Roamium forwards replies back to Chromium, and the page observes
+the expected JavaScript return values.
+
+The key runtime finding is that the current Ghostboard launch path can deliver
+an initial-load `alert()` to webtui's direct browser connection without relying
+on native OS dialogs or weakening the harness. Unlike Experiment 2's loading
+state, this run did not prove a missing direct-client replay gap for JavaScript
+dialogs.

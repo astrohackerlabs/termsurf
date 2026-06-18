@@ -466,6 +466,10 @@ pub fn handle_message(msg: &TermSurfMessage) {
                     "[termsurf-js-dialog] reply tab_id={} request_id={} accepted={} ok={}",
                     m.tab_id, m.request_id, m.accepted, ok
                 );
+                trace_pdf_input(format!(
+                    "javascript-dialog-reply tab={} pane={} request_id={} accepted={} ok={}",
+                    m.tab_id, t.pane_id, m.request_id, m.accepted, ok
+                ));
             } else {
                 eprintln!(
                     "[termsurf-js-dialog] reply-missing-tab tab_id={} request_id={}",
@@ -759,6 +763,10 @@ pub unsafe extern "C" fn on_javascript_dialog_request(
         "[termsurf-js-dialog] request tab_id={} request_id={} type={} origin={}",
         t.tab_id, request_id, dialog_type, origin_url
     );
+    trace_pdf_input(format!(
+        "javascript-dialog-request tab={} pane={} request_id={} type={} origin={} message={}",
+        t.tab_id, t.pane_id, request_id, dialog_type, origin_url, message
+    ));
     let msg = TermSurfMessage {
         msg: Some(Msg::JavascriptDialogRequest(
             proto::termsurf::JavaScriptDialogRequest {

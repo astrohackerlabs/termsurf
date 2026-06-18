@@ -64,6 +64,8 @@ DEVTOOLS_COMMAND="$RUN_DIR/devtools-command.txt"
 DEVTOOLS_QUERY_PROBE="$RUN_DIR/devtools-query-probe.py"
 DEVTOOLS_OVERLAY_PROBE="$RUN_DIR/devtools-overlay-probe.py"
 STATE_WEB_ROOT="$RUN_DIR/browser-state-site"
+DIALOG_WEB_ROOT="$RUN_DIR/javascript-dialog-site"
+DIALOG_TYPE_COMMAND="$RUN_DIR/dialog-type-command.txt"
 NEW_TAB_COMMAND_LOG="$RUN_DIR/new-tab-command.log"
 NEW_TAB_MARKER_COMMAND="$RUN_DIR/new-tab-marker-command.txt"
 SECOND_BROWSER_COMMAND="$RUN_DIR/second-browser-command.txt"
@@ -232,6 +234,17 @@ wait_for_state_trace_after() {
   fail "timed out waiting for $label"
 }
 
+require_no_state_trace_after() {
+  local start_line="$1"
+  local pattern="$2"
+  local label="$3"
+  if tail -n +"$((start_line + 1))" "$WEBTUI_STATE_TRACE" | grep -E "$pattern" >/dev/null 2>&1; then
+    fail "$label"
+  else
+    log "PASS: $label"
+  fi
+}
+
 require_state_trace() {
   local pattern="$1"
   local label="$2"
@@ -339,6 +352,20 @@ require_trace_after() {
   else
     fail "missing $label"
   fi
+}
+
+wait_for_trace_regex() {
+  local pattern="$1"
+  local label="$2"
+  local attempts="${3:-30}"
+  for _ in $(seq 1 "$attempts"); do
+    if grep -E "$pattern" "$ROAMIUM_TRACE" >/dev/null 2>&1; then
+      log "PASS: observed $label"
+      return 0
+    fi
+    delay 1
+  done
+  fail "timed out waiting for $label"
 }
 
 require_no_trace_after() {
@@ -1602,7 +1629,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -1722,6 +1749,118 @@ PY
   log "browser_state_web_root=$STATE_WEB_ROOT"
   log "browser_state_http_pid=$HTTP_PID"
   log "browser_state_url=$URL"
+fi
+
+if [ "$SCENARIO" = "javascript-dialog-smoke" ]; then
+  DIALOG_HTTP_PORT="$(python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+)"
+  mkdir -p "$DIALOG_WEB_ROOT"
+  cat >"$DIALOG_WEB_ROOT/initial-alert.html" <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Issue 816 Dialog Initial Pending</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+        color: #111111;
+        font: 16px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      button,
+      a {
+        position: absolute;
+        left: 32px;
+        min-width: 220px;
+        height: 28px;
+      }
+      #alert-button { top: 70px; }
+      #confirm-accept-button { top: 120px; }
+      #confirm-cancel-button { top: 170px; }
+      #prompt-accept-button { top: 220px; }
+      #prompt-cancel-button { top: 270px; }
+      #beforeunload-arm-button { top: 320px; }
+      #beforeunload-leave-link { top: 370px; line-height: 28px; }
+      #result {
+        position: absolute;
+        left: 32px;
+        top: 20px;
+      }
+    </style>
+    <script>
+      function record(name, value) {
+        const marker = `ISSUE816_DIALOG_RESULT case=${name} value=${value}`;
+        console.log(marker);
+        document.title = `Issue 816 Dialog ${name} ${value}`;
+        const result = document.getElementById("result");
+        if (result) result.textContent = marker;
+      }
+
+      alert("ISSUE816_INITIAL_ALERT");
+      window.addEventListener("DOMContentLoaded", () => {
+        record("initial-alert", "resumed");
+      });
+    </script>
+  </head>
+  <body>
+    <div id="result">ISSUE816_DIALOG_READY</div>
+    <button id="alert-button" onclick="alert('ISSUE816_ALERT'); record('alert', 'resumed')">alert</button>
+    <button id="confirm-accept-button" onclick="record('confirm-accept', String(confirm('ISSUE816_CONFIRM_ACCEPT')))">confirm accept</button>
+    <button id="confirm-cancel-button" onclick="record('confirm-cancel', String(confirm('ISSUE816_CONFIRM_CANCEL')))">confirm cancel</button>
+    <button id="prompt-accept-button" onclick="record('prompt-accept', String(prompt('ISSUE816_PROMPT_ACCEPT', 'seed')))">prompt accept</button>
+    <button id="prompt-cancel-button" onclick="record('prompt-cancel', String(prompt('ISSUE816_PROMPT_CANCEL', 'seed')))">prompt cancel</button>
+    <button id="beforeunload-arm-button" onclick="window.onbeforeunload = (event) => { event.preventDefault(); event.returnValue = 'ISSUE816_BEFOREUNLOAD'; return 'ISSUE816_BEFOREUNLOAD'; }; record('beforeunload-armed', 'true')">arm beforeunload</button>
+    <a id="beforeunload-leave-link" href="/away.html">leave page</a>
+  </body>
+</html>
+EOF
+  cat >"$DIALOG_WEB_ROOT/away.html" <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Issue 816 Dialog away loaded</title>
+    <script>
+      console.log("ISSUE816_DIALOG_RESULT case=beforeunload-proceed value=away");
+    </script>
+  </head>
+  <body>ISSUE816_DIALOG_AWAY</body>
+</html>
+EOF
+  python3 -m http.server "$DIALOG_HTTP_PORT" --bind 127.0.0.1 --directory "$DIALOG_WEB_ROOT" >>"$HARNESS_LOG" 2>&1 &
+  HTTP_PID="$!"
+  URL="http://127.0.0.1:${DIALOG_HTTP_PORT}/initial-alert.html"
+  for _ in $(seq 1 30); do
+    if python3 - "$URL" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+    then
+      break
+    fi
+    delay 0.25
+  done
+  python3 - "$URL" <<'PY' >/dev/null 2>&1 || fail "JavaScript dialog HTTP fixture did not become ready"
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+  log "javascript_dialog_web_root=$DIALOG_WEB_ROOT"
+  log "javascript_dialog_http_pid=$HTTP_PID"
+  log "javascript_dialog_url=$URL"
 fi
 
 COMMAND="$RUN_DIR/run-web.sh"
@@ -2627,6 +2766,9 @@ if [ "$SCENARIO" = "browser-state-smoke" ]; then
   log "reload_screenshot=$SCREENSHOT_BROWSER_STATE_RELOAD"
   log "blank_screenshot=$SCREENSHOT_BROWSER_STATE_BLANK"
 fi
+if [ "$SCENARIO" = "javascript-dialog-smoke" ]; then
+  log "webtui_state_trace=$WEBTUI_STATE_TRACE"
+fi
 if [ "$SCENARIO" = "window-resize" ]; then
   log "grow_screenshot=$SCREENSHOT_GROW"
   log "shrink_screenshot=$SCREENSHOT_SHRINK"
@@ -2925,6 +3067,112 @@ if [ "$SCENARIO" = "browser-state-smoke" ]; then
   wait_for_state_trace_after "$BLANK_TRACE_START_LINE" "event=title_changed[[:space:]]+title=Issue 816 Blank Target" "webtui target blank title" 45
   screencapture -x -o -l"$WID" "$SCREENSHOT_BROWSER_STATE_BLANK"
   log "blank_screenshot_exit=$?"
+fi
+
+if [ "$SCENARIO" = "javascript-dialog-smoke" ]; then
+  DIALOG_AWAY_URL="http://127.0.0.1:${DIALOG_HTTP_PORT}/away.html"
+
+  dialog_request_id() {
+    local start_line="$1"
+    local pattern="$2"
+    tail -n +"$((start_line + 1))" "$WEBTUI_STATE_TRACE" \
+      | grep -E "$pattern" \
+      | tail -1 \
+      | sed -E 's/.*request_id=([0-9]+).*/\1/'
+  }
+
+  press_dialog_key() {
+    local key="$1"
+    local label="$2"
+    case "$key" in
+      enter) swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1 ;;
+      esc) swift "$ROOT/scripts/ghostty-app/inject.swift" key 53 >>"$HARNESS_LOG" 2>&1 ;;
+      y) swift "$ROOT/scripts/ghostty-app/inject.swift" key 16 >>"$HARNESS_LOG" 2>&1 ;;
+      n) swift "$ROOT/scripts/ghostty-app/inject.swift" key 45 >>"$HARNESS_LOG" 2>&1 ;;
+      *) fail "unsupported dialog key: $key" ;;
+    esac
+    log "javascript_dialog_key_${label}=$key"
+  }
+
+  run_dialog_button_case() {
+    local label="$1"
+    local web_y="$2"
+    local dialog_type="$3"
+    local message="$4"
+    local reply_key="$5"
+    local accepted="$6"
+    local prompt_text="$7"
+    local result_value="$8"
+    local start_line request_id click_x click_y
+
+    start_line="$(state_trace_line_count)"
+    IFS=$'\t' read -r click_x click_y <<<"$(global_point_for_web_point "$DIALOG_WIN_LINE" "$APPKIT_PRESENT_LINE" 150 "$web_y")"
+    click_global_point "$click_x" "$click_y" "javascript_dialog_${label}"
+    wait_for_state_trace_after "$start_line" "event=javascript_dialog_request.*dialog_type=${dialog_type}.*message=${message}" "webtui ${label} dialog request" 45
+    request_id="$(dialog_request_id "$start_line" "event=javascript_dialog_request.*dialog_type=${dialog_type}.*message=${message}")"
+    [ -n "$request_id" ] || fail "missing request id for ${label}"
+    wait_for_trace_regex "javascript-dialog-request tab=${BROWSER_TAB_ID} .*request_id=${request_id} type=${dialog_type} .*message=${message}" "Roamium ${label} dialog request" 45
+    if [ -n "$prompt_text" ]; then
+      printf '%s' "$prompt_text" >"$DIALOG_TYPE_COMMAND"
+      swift "$ROOT/scripts/ghostty-app/inject.swift" type "$DIALOG_TYPE_COMMAND" >>"$HARNESS_LOG" 2>&1
+      log "javascript_dialog_type_${label}=$prompt_text"
+    fi
+    press_dialog_key "$reply_key" "$label"
+    wait_for_state_trace_after "$start_line" "event=javascript_dialog_reply.*request_id=${request_id}.*accepted=${accepted}" "webtui ${label} dialog reply" 45
+    wait_for_trace_regex "javascript-dialog-reply tab=${BROWSER_TAB_ID} .*request_id=${request_id} accepted=${accepted} ok=true" "Roamium ${label} dialog reply" 45
+    wait_for_state_trace_after "$start_line" "event=console_message.*message=ISSUE816_DIALOG_RESULT case=${label} value=${result_value}" "page observed ${label} result" 45
+    wait_for_state_trace_after "$start_line" "event=title_changed.*title=Issue 816 Dialog ${label} ${result_value}" "webtui received ${label} title" 45
+  }
+
+  wait_for_state_trace "event=javascript_dialog_request.*dialog_type=alert.*message=ISSUE816_INITIAL_ALERT" "webtui initial alert dialog request" 45
+  INITIAL_DIALOG_REQUEST_ID="$(dialog_request_id 0 "event=javascript_dialog_request.*dialog_type=alert.*message=ISSUE816_INITIAL_ALERT")"
+  [ -n "$INITIAL_DIALOG_REQUEST_ID" ] || fail "missing request id for initial alert"
+  wait_for_trace_regex "javascript-dialog-request tab=${BROWSER_TAB_ID} .*request_id=${INITIAL_DIALOG_REQUEST_ID} type=alert .*message=ISSUE816_INITIAL_ALERT" "Roamium initial alert request" 45
+  press_dialog_key enter "initial_alert"
+  wait_for_state_trace "event=javascript_dialog_reply.*request_id=${INITIAL_DIALOG_REQUEST_ID}.*accepted=true" "webtui initial alert reply" 45
+  wait_for_trace_regex "javascript-dialog-reply tab=${BROWSER_TAB_ID} .*request_id=${INITIAL_DIALOG_REQUEST_ID} accepted=true ok=true" "Roamium initial alert reply" 45
+  wait_for_state_trace "event=console_message.*message=ISSUE816_DIALOG_RESULT case=initial-alert value=resumed" "page observed initial alert result" 45
+  wait_for_state_trace "event=title_changed.*title=Issue 816 Dialog initial-alert resumed" "webtui received initial alert title" 45
+
+  DIALOG_WIN_LINE="$(window_bounds)" || fail "failed to resolve JavaScript dialog window bounds"
+  run_dialog_button_case "alert" 84 "alert" "ISSUE816_ALERT" "enter" "true" "" "resumed"
+  run_dialog_button_case "confirm-accept" 134 "confirm" "ISSUE816_CONFIRM_ACCEPT" "y" "true" "" "true"
+  run_dialog_button_case "confirm-cancel" 184 "confirm" "ISSUE816_CONFIRM_CANCEL" "n" "false" "" "false"
+  run_dialog_button_case "prompt-accept" 234 "prompt" "ISSUE816_PROMPT_ACCEPT" "enter" "true" "-typed" "seed-typed"
+  run_dialog_button_case "prompt-cancel" 284 "prompt" "ISSUE816_PROMPT_CANCEL" "esc" "false" "" "null"
+
+  BEFOREUNLOAD_ARM_START_LINE="$(state_trace_line_count)"
+  IFS=$'\t' read -r BEFOREUNLOAD_ARM_X BEFOREUNLOAD_ARM_Y <<<"$(global_point_for_web_point "$DIALOG_WIN_LINE" "$APPKIT_PRESENT_LINE" 150 334)"
+  click_global_point "$BEFOREUNLOAD_ARM_X" "$BEFOREUNLOAD_ARM_Y" "javascript_dialog_beforeunload_arm"
+  wait_for_state_trace_after "$BEFOREUNLOAD_ARM_START_LINE" "event=console_message.*message=ISSUE816_DIALOG_RESULT case=beforeunload-armed value=true" "page observed beforeunload activation" 45
+  wait_for_state_trace_after "$BEFOREUNLOAD_ARM_START_LINE" "event=title_changed.*title=Issue 816 Dialog beforeunload-armed true" "webtui received beforeunload armed title" 45
+
+  BEFOREUNLOAD_CANCEL_START_LINE="$(state_trace_line_count)"
+  IFS=$'\t' read -r BEFOREUNLOAD_LEAVE_X BEFOREUNLOAD_LEAVE_Y <<<"$(global_point_for_web_point "$DIALOG_WIN_LINE" "$APPKIT_PRESENT_LINE" 150 384)"
+  click_global_point "$BEFOREUNLOAD_LEAVE_X" "$BEFOREUNLOAD_LEAVE_Y" "javascript_dialog_beforeunload_stay"
+  wait_for_state_trace_after "$BEFOREUNLOAD_CANCEL_START_LINE" "event=javascript_dialog_request.*dialog_type=beforeunload" "webtui beforeunload stay request" 45
+  BEFOREUNLOAD_CANCEL_REQUEST_ID="$(dialog_request_id "$BEFOREUNLOAD_CANCEL_START_LINE" "event=javascript_dialog_request.*dialog_type=beforeunload")"
+  [ -n "$BEFOREUNLOAD_CANCEL_REQUEST_ID" ] || fail "missing request id for beforeunload stay"
+  wait_for_trace_regex "javascript-dialog-request tab=${BROWSER_TAB_ID} .*request_id=${BEFOREUNLOAD_CANCEL_REQUEST_ID} type=beforeunload" "Roamium beforeunload stay request" 45
+  press_dialog_key n "beforeunload_stay"
+  wait_for_state_trace_after "$BEFOREUNLOAD_CANCEL_START_LINE" "event=javascript_dialog_reply.*request_id=${BEFOREUNLOAD_CANCEL_REQUEST_ID}.*accepted=false" "webtui beforeunload stay reply" 45
+  wait_for_trace_regex "javascript-dialog-reply tab=${BROWSER_TAB_ID} .*request_id=${BEFOREUNLOAD_CANCEL_REQUEST_ID} accepted=false ok=true" "Roamium beforeunload stay reply" 45
+  delay 2
+  require_no_state_trace_after "$BEFOREUNLOAD_CANCEL_START_LINE" "event=url_changed[[:space:]]+url=${DIALOG_AWAY_URL}" "beforeunload stay did not emit away URL"
+  require_no_state_trace_after "$BEFOREUNLOAD_CANCEL_START_LINE" "event=title_changed.*title=Issue 816 Dialog away loaded" "beforeunload stay did not navigate away"
+
+  BEFOREUNLOAD_PROCEED_START_LINE="$(state_trace_line_count)"
+  click_global_point "$BEFOREUNLOAD_LEAVE_X" "$BEFOREUNLOAD_LEAVE_Y" "javascript_dialog_beforeunload_proceed"
+  wait_for_state_trace_after "$BEFOREUNLOAD_PROCEED_START_LINE" "event=javascript_dialog_request.*dialog_type=beforeunload" "webtui beforeunload proceed request" 45
+  BEFOREUNLOAD_PROCEED_REQUEST_ID="$(dialog_request_id "$BEFOREUNLOAD_PROCEED_START_LINE" "event=javascript_dialog_request.*dialog_type=beforeunload")"
+  [ -n "$BEFOREUNLOAD_PROCEED_REQUEST_ID" ] || fail "missing request id for beforeunload proceed"
+  wait_for_trace_regex "javascript-dialog-request tab=${BROWSER_TAB_ID} .*request_id=${BEFOREUNLOAD_PROCEED_REQUEST_ID} type=beforeunload" "Roamium beforeunload proceed request" 45
+  press_dialog_key y "beforeunload_proceed"
+  wait_for_state_trace_after "$BEFOREUNLOAD_PROCEED_START_LINE" "event=javascript_dialog_reply.*request_id=${BEFOREUNLOAD_PROCEED_REQUEST_ID}.*accepted=true" "webtui beforeunload proceed reply" 45
+  wait_for_trace_regex "javascript-dialog-reply tab=${BROWSER_TAB_ID} .*request_id=${BEFOREUNLOAD_PROCEED_REQUEST_ID} accepted=true ok=true" "Roamium beforeunload proceed reply" 45
+  wait_for_state_trace_after "$BEFOREUNLOAD_PROCEED_START_LINE" "event=url_changed[[:space:]]+url=${DIALOG_AWAY_URL}" "beforeunload proceed navigated away" 45
+  wait_for_state_trace_after "$BEFOREUNLOAD_PROCEED_START_LINE" "event=title_changed[[:space:]]+title=Issue 816 Dialog away loaded" "beforeunload proceed loaded away title" 45
+  wait_for_state_trace_after "$BEFOREUNLOAD_PROCEED_START_LINE" "event=console_message.*message=ISSUE816_DIALOG_RESULT case=beforeunload-proceed value=away" "page observed beforeunload proceed result" 45
 fi
 
 if [ "$SCENARIO" = "named-roamium-debug-launch" ]; then
