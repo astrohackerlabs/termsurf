@@ -39,4 +39,4 @@ Verification should include:
 - [Experiment 2: Decide public macOS app identity](02-decide-public-macos-app-identity.md)
   — **Pass**
 - [Experiment 3: Implement macOS bundle identity](03-implement-macos-bundle-identity.md)
-  — **Designed**
+  — **Pass**

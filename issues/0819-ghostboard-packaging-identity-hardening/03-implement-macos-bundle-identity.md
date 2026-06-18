@@ -153,3 +153,159 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Pass
+
+Experiment 3 implemented the macOS bundle identity portion of the Issue 819
+contract. Ghostboard's debug app now builds as `TermSurf Ghostboard.app` with
+executable `ghostboard` and debug bundle id `com.termsurf.ghostboard.debug`.
+
+### Changes
+
+Changed files:
+
+- `ghostboard/macos/Ghostty.xcodeproj/project.pbxproj`
+  - Renamed the macOS app product reference from `TermSurf.app` to
+    `TermSurf Ghostboard.app`.
+  - Updated macOS app `EXECUTABLE_NAME` from `termsurf` to `ghostboard`.
+  - Updated macOS app display/product name from `TermSurf` to
+    `TermSurf Ghostboard`.
+  - Updated macOS app bundle ids from `com.termsurf` / `com.termsurf.debug` to
+    `com.termsurf.ghostboard` / `com.termsurf.ghostboard.debug`.
+  - Updated unit-test `TEST_HOST` paths to the renamed app/executable.
+  - Updated Dock Tile plugin display name and bundle id to
+    `TermSurf Ghostboard Dock Tile Plugin` and
+    `com.termsurf.ghostboard.dock-tile`.
+- `ghostboard/macos/Ghostty.xcodeproj/xcshareddata/xcschemes/Ghostty.xcscheme`
+  - Updated the app `BuildableName` references to `TermSurf Ghostboard.app`.
+- `ghostboard/src/build/GhosttyXcodebuild.zig`
+  - Updated the Zig build/open helper app path and executable path to the
+    renamed app.
+- `scripts/ghostboard-geometry-matrix.sh`
+  - Updated the default debug app path and executable path to
+    `TermSurf Ghostboard.app/Contents/MacOS/ghostboard`.
+
+No AppleScript dictionary, config-path, Homebrew, repo-level release packaging,
+iOS target, or broad implementation-symbol rename was included.
+
+### Verification
+
+Formatting and static checks:
+
+1. `zig fmt ghostboard/src/build/GhosttyXcodebuild.zig` passed.
+2. `prettier --write --prose-wrap always --print-width 80 issues/0819-ghostboard-packaging-identity-hardening/README.md issues/0819-ghostboard-packaging-identity-hardening/03-implement-macos-bundle-identity.md`
+   passed.
+3. `git diff --check` passed.
+4. Old-reference search over touched build/harness files found no remaining
+   `TermSurf.app`, `Contents/MacOS/termsurf`, `EXECUTABLE_NAME = termsurf`,
+   `com.termsurf.debug`, `com.termsurf-dock-tile`, or
+   `BuildableName = "TermSurf.app"` references.
+
+Build and bundle verification:
+
+1. Removed stale debug app outputs:
+
+   ```bash
+   rm -rf ghostboard/macos/build/Debug/TermSurf.app
+   rm -rf ghostboard/macos/build/Debug/TermSurf\ Ghostboard.app
+   ```
+
+2. Built the debug macOS app:
+
+   ```bash
+   cd ghostboard/macos && ./build.nu --configuration Debug --action build
+   ```
+
+   Result: `** BUILD SUCCEEDED **`.
+
+3. Inspected the rebuilt bundle:
+
+   ```text
+   CFBundleName: TermSurf Ghostboard
+   CFBundleDisplayName: TermSurf Ghostboard
+   CFBundleIdentifier: com.termsurf.ghostboard.debug
+   CFBundleExecutable: ghostboard
+   ```
+
+4. Verified the generated executable exists:
+
+   ```text
+   ghostboard/macos/build/Debug/TermSurf Ghostboard.app/Contents/MacOS/ghostboard
+   ```
+
+5. Verified the old debug executable was not recreated:
+
+   ```text
+   ghostboard/macos/build/Debug/TermSurf.app/Contents/MacOS/termsurf absent
+   ```
+
+Runtime smoke verification:
+
+1. `scripts/ghostboard-geometry-matrix.sh named-roamium-invalid-env` passed with
+   the renamed app path:
+
+   ```text
+   app=/Users/astrohacker/dev/termsurf/ghostboard/macos/build/Debug/TermSurf Ghostboard.app
+   PASS: observed HelloRequest over TERMSURF_SOCKET
+   PASS: observed named Roamium SetOverlay with invalid env
+   PASS: observed clear named Roamium invalid-env failure
+   PASS: invalid named Roamium env did not create a pending server
+   PASS: invalid named Roamium env did not spawn a browser
+   PASS: scenario named-roamium-invalid-env
+   ```
+
+2. As an additional broader smoke,
+   `scripts/ghostboard-geometry-matrix.sh initial-open` was run twice. Both runs
+   launched the renamed app, presented the browser overlay, and produced
+   screenshots, but failed on the post-presentation synthetic click/hit-test
+   assertion:
+
+   ```text
+   PASS: observed AppKit overlay presentation
+   PASS: Zig geometry record
+   PASS: bridge geometry record
+   PASS: AppKit presented geometry record
+   FAIL: missing AppKit hit-test geometry record
+   ```
+
+   The screenshot from the second run shows the renamed debug app rendering the
+   Example Domain browser overlay. This failure is recorded as follow-up
+   evidence rather than blocking this experiment because the planned scoped
+   runtime smoke was to prove the harness can launch the generated app and
+   discover/use `TERMSURF_SOCKET`; the passing `named-roamium-invalid-env`
+   scenario proves that boundary without relying on mouse hit-test delivery.
+
+## Conclusion
+
+Ghostboard's macOS debug bundle identity now matches the Issue 819 public app
+identity decision for the bundle surface:
+
+- app: `TermSurf Ghostboard.app`;
+- executable: `ghostboard`;
+- debug bundle id: `com.termsurf.ghostboard.debug`;
+- release bundle id setting: `com.termsurf.ghostboard`;
+- Dock Tile plugin id: `com.termsurf.ghostboard.dock-tile`.
+
+The next experiment should align user-visible Ghostty leakage that still remains
+after the bundle rename, starting with the Settings UI and AppleScript-facing
+names, while keeping implementation-only upstream names intact.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent
+`Kierkegaard the 2nd`:
+
+- **Verdict:** Approved.
+- **Findings:** None.
+- **Evidence checked:** The reviewer confirmed the diff is limited to the
+  expected Xcode project/scheme, Zig build helper, geometry harness, and issue
+  docs; the built bundle reports `TermSurf Ghostboard`,
+  `com.termsurf.ghostboard.debug`, and executable `ghostboard`; the renamed
+  executable exists; the old `TermSurf.app/Contents/MacOS/termsurf` output is
+  absent; the Dock Tile plugin reports the Ghostboard name and bundle id; the
+  scoped smoke passed with the renamed app path and `TERMSURF_SOCKET`; the
+  broader `initial-open` hit-test failure is outside this experiment's scoped
+  pass criteria; `git diff --check` passes; and the result commit had not yet
+  been made.
