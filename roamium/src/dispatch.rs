@@ -1,8 +1,9 @@
 use std::ffi::{c_void, CString};
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use crate::ffi::{self, TsWebContents};
 use crate::proto::{self, Msg, TermSurfMessage};
@@ -18,6 +19,7 @@ struct TabEntry {
 }
 
 static PDF_INPUT_TRACE_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static LAST_LOADING_STATES: Mutex<Vec<TermSurfMessage>> = Mutex::new(Vec::new());
 
 struct DeferredHttpAuthCancel {
     wc: usize,
@@ -78,6 +80,49 @@ fn trace_pdf_input(line: impl AsRef<str>) {
     };
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "roamium {}", line.as_ref());
+    }
+}
+
+fn remember_loading_state(msg: &TermSurfMessage) {
+    let Some(Msg::LoadingState(ref loading)) = msg.msg else {
+        return;
+    };
+    let mut states = LAST_LOADING_STATES.lock().unwrap();
+    match loading.state.as_str() {
+        "loading" | "done" | "error" => {
+            states.retain(|existing| {
+                !matches!(
+                    existing.msg,
+                    Some(Msg::LoadingState(ref existing_loading)) if existing_loading.tab_id == loading.tab_id
+                )
+            });
+            states.push(msg.clone());
+        }
+        "progress" => {
+            states.retain(|existing| {
+                !matches!(
+                    existing.msg,
+                    Some(Msg::LoadingState(ref existing_loading))
+                        if existing_loading.tab_id == loading.tab_id
+                            && existing_loading.state == "progress"
+                )
+            });
+            states.push(msg.clone());
+        }
+        _ => states.push(msg.clone()),
+    }
+}
+
+pub fn replay_state_to_client(stream: &mut UnixStream) {
+    let states = LAST_LOADING_STATES.lock().unwrap().clone();
+    for msg in states {
+        if let Some(Msg::LoadingState(ref loading)) = msg.msg {
+            trace_pdf_input(format!(
+                "loading-state-replay tab={} state={} progress={}",
+                loading.tab_id, loading.state, loading.progress
+            ));
+        }
+        let _ = crate::ipc::write_message(stream, &msg);
     }
 }
 
@@ -570,10 +615,21 @@ pub unsafe extern "C" fn on_loading_state(
     progress: i32,
     _user_data: *mut c_void,
 ) {
-    let Some(t) = find_by_handle(wc) else { return };
     let state_str = unsafe { std::ffi::CStr::from_ptr(state) }
         .to_string_lossy()
         .into_owned();
+    let Some(t) = find_by_handle(wc) else {
+        let pending_null_handle = tabs().iter().any(|t| t.handle.is_null());
+        trace_pdf_input(format!(
+            "loading-state-callback-missing-tab handle={:p} pending_null_handle={} state={} progress={}",
+            wc, pending_null_handle, state_str, progress
+        ));
+        return;
+    };
+    trace_pdf_input(format!(
+        "loading-state-callback tab={} pane={} state={} progress={}",
+        t.tab_id, t.pane_id, state_str, progress
+    ));
     let msg = TermSurfMessage {
         msg: Some(Msg::LoadingState(proto::termsurf::LoadingState {
             tab_id: t.tab_id,
@@ -581,6 +637,7 @@ pub unsafe extern "C" fn on_loading_state(
             progress: progress as u64,
         })),
     };
+    remember_loading_state(&msg);
     crate::ipc::send(&msg);
 }
 

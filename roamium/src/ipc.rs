@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Mutex;
 
@@ -31,20 +31,23 @@ pub fn connect(path: &str) -> Option<UnixStream> {
 /// Disconnected writers are silently removed. Returns the number of writers
 /// that received the message.
 pub fn send(msg: &TermSurfMessage) -> usize {
-    let payload = msg.encode_to_vec();
-    let len = (payload.len() as u32).to_le_bytes();
     let mut sent = 0;
     WRITERS.lock().unwrap().retain_mut(|stream| {
-        if stream.write_all(&len).is_err() {
-            return false;
-        }
-        if stream.write_all(&payload).is_err() {
+        if write_message(stream, msg).is_err() {
             return false;
         }
         sent += 1;
         true
     });
     sent
+}
+
+pub fn write_message(stream: &mut UnixStream, msg: &TermSurfMessage) -> io::Result<()> {
+    let payload = msg.encode_to_vec();
+    let len = (payload.len() as u32).to_le_bytes();
+    stream.write_all(&len)?;
+    stream.write_all(&payload)?;
+    Ok(())
 }
 
 /// Start a listener on the given Unix socket path. Accepts connections in a
@@ -80,7 +83,9 @@ pub fn listen(path: &str) {
                             continue;
                         }
                     };
-                    WRITERS.lock().unwrap().push(stream);
+                    let mut writer = stream;
+                    crate::dispatch::replay_state_to_client(&mut writer);
+                    WRITERS.lock().unwrap().push(writer);
                     std::thread::spawn(move || {
                         read_messages(reader, false);
                     });

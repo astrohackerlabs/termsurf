@@ -139,3 +139,121 @@ Fresh-context adversarial review by Codex subagent `Confucius`:
   `./scripts/build.sh roamium` plus `cargo check -p roamium` when applicable.
 - **Re-review verdict:** Approved. The reviewer confirmed the prior findings
   were resolved and no new required findings were introduced.
+
+## Result
+
+**Result:** Pass.
+
+Ownership evidence showed the initial-load `loading` state was not a webtui
+rendering problem. With Roamium callback tracing enabled, the before-fix run
+recorded initial `progress`/`done` callbacks but no initial `loading` callback
+at Roamium for the fixture navigation:
+
+- Before-fix Roamium trace:
+  `logs/ghostboard-geometry-browser-state-smoke-roamium-20260617-222814.log`
+- Before-fix webtui trace:
+  `logs/ghostboard-geometry-browser-state-smoke-webtui-20260617-222814.log`
+
+The first Chromium fix made libtermsurf emit a deterministic `loading` state
+before the initial `NavigateTab(handle, url)`. A follow-up run proved Roamium
+saw that event, but webtui still missed it because the direct browser socket
+client connects after `BrowserReady`:
+
+- Intermediate Roamium trace:
+  `logs/ghostboard-geometry-browser-state-smoke-roamium-20260617-223241.log`
+- Intermediate webtui trace:
+  `logs/ghostboard-geometry-browser-state-smoke-webtui-20260617-223241.log`
+
+The final fix keeps a per-tab loading-state replay cache in Roamium. New direct
+browser clients receive observed in-flight loading states before joining the
+normal broadcast writer list. The final strict harness rerun passed with an
+initial webtui sequence of `loading`, `progress`, then `done`:
+
+- Final harness log:
+  `logs/ghostboard-geometry-browser-state-smoke-harness-20260617-224527.log`
+- Final Roamium trace:
+  `logs/ghostboard-geometry-browser-state-smoke-roamium-20260617-224527.log`
+- Final webtui state trace:
+  `logs/ghostboard-geometry-browser-state-smoke-webtui-20260617-224527.log`
+
+The final Roamium trace includes a real raw callback followed by replay:
+`loading-state-callback ... state=loading progress=0` and
+`loading-state-replay ... state=loading progress=0`. The webtui trace begins
+with `event=loading_state state=loading progress=0` before later `progress` and
+`done` events.
+
+Changed files:
+
+- `chromium/src/content/libtermsurf_chromium/ts_browser_main_parts.cc`
+  - Emits `TsNotifyLoadingState(handle, "loading", 0)` immediately before the
+    initial `NavigateTab(handle, url)`.
+- `roamium/src/dispatch.rs`
+  - Adds raw callback trace lines for loading-state callbacks.
+  - Caches the per-tab in-flight loading sequence for direct-client replay.
+- `roamium/src/ipc.rs`
+  - Adds a single-stream protobuf writer and replays cached state to a newly
+    connected direct browser client before adding it to the broadcast set.
+- `scripts/ghostboard-geometry-matrix.sh`
+  - Changes `browser-state-smoke` from Partial-on-missing-loading to requiring a
+    literal initial `state=loading`.
+- `chromium/README.md` and `chromium/patches/issue-816/`
+  - Record and archive Chromium branch `148.0.7778.97-issue-816`.
+
+Chromium branch:
+
+- Branch: `148.0.7778.97-issue-816`
+- Commit: `c3ee0264d1` (`Ring loading before first road`)
+- Patch archive:
+  `chromium/patches/issue-816/0001-Ring-loading-before-first-road.patch`
+
+Verification run:
+
+```bash
+prettier --write --prose-wrap always --print-width 80 issues/0816-ghostboard-browser-state-interruptions/README.md issues/0816-ghostboard-browser-state-interruptions/02-fix-initial-loading-state-start.md chromium/README.md
+prettier --check --prose-wrap always --print-width 80 issues/0816-ghostboard-browser-state-interruptions/README.md issues/0816-ghostboard-browser-state-interruptions/02-fix-initial-loading-state-start.md chromium/README.md
+cargo fmt -- roamium/src/dispatch.rs roamium/src/ipc.rs
+cargo check -p roamium
+./scripts/build.sh chromium
+./scripts/build.sh roamium
+bash -n scripts/ghostboard-geometry-matrix.sh
+git diff --check
+scripts/ghostboard-geometry-matrix.sh browser-state-smoke
+```
+
+`shellcheck scripts/ghostboard-geometry-matrix.sh` could not be run because
+`shellcheck` is not installed on this VM.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Socrates`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** Roamium replay still synthesized a literal `loading`
+  state from `progress`, so the harness could have passed without proving a real
+  engine/browser loading callback.
+- **Optional finding:** `chromium/README.md` still used stale "Current Chromium
+  branch patch archive" wording in a patch archive example.
+- **Resolution:** Accepted both findings. Removed the synthetic fallback so
+  Roamium replay only replays observed loading callbacks/states, updated the
+  patch archive example to generic issue-branch wording, rebuilt Roamium, reran
+  the strict browser-state smoke, and updated the result evidence to the final
+  `20260617-224527` traces.
+- **Re-review verdict:** Approved. The reviewer confirmed
+  `roamium/src/dispatch.rs` no longer synthesizes `loading` from `progress`, the
+  final Roamium log shows a real raw callback followed by replay, the webtui log
+  begins with `state=loading` before `progress`, and the stale README wording is
+  gone.
+
+## Conclusion
+
+Initial loading-state parity is fixed. The missing event had two parts:
+
+1. Chromium/libtermsurf did not produce a literal initial `loading` edge for the
+   first navigation even though later reloads did.
+2. Even after adding that engine event, Roamium could broadcast it before webtui
+   connected to the direct browser socket.
+
+The durable regression guard is now stricter: `browser-state-smoke` requires the
+initial fixture load to reach webtui as a literal `loading` state and still
+checks URL, title, console, hover target, white background, reload, and fresh
+post-click `_blank` URL/title behavior.

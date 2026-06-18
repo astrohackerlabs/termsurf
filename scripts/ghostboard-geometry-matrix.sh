@@ -2884,12 +2884,7 @@ if [ "$SCENARIO" = "browser-state-smoke" ]; then
   STATE_BLANK_URL="http://127.0.0.1:${STATE_HTTP_PORT}/blank-target.html"
 
   wait_for_state_trace "event=url_changed.*url=${URL}" "webtui URL state changed to fixture URL" 45
-  if has_state_trace "event=loading_state.*state=loading"; then
-    log "PASS: webtui loading state emitted loading"
-  else
-    require_state_trace "event=loading_state.*state=progress" "webtui loading state emitted progress without loading"
-    log "PARTIAL: webtui fixture load emitted progress without a literal loading state"
-  fi
+  wait_for_state_trace "event=loading_state.*state=loading" "webtui initial loading state started" 45
   wait_for_state_trace "event=loading_state.*state=done" "webtui loading state finished" 45
   wait_for_state_trace "event=title_changed.*title=Issue 816 State Smoke Updated 1" "webtui received updated page title" 45
   wait_for_state_trace "event=console_message.*message=ISSUE816_CONSOLE_MARKER_1" "webtui received console marker" 45

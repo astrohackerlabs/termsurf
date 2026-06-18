@@ -44,4 +44,4 @@ owning component before any fix.
   — **Partial** (initial load reports `progress`/`done` but not literal
   `loading`)
 - [Experiment 2: Fix initial loading-state start](02-fix-initial-loading-state-start.md)
-  — **Designed**
+  — **Pass**
