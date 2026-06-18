@@ -29,3 +29,8 @@ Verification should include:
 - `HelloReply` includes the configured homepage or documented default;
 - webtui consumes the reply and displays/uses the values correctly;
 - missing or invalid config falls back deterministically.
+
+## Experiments
+
+- [Experiment 1: Send deterministic HelloReply defaults](01-send-deterministic-hello-reply-defaults.md)
+  — **Designed**
