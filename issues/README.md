@@ -2,19 +2,19 @@
 
 ## Open
 
-| #                                                         | Title                                | Opened     |
-| --------------------------------------------------------- | ------------------------------------ | ---------- |
-| [0756](0756-surfari/README.md)                            | Surfari — WebKit engine for TermSurf | 2026-03-16 |
-| [0795](0795-pdf-native-print/README.md)                   | PDF Native Print                     | 2026-05-30 |
-| [0797](0797-pdf-core-workflow-coverage/README.md)         | PDF Core Workflow Coverage           | 2026-05-30 |
-| [0798](0798-pdf-advanced-features/README.md)              | PDF Advanced Features                | 2026-05-30 |
-| [0803](0803-roastty-debug-overlay/README.md)              | Roastty Debug Overlay                | 2026-06-13 |
-| [0820](0820-ghostboard-performance-smoke-tests/README.md) | Ghostboard Performance Smoke Tests   | 2026-06-17 |
+| #                                                 | Title                                | Opened     |
+| ------------------------------------------------- | ------------------------------------ | ---------- |
+| [0756](0756-surfari/README.md)                    | Surfari — WebKit engine for TermSurf | 2026-03-16 |
+| [0795](0795-pdf-native-print/README.md)           | PDF Native Print                     | 2026-05-30 |
+| [0797](0797-pdf-core-workflow-coverage/README.md) | PDF Core Workflow Coverage           | 2026-05-30 |
+| [0798](0798-pdf-advanced-features/README.md)      | PDF Advanced Features                | 2026-05-30 |
+| [0803](0803-roastty-debug-overlay/README.md)      | Roastty Debug Overlay                | 2026-06-13 |
 
 ## Closed
 
 | #                                                               | Title                                                                         | Opened     | Closed     |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0820](0820-ghostboard-performance-smoke-tests/README.md)       | Ghostboard Performance Smoke Tests                                            | 2026-06-17 | 2026-06-18 |
 | [0819](0819-ghostboard-packaging-identity-hardening/README.md)  | Ghostboard Packaging and Identity Hardening                                   | 2026-06-17 | 2026-06-18 |
 | [0818](0818-ghostboard-profile-tab-lifecycle-matrix/README.md)  | Ghostboard Profile, Tab, and Lifecycle Matrix                                 | 2026-06-17 | 2026-06-18 |
 | [0817](0817-ghostboard-input-focus-regression-matrix/README.md) | Ghostboard Input and Focus Regression Matrix                                  | 2026-06-17 | 2026-06-18 |
