@@ -35,4 +35,4 @@ Verification should include:
 ## Experiments
 
 - [Experiment 1: Audit packaging identity contract](01-audit-packaging-identity-contract.md)
-  — **Designed**
+  — **Pass**

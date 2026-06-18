@@ -176,3 +176,212 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Pass
+
+Experiment 1 completed the audit without changing app source, build scripts, or
+packaging behavior. The result is a baseline contract plus a classified backlog
+for the follow-up hardening experiments.
+
+### Identity Contract
+
+The intended contract for Issue 819 is:
+
+| Surface                                                    | Intended identity                                                                                             | Status         |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------- |
+| macOS app display name                                     | TermSurf, unless a later product decision chooses a GUI-qualified name such as TermSurf Ghostboard            | Needs decision |
+| macOS executable name                                      | `termsurf`, matching the current app bundle                                                                   | OK             |
+| macOS bundle id                                            | `com.termsurf` for release and `com.termsurf.debug` for debug, unless multiple TermSurf GUI apps must coexist | Needs decision |
+| Ghostboard source tree and upstream implementation symbols | May remain Ghostty-named where preserving upstream structure reduces merge risk and they are not user-visible | OK             |
+| User-visible scripting/docs/settings strings               | Must not tell users they are running or configuring Ghostty                                                   | Needs fix      |
+| Config location                                            | Must be documented and loaded consistently as a TermSurf/Ghostboard config path                               | Needs fix      |
+| Debug Roamium resolution                                   | Must use explicit debug paths and avoid installed Roamium fallback                                            | OK             |
+| Installed Roamium resolution                               | Must be defined separately from the debug contract                                                            | Needs fix      |
+| Release/Homebrew packaging                                 | Must include the intended Ghostboard/TermSurf app and agree with install/uninstall docs                       | Needs fix      |
+
+### Current Evidence
+
+The built debug app bundle currently reports:
+
+```text
+CFBundleName: TermSurf
+CFBundleDisplayName: TermSurf
+CFBundleIdentifier: com.termsurf.debug
+CFBundleExecutable: termsurf
+```
+
+The Xcode project agrees for the macOS app target:
+
+- `ASSETCATALOG_COMPILER_APPICON_NAME = TermSurf`
+- `EXECUTABLE_NAME = termsurf`
+- `INFOPLIST_FILE = "Ghostty-Info.plist"`
+- `INFOPLIST_KEY_CFBundleDisplayName = TermSurf`
+- release/local bundle id `com.termsurf`
+- debug bundle id `com.termsurf.debug`
+- `PRODUCT_NAME = TermSurf`
+
+The same project still contains inherited Ghostty identities outside the main
+macOS app target:
+
+- the project and app target are still named `Ghostty`;
+- test bundle identifiers remain `com.mitchellh.GhosttyTests` and
+  `com.mitchellh.GhosttyUITests`;
+- the iOS target still uses display name `Ghostty`, bundle id
+  `com.mitchellh.ghostty-ios`, and the `Ghostty` app icon;
+- the Dock Tile plugin uses display name `TermSurf Dock Tile Plugin` and bundle
+  id `com.termsurf-dock-tile`.
+
+`ghostboard/macos/Ghostty-Info.plist` still exposes inherited metadata keys and
+resources:
+
+- `GhosttyBuild`
+- `GhosttyCommit`
+- `Ghostty.sdef`
+- `Ghostty Surface Identifier`
+
+The AppleScript dictionary is user-visible and still Ghostty-branded:
+
+- dictionary title `Ghostty Scripting Dictionary`;
+- suite name `Ghostty Suite`;
+- descriptions such as `The Ghostty application` and `frontmost Ghostty window`;
+- Cocoa class names such as `GhosttyScriptWindow`, `GhosttyScriptTab`, and
+  `GhosttyScriptTerminal`.
+
+The entitlements are inherited from Ghostty file names but contain capability
+keys rather than product names. Current files are:
+
+- `ghostboard/macos/Ghostty.entitlements`
+- `ghostboard/macos/GhosttyDebug.entitlements`
+- `ghostboard/macos/GhosttyReleaseLocal.entitlements`
+
+They grant Apple Events, audio, camera, address book, calendars, location,
+photos, and debug/local library-validation exceptions where applicable.
+
+### Packaging Evidence
+
+The current repo-level build/install/release scripts are still Wezboard/Roamium
+oriented:
+
+- `scripts/build.sh` lists components
+  `wezboard, roamium, webtui, chromium, all`; there is no `ghostboard`
+  component.
+- `scripts/install.sh` lists components `wezboard, roamium, webtui, all`; it
+  installs Roamium to `/usr/local/roamium` and Wezboard to
+  `/Applications/TermSurf Wezboard.app`.
+- `scripts/uninstall.sh` removes `/usr/local/roamium`, `/usr/local/bin/roamium`,
+  `/usr/local/lib/roamium`, and `/Applications/TermSurf Wezboard.app`; it has no
+  Ghostboard app path.
+- `scripts/release.sh` packages `web`, `wezboard`, `roamium`, Chromium
+  resources, and `TermSurf Wezboard.app`; it has no Ghostboard/TermSurf.app
+  release path.
+- `homebrew/Casks/termsurf.rb` installs `TermSurf Wezboard.app`, `web`,
+  `wezboard`, and a `roamium` artifact at `/opt/homebrew/opt/termsurf-roamium`;
+  it does not install Ghostboard.
+
+This means Ghostboard currently has a debug app identity but no normal
+repo-level install/release/Homebrew path.
+
+### Config Evidence
+
+Config-path evidence is inconsistent:
+
+- `docs/xdg.md` states TermSurf should use `~/.config/termsurf/`.
+- `ghostboard/src/cli/edit_config.zig` documents
+  `$XDG_CONFIG_HOME/termsurf/config`.
+- `ghostboard/src/config/Config.zig` documents the main configuration file at
+  `$XDG_CONFIG_HOME/termsurf/config` and themes under
+  `$XDG_CONFIG_HOME/termsurf/themes`.
+- `ghostboard/src/cli/list_themes.zig` documents TermSurf theme paths.
+- `ghostboard/macos/Sources/Features/Settings/SettingsView.swift` still tells
+  users to edit `$HOME/.config/ghostty/config.ghostty` and restart Ghostty.
+- generated manpage fragments under `ghostboard/src/build/mdgen/` still document
+  Ghostty paths such as `$XDG_CONFIG_HOME/ghostty/config.ghostty` and
+  `$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty`.
+- `ghostboard/src/config/file_load.zig` still calls
+  `internal_os.macos.appSupportDir(alloc, "config.ghostty")`, so macOS fallback
+  behavior needs a focused runtime check before changing docs.
+
+### Debug-vs-Installed Evidence
+
+The debug browser boundary is explicit and currently correct:
+
+- `docs/ghostboard-launch-discovery.md` says named/default `roamium` resolves
+  through `TERMSURF_ROAMIUM_PATH`.
+- `ghostboard/src/apprt/termsurf.zig` defines `default_browser = "roamium"` and
+  `roamium_path_env = "TERMSURF_ROAMIUM_PATH"`.
+- the resolver accepts absolute browser paths directly;
+- named `roamium` fails clearly if `TERMSURF_ROAMIUM_PATH` is missing, empty, or
+  relative;
+- `scripts/ghostboard-geometry-matrix.sh named-roamium-debug-launch` asserts the
+  debug path is used;
+- `scripts/ghostboard-geometry-matrix.sh named-roamium-debug-launch` also
+  asserts no spawned path starts with `/usr/local/roamium`,
+  `/usr/local/bin/roamium`, or `/opt/homebrew/opt/termsurf-roamium`.
+
+Installed-app behavior is not yet defined. The current install script uses
+`/usr/local/roamium`, while the Homebrew cask uses
+`/opt/homebrew/opt/termsurf-roamium`.
+
+### Classification
+
+| Finding                                                                                                                                   | Classification | Next experiment                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Main debug app bundle is named TermSurf with executable `termsurf` and debug bundle id `com.termsurf.debug`.                              | OK             | Keep as baseline unless the app-name decision changes.                                                                          |
+| Release bundle id `com.termsurf` may collide with other future TermSurf GUI apps if Wezboard and Ghostboard are both distributed as apps. | Needs decision | Decide whether Ghostboard should ship as `TermSurf`, `TermSurf Ghostboard`, or another GUI-qualified app identity.              |
+| AppleScript dictionary remains user-visible Ghostty.                                                                                      | Needs fix      | Rename user-visible scripting dictionary title/suite/descriptions while preserving or deliberately migrating Cocoa class names. |
+| Settings UI still points to Ghostty config and says restart Ghostty.                                                                      | Needs fix      | Update Settings UI after the config path is proven.                                                                             |
+| Config docs/source are split between TermSurf paths and inherited Ghostty macOS fallback/manpage paths.                                   | Needs fix      | Run a focused config-location runtime proof, then align docs and user-visible strings with the real supported path.             |
+| Repo-level build/install/release scripts have no Ghostboard component.                                                                    | Needs fix      | Add Ghostboard build/install/release packaging only after app identity is decided.                                              |
+| Homebrew cask installs Wezboard but not Ghostboard.                                                                                       | Needs fix      | Extend or split cask packaging after app identity and release artifact paths are decided.                                       |
+| Debug named Roamium resolution is explicit and avoids installed fallback.                                                                 | OK             | Preserve existing Issue 814 regression scenarios.                                                                               |
+| Installed Roamium discovery has conflicting paths between install script and Homebrew cask.                                               | Needs fix      | Define installed Roamium location and app environment behavior, then add a regression check.                                    |
+| Entitlement file names remain Ghostty but entitlement contents are capability-only.                                                       | OK             | Leave file names unless a later rename is needed for packaging clarity.                                                         |
+| `GhosttyBuild` and `GhosttyCommit` plist keys remain inherited implementation metadata.                                                   | OK             | Leave unless a future public diagnostics path exposes these keys to users.                                                      |
+| `Ghostty.sdef` and `Ghostty Surface Identifier` are bundled user-visible or automation-facing plist resources.                            | Needs fix      | Rename the user-visible scripting dictionary/resource strings in the AppleScript identity experiment.                           |
+| Xcode project, target, tests, and many source symbols remain Ghostty-named.                                                               | OK             | Treat as inherited implementation identity unless user-visible leakage or packaging requires a targeted rename.                 |
+| iOS target remains Ghostty-branded.                                                                                                       | Needs decision | Defer unless Issue 819 includes iOS packaging; the current issue is macOS distribution focused.                                 |
+
+Verification completed:
+
+1. Inspected the built debug app bundle with `PlistBuddy`.
+2. Inspected Xcode project, plist, scripting dictionary, and entitlement
+   metadata with `rg` and `plutil`.
+3. Inspected repo-level build/install/uninstall/release scripts and Homebrew
+   cask paths.
+4. Inspected Issue 814 docs, Ghostboard resolver code, and harness assertions
+   for the debug-vs-installed boundary.
+5. Inspected config-path references across docs, Ghostboard source, and macOS
+   settings UI.
+
+## Conclusion
+
+Issue 819 should proceed with a decision/fix split:
+
+1. Decide the public Ghostboard app identity before changing release packaging.
+   The current implementation says `TermSurf`, but the issue title and future
+   multi-GUI product shape may require a GUI-qualified app name.
+2. Prove the real config loading location at runtime, then align Settings UI,
+   docs, and generated documentation around that path.
+3. Define installed Roamium discovery and package Ghostboard only after the app
+   identity and config contract are explicit.
+
+The next experiment should resolve the public macOS app identity contract
+without changing behavior, because release packaging, bundle ids, Homebrew
+artifacts, and installed browser discovery all depend on that decision.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Singer the 2nd`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The result recorded inherited `Ghostty-Info.plist`
+  metadata/resources, but the classification table did not classify
+  `GhosttyBuild`, `GhosttyCommit`, `Ghostty.sdef`, or
+  `Ghostty Surface Identifier`. Fixed by adding classification rows for
+  inherited diagnostic metadata and user-visible/automation-facing plist
+  resources.
+- **Re-review verdict:** Approved. The reviewer confirmed the inherited plist
+  metadata/resources are now classified with next-experiment recommendations and
+  no new Required finding was introduced.
