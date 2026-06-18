@@ -48,3 +48,5 @@ Verification should include:
   — **Pass**
 - [Experiment 7: Add Ghostboard script component](07-add-ghostboard-script-component.md)
   — **Partial**
+- [Experiment 8: Add testable Ghostboard app install root](08-add-testable-ghostboard-app-install-root.md)
+  — **Designed**
