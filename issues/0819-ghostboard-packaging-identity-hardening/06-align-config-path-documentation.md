@@ -161,3 +161,74 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Pass
+
+Aligned the targeted user-facing config path docs and Settings copy with the
+runtime contract proven in Experiment 5.
+
+Changed files:
+
+- `ghostboard/macos/Sources/Features/Settings/SettingsView.swift`
+  - Settings now tells users to edit `$XDG_CONFIG_HOME/termsurf/config`, or
+    `~/.config/termsurf/config` when `XDG_CONFIG_HOME` is unset, and restart
+    TermSurf Ghostboard.
+- `ghostboard/src/build/mdgen/ghostty_5_header.md`
+  - The configuration section now documents TermSurf Ghostboard's
+    `$XDG_CONFIG_HOME/termsurf/config` path and says inherited Ghostty XDG and
+    macOS Application Support paths are not loaded.
+- `ghostboard/src/build/mdgen/ghostty_1_footer.md`
+- `ghostboard/src/build/mdgen/ghostty_5_footer.md`
+  - File listings now point at `$XDG_CONFIG_HOME/termsurf/config`.
+  - Removed inherited macOS Application Support and Windows
+    `LOCALAPPDATA/ghostty/config.ghostty` config path claims.
+- `docs/xdg.md`
+  - Replaced stale Ghostty config wording with TermSurf Ghostboard config
+    wording for the TermSurf XDG config directory.
+
+Verification:
+
+```bash
+prettier --write --prose-wrap always --print-width 80 \
+  docs/xdg.md \
+  issues/0819-ghostboard-packaging-identity-hardening/README.md \
+  issues/0819-ghostboard-packaging-identity-hardening/06-align-config-path-documentation.md
+git diff --check
+rg -n 'ghostty/config\.ghostty|com\.mitchellh\.ghostty/config\.ghostty|LOCALAPPDATA/ghostty/config\.ghostty|Application Support/com\.mitchellh\.ghostty|Ghostty configuration|Ghostty config file|handled by|Ghostty for its config' \
+  ghostboard/src/build/mdgen/ghostty_1_header.md \
+  ghostboard/src/build/mdgen/ghostty_1_footer.md \
+  ghostboard/src/build/mdgen/ghostty_5_header.md \
+  ghostboard/src/build/mdgen/ghostty_5_footer.md \
+  docs/xdg.md \
+  ghostboard/macos/Sources/Features/Settings/SettingsView.swift
+(cd ghostboard/macos && ./build.nu --configuration Debug --action build)
+scripts/ghostboard-geometry-matrix.sh ghostboard-config-paths
+```
+
+The stale-text search returned no matches. The debug app build succeeded. The
+config-path proof passed all three cases: `explicit-env`, `xdg-default`, and
+`no-current-xdg`.
+
+The build emitted existing warnings unrelated to this experiment:
+
+- SwiftLint optional `Data` to `String` conversion warning in
+  `SurfaceView_AppKit.swift`.
+- Existing `UnsafeMutableRawPointer`/`Sendable` warning in
+  `GhosttyPackage.swift`.
+- dSYM warnings for missing ImGui symbols in `libghostty.a(ext.o)`.
+
+## Conclusion
+
+The targeted user-facing config path surfaces now agree with the proven
+Ghostboard runtime behavior. The normal documented config path is
+`$XDG_CONFIG_HOME/termsurf/config`, with `~/.config/termsurf/config` as the
+default when `XDG_CONFIG_HOME` is unset. This experiment did not change config
+loading behavior.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Plato the 2nd`:
+
+- **Verdict:** Approved.

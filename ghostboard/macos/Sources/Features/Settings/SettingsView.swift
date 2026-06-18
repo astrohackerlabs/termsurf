@@ -14,7 +14,8 @@ struct SettingsView: View {
             VStack(alignment: .leading) {
                 Text("Coming Soon. 🚧").font(.title)
                 Text("You can't configure TermSurf Ghostboard settings in the GUI yet. " +
-                     "Edit the configuration file and restart TermSurf Ghostboard.")
+                     "Edit $XDG_CONFIG_HOME/termsurf/config and restart TermSurf Ghostboard. " +
+                     "If XDG_CONFIG_HOME is unset, use ~/.config/termsurf/config.")
                 .multilineTextAlignment(.leading)
                 .lineLimit(nil)
             }
