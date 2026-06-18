@@ -42,6 +42,7 @@ extern "c" fn termsurf_present_overlay(
 ) void;
 
 extern "c" fn termsurf_clear_overlay(pane_id: [*:0]const u8) void;
+extern "c" fn termsurf_set_cursor(pane_id: [*:0]const u8, cursor_type: i64) void;
 
 const ConnType = enum {
     unknown,
@@ -80,6 +81,7 @@ const PaneState = struct {
     appkit_pixel_height: u64 = 0,
     last_resize_pixel_width: u64 = 0,
     last_resize_pixel_height: u64 = 0,
+    cursor_type: i64 = 0,
     tui_fd: std.posix.fd_t = -1,
 
     fn paneId(self: *const PaneState) []const u8 {
@@ -214,6 +216,17 @@ const OverlaySnapshot = struct {
     pixel_height: u64 = 0,
 
     fn paneId(self: *const OverlaySnapshot) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+};
+
+const CursorSnapshot = struct {
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+    tab_id: i64 = 0,
+    cursor_type: i64 = 0,
+
+    fn paneId(self: *const CursorSnapshot) []const u8 {
         return self.pane_id[0..self.pane_id_len];
     }
 };
@@ -547,6 +560,9 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CA_CONTEXT => {
                     handleCaContext(fd, msg.*.unnamed_0.ca_context);
+                },
+                c.TERMSURF__TERM_SURF_MESSAGE__MSG_CURSOR_CHANGED => {
+                    handleCursorChanged(fd, msg.*.unnamed_0.cursor_changed);
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_MODE_CHANGED => {
                     handleModeChanged(msg.*.unnamed_0.mode_changed);
@@ -1760,6 +1776,58 @@ fn handleCaContext(fd: std.posix.fd_t, req: ?*c.Termsurf__CaContext) void {
     if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
 }
 
+fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) void {
+    const cursor = req orelse {
+        log.warn("CursorChanged: missing payload", .{});
+        return;
+    };
+
+    var cursor_snapshot: ?CursorSnapshot = null;
+
+    state_mutex.lock();
+
+    const server_index = findServerByFd(fd) orelse {
+        log.warn("CursorChanged: unknown browser fd={} tab_id={}", .{ fd, cursor.*.tab_id });
+        state_mutex.unlock();
+        return;
+    };
+    const profile = servers[server_index].profileName();
+    const browser = servers[server_index].browserName();
+    const lookup_index = findTabLookup(profile, browser, cursor.*.tab_id) orelse {
+        log.warn(
+            "CursorChanged: unknown tab key={s}/{s} tab_id={} cursor_type={}",
+            .{ profile, browser, cursor.*.tab_id, cursor.*.cursor_type },
+        );
+        state_mutex.unlock();
+        return;
+    };
+    const pane_id = tab_lookups[lookup_index].paneId();
+    const pane_index = findPane(pane_id) orelse {
+        log.warn("CursorChanged: tab maps to missing pane_id={s}", .{pane_id});
+        state_mutex.unlock();
+        return;
+    };
+
+    panes[pane_index].cursor_type = cursor.*.cursor_type;
+    var snapshot: CursorSnapshot = .{
+        .tab_id = cursor.*.tab_id,
+        .cursor_type = cursor.*.cursor_type,
+    };
+    if (copyText(&snapshot.pane_id, &snapshot.pane_id_len, panes[pane_index].paneId())) {
+        cursor_snapshot = snapshot;
+    } else {
+        log.warn("CursorChanged: pane_id too long pane_id={s}", .{panes[pane_index].paneId()});
+    }
+
+    log.info(
+        "CursorChanged: pane_id={s} tab_id={} cursor_type={}",
+        .{ panes[pane_index].paneId(), cursor.*.tab_id, cursor.*.cursor_type },
+    );
+    state_mutex.unlock();
+
+    if (cursor_snapshot) |cursor_snapshot_value| setCursor(&cursor_snapshot_value);
+}
+
 fn snapshotOverlay(pane: *const PaneState) ?OverlaySnapshot {
     if (pane.ca_context_id == 0) return null;
     if (pane.width == 0 or pane.height == 0) return null;
@@ -1801,6 +1869,17 @@ fn presentOverlay(snapshot: *const OverlaySnapshot) void {
             snapshot.pixel_width,
             snapshot.pixel_height,
         },
+    );
+}
+
+fn setCursor(snapshot: *const CursorSnapshot) void {
+    termsurf_set_cursor(
+        snapshot.pane_id[0..snapshot.pane_id_len :0].ptr,
+        snapshot.cursor_type,
+    );
+    log.info(
+        "SetCursor: pane_id={s} tab_id={} cursor_type={}",
+        .{ snapshot.paneId(), snapshot.tab_id, snapshot.cursor_type },
     );
 }
 

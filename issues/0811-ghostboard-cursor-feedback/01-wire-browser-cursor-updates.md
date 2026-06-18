@@ -142,3 +142,112 @@ Fresh-context adversarial review by Codex subagent `Dirac`:
   isolation check with explicit pass criteria.
 - **Re-review verdict:** Approved. The reviewer confirmed both required findings
   were resolved and found no new required issues.
+
+## Result
+
+**Result:** Pass
+
+Implemented Ghostboard `CursorChanged` handling and AppKit cursor application.
+
+Changed files:
+
+- `ghostboard/src/apprt/termsurf.zig`
+  - Added `termsurf_set_cursor` bridge declaration.
+  - Added `cursor_type` to `PaneState`.
+  - Added `CursorSnapshot`, a dispatcher case for `CursorChanged`, and
+    `handleCursorChanged`.
+  - Routes cursor updates by browser fd, profile/browser, tab id, and pane id
+    before calling the AppKit bridge outside `state_mutex`.
+- `ghostboard/macos/Sources/App/macOS/AppDelegate+TermSurf.swift`
+  - Added exported `termsurf_set_cursor`.
+  - Resolves pane id to `SurfaceView` on the main queue and forwards the cursor
+    type.
+- `ghostboard/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
+  - Added pane-local TermSurf cursor state.
+  - Maps cursor type `2` to `.pointingHand`, `3` to `.iBeam`, and all other
+    values to `.arrow`.
+  - Applies the cursor only after a successful browser-overlay mouse move and
+    resets to arrow when leaving or clearing the overlay.
+
+Baseline evidence:
+
+- Before implementation, the baseline cursor page built and ran with:
+  - `cd ghostboard && zig build -Demit-macos-app=false`
+  - `cd ghostboard && macos/build.nu --scheme Ghostty --configuration Debug --action build`
+  - `TERMSURF_GEOMETRY_URL=file://... scripts/ghostboard-geometry-matrix.sh initial-open`
+- Baseline log:
+  - `logs/ghostboard-geometry-initial-open-app-20260617-192019.log`
+- The baseline decoded but ignored the cursor message:
+  - `TermSurf message decoded type=CursorChanged`
+  - `TermSurf message ignored type=CursorChanged`
+
+Verification:
+
+- `zig fmt ghostboard/src/apprt/termsurf.zig` passed.
+- `cd ghostboard && zig build -Demit-macos-app=false` passed.
+- `cd ghostboard && macos/build.nu --scheme Ghostty --configuration Debug --action build`
+  passed.
+- `git diff --check` passed.
+- Direct `swiftlint` was not available in this VM (`command not found`), but the
+  macOS app build ran its SwiftLint build phase and completed successfully.
+
+Runtime cursor checks:
+
+- Link hover page:
+  - Harness passed:
+    `logs/ghostboard-geometry-initial-open-harness-20260617-192326.log`
+  - App log: `logs/ghostboard-geometry-initial-open-app-20260617-192326.log`
+  - Evidence:
+    `CursorChanged: pane_id=8D426C37-1EA3-4AB4-9DE6-74B5F76141E9 tab_id=1 cursor_type=2`
+    and
+    `TermSurf cursor set pane_id=8D426C37-1EA3-4AB4-9DE6-74B5F76141E9 cursor_type=2 over_overlay=true`.
+- Text/input hover page:
+  - Harness passed:
+    `logs/ghostboard-geometry-initial-open-harness-20260617-192332.log`
+  - App log: `logs/ghostboard-geometry-initial-open-app-20260617-192332.log`
+  - Evidence:
+    `CursorChanged: pane_id=D08C5426-6BFF-4EE8-AF0C-1C42CAFDE551 tab_id=1 cursor_type=3`
+    and
+    `TermSurf cursor set pane_id=D08C5426-6BFF-4EE8-AF0C-1C42CAFDE551 cursor_type=3 over_overlay=true`.
+- Blank-background hover page:
+  - Harness passed:
+    `logs/ghostboard-geometry-initial-open-harness-20260617-192402.log`
+  - App log: `logs/ghostboard-geometry-initial-open-app-20260617-192402.log`
+  - Evidence:
+    `CursorChanged: pane_id=1BB390AD-F6B2-4DDA-AD39-3DBFD0223383 tab_id=1 cursor_type=0`
+    and
+    `TermSurf cursor set pane_id=1BB390AD-F6B2-4DDA-AD39-3DBFD0223383 cursor_type=0 over_overlay=true`.
+- Two-browser-tab isolation:
+  - Harness passed:
+    `logs/ghostboard-geometry-open-browser-in-new-tab-harness-20260617-192430.log`
+  - App log:
+    `logs/ghostboard-geometry-open-browser-in-new-tab-app-20260617-192430.log`
+  - Roamium trace:
+    `logs/ghostboard-geometry-open-browser-in-new-tab-roamium-20260617-192430.log`
+  - Pane A evidence:
+    `CursorChanged: pane_id=98FC3F99-6089-413A-8804-F8864B8F0FDC tab_id=1 cursor_type=2`.
+  - Pane B evidence:
+    `CursorChanged: pane_id=69ACDB68-4DF6-43C3-BDF3-6DB3671EC7C1 tab_id=2 cursor_type=3`.
+  - The harness also proved tab/focus isolation: browser B keyboard did not
+    reach browser A, browser A keyboard did not reach browser B, and restored
+    hit tests used the correct pane/tab frames after switching.
+- All post-change cursor runtime app logs checked had no
+  `ignored type=CursorChanged` entries.
+
+Completion review:
+
+- Fresh-context adversarial review by Codex subagent `Poincare`.
+- **Verdict:** Approved.
+- **Findings:** None.
+- The reviewer independently checked `git diff --check`,
+  `cd ghostboard && zig build -Demit-macos-app=false`, the working-tree diff,
+  the baseline ignored-message evidence, post-change cursor routing logs, and
+  the two-tab isolation harness evidence.
+
+## Conclusion
+
+Ghostboard now consumes Roamium `CursorChanged` messages and applies browser
+cursor feedback through AppKit. Link hover routes to the pointing-hand cursor,
+text/input hover routes to I-beam, blank page hover routes to arrow, and the
+two-browser-tab run proves cursor updates are keyed to the correct pane/tab
+instead of leaking through focus switches.

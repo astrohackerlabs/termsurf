@@ -40,4 +40,4 @@ Verification should include at least:
 ## Experiments
 
 - [Experiment 1: Wire browser cursor updates into AppKit](01-wire-browser-cursor-updates.md)
-  — **Designed**
+  — **Pass**

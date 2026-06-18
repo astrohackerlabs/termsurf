@@ -244,6 +244,8 @@ extension Ghostty {
         private var termsurfOverlayContextID: UInt64 = 0
         private var termsurfOverlayFrame: CGRect?
         private var termsurfPressedBrowserKeys: Set<UInt16> = []
+        private var termsurfCursorType: Int64 = 0
+        private var termsurfMouseOverOverlay: Bool = false
 
         func termSurfGeometryIdentity(browserTabID: String = "unknown:appkit") -> String {
             let windowID = window.map { String($0.windowNumber) } ?? "unknown:no-window"
@@ -629,8 +631,22 @@ extension Ghostty {
             termsurfOverlayContextID = 0
             termsurfOverlayFrame = nil
             termsurfPressedBrowserKeys.removeAll()
+            termsurfCursorType = 0
+            termsurfMouseOverOverlay = false
+            NSCursor.arrow.set()
             AppDelegate.logger.info("TermSurf overlay cleared pane_id=\(self.id.uuidString)")
             fputs("TermSurf overlay cleared pane_id=\(self.id.uuidString)\n", stderr)
+        }
+
+        func setTermSurfCursor(type: Int64) {
+            dispatchPrecondition(condition: .onQueue(.main))
+            termsurfCursorType = type
+            applyTermSurfCursorIfNeeded()
+            AppDelegate.logger.info(
+                "TermSurf cursor set pane_id=\(self.id.uuidString) cursor_type=\(type) over_overlay=\(self.termsurfMouseOverOverlay)")
+            fputs(
+                "TermSurf cursor set pane_id=\(self.id.uuidString) cursor_type=\(type) over_overlay=\(termsurfMouseOverOverlay)\n",
+                stderr)
         }
 
         func focusDidChange(_ focused: Bool) {
@@ -1221,6 +1237,8 @@ extension Ghostty {
         override func mouseExited(with event: NSEvent) {
             mouseOverSurface = false
             mouseLocationInSurface = nil
+            termsurfMouseOverOverlay = false
+            NSCursor.arrow.set()
             guard let surfaceModel else { return }
 
             // If the mouse is being dragged then we don't have to emit
@@ -1703,6 +1721,22 @@ extension Ghostty {
                 y: Double(webPoint.y))
         }
 
+        private func termSurfCursor() -> NSCursor {
+            switch termsurfCursorType {
+            case 2:
+                return .pointingHand
+            case 3:
+                return .iBeam
+            default:
+                return .arrow
+            }
+        }
+
+        private func applyTermSurfCursorIfNeeded() {
+            guard termsurfMouseOverOverlay else { return }
+            termSurfCursor().set()
+        }
+
         private func forwardTermSurfKeyDown(_ event: NSEvent) -> Bool {
             let type: String
             if event.isARepeat || termsurfPressedBrowserKeys.contains(event.keyCode) {
@@ -1781,7 +1815,13 @@ extension Ghostty {
         }
 
         private func forwardTermSurfMouseMove(_ event: NSEvent) -> Bool {
-            guard let point = termSurfOverlayPoint(for: event) else { return false }
+            guard let point = termSurfOverlayPoint(for: event) else {
+                if termsurfMouseOverOverlay {
+                    termsurfMouseOverOverlay = false
+                    NSCursor.arrow.set()
+                }
+                return false
+            }
 
             let paneID = id.uuidString
             let modifiers = termSurfModifiers(event.modifierFlags, pressedButtons: true)
@@ -1793,6 +1833,10 @@ extension Ghostty {
                     modifiers)
             }
 
+            if forwarded != 0 {
+                termsurfMouseOverOverlay = true
+                applyTermSurfCursorIfNeeded()
+            }
             return forwarded != 0
         }
 

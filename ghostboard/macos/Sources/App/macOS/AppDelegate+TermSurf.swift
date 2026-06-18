@@ -66,6 +66,34 @@ func termsurf_clear_overlay(_ paneIDPointer: UnsafePointer<CChar>?) {
     }
 }
 
+@_cdecl("termsurf_set_cursor")
+func termsurf_set_cursor(_ paneIDPointer: UnsafePointer<CChar>?, _ cursorType: Int64) {
+    guard let paneIDPointer else {
+        termsurfLogOverlay("TermSurf cursor rejected: missing pane id")
+        return
+    }
+
+    let paneID = String(cString: paneIDPointer)
+    termsurfLogOverlay("TermSurf cursor request pane_id=\(paneID) cursor_type=\(cursorType)")
+
+    DispatchQueue.main.async {
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
+            termsurfLogOverlay("TermSurf cursor rejected: missing app delegate")
+            return
+        }
+        guard let uuid = UUID(uuidString: paneID) else {
+            termsurfLogOverlay("TermSurf cursor rejected: invalid pane id \(paneID)")
+            return
+        }
+        guard let target = appDelegate.findSurface(forUUID: uuid) else {
+            termsurfLogOverlay("TermSurf cursor rejected: no surface for pane id \(paneID)")
+            return
+        }
+
+        target.setTermSurfCursor(type: cursorType)
+    }
+}
+
 @_cdecl("termsurf_present_overlay")
 // swiftlint:disable:next function_parameter_count
 func termsurf_present_overlay(
