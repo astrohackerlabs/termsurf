@@ -37,3 +37,5 @@ Verification should include:
 
 - [Experiment 1: Resolve named Roamium for debug launch](01-resolve-named-roamium-debug-launch.md)
   — **Pass**
+- [Experiment 2: Document launch discovery contract](02-document-launch-discovery-contract.md)
+  — **Designed**
