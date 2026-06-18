@@ -33,4 +33,4 @@ Verification should include:
 ## Experiments
 
 - [Experiment 1: Send deterministic HelloReply defaults](01-send-deterministic-hello-reply-defaults.md)
-  — **Designed**
+  — **Pass**

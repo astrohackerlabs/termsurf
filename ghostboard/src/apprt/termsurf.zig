@@ -21,6 +21,7 @@ const max_browser_len: usize = std.fs.max_path_bytes;
 const max_url_len: usize = 2048;
 const max_listen_socket_len: usize = std.fs.max_path_bytes;
 const default_browser = "roamium";
+const default_homepage = "https://termsurf.com/welcome";
 const fallback_cell_width: u64 = 10;
 const fallback_cell_height: u64 = 20;
 const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
@@ -744,6 +745,10 @@ fn readExactOrEof(fd: std.posix.fd_t, buf: []u8) !bool {
 fn sendHelloReply(fd: std.posix.fd_t) !void {
     var reply: c.Termsurf__HelloReply = undefined;
     c.termsurf__hello_reply__init(&reply);
+    var browsers = [_][*:0]u8{@constCast(default_browser.ptr)};
+    reply.homepage = @constCast(default_homepage.ptr);
+    reply.n_browsers = browsers.len;
+    reply.browsers = @ptrCast(&browsers);
 
     var wrapper: c.Termsurf__TermSurfMessage = undefined;
     c.termsurf__term_surf_message__init(&wrapper);
@@ -751,7 +756,10 @@ fn sendHelloReply(fd: std.posix.fd_t) !void {
     wrapper.unnamed_0.hello_reply = &reply;
 
     try sendProtobuf(fd, &wrapper);
-    log.info("TermSurf HelloReply sent", .{});
+    log.info(
+        "TermSurf HelloReply sent homepage={s} browsers={s}",
+        .{ default_homepage, default_browser },
+    );
 }
 
 fn sendQueryLastReply(fd: std.posix.fd_t, req: ?*c.Termsurf__QueryLastRequest) !void {

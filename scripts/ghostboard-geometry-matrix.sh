@@ -2538,6 +2538,7 @@ if [ "$SCENARIO" = "named-roamium-debug-launch" ]; then
   fi
   log "PASS: named Roamium debug launch command omits --browser"
   require_log "TermSurf message decoded type=HelloRequest" "named Roamium webtui discovered TERMSURF_SOCKET"
+  require_log "TermSurf HelloReply sent homepage=https://termsurf.com/welcome browsers=roamium" "Ghostboard sent HelloReply homepage and browser defaults"
   require_log "SetOverlay: pane_id=${PANE_ID} profile=default browser=roamium url=${URL}" "Ghostboard received named Roamium SetOverlay"
   require_log "SetOverlay: named browser resolved browser=roamium env=TERMSURF_ROAMIUM_PATH path=${ROAMIUM}" "Ghostboard resolved named Roamium to debug path"
   require_log "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default" "Ghostboard spawned debug Roamium path"

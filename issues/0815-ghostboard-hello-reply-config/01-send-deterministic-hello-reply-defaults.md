@@ -101,3 +101,79 @@ Fresh-context adversarial review by Codex subagent `Copernicus`:
   while webtui browser consumption is proven by `SetOverlay browser=roamium`.
 - **Resolution:** Accepted both suggestions and updated the Changes and
   Verification sections.
+
+## Result
+
+**Result:** Pass
+
+Ghostboard now sends deterministic baseline `HelloReply` data:
+
+- `homepage=https://termsurf.com/welcome`
+- `browsers=["roamium"]`
+
+The implementation adds a static default homepage constant next to the default
+browser name, populates the protobuf-c `HelloReply` fields in `sendHelloReply`,
+and logs the sent homepage/browser data. The harness now requires that log in
+the named/default Roamium runtime path before accepting the scenario.
+
+Verification commands:
+
+1. `prettier --write --prose-wrap always --print-width 80 issues/0815-ghostboard-hello-reply-config/README.md issues/0815-ghostboard-hello-reply-config/01-send-deterministic-hello-reply-defaults.md`
+2. `zig fmt ghostboard/src/apprt/termsurf.zig`
+3. `bash -n scripts/ghostboard-geometry-matrix.sh`
+4. `shellcheck scripts/ghostboard-geometry-matrix.sh` if available.
+5. `cd ghostboard && zig build -Demit-macos-app=false`
+6. `cd ghostboard && macos/build.nu --scheme Ghostty --configuration Debug --action build`
+7. `scripts/ghostboard-geometry-matrix.sh named-roamium-debug-launch`
+8. `git diff --check`
+
+Notes:
+
+- `shellcheck` is not installed on this VM, so that optional check was skipped.
+
+Final runtime evidence:
+
+- Harness:
+  `logs/ghostboard-geometry-named-roamium-debug-launch-harness-20260617-211744.log`
+- App:
+  `logs/ghostboard-geometry-named-roamium-debug-launch-app-20260617-211744.log`
+- Roamium trace:
+  `logs/ghostboard-geometry-named-roamium-debug-launch-roamium-20260617-211744.log`
+
+The app log proved:
+
+- `TermSurf message decoded type=HelloRequest`
+- `TermSurf HelloReply sent homepage=https://termsurf.com/welcome browsers=roamium`
+- `SetOverlay: ... profile=default browser=roamium url=https://example.com`
+- `BrowserReady: ... browser=roamium`
+
+The runtime scenario also proved the generated webtui command omitted
+`--browser`, so the `browser=roamium` `SetOverlay` came from webtui consuming
+the first `HelloReply.browsers` entry.
+
+## Conclusion
+
+Ghostboard no longer sends an empty baseline `HelloReply`. webtui can now rely
+on the GUI reply for the default homepage and browser list in the
+omitted-`--browser` path.
+
+Custom Ghostboard config parsing remains unsolved and should be handled by the
+next experiment if Issue 815 requires configurable homepage or browser-list
+overrides.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Curie`:
+
+- **Verdict:** Approved.
+- **Findings:** None.
+- **Evidence:** The reviewer confirmed the `HelloReply` population is narrow and
+  in scope, the protobuf-c storage lives through synchronous `sendProtobuf`
+  packing, webtui consumes the first `HelloReply.browsers` entry when
+  `--browser` is omitted, the harness proves the sent defaults and
+  `browser=roamium` path, the README status is `Pass`, and the result commit had
+  not yet been made.
+- **Read-only checks:** `git diff --check`,
+  `bash -n scripts/ghostboard-geometry-matrix.sh`, `prettier --check` on the
+  issue docs, and `cd ghostboard && zig build -Demit-macos-app=false` passed.
+  `shellcheck` was not installed.
