@@ -10,6 +10,7 @@ APP="${TERMSURF_GHOSTBOARD_APP:-$ROOT/ghostboard/macos/build/Debug/TermSurf.app}
 APP_BIN="$APP/Contents/MacOS/termsurf"
 WEB="${TERMSURF_WEB:-$ROOT/target/debug/web}"
 ROAMIUM="${TERMSURF_ROAMIUM:-$ROOT/chromium/src/out/Default/roamium}"
+ROAMIUM_PATH_FOR_APP="$ROAMIUM"
 URL="${TERMSURF_GEOMETRY_URL:-https://example.com}"
 URL_B="${TERMSURF_GEOMETRY_SECOND_URL:-https://example.org}"
 URL_C="${TERMSURF_GEOMETRY_THIRD_URL:-https://example.net}"
@@ -1412,7 +1413,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|named-roamium-debug-launch|named-roamium-invalid-env|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -1440,6 +1441,18 @@ cat >"$COMMAND" <<EOF
 exec "$WEB" --browser "$ROAMIUM" "$URL"
 EOF
 chmod +x "$COMMAND"
+
+if [ "$SCENARIO" = "named-roamium-debug-launch" ] || [ "$SCENARIO" = "named-roamium-invalid-env" ]; then
+  cat >"$COMMAND" <<EOF
+#!/usr/bin/env bash
+exec "$WEB" "$URL"
+EOF
+  chmod +x "$COMMAND"
+fi
+
+if [ "$SCENARIO" = "named-roamium-invalid-env" ]; then
+  ROAMIUM_PATH_FOR_APP="roamium"
+fi
 
 if [ "$SCENARIO" = "terminal-scrollback-movement" ]; then
   cat >"$COMMAND" <<EOF
@@ -2340,12 +2353,29 @@ GHOSTTY_LOG=stderr \
 TERMSURF_GEOMETRY_TRACE=1 \
 TERMSURF_GEOMETRY_SCENARIO="$SCENARIO" \
 TERMSURF_DEVTOOLS_RESERVATION_TIMEOUT_MS=1000 \
+TERMSURF_ROAMIUM_PATH="$ROAMIUM_PATH_FOR_APP" \
 TERMSURF_INPUT_TRACE=1 \
 TERMSURF_PDF_INPUT_TRACE=1 \
 TERMSURF_PDF_INPUT_TRACE_FILE="$ROAMIUM_TRACE" \
   "$APP_BIN" >"$APP_LOG" 2>&1 &
 PID="$!"
 log "pid=$PID"
+
+if [ "$SCENARIO" = "named-roamium-invalid-env" ]; then
+  wait_for_log "TermSurf message decoded type=HelloRequest" "HelloRequest over TERMSURF_SOCKET" 45
+  wait_for_log "SetOverlay: pane_id=.* profile=default browser=roamium url=${URL}" "named Roamium SetOverlay with invalid env" 45
+  wait_for_log "SetOverlay: named browser unresolved browser=roamium env=TERMSURF_ROAMIUM_PATH value=roamium" "clear named Roamium invalid-env failure" 45
+  if grep -E "SetOverlay: created pending server key=default/roamium" "$APP_LOG" >/dev/null 2>&1; then
+    fail "invalid named Roamium env left a pending default/roamium server"
+  fi
+  log "PASS: invalid named Roamium env did not create a pending server"
+  if grep -E "spawned browser path=" "$APP_LOG" >/dev/null 2>&1; then
+    fail "invalid named Roamium env spawned a browser"
+  fi
+  log "PASS: invalid named Roamium env did not spawn a browser"
+  log "PASS: scenario named-roamium-invalid-env"
+  exit 0
+fi
 
 wait_for_log 'TermSurf geometry layer=appkit event=presented ' "AppKit overlay presentation"
 
@@ -2461,6 +2491,22 @@ require_log "TermSurf geometry .*scenario=${SCENARIO}" "timestamped run contains
 require_log 'window_id:[^ ]+ surface_id:[^ ]+ selected_tab_id:[^ ]+ pane_id:[^ ]+ browser_tab_id:[^ ]+' "canonical identity tuple fields"
 require_readable "$ROAMIUM_TRACE"
 require_trace "resize tab_id=${BROWSER_TAB_ID} pane_id=${PANE_ID} pixel_width=${APPKIT_PIXEL_WIDTH} pixel_height=${APPKIT_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied resize to AppKit pixel size via ts_set_view_size"
+
+if [ "$SCENARIO" = "named-roamium-debug-launch" ]; then
+  if grep -F -- "--browser" "$COMMAND" >/dev/null 2>&1; then
+    fail "named Roamium debug launch command unexpectedly contains --browser"
+  fi
+  log "PASS: named Roamium debug launch command omits --browser"
+  require_log "TermSurf message decoded type=HelloRequest" "named Roamium webtui discovered TERMSURF_SOCKET"
+  require_log "SetOverlay: pane_id=${PANE_ID} profile=default browser=roamium url=${URL}" "Ghostboard received named Roamium SetOverlay"
+  require_log "SetOverlay: named browser resolved browser=roamium env=TERMSURF_ROAMIUM_PATH path=${ROAMIUM}" "Ghostboard resolved named Roamium to debug path"
+  require_log "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default" "Ghostboard spawned debug Roamium path"
+  require_log "BrowserReady: pane_id=${PANE_ID} tab_id=${BROWSER_TAB_ID} socket=.* browser=roamium" "BrowserReady preserved named Roamium key"
+  if grep -E "spawned browser path=(/usr/local/roamium|/usr/local/bin/roamium|/opt/homebrew/opt/termsurf-roamium)" "$APP_LOG" >/dev/null 2>&1; then
+    fail "named Roamium debug launch used a stale installed Roamium path"
+  fi
+  log "PASS: named Roamium debug launch did not use a stale installed path"
+fi
 
 if [ "$SCENARIO" = "display-move-backing-scale" ]; then
   A_WINDOW_ID="$WID"

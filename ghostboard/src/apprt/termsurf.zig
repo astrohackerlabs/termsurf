@@ -26,6 +26,7 @@ const fallback_cell_height: u64 = 20;
 const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
 const devtools_reservation_timeout_env = "TERMSURF_DEVTOOLS_RESERVATION_TIMEOUT_MS";
 const default_devtools_reservation_timeout_ms: i64 = 15_000;
+const roamium_path_env = "TERMSURF_ROAMIUM_PATH";
 
 extern "c" fn termsurf_open_split(
     pane_id: [*:0]const u8,
@@ -1113,6 +1114,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
     var spawn_browser_len: usize = 0;
     var spawn_listen_socket_buf: [max_listen_socket_len]u8 = undefined;
     var spawn_listen_socket_len: usize = 0;
+    var should_record_child: bool = false;
     var resize_snapshot: ?ResizeSnapshot = null;
     var overlay_snapshot: ?OverlaySnapshot = null;
 
@@ -1167,6 +1169,11 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
             };
         }
     } else {
+        const browser_executable = resolveBrowserExecutable(browser) orelse {
+            panes[pane_index] = .{};
+            state_mutex.unlock();
+            return;
+        };
         const server_index = reserveServer() orelse {
             log.warn("SetOverlay: server limit reached profile={s} browser={s}", .{ profile, browser });
             panes[pane_index] = .{};
@@ -1179,16 +1186,24 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
             return;
         }
         if (buildListenSocket(&servers[server_index])) {
-            if (isAbsolutePath(browser)) {
-                should_spawn =
-                    copyText(&spawn_profile_buf, &spawn_profile_len, servers[server_index].profileName()) and
-                    copyText(&spawn_browser_buf, &spawn_browser_len, servers[server_index].browserName()) and
-                    copyText(&spawn_listen_socket_buf, &spawn_listen_socket_len, servers[server_index].listenSocket());
-            } else {
-                log.warn("SetOverlay: named browser launch not implemented browser={s}", .{browser});
+            if (!copyText(&spawn_profile_buf, &spawn_profile_len, servers[server_index].profileName()) or
+                !copyText(&spawn_browser_buf, &spawn_browser_len, browser_executable) or
+                !copyText(&spawn_listen_socket_buf, &spawn_listen_socket_len, servers[server_index].listenSocket()))
+            {
+                log.warn("SetOverlay: spawn arguments too long profile={s} browser={s}", .{ profile, browser });
+                panes[pane_index] = .{};
+                servers[server_index] = .{};
+                state_mutex.unlock();
+                return;
             }
+            should_spawn = true;
+            should_record_child = should_spawn;
         } else {
             log.warn("SetOverlay: listen socket path too long profile={s} browser={s}", .{ profile, browser });
+            panes[pane_index] = .{};
+            servers[server_index] = .{};
+            state_mutex.unlock();
+            return;
         }
         log.info(
             "SetOverlay: created pending server key={s}/{s} pane_count={} listen_socket={s}",
@@ -1202,9 +1217,41 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         const browser_z = spawn_browser_buf[0..spawn_browser_len :0];
         const listen_socket_z = spawn_listen_socket_buf[0..spawn_listen_socket_len :0];
         if (spawnBrowserProcess(profile_z, browser_z, listen_socket_z)) |pid| {
-            recordServerChild(profile_z, browser_z, pid);
+            if (should_record_child) recordServerChild(profile_z, browser, pid);
         }
     }
+}
+
+fn resolveBrowserExecutable(browser: []const u8) ?[]const u8 {
+    if (isAbsolutePath(browser)) {
+        log.info("SetOverlay: browser executable absolute path={s}", .{browser});
+        return browser;
+    }
+
+    if (std.mem.eql(u8, browser, default_browser)) {
+        const resolved = std.posix.getenv(roamium_path_env) orelse {
+            log.warn(
+                "SetOverlay: named browser unresolved browser={s} env={s}",
+                .{ browser, roamium_path_env },
+            );
+            return null;
+        };
+        if (resolved.len == 0 or !isAbsolutePath(resolved)) {
+            log.warn(
+                "SetOverlay: named browser unresolved browser={s} env={s} value={s}",
+                .{ browser, roamium_path_env, resolved },
+            );
+            return null;
+        }
+        log.info(
+            "SetOverlay: named browser resolved browser={s} env={s} path={s}",
+            .{ browser, roamium_path_env, resolved },
+        );
+        return resolved;
+    }
+
+    log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
+    return null;
 }
 
 fn handleSetDevtoolsOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetDevtoolsOverlay) void {

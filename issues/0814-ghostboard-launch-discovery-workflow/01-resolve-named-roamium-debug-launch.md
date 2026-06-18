@@ -132,3 +132,119 @@ Fresh-context adversarial review by Codex subagent `Nash`:
   sections, the scope matches Issue 814, the planned Ghostboard/webtui/Roamium
   launch flow is technically consistent with current code, and the working tree
   contains only the Issue 814 plan docs.
+
+## Result
+
+**Result:** Pass
+
+Implemented named/default `roamium` debug launch resolution in
+`ghostboard/src/apprt/termsurf.zig` and added two focused
+`scripts/ghostboard-geometry-matrix.sh` scenarios:
+
+- `named-roamium-debug-launch` runs `web` without `--browser`, sets
+  `TERMSURF_ROAMIUM_PATH` to the repo-built debug Roamium path, and proves
+  Ghostboard resolves the named/default `roamium` browser to that executable.
+- `named-roamium-invalid-env` sets `TERMSURF_ROAMIUM_PATH=roamium`, proves
+  webtui reaches Ghostboard over `TERMSURF_SOCKET`, verifies Ghostboard logs a
+  clear invalid named-browser failure, verifies no pending `default/roamium`
+  server is created, and verifies no browser process is spawned.
+
+The resolver preserves the existing absolute-path behavior, keeps the Ghostboard
+pane/server/browser key as the requested browser string, uses the resolved
+absolute path only when spawning the browser process, and refuses to silently
+fall through to installed Roamium paths when the named debug override is missing
+or invalid.
+
+Verification commands:
+
+1. `zig fmt ghostboard/src/apprt/termsurf.zig`
+2. `bash -n scripts/ghostboard-geometry-matrix.sh`
+3. `cd ghostboard && zig build -Demit-macos-app=false`
+4. `cd ghostboard && macos/build.nu --scheme Ghostty --configuration Debug --action build`
+5. `cargo check -p webtui`
+6. `cargo check -p roamium`
+7. `git diff --check`
+8. `scripts/ghostboard-geometry-matrix.sh initial-open`
+9. `scripts/ghostboard-geometry-matrix.sh named-roamium-debug-launch`
+10. `scripts/ghostboard-geometry-matrix.sh named-roamium-invalid-env`
+
+Notes:
+
+- `shellcheck` is not installed on this VM, so that optional check was skipped.
+
+Final runtime evidence:
+
+- Absolute-path baseline:
+  - Harness: `logs/ghostboard-geometry-initial-open-harness-20260617-210018.log`
+  - App: `logs/ghostboard-geometry-initial-open-app-20260617-210018.log`
+  - Roamium trace:
+    `logs/ghostboard-geometry-initial-open-roamium-20260617-210018.log`
+- Named debug launch:
+  - Harness:
+    `logs/ghostboard-geometry-named-roamium-debug-launch-harness-20260617-210006.log`
+  - App:
+    `logs/ghostboard-geometry-named-roamium-debug-launch-app-20260617-210006.log`
+  - Roamium trace:
+    `logs/ghostboard-geometry-named-roamium-debug-launch-roamium-20260617-210006.log`
+- Invalid-env negative path:
+  - Harness:
+    `logs/ghostboard-geometry-named-roamium-invalid-env-harness-20260617-210006.log`
+  - App:
+    `logs/ghostboard-geometry-named-roamium-invalid-env-app-20260617-210006.log`
+
+The named debug launch run proved:
+
+- the generated command omitted `--browser`;
+- webtui discovered `TERMSURF_SOCKET` and sent `HelloRequest`;
+- Ghostboard received `SetOverlay` with `browser=roamium`;
+- Ghostboard resolved `roamium` through `TERMSURF_ROAMIUM_PATH` to
+  `/Users/astrohacker/dev/termsurf/chromium/src/out/Default/roamium`;
+- Ghostboard spawned that debug path;
+- Roamium registered, sent `TabReady` and `CaContext`, and received the AppKit
+  corrective resize;
+- `BrowserReady` preserved `browser=roamium`;
+- no stale installed path under `/usr/local` or
+  `/opt/homebrew/opt/termsurf-roamium` was spawned.
+
+The invalid-env run proved:
+
+- webtui still discovered `TERMSURF_SOCKET`;
+- Ghostboard received `SetOverlay` with `browser=roamium`;
+- Ghostboard logged
+  `SetOverlay: named browser unresolved browser=roamium env=TERMSURF_ROAMIUM_PATH value=roamium`;
+- no pending `default/roamium` server was created;
+- no browser process was spawned.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Carver`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The invalid named-browser path resolved too late in the
+  new-server branch, after Ghostboard had already created a pending
+  `default/roamium` server. A later retry in the same app process could reuse
+  that pending server and skip resolver retry.
+- **Optional finding:** Named launch recorded the child PID using the resolved
+  executable path instead of the server key, so `recordServerChild` could not
+  match the `default/roamium` server.
+- **Resolution:** Moved browser executable resolution before server reservation,
+  clear the pane/server on unusable spawn arguments or listen-socket failure,
+  record the child PID with the requested browser key, and added an invalid-env
+  harness assertion that no pending `default/roamium` server is created.
+- **Re-review verdict:** Approved. The reviewer confirmed the required finding
+  is resolved by resolving named browsers before `reserveServer()` and by the
+  invalid-env harness assertion at `scripts/ghostboard-geometry-matrix.sh:2368`.
+  The reviewer also confirmed `recordServerChild(profile_z, browser, pid)` now
+  records the requested server key and found no new required findings.
+
+## Conclusion
+
+Ghostboard now has a deterministic debug-safe path for default/named Roamium
+launches. `web https://example.com` can exercise webtui's default browser path
+inside the real Ghostboard app when the harness supplies
+`TERMSURF_ROAMIUM_PATH`, and misconfigured named-browser launch fails clearly
+instead of silently using a stale installed binary.
+
+The remaining Issue 814 work should decide whether normal installed-app
+resolution, broader app discovery, or documentation should be handled in a
+follow-up experiment.

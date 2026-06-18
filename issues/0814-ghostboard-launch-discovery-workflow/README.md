@@ -36,4 +36,4 @@ Verification should include:
 ## Experiments
 
 - [Experiment 1: Resolve named Roamium for debug launch](01-resolve-named-roamium-debug-launch.md)
-  — **Designed**
+  — **Pass**
