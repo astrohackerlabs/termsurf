@@ -206,7 +206,7 @@ remain.
 
 ## Result
 
-**Result:** Partial
+**Result:** Pass
 
 Implemented a shared Roamium runtime resource copier and wired it into both
 production packaging paths:
@@ -296,10 +296,11 @@ Chromium child-process sandbox fatals (`sandbox::Seatbelt::IsSandboxed()`),
 which is outside this packaging fix and is expected from launching Roamium
 standalone without the full app/Ghostboard context.
 
-The remaining unverified items are the privileged default install to
-`/opt/homebrew/opt/termsurf-roamium` and the final installed Ghostboard +
-`/usr/local/bin/web` GUI startup check. Those require a sudo-capable interactive
-terminal on this VM.
+The privileged default install to `/opt/homebrew/opt/termsurf-roamium` was later
+verified manually in the interactive VM. The installed resource root contains
+all six required generated packs, and installed Ghostboard plus
+`/usr/local/bin/web` can launch Roamium from
+`/opt/homebrew/opt/termsurf-roamium/roamium` without hanging at browser startup.
 
 ## Conclusion
 
@@ -308,9 +309,9 @@ the same resource-root copy paths using unprivileged install and package-only
 release staging. The Homebrew tarball path now contains the required generated
 packs under `roamium/gen/...`.
 
-The issue should stay open until the default privileged install is run and
-Ghostboard is verified against `/opt/homebrew/opt/termsurf-roamium/roamium` in
-the actual production location.
+The final production path was also verified in the VM: Ghostboard can launch the
+installed Roamium binary from `/opt/homebrew/opt/termsurf-roamium/roamium`, and
+the TUI leaves browser startup instead of remaining stuck waiting for Chromium.
 
 ## Completion Review
 

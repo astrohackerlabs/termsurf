@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-18"
+closed = "2026-06-18"
 +++
 
 # Issue 821: Restore Roamium Install Resource Root
@@ -104,5 +105,14 @@ installed Roamium path.
 ## Experiments
 
 - [Experiment 1: Copy Generated Resource Packs](01-copy-generated-resource-packs.md)
-  — **Partial** (packaging paths fixed; privileged default install and GUI
-  startup still need sudo-capable verification)
+  — **Pass**
+
+## Conclusion
+
+The Roamium install and release packaging paths now preserve the required
+generated Chromium resource packs under the installed resource root. The final
+production verification was completed manually: installed Ghostboard and
+`/usr/local/bin/web` can launch Roamium from
+`/opt/homebrew/opt/termsurf-roamium/roamium` without hanging at browser startup.
+
+Issue 821 is complete.
