@@ -80,6 +80,8 @@ NEW_TAB_COMMAND_LOG="$RUN_DIR/new-tab-command.log"
 NEW_TAB_MARKER_COMMAND="$RUN_DIR/new-tab-marker-command.txt"
 SECOND_BROWSER_COMMAND="$RUN_DIR/second-browser-command.txt"
 THIRD_BROWSER_COMMAND="$RUN_DIR/third-browser-command.txt"
+BROWSER_B_TUI_PID_FILE="$RUN_DIR/browser-b-web.pid"
+BROWSER_B_TUI_WRAPPER="$RUN_DIR/browser-b-web-wrapper.sh"
 PID=""
 HTTP_PID=""
 
@@ -1470,6 +1472,36 @@ wait_for_selected_tab_change_after() {
   fail "timed out waiting for $label"
 }
 
+wait_for_selected_tab_not_in_after() {
+  local start_line="$1"
+  local label="$2"
+  local attempts="$3"
+  shift 3
+  local line changed_id excluded excluded_id
+  for _ in $(seq 1 "$attempts"); do
+    while IFS= read -r line; do
+      changed_id="$(extract_selected_tab_id "$line")"
+      case "$changed_id" in
+        ""|"$line"|unknown:*|-1) continue ;;
+      esac
+      excluded=false
+      for excluded_id in "$@"; do
+        if [ "$changed_id" = "$excluded_id" ]; then
+          excluded=true
+          break
+        fi
+      done
+      if [ "$excluded" = false ]; then
+        printf '%s\n' "$line"
+        return 0
+      fi
+    done < <(tail -n +"$((start_line + 1))" "$APP_LOG" |
+      grep -E "TermSurf geometry layer=(appkit|scrollview) .*selected_tab_id:" || true)
+    delay 1
+  done
+  fail "timed out waiting for $label"
+}
+
 wait_for_selected_tab_id_after() {
   local start_line="$1"
   local selected_tab_id="$2"
@@ -1695,7 +1727,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|multi-profile-isolation|same-profile-server-lifecycle|two-browser-split-routing|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|multi-profile-isolation|same-profile-server-lifecycle|tui-disconnect-reconnect|two-browser-split-routing|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -2589,7 +2621,7 @@ EOF
   chmod +x "$COMMAND"
 fi
 
-if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "same-profile-server-lifecycle" ] || [ "$SCENARIO" = "open-browser-in-new-window" ] || [ "$SCENARIO" = "multiple-windows-with-browsers" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
+if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "same-profile-server-lifecycle" ] || [ "$SCENARIO" = "tui-disconnect-reconnect" ] || [ "$SCENARIO" = "open-browser-in-new-window" ] || [ "$SCENARIO" = "multiple-windows-with-browsers" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
   FIRST_RUN_MARKER="$RUN_DIR/first-web-ran"
   cat >"$COMMAND" <<EOF
 #!/usr/bin/env bash
@@ -2616,7 +2648,7 @@ EOF
   chmod +x "$COMMAND"
 fi
 
-if [ "$SCENARIO" = "same-profile-server-lifecycle" ]; then
+if [ "$SCENARIO" = "same-profile-server-lifecycle" ] || [ "$SCENARIO" = "tui-disconnect-reconnect" ]; then
   cat >"$COMMAND" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -2653,7 +2685,7 @@ browser = ""
 EOF
 fi
 
-if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "same-profile-server-lifecycle" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
+if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "same-profile-server-lifecycle" ] || [ "$SCENARIO" = "tui-disconnect-reconnect" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+t=new_tab
 keybind = ctrl+1=goto_tab:1
@@ -3886,6 +3918,172 @@ if [ "$SCENARIO" = "multi-profile-isolation" ]; then
   require_trace_after "$A_KEY_START_LINE" "key-event tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "profile A keyboard marker reached profile A"
   require_no_trace_after "$A_KEY_START_LINE" "key-event tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "profile A keyboard marker did not reach profile B"
   leave_browser_browse "profile_a_return" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+fi
+
+if [ "$SCENARIO" = "tui-disconnect-reconnect" ]; then
+  A_SELECTED_TAB_ID="$(extract_selected_tab_id "$APPKIT_PRESENT_LINE")"
+  [ -n "$A_SELECTED_TAB_ID" ] || fail "could not extract browser A selected tab id"
+  A_PANE_ID="$PANE_ID"
+  A_BROWSER_TAB_ID="$BROWSER_TAB_ID"
+  A_CONTEXT_ID="$CONTEXT_ID"
+  log "browser_a_selected_tab_id=$A_SELECTED_TAB_ID"
+  log "browser_a_pane_id=$A_PANE_ID"
+  log "browser_a_browser_tab_id=$A_BROWSER_TAB_ID"
+  log "browser_a_context_id=$A_CONTEXT_ID"
+
+  require_log "SetOverlay: pane_id=${A_PANE_ID} profile=default browser=${ROAMIUM}" "browser A SetOverlay uses default profile and absolute Roamium path"
+  require_log "SetOverlay: created pending server key=default/${ROAMIUM} pane_count=1" "browser A created default profile server"
+  SHARED_SPAWN_LINE="$(grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default .*--user-data-dir=.*chromium-profiles/default" "$APP_LOG" | tail -1 || true)"
+  [ -n "$SHARED_SPAWN_LINE" ] || fail "missing default profile Roamium spawn line"
+  SHARED_SPAWN_PID="$(printf '%s\n' "$SHARED_SPAWN_LINE" | sed -E 's/.* pid=([0-9]+) profile=.*/\1/')"
+  [ -n "$SHARED_SPAWN_PID" ] || fail "failed to extract shared Roamium pid"
+  log "reconnect_shared_spawn_pid=$SHARED_SPAWN_PID"
+
+  cat >"$BROWSER_B_TUI_WRAPPER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "\$\$" >"$BROWSER_B_TUI_PID_FILE"
+exec "$WEB" --browser "$ROAMIUM" --profile default "$URL_B"
+EOF
+  chmod +x "$BROWSER_B_TUI_WRAPPER"
+
+  B_TAB_START_LINE="$(log_line_count)"
+  B_TAB_TRACE_START_LINE="$(trace_line_count)"
+  log "reconnect_browser_b_new_tab_keybind=ctrl+t=new_tab"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 17 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  require_log_after "$B_TAB_START_LINE" "dispatching action target=surface action=.new_tab" "browser B native tab action dispatched"
+  require_log_after "$B_TAB_START_LINE" 'starting command command=`/usr/bin/login`' "browser B native tab started login shell"
+
+  log "reconnect_browser_b_select_tab2_keybind=ctrl+2=goto_tab:2"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 19 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  B_SELECTED_LINE="$(wait_for_selected_tab_change_after "$B_TAB_START_LINE" "$A_SELECTED_TAB_ID" "browser B tab selected")"
+  B_SELECTED_TAB_ID="$(extract_selected_tab_id "$B_SELECTED_LINE")"
+  [ -n "$B_SELECTED_TAB_ID" ] || fail "failed to extract browser B selected tab id"
+  [ "$B_SELECTED_TAB_ID" != "$A_SELECTED_TAB_ID" ] || fail "browser B reused browser A native tab id"
+  log "browser_b_selected_tab_id=$B_SELECTED_TAB_ID"
+
+  printf '"%s"' "$BROWSER_B_TUI_WRAPPER" >"$SECOND_BROWSER_COMMAND"
+  log "browser_b_wrapper_command=$(cat "$SECOND_BROWSER_COMMAND")"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$SECOND_BROWSER_COMMAND" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
+  for _ in $(seq 1 30); do
+    [ -s "$BROWSER_B_TUI_PID_FILE" ] && break
+    delay 1
+  done
+  [ -s "$BROWSER_B_TUI_PID_FILE" ] || fail "browser B wrapper did not record a web TUI pid"
+  B_TUI_PID="$(cat "$BROWSER_B_TUI_PID_FILE")"
+  case "$B_TUI_PID" in
+    ''|*[!0-9]*) fail "invalid browser B web TUI pid: $B_TUI_PID" ;;
+  esac
+  if ! ps -p "$B_TUI_PID" -o command= | grep -F -- "$URL_B" >/dev/null 2>&1; then
+    fail "browser B recorded pid does not match URL_B command"
+  fi
+  log "browser_b_tui_pid=$B_TUI_PID"
+
+  B_SET_LINE="$(wait_for_line_after "$B_TAB_START_LINE" "SetOverlay: pane_id=[^ ]+ profile=default browser=${ROAMIUM} url=${URL_B}" "browser B SetOverlay uses default profile and absolute Roamium path" 60)"
+  B_PANE_ID="$(printf '%s\n' "$B_SET_LINE" | sed -E 's/.*SetOverlay: pane_id=([^ ]+) .*/\1/')"
+  [ -n "$B_PANE_ID" ] || fail "failed to extract browser B pane id"
+  [ "$B_PANE_ID" != "$A_PANE_ID" ] || fail "browser B reused browser A pane id"
+  wait_for_log_after "$B_TAB_START_LINE" "SetOverlay: reused pending server key=default/${ROAMIUM} pane_count=2 has_fd=true" "browser B reused shared default profile server" 60
+  if tail -n +"$((B_TAB_START_LINE + 1))" "$APP_LOG" | grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default" >/dev/null 2>&1; then
+    fail "browser B spawned a second default profile Roamium process"
+  fi
+  kill -0 "$SHARED_SPAWN_PID" >/dev/null 2>&1 || fail "shared Roamium pid died while browser B was opening"
+
+  B_CA_CONTEXT_LINE="$(wait_for_line_after "$B_TAB_START_LINE" "TermSurf geometry layer=zig event=ca_context .*pane_id:${B_PANE_ID}" "browser B Zig ca_context" 60)"
+  B_BROWSER_TAB_ID="$(extract_browser_tab_id "$B_CA_CONTEXT_LINE")"
+  B_CONTEXT_ID="$(extract_context_id "$B_CA_CONTEXT_LINE")"
+  [ -n "$B_BROWSER_TAB_ID" ] || fail "failed to extract browser B browser tab id"
+  [ -n "$B_CONTEXT_ID" ] || fail "failed to extract browser B context id"
+  [ "$B_BROWSER_TAB_ID" != "$A_BROWSER_TAB_ID" ] || fail "browser B reused browser A tab id"
+  [ "$B_CONTEXT_ID" != "$A_CONTEXT_ID" ] || fail "browser B reused browser A context id"
+  log "browser_b_pane_id=$B_PANE_ID"
+  log "browser_b_browser_tab_id=$B_BROWSER_TAB_ID"
+  log "browser_b_context_id=$B_CONTEXT_ID"
+
+  B_DISCONNECT_START_LINE="$(log_line_count)"
+  B_DISCONNECT_TRACE_START_LINE="$(trace_line_count)"
+  log "browser_b_tui_disconnect_kill_pid=$B_TUI_PID"
+  kill "$B_TUI_PID" >/dev/null 2>&1 || fail "failed to terminate browser B web TUI pid=$B_TUI_PID"
+  for _ in $(seq 1 20); do
+    ! kill -0 "$B_TUI_PID" >/dev/null 2>&1 && break
+    delay 0.5
+  done
+  if kill -0 "$B_TUI_PID" >/dev/null 2>&1; then
+    kill -9 "$B_TUI_PID" >/dev/null 2>&1 || true
+  fi
+
+  wait_for_log_after "$B_DISCONNECT_START_LINE" "TUI disconnect cleanup: pane_id=${B_PANE_ID} tab_id=${B_BROWSER_TAB_ID}" "Ghostboard ran TUI disconnect cleanup for browser B" 45
+  require_log_after "$B_DISCONNECT_START_LINE" "CloseTab: pane_id=${B_PANE_ID} tab_id=${B_BROWSER_TAB_ID}" "Ghostboard sent CloseTab for browser B TUI disconnect"
+  require_trace_after "$B_DISCONNECT_TRACE_START_LINE" "close-tab tab_id=${B_BROWSER_TAB_ID} pane_id=${B_PANE_ID} result=destroying ffi=ts_destroy_web_contents" "Roamium destroyed browser B after TUI disconnect"
+  require_trace_after "$B_DISCONNECT_TRACE_START_LINE" "close-tab tab_id=${B_BROWSER_TAB_ID} result=removed" "Roamium removed browser B after TUI disconnect"
+  kill -0 "$SHARED_SPAWN_PID" >/dev/null 2>&1 || fail "shared Roamium pid died after browser B TUI disconnect while browser A remained alive"
+  require_no_trace_after "$B_DISCONNECT_TRACE_START_LINE" "close-tab result=no-tabs-remaining" "shared Roamium stayed alive after browser B TUI disconnect"
+
+  log "reconnect_browser_a_select_tab1_keybind=ctrl+1=goto_tab:1"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 18 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  enter_browser_browse "reconnect_browser_a_after_b_disconnect" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+  type_marker_require_only "reconnect_browser_a_after_b_disconnect" "ISSUE818_EXP6_BROWSER_A_AFTER_B_DISCONNECT" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID"
+  leave_browser_browse "reconnect_browser_a_after_b_disconnect" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+
+  C_TAB_START_LINE="$(log_line_count)"
+  C_TAB_TRACE_START_LINE="$(trace_line_count)"
+  log "reconnect_browser_c_new_tab_keybind=ctrl+t=new_tab"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 17 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  require_log_after "$C_TAB_START_LINE" "dispatching action target=surface action=.new_tab" "browser C native tab action dispatched"
+  require_log_after "$C_TAB_START_LINE" 'starting command command=`/usr/bin/login`' "browser C native tab started login shell"
+  C_SELECTED_LINE="$(wait_for_selected_tab_not_in_after "$C_TAB_START_LINE" "browser C tab selected" 30 "$A_SELECTED_TAB_ID" "$B_SELECTED_TAB_ID")"
+  C_SELECTED_TAB_ID="$(extract_selected_tab_id "$C_SELECTED_LINE")"
+  [ -n "$C_SELECTED_TAB_ID" ] || fail "failed to extract browser C selected tab id"
+  [ "$C_SELECTED_TAB_ID" != "$A_SELECTED_TAB_ID" ] || fail "browser C reused browser A native tab id"
+  [ "$C_SELECTED_TAB_ID" != "$B_SELECTED_TAB_ID" ] || fail "browser C reused browser B native tab id"
+  log "browser_c_selected_tab_id=$C_SELECTED_TAB_ID"
+
+  printf '"%s" --browser "%s" --profile default "%s"' "$WEB" "$ROAMIUM" "$URL_C" >"$THIRD_BROWSER_COMMAND"
+  log "browser_c_command=$(cat "$THIRD_BROWSER_COMMAND")"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$THIRD_BROWSER_COMMAND" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
+  C_SET_LINE="$(wait_for_line_after "$C_TAB_START_LINE" "SetOverlay: pane_id=[^ ]+ profile=default browser=${ROAMIUM} url=${URL_C}" "browser C SetOverlay uses default profile and absolute Roamium path" 60)"
+  C_PANE_ID="$(printf '%s\n' "$C_SET_LINE" | sed -E 's/.*SetOverlay: pane_id=([^ ]+) .*/\1/')"
+  [ -n "$C_PANE_ID" ] || fail "failed to extract browser C pane id"
+  [ "$C_PANE_ID" != "$A_PANE_ID" ] || fail "browser C reused browser A pane id"
+  [ "$C_PANE_ID" != "$B_PANE_ID" ] || fail "browser C reused disconnected browser B pane id"
+  wait_for_log_after "$C_TAB_START_LINE" "SetOverlay: reused pending server key=default/${ROAMIUM} pane_count=2 has_fd=true" "browser C reused warm default profile server" 60
+  if tail -n +"$((C_TAB_START_LINE + 1))" "$APP_LOG" | grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default" >/dev/null 2>&1; then
+    fail "browser C spawned a second default profile Roamium process"
+  fi
+  kill -0 "$SHARED_SPAWN_PID" >/dev/null 2>&1 || fail "shared Roamium pid died while browser C was opening"
+
+  C_CA_CONTEXT_LINE="$(wait_for_line_after "$C_TAB_START_LINE" "TermSurf geometry layer=zig event=ca_context .*pane_id:${C_PANE_ID}" "browser C Zig ca_context" 60)"
+  C_BROWSER_TAB_ID="$(extract_browser_tab_id "$C_CA_CONTEXT_LINE")"
+  C_CONTEXT_ID="$(extract_context_id "$C_CA_CONTEXT_LINE")"
+  [ -n "$C_BROWSER_TAB_ID" ] || fail "failed to extract browser C browser tab id"
+  [ -n "$C_CONTEXT_ID" ] || fail "failed to extract browser C context id"
+  [ "$C_BROWSER_TAB_ID" != "$A_BROWSER_TAB_ID" ] || fail "browser C reused browser A tab id"
+  [ "$C_BROWSER_TAB_ID" != "$B_BROWSER_TAB_ID" ] || fail "browser C reused disconnected browser B tab id"
+  [ "$C_CONTEXT_ID" != "$A_CONTEXT_ID" ] || fail "browser C reused browser A context id"
+  [ "$C_CONTEXT_ID" != "$B_CONTEXT_ID" ] || fail "browser C reused disconnected browser B context id"
+  log "browser_c_pane_id=$C_PANE_ID"
+  log "browser_c_browser_tab_id=$C_BROWSER_TAB_ID"
+  log "browser_c_context_id=$C_CONTEXT_ID"
+
+  enter_browser_browse "reconnect_browser_c" "$C_PANE_ID" "$C_BROWSER_TAB_ID"
+  type_marker_require_only "reconnect_browser_c" "ISSUE818_EXP6_BROWSER_C" "$C_BROWSER_TAB_ID" "$C_PANE_ID" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID"
+  leave_browser_browse "reconnect_browser_c" "$C_PANE_ID" "$C_BROWSER_TAB_ID"
+
+  log "reconnect_browser_a_select_tab1_after_c_keybind=ctrl+1=goto_tab:1"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 18 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  enter_browser_browse "reconnect_browser_a_after_c" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+  type_marker_require_only "reconnect_browser_a_after_c" "ISSUE818_EXP6_BROWSER_A_AFTER_C" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID" "$C_BROWSER_TAB_ID" "$C_PANE_ID"
+  leave_browser_browse "reconnect_browser_a_after_c" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+
+  require_no_trace_after "$B_DISCONNECT_TRACE_START_LINE" "key-event tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "disconnected browser B received no later keyboard input"
+  log "PASS: scenario tui-disconnect-reconnect"
 fi
 
 if [ "$SCENARIO" = "javascript-dialog-smoke" ]; then

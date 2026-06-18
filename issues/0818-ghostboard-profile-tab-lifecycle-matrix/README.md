@@ -48,4 +48,4 @@ process exit.
 - [Experiment 5: Prove two-browser split-pane routing](05-prove-two-browser-split-routing.md)
   — **Pass**
 - [Experiment 6: Prove TUI disconnect reconnect](06-prove-tui-disconnect-reconnect.md)
-  — **Designed**
+  — **Pass**

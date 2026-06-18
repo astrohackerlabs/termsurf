@@ -129,3 +129,84 @@ Fresh-context adversarial design review by Codex subagent `Bacon the 2nd`:
   harness/docs proof boundary, and the pass/fail criteria are coherent with
   `cleanupTuiPanes`: decrement pane count, send `CloseTab`, preserve the server
   while browser A remains alive, then prove browser C reuses the same pid.
+
+## Result
+
+**Result:** Pass
+
+Implemented `tui-disconnect-reconnect` in
+`scripts/ghostboard-geometry-matrix.sh` as a proof-only harness scenario. The
+scenario opens browser A with the default profile, opens browser B in a second
+native tab using the same profile/browser, records browser B's `web` TUI pid via
+an explicit wrapper, kills only that TUI process, proves Ghostboard runs TUI
+disconnect cleanup and sends `CloseTab` for browser B, proves Roamium destroys
+and removes browser B's tab while preserving the shared profile server, then
+opens browser C with the same profile and proves C reuses the warm server.
+
+Verification passed:
+
+1. `bash -n scripts/ghostboard-geometry-matrix.sh`
+2. `git diff --check`
+3. `scripts/ghostboard-geometry-matrix.sh tui-disconnect-reconnect`
+
+The passing runtime run was timestamped `20260618-025307` with logs:
+
+- `logs/ghostboard-geometry-tui-disconnect-reconnect-harness-20260618-025307.log`
+- `logs/ghostboard-geometry-tui-disconnect-reconnect-app-20260618-025307.log`
+- `logs/ghostboard-geometry-tui-disconnect-reconnect-roamium-20260618-025307.log`
+- `logs/ghostboard-geometry-tui-disconnect-reconnect-screenshot-20260618-025307.png`
+
+Key observed identities:
+
+- Browser A selected native tab `4498`, pane
+  `F3947F7C-0A37-445F-A691-EFFE2B63FF86`, browser tab `1`, context `2092037997`.
+- Browser B selected native tab `4511`, pane
+  `18E738EB-734E-471A-A219-9B76827307D2`, browser tab `2`, context `3816631262`,
+  wrapper-recorded TUI pid `41013`.
+- Shared default-profile Roamium pid `40670` stayed alive after browser B's TUI
+  disconnect.
+- Browser C selected native tab `4515`, pane
+  `9E7353AC-E0FF-4884-B3E4-561A131F006C`, browser tab `3`, context `2833149316`.
+
+The harness also proved keyboard routing after reconnect:
+
+- browser A received input after browser B disconnected and browser B did not;
+- browser C received focused input after warm reconnect and neither browser A
+  nor disconnected browser B did;
+- browser A again received focused input after switching back from browser C;
+- disconnected browser B received no later keyboard input.
+
+Two harness-only corrections were made while implementing the scenario:
+
+- Browser B pid discovery uses the wrapper-recorded pid, as requested by the
+  design review, instead of relying on process-table argv matching alone.
+- Browser C selection is detected by waiting for a selected native tab id that
+  is neither browser A nor browser B. `ctrl+t` already selects the new tab.
+
+## Conclusion
+
+Warm reconnect is now proven for the default-profile Ghostboard path. A TUI
+process can disconnect without a native tab close, Ghostboard cleans up only
+that pane/tab, Roamium removes the closed browser tab, the shared profile server
+stays alive while another pane still uses it, and a later TUI can reconnect by
+opening a fresh browser tab on the warm server.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Harvey the 2nd`:
+
+- **Verdict:** Approved.
+- **Required findings:** None.
+- **Reviewer checks:** The reviewer verified the diff only touches
+  `scripts/ghostboard-geometry-matrix.sh`, the Issue 818 README, and this
+  experiment file; `bash -n scripts/ghostboard-geometry-matrix.sh` passed;
+  `git diff --check` passed; Markdown `prettier --check` passed; and no result
+  commit existed before review.
+- **Runtime evidence review:** The reviewer did not rerun the runtime scenario
+  because it would create logs and drive/kill processes, but reviewed the
+  `20260618-025307` logs. The logs support the result: browser B used wrapper
+  pid `41013`, Ghostboard logged `TUI disconnect cleanup` and `CloseTab`,
+  Roamium destroyed/removed tab `2`, only one default Roamium spawn `40670`
+  appeared, browser B and browser C reused the warm server, browser C got fresh
+  native/pane/tab/context identities, and keyboard routing assertions passed
+  without later input to browser B.
