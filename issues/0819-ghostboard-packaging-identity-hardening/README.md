@@ -36,3 +36,5 @@ Verification should include:
 
 - [Experiment 1: Audit packaging identity contract](01-audit-packaging-identity-contract.md)
   — **Pass**
+- [Experiment 2: Decide public macOS app identity](02-decide-public-macos-app-identity.md)
+  — **Designed**
