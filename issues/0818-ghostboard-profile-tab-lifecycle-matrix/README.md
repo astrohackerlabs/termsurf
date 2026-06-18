@@ -39,3 +39,5 @@ process exit.
 
 - [Experiment 1: Establish lifecycle baseline](01-establish-lifecycle-baseline.md)
   — **Partial**
+- [Experiment 2: Prove multi-profile isolation](02-prove-multi-profile-isolation.md)
+  — **Designed**
