@@ -134,3 +134,104 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Partial
+
+Implemented `scripts/ghostboard-performance-smoke.sh`, a bounded performance
+smoke wrapper around the existing Ghostboard geometry matrix. The fast profile
+now provides a durable repeated-startup guard. The diagnostic profile correctly
+classifies pointer-dependent rows, but those rows currently fail on the generic
+AppKit hit-test prerequisite before they can measure resize, mouse, scroll, or
+input responsiveness.
+
+Changed files:
+
+- `scripts/ghostboard-performance-smoke.sh`
+  - Adds `--fast` and `--diagnostic` profiles.
+  - Runs every row through `scripts/bounded-run.sh`.
+  - Writes timestamped summary logs under `logs/`.
+  - Records profile, scenario label, geometry scenario, bounded-run log path,
+    bounded status, scenario exit code, elapsed seconds, and threshold.
+  - Fails distinctly for missing bounded status, `HARD_TIMEOUT`, `IDLE_KILL`,
+    scenario nonzero exit, missing elapsed time, or elapsed time above the row's
+    smoke ceiling.
+  - Uses environment-tunable smoke ceilings while keeping runnable defaults.
+
+Verification passed:
+
+```bash
+bash -n scripts/ghostboard-performance-smoke.sh
+git diff --check
+scripts/ghostboard-performance-smoke.sh --fast
+```
+
+Fast-profile evidence:
+
+| Row          | Scenario                     | Result | Elapsed | Evidence                                                               |
+| ------------ | ---------------------------- | ------ | ------- | ---------------------------------------------------------------------- |
+| startup-1    | `named-roamium-debug-launch` | Pass   | 10s     | `logs/ghostboard-performance-smoke-fast-startup-1-20260618-045700.log` |
+| startup-2    | `named-roamium-debug-launch` | Pass   | 10s     | `logs/ghostboard-performance-smoke-fast-startup-2-20260618-045700.log` |
+| startup-3    | `named-roamium-debug-launch` | Pass   | 10s     | `logs/ghostboard-performance-smoke-fast-startup-3-20260618-045700.log` |
+| fast summary | `--fast`                     | Pass   | n/a     | `logs/ghostboard-performance-smoke-fast-20260618-045700.log`           |
+
+Diagnostic-profile evidence:
+
+```bash
+scripts/ghostboard-performance-smoke.sh --diagnostic
+```
+
+| Row       | Scenario                       | Result | Elapsed | Evidence                                                                     |
+| --------- | ------------------------------ | ------ | ------- | ---------------------------------------------------------------------------- |
+| startup-1 | `named-roamium-debug-launch`   | Pass   | 10s     | `logs/ghostboard-performance-smoke-diagnostic-startup-1-20260618-045739.log` |
+| startup-2 | `named-roamium-debug-launch`   | Pass   | 10s     | `logs/ghostboard-performance-smoke-diagnostic-startup-2-20260618-045739.log` |
+| startup-3 | `named-roamium-debug-launch`   | Pass   | 10s     | `logs/ghostboard-performance-smoke-diagnostic-startup-3-20260618-045739.log` |
+| resize    | `window-resize`                | Fail   | 10s     | `logs/ghostboard-performance-smoke-diagnostic-resize-20260618-045739.log`    |
+| mouse     | `mouse-after-geometry-change`  | Fail   | 10s     | `logs/ghostboard-performance-smoke-diagnostic-mouse-20260618-045739.log`     |
+| scroll    | `terminal-scrollback-movement` | Fail   | 10s     | `logs/ghostboard-performance-smoke-diagnostic-scroll-20260618-045739.log`    |
+| input     | `browser-input-granularity`    | Fail   | 45s     | `logs/ghostboard-performance-smoke-diagnostic-input-20260618-045739.log`     |
+| summary   | `--diagnostic`                 | Fail   | n/a     | `logs/ghostboard-performance-smoke-diagnostic-20260618-045739.log`           |
+
+All diagnostic failures reached AppKit overlay presentation and then failed with
+`FAIL: missing AppKit hit-test geometry record`. This is a scenario failure, not
+a bounded-run timeout or smoke-threshold failure.
+
+The approved design expected the fast profile to include startup, resize, and
+mouse rows. Implementation narrowed the default fast profile to repeated
+resolver-only startup after runtime evidence showed the pointer-dependent
+geometry rows currently fail before performance can be measured. The
+pointer-dependent rows remain in the diagnostic profile so they stay visible
+without making the default smoke unusable.
+
+Generated logs and screenshots were left under `logs/` and were not staged.
+
+## Conclusion
+
+Experiment 1 establishes the first durable Issue 820 guard: a fast repeated
+Ghostboard startup smoke that runs under bounded-run protection and records
+elapsed evidence. The runner has distinct classifications for scenario failures,
+bounded-run timeouts, missing elapsed data, and threshold failures; this
+experiment exercised the scenario-failure path through the diagnostic profile.
+
+The next experiment should decide how to make pointer-dependent performance rows
+usable: either restore the generic AppKit hit-test prerequisite on this VM, or
+teach the performance diagnostic profile to use a lower-level pointer/geometry
+oracle that does not depend on the flaky initial hit-test row.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Meitner the 2nd`:
+
+- **Verdict:** Approved.
+- **Required findings:** None.
+- **Optional finding:** The conclusion originally said the experiment “proves”
+  timeout and threshold distinction, but runtime evidence exercised only
+  scenario failures. Accepted; softened the conclusion to say the runner has
+  distinct classifications and this experiment exercised the scenario-failure
+  path.
+- **Checks performed by reviewer:**
+  `bash -n scripts/ghostboard-performance-smoke.sh` and `git diff --check`
+  passed. The reviewer confirmed no generated logs or screenshots were staged,
+  the result commit had not already been made, and the diagnostic logs match the
+  recorded `FAIL: missing AppKit hit-test geometry record` Partial result.

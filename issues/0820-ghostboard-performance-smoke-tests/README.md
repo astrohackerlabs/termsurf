@@ -38,4 +38,4 @@ benchmarks.
 ## Experiments
 
 - [Experiment 1: Add bounded performance smoke runner](01-add-bounded-performance-smoke-runner.md)
-  — **Designed**
+  — **Partial**
