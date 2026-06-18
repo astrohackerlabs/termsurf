@@ -54,4 +54,4 @@ owning component before any fix.
 - [Experiment 6: Prove runtime color scheme](06-prove-runtime-color-scheme.md) —
   **Pass**
 - [Experiment 7: Prove copy-current-URL](07-prove-copy-current-url.md) —
-  **Designed**
+  **Pass**

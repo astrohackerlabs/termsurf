@@ -1045,6 +1045,7 @@ int termsurf_forward_key_event(const char*, const char*, int64_t, const char*, u
 int termsurf_forward_mouse_event(const char*, const char*, const char*, double, double, int64_t, uint64_t);
 int termsurf_forward_mouse_move(const char*, double, double, uint64_t);
 int termsurf_forward_scroll_event(const char*, double, double, double, double, uint64_t, uint64_t, bool, uint64_t);
+size_t termsurf_copy_current_url(const char*, uint8_t*, size_t);
 
 ghostty_config_t ghostty_config_new();
 void ghostty_config_free(ghostty_config_t);

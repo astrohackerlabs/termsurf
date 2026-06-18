@@ -255,6 +255,14 @@ pub export fn termsurf_forward_scroll_event(
     )) 1 else 0;
 }
 
+pub export fn termsurf_copy_current_url(
+    pane_id: [*:0]const u8,
+    out: [*]u8,
+    out_len: usize,
+) usize {
+    return termsurf.copyCurrentUrl(std.mem.span(pane_id), out[0..out_len]);
+}
+
 pub export fn termsurf_pane_closed(pane_id: [*:0]const u8) void {
     termsurf.paneClosed(std.mem.span(pane_id));
 }

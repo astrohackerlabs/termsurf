@@ -1856,6 +1856,25 @@ pub fn paneFocusChanged(pane_id: []const u8, focused: bool) void {
     }
 }
 
+pub fn copyCurrentUrl(pane_id: []const u8, out: []u8) usize {
+    if (out.len == 0) return 0;
+
+    state_mutex.lock();
+    defer state_mutex.unlock();
+
+    const pane_index = findPane(pane_id) orelse return 0;
+    const pane = &panes[pane_index];
+    if (!pane.in_use or !pane.focused or pane.browsing or pane.url_len == 0) return 0;
+
+    const url = pane.url[0..pane.url_len];
+    const copied_len = @min(url.len, out.len - 1);
+    @memcpy(out[0..copied_len], url[0..copied_len]);
+    out[copied_len] = 0;
+
+    log.info("CopyCurrentUrl: pane_id={s} url={s}", .{ pane.paneId(), url });
+    return copied_len;
+}
+
 pub fn guiActiveChanged(active: bool) void {
     var targets: [max_servers]GuiActiveTarget = [_]GuiActiveTarget{.{}} ** max_servers;
     var target_count: usize = 0;

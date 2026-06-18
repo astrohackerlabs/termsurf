@@ -45,6 +45,21 @@ extension Ghostty {
         // The hovered URL string
         @Published var hoverUrl: String?
 
+        // Short-lived TermSurf copy-current-URL feedback.
+        @Published var termsurfCopyUrlFeedback: String? {
+            didSet {
+                termsurfCopyUrlFeedbackTimer?.invalidate()
+                termsurfCopyUrlFeedbackTimer = nil
+
+                if termsurfCopyUrlFeedback != nil {
+                    termsurfCopyUrlFeedbackTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+                        self?.termsurfCopyUrlFeedback = nil
+                        self?.termsurfCopyUrlFeedbackTimer = nil
+                    }
+                }
+            }
+        }
+
         // The progress report (if any)
         @Published var progressReport: Action.ProgressReport? {
             didSet {
@@ -237,6 +252,9 @@ extension Ghostty {
 
         // Timer to remove progress report after 15 seconds
         private var progressReportTimer: Timer?
+
+        // Timer to remove TermSurf copy-current-URL feedback
+        private var termsurfCopyUrlFeedbackTimer: Timer?
 
         private var termsurfOverlayRootLayer: CALayer?
         private var termsurfOverlayPositioningLayer: CALayer?
@@ -485,6 +503,7 @@ extension Ghostty {
 
             // Cancel progress report timer
             progressReportTimer?.invalidate()
+            termsurfCopyUrlFeedbackTimer?.invalidate()
 
             clearTermSurfOverlay()
         }
@@ -1546,6 +1565,16 @@ extension Ghostty {
                 termSurfLogGeometry(
                     event: "perform_key_equivalent_binding",
                     note: "key_code=\(event.keyCode) modifiers=\(termSurfModifiers(event.modifierFlags)) focused=\(focused) flags=\(bindingFlags.rawValue)")
+                if event.keyCode == 0x08,
+                   event.modifierFlags.contains(.command),
+                   !event.modifierFlags.contains(.shift),
+                   !event.modifierFlags.contains(.control),
+                   !event.modifierFlags.contains(.option),
+                   accessibilitySelectedText()?.isEmpty ?? true,
+                   copyTermSurfCurrentUrl() {
+                    return true
+                }
+
                 // Attempt to trigger a menu item for this key binding. We only do this if:
                 //   - We're not in a key sequence or table (those are separate bindings)
                 //   - The binding is NOT `all` (menu uses FirstResponder chain)
@@ -2109,12 +2138,46 @@ extension Ghostty {
 
         // MARK: Menu Handlers
 
+        private func copyTermSurfCurrentUrl() -> Bool {
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            let copied = id.uuidString.withCString { paneIDPointer in
+                buffer.withUnsafeMutableBufferPointer { bufferPointer in
+                    termsurf_copy_current_url(
+                        paneIDPointer,
+                        bufferPointer.baseAddress,
+                        bufferPointer.count)
+                }
+            }
+            guard copied > 0 else { return false }
+
+            let url = String(decoding: buffer[0..<Int(copied)], as: UTF8.self)
+            let pasteboard = NSPasteboard.general
+            pasteboard.declareTypes([.string], owner: nil)
+            pasteboard.setString(url, forType: .string)
+            termsurfCopyUrlFeedback = "URL copied"
+            termSurfLogGeometry(
+                event: "copy_current_url",
+                browserTabID: "unknown:copy-current-url",
+                note: "pane_id=\(id.uuidString) url=\(url) mode=control")
+            termSurfLogGeometry(
+                event: "copy_current_url_feedback",
+                browserTabID: "unknown:copy-current-url",
+                note: "message=URL copied")
+            return true
+        }
+
         @IBAction func copy(_ sender: Any?) {
             guard let surface = self.surface else { return }
             let action = "copy_to_clipboard"
-            if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
-                AppDelegate.logger.warning("action failed action=\(action)")
+            if ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
+                return
             }
+
+            if copyTermSurfCurrentUrl() {
+                return
+            }
+
+            AppDelegate.logger.warning("action failed action=\(action)")
         }
 
         @IBAction func paste(_ sender: Any?) {

@@ -19,6 +19,7 @@ key events received through the terminal PTY.
 | v      | Control | Edit URL (visual mode)      | Empty selection at cursor (Issue 658)        |
 | V      | Control | Edit URL (visual line)      | Entire URL selected (Issue 658)              |
 | :      | Control | Enter Command mode          | Yellow command bar (Issue 659)               |
+| Cmd+C  | Control | Copy current URL            | Shows brief `url copied` feedback            |
 | q      | Control | Quit                        |                                              |
 | Ctrl+C | Any     | Force quit                  |                                              |
 

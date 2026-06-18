@@ -120,6 +120,24 @@ extension Ghostty {
                     .transition(.opacity)
                 }
 
+                if let feedback = surfaceView.termsurfCopyUrlFeedback {
+                    VStack(spacing: 0) {
+                        Text(feedback)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.82))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .accessibilityLabel(feedback)
+                            .padding(.top, 8)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
+
 #if canImport(AppKit)
                 // Readonly indicator badge
                 if surfaceView.readonly {

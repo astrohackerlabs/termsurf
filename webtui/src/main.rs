@@ -547,6 +547,7 @@ fn main() -> io::Result<()> {
     let mut pending_auth: Option<PendingHttpAuth> = None;
     let mut handled_dialogs: Vec<(i64, u64)> = Vec::new();
     let mut handled_auth: Vec<(i64, u64)> = Vec::new();
+    let mut copy_url_feedback_until: Option<Instant> = None;
     let mut state_trace = StateTrace::from_env();
     let mut last_render_trace = String::new();
     // edtui state (Issue 637, 658).
@@ -593,6 +594,7 @@ fn main() -> io::Result<()> {
                 &target_url,
                 &pending_dialog,
                 &pending_auth,
+                copy_url_feedback_until,
                 &loading_log,
                 &console_log,
                 &renderer_crash,
@@ -712,6 +714,11 @@ fn main() -> io::Result<()> {
             true
         } else if let Some(at) = page_loaded_at {
             at.elapsed() < Duration::from_secs(2)
+        } else if copy_url_feedback_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false)
+        {
+            true
         } else {
             false
         };
@@ -986,6 +993,25 @@ fn main() -> io::Result<()> {
                                 cmd_state.set_clipboard(UrlClipboard::new());
                                 cmd_state.mode = EditorMode::Insert;
                                 mode = Mode::Command;
+                            }
+                            KeyCode::Char('c') | KeyCode::Char('C')
+                                if key.modifiers.contains(KeyModifiers::SUPER) && !is_devtools =>
+                            {
+                                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                    let _ = clipboard.set_text(url.clone());
+                                }
+                                copy_url_feedback_until =
+                                    Some(Instant::now() + Duration::from_millis(1500));
+                                if let Some(trace) = state_trace.as_mut() {
+                                    trace.write(
+                                        "copy_current_url",
+                                        &[
+                                            ("tab_id", current_tab_id.to_string()),
+                                            ("url", url.clone()),
+                                            ("mode", "control".to_string()),
+                                        ],
+                                    );
+                                }
                             }
                             KeyCode::Enter => {
                                 mode = Mode::Browse;
@@ -1552,6 +1578,7 @@ fn ui(
     target_url: &str,
     pending_dialog: &Option<PendingJsDialog>,
     pending_auth: &Option<PendingHttpAuth>,
+    copy_url_feedback_until: Option<Instant>,
     loading_log: &[(LoadingStage, StageStatus)],
     console_log: &[ConsoleLogEntry],
     renderer_crash: &Option<RendererCrashState>,
@@ -1977,7 +2004,15 @@ fn ui(
                 Span::styled("control", d),
             ]),
             Mode::Control => {
-                if is_devtools {
+                if copy_url_feedback_until
+                    .map(|until| Instant::now() < until)
+                    .unwrap_or(false)
+                {
+                    Line::from(vec![
+                        Span::styled("url copied ", Style::default().fg(GREEN).bg(BG)),
+                        Span::styled("\u{2318}c", d),
+                    ])
+                } else if is_devtools {
                     // DevTools: no edit keys (Issue 687).
                     Line::from(vec![
                         Span::styled(":q\u{23CE} ", f),

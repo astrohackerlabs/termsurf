@@ -72,6 +72,7 @@ CRASH_WEB_ROOT="$RUN_DIR/renderer-crash-site"
 CRASH_TYPE_COMMAND="$RUN_DIR/renderer-crash-type-command.txt"
 COLOR_WEB_ROOT="$RUN_DIR/color-scheme-site"
 COLOR_TYPE_COMMAND="$RUN_DIR/color-scheme-type-command.txt"
+COPY_URL_WEB_ROOT="$RUN_DIR/copy-current-url-site"
 NEW_TAB_COMMAND_LOG="$RUN_DIR/new-tab-command.log"
 NEW_TAB_MARKER_COMMAND="$RUN_DIR/new-tab-marker-command.txt"
 SECOND_BROWSER_COMMAND="$RUN_DIR/second-browser-command.txt"
@@ -1662,7 +1663,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -2157,6 +2158,70 @@ PY
   log "color_scheme_web_root=$COLOR_WEB_ROOT"
   log "color_scheme_http_pid=$HTTP_PID"
   log "color_scheme_url=$URL"
+fi
+
+if [ "$SCENARIO" = "copy-current-url-smoke" ]; then
+  COPY_URL_HTTP_PORT="$(python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+)"
+  mkdir -p "$COPY_URL_WEB_ROOT"
+  cat >"$COPY_URL_WEB_ROOT/index.html" <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Issue 816 Copy URL Initial</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+        color: #111111;
+        font: 16px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+    </style>
+    <script>
+      console.log(`ISSUE816_COPY_URL_READY ${window.location.href}`);
+      window.addEventListener("load", () => {
+        document.title = "Issue 816 Copy URL Ready";
+      });
+    </script>
+  </head>
+  <body>ISSUE816_COPY_URL_BODY</body>
+</html>
+EOF
+  cp "$COPY_URL_WEB_ROOT/index.html" "$COPY_URL_WEB_ROOT/copy-${TS}.html"
+  python3 -m http.server "$COPY_URL_HTTP_PORT" --bind 127.0.0.1 --directory "$COPY_URL_WEB_ROOT" >>"$HARNESS_LOG" 2>&1 &
+  HTTP_PID="$!"
+  URL="http://127.0.0.1:${COPY_URL_HTTP_PORT}/copy-${TS}.html"
+  for _ in $(seq 1 30); do
+    if python3 - "http://127.0.0.1:${COPY_URL_HTTP_PORT}/index.html" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+    then
+      break
+    fi
+    delay 0.25
+  done
+  python3 - "http://127.0.0.1:${COPY_URL_HTTP_PORT}/index.html" <<'PY' >/dev/null 2>&1 || fail "copy-current-url HTTP fixture did not become ready"
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+  log "copy_current_url_web_root=$COPY_URL_WEB_ROOT"
+  log "copy_current_url_http_pid=$HTTP_PID"
+  log "copy_current_url_url=$URL"
 fi
 
 COMMAND="$RUN_DIR/run-web.sh"
@@ -3074,6 +3139,9 @@ fi
 if [ "$SCENARIO" = "color-scheme-smoke" ]; then
   log "webtui_state_trace=$WEBTUI_STATE_TRACE"
 fi
+if [ "$SCENARIO" = "copy-current-url-smoke" ]; then
+  log "webtui_state_trace=$WEBTUI_STATE_TRACE"
+fi
 if [ "$SCENARIO" = "window-resize" ]; then
   log "grow_screenshot=$SCREENSHOT_GROW"
   log "shrink_screenshot=$SCREENSHOT_SHRINK"
@@ -3620,6 +3688,52 @@ if [ "$SCENARIO" = "color-scheme-smoke" ]; then
   assert_color_scheme_command "dark_off" "dark off" "off" "light" "false"
   assert_color_scheme_command "dark_on" "dark on" "on" "dark" "true"
   assert_color_scheme_command "dark_system" "dark system" "system" "light" "false"
+fi
+
+if [ "$SCENARIO" = "copy-current-url-smoke" ]; then
+  wait_for_state_trace "event=url_changed.*url=${URL}" "webtui copy URL fixture URL" 45
+  wait_for_state_trace "event=title_changed.*title=Issue 816 Copy URL Ready" "webtui copy URL fixture title" 45
+  wait_for_state_trace "event=console_message.*message=ISSUE816_COPY_URL_READY ${URL}" "webtui copy URL fixture ready marker" 45
+
+  COPY_URL_SENTINEL="ISSUE816_COPY_URL_SENTINEL_${TS}"
+  printf '%s' "$COPY_URL_SENTINEL" | pbcopy
+  CLIPBOARD_BEFORE="$(pbpaste)"
+  [ "$CLIPBOARD_BEFORE" = "$COPY_URL_SENTINEL" ] || fail "failed to set clipboard sentinel before copy-current-url"
+  log "copy_current_url_clipboard_before=$CLIPBOARD_BEFORE"
+
+  COPY_APP_START_LINE="$(log_line_count)"
+  log "copy_current_url_key=cmd+c"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 8 command >>"$HARNESS_LOG" 2>&1
+  wait_for_log_after "$COPY_APP_START_LINE" "CopyCurrentUrl: pane_id=${PANE_ID} url=${URL}" "Ghostboard selected current URL for Control-mode copy" 45
+  wait_for_log_after "$COPY_APP_START_LINE" "TermSurf geometry layer=appkit event=copy_current_url .*pane_id:${PANE_ID} .*note=pane_id=${PANE_ID} url=${URL} mode=control" "AppKit copied current URL in Control mode" 45
+  wait_for_log_after "$COPY_APP_START_LINE" "TermSurf geometry layer=appkit event=copy_current_url_feedback .*pane_id:${PANE_ID} .*note=message=URL copied" "AppKit showed copy-current-URL feedback" 45
+
+  for _ in $(seq 1 20); do
+    CLIPBOARD_AFTER="$(pbpaste)"
+    if [ "$CLIPBOARD_AFTER" = "$URL" ]; then
+      break
+    fi
+    delay 0.25
+  done
+  [ "$CLIPBOARD_AFTER" = "$URL" ] || fail "clipboard after copy-current-url did not match current URL: got=$CLIPBOARD_AFTER expected=$URL"
+  [ "$CLIPBOARD_AFTER" != "$COPY_URL_SENTINEL" ] || fail "copy-current-url left clipboard sentinel unchanged"
+  log "PASS: copy-current-url clipboard matched current URL"
+
+  enter_browser_browse "copy_current_url_browse_guard" "$PANE_ID" "$BROWSER_TAB_ID"
+  BROWSE_COPY_SENTINEL="ISSUE816_COPY_URL_BROWSE_SENTINEL_${TS}"
+  printf '%s' "$BROWSE_COPY_SENTINEL" | pbcopy
+  BROWSE_CLIPBOARD_BEFORE="$(pbpaste)"
+  [ "$BROWSE_CLIPBOARD_BEFORE" = "$BROWSE_COPY_SENTINEL" ] || fail "failed to set clipboard sentinel before Browse-mode Cmd+C"
+
+  BROWSE_COPY_APP_START_LINE="$(log_line_count)"
+  log "copy_current_url_browse_key=cmd+c"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 8 command >>"$HARNESS_LOG" 2>&1
+  delay 1
+  require_no_log_after "$BROWSE_COPY_APP_START_LINE" "CopyCurrentUrl: pane_id=${PANE_ID} url=${URL}" "Browse-mode Cmd+C did not select TermSurf current URL"
+  require_no_log_after "$BROWSE_COPY_APP_START_LINE" "TermSurf geometry layer=appkit event=copy_current_url .*pane_id:${PANE_ID}" "Browse-mode Cmd+C did not run AppKit copy-current-URL"
+  BROWSE_CLIPBOARD_AFTER="$(pbpaste)"
+  [ "$BROWSE_CLIPBOARD_AFTER" = "$BROWSE_COPY_SENTINEL" ] || fail "Browse-mode Cmd+C overwrote clipboard: got=$BROWSE_CLIPBOARD_AFTER expected=$BROWSE_COPY_SENTINEL"
+  log "PASS: Browse-mode Cmd+C left copy-current-URL guard inactive"
 fi
 
 if [ "$SCENARIO" = "named-roamium-debug-launch" ]; then
