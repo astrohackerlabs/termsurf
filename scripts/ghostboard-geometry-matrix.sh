@@ -75,6 +75,7 @@ COLOR_TYPE_COMMAND="$RUN_DIR/color-scheme-type-command.txt"
 COPY_URL_WEB_ROOT="$RUN_DIR/copy-current-url-site"
 INPUT_WEB_ROOT="$RUN_DIR/browser-input-site"
 INPUT_TYPE_COMMAND="$RUN_DIR/browser-input-type-command.txt"
+PROFILE_WEB_ROOT="$RUN_DIR/multi-profile-site"
 NEW_TAB_COMMAND_LOG="$RUN_DIR/new-tab-command.log"
 NEW_TAB_MARKER_COMMAND="$RUN_DIR/new-tab-marker-command.txt"
 SECOND_BROWSER_COMMAND="$RUN_DIR/second-browser-command.txt"
@@ -1686,7 +1687,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|multi-profile-isolation|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -2412,6 +2413,70 @@ PY
   log "browser_input_url=$URL"
 fi
 
+if [ "$SCENARIO" = "multi-profile-isolation" ]; then
+  PROFILE_HTTP_PORT="$(python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+)"
+  mkdir -p "$PROFILE_WEB_ROOT"
+  cat >"$PROFILE_WEB_ROOT/index.html" <<'EOF'
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Issue 818 Profile Fixture</title>
+  </head>
+  <body>
+    <input id="profile-input" value="ISSUE818_PROFILE_INPUT">
+    <script>
+      const params = new URLSearchParams(location.search);
+      const profile = params.get("profile") || "unknown";
+      const key = "issue818-profile-marker";
+      const before = localStorage.getItem(key) || "none";
+      localStorage.setItem(key, profile);
+      const after = localStorage.getItem(key) || "none";
+      console.log(`ISSUE818_PROFILE_STORAGE profile=${profile} before=${before} after=${after}`);
+      document.title = `Issue 818 Profile ${profile} before ${before} after ${after}`;
+      document.getElementById("profile-input").focus();
+    </script>
+  </body>
+</html>
+EOF
+  python3 -m http.server "$PROFILE_HTTP_PORT" --bind 127.0.0.1 --directory "$PROFILE_WEB_ROOT" >>"$HARNESS_LOG" 2>&1 &
+  HTTP_PID="$!"
+  PROFILE_URL_A="http://127.0.0.1:${PROFILE_HTTP_PORT}/index.html?profile=profilea"
+  PROFILE_URL_B="http://127.0.0.1:${PROFILE_HTTP_PORT}/index.html?profile=profileb"
+  URL="$PROFILE_URL_A"
+  for _ in $(seq 1 30); do
+    if python3 - "$URL" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+    then
+      break
+    fi
+    delay 0.25
+  done
+  python3 - "$URL" <<'PY' >/dev/null 2>&1 || fail "multi-profile HTTP fixture did not become ready"
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+  log "profile_web_root=$PROFILE_WEB_ROOT"
+  log "profile_http_pid=$HTTP_PID"
+  log "profile_url_a=$PROFILE_URL_A"
+  log "profile_url_b=$PROFILE_URL_B"
+fi
+
 COMMAND="$RUN_DIR/run-web.sh"
 CONFIG="$RUN_DIR/config"
 WINDOW_BOUNDS="$RUN_DIR/window-bounds.swift"
@@ -2428,6 +2493,14 @@ cat >"$COMMAND" <<EOF
 exec "$WEB" --browser "$ROAMIUM" "$URL"
 EOF
 chmod +x "$COMMAND"
+
+if [ "$SCENARIO" = "multi-profile-isolation" ]; then
+  cat >"$COMMAND" <<EOF
+#!/usr/bin/env bash
+exec "$WEB" --browser "$ROAMIUM" --profile profilea "$PROFILE_URL_A"
+EOF
+  chmod +x "$COMMAND"
+fi
 
 if [ "$SCENARIO" = "named-roamium-debug-launch" ] || [ "$SCENARIO" = "named-roamium-invalid-env" ]; then
   cat >"$COMMAND" <<EOF
@@ -2508,13 +2581,26 @@ EOF
   chmod +x "$COMMAND"
 fi
 
-if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "open-browser-in-new-window" ] || [ "$SCENARIO" = "multiple-windows-with-browsers" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ]; then
+if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "open-browser-in-new-window" ] || [ "$SCENARIO" = "multiple-windows-with-browsers" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
   FIRST_RUN_MARKER="$RUN_DIR/first-web-ran"
   cat >"$COMMAND" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if mkdir "$FIRST_RUN_MARKER" 2>/dev/null; then
   exec "$WEB" --browser "$ROAMIUM" "$URL"
+fi
+printf 'new-tab-command invocation pid=%s\\n' "\$\$" >>"$NEW_TAB_COMMAND_LOG"
+exec /bin/zsh -f -c 'printf "ISSUE809_EXP12_NEW_TAB_READY\\n"; while :; do sleep 60; done'
+EOF
+  chmod +x "$COMMAND"
+fi
+
+if [ "$SCENARIO" = "multi-profile-isolation" ]; then
+  cat >"$COMMAND" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if mkdir "$FIRST_RUN_MARKER" 2>/dev/null; then
+  exec "$WEB" --browser "$ROAMIUM" --profile profilea "$PROFILE_URL_A"
 fi
 printf 'new-tab-command invocation pid=%s\\n' "\$\$" >>"$NEW_TAB_COMMAND_LOG"
 exec /bin/zsh -f -c 'printf "ISSUE809_EXP12_NEW_TAB_READY\\n"; while :; do sleep 60; done'
@@ -2546,7 +2632,7 @@ browser = ""
 EOF
 fi
 
-if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ]; then
+if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "devtools-singleton-guard" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+t=new_tab
 keybind = ctrl+1=goto_tab:1
@@ -3363,7 +3449,7 @@ if [ "$SCENARIO" = "new-terminal-tab-visibility" ]; then
   log "new_tab_command_log=$NEW_TAB_COMMAND_LOG"
   log "new_tab_marker_command=$NEW_TAB_MARKER_COMMAND"
 fi
-if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "gui-active-multi-tab" ]; then
+if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "gui-active-multi-tab" ] || [ "$SCENARIO" = "multi-profile-isolation" ]; then
   log "new_tab_screenshot=$SCREENSHOT_TAB_NEW"
   log "browser_b_screenshot=$SCREENSHOT_TAB_BROWSER_B"
   log "browser_a_restored_screenshot=$SCREENSHOT_TAB_BROWSER_A_RESTORED"
@@ -3632,6 +3718,154 @@ if [ "$SCENARIO" = "browser-state-smoke" ]; then
   wait_for_state_trace_after "$BLANK_TRACE_START_LINE" "event=title_changed[[:space:]]+title=Issue 816 Blank Target" "webtui target blank title" 45
   screencapture -x -o -l"$WID" "$SCREENSHOT_BROWSER_STATE_BLANK"
   log "blank_screenshot_exit=$?"
+fi
+
+if [ "$SCENARIO" = "multi-profile-isolation" ]; then
+  A_SELECTED_TAB_ID="$(extract_selected_tab_id "$APPKIT_PRESENT_LINE")"
+  A_PANE_ID="$PANE_ID"
+  A_BROWSER_TAB_ID="$BROWSER_TAB_ID"
+  A_CONTEXT_ID="$CONTEXT_ID"
+  A_FRAME="$OVERLAY_FRAME"
+  A_FRAME_SIZE="$OVERLAY_FRAME_SIZE"
+  A_FRAME_X="$OVERLAY_FRAME_X"
+  A_FRAME_Y="$OVERLAY_FRAME_Y"
+  A_PIXEL="$APPKIT_PIXEL"
+  log "profile_a_selected_tab_id=$A_SELECTED_TAB_ID"
+  log "profile_a_pane_id=$A_PANE_ID"
+  log "profile_a_browser_tab_id=$A_BROWSER_TAB_ID"
+  log "profile_a_context_id=$A_CONTEXT_ID"
+
+  require_log "SetOverlay: pane_id=${A_PANE_ID} profile=profilea browser=${ROAMIUM}" "profile A SetOverlay uses profilea and absolute Roamium path"
+  require_log "SetOverlay: created pending server key=profilea/${ROAMIUM} pane_count=1" "profile A created profile-scoped server key"
+  A_SPAWN_LINE="$(grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=profilea .*--user-data-dir=.*chromium-profiles/profilea" "$APP_LOG" | tail -1 || true)"
+  [ -n "$A_SPAWN_LINE" ] || fail "missing profile A spawn line with profile-specific user-data-dir"
+  A_SPAWN_PID="$(printf '%s\n' "$A_SPAWN_LINE" | sed -E 's/.* pid=([0-9]+) profile=.*/\1/')"
+  [ -n "$A_SPAWN_PID" ] || fail "failed to extract profile A Roamium pid"
+  log "profile_a_spawn_pid=$A_SPAWN_PID"
+  log "PASS: profile A spawn used profile-specific user-data-dir"
+  wait_for_state_trace "event=console_message.*message=ISSUE818_PROFILE_STORAGE profile=profilea before=none after=profilea" "profile A initial same-origin storage marker" 45
+
+  B_TAB_START_LINE="$(log_line_count)"
+  B_TAB_TRACE_START_LINE="$(trace_line_count)"
+  B_TAB_STATE_START_LINE="$(state_trace_line_count)"
+  log "profile_b_new_tab_keybind=ctrl+t=new_tab"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 17 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  require_log_after "$B_TAB_START_LINE" "dispatching action target=surface action=.new_tab" "profile B native tab action dispatched"
+  require_log_after "$B_TAB_START_LINE" 'starting command command=`/usr/bin/login`' "profile B native tab started login shell"
+  if [ -s "$NEW_TAB_COMMAND_LOG" ]; then
+    fail "profile B native tab inherited the first-run web wrapper"
+  fi
+  log "PASS: profile B native tab did not inherit first-run web wrapper"
+  A_TABBED_PRESENT_LINE="$(wait_for_changed_appkit_frame_after "$B_TAB_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$A_FRAME" "profile A geometry adjusted for native tab bar")"
+  A_TABBED_PIXELS_LINE="$(wait_for_changed_appkit_pixels_after "$B_TAB_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$A_PIXEL" "profile A AppKit pixels adjusted for native tab bar")"
+  A_FRAME="$(extract_overlay_frame "$A_TABBED_PRESENT_LINE")"
+  A_FRAME_SIZE="$(extract_frame_size "$A_TABBED_PRESENT_LINE")"
+  A_FRAME_X="$(extract_frame_x "$A_TABBED_PRESENT_LINE")"
+  A_FRAME_Y="$(extract_frame_y "$A_TABBED_PRESENT_LINE")"
+  A_PIXEL="$(extract_appkit_pixel "$A_TABBED_PIXELS_LINE")"
+  log "profile_a_tabbed_overlay_frame=$A_FRAME"
+  log "profile_a_tabbed_appkit_pixel=$A_PIXEL"
+
+  log "profile_b_select_tab2_keybind=ctrl+2=goto_tab:2"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 19 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  B_SELECTED_LINE="$(wait_for_selected_tab_change_after "$B_TAB_START_LINE" "$A_SELECTED_TAB_ID" "profile B tab selected")"
+  B_SELECTED_TAB_ID="$(extract_selected_tab_id "$B_SELECTED_LINE")"
+  [ -n "$B_SELECTED_TAB_ID" ] || fail "failed to extract profile B selected tab id"
+  log "profile_b_selected_tab_id=$B_SELECTED_TAB_ID"
+
+  printf '"%s" --browser "%s" --profile profileb "%s"' "$WEB" "$ROAMIUM" "$PROFILE_URL_B" >"$SECOND_BROWSER_COMMAND"
+  log "profile_b_command=$(cat "$SECOND_BROWSER_COMMAND")"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$SECOND_BROWSER_COMMAND" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
+
+  B_SET_LINE="$(wait_for_line_after "$B_TAB_START_LINE" "SetOverlay: pane_id=[^ ]+ profile=profileb browser=${ROAMIUM}" "profile B SetOverlay" 60)"
+  B_PANE_ID="$(printf '%s\n' "$B_SET_LINE" | sed -E 's/.*SetOverlay: pane_id=([^ ]+) .*/\1/')"
+  [ -n "$B_PANE_ID" ] || fail "failed to extract profile B pane id"
+  [ "$B_PANE_ID" != "$A_PANE_ID" ] || fail "profile B reused profile A pane id"
+  wait_for_log_after "$B_TAB_START_LINE" "SetOverlay: created pending server key=profileb/${ROAMIUM} pane_count=1" "profile B created profile-scoped server key" 60
+  B_SPAWN_LINE="$(tail -n +"$((B_TAB_START_LINE + 1))" "$APP_LOG" | grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=profileb .*--user-data-dir=.*chromium-profiles/profileb" | tail -1 || true)"
+  [ -n "$B_SPAWN_LINE" ] || fail "missing profile B spawn line with profile-specific user-data-dir"
+  B_SPAWN_PID="$(printf '%s\n' "$B_SPAWN_LINE" | sed -E 's/.* pid=([0-9]+) profile=.*/\1/')"
+  [ -n "$B_SPAWN_PID" ] || fail "failed to extract profile B Roamium pid"
+  [ "$B_SPAWN_PID" != "$A_SPAWN_PID" ] || fail "profile B reused profile A Roamium pid"
+  log "profile_b_spawn_pid=$B_SPAWN_PID"
+  log "PASS: profile B spawn used profile-specific user-data-dir"
+
+  B_CA_CONTEXT_LINE="$(wait_for_line_after "$B_TAB_START_LINE" "TermSurf geometry layer=zig event=ca_context .*pane_id:${B_PANE_ID}" "profile B Zig ca_context" 60)"
+  B_BROWSER_TAB_ID="$(extract_browser_tab_id "$B_CA_CONTEXT_LINE")"
+  B_CONTEXT_ID="$(extract_context_id "$B_CA_CONTEXT_LINE")"
+  [ -n "$B_BROWSER_TAB_ID" ] || fail "failed to extract profile B browser tab id"
+  [ -n "$B_CONTEXT_ID" ] || fail "failed to extract profile B context id"
+  [ "$B_CONTEXT_ID" != "$A_CONTEXT_ID" ] || fail "profile B reused profile A CA/context id"
+  log "profile_b_pane_id=$B_PANE_ID"
+  log "profile_b_browser_tab_id=$B_BROWSER_TAB_ID"
+  log "profile_b_context_id=$B_CONTEXT_ID"
+  if [ "$B_BROWSER_TAB_ID" = "$A_BROWSER_TAB_ID" ]; then
+    log "profile_browser_tab_ids_are_process_local=true"
+  fi
+
+  B_APPKIT_PRESENT_LINE="$(wait_for_line_after "$B_TAB_START_LINE" "TermSurf geometry layer=appkit event=presented .*pane_id:${B_PANE_ID} .*context_id=${B_CONTEXT_ID}" "profile B AppKit presentation" 60)"
+  B_APPKIT_PIXELS_LINE="$(wait_for_line_after "$B_TAB_START_LINE" "TermSurf geometry layer=appkit event=presented_pixels .*pane_id:${B_PANE_ID} .*context_id=${B_CONTEXT_ID}" "profile B AppKit pixels" 60)"
+  B_SELECTED_PRESENTED_TAB_ID="$(extract_selected_tab_id "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME="$(extract_overlay_frame "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME_SIZE="$(extract_frame_size "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME_X="$(extract_frame_x "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME_Y="$(extract_frame_y "$B_APPKIT_PRESENT_LINE")"
+  B_PIXEL="$(extract_appkit_pixel "$B_APPKIT_PIXELS_LINE")"
+  [ "$B_SELECTED_PRESENTED_TAB_ID" = "$B_SELECTED_TAB_ID" ] || fail "profile B selected tab id mismatch: expected=$B_SELECTED_TAB_ID actual=$B_SELECTED_PRESENTED_TAB_ID"
+  log "profile_b_overlay_frame=$B_FRAME"
+  log "profile_b_appkit_pixel=$B_PIXEL"
+  B_PIXEL_WIDTH="${B_PIXEL%x*}"
+  B_PIXEL_HEIGHT="${B_PIXEL#*x}"
+  require_trace_after "$B_TAB_TRACE_START_LINE" "resize tab_id=${B_BROWSER_TAB_ID} pane_id=${B_PANE_ID} pixel_width=${B_PIXEL_WIDTH} pixel_height=${B_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium applied profile B resize to AppKit pixel size"
+  wait_for_state_trace_after "$B_TAB_STATE_START_LINE" "event=console_message.*message=ISSUE818_PROFILE_STORAGE profile=profileb before=none after=profileb" "profile B initial same-origin storage marker" 45
+
+  B_WIN_LINE="$(window_bounds)" || fail "failed to resolve profile B window bounds"
+  IFS=$'\t' read -r _B_WID B_WX B_WY _B_WW _B_WH <<<"$B_WIN_LINE"
+  B_CLICK_X="$(awk -v wx="$B_WX" -v frame_x="$B_FRAME_X" -v frame_size="$B_FRAME_SIZE" 'BEGIN { split(frame_size, parts, "x"); print int(wx + frame_x + (parts[1] / 2) + 0.5) }')"
+  B_CLICK_Y="$(awk -v wy="$B_WY" -v frame_y="$B_FRAME_Y" -v frame_size="$B_FRAME_SIZE" 'BEGIN { split(frame_size, parts, "x"); print int(wy + frame_y + (parts[2] / 2) + 0.5) }')"
+  B_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$B_CLICK_X" "$B_CLICK_Y" "profile_b_area"
+  B_HIT_LINE="$(wait_for_hit_after "$B_HIT_START_LINE" "$B_CONTEXT_ID" "profile B hit-test")"
+  require_text "$B_HIT_LINE" "selected_tab_id:${B_SELECTED_TAB_ID}" "profile B hit-test has selected tab id"
+  require_text "$B_HIT_LINE" "overlay_frame=${B_FRAME}" "profile B hit-test uses profile B frame"
+
+  enter_browser_browse "profile_b" "$B_PANE_ID" "$B_BROWSER_TAB_ID"
+  B_KEY_START_LINE="$(trace_line_count)"
+  printf 'ISSUE818_PROFILE_B_KEY\n' >"$BROWSER_FOCUS_COMMAND"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$BROWSER_FOCUS_COMMAND" >>"$HARNESS_LOG" 2>&1
+  require_trace_after "$B_KEY_START_LINE" "key-event tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "profile B keyboard marker reached profile B"
+  require_no_trace_after "$B_KEY_START_LINE" "key-event tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "profile B keyboard marker did not reach profile A"
+  leave_browser_browse "profile_b" "$B_PANE_ID" "$B_BROWSER_TAB_ID"
+
+  A_RETURN_START_LINE="$(log_line_count)"
+  A_RETURN_STATE_START_LINE="$(state_trace_line_count)"
+  log "profile_a_return_keybind=ctrl+p=previous_tab"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 35 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  wait_for_log_after "$A_RETURN_START_LINE" "Pane focus changed: pane_id=${A_PANE_ID} focused=true" "profile A pane focused again after tab switch"
+  A_RETURN_WIN_LINE="$(window_bounds)" || fail "failed to resolve profile A return window bounds"
+  IFS=$'\t' read -r _A_WID A_WX A_WY _A_WW _A_WH <<<"$A_RETURN_WIN_LINE"
+  A_CLICK_X="$(awk -v wx="$A_WX" -v frame_x="$A_FRAME_X" -v frame_size="$A_FRAME_SIZE" 'BEGIN { split(frame_size, parts, "x"); print int(wx + frame_x + (parts[1] / 2) + 0.5) }')"
+  A_CLICK_Y="$(awk -v wy="$A_WY" -v frame_y="$A_FRAME_Y" -v frame_size="$A_FRAME_SIZE" 'BEGIN { split(frame_size, parts, "x"); print int(wy + frame_y + (parts[2] / 2) + 0.5) }')"
+  A_HIT_START_LINE="$(log_line_count)"
+  click_global_point "$A_CLICK_X" "$A_CLICK_Y" "profile_a_return_area"
+  A_HIT_LINE="$(wait_for_hit_after "$A_HIT_START_LINE" "$A_CONTEXT_ID" "profile A return hit-test")"
+  require_text "$A_HIT_LINE" "selected_tab_id:${A_SELECTED_TAB_ID}" "profile A return hit-test has selected tab id"
+  require_text "$A_HIT_LINE" "overlay_frame=${A_FRAME}" "profile A return hit-test uses profile A frame"
+  enter_browser_browse "profile_a_return" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+  log "profile_a_reload_key=cmd+r"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 15 command >>"$HARNESS_LOG" 2>&1
+  wait_for_state_trace_after "$A_RETURN_STATE_START_LINE" "event=console_message.*message=ISSUE818_PROFILE_STORAGE profile=profilea before=profilea after=profilea" "profile A same-origin storage marker after profile B" 45
+
+  A_KEY_START_LINE="$(trace_line_count)"
+  printf 'ISSUE818_PROFILE_A_KEY\n' >"$BROWSER_FOCUS_COMMAND"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$BROWSER_FOCUS_COMMAND" >>"$HARNESS_LOG" 2>&1
+  require_trace_after "$A_KEY_START_LINE" "key-event tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "profile A keyboard marker reached profile A"
+  require_no_trace_after "$A_KEY_START_LINE" "key-event tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "profile A keyboard marker did not reach profile B"
+  leave_browser_browse "profile_a_return" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
 fi
 
 if [ "$SCENARIO" = "javascript-dialog-smoke" ]; then

@@ -83,6 +83,11 @@ Pass criteria:
 - Profile A reports only the profile A `localStorage` marker from that origin.
 - Profile B reports only the profile B `localStorage` marker from that origin.
 
+Browser tab id uniqueness is interpreted with the profile/process identity. If
+two profiles run in distinct Roamium processes, both processes may legitimately
+report browser tab id `1`; in that case, profile/server key, pane id, Roamium
+pid, and CA context id must be distinct.
+
 Partial criteria:
 
 - Profile-specific process/server identity and routing isolation are proven, but
@@ -137,3 +142,85 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Pass
+
+The `multi-profile-isolation` runtime scenario was added to
+`scripts/ghostboard-geometry-matrix.sh` and passed at timestamp
+`20260618-013435`.
+
+Verification run:
+
+```bash
+bash -n scripts/ghostboard-geometry-matrix.sh
+git diff --check
+scripts/ghostboard-geometry-matrix.sh multi-profile-isolation
+```
+
+Runtime artifacts:
+
+- App log:
+  `/Users/astrohacker/dev/termsurf/logs/ghostboard-geometry-multi-profile-isolation-app-20260618-013435.log`
+- Roamium trace:
+  `/Users/astrohacker/dev/termsurf/logs/ghostboard-geometry-multi-profile-isolation-roamium-20260618-013435.log`
+- Harness log:
+  `/Users/astrohacker/dev/termsurf/logs/ghostboard-geometry-multi-profile-isolation-harness-20260618-013435.log`
+
+Observed pass evidence:
+
+- Profile A launched with `profile=profilea`, server key
+  `profilea//Users/astrohacker/dev/termsurf/chromium/src/out/Default/roamium`,
+  Roamium pid `10803`, and a `--user-data-dir` under
+  `chromium-profiles/profilea`.
+- Profile B launched with `profile=profileb`, server key
+  `profileb//Users/astrohacker/dev/termsurf/chromium/src/out/Default/roamium`,
+  Roamium pid `11195`, and a `--user-data-dir` under
+  `chromium-profiles/profileb`.
+- Profile A and profile B had distinct native tab/window ids, pane ids, Roamium
+  pids, and CA context ids.
+- Profile B hit-testing targeted profile B's context and profile B keyboard
+  input reached only profile B.
+- Switching back to profile A focused profile A's pane, hit-testing targeted
+  profile A's context, and profile A keyboard input reached only profile A.
+- Both profiles loaded the same local origin. Profile A first observed
+  `before=none after=profilea`; profile B first observed
+  `before=none after=profileb`; after profile B ran, profile A reloaded and
+  observed `before=profilea after=profilea`.
+
+The only pass-criteria adjustment discovered during implementation was that
+browser tab ids are process-local. Both profile A and profile B legitimately
+reported browser tab id `1` because they were backed by separate Roamium
+processes. The durable cross-profile identity is therefore the combination of
+profile/server key, pane id, Roamium pid, and CA context id, not browser tab id
+alone.
+
+## Conclusion
+
+Ghostboard's runtime multi-profile isolation is proven for simultaneous profiles
+in separate native tabs. Distinct profiles create distinct server keys, spawn
+distinct Roamium processes with profile-specific user-data directories, maintain
+separate CA contexts and panes, isolate same-origin `localStorage`, and do not
+leak keyboard or mouse routing across active profiles.
+
+The next experiment should move to another uncovered Issue 818 lifecycle row,
+such as warm reconnect/server reuse or stale process cleanup, rather than
+continuing multi-profile isolation.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Ampere the 2nd`:
+
+- **Verdict:** Approved.
+- **Required findings:** None.
+- **Optional finding:** The original pass/fail criteria still said browser tab
+  ids must be distinct, while the result documented that tab ids are
+  process-local. Fixed by adding a criteria note that browser tab id uniqueness
+  is interpreted with the profile/process identity, and that distinct profiles
+  in distinct Roamium processes may both report browser tab id `1`.
+- **Checks performed by reviewer:**
+  `bash -n scripts/ghostboard-geometry-matrix.sh`, `git diff --check`,
+  confirmation that the last commit was the plan commit `7d44f7203`,
+  confirmation that the working-tree diff was limited to the harness and Issue
+  818 docs, and inspection of the claimed `20260618-013435` runtime logs.
