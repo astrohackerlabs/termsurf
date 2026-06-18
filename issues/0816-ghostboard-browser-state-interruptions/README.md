@@ -52,4 +52,4 @@ owning component before any fix.
 - [Experiment 5: Prove renderer crash recovery](05-prove-renderer-crash-recovery.md)
   — **Pass**
 - [Experiment 6: Prove runtime color scheme](06-prove-runtime-color-scheme.md) —
-  **Designed**
+  **Pass**

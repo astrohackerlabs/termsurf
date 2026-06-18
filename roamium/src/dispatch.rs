@@ -515,7 +515,16 @@ pub fn handle_message(msg: &TermSurfMessage) {
         }
         Msg::SetColorScheme(m) => {
             if let Some(t) = find_by_tab_id(m.tab_id) {
+                trace_pdf_input(format!(
+                    "set-color-scheme tab={} pane={} dark={} ffi=ts_set_color_scheme",
+                    m.tab_id, t.pane_id, m.dark
+                ));
                 unsafe { ffi::ts_set_color_scheme(t.handle, m.dark) };
+            } else {
+                trace_pdf_input(format!(
+                    "set-color-scheme tab={} result=missing-tab dark={}",
+                    m.tab_id, m.dark
+                ));
             }
         }
         Msg::QueryTabsRequest(_) => {

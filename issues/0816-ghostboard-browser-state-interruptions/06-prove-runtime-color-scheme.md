@@ -192,3 +192,106 @@ Fresh-context adversarial design review by Codex subagent `Lagrange`:
   separate result commit before moving to the next experiment.
 - **Re-review verdict:** Approved. The reviewer confirmed the completion gate is
   now present and no required findings remain.
+
+## Result
+
+**Result:** Pass
+
+Implemented a focused `color-scheme-smoke` scenario for debug Ghostboard.
+
+Code changes:
+
+- `roamium/src/dispatch.rs` now emits a stable `set-color-scheme` trace line
+  when direct `SetColorScheme` messages reach the active browser tab.
+- `webtui/src/main.rs` now records a test-only `color_scheme_command`
+  state-trace event when `:dark` commands are accepted.
+- `scripts/ghostboard-geometry-matrix.sh` now has a `color-scheme-smoke`
+  scenario that:
+  - serves a local page using `matchMedia("(prefers-color-scheme: dark)")`;
+  - reports the page-observed scheme with console markers and unique title
+    updates;
+  - drives `:dark off`, `:dark on`, and `:dark system` through webtui command
+    mode;
+  - asserts webtui command evidence, Roamium direct-message evidence, and
+    page-observed media-query evidence for each command.
+
+Verification:
+
+- `prettier --write --prose-wrap always --print-width 80 issues/0816-ghostboard-browser-state-interruptions/README.md issues/0816-ghostboard-browser-state-interruptions/06-prove-runtime-color-scheme.md`
+  — pass.
+- `cargo fmt -- webtui/src/main.rs roamium/src/dispatch.rs` — pass.
+- `bash -n scripts/ghostboard-geometry-matrix.sh` — pass.
+- `cargo check -p webtui` — pass.
+- `cargo build -p webtui` — pass.
+- `cargo check -p roamium` — pass.
+- `./scripts/build.sh roamium` — pass.
+- `shellcheck scripts/ghostboard-geometry-matrix.sh` — not run; `shellcheck` is
+  not installed on this VM.
+- `git diff --check` — pass.
+- `scripts/ghostboard-geometry-matrix.sh color-scheme-smoke` — pass at timestamp
+  `20260617-235140`.
+
+Passing runtime evidence:
+
+- Harness log:
+  `logs/ghostboard-geometry-color-scheme-smoke-harness-20260617-235140.log`.
+- App log:
+  `logs/ghostboard-geometry-color-scheme-smoke-app-20260617-235140.log`.
+- Roamium trace:
+  `logs/ghostboard-geometry-color-scheme-smoke-roamium-20260617-235140.log`.
+- webtui state trace:
+  `logs/ghostboard-geometry-color-scheme-smoke-webtui-20260617-235140.log`.
+- Screenshot:
+  `logs/ghostboard-geometry-color-scheme-smoke-screenshot-20260617-235140.png`.
+
+Key passing assertions:
+
+- `:dark off` produced webtui
+  `event=color_scheme_command action=off scheme=light dark=false tab_id=1`,
+  Roamium `set-color-scheme tab=1 ... dark=false ffi=ts_set_color_scheme`, and
+  page evidence `ISSUE816_COLOR_SCHEME ... scheme=light`.
+- `:dark on` produced webtui
+  `event=color_scheme_command action=on scheme=dark dark=true tab_id=1`, Roamium
+  `set-color-scheme tab=1 ... dark=true ffi=ts_set_color_scheme`, and page
+  evidence `ISSUE816_COLOR_SCHEME ... scheme=dark`.
+- `:dark system` produced webtui
+  `event=color_scheme_command action=system scheme=light dark=false tab_id=1`,
+  Roamium `set-color-scheme tab=1 ... dark=false ffi=ts_set_color_scheme`, and
+  page evidence `ISSUE816_COLOR_SCHEME ... scheme=light`.
+- All commands used the same browser tab and pane IDs for the active Ghostboard
+  browser pane.
+
+The first runtime attempt failed only because the fixture reused the same title
+for repeated light reports, so Chromium did not emit a fresh `TitleChanged`
+after `:dark off`. The fixture now includes a sequence number in each title,
+which provides durable post-command title evidence without weakening the
+page-level console/media-query assertions.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Schrodinger`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The experiment recorded `## Result` and `## Conclusion`,
+  but did not include a `## Completion Review` section ready to record the
+  completion-review verdict and any findings/fixes.
+- **Resolution:** Accepted. This section now records the completion-review
+  finding and resolution.
+- **Implementation review:** The reviewer found no implementation-scope,
+  protocol-behavior, or runtime-evidence blockers. The reviewer independently
+  verified `prettier --check`, `cargo fmt --check`, `bash -n`,
+  `cargo check -p webtui`, `cargo check -p roamium`, and `git diff --check`.
+- **Re-review verdict:** Approved. The reviewer confirmed the completion-review
+  section records the prior finding and resolution, with no required findings
+  remaining.
+
+## Conclusion
+
+Post-ready runtime color-scheme changes are proven under debug Ghostboard for
+the direct webtui-to-Roamium path. The page observes `prefers-color-scheme`
+changes for `:dark on` and returns to light for `:dark off` and the current
+`:dark system` implementation.
+
+This experiment did not fix or prove initial tab-create dark-state inheritance
+or Ghostboard compositor-side `SetColorScheme` fallback. Those remain separate
+appearance/fallback questions. The next Issue 816 gap is copy-current-URL.

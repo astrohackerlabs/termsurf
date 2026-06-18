@@ -1061,8 +1061,25 @@ fn main() -> io::Result<()> {
                                         DarkAction::Off => false,
                                         DarkAction::System => false,
                                     };
+                                    let action_label = match action {
+                                        DarkAction::Toggle => "toggle",
+                                        DarkAction::On => "on",
+                                        DarkAction::Off => "off",
+                                        DarkAction::System => "system",
+                                    };
                                     is_dark = dark;
                                     let scheme = if dark { "dark" } else { "light" };
+                                    if let Some(trace) = state_trace.as_mut() {
+                                        trace.write(
+                                            "color_scheme_command",
+                                            &[
+                                                ("action", action_label.to_string()),
+                                                ("scheme", scheme.to_string()),
+                                                ("dark", dark.to_string()),
+                                                ("tab_id", current_tab_id.to_string()),
+                                            ],
+                                        );
+                                    }
                                     if let Some(ref bc) = browser_conn {
                                         bc.send_set_color_scheme(scheme);
                                     }
