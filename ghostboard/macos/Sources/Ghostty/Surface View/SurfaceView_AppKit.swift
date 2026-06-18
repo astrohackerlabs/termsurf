@@ -1840,6 +1840,13 @@ extension Ghostty {
                 }
             }
 
+            if forwarded != 0 {
+                termSurfLogGeometry(
+                    event: "mouse_forwarded",
+                    hit: true,
+                    webPoint: CGPoint(x: point.x, y: point.y),
+                    note: "kind=event ns_event=\(event.type.rawValue) type=\(type) button=\(button) click_count=\(max(event.clickCount, 1)) modifiers=\(modifiers) terminal_fallback=false")
+            }
             return forwarded != 0
         }
 
@@ -1853,7 +1860,17 @@ extension Ghostty {
             }
 
             let paneID = id.uuidString
-            let modifiers = termSurfModifiers(event.modifierFlags, pressedButtons: true)
+            var modifiers = termSurfModifiers(event.modifierFlags, pressedButtons: true)
+            switch event.type {
+            case .leftMouseDragged:
+                modifiers |= 64
+            case .rightMouseDragged:
+                modifiers |= 256
+            case .otherMouseDragged:
+                modifiers |= 128
+            default:
+                break
+            }
             let forwarded: Int32 = paneID.withCString { paneIDPointer in
                 termsurf_forward_mouse_move(
                     paneIDPointer,
@@ -1865,6 +1882,11 @@ extension Ghostty {
             if forwarded != 0 {
                 termsurfMouseOverOverlay = true
                 applyTermSurfCursorIfNeeded()
+                termSurfLogGeometry(
+                    event: "mouse_forwarded",
+                    hit: true,
+                    webPoint: CGPoint(x: point.x, y: point.y),
+                    note: "kind=move ns_event=\(event.type.rawValue) modifiers=\(modifiers) terminal_fallback=false")
             }
             return forwarded != 0
         }

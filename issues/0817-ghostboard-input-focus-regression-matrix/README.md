@@ -43,4 +43,4 @@ manual or screenshot-heavy cases separated from fast smoke tests.
 - [Experiment 2: Prove browser input granularity](02-prove-browser-input-granularity.md)
   — **Partial**
 - [Experiment 3: Fix browser drag forwarding](03-fix-browser-drag-forwarding.md)
-  — **Designed**
+  — **Pass**

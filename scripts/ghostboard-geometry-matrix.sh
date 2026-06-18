@@ -179,6 +179,27 @@ wait_for_log_after() {
   fail "timed out waiting for $label"
 }
 
+LOG_MATCH_LINE=0
+wait_for_log_after_ordered() {
+  local start_line="$1"
+  local pattern="$2"
+  local label="$3"
+  local attempts="${4:-30}"
+  local match=""
+  local relative_line=""
+  for _ in $(seq 1 "$attempts"); do
+    match="$(tail -n +"$((start_line + 1))" "$APP_LOG" | grep -n -E "$pattern" | head -n 1 || true)"
+    if [ -n "$match" ]; then
+      relative_line="${match%%:*}"
+      LOG_MATCH_LINE=$((start_line + relative_line))
+      log "PASS: $label"
+      return 0
+    fi
+    delay 1
+  done
+  fail "timed out waiting for $label"
+}
+
 require_trace() {
   local needle="$1"
   local label="$2"
@@ -3980,8 +4001,14 @@ if [ "$SCENARIO" = "browser-input-granularity" ]; then
   wait_for_state_trace_after "$TRIPLE_CLICK_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=click .*detail=3" "page observed triple-click detail" 45
 
   DRAG_START_LINE="$(state_trace_line_count)"
+  DRAG_APP_START_LINE="$(log_line_count)"
   log "browser_input_drag_points=${DRAG_START_X},${DRAG_START_Y}-${DRAG_END_X},${DRAG_END_Y}"
   swift "$ROOT/scripts/ghostty-app/inject.swift" drag "$DRAG_START_X" "$DRAG_START_Y" "$DRAG_END_X" "$DRAG_END_Y" >>"$HARNESS_LOG" 2>&1
+  wait_for_log_after_ordered "$DRAG_APP_START_LINE" "TermSurf geometry layer=appkit event=mouse_forwarded .*pane_id:${PANE_ID} .*note=kind=event .*type=down .*button=left .*terminal_fallback=false" "browser drag down consumed by TermSurf overlay"
+  DRAG_APP_DOWN_LINE="$LOG_MATCH_LINE"
+  wait_for_log_after_ordered "$DRAG_APP_DOWN_LINE" "TermSurf geometry layer=appkit event=mouse_forwarded .*pane_id:${PANE_ID} .*note=kind=move .*ns_event=6 .*modifiers=.*64 .*terminal_fallback=false" "browser drag move consumed by TermSurf overlay"
+  DRAG_APP_MOVE_LINE="$LOG_MATCH_LINE"
+  wait_for_log_after_ordered "$DRAG_APP_MOVE_LINE" "TermSurf geometry layer=appkit event=mouse_forwarded .*pane_id:${PANE_ID} .*note=kind=event .*type=up .*button=left .*terminal_fallback=false" "browser drag up consumed by TermSurf overlay"
   wait_for_state_trace_after "$DRAG_START_LINE" "event=console_message.*message=ISSUE817_INPUT .*kind=selection .*text=ISSUE817_BROWSER_DRAG_TEXT" "page observed browser drag selection" 45
 
   BROWSER_SELECTION_SENTINEL="ISSUE817_TERMINAL_SELECTION_SENTINEL_${TS}"

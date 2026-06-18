@@ -118,3 +118,99 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Pass
+
+Implemented the scoped Ghostboard drag-forwarding fix and tightened the
+`browser-input-granularity` scenario so the passing row proves both browser drag
+selection and direct TermSurf overlay consumption.
+
+Source and harness changes:
+
+- `ghostboard/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
+  preserves explicit button-state modifier bits for AppKit drag move events
+  before forwarding the move to Roamium. Left-button drags now carry modifier
+  bit `64`; right- and other-button drags preserve their corresponding bits.
+- The same AppKit forwarding path now emits a narrow `mouse_forwarded` geometry
+  trace for TermSurf overlay mouse events and moves. The trace records the
+  forwarded kind, AppKit event type, button, click count, modifiers, and
+  `terminal_fallback=false`.
+- `scripts/ghostboard-geometry-matrix.sh` now asserts that the browser drag
+  down, AppKit dragged move, and drag up were consumed by TermSurf overlay
+  forwarding in order. The move assertion specifically requires AppKit
+  `ns_event=6` and the active left-button modifier.
+
+Verification performed:
+
+- `bash -n scripts/ghostboard-geometry-matrix.sh` — pass.
+- `swiftc -typecheck scripts/ghostty-app/inject.swift` — pass.
+- `git diff --check` — pass.
+- `./build.nu --configuration Debug --action build` from `ghostboard/macos` —
+  pass. The build still reports the pre-existing `GhosttyPackage.swift` Sendable
+  warning, the pre-existing `SurfaceView_AppKit.swift` Swift 6 actor warning,
+  and dSYM symbol warnings.
+- `scripts/ghostboard-geometry-matrix.sh browser-input-granularity` — pass.
+
+Passing runtime evidence:
+
+- Harness log:
+  `logs/ghostboard-geometry-browser-input-granularity-harness-20260618-010522.log`
+- App log:
+  `logs/ghostboard-geometry-browser-input-granularity-app-20260618-010522.log`
+- Roamium trace:
+  `logs/ghostboard-geometry-browser-input-granularity-roamium-20260618-010522.log`
+- Web TUI state trace:
+  `logs/ghostboard-geometry-browser-input-granularity-webtui-20260618-010522.log`
+- Screenshot:
+  `logs/ghostboard-geometry-browser-input-granularity-screenshot-20260618-010522.png`
+
+The passing run proves:
+
+- browser text input, special keys, caret insertion/deletion, tab focus, enter
+  activation, single click, double click, triple click, and modifier-click still
+  pass;
+- the drag down was consumed by TermSurf overlay forwarding;
+- the AppKit dragged move was consumed by TermSurf overlay forwarding after the
+  down event with `ns_event=6` and `modifiers=64`;
+- the drag up was consumed by TermSurf overlay forwarding after the dragged
+  move;
+- Roamium received browser drag moves with the active left-button modifier;
+- the page reported non-empty browser drag selection for
+  `ISSUE817_BROWSER_DRAG_TEXT`;
+- Browse-mode `Cmd+C` copied `ISSUE817_BROWSER_DRAG_TEXT`, proving the browser
+  selection, not terminal selection, owned the active copy target; and
+- returning to Control mode cleared browser focus.
+
+## Conclusion
+
+The confirmed Ghostboard-owned drag gap was in the AppKit move forwarding path:
+drag-generated mouse moves did not reliably carry an active mouse-button
+modifier to Roamium. Preserving the drag button bit fixes Chromium drag
+selection, and the new direct AppKit `mouse_forwarded` assertions make the
+regression guard durable without relying only on clipboard state.
+
+Issue 817 now has a focused automated row for browser text, special keys,
+click-count granularity, modifier-click, drag selection, copy of browser
+selection, focus return to Control mode, and direct overlay drag consumption.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent `Heisenberg`:
+
+- **Initial verdict:** Changes required.
+- **Finding 1:** The drag-move assertion could match a non-drag mouse move with
+  the left-button modifier and did not prove ordered down → dragged move → up.
+  Fixed by adding an ordered AppKit log matcher and requiring the drag move to
+  include `ns_event=6` and `modifiers=64` after the down event and before the up
+  event.
+- **Re-verification:** After the fix,
+  `bash -n scripts/ghostboard-geometry-matrix.sh`,
+  `swiftc -typecheck scripts/ghostty-app/inject.swift`, `git diff --check`, and
+  `scripts/ghostboard-geometry-matrix.sh browser-input-granularity` all passed.
+- **Final verdict:** Approved. The reviewer confirmed the ordered assertions now
+  search after the matched down line, require `ns_event=6` and `modifiers=64`
+  for the dragged move, then search after the matched move line for the up
+  event. The reviewer also confirmed the `20260618-010522` app and harness logs
+  prove that order and reported no new Required findings.
