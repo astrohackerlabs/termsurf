@@ -35,4 +35,4 @@ Verification should include:
 - [Experiment 1: Wire GUI active state into Roamium](01-wire-gui-active-state.md)
   — **Partial**
 - [Experiment 2: Prove active state across browser tabs](02-prove-active-state-across-browser-tabs.md)
-  — **Designed**
+  — **Pass**

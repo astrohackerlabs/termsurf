@@ -144,3 +144,97 @@ Fresh-context adversarial review by Codex subagent `Herschel`:
   to non-mutating `swiftlint lint --strict` and described the baseline worktree
   as temporary and disposable.
 - **Re-review verdict:** Approved.
+
+## Result
+
+**Result:** Pass
+
+Implemented a focused `gui-active-multi-tab` regression scenario in
+`scripts/ghostboard-geometry-matrix.sh`. The scenario reuses the existing
+native-tab browser flow, then explicitly tests app deactivate/reactivate cycles
+with two live browser tabs:
+
+- browser A: pane `03D8B076-5CD3-42A5-B640-9F6E7F733FDC`, browser tab `1`;
+- browser B: pane `051352E0-0AA6-4764-B649-52785AFDD5B5`, browser tab `2`.
+
+The final passing run was:
+
+- harness log:
+  `logs/ghostboard-geometry-gui-active-multi-tab-harness-20260617-200354.log`;
+- Roamium trace:
+  `logs/ghostboard-geometry-gui-active-multi-tab-roamium-20260617-200354.log`;
+- Ghostboard app log:
+  `logs/ghostboard-geometry-gui-active-multi-tab-app-20260617-200354.log`.
+
+The Roamium trace shows the required app-level inactive broadcasts and
+focused-tab activation targets:
+
+- `tab=0 active=false reason=gui_deactivated target_count=2`;
+- `tab=2 ... active=true reason=gui_activated target_count=1` while browser B is
+  focused;
+- `tab=0 active=false reason=gui_deactivated target_count=2`;
+- `tab=1 ... active=true reason=gui_activated target_count=1` after switching
+  focus back to browser A.
+
+The harness also verified that no stale active message was emitted for the
+unfocused tab after either activation boundary:
+
+- `PASS: gui_active_browser_b Roamium did not receive stale active state for unfocused browser`;
+- `PASS: gui_active_browser_a Roamium did not receive stale active state for unfocused browser`.
+
+Finally, the scenario sent deterministic keyboard markers after each activation
+cycle and verified they reached only the focused browser:
+
+- `PASS: gui-active browser B after activation keyboard marker reached active browser`;
+- `PASS: gui-active browser B after activation keyboard marker did not reach inactive browser 1`;
+- `PASS: gui-active browser A after activation keyboard marker reached active browser`;
+- `PASS: gui-active browser A after activation keyboard marker did not reach inactive browser 1`.
+
+Verification run in the current worktree:
+
+- `bash -n scripts/ghostboard-geometry-matrix.sh` passed.
+- `shellcheck scripts/ghostboard-geometry-matrix.sh` could not run because
+  `shellcheck` is not installed in this VM.
+- `cargo check -p roamium` passed.
+- `cd ghostboard && zig build -Demit-macos-app=false` passed.
+- `cd ghostboard && macos/build.nu --scheme Ghostty --configuration Debug --action build`
+  passed after the Zig build generated `GhosttyKit.xcframework`.
+- `scripts/ghostboard-geometry-matrix.sh gui-active-multi-tab` passed.
+
+Broad test-target classification:
+
+- `cd ghostboard && swiftlint lint --strict` fails in both baseline and current
+  worktrees because `swiftlint` is not installed in this VM.
+- `cd ghostboard && zig build test` fails in both baseline and current worktrees
+  with pre-existing Ghostty test module/linkage failures, including unresolved
+  `@testable import Ghostty` and unresolved TermSurf bridge symbols such as
+  `_termsurf_clear_overlay`, `_termsurf_open_split`,
+  `_termsurf_present_overlay`, and `_termsurf_set_cursor`.
+- `cd ghostboard && macos/build.nu --scheme Ghostty --configuration Debug --action test`
+  fails in both baseline and current worktrees before running tests because the
+  Ghostty test target cannot resolve or link the app module.
+
+Those broad target failures are therefore classified as pre-existing local
+test-harness/environment gaps, not regressions caused by Issue 812 Experiment 2.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Noether`:
+
+- **Verdict:** Approved.
+- **Required findings:** None.
+- **Evidence checked:** the result was still uncommitted; the diff was scoped to
+  `scripts/ghostboard-geometry-matrix.sh` and Issue 812 docs;
+  `bash -n scripts/ghostboard-geometry-matrix.sh` and `git diff --check` passed;
+  `shellcheck` was unavailable; the logs showed two distinct browser tabs, both
+  activation directions, and a final `PASS: scenario gui-active-multi-tab`; the
+  experiment file had Result and Conclusion sections, and the README status
+  matched.
+
+## Conclusion
+
+Experiment 2 closes the verification gap left by Experiment 1. Ghostboard now
+has a regression scenario proving that GUI deactivation broadcasts inactive
+state to all live browser targets, GUI activation targets only the currently
+focused browser tab, switching native tabs changes the next activation target,
+and browser keyboard focus remains scoped to the focused tab after activation.

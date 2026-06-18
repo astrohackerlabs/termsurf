@@ -1350,8 +1350,38 @@ type_marker_require_only() {
   fi
 }
 
+assert_gui_active_cycle() {
+  local label="$1"
+  local active_tab_id="$2"
+  local active_pane_id="$3"
+  local inactive_tab_id="$4"
+  local inactive_pane_id="$5"
+  local app_start_line
+  local trace_start_line
+  local hide_result
+  local show_result
+
+  app_start_line="$(log_line_count)"
+  trace_start_line="$(trace_line_count)"
+  log "${label}_hide_show=deactivate-reactivate"
+  hide_result="$(swift "$HIDE_APP" "$PID" hide >>"$HARNESS_LOG" 2>&1; tail -1 "$HARNESS_LOG")"
+  [ "$hide_result" = "hidden" ] || fail "$label app hide did not report hidden: $hide_result"
+  log "PASS: $label app hide reported hidden"
+  delay 1
+  show_result="$(swift "$HIDE_APP" "$PID" show >>"$HARNESS_LOG" 2>&1; tail -1 "$HARNESS_LOG")"
+  [ "$show_result" = "visible" ] || fail "$label app show did not report visible: $show_result"
+  log "PASS: $label app show reported visible"
+  delay 1
+
+  require_log_after "$app_start_line" "SetGuiActive: tab_id=0 active=false reason=gui_deactivated" "$label Ghostboard sent inactive broadcast"
+  require_trace_after "$trace_start_line" "set-gui-active tab=0 active=false reason=gui_deactivated" "$label Roamium received inactive broadcast"
+  require_log_after "$app_start_line" "SetGuiActive: pane_id=${active_pane_id} tab_id=${active_tab_id} active=true reason=gui_activated" "$label Ghostboard sent active state to focused browser"
+  require_trace_after "$trace_start_line" "set-gui-active tab=${active_tab_id} pane=${active_pane_id} active=true reason=gui_activated target_count=1" "$label Roamium received active state for focused browser"
+  require_no_trace_after "$trace_start_line" "set-gui-active tab=${inactive_tab_id} pane=${inactive_pane_id} active=true reason=gui_activated" "$label Roamium did not receive stale active state for unfocused browser"
+}
+
 case "$SCENARIO" in
-  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|mouse-after-geometry-change|keyboard-after-tab-window-switch) ;;
+  initial-open|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -1391,7 +1421,7 @@ EOF
   chmod +x "$COMMAND"
 fi
 
-if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "open-browser-in-new-window" ] || [ "$SCENARIO" = "multiple-windows-with-browsers" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ]; then
+if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "open-browser-in-new-window" ] || [ "$SCENARIO" = "multiple-windows-with-browsers" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ]; then
   FIRST_RUN_MARKER="$RUN_DIR/first-web-ran"
   cat >"$COMMAND" <<EOF
 #!/usr/bin/env bash
@@ -1410,7 +1440,7 @@ window-save-state = never
 initial-command = direct:$COMMAND
 EOF
 
-if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ]; then
+if [ "$SCENARIO" = "new-terminal-tab-visibility" ] || [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "keyboard-after-tab-window-switch" ] || [ "$SCENARIO" = "gui-active-multi-tab" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+t=new_tab
 keybind = ctrl+1=goto_tab:1
@@ -2020,7 +2050,7 @@ if [ "$SCENARIO" = "new-terminal-tab-visibility" ]; then
   log "new_tab_command_log=$NEW_TAB_COMMAND_LOG"
   log "new_tab_marker_command=$NEW_TAB_MARKER_COMMAND"
 fi
-if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ]; then
+if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "gui-active-multi-tab" ]; then
   log "new_tab_screenshot=$SCREENSHOT_TAB_NEW"
   log "browser_b_screenshot=$SCREENSHOT_TAB_BROWSER_B"
   log "browser_a_restored_screenshot=$SCREENSHOT_TAB_BROWSER_A_RESTORED"
@@ -3336,7 +3366,7 @@ if [ "$SCENARIO" = "new-terminal-tab-visibility" ]; then
   log "back_tab_screenshot_exit=$?"
 fi
 
-if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ]; then
+if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser-tab" ] || [ "$SCENARIO" = "gui-active-multi-tab" ]; then
   A_SELECTED_TAB_ID="$(extract_selected_tab_id "$APPKIT_PRESENT_LINE")"
   [ -n "$A_SELECTED_TAB_ID" ] || fail "could not extract browser A selected tab id"
   A_PANE_ID="$PANE_ID"
@@ -3593,7 +3623,7 @@ if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser
     [ "$BROWSER_B_TRACE_START_LINE" -lt "$CLOSE_TAB_TRACE_START_LINE" ] || fail "trace boundaries for browser B close were not monotonic"
   fi
 
-  if [ "$SCENARIO" = "open-browser-in-new-tab" ]; then
+  if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "gui-active-multi-tab" ]; then
   SWITCH_A_START_LINE="$(log_line_count)"
   SWITCH_A_TRACE_START_LINE="$(trace_line_count)"
   log "switch_to_browser_a_keybind=ctrl+p=previous_tab"
@@ -3670,6 +3700,31 @@ if [ "$SCENARIO" = "open-browser-in-new-tab" ] || [ "$SCENARIO" = "close-browser
   require_no_trace_after "$B_RESTORE_KEY_START_LINE" "key-event tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "browser B restored keyboard marker did not reach browser A"
   screencapture -x -o -l"$TAB2_SELECTED_TAB_ID" "$SCREENSHOT_TAB_BROWSER_B_RESTORED"
   log "browser_b_restored_screenshot_exit=$?"
+
+  if [ "$SCENARIO" = "gui-active-multi-tab" ]; then
+    assert_gui_active_cycle "gui_active_browser_b" "$B_BROWSER_TAB_ID" "$B_PANE_ID" "$A_BROWSER_TAB_ID" "$A_PANE_ID"
+    type_marker_require_only "gui-active browser B after activation" "ISSUE812_EXP2_BROWSER_B_ACTIVE" "$B_BROWSER_TAB_ID" "$B_PANE_ID" "$A_BROWSER_TAB_ID" "$A_PANE_ID"
+    leave_browser_browse "gui_active_browser_b" "$B_PANE_ID" "$B_BROWSER_TAB_ID"
+
+    GUI_ACTIVE_SWITCH_A_START_LINE="$(log_line_count)"
+    log "gui_active_switch_to_browser_a_keybind=ctrl+p=previous_tab"
+    swift "$ROOT/scripts/ghostty-app/inject.swift" key 35 control >>"$HARNESS_LOG" 2>&1
+    delay 1
+    wait_for_log_after "$GUI_ACTIVE_SWITCH_A_START_LINE" "Pane focus changed: pane_id=${A_PANE_ID} focused=true" "gui-active browser A pane focused"
+    require_no_different_appkit_frame_after "$GUI_ACTIVE_SWITCH_A_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$A_TABBED_FRAME" "gui-active browser A kept tab-bar-adjusted AppKit frame"
+    require_no_different_appkit_pixels_after "$GUI_ACTIVE_SWITCH_A_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$A_TABBED_PIXEL" "gui-active browser A kept tab-bar-adjusted AppKit pixels"
+
+    TAB1_WIN_LINE="$(window_bounds_for "$A_SELECTED_TAB_ID")" || fail "failed to resolve gui-active browser A window bounds for window id=$A_SELECTED_TAB_ID"
+    A_GUI_CLICK_START_LINE="$(log_line_count)"
+    click_browser_frame_center "$TAB1_WIN_LINE" "$A_TABBED_FRAME_X" "$A_TABBED_FRAME_Y" "$A_TABBED_FRAME_SIZE" "gui_active_browser_a_area"
+    A_GUI_HIT_LINE="$(wait_for_hit_after "$A_GUI_CLICK_START_LINE" "$A_CONTEXT_ID" "gui-active browser A hit-test")"
+    require_text "$A_GUI_HIT_LINE" "selected_tab_id:${A_SELECTED_TAB_ID}" "gui-active browser A hit-test has tab 1 selected tab id"
+    require_text "$A_GUI_HIT_LINE" "overlay_frame=${A_TABBED_FRAME}" "gui-active browser A hit-test uses browser A frame"
+    enter_browser_browse "gui_active_browser_a" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+    assert_gui_active_cycle "gui_active_browser_a" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID"
+    type_marker_require_only "gui-active browser A after activation" "ISSUE812_EXP2_BROWSER_A_ACTIVE" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID"
+    leave_browser_browse "gui_active_browser_a" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+  fi
 
   [ "$BROWSER_B_TRACE_START_LINE" -lt "$SWITCH_B_TRACE_START_LINE" ] || fail "trace boundaries for browser B restore were not monotonic"
   [ "$NEW_TAB_TRACE_START_LINE" -lt "$BROWSER_B_TRACE_START_LINE" ] || fail "trace boundaries for browser B open were not monotonic"
