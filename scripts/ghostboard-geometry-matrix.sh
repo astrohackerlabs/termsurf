@@ -526,6 +526,14 @@ extract_root_frame_size() {
   printf '%s\n' "$1" | sed -E 's/.*root_frame=\{\{[^}]+\}, \{([^,]+), ([^}]+)\}\}.*/\1x\2/'
 }
 
+extract_root_frame_x() {
+  printf '%s\n' "$1" | sed -E 's/.*root_frame=\{\{([^,]+), [^}]+\}, \{[^}]+\}\}.*/\1/'
+}
+
+extract_root_frame_y() {
+  printf '%s\n' "$1" | sed -E 's/.*root_frame=\{\{[^,]+, ([^}]+)\}, \{[^}]+\}\}.*/\1/'
+}
+
 extract_web_point() {
   printf '%s\n' "$1" | sed -E 's/.*web_point=\{([^,]+), ([^}]+)\}.*/\1,\2/'
 }
@@ -1687,7 +1695,7 @@ devtools_overlay_probe() {
 }
 
 case "$SCENARIO" in
-  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|multi-profile-isolation|same-profile-server-lifecycle|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
+  initial-open|launch-discovery-contract|named-roamium-debug-launch|named-roamium-invalid-env|hello-config-homepage|hello-config-browser-list|hello-empty-browser-list|browser-state-smoke|javascript-dialog-smoke|http-auth-smoke|renderer-crash-smoke|color-scheme-smoke|copy-current-url-smoke|browser-input-granularity|multi-profile-isolation|same-profile-server-lifecycle|two-browser-split-routing|window-resize|split-right|split-down|split-right-resize|split-right-equalize|split-right-zoom|split-right-close-sibling|split-right-close-browser-pane|split-right-focus-switch|new-terminal-tab-visibility|open-browser-in-new-tab|close-browser-tab|open-browser-in-new-window|multiple-windows-with-browsers|display-move-backing-scale|fullscreen-unfullscreen|minimize-hide-restore|font-size-cell-metrics|tui-overlay-resize-command|terminal-scrollback-movement|browser-navigation-geometry|devtools-split-geometry|devtools-singleton-guard|mouse-after-geometry-change|keyboard-after-tab-window-switch|gui-active-multi-tab) ;;
   *)
     fail "unsupported scenario: $SCENARIO"
     ;;
@@ -2684,16 +2692,15 @@ keybind = ctrl+b=scroll_to_bottom
 EOF
 fi
 
-if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ] || [ "$SCENARIO" = "split-right-zoom" ] || [ "$SCENARIO" = "split-right-focus-switch" ] || [ "$SCENARIO" = "mouse-after-geometry-change" ]; then
+if [ "$SCENARIO" = "split-right" ] || [ "$SCENARIO" = "split-right-resize" ] || [ "$SCENARIO" = "split-right-equalize" ] || [ "$SCENARIO" = "split-right-zoom" ] || [ "$SCENARIO" = "split-right-focus-switch" ] || [ "$SCENARIO" = "two-browser-split-routing" ] || [ "$SCENARIO" = "mouse-after-geometry-change" ]; then
   cat >>"$CONFIG" <<'EOF'
 keybind = ctrl+d=new_split:right
 EOF
 fi
 
-if [ "$SCENARIO" = "split-right-close-sibling" ]; then
+if [ "$SCENARIO" = "split-right-close-sibling" ] || [ "$SCENARIO" = "two-browser-split-routing" ]; then
   cat >>"$CONFIG" <<'EOF'
 confirm-close-surface = false
-keybind = ctrl+d=new_split:right
 keybind = ctrl+k=close_surface
 EOF
 fi
@@ -7363,6 +7370,216 @@ if [ "$SCENARIO" = "devtools-split-geometry" ] || [ "$SCENARIO" = "devtools-sing
     log "devtools_singleton_browser_b_devtools_tab_id=$B_DT_BROWSER_TAB_ID"
     require_trace_after "$B_DEVTOOLS_TRACE_START_LINE" "ca-context tab=${B_DT_BROWSER_TAB_ID} pane=${B_DT_PANE_ID} inspected_tab_id=${B_BROWSER_TAB_ID}" "Roamium reported browser B DevTools CA context"
   fi
+fi
+
+if [ "$SCENARIO" = "two-browser-split-routing" ]; then
+  A_WINDOW_ID="$WID"
+  A_SURFACE_ID="$(extract_surface_id "$APPKIT_PRESENT_LINE")"
+  A_SELECTED_TAB_ID="$(extract_selected_tab_id "$APPKIT_PRESENT_LINE")"
+  A_PANE_ID="$PANE_ID"
+  A_BROWSER_TAB_ID="$BROWSER_TAB_ID"
+  A_CONTEXT_ID="$CONTEXT_ID"
+  A_BASE_FRAME="$OVERLAY_FRAME"
+  A_BASE_PIXEL="$APPKIT_PIXEL"
+  log "browser_a_window_id=$A_WINDOW_ID"
+  log "browser_a_surface_id=$A_SURFACE_ID"
+  log "browser_a_selected_tab_id=$A_SELECTED_TAB_ID"
+  log "browser_a_pane_id=$A_PANE_ID"
+  log "browser_a_browser_tab_id=$A_BROWSER_TAB_ID"
+  log "browser_a_context_id=$A_CONTEXT_ID"
+
+  require_log "SetOverlay: created pending server key=default/${ROAMIUM} pane_count=1" "browser A created default-profile server"
+  A_SPAWN_LINE="$(grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default" "$APP_LOG" | tail -1 || true)"
+  [ -n "$A_SPAWN_LINE" ] || fail "missing browser A Roamium spawn line"
+  A_SPAWN_PID="$(printf '%s\n' "$A_SPAWN_LINE" | sed -E 's/.* pid=([0-9]+) profile=.*/\1/')"
+  [ -n "$A_SPAWN_PID" ] || fail "failed to extract browser A Roamium pid"
+  log "browser_a_spawn_pid=$A_SPAWN_PID"
+
+  SPLIT_START_LINE="$(log_line_count)"
+  SPLIT_TRACE_START_LINE="$(trace_line_count)"
+  log "split_keybind=ctrl+d=new_split:right"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 2 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+
+  require_log_after "$SPLIT_START_LINE" "dispatching action target=surface action=.new_split" "two-browser split action dispatched"
+  require_log_after "$SPLIT_START_LINE" 'starting command command=`/usr/bin/login`' "two-browser split sibling started login shell"
+  A_SPLIT_PRESENT_LINE="$(wait_for_split_right_frame_after "$SPLIT_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$OVERLAY_FRAME_SIZE" "browser A split AppKit overlay frame")"
+  A_SPLIT_PIXELS_LINE="$(wait_for_split_right_pixels_after "$SPLIT_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$APPKIT_PIXEL" "browser A split AppKit pixels")"
+  A_SPLIT_FRAME="$(extract_overlay_frame "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_FRAME_SIZE="$(extract_frame_size "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_FRAME_X="$(extract_frame_x "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_FRAME_Y="$(extract_frame_y "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_ROOT_X="$(extract_root_frame_x "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_ROOT_Y="$(extract_root_frame_y "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_ROOT_SIZE="$(extract_root_frame_size "$A_SPLIT_PRESENT_LINE")"
+  A_SPLIT_PIXEL="$(extract_appkit_pixel "$A_SPLIT_PIXELS_LINE")"
+  A_SPLIT_PIXEL_WIDTH="${A_SPLIT_PIXEL%x*}"
+  A_SPLIT_PIXEL_HEIGHT="${A_SPLIT_PIXEL#*x}"
+  log "browser_a_split_overlay_frame=$A_SPLIT_FRAME"
+  log "browser_a_split_root_x=$A_SPLIT_ROOT_X"
+  log "browser_a_split_root_y=$A_SPLIT_ROOT_Y"
+  log "browser_a_split_root_size=$A_SPLIT_ROOT_SIZE"
+  log "browser_a_split_appkit_pixel=$A_SPLIT_PIXEL"
+  require_trace_after "$SPLIT_TRACE_START_LINE" "resize tab_id=${A_BROWSER_TAB_ID} pane_id=${A_PANE_ID} pixel_width=${A_SPLIT_PIXEL_WIDTH} pixel_height=${A_SPLIT_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium resized browser A to split AppKit pixel size"
+
+  BROWSER_B_START_LINE="$(log_line_count)"
+  BROWSER_B_TRACE_START_LINE="$(trace_line_count)"
+  printf '"%s" --browser "%s" --profile default "%s"' "$WEB" "$ROAMIUM" "$URL_B" >"$SECOND_BROWSER_COMMAND"
+  log "browser_b_split_command=$(cat "$SECOND_BROWSER_COMMAND")"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" type "$SECOND_BROWSER_COMMAND" >>"$HARNESS_LOG" 2>&1
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
+
+  B_SET_LINE="$(wait_for_line_after "$BROWSER_B_START_LINE" "SetOverlay: pane_id=[^ ]+ profile=default browser=${ROAMIUM} url=${URL_B}" "browser B split SetOverlay" 60)"
+  B_PANE_ID="$(printf '%s\n' "$B_SET_LINE" | sed -E 's/.*SetOverlay: pane_id=([^ ]+) .*/\1/')"
+  [ -n "$B_PANE_ID" ] || fail "failed to extract browser B pane id"
+  [ "$B_PANE_ID" != "$A_PANE_ID" ] || fail "browser B reused browser A pane id"
+  log "browser_b_pane_id=$B_PANE_ID"
+  wait_for_log_after "$BROWSER_B_START_LINE" "SetOverlay: reused pending server key=default/${ROAMIUM} pane_count=2 has_fd=true" "browser B reused default-profile server" 60
+  if tail -n +"$((BROWSER_B_START_LINE + 1))" "$APP_LOG" |
+    grep -E "spawned browser path=${ROAMIUM} pid=[0-9]+ profile=default" >/dev/null 2>&1; then
+    fail "browser B spawned a second default-profile Roamium process"
+  fi
+  log "PASS: browser B did not spawn a second default-profile Roamium process"
+
+  B_CA_CONTEXT_LINE="$(wait_for_line_after "$BROWSER_B_START_LINE" "TermSurf geometry layer=zig event=ca_context .*pane_id:${B_PANE_ID}" "browser B split Zig ca_context" 60)"
+  B_BROWSER_TAB_ID="$(extract_browser_tab_id "$B_CA_CONTEXT_LINE")"
+  B_CONTEXT_ID="$(extract_context_id "$B_CA_CONTEXT_LINE")"
+  [ -n "$B_BROWSER_TAB_ID" ] || fail "failed to extract browser B browser tab id"
+  [ -n "$B_CONTEXT_ID" ] || fail "failed to extract browser B context id"
+  [ "$B_BROWSER_TAB_ID" != "$A_BROWSER_TAB_ID" ] || fail "browser B reused browser A browser tab id"
+  [ "$B_CONTEXT_ID" != "$A_CONTEXT_ID" ] || fail "browser B reused browser A CA/context id"
+  log "browser_b_browser_tab_id=$B_BROWSER_TAB_ID"
+  log "browser_b_context_id=$B_CONTEXT_ID"
+
+  B_APPKIT_PRESENT_LINE="$(wait_for_line_after "$BROWSER_B_START_LINE" "TermSurf geometry layer=appkit event=presented .*pane_id:${B_PANE_ID} .*context_id=${B_CONTEXT_ID}" "browser B split AppKit presentation" 60)"
+  B_APPKIT_PIXELS_LINE="$(wait_for_line_after "$BROWSER_B_START_LINE" "TermSurf geometry layer=appkit event=presented_pixels .*pane_id:${B_PANE_ID} .*context_id=${B_CONTEXT_ID}" "browser B split AppKit pixels" 60)"
+  B_PRESENT_WINDOW_ID="$(printf '%s\n' "$B_APPKIT_PRESENT_LINE" | sed -E 's/.*window_id:([^ ]+) .*/\1/')"
+  B_SURFACE_ID="$(extract_surface_id "$B_APPKIT_PRESENT_LINE")"
+  B_SELECTED_TAB_ID="$(extract_selected_tab_id "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME="$(extract_overlay_frame "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME_SIZE="$(extract_frame_size "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME_X="$(extract_frame_x "$B_APPKIT_PRESENT_LINE")"
+  B_FRAME_Y="$(extract_frame_y "$B_APPKIT_PRESENT_LINE")"
+  B_ROOT_X="$(extract_root_frame_x "$B_APPKIT_PRESENT_LINE")"
+  B_ROOT_Y="$(extract_root_frame_y "$B_APPKIT_PRESENT_LINE")"
+  B_ROOT_SIZE="$(extract_root_frame_size "$B_APPKIT_PRESENT_LINE")"
+  B_PIXEL="$(extract_appkit_pixel "$B_APPKIT_PIXELS_LINE")"
+  [ "$B_PRESENT_WINDOW_ID" = "$A_WINDOW_ID" ] || fail "browser B AppKit window id mismatch: expected=$A_WINDOW_ID actual=$B_PRESENT_WINDOW_ID"
+  [ -n "$B_SURFACE_ID" ] || fail "failed to extract browser B surface id"
+  [ "$B_SURFACE_ID" != "$A_SURFACE_ID" ] || fail "browser B reused browser A terminal surface id"
+  [ "$B_SELECTED_TAB_ID" = "$A_SELECTED_TAB_ID" ] || fail "browser B selected tab id mismatch: expected=$A_SELECTED_TAB_ID actual=$B_SELECTED_TAB_ID"
+  log "browser_b_surface_id=$B_SURFACE_ID"
+  log "browser_b_selected_tab_id=$B_SELECTED_TAB_ID"
+  log "browser_b_overlay_frame=$B_FRAME"
+  log "browser_b_root_x=$B_ROOT_X"
+  log "browser_b_root_y=$B_ROOT_Y"
+  log "browser_b_root_size=$B_ROOT_SIZE"
+  log "browser_b_appkit_pixel=$B_PIXEL"
+
+  B_PIXEL_WIDTH="${B_PIXEL%x*}"
+  B_PIXEL_HEIGHT="${B_PIXEL#*x}"
+  require_trace_after "$BROWSER_B_TRACE_START_LINE" "resize tab_id=${B_BROWSER_TAB_ID} pane_id=${B_PANE_ID} pixel_width=${B_PIXEL_WIDTH} pixel_height=${B_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium resized browser B to split AppKit pixel size"
+
+  A_SPLIT_ROOT_WIDTH="$(pair_width "$A_SPLIT_ROOT_SIZE")"
+  A_GLOBAL_FRAME_X="$(awk -v root="$A_SPLIT_ROOT_X" -v frame="$A_SPLIT_FRAME_X" 'BEGIN { print root + frame }')"
+  B_GLOBAL_FRAME_X="$(awk -v surface_x="$A_SPLIT_ROOT_WIDTH" -v frame="$B_FRAME_X" 'BEGIN { print surface_x + frame }')"
+  A_GLOBAL_FRAME_WIDTH="$(pair_width "$A_SPLIT_FRAME_SIZE")"
+  B_GLOBAL_FRAME_WIDTH="$(pair_width "$B_FRAME_SIZE")"
+  awk \
+    -v ax="$A_GLOBAL_FRAME_X" \
+    -v aw="$A_GLOBAL_FRAME_WIDTH" \
+    -v bx="$B_GLOBAL_FRAME_X" \
+    -v bw="$B_GLOBAL_FRAME_WIDTH" \
+    'BEGIN { exit !((ax + aw <= bx) || (bx + bw <= ax)) }' ||
+    fail "browser split overlay frames overlap: a_x=$A_GLOBAL_FRAME_X a_w=$A_GLOBAL_FRAME_WIDTH b_x=$B_GLOBAL_FRAME_X b_w=$B_GLOBAL_FRAME_WIDTH"
+  log "PASS: browser split overlay frames do not overlap"
+
+  SPLIT_WIN_LINE="$(window_bounds_for "$A_WINDOW_ID")" || fail "failed to resolve two-browser split window bounds"
+  IFS=$'\t' read -r _SPLIT_WID SPLIT_WX SPLIT_WY SPLIT_WW SPLIT_WH <<<"$SPLIT_WIN_LINE"
+  A_SPLIT_ROOT_HEIGHT="$(pair_height "$A_SPLIT_ROOT_SIZE")"
+  SPLIT_CONTENT_Y_OFFSET="$(awk -v wh="$SPLIT_WH" -v root_h="$A_SPLIT_ROOT_HEIGHT" 'BEGIN { print int(wh - root_h) }')"
+  A_SPLIT_FRAME_WIDTH="$(pair_width "$A_SPLIT_FRAME_SIZE")"
+  A_SPLIT_FRAME_HEIGHT="$(pair_height "$A_SPLIT_FRAME_SIZE")"
+  B_FRAME_WIDTH="$(pair_width "$B_FRAME_SIZE")"
+  B_FRAME_HEIGHT="$(pair_height "$B_FRAME_SIZE")"
+  A_CLICK_X="$(awk -v wx="$SPLIT_WX" -v root_x="$A_SPLIT_ROOT_X" -v frame_x="$A_SPLIT_FRAME_X" -v frame_w="$A_SPLIT_FRAME_WIDTH" 'BEGIN { print int(wx + root_x + frame_x + (frame_w / 2) + 0.5) }')"
+  A_CLICK_Y="$(awk -v wy="$SPLIT_WY" -v content_y="$SPLIT_CONTENT_Y_OFFSET" -v root_y="$A_SPLIT_ROOT_Y" -v frame_y="$A_SPLIT_FRAME_Y" -v frame_h="$A_SPLIT_FRAME_HEIGHT" 'BEGIN { print int(wy + content_y + root_y + frame_y + (frame_h / 2) + 0.5) }')"
+  B_CLICK_X="$(awk -v wx="$SPLIT_WX" -v surface_x="$A_SPLIT_ROOT_WIDTH" -v frame_x="$B_FRAME_X" -v frame_w="$B_FRAME_WIDTH" 'BEGIN { print int(wx + surface_x + frame_x + (frame_w / 2) + 0.5) }')"
+  B_CLICK_Y="$(awk -v wy="$SPLIT_WY" -v content_y="$SPLIT_CONTENT_Y_OFFSET" -v root_y="$B_ROOT_Y" -v frame_y="$B_FRAME_Y" -v frame_h="$B_FRAME_HEIGHT" 'BEGIN { print int(wy + content_y + root_y + frame_y + (frame_h / 2) + 0.5) }')"
+  log "browser_a_split_click=${A_CLICK_X},${A_CLICK_Y}"
+  log "browser_b_split_click=${B_CLICK_X},${B_CLICK_Y}"
+
+  A_HIT_START_LINE="$(log_line_count)"
+  A_HIT_TRACE_START_LINE="$(trace_line_count)"
+  click_global_point "$A_CLICK_X" "$A_CLICK_Y" "two_browser_split_a"
+  A_HIT_LINE="$(wait_for_hit_after "$A_HIT_START_LINE" "$A_CONTEXT_ID" "browser A split hit-test")"
+  require_text "$A_HIT_LINE" "pane_id:${A_PANE_ID}" "browser A hit-test has browser A pane id"
+  require_text "$A_HIT_LINE" "selected_tab_id:${A_SELECTED_TAB_ID}" "browser A hit-test has selected tab id"
+  require_text "$A_HIT_LINE" "overlay_frame=${A_SPLIT_FRAME}" "browser A hit-test uses browser A split frame"
+  require_trace_after "$A_HIT_TRACE_START_LINE" "mouse-move tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "browser A pointer move reached browser A"
+  require_no_trace_after "$A_HIT_TRACE_START_LINE" "mouse-move tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "browser A pointer move did not route to browser B"
+
+  enter_browser_browse "two_browser_split_a" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+  type_marker_require_only "two_browser_split_a" "ISSUE818_EXP5_BROWSER_A" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID"
+  leave_browser_browse "two_browser_split_a" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+
+  B_HIT_START_LINE="$(log_line_count)"
+  B_HIT_TRACE_START_LINE="$(trace_line_count)"
+  click_global_point "$B_CLICK_X" "$B_CLICK_Y" "two_browser_split_b"
+  B_HIT_LINE="$(wait_for_hit_after "$B_HIT_START_LINE" "$B_CONTEXT_ID" "browser B split hit-test")"
+  require_text "$B_HIT_LINE" "pane_id:${B_PANE_ID}" "browser B hit-test has browser B pane id"
+  require_text "$B_HIT_LINE" "selected_tab_id:${B_SELECTED_TAB_ID}" "browser B hit-test has selected tab id"
+  require_text "$B_HIT_LINE" "overlay_frame=${B_FRAME}" "browser B hit-test uses browser B split frame"
+  require_trace_after "$B_HIT_TRACE_START_LINE" "mouse-move tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "browser B pointer move reached browser B"
+  require_no_trace_after "$B_HIT_TRACE_START_LINE" "mouse-move tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "browser B pointer move did not route to browser A"
+
+  enter_browser_browse "two_browser_split_b" "$B_PANE_ID" "$B_BROWSER_TAB_ID"
+  type_marker_require_only "two_browser_split_b" "ISSUE818_EXP5_BROWSER_B" "$B_BROWSER_TAB_ID" "$B_PANE_ID" "$A_BROWSER_TAB_ID" "$A_PANE_ID"
+  leave_browser_browse "two_browser_split_b" "$B_PANE_ID" "$B_BROWSER_TAB_ID"
+
+  B_CLOSE_START_LINE="$(log_line_count)"
+  B_CLOSE_TRACE_START_LINE="$(trace_line_count)"
+  log "browser_b_close_keybind=ctrl+k=close_surface"
+  swift "$ROOT/scripts/ghostty-app/inject.swift" key 40 control >>"$HARNESS_LOG" 2>&1
+  delay 1
+  require_log_after "$B_CLOSE_START_LINE" "Pane close cleanup: pane_id=${B_PANE_ID} tab_id=${B_BROWSER_TAB_ID}" "Ghostboard cleaned up browser B split pane"
+  require_log_after "$B_CLOSE_START_LINE" "CloseTab: pane_id=${B_PANE_ID} tab_id=${B_BROWSER_TAB_ID}" "Ghostboard sent CloseTab for browser B split pane"
+  require_trace_after "$B_CLOSE_TRACE_START_LINE" "close-tab tab_id=${B_BROWSER_TAB_ID} pane_id=${B_PANE_ID} result=destroying ffi=ts_destroy_web_contents" "Roamium destroyed browser B split tab"
+  require_trace_after "$B_CLOSE_TRACE_START_LINE" "close-tab tab_id=${B_BROWSER_TAB_ID} result=removed" "Roamium removed browser B split tab"
+  require_no_trace_after "$B_CLOSE_TRACE_START_LINE" "close-tab result=no-tabs-remaining" "shared Roamium stayed alive after closing browser B"
+
+  A_AFTER_CLOSE_PRESENT_LINE="$(wait_for_split_right_zoom_frame_after "$B_CLOSE_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$OVERLAY_FRAME_SIZE" "$A_SPLIT_FRAME_SIZE" "browser A expanded after browser B split close")"
+  A_AFTER_CLOSE_PIXELS_LINE="$(wait_for_split_right_zoom_pixels_after "$B_CLOSE_START_LINE" "$A_PANE_ID" "$A_CONTEXT_ID" "$A_BASE_PIXEL" "$A_SPLIT_PIXEL" "browser A pixels expanded after browser B split close")"
+  A_AFTER_CLOSE_FRAME="$(extract_overlay_frame "$A_AFTER_CLOSE_PRESENT_LINE")"
+  A_AFTER_CLOSE_FRAME_SIZE="$(extract_frame_size "$A_AFTER_CLOSE_PRESENT_LINE")"
+  A_AFTER_CLOSE_FRAME_X="$(extract_frame_x "$A_AFTER_CLOSE_PRESENT_LINE")"
+  A_AFTER_CLOSE_FRAME_Y="$(extract_frame_y "$A_AFTER_CLOSE_PRESENT_LINE")"
+  A_AFTER_CLOSE_PIXEL="$(extract_appkit_pixel "$A_AFTER_CLOSE_PIXELS_LINE")"
+  A_AFTER_CLOSE_PIXEL_WIDTH="${A_AFTER_CLOSE_PIXEL%x*}"
+  A_AFTER_CLOSE_PIXEL_HEIGHT="${A_AFTER_CLOSE_PIXEL#*x}"
+  log "browser_a_after_close_overlay_frame=$A_AFTER_CLOSE_FRAME"
+  log "browser_a_after_close_appkit_pixel=$A_AFTER_CLOSE_PIXEL"
+  require_trace_after "$B_CLOSE_TRACE_START_LINE" "resize tab_id=${A_BROWSER_TAB_ID} pane_id=${A_PANE_ID} pixel_width=${A_AFTER_CLOSE_PIXEL_WIDTH} pixel_height=${A_AFTER_CLOSE_PIXEL_HEIGHT} screen_x=0 screen_y=0 screen_width=0 screen_height=0 screen_scale=0 ffi=ts_set_view_size" "Roamium resized browser A after browser B close"
+
+  screencapture -x -o -l"$A_WINDOW_ID" "$SCREENSHOT_CLOSE"
+  log "two_browser_split_close_screenshot_exit=$?"
+
+  A_AFTER_CLOSE_WIN_LINE="$(window_bounds_for "$A_WINDOW_ID")" || fail "failed to resolve browser A window after browser B close"
+  A_AFTER_CLOSE_CLICK="$(click_point_for_frame "$A_AFTER_CLOSE_WIN_LINE" "$A_AFTER_CLOSE_PRESENT_LINE")"
+  IFS=$'\t' read -r A_AFTER_CLOSE_X A_AFTER_CLOSE_Y <<<"$A_AFTER_CLOSE_CLICK"
+  A_POST_HIT_START_LINE="$(log_line_count)"
+  A_POST_HIT_TRACE_START_LINE="$(trace_line_count)"
+  click_global_point "$A_AFTER_CLOSE_X" "$A_AFTER_CLOSE_Y" "two_browser_split_a_after_b_close"
+  A_POST_HIT_LINE="$(wait_for_hit_after "$A_POST_HIT_START_LINE" "$A_CONTEXT_ID" "browser A hit-test after browser B close")"
+  require_text "$A_POST_HIT_LINE" "pane_id:${A_PANE_ID}" "browser A post-close hit-test has browser A pane id"
+  require_trace_after "$A_POST_HIT_TRACE_START_LINE" "mouse-move tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID}" "browser A post-close pointer move reached browser A"
+  require_no_trace_after "$A_POST_HIT_TRACE_START_LINE" "mouse-move tab=${B_BROWSER_TAB_ID} pane=${B_PANE_ID}" "browser A post-close pointer move did not route to closed browser B"
+
+  enter_browser_browse "two_browser_split_a_after_b_close" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+  type_marker_require_only "two_browser_split_a_after_b_close" "ISSUE818_EXP5_BROWSER_A_AFTER_CLOSE" "$A_BROWSER_TAB_ID" "$A_PANE_ID" "$B_BROWSER_TAB_ID" "$B_PANE_ID"
+  leave_browser_browse "two_browser_split_a_after_b_close" "$A_PANE_ID" "$A_BROWSER_TAB_ID"
+
+  require_no_log_after "$B_CLOSE_START_LINE" "SetOverlay: pane_id=${B_PANE_ID}" "closed browser B did not recreate a live overlay"
 fi
 
 if [ "$SCENARIO" = "split-right" ]; then
