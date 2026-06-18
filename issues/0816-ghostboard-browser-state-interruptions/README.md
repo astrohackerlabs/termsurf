@@ -37,3 +37,8 @@ This issue should start as a walkthrough and regression-design issue. It should
 only fix app code after a focused experiment proves a specific missing behavior.
 Because many flows are engine- or webtui-owned, each finding must identify the
 owning component before any fix.
+
+## Experiments
+
+- [Experiment 1: Prove direct browser state smoke](01-prove-direct-browser-state-smoke.md)
+  — **Designed**
