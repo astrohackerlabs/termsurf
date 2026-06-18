@@ -29,3 +29,8 @@ Verification should include:
 - app deactivation sends inactive state;
 - window focus changes do not produce stale or duplicate state;
 - browser input/focus behavior still works after activation changes.
+
+## Experiments
+
+- [Experiment 1: Wire GUI active state into Roamium](01-wire-gui-active-state.md)
+  — **Designed**
