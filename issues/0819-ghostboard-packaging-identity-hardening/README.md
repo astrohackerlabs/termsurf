@@ -31,3 +31,8 @@ Verification should include:
 - release packaging includes the intended binaries and assets;
 - debug testing cannot accidentally mask installed-app behavior;
 - docs and scripts agree on the supported launch paths.
+
+## Experiments
+
+- [Experiment 1: Audit packaging identity contract](01-audit-packaging-identity-contract.md)
+  — **Designed**
