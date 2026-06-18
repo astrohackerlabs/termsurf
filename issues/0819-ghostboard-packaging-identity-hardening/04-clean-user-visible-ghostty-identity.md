@@ -164,3 +164,161 @@ After implementation and verification:
   file; and
 - commit the reviewed result separately before designing or implementing the
   next experiment.
+
+## Result
+
+**Result:** Pass
+
+Experiment 4 cleaned the targeted user-visible Ghostty identity leaks in the
+macOS Settings UI, AppleScript scripting dictionary descriptions, and exported
+surface identifier metadata without changing config loading behavior, release
+packaging, Homebrew packaging, iOS identity, or broad implementation symbols.
+
+### Changes
+
+Changed files:
+
+- `ghostboard/macos/Sources/Features/Settings/SettingsView.swift`
+  - Replaced the visible Ghostty config-path/restart instruction with a
+    path-neutral TermSurf Ghostboard message:
+    `Edit the configuration file and restart TermSurf Ghostboard.`
+  - This deliberately avoids claiming a final config path before the config-path
+    runtime proof.
+- `ghostboard/macos/Ghostty.sdef`
+  - Renamed AppleScript dictionary title to
+    `TermSurf Ghostboard Scripting Dictionary`.
+  - Renamed suite name/description to TermSurf Ghostboard wording.
+  - Replaced visible Ghostty descriptions for app, front window, window, tab,
+    perform action, new window, new tab, and activate window.
+  - Preserved Cocoa runtime class names such as `GhosttyScriptWindow`.
+- `ghostboard/macos/Ghostty-Info.plist`
+  - Renamed `Ghostty Surface Identifier` to
+    `TermSurf Ghostboard Surface Identifier`.
+  - Left the exported UTI identifier `com.mitchellh.ghosttySurfaceId` unchanged
+    as compatibility debt because it is coupled to drag/drop runtime code such
+    as `UTType.ghosttySurfaceId`.
+
+No generated mdgen files were changed. Their Ghostty product/config wording was
+inventoried and left as follow-up debt because many strings are tied to
+unsettled config-path behavior.
+
+### Verification
+
+Formatting and static checks:
+
+1. `prettier --write --prose-wrap always --print-width 80 issues/0819-ghostboard-packaging-identity-hardening/README.md issues/0819-ghostboard-packaging-identity-hardening/04-clean-user-visible-ghostty-identity.md`
+   passed.
+2. `git diff --check` passed.
+
+Build:
+
+1. `cd ghostboard/macos && ./build.nu --configuration Debug --action build`
+   passed with `** BUILD SUCCEEDED **`.
+
+Source identity inspection:
+
+1. Targeted source search:
+
+   ```bash
+   rg -n 'Ghostty|ghostty|\.config/ghostty|config\.ghostty|com\.mitchellh\.ghostty' \
+     ghostboard/macos/Sources/Features/Settings/SettingsView.swift \
+     ghostboard/macos/Ghostty.sdef \
+     ghostboard/macos/Ghostty-Info.plist
+   ```
+
+   Remaining `Ghostty` hits are allowlisted implementation-only or compatibility
+   identifiers:
+
+   - `GhosttyScript...` Cocoa class references in `Ghostty.sdef`;
+   - `GhosttyBuild` and `GhosttyCommit` diagnostic keys;
+   - `Ghostty.sdef` resource filename.
+   - `com.mitchellh.ghosttySurfaceId` exported UTI identifier.
+
+   No targeted Settings UI Ghostty config path or restart text remains.
+
+   The exported UTI identifier is deferred compatibility debt rather than
+   changed here because it is tied to macOS drag/drop type handling in
+   `SurfaceView+Transferable.swift` and related split drop code. Renaming that
+   identifier should be handled by a dedicated compatibility experiment that can
+   preserve or migrate existing pasteboard/drag data behavior.
+
+2. mdgen inventory:
+
+   ```bash
+   rg -n 'Ghostty|\.config/ghostty|config\.ghostty' ghostboard/src/build/mdgen
+   ```
+
+   This still finds Ghostty product/config wording in mdgen header/footer
+   templates, including config paths such as
+   `$XDG_CONFIG_HOME/ghostty/config.ghostty` and product descriptions such as
+   `Ghostty terminal emulator`. These are documented as deferred debt for the
+   config-path/documentation experiment.
+
+Bundled metadata inspection:
+
+1. Bundled scripting definition search:
+
+   ```bash
+   rg -n 'Ghostty' \
+     'ghostboard/macos/build/Debug/TermSurf Ghostboard.app/Contents/Resources/Ghostty.sdef'
+   ```
+
+   Remaining bundled hits are only allowlisted `GhosttyScript...` Cocoa class
+   references.
+
+2. Bundled TermSurf Ghostboard search:
+
+   ```bash
+   rg -n 'TermSurf Ghostboard|Ghostty Surface Identifier|TermSurf Ghostboard Surface Identifier' \
+     'ghostboard/macos/build/Debug/TermSurf Ghostboard.app/Contents'
+   ```
+
+   The built app now contains TermSurf Ghostboard wording for:
+
+   - app plist names and service titles;
+   - Dock Tile plugin display name;
+   - AppleScript dictionary title/suite/descriptions;
+   - exported surface identifier description.
+
+3. Info.plist inspection:
+
+   ```text
+   GhosttyBuild => ""
+   GhosttyCommit => ""
+   OSAScriptingDefinition => "Ghostty.sdef"
+   UTTypeIdentifier => "com.mitchellh.ghosttySurfaceId"
+   UTTypeDescription => "TermSurf Ghostboard Surface Identifier"
+   ```
+
+   The remaining Ghostty plist keys/resource name and lower-case exported UTI
+   identifier are implementation/diagnostic or compatibility identifiers and are
+   not changed in this experiment.
+
+## Conclusion
+
+The targeted user-visible identity leaks are cleaned for the macOS Settings UI,
+AppleScript dictionary text, and exported surface identifier metadata. Remaining
+Ghostty names in the inspected surfaces are either implementation-only
+allowlisted identifiers, compatibility debt (`com.mitchellh.ghosttySurfaceId`),
+or generated documentation/config-path debt.
+
+The next experiment should prove the real config loading path at runtime and
+then align config-path docs, Settings UI specificity, and generated mdgen
+documentation around the proven TermSurf Ghostboard path.
+
+## Completion Review
+
+Fresh-context adversarial completion review by Codex subagent
+`McClintock the 2nd`:
+
+- **Initial verdict:** Changes required.
+- **Required finding:** The result missed the lower-case exported UTI identifier
+  `com.mitchellh.ghosttySurfaceId` in source and built Info.plist metadata.
+  Fixed by documenting the identifier as deferred compatibility debt, broadening
+  verification to search lower-case `ghostty` / `com.mitchellh.ghostty`, and
+  allowlisting the exported UTI identifier with rationale tied to drag/drop
+  runtime code.
+- **Re-review verdict:** Approved. The reviewer confirmed the UTI identifier is
+  explicitly documented as compatibility debt, the verification search is
+  broadened, the allowlist includes the exported UTI identifier,
+  `git diff --check` passes, and no new Required finding was introduced.

@@ -13,8 +13,8 @@ struct SettingsView: View {
 
             VStack(alignment: .leading) {
                 Text("Coming Soon. 🚧").font(.title)
-                Text("You can't configure settings in the GUI yet. To modify settings, " +
-                     "edit the file at $HOME/.config/ghostty/config.ghostty and restart Ghostty.")
+                Text("You can't configure TermSurf Ghostboard settings in the GUI yet. " +
+                     "Edit the configuration file and restart TermSurf Ghostboard.")
                 .multilineTextAlignment(.leading)
                 .lineLimit(nil)
             }

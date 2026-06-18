@@ -41,4 +41,4 @@ Verification should include:
 - [Experiment 3: Implement macOS bundle identity](03-implement-macos-bundle-identity.md)
   — **Pass**
 - [Experiment 4: Clean user-visible Ghostty identity](04-clean-user-visible-ghostty-identity.md)
-  — **Designed**
+  — **Pass**

@@ -114,7 +114,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.mitchellh.ghosttySurfaceId</string>
 			<key>UTTypeDescription</key>
-			<string>Ghostty Surface Identifier</string>
+			<string>TermSurf Ghostboard Surface Identifier</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
