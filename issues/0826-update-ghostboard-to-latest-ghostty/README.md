@@ -202,4 +202,4 @@ previous experiment has produced a result.
 - [Experiment 9: Tolerate closed browser sockets during cleanup](09-tolerate-closed-browser-sockets-during-cleanup.md)
   — **Partial**
 - [Experiment 10: Localize display-move single-display focus](10-localize-display-move-single-display-focus.md)
-  — **Designed**
+  — **Pass**

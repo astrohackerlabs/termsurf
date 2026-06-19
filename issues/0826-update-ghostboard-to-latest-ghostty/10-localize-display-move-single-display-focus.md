@@ -224,3 +224,131 @@ Optional finding and fix:
   localization evidence.
 
 The final re-review approved the design with no remaining required findings.
+
+## Result
+
+**Result:** Pass
+
+Implemented the approved diagnostics in `scripts/ghostboard-geometry-matrix.sh`
+for only the `display-move-backing-scale` single-display fallback. The
+diagnostics now log:
+
+- the Roamium focus trace cursor before Enter;
+- pre-Enter true/false focus counts and last focus line;
+- the exact AppKit Enter key-down line;
+- the exact app-side `ModeChanged` and `FocusChanged` lines after Enter;
+- post-Enter true/false focus counts and deltas;
+- the last post-Enter Roamium focus trace line.
+
+No Ghostboard product code, `webtui/`, `roamium/`, `chromium/`, or
+`proto/termsurf.proto` files were changed.
+
+The first diagnostic rerun passed:
+
+```text
+display_move_rc=0
+```
+
+The final rerun with exact app-line capture also passed:
+
+```text
+display_move_after_fix_rc=0
+```
+
+The latest evidence was written to:
+
+```text
+logs/issue-0826-exp10-selected-artifacts.log
+logs/issue-0826-exp10-app-harness-focus-evidence.log
+logs/issue-0826-exp10-roamium-focus-evidence.log
+logs/issue-0826-exp10-display-move-after-fix.log
+```
+
+The final run used:
+
+```text
+APP_LOG=logs/ghostboard-geometry-display-move-backing-scale-app-20260619-131043.log
+HARNESS_LOG=logs/ghostboard-geometry-display-move-backing-scale-harness-20260619-131043.log
+ROAMIUM_TRACE=logs/ghostboard-geometry-display-move-backing-scale-roamium-20260619-131043.log
+```
+
+The relevant single-display focus evidence was:
+
+```text
+PARTIAL: only one display is available; cross-display move cannot run in this VM
+single_display_trace_start_line=17
+single_display_pre_enter_focus_true_count=0
+single_display_pre_enter_focus_false_count=0
+single_display_pre_enter_last_focus=<none>
+single_display_mode_key=enter=Mode::Browse
+PASS: single-display webtui entered browse mode
+PASS: single-display Ghostboard emitted focus=true after browse mode
+single_display_mode_app_log_line=info(termsurf): ModeChanged: pane_id=0AF1CD11-7011-4C7F-8C93-A3A322921673 browsing=true
+single_display_focus_app_log_line=info(termsurf): FocusChanged: pane_id=0AF1CD11-7011-4C7F-8C93-A3A322921673 tab_id=1 focused=true
+single_display_enter_key_appkit_log_line=383:TermSurf geometry layer=appkit event=key_down scenario=display-move-backing-scale ... note=key_code=36 modifiers=0 focused=true
+single_display_post_enter_focus_true_count=1
+single_display_post_enter_focus_false_count=0
+single_display_focus_true_delta=1
+single_display_focus_false_delta=0
+single_display_post_enter_last_focus=18:roamium focus-changed tab=1 pane=0AF1CD11-7011-4C7F-8C93-A3A322921673 ffi=ts_set_focus focused=true
+PASS: Roamium observed focus=true on single display
+PASS: single-display keyboard marker reached browser
+PASS: scenario display-move-backing-scale partial-single-display
+```
+
+The row still records the expected VM limitation as a partial note because only
+one display is available, but the single-display fallback now passes its
+overlay, focus, and browser keyboard checks. The previous missing Roamium focus
+line did not reproduce in either rerun.
+
+Verification checks:
+
+```text
+bash -n scripts/ghostboard-geometry-matrix.sh
+prettier --write --prose-wrap always --print-width 80 \
+  issues/0826-update-ghostboard-to-latest-ghostty/README.md \
+  issues/0826-update-ghostboard-to-latest-ghostty/10-localize-display-move-single-display-focus.md
+git diff --check
+test ! -s logs/issue-0826-exp10-post-cleanup-processes.log
+test ! -s logs/issue-0826-exp10-forbidden-top-status.log
+test ! -s logs/issue-0826-exp10-chromium-status.log
+test ! -s logs/issue-0826-exp10-chromium-diff-name-only.log
+```
+
+All checks passed. `logs/issue-0826-exp10-git-diff-name-only.log` contained
+only:
+
+```text
+scripts/ghostboard-geometry-matrix.sh
+```
+
+## Conclusion
+
+Experiment 10 did not find a reproducible Ghostboard or Roamium product bug. The
+diagnostics proved that, in the current runs, Enter reaches AppKit, webtui
+enters Browse mode, Ghostboard emits `FocusChanged focused=true`, Roamium
+records a new `ts_set_focus focused=true` trace after Enter, and browser
+keyboard forwarding works in the single-display fallback.
+
+The next experiment should resume the inherited viewport matrix after
+`display-move-backing-scale` to find the next remaining failure, if any.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+**Verdict:** Approved.
+
+Findings:
+
+- No required findings.
+- No optional findings.
+- No nit findings.
+
+The reviewer independently verified that
+`bash -n scripts/ghostboard-geometry-matrix.sh` and `git diff --check` were
+clean, that the result commit had not already been made, that forbidden-path and
+Chromium scope checks were clean, and that the final focused logs showed the
+single-display fallback passing overlay, focus, and browser keyboard checks
+without hiding the expected one-display partial note.

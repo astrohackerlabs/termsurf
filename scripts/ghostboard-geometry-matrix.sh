@@ -5079,9 +5079,45 @@ EOF
 
     SINGLE_MODE_START_LINE="$(log_line_count)"
     SINGLE_MODE_TRACE_START_LINE="$(trace_line_count)"
+    SINGLE_MODE_PRE_TRACE_FOCUS_TRUE_COUNT="$(awk -v tab="$A_BROWSER_TAB_ID" -v pane="$A_PANE_ID" 'index($0, "focus-changed tab=" tab " pane=" pane " ffi=ts_set_focus focused=true") { count++ } END { print count + 0 }' "$ROAMIUM_TRACE")"
+    SINGLE_MODE_PRE_TRACE_FOCUS_FALSE_COUNT="$(awk -v tab="$A_BROWSER_TAB_ID" -v pane="$A_PANE_ID" 'index($0, "focus-changed tab=" tab " pane=" pane " ffi=ts_set_focus focused=false") { count++ } END { print count + 0 }' "$ROAMIUM_TRACE")"
+    SINGLE_MODE_PRE_TRACE_LAST_FOCUS="$(rg -n "focus-changed tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID} .*focused=" "$ROAMIUM_TRACE" | tail -1 || true)"
+    log "single_display_trace_start_line=$SINGLE_MODE_TRACE_START_LINE"
+    log "single_display_pre_enter_focus_true_count=$SINGLE_MODE_PRE_TRACE_FOCUS_TRUE_COUNT"
+    log "single_display_pre_enter_focus_false_count=$SINGLE_MODE_PRE_TRACE_FOCUS_FALSE_COUNT"
+    if [ -n "$SINGLE_MODE_PRE_TRACE_LAST_FOCUS" ]; then
+      log "single_display_pre_enter_last_focus=$SINGLE_MODE_PRE_TRACE_LAST_FOCUS"
+    else
+      log "single_display_pre_enter_last_focus=<none>"
+    fi
     log "single_display_mode_key=enter=Mode::Browse"
     swift "$ROOT/scripts/ghostty-app/inject.swift" key 36 >>"$HARNESS_LOG" 2>&1
-    wait_for_log_after "$SINGLE_MODE_START_LINE" "ModeChanged: pane_id=${A_PANE_ID} browsing=true" "single-display webtui entered browse mode"
+    SINGLE_MODE_CHANGED_APP_LINE="$(wait_for_line_after "$SINGLE_MODE_START_LINE" "ModeChanged: pane_id=${A_PANE_ID} browsing=true" "single-display webtui entered browse mode")"
+    log "PASS: single-display webtui entered browse mode"
+    SINGLE_MODE_FOCUS_APP_LINE="$(wait_for_line_after "$SINGLE_MODE_START_LINE" "FocusChanged: pane_id=${A_PANE_ID} tab_id=${A_BROWSER_TAB_ID} focused=true" "single-display Ghostboard emitted focus=true after browse mode")"
+    log "PASS: single-display Ghostboard emitted focus=true after browse mode"
+    SINGLE_MODE_KEY_APP_LINE="$(rg -n "key_down scenario=${SCENARIO} .*pane_id:${A_PANE_ID} .*note=key_code=36 " "$APP_LOG" | tail -1 || true)"
+    SINGLE_MODE_POST_TRACE_FOCUS_TRUE_COUNT="$(awk -v tab="$A_BROWSER_TAB_ID" -v pane="$A_PANE_ID" 'index($0, "focus-changed tab=" tab " pane=" pane " ffi=ts_set_focus focused=true") { count++ } END { print count + 0 }' "$ROAMIUM_TRACE")"
+    SINGLE_MODE_POST_TRACE_FOCUS_FALSE_COUNT="$(awk -v tab="$A_BROWSER_TAB_ID" -v pane="$A_PANE_ID" 'index($0, "focus-changed tab=" tab " pane=" pane " ffi=ts_set_focus focused=false") { count++ } END { print count + 0 }' "$ROAMIUM_TRACE")"
+    SINGLE_MODE_POST_TRACE_LAST_FOCUS="$(rg -n "focus-changed tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID} .*focused=" "$ROAMIUM_TRACE" | tail -1 || true)"
+    SINGLE_MODE_TRACE_FOCUS_TRUE_DELTA="$((SINGLE_MODE_POST_TRACE_FOCUS_TRUE_COUNT - SINGLE_MODE_PRE_TRACE_FOCUS_TRUE_COUNT))"
+    SINGLE_MODE_TRACE_FOCUS_FALSE_DELTA="$((SINGLE_MODE_POST_TRACE_FOCUS_FALSE_COUNT - SINGLE_MODE_PRE_TRACE_FOCUS_FALSE_COUNT))"
+    log "single_display_mode_app_log_line=$SINGLE_MODE_CHANGED_APP_LINE"
+    log "single_display_focus_app_log_line=$SINGLE_MODE_FOCUS_APP_LINE"
+    if [ -n "$SINGLE_MODE_KEY_APP_LINE" ]; then
+      log "single_display_enter_key_appkit_log_line=$SINGLE_MODE_KEY_APP_LINE"
+    else
+      log "single_display_enter_key_appkit_log_line=<none>"
+    fi
+    log "single_display_post_enter_focus_true_count=$SINGLE_MODE_POST_TRACE_FOCUS_TRUE_COUNT"
+    log "single_display_post_enter_focus_false_count=$SINGLE_MODE_POST_TRACE_FOCUS_FALSE_COUNT"
+    log "single_display_focus_true_delta=$SINGLE_MODE_TRACE_FOCUS_TRUE_DELTA"
+    log "single_display_focus_false_delta=$SINGLE_MODE_TRACE_FOCUS_FALSE_DELTA"
+    if [ -n "$SINGLE_MODE_POST_TRACE_LAST_FOCUS" ]; then
+      log "single_display_post_enter_last_focus=$SINGLE_MODE_POST_TRACE_LAST_FOCUS"
+    else
+      log "single_display_post_enter_last_focus=<none>"
+    fi
     require_trace_after "$SINGLE_MODE_TRACE_START_LINE" "focus-changed tab=${A_BROWSER_TAB_ID} pane=${A_PANE_ID} ffi=ts_set_focus focused=true" "Roamium observed focus=true on single display"
 
     SINGLE_KEY_START_LINE="$(trace_line_count)"
