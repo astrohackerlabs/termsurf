@@ -1306,7 +1306,6 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
     var spawn_listen_socket_buf: [max_listen_socket_len]u8 = undefined;
     var spawn_listen_socket_len: usize = 0;
     var should_record_child: bool = false;
-    var resize_snapshot: ?ResizeSnapshot = null;
     var overlay_snapshot: ?OverlaySnapshot = null;
 
     state_mutex.lock();
@@ -1325,7 +1324,6 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         panes[pane_index].tui_fd = tui_fd;
         const server_index = findServer(profile, browser);
         const pane_count = if (server_index) |index| servers[index].pane_count else 0;
-        resize_snapshot = snapshotResize(&panes[pane_index]);
         overlay_snapshot = snapshotOverlay(&panes[pane_index]);
         log.info(
             "SetOverlay: updated pane_id={s} profile={s} browser={s} pane_count={}",
@@ -1333,11 +1331,6 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         );
         geometryTracePane("set_overlay_update", &panes[pane_index], "updated-existing-pane");
         state_mutex.unlock();
-        if (resize_snapshot) |snapshot| {
-            sendResize(&snapshot) catch |err| {
-                log.warn("Resize send failed pane_id={s} err={}", .{ snapshot.paneId(), err });
-            };
-        }
         if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
         return;
     }

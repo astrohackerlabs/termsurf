@@ -87,4 +87,4 @@ the final acceptance requires a human watching the installed or development app.
 ## Experiments
 
 - [Experiment 1: Remove fallback resize from active overlay updates](01-remove-fallback-resize-from-active-overlay-updates.md)
-  — **Designed**
+  — **Partial** (automated checks pass; manual visual verification pending)

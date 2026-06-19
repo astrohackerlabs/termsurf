@@ -125,3 +125,94 @@ Re-review verdict: **APPROVED**.
 
 The reviewer confirmed that the prior Required finding is resolved and no new
 Required findings were introduced.
+
+## Result
+
+**Result:** Partial
+
+Implemented the normal browser-overlay part of the experiment. The existing-pane
+`handleSetOverlay` update path now updates Ghostboard state and calls
+`presentOverlay`, but it no longer sends the fallback `snapshotResize` browser
+resize before AppKit has reported the real presented pixel size. Devtools
+overlay handling was intentionally left unchanged.
+
+Verification performed:
+
+```bash
+zig fmt ghostboard/src/apprt/termsurf.zig
+git diff --check
+cd ghostboard && zig build
+scripts/ghostboard-geometry-matrix.sh window-resize
+scripts/ghostboard-geometry-matrix.sh split-right
+scripts/ghostboard-geometry-matrix.sh split-down
+```
+
+Results:
+
+- `zig fmt ghostboard/src/apprt/termsurf.zig` passed.
+- `git diff --check` passed.
+- `cd ghostboard && zig build` passed.
+- `scripts/ghostboard-geometry-matrix.sh window-resize` passed with logs at
+  `logs/ghostboard-geometry-window-resize-app-20260619-181221.log` and
+  `logs/ghostboard-geometry-window-resize-roamium-20260619-181221.log`.
+- `scripts/ghostboard-geometry-matrix.sh split-right` passed with logs at
+  `logs/ghostboard-geometry-split-right-app-20260619-181240.log` and
+  `logs/ghostboard-geometry-split-right-roamium-20260619-181240.log`.
+- `scripts/ghostboard-geometry-matrix.sh split-down` passed with logs at
+  `logs/ghostboard-geometry-split-down-app-20260619-181422.log` and
+  `logs/ghostboard-geometry-split-down-roamium-20260619-181422.log`.
+
+The sequential geometry logs show the intended active-update sequence:
+
+- `set_overlay_update`
+- `present_overlay_call`
+- AppKit `presented_pixels`
+- Zig `appkit_presented_pixels`
+- Zig `appkit_corrective_resize`
+- Zig `resize` with the AppKit pixel size
+
+For split-right, the active update changed from grid `87x48+1+1` to AppKit
+pixels `1392x1632`; there was no intervening browser `Resize` for the fallback
+grid-derived `870x960` size. For split-down, the active update changed from grid
+`177x21+1+1` to AppKit pixels `2832x714`; there was no intervening browser
+`Resize` for the fallback grid-derived `1770x420` size. For window shrink, the
+active update changed from grid `177x48+1+1` to AppKit pixels `2832x1632`; there
+was no intervening browser `Resize` for the fallback grid-derived `1770x960`
+size.
+
+An initial parallel run of the three geometry scenarios produced pointer
+hit-test failures in the window-resize and split-right harnesses before those
+runs reached their resize assertions. Re-running the scenarios sequentially
+passed, so the recorded verification uses the sequential runs.
+
+Manual visual verification is still pending. The primary bug is a short-lived
+visual bounce, so this experiment should stay Partial until a human confirms
+that resizing an active browser pane no longer visibly shrinks the webview to a
+small/default size before returning to the pane size.
+
+## Conclusion
+
+The likely code-level cause has been removed from normal browser overlay
+updates, and the automated geometry matrix still proves AppKit pixel resize
+delivery for window, horizontal split, and vertical split changes. If manual
+testing still shows a visible bounce, the next experiment should capture a
+geometry trace from the manual reproduction and look for a remaining resize
+source outside the normal `handleSetOverlay` path.
+
+## Completion Review
+
+Fresh-context adversarial completion review returned **APPROVED** with no
+findings.
+
+The reviewer independently confirmed:
+
+- the implementation removes only the normal `handleSetOverlay` fallback
+  `snapshotResize` send;
+- `handleSetDevtoolsOverlay` still keeps `snapshotResize` and `sendResize`;
+- existing normal browser overlay updates still call `presentOverlay`;
+- `overlayPresentedPixels` still sends corrective browser resizes;
+- the README status matches the experiment result;
+- no result commit existed before the completion review;
+- the recorded logs show the expected
+  `set_overlay_update -> present_overlay_call -> presented_pixels -> appkit_corrective_resize -> resize`
+  sequence without the old fallback resize dimensions.
