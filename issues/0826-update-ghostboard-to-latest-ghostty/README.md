@@ -193,3 +193,5 @@ previous experiment has produced a result.
   — **Pass**
 - [Experiment 5: Restore TermSurf identity surfaces](05-restore-termsurf-identity-surfaces.md)
   — **Partial**
+- [Experiment 6: Verify real Roamium overlay smoke](06-verify-real-roamium-overlay-smoke.md)
+  — **Designed**
