@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-13"
+closed = "2026-06-19"
 +++
 
 # Issue 803: Roastty Debug Overlay
@@ -43,3 +44,10 @@ The investigation should avoid broad renderer churn. It should focus on:
 
 As with other current issues, experiments should be created one at a time. Do
 not add the `## Experiments` index until Experiment 1 is designed.
+
+## Conclusion
+
+Roastty is no longer active work, so this optional deferred debug overlay item
+is intentionally retired without experiments. If Roastty work resumes later,
+open a new issue against the then-current Roastty direction instead of reviving
+this placeholder.

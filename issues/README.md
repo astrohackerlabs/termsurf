@@ -8,7 +8,6 @@
 | [0795](0795-pdf-native-print/README.md)           | PDF Native Print                     | 2026-05-30 |
 | [0797](0797-pdf-core-workflow-coverage/README.md) | PDF Core Workflow Coverage           | 2026-05-30 |
 | [0798](0798-pdf-advanced-features/README.md)      | PDF Advanced Features                | 2026-05-30 |
-| [0803](0803-roastty-debug-overlay/README.md)      | Roastty Debug Overlay                | 2026-06-13 |
 
 ## Closed
 
@@ -34,6 +33,7 @@
 | [0806](0806-roastty-input-latency/README.md)                    | Roastty input latency                                                         | 2026-06-16 | 2026-06-16 |
 | [0805](0805-roastty-ghostty-parity/README.md)                   | Roastty Parity with Ghostty 2c62d182                                          | 2026-06-13 | 2026-06-15 |
 | [0804](0804-roastty-gui-automation-readiness/README.md)         | Roastty GUI Automation Readiness                                              | 2026-06-13 | 2026-06-13 |
+| [0803](0803-roastty-debug-overlay/README.md)                    | Roastty Debug Overlay                                                         | 2026-06-13 | 2026-06-19 |
 | [0802](0802-libroastty-completion-and-mac-app/README.md)        | Complete libroastty and prove it with a copied, renamed Ghostty macOS app     | 2026-06-08 | 2026-06-13 |
 | [0801](0801-roastty-libghostty-rewrite/README.md)               | Reimplement libghostty as libroastty                                          | 2026-05-31 | 2026-06-08 |
 | [0800](0800-roastty-architecture/README.md)                     | Roastty Architecture and ABI Skeleton                                         | 2026-05-31 | 2026-05-31 |
