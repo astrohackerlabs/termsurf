@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-19"
+closed = "2026-06-19"
 +++
 
 # Issue 824: Ghostboard Poisoned Agent Files
@@ -100,3 +101,16 @@ build/test instructions.
   — **Pass**
 - [Experiment 2: Sanitize Ghostboard agent-facing files](02-sanitize-ghostboard-agent-facing-files.md)
   — **Pass**
+
+## Conclusion
+
+Issue 824 is closed. The active `ghostboard/` tree no longer contains the
+confirmed inherited `AGENTS.md` trap or the inherited Ghostty
+contributor-gate/vouch/denouncement policy surface.
+
+Experiment 1 produced the audit inventory. Experiment 2 removed or rewrote the
+agent-facing files, deleted the inherited contributor-gate GitHub templates and
+workflows, verified the high-signal poison greps returned no matches, and
+recorded the remaining `ghostty-org/ghostty` URL hits as benign upstream
+provenance, generated documentation, examples, runtime/update metadata, or CI
+repository guards.
