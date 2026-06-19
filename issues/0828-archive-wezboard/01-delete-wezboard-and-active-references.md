@@ -302,18 +302,14 @@ matches only:
 - `chromium/patches/**` contains old patch commit-message text from historical
   Wezboard-era Chromium patch exports.
 
-The deletion commit hash cannot be embedded in the deletion commit itself. It
-will be recorded in a follow-up issue-document commit immediately after the
-result commit exists.
+Deletion commit hash: `d92ba788058d2569497789f6deabbffe7f2508b9`.
 
 ## Conclusion
 
 Experiment 1 archived Wezboard from the active repo surface. The code directory
 is deleted, current scripts and package metadata no longer expose Wezboard as a
 component, and current docs point at Ghostboard/TermSurf as the frontend. The
-next required step is the result review, followed by the result commit; after
-that commit lands, record its exact hash in this experiment and the issue README
-conclusion.
+deletion commit hash is `d92ba788058d2569497789f6deabbffe7f2508b9`.
 
 ## Completion Review
 

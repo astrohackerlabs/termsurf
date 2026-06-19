@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-19"
+closed = "2026-06-19"
 +++
 
 # Issue 828: Archive Wezboard
@@ -68,3 +69,20 @@ Do not create experiments upfront. Design Experiment 1 after this issue is open.
 
 - [Experiment 1: Delete Wezboard and remove active references](01-delete-wezboard-and-active-references.md)
   — **Pass**
+
+## Conclusion
+
+Wezboard was archived by deleting `wezboard/` from the repository in commit
+`d92ba788058d2569497789f6deabbffe7f2508b9`.
+
+That commit also removed active Wezboard build/install/release surfaces, deleted
+Wezboard-only helper scripts and active website pages, updated the Homebrew cask
+through submodule commit `3f15e14`, and updated current documentation to treat
+Ghostboard/TermSurf as the active frontend.
+
+To recover the archived Wezboard source, check out or inspect any commit before
+`d92ba788058d2569497789f6deabbffe7f2508b9`, for example:
+
+```bash
+git checkout d92ba788058d2569497789f6deabbffe7f2508b9^ -- wezboard
+```
