@@ -96,4 +96,4 @@ Do not create experiments upfront. Design Experiment 1 after this issue is open.
 ## Experiments
 
 - [Experiment 1: Replace Ghostboard icon assets with the TermSurf logo](01-replace-ghostboard-icon-assets.md)
-  — **Designed**
+  — **Pass**
