@@ -198,4 +198,4 @@ previous experiment has produced a result.
 - [Experiment 7: Run inherited viewport matrix](07-run-inherited-viewport-matrix.md)
   — **Partial**
 - [Experiment 8: Restore close-sibling split keybind](08-restore-close-sibling-split-keybind.md)
-  — **Designed**
+  — **Partial**

@@ -244,3 +244,93 @@ built-in function. Fixed by using `/if \[.*split-right-close-sibling/`,
 `ctrl[+]d`, `ctrl[+]k`, and `has_split` / `has_close`.
 
 The final re-review approved the design with no findings.
+
+## Result
+
+**Result:** Partial
+
+The harness keybinding omission was fixed, and the previously failing
+`split-right-close-sibling` row now passes with the normal default app, `web`,
+Roamium, and installed-Roamium overrides unset.
+
+Implementation change:
+
+- `scripts/ghostboard-geometry-matrix.sh`
+  - Added `split-right-close-sibling` to the scenario group that writes
+    `keybind = ctrl+d=new_split:right`.
+  - Left the existing `confirm-close-surface = false` and
+    `keybind = ctrl+k=close_surface` block intact.
+
+Verification evidence:
+
+- `logs/issue-0826-exp08-keybind-evidence.log` shows that config blocks whose
+  condition includes `split-right-close-sibling` now include both
+  `keybind = ctrl+d=new_split:right` and `keybind = ctrl+k=close_surface`.
+- `bash -n scripts/ghostboard-geometry-matrix.sh` passed.
+- `prettier --write --prose-wrap always --print-width 80` passed for the issue
+  README and this experiment file.
+- `git diff --check` passed.
+- The debug macOS app build passed with output captured in
+  `logs/issue-0826-exp08-macos-build.log`.
+- `logs/ghostboard-geometry-split-right-close-sibling-harness-20260619-122413.log`
+  shows:
+  - `split_keybind=ctrl+d=new_split:right`
+  - `split_overlay_frame_size=496x544`
+  - `close_keybind=ctrl+k=close_surface`
+  - `close_overlay_frame_size=1024x544`
+  - `PASS: scenario split-right-close-sibling`
+- `logs/ghostboard-geometry-split-right-close-sibling-app-20260619-122413.log`
+  shows `dispatching action target=surface action=.new_split value=.right`, plus
+  AppKit presented-frame logs for the initial, split, and post-close overlay
+  geometry.
+- `logs/issue-0826-exp08-close-sibling-roamium-evidence.log` shows Roamium
+  resize calls for the initial full-pane size, the split-pane size, and the
+  post-close full-pane size.
+
+However, the same passing app log also shows a cleanup-time product failure
+after the scenario has already passed:
+
+```text
+warning(termsurf): CloseTab send failed pane_id=... err=error.NotOpenForWriting
+thread ... panic: reached unreachable code
+```
+
+Spot checks found the same cleanup-time `CloseTab send failed` followed by a
+panic in earlier rows that had been reported as passing, including
+`initial-open`, `window-resize`, and `split-right`. This means the harness
+keybinding omission was real and repaired, but the inherited matrix is still
+masking a broader Ghostboard shutdown/cleanup bug. The remaining matrix rows
+were not resumed in this experiment because continuing would produce additional
+scenario results on top of a known teardown panic.
+
+Final scope checks:
+
+- No product code changed in this experiment.
+- No forbidden paths were modified: `webtui/`, `roamium/`, `chromium/`, or
+  `proto/termsurf.proto`.
+- The nested `chromium/src` checkout had no experiment changes.
+
+## Conclusion
+
+Experiment 8 restored the missing split keybinding for
+`split-right-close-sibling` and proved that the close-sibling row can now drive
+split creation, close the sibling pane, and return the browser overlay to the
+full terminal pane. The result is Partial because app teardown still attempts to
+send `CloseTab` on a browser socket that is already not open for writing, then
+panics during shutdown. The next experiment should localize and fix that cleanup
+path before the viewport matrix is resumed.
+
+## Result Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+**Verdict:** Approved.
+
+Findings: none.
+
+The reviewer independently checked that the implementation commit only added
+`split-right-close-sibling` to the `ctrl+d=new_split:right` harness keybinding
+group, that the README status and experiment result both say Partial, that the
+referenced harness/app/Roamium logs support the pass and cleanup-panic claims,
+and that the result documentation had not yet been committed before review.
