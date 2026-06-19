@@ -97,4 +97,4 @@ build/test instructions.
 ## Experiments
 
 - [Experiment 1: Audit inherited agent-facing poison](01-audit-inherited-agent-facing-poison.md)
-  — **Designed**
+  — **Pass**
