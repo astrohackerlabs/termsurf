@@ -205,3 +205,5 @@ previous experiment has produced a result.
   — **Pass**
 - [Experiment 11: Resume remaining viewport matrix](11-resume-remaining-viewport-matrix.md)
   — **Partial**
+- [Experiment 12: Localize browser navigation trace](12-localize-browser-navigation-trace.md)
+  — **Designed**
