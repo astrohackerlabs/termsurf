@@ -98,3 +98,5 @@ build/test instructions.
 
 - [Experiment 1: Audit inherited agent-facing poison](01-audit-inherited-agent-facing-poison.md)
   — **Pass**
+- [Experiment 2: Sanitize Ghostboard agent-facing files](02-sanitize-ghostboard-agent-facing-files.md)
+  — **Designed**
