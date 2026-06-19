@@ -180,3 +180,8 @@ experiment review gate.
 
 Do not open experiments upfront. Each experiment should be designed after the
 previous experiment has produced a result.
+
+## Experiments
+
+- [Experiment 1: Discover the largest practical merge range](01-discover-largest-practical-merge-range.md)
+  — **Designed**
