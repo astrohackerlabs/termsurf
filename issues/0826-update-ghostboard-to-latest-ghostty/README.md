@@ -186,4 +186,4 @@ previous experiment has produced a result.
 - [Experiment 1: Discover the largest practical merge range](01-discover-largest-practical-merge-range.md)
   — **Pass**
 - [Experiment 2: Apply the full upstream subtree merge](02-apply-full-upstream-subtree-merge.md)
-  — **Designed**
+  — **Pass**

@@ -5,6 +5,7 @@ const Terminal = @This();
 
 const std = @import("std");
 const build_options = @import("terminal_options");
+const lib = @import("lib.zig");
 const assert = @import("../quirks.zig").inlineAssert;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -16,15 +17,15 @@ const modespkg = @import("modes.zig");
 const charsets = @import("charsets.zig");
 const csi = @import("csi.zig");
 const hyperlink = @import("hyperlink.zig");
+const glyph = @import("apc/glyph.zig");
 const kitty = @import("kitty.zig");
 const osc = @import("osc.zig");
 const point = @import("point.zig");
 const sgr = @import("sgr.zig");
 const Tabstops = @import("Tabstops.zig");
 const color = @import("color.zig");
-const mouse_shape_pkg = @import("mouse_shape.zig");
-const ReadonlyHandler = @import("stream_readonly.zig").Handler;
-const ReadonlyStream = @import("stream_readonly.zig").Stream;
+const mouse = @import("mouse.zig");
+const Stream = @import("stream_terminal.zig").Stream;
 
 const size = @import("size.zig");
 const pagepkg = @import("page.zig");
@@ -65,6 +66,9 @@ scrolling_region: ScrollingRegion,
 /// The last reported pwd, if any.
 pwd: std.ArrayList(u8),
 
+/// The title of the terminal as set by escape sequences (e.g. OSC 0/2).
+title: std.ArrayList(u8),
+
 /// The color state for this terminal.
 colors: Colors,
 
@@ -76,7 +80,10 @@ previous_char: ?u21 = null,
 modes: modespkg.ModeState = .{},
 
 /// The most recently set mouse shape for the terminal.
-mouse_shape: mouse_shape_pkg.MouseShape = .text,
+mouse_shape: mouse.Shape = .text,
+
+/// Per-session Glyph Protocol registrations.
+glyph_glossary: glyph.Glossary = .empty,
 
 /// These are just a packed set of flags we may set on the terminal.
 flags: packed struct {
@@ -93,8 +100,8 @@ flags: packed struct {
     /// set mode in modes. You can't get the right event/format to use
     /// based on modes alone because modes don't show you what order
     /// this was called so we have to track it separately.
-    mouse_event: MouseEvents = .none,
-    mouse_format: MouseFormat = .x10,
+    mouse_event: mouse.Event = .none,
+    mouse_format: mouse.Format = .x10,
 
     /// Set via the XTSHIFTESCAPE sequence. If true (XTSHIFTESCAPE = 1)
     /// then we want to capture the shift key for the mouse protocol
@@ -162,31 +169,11 @@ pub const Dirty = packed struct {
 
     /// Set when the pre-edit is modified.
     preedit: bool = false,
-};
 
-/// The event types that can be reported for mouse-related activities.
-/// These are all mutually exclusive (hence in a single enum).
-pub const MouseEvents = enum(u3) {
-    none = 0,
-    x10 = 1, // 9
-    normal = 2, // 1000
-    button = 3, // 1002
-    any = 4, // 1003
-
-    /// Returns true if this event sends motion events.
-    pub fn motion(self: MouseEvents) bool {
-        return self == .button or self == .any;
-    }
-};
-
-/// The format of mouse events when enabled.
-/// These are all mutually exclusive (hence in a single enum).
-pub const MouseFormat = enum(u3) {
-    x10 = 0,
-    utf8 = 1, // 1005
-    sgr = 2, // 1006
-    urxvt = 3, // 1015
-    sgr_pixels = 4, // 1016
+    /// Set when Glyph Protocol registrations may have changed. Registered
+    /// glyphs can affect already-visible PUA cells, so this requires a full
+    /// render-state rebuild.
+    glyph_glossary: bool = false,
 };
 
 /// Scrolling region is the area of the screen designated where scrolling
@@ -213,6 +200,26 @@ pub const Options = struct {
     /// The default mode state. When the terminal gets a reset, it
     /// will revert back to this state.
     default_modes: modespkg.ModePacked = .{},
+
+    /// The total storage limit for Kitty images in bytes. Has no effect
+    /// if kitty images are disabled at build-time.
+    kitty_image_storage_limit: usize = switch (build_options.artifact) {
+        .ghostty => 320 * 1000 * 1000, // 320MB
+
+        // libghostty we start with a much lower limit since this is an
+        // embedded library and we want to be more conservative with memory
+        // usage by default.
+        .lib => 10 * 1000 * 1000, // 10MB
+    },
+
+    /// The limits for what medium types are allowed for Kitty image loading.
+    /// Has no effect if kitty images are disabled otherwise. For example,
+    // if no `sys.decode_png` hook is specified, png formats are disabled
+    // no matter what.
+    kitty_image_loading_limits: if (build_options.kitty_graphics)
+        kitty.graphics.LoadingImage.Limits
+    else
+        void = if (build_options.kitty_graphics) .direct else {},
 };
 
 /// Initialize a new terminal.
@@ -227,6 +234,8 @@ pub fn init(
         .cols = cols,
         .rows = rows,
         .max_scrollback = opts.max_scrollback,
+        .kitty_image_storage_limit = opts.kitty_image_storage_limit,
+        .kitty_image_loading_limits = opts.kitty_image_loading_limits,
     });
     errdefer screen_set.deinit(alloc);
 
@@ -242,6 +251,7 @@ pub fn init(
             .right = cols - 1,
         },
         .pwd = .empty,
+        .title = .empty,
         .colors = opts.colors,
         .modes = .{
             .values = opts.default_modes,
@@ -254,24 +264,36 @@ pub fn deinit(self: *Terminal, alloc: Allocator) void {
     self.tabstops.deinit(alloc);
     self.screens.deinit(alloc);
     self.pwd.deinit(alloc);
+    self.title.deinit(alloc);
+    self.glyph_glossary.deinit(alloc);
     self.* = undefined;
 }
 
 /// Return a terminal.Stream that can process VT streams and update this
 /// terminal state. The streams will only process read-only data that
-/// modifies terminal state. Sequences that query or otherwise require
-/// output will be ignored.
-pub fn vtStream(self: *Terminal) ReadonlyStream {
+/// modifies terminal state.
+///
+/// Sequences that query or otherwise require output will be ignored.
+/// If you want to handle side effects, use `vtHandler` and set the
+/// effects field yourself, then initialize a stream.
+///
+/// This must be deinitialized by the caller.
+///
+/// Important: this creates a new stream each time with fresh parser state.
+/// If you need to persist parser state across multiple writes (e.g.
+/// for handling escape sequences split across write boundaries), you
+/// must store and reuse the returned stream.
+pub fn vtStream(self: *Terminal) Stream {
     return .initAlloc(self.gpa(), self.vtHandler());
 }
 
 /// This is the handler-side only for vtStream.
-pub fn vtHandler(self: *Terminal) ReadonlyHandler {
+pub fn vtHandler(self: *Terminal) Stream.Handler {
     return .init(self);
 }
 
 /// The general allocator we should use for this terminal.
-fn gpa(self: *Terminal) Allocator {
+pub fn gpa(self: *Terminal) Allocator {
     return self.screens.active.alloc;
 }
 
@@ -365,20 +387,20 @@ pub fn print(self: *Terminal, c: u21) !void {
         // necessarily a grapheme break.
         if (prev.cell.codepoint() == 0) break :grapheme;
 
+        var previous_codepoint: u21 = prev.cell.content.codepoint;
         const grapheme_break = brk: {
             var state: uucode.grapheme.BreakState = .default;
-            var cp1: u21 = prev.cell.content.codepoint;
             if (prev.cell.hasGrapheme()) {
                 const cps = self.screens.active.cursor.page_pin.node.data.lookupGrapheme(prev.cell).?;
                 for (cps) |cp2| {
-                    // log.debug("cp1={x} cp2={x}", .{ cp1, cp2 });
-                    assert(!unicode.graphemeBreak(cp1, cp2, &state));
-                    cp1 = cp2;
+                    // log.debug("cp1={x} cp2={x}", .{ previous_codepoint, cp2 });
+                    assert(!unicode.graphemeBreak(previous_codepoint, cp2, &state));
+                    previous_codepoint = cp2;
                 }
             }
 
-            // log.debug("cp1={x} cp2={x} end", .{ cp1, c });
-            break :brk unicode.graphemeBreak(cp1, c, &state);
+            // log.debug("cp1={x} cp2={x} end", .{ previous_codepoint, c });
+            break :brk unicode.graphemeBreak(previous_codepoint, c, &state);
         };
 
         // If we can NOT break, this means that "c" is part of a grapheme
@@ -390,7 +412,7 @@ pub fn print(self: *Terminal, c: u21) !void {
             // the cell width accordingly. VS16 makes the character wide and
             // VS15 makes it narrow.
             if (c == 0xFE0F or c == 0xFE0E) {
-                const prev_props = unicode.table.get(prev.cell.content.codepoint);
+                const prev_props = unicode.table.get(previous_codepoint);
                 // Check if it is a valid variation sequence in
                 // emoji-variation-sequences.txt, and if not, ignore the char.
                 if (!prev_props.emoji_vs_base) return;
@@ -561,20 +583,25 @@ pub fn print(self: *Terminal, c: u21) !void {
         // it.
         if (self.modes.get(.grapheme_cluster)) return;
 
-        // If we're at cell zero, then this is malformed data and we don't
-        // print anything or even store this. Zero-width characters are ALWAYS
-        // attached to some other non-zero-width character at the time of
-        // writing.
-        if (self.screens.active.cursor.x == 0) {
+        // If we have wraparound enabled and a pending wrap, the character
+        // we're attaching to is still under the cursor. Otherwise, it's the
+        // cell to the left.
+        const left: size.CellCountInt = if (self.modes.get(.wraparound) and self.screens.active.cursor.pending_wrap) 0 else 1;
+
+        // If we're at cell zero and not pending a wrap, then this is malformed
+        // data and we don't print anything or even store this. Zero-width
+        // characters are ALWAYS attached to some other non-zero-width
+        // character at the time of writing.
+        if (self.screens.active.cursor.x == 0 and left == 1) {
             log.warn("zero-width character with no prior character, ignoring", .{});
             return;
         }
 
         // Find our previous cell
         const prev = prev: {
-            const immediate = self.screens.active.cursorCellLeft(1);
+            const immediate = self.screens.active.cursorCellLeft(left);
             if (immediate.wide != .spacer_tail) break :prev immediate;
-            break :prev self.screens.active.cursorCellLeft(2);
+            break :prev self.screens.active.cursorCellLeft(left + 1);
         };
 
         // If our previous cell has no text, just ignore the zero-width character
@@ -1199,10 +1226,8 @@ pub fn semanticPrompt(
                 // within a prompt area to SGR mouse events and defers to the
                 // shell to handle them.
                 if (cmd.readOption(.click_events)) |v| {
-                    if (v) {
-                        screen.semantic_prompt.click = .click_events;
-                        break :click;
-                    }
+                    screen.semantic_prompt.click = .{ .click_events = v };
+                    break :click;
                 }
 
                 // If click_events was not set or disabled, fallback to `cl`.
@@ -1704,7 +1729,7 @@ pub fn scrollUp(self: *Terminal, count: usize) !void {
 }
 
 /// Options for scrolling the viewport of the terminal grid.
-pub const ScrollViewport = union(enum) {
+pub const ScrollViewport = union(Tag) {
     /// Scroll to the top of the scrollback
     top,
 
@@ -1713,6 +1738,23 @@ pub const ScrollViewport = union(enum) {
 
     /// Scroll by some delta amount, up is negative.
     delta: isize,
+
+    pub const Tag = lib.Enum(lib.target, &.{
+        "top",
+        "bottom",
+        "delta",
+    });
+
+    const c_union = lib.TaggedUnion(
+        lib.target,
+        @This(),
+        // Padding: largest variant is isize (8 bytes on 64-bit).
+        // Use [2]u64 (16 bytes) for future expansion.
+        [2]u64,
+    );
+    pub const C = c_union.C;
+    pub const CValue = c_union.CValue;
+    pub const cval = c_union.cval;
 };
 
 /// Scroll the viewport of the terminal grid.
@@ -2594,7 +2636,7 @@ pub fn eraseDisplay(
             assert(!self.screens.active.cursor.pending_wrap);
         },
 
-        .scrollback => self.screens.active.eraseRows(.{ .history = .{} }, null),
+        .scrollback => self.screens.active.eraseHistory(null),
     }
 }
 
@@ -2684,6 +2726,50 @@ pub fn kittyGraphics(
     cmd: *kitty.graphics.Command,
 ) ?kitty.graphics.Response {
     return kitty.graphics.execute(alloc, self, cmd);
+}
+
+/// Execute a Glyph Protocol APC command against this terminal's per-session
+/// glossary. The returned response, if any, should be sent back to the pty as
+/// a complete APC sequence via `Response.formatWire`.
+pub fn glyphProtocol(
+    self: *Terminal,
+    alloc: Allocator,
+    req: *const glyph.Request,
+) ?glyph.Response {
+    const resp = glyph.execute(alloc, &self.glyph_glossary, req);
+    switch (req.*) {
+        .register, .clear => self.flags.dirty.glyph_glossary = true,
+        .support, .query => {},
+    }
+    return resp;
+}
+
+/// Set the storage size limit for Kitty graphics across all screens.
+pub fn setKittyGraphicsSizeLimit(
+    self: *Terminal,
+    alloc: Allocator,
+    limit: usize,
+) !void {
+    if (comptime !build_options.kitty_graphics) return;
+    var it = self.screens.all.iterator();
+    while (it.next()) |entry| {
+        const screen: *Screen = entry.value.*;
+        try screen.kitty_images.setLimit(alloc, screen, limit);
+    }
+}
+
+/// Set the allowed medium types for Kitty graphics image loading
+/// across all screens.
+pub fn setKittyGraphicsLoadingLimits(
+    self: *Terminal,
+    limits: kitty.graphics.LoadingImage.Limits,
+) void {
+    if (comptime !build_options.kitty_graphics) return;
+    var it = self.screens.all.iterator();
+    while (it.next()) |entry| {
+        const screen: *Screen = entry.value.*;
+        screen.kitty_images.image_limits = limits;
+    }
 }
 
 /// Set a style attribute.
@@ -2867,14 +2953,33 @@ pub fn resize(
 /// Set the pwd for the terminal.
 pub fn setPwd(self: *Terminal, pwd: []const u8) !void {
     self.pwd.clearRetainingCapacity();
-    try self.pwd.appendSlice(self.gpa(), pwd);
+    if (pwd.len > 0) {
+        try self.pwd.appendSlice(self.gpa(), pwd);
+        try self.pwd.append(self.gpa(), 0);
+    }
 }
 
 /// Returns the pwd for the terminal, if any. The memory is owned by the
 /// Terminal and is not copied. It is safe until a reset or setPwd.
-pub fn getPwd(self: *const Terminal) ?[]const u8 {
+pub fn getPwd(self: *const Terminal) ?[:0]const u8 {
     if (self.pwd.items.len == 0) return null;
-    return self.pwd.items;
+    return self.pwd.items[0 .. self.pwd.items.len - 1 :0];
+}
+
+/// Set the title for the terminal, as set by escape sequences (e.g. OSC 0/2).
+pub fn setTitle(self: *Terminal, t: []const u8) !void {
+    self.title.clearRetainingCapacity();
+    if (t.len > 0) {
+        try self.title.appendSlice(self.gpa(), t);
+        try self.title.append(self.gpa(), 0);
+    }
+}
+
+/// Returns the title for the terminal, if any. The memory is owned by the
+/// Terminal and is not copied. It is safe until a reset or setTitle.
+pub fn getTitle(self: *const Terminal) ?[:0]const u8 {
+    if (self.title.items.len == 0) return null;
+    return self.title.items[0 .. self.title.items.len - 1 :0];
 }
 
 /// Switch to the given screen type (alternate or primary).
@@ -2915,12 +3020,15 @@ pub fn switchScreen(self: *Terminal, key: ScreenSet.Key) !?*Screen {
                     .alternate => 0,
                 },
 
-                // Inherit our Kitty image storage limit from the primary
+                // Inherit our Kitty image settings from the primary
                 // screen if we have to initialize.
                 .kitty_image_storage_limit = if (comptime build_options.kitty_graphics)
                     primary.kitty_images.total_limit
                 else
                     0,
+                .kitty_image_loading_limits = if (comptime build_options.kitty_graphics)
+                    primary.kitty_images.image_limits
+                else {},
             },
         );
     };
@@ -3086,6 +3194,8 @@ pub fn fullReset(self: *Terminal) void {
     self.tabstops.reset(TABSTOP_INTERVAL);
     self.previous_char = null;
     self.pwd.clearRetainingCapacity();
+    self.title.clearRetainingCapacity();
+    self.glyph_glossary.clearAndFree(self.gpa());
     self.status_display = .main;
     self.scrolling_region = .{
         .top = 0,
@@ -3231,6 +3341,23 @@ test "Terminal: zero-width character at start" {
 
     // Should not be dirty since we changed nothing.
     try testing.expect(!t.isDirty(.{ .screen = .{ .x = 0, .y = 0 } }));
+}
+
+// https://github.com/ghostty-org/ghostty/pull/12581
+test "Terminal: zero-width character attaches to pending wrap cell" {
+    var t = try init(testing.allocator, .{ .cols = 2, .rows = 2 });
+    defer t.deinit(testing.allocator);
+
+    // Disable grapheme clustering to exercise the fallback path.
+    t.modes.set(.grapheme_cluster, false);
+
+    try t.print('x');
+    try t.print('å');
+    try t.print(0x0332); // Combining low line.
+
+    const str = try t.plainString(testing.allocator);
+    defer testing.allocator.free(str);
+    try testing.expectEqualStrings("xå̲", str);
 }
 
 // https://github.com/mitchellh/ghostty/issues/1400
@@ -3637,6 +3764,27 @@ test "Terminal: invalid VS16 doesn't mark dirty" {
     t.clearDirty();
     try t.print(0xFE0F); // VS16 to make wide
     try testing.expect(!t.isDirty(.{ .screen = .{ .x = 0, .y = 0 } }));
+}
+
+// https://github.com/ghostty-org/ghostty/pull/12596
+test "Terminal: variation selectors apply to preceding codepoint" {
+    var t = try init(testing.allocator, .{ .cols = 5, .rows = 5 });
+    defer t.deinit(testing.allocator);
+
+    // Enable grapheme clustering
+    t.modes.set(.grapheme_cluster, true);
+
+    // Pirate flag: black flag + ZWJ + skull and crossbones + VS16.
+    try t.print(0x1F3F4);
+    try t.print(0x200D);
+    try t.print(0x2620);
+    try t.print(0xFE0F);
+
+    const list_cell = t.screens.active.pages.getCell(.{ .screen = .{ .x = 0, .y = 0 } }).?;
+    const cell = list_cell.cell;
+    try testing.expectEqual(@as(u21, 0x1F3F4), cell.content.codepoint);
+    try testing.expect(cell.hasGrapheme());
+    try testing.expectEqualSlices(u21, &.{ 0x200D, 0x2620, 0xFE0F }, list_cell.node.data.lookupGrapheme(cell).?);
 }
 
 test "Terminal: print multicodepoint grapheme, mode 2027" {
@@ -12271,7 +12419,24 @@ test "Terminal: OSC133A click_events=1 sets click to click_events" {
         .options_unvalidated = "click_events=1",
     });
 
-    try testing.expectEqual(.click_events, t.screens.active.semantic_prompt.click);
+    try testing.expectEqual(Screen.SemanticPrompt.SemanticClick{ .click_events = .absolute }, t.screens.active.semantic_prompt.click);
+}
+
+test "Terminal: OSC133A click_events=2 sets click to click_events (relative)" {
+    const alloc = testing.allocator;
+    var t = try init(alloc, .{ .cols = 10, .rows = 5 });
+    defer t.deinit(alloc);
+
+    // Verify default state is none
+    try testing.expectEqual(.none, t.screens.active.semantic_prompt.click);
+
+    // OSC 133;A with click_events=2
+    try t.semanticPrompt(.{
+        .action = .fresh_line_new_prompt,
+        .options_unvalidated = "click_events=2",
+    });
+
+    try testing.expectEqual(Screen.SemanticPrompt.SemanticClick{ .click_events = .relative }, t.screens.active.semantic_prompt.click);
 }
 
 test "Terminal: OSC133A click_events=0 does not set click_events" {
@@ -12328,7 +12493,7 @@ test "Terminal: OSC133A click_events=1 takes priority over cl" {
     });
 
     // click_events should take priority
-    try testing.expectEqual(.click_events, t.screens.active.semantic_prompt.click);
+    try testing.expectEqual(Screen.SemanticPrompt.SemanticClick{ .click_events = .absolute }, t.screens.active.semantic_prompt.click);
 }
 
 test "Terminal: OSC133A click_events=0 falls back to cl" {
@@ -13059,4 +13224,36 @@ test "Terminal: deleteLines wide char at right margin with full clear" {
     // and the orphaned spacer_tail at col 39 triggers a page integrity
     // violation in clearCells.
     try t.scrollUp(t.rows);
+}
+
+test "Terminal: glyph APC stores session glossary entries" {
+    const alloc = testing.allocator;
+    var t = try init(alloc, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(alloc);
+
+    var register_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
+    defer register_parser.deinit();
+    for ("r;cp=e0a0;AAAAAAAAAAAAAA==") |byte| try register_parser.feed(byte);
+    var register_req = try register_parser.complete(alloc);
+    defer register_req.deinit(alloc);
+
+    try testing.expectEqual(glyph.Response{
+        .register = .{ .cp = 0xE0A0 },
+    }, t.glyphProtocol(alloc, &register_req).?);
+    try testing.expect(t.glyph_glossary.contains(0xE0A0));
+    try testing.expect(t.flags.dirty.glyph_glossary);
+
+    var query_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
+    defer query_parser.deinit();
+    for ("q;cp=e0a0") |byte| try query_parser.feed(byte);
+    var query_req = try query_parser.complete(alloc);
+    defer query_req.deinit(alloc);
+
+    try testing.expectEqual(glyph.Response{ .query = .{
+        .cp = 0xE0A0,
+        .status = .{ .glossary = true },
+    } }, t.glyphProtocol(alloc, &query_req).?);
+
+    t.fullReset();
+    try testing.expect(!t.glyph_glossary.contains(0xE0A0));
 }

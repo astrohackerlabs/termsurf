@@ -478,9 +478,12 @@ fn initPages(
             page_alloc.free(page_buf);
 
         // In runtime safety modes we have to memset because the Zig allocator
-        // interface will always memset to 0xAA for undefined. In non-safe modes
-        // we use a page allocator and the OS guarantees zeroed memory.
-        if (comptime std.debug.runtime_safety) @memset(page_buf, 0);
+        // interface will always memset to 0xAA for undefined. On freestanding
+        // (WASM), the WasmAllocator reuses freed slots without zeroing since
+        // only fresh memory.grow pages are guaranteed zero by the WASM spec.
+        // On native, the OS page allocator (mmap) returns zeroed pages.
+        if (comptime std.debug.runtime_safety or builtin.os.tag == .freestanding)
+            @memset(page_buf, 0);
 
         // Initialize the first set of pages to contain our viewport so that
         // the top of the first page is always the active area.
@@ -654,6 +657,11 @@ pub fn deinit(self: *PageList) void {
 /// memory to fit the active area.
 pub fn reset(self: *PageList) void {
     defer self.assertIntegrity();
+
+    // Invalidate all external page refs to the previous list. The reset below
+    // rebuilds the page list from the pools, so old untracked refs must be
+    // rejected before any validation attempts to inspect their node pointers.
+    self.page_serial_min = self.page_serial;
 
     // We need enough pages/nodes to keep our active area. This should
     // never fail since we by definition have allocated a page already
@@ -932,6 +940,10 @@ pub const Resize = struct {
     pub const Cursor = struct {
         x: size.CellCountInt,
         y: size.CellCountInt,
+
+        /// When set, this pin preserves right-side blank cells up to the cursor
+        /// during reflow.
+        pin: ?*Pin = null,
     };
 };
 
@@ -1010,10 +1022,6 @@ fn resizeCols(
 ) Allocator.Error!void {
     assert(cols != self.cols);
 
-    // Update our cols. We have to do this early because grow() that we
-    // may call below relies on this to calculate the proper page size.
-    self.cols = cols;
-
     // If we have a cursor position (x,y), then we try under any col resizing
     // to keep the same number remaining active rows beneath it. This is a
     // very special case if you can imagine clearing the screen (i.e.
@@ -1022,10 +1030,11 @@ fn resizeCols(
     // pull down scrollback.
     const preserved_cursor: ?struct {
         tracked_pin: *Pin,
+        untrack: bool,
         remaining_rows: usize,
         wrapped_rows: usize,
     } = if (cursor) |c| cursor: {
-        const p = self.pin(.{ .active = .{
+        const p = if (c.pin) |cursor_pin| cursor_pin.* else self.pin(.{ .active = .{
             .x = c.x,
             .y = c.y,
         } }) orelse break :cursor null;
@@ -1038,6 +1047,16 @@ fn resizeCols(
         const wrapped = wrapped: {
             var wrapped: usize = 0;
 
+            // If shrinking rows (in the .lt branch of resize, rows shrink
+            // before we get here) pushed the cursor pin above the new active
+            // area, there are no rows to count and iterating .left_up toward
+            // the active-area top would be an invalid (reversed) range. The
+            // preserved-cursor growth below already no-ops for a cursor that
+            // isn't in the active area, so we just count zero here.
+            if (active_pin) |ap| {
+                if (p.before(ap)) break :wrapped 0;
+            }
+
             var row_it = p.rowIterator(.left_up, active_pin);
             while (row_it.next()) |next| {
                 const row = next.rowAndCell().row;
@@ -1048,12 +1067,21 @@ fn resizeCols(
         };
 
         break :cursor .{
-            .tracked_pin = try self.trackPin(p),
-            .remaining_rows = self.rows - c.y - 1,
+            .tracked_pin = c.pin orelse try self.trackPin(p),
+            .untrack = c.pin == null,
+            .remaining_rows = self.rows -| (c.y + 1),
             .wrapped_rows = wrapped,
         };
     } else null;
-    defer if (preserved_cursor) |c| self.untrackPin(c.tracked_pin);
+    defer if (preserved_cursor) |c| {
+        if (c.untrack) self.untrackPin(c.tracked_pin);
+    };
+
+    // Update our cols. We have to do this early because grow() that we
+    // may call below relies on this to calculate the proper page size, but
+    // after preserved_cursor so that the cursor pin can resolve coordinates in
+    // the old active coordinate space.
+    self.cols = cols;
 
     // Create the first node that contains our reflow.
     const first_rewritten_node = node: {
@@ -1107,7 +1135,11 @@ fn resizeCols(
     {
         var reflow_cursor: ReflowCursor = .init(first_rewritten_node);
         while (it.next()) |row| {
-            try reflow_cursor.reflowRow(self, row);
+            try reflow_cursor.reflowRow(
+                self,
+                row,
+                if (preserved_cursor) |c| c.tracked_pin else null,
+            );
 
             // Once we're done reflowing a page, destroy it immediately.
             // This frees memory and makes it more likely in memory
@@ -1132,6 +1164,17 @@ fn resizeCols(
         if (total >= self.rows) break;
     } else {
         for (total..self.rows) |_| _ = try self.grow();
+    }
+
+    // Reflow can unwrap enough rows that a history viewport pin lands in the
+    // active area before we do any preserved-cursor growth below. Switch back
+    // to the active viewport now so intermediate grow() integrity checks stay
+    // valid.
+    switch (self.viewport) {
+        .active, .top => {},
+        .pin => if (self.pinIsActive(self.viewport_pin.*)) {
+            self.viewport = .active;
+        },
     }
 
     // See preserved_cursor setup for why.
@@ -1159,7 +1202,7 @@ fn resizeCols(
             break :wrapped wrapped;
         };
 
-        const current = self.rows - active_pt.active.y - 1;
+        const current = self.rows -| (active_pt.active.y + 1);
 
         var req_rows = c.remaining_rows;
         req_rows -|= wrapped -| c.wrapped_rows;
@@ -1212,6 +1255,7 @@ const ReflowCursor = struct {
         self: *ReflowCursor,
         list: *PageList,
         row: Pin,
+        cursor_pin: ?*Pin,
     ) Allocator.Error!void {
         const src_page: *Page = &row.node.data;
         const src_row = row.rowAndCell().row;
@@ -1239,6 +1283,8 @@ const ReflowCursor = struct {
                 if (&p.node.data != src_page or
                     p.y != src_y) continue;
 
+                if (cursor_pin != null and p == cursor_pin.?) continue;
+
                 // If this pin is in the blanks on the right and past the end
                 // of the dst col width then we move it to the end of the dst
                 // col width instead.
@@ -1250,6 +1296,14 @@ const ReflowCursor = struct {
                 // We increase our col len to at least include this pin.
                 // This ensures that blank rows with pins are processed,
                 // so that the pins can be properly remapped.
+                cols_len = @max(cols_len, p.x + 1);
+            }
+        }
+
+        // If the cursor is after blanks on the right, those cells are still
+        // before the next write and must reflow with it.
+        if (cursor_pin) |p| {
+            if (&p.node.data == src_page and p.y == src_y) {
                 cols_len = @max(cols_len, p.x + 1);
             }
         }
@@ -3385,9 +3439,10 @@ inline fn createPageExt(
     else
         page_alloc.free(page_buf);
 
-    // Required only with runtime safety because allocators initialize
-    // to undefined, 0xAA.
-    if (comptime std.debug.runtime_safety) @memset(page_buf, 0);
+    // In runtime safety modes, allocators fill with 0xAA. On freestanding
+    // (WASM), the WasmAllocator reuses freed slots without zeroing.
+    if (comptime std.debug.runtime_safety or builtin.os.tag == .freestanding)
+        @memset(page_buf, 0);
 
     page.* = .{
         .data = .initBuf(.init(page_buf), layout),
@@ -3730,12 +3785,36 @@ pub fn eraseRowBounded(
     node.data.clearCells(&rows[node.data.size.rows - 1], 0, node.data.size.cols);
 }
 
-/// Erase the rows from the given top to bottom (inclusive). Erasing
-/// the rows doesn't clear them but actually physically REMOVES the rows.
-/// If the top or bottom point is in the middle of a page, the other
-/// contents in the page will be preserved but the page itself will be
-/// underutilized (size < capacity).
-pub fn eraseRows(
+/// Erase all history rows, optionally up to a bottom-left bound.
+/// This always starts from the beginning of the history area.
+pub fn eraseHistory(
+    self: *PageList,
+    bl_pt: ?point.Point,
+) void {
+    self.eraseRows(.{ .history = .{} }, bl_pt);
+}
+
+/// Erase active area rows, from the top of the active area to the
+/// given row (inclusive).
+pub fn eraseActive(
+    self: *PageList,
+    y: size.CellCountInt,
+) void {
+    assert(y < self.rows);
+    self.eraseRows(.{ .active = .{} }, .{ .active = .{ .y = y } });
+}
+
+/// Erase rows from tl_pt to bl_pt (inclusive), physically removing
+/// them rather than just clearing their contents. If a point falls
+/// in the middle of a page, remaining rows in that page are shifted
+/// and the page becomes underutilized (size < capacity).
+///
+/// Callers must ensure that the erased range only removes pages from
+/// the front or back of the linked list, never the middle. Middle-page
+/// erasure would create serial gaps that page_serial_min cannot
+/// represent, leaving dangling references in consumers such as search.
+/// Use the public eraseHistory/eraseActive wrappers which enforce this.
+fn eraseRows(
     self: *PageList,
     tl_pt: point.Point,
     bl_pt: ?point.Point,
@@ -3839,15 +3918,28 @@ pub fn eraseRows(
     self.fixupViewport(erased);
 }
 
-/// Erase a single page, freeing all its resources. The page can be
-/// anywhere in the linked list but must NOT be the final page in the
-/// entire list (i.e. must not make the list empty).
+/// Erase a single page, freeing all its resources. The page must be
+/// at the front or back of the linked list (not the middle) and must
+/// NOT be the final page in the entire list (i.e. must not make the
+/// list empty).
 ///
 /// IMPORTANT: This function does NOT update `total_rows`. The caller is
 /// responsible for accounting for the removed rows before or after calling
 /// this function.
 fn erasePage(self: *PageList, node: *List.Node) void {
+    // Must not be the final page.
     assert(node.next != null or node.prev != null);
+
+    // We only support erasing from the front or back, never the middle.
+    // Middle erasure would create serial gaps that page_serial_min can't
+    // represent. If this ever needs to change, we'll need a more
+    // sophisticated invalidation mechanism.
+    assert(node.prev == null or node.next == null);
+
+    // If we're erasing the first page, update page_serial_min so that
+    // any external references holding this page's serial will know it
+    // has been invalidated.
+    if (node.prev == null) self.page_serial_min = node.next.?.serial;
 
     // Update any tracked pins to move to the previous or next page.
     const pin_keys = self.tracked_pins.keys();
@@ -7136,10 +7228,7 @@ test "PageList eraseRows invalidates viewport offset cache" {
     // This removes rows from before our pin, which changes its absolute
     // offset from the top, but the cache is not invalidated.
     const rows_to_erase = page.capacity.rows / 2;
-    s.eraseRows(
-        .{ .history = .{} },
-        .{ .history = .{ .y = rows_to_erase - 1 } },
-    );
+    s.eraseHistory(.{ .history = .{ .y = rows_to_erase - 1 } });
 
     try testing.expectEqual(Scrollbar{
         .total = s.total_rows,
@@ -9314,7 +9403,7 @@ test "PageList erase" {
     try testing.expect(s.total_rows > s.rows);
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .history = .{} }, null);
+    s.eraseHistory(null);
     try testing.expectEqual(s.rows, s.total_rows);
 
     // We should be back to just one page
@@ -9345,7 +9434,7 @@ test "PageList erase reaccounts page size" {
     try testing.expect(s.page_size > start_size);
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .history = .{} }, null);
+    s.eraseHistory(null);
     try testing.expectEqual(start_size, s.page_size);
 }
 
@@ -9377,7 +9466,7 @@ test "PageList erase row with tracked pin resets to top-left" {
     defer s.untrackPin(p);
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .history = .{} }, null);
+    s.eraseHistory(null);
     try testing.expectEqual(s.rows, s.total_rows);
 
     // Our pin should move to the first page
@@ -9398,7 +9487,7 @@ test "PageList erase row with tracked pin shifts" {
     defer s.untrackPin(p);
 
     // Erase only a few rows in our active
-    s.eraseRows(.{ .active = .{} }, .{ .active = .{ .y = 3 } });
+    s.eraseActive(3);
     try testing.expectEqual(s.rows, s.total_rows);
 
     // Our pin should move to the first page
@@ -9419,7 +9508,7 @@ test "PageList erase row with tracked pin is erased" {
     defer s.untrackPin(p);
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .active = .{} }, .{ .active = .{ .y = 3 } });
+    s.eraseActive(3);
     try testing.expectEqual(s.rows, s.total_rows);
 
     // Our pin should move to the first page
@@ -9453,7 +9542,7 @@ test "PageList erase resets viewport to active if moves within active" {
     try testing.expect(s.viewport == .top);
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .history = .{} }, null);
+    s.eraseHistory(null);
     try testing.expect(s.viewport == .active);
 }
 
@@ -9482,7 +9571,7 @@ test "PageList erase resets viewport if inside erased page but not active" {
     try testing.expect(s.viewport == .top);
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .history = .{} }, .{ .history = .{ .y = 2 } });
+    s.eraseHistory(.{ .history = .{ .y = 2 } });
     try testing.expect(s.viewport == .top);
 }
 
@@ -9510,7 +9599,7 @@ test "PageList erase resets viewport to active if top is inside active" {
     s.scroll(.{ .top = {} });
 
     // Erase the entire history, we should be back to just our active set.
-    s.eraseRows(.{ .history = .{} }, null);
+    s.eraseHistory(null);
     try testing.expect(s.viewport == .active);
 }
 
@@ -9521,7 +9610,7 @@ test "PageList erase active regrows automatically" {
     var s = try init(alloc, 80, 24, null);
     defer s.deinit();
     try testing.expect(s.totalRows() == s.rows);
-    s.eraseRows(.{ .active = .{} }, .{ .active = .{ .y = 10 } });
+    s.eraseActive(10);
     try testing.expect(s.totalRows() == s.rows);
 }
 
@@ -9543,7 +9632,7 @@ test "PageList erase a one-row active" {
         };
     }
 
-    s.eraseRows(.{ .active = .{} }, .{ .active = .{} });
+    s.eraseActive(0);
     try testing.expectEqual(s.rows, s.total_rows);
 
     // The row should be empty
@@ -10747,6 +10836,89 @@ test "PageList resize (no reflow) less rows and cols" {
         const cells = offset.node.data.getCells(rac.row);
         try testing.expectEqual(@as(usize, 5), cells.len);
     }
+}
+
+test "PageList resize less rows and cols cursor at bottom" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, 80, 24, 0);
+    defer s.deinit();
+
+    const cursor_pin = try s.trackPin(s.pin(.{ .active = .{
+        .x = 0,
+        .y = s.rows - 1,
+    } }).?);
+    defer s.untrackPin(cursor_pin);
+
+    // Shrink both axes such that the original cursor.y is strictly past the
+    // new row count, so resizeWithoutReflow leaves self.rows < c.y + 1.
+    try s.resize(.{
+        .cols = 79,
+        .rows = 20,
+        .reflow = true,
+        .cursor = .{ .x = 0, .y = 23, .pin = cursor_pin },
+    });
+    try testing.expectEqual(@as(usize, 79), s.cols);
+    try testing.expectEqual(@as(usize, 20), s.rows);
+
+    // remaining_rows saturates to 0, so the cursor lands on the new bottom row.
+    try testing.expectEqual(point.Point{ .active = .{
+        .x = 0,
+        .y = s.rows - 1,
+    } }, s.pointFromPin(.active, cursor_pin.*).?);
+}
+
+test "PageList resize less rows and cols cursor near top pushed to scrollback" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, 80, 24, null);
+    defer s.deinit();
+
+    // Fill every active row with non-blank content so that shrinking rows
+    // can't trim trailing blank lines and instead pushes the top rows into
+    // scrollback.
+    {
+        var it = s.rowIterator(.right_down, .{ .active = .{} }, null);
+        while (it.next()) |p| {
+            const rac = p.rowAndCell();
+            const cells = p.node.data.getCells(rac.row);
+            for (cells, 0..) |*cell, x| cell.* = .{
+                .content_tag = .codepoint,
+                .content = .{ .codepoint = @intCast('A' + (x % 26)) },
+            };
+        }
+    }
+
+    // Cursor near the top of the active area. After we shrink rows the active
+    // area top moves down past this pin, so it ends up in scrollback.
+    const cursor_pin = try s.trackPin(s.pin(.{ .active = .{
+        .x = 0,
+        .y = 0,
+    } }).?);
+    defer s.untrackPin(cursor_pin);
+
+    // Shrink both axes with reflow. resizeWithoutReflow shrinks self.rows
+    // first, leaving the cursor pin above the new active area, then resizeCols
+    // walks .left_up from the cursor pin toward the active-area top.
+    try s.resize(.{
+        .cols = 79,
+        .rows = 20,
+        .reflow = true,
+        .cursor = .{ .x = 0, .y = 0, .pin = cursor_pin },
+    });
+    try testing.expectEqual(@as(usize, 79), s.cols);
+    try testing.expectEqual(@as(usize, 20), s.rows);
+
+    // The active area is anchored to the bottom, so shrinking rows pushed the
+    // top-of-screen cursor into scrollback: it no longer resolves to an
+    // active-area coordinate, but it remains a valid screen pin.
+    try testing.expect(s.pointFromPin(.active, cursor_pin.*) == null);
+    try testing.expect(s.pointFromPin(.screen, cursor_pin.*) != null);
+
+    // Integrity must hold after the resize.
+    s.assertIntegrity();
 }
 
 test "PageList resize (no reflow) more rows and less cols" {
@@ -13469,6 +13641,30 @@ test "PageList reset" {
     }, s.getTopLeft(.active));
 }
 
+test "PageList reset invalidates stale untracked refs even if node memory is reused" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, 80, 24, null);
+    defer s.deinit();
+
+    const old_serial = s.pages.first.?.serial;
+    try testing.expect(old_serial >= s.page_serial_min);
+    try testing.expect(old_serial < s.page_serial);
+
+    s.reset();
+
+    // The important safety property is that stale serials are rejected before
+    // the node pointer is inspected. Reset rebuilds the page list from the
+    // pools, so old untracked refs may contain node pointers that are no
+    // longer safe to dereference.
+    try testing.expect(old_serial < s.page_serial_min);
+
+    const new_serial = s.pages.first.?.serial;
+    try testing.expect(new_serial >= s.page_serial_min);
+    try testing.expect(new_serial < s.page_serial);
+}
+
 test "PageList reset across two pages" {
     const testing = std.testing;
     const alloc = testing.allocator;
@@ -13838,7 +14034,7 @@ test "PageList resize (no reflow) more cols remaps pins in backfill path" {
 
     // Trim a history row so the first page has spare capacity.
     // This triggers the backfill path in resizeWithoutReflowGrowCols.
-    s.eraseRows(.{ .history = .{} }, .{ .history = .{ .y = 0 } });
+    s.eraseHistory(.{ .history = .{ .y = 0 } });
     try testing.expect(first_page.data.size.rows < first_page.data.capacity.rows);
 
     // Ensure the resize takes the slow path (new capacity > current capacity).

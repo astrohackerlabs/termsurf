@@ -35,6 +35,7 @@ const TitleDialog = @import("title_dialog.zig").TitleDialog;
 const Window = @import("window.zig").Window;
 const InspectorWindow = @import("inspector_window.zig").InspectorWindow;
 const i18n = @import("../../../os/i18n.zig");
+const media = @import("../media.zig");
 
 const log = std.log.scoped(.gtk_ghostty_surface);
 
@@ -163,6 +164,24 @@ pub const Surface = extern struct {
                         Private,
                         &Private.offset,
                         "focused",
+                    ),
+                },
+            );
+        };
+
+        pub const mapped = struct {
+            pub const name = "mapped";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                bool,
+                .{
+                    .default = false,
+                    .accessor = gobject.ext.privateFieldAccessor(
+                        Self,
+                        Private,
+                        &Private.offset,
+                        "mapped",
                     ),
                 },
             );
@@ -591,11 +610,15 @@ pub const Surface = extern struct {
         /// focus events.
         focused: bool = true,
 
+        /// Whether the GLArea widget is mapped. Some operations like grabbing
+        /// focus only work if a widget is mapped.
+        mapped: bool = false,
+
         /// Whether this surface is "zoomed" or not. A zoomed surface
         /// shows up taking the full bounds of a split view.
         zoom: bool = false,
 
-        /// The GLAarea that renders the actual surface. This is a binding
+        /// The GLArea that renders the actual surface. This is a binding
         /// to the template so it doesn't have to be unrefed manually.
         gl_area: *gtk.GLArea,
 
@@ -650,6 +673,12 @@ pub const Surface = extern struct {
         // true) under various scenarios, but can also manually be set to
         // false by a parent widget.
         bell_ringing: bool = false,
+
+        // The audio bell's MediaFile, reused across bells so we don't leak a
+        // GStreamer pipeline (and its GL threads) on every ring. Built lazily
+        // on the first audio bell and rebuilt when `bell-audio-path` changes;
+        // unref'd on dispose. See ringBell and media.zig.
+        bell_media: ?*gtk.MediaFile = null,
 
         /// True if this surface is in an error state. This is currently
         /// a simple boolean with no additional information on WHAT the
@@ -1737,7 +1766,7 @@ pub const Surface = extern struct {
         defer icon.unref();
         notification.setIcon(icon.as(gio.Icon));
 
-        const pointer = glib.Variant.newUint64(@intFromPtr(core_surface));
+        const pointer = glib.Variant.newUint64(core_surface.id);
         notification.setDefaultActionAndTargetValue(
             "app.present-surface",
             pointer,
@@ -1767,6 +1796,7 @@ pub const Surface = extern struct {
         priv.mouse_shape = .text;
         priv.mouse_hidden = false;
         priv.focused = true;
+        priv.mapped = false;
         priv.size = .{ .width = 0, .height = 0 };
         priv.vadj_signal_group = null;
 
@@ -1828,6 +1858,11 @@ pub const Surface = extern struct {
         if (priv.config) |v| {
             v.unref();
             priv.config = null;
+        }
+
+        if (priv.bell_media) |v| {
+            v.unref();
+            priv.bell_media = null;
         }
 
         if (priv.vadj_signal_group) |group| {
@@ -2016,6 +2051,11 @@ pub const Surface = extern struct {
     /// Returns the focus state of this surface.
     pub fn getFocused(self: *Self) bool {
         return self.private().focused;
+    }
+
+    /// Returns true if the GLArea of this surface is mapped.
+    pub fn getMapped(self: *Self) bool {
+        return self.private().mapped;
     }
 
     /// Change the configuration for this surface.
@@ -2457,34 +2497,15 @@ pub const Surface = extern struct {
                 1.0,
             );
 
-            assert(std.fs.path.isAbsolute(path));
-            const media_file = gtk.MediaFile.newForFilename(path);
-
-            // If the audio file is marked as required, we'll emit an error if
-            // there was a problem playing it. Otherwise there will be silence.
-            if (required) {
-                _ = gobject.Object.signals.notify.connect(
-                    media_file,
-                    ?*anyopaque,
-                    mediaFileError,
-                    null,
-                    .{ .detail = "error" },
-                );
-            }
-
-            // Watch for the "ended" signal so that we can clean up after
-            // ourselves.
-            _ = gobject.Object.signals.notify.connect(
-                media_file,
-                ?*anyopaque,
-                mediaFileEnded,
-                null,
-                .{ .detail = "ended" },
-            );
-
-            const media_stream = media_file.as(gtk.MediaStream);
-            media_stream.setVolume(volume);
-            media_stream.play();
+            // Reuse one MediaFile per surface (rebuilt only when the path
+            // changes) so each bell replays the same pipeline instead of
+            // leaking a fresh one. Assign unconditionally: bellMediaFile frees
+            // any stale MediaFile and returns the current slot value (possibly
+            // null if the path is now inaccessible), so priv.bell_media never
+            // dangles.
+            priv.bell_media = media.bellMediaFile(priv.bell_media, path, required);
+            const media_file = priv.bell_media orelse break :audio;
+            media.playBell(media_file, volume);
         }
     }
 
@@ -2723,22 +2744,25 @@ pub const Surface = extern struct {
     }
 
     fn ecFocusEnter(_: *gtk.EventControllerFocus, self: *Self) callconv(.c) void {
+        self.updateFocus(true);
+    }
+
+    fn ecFocusLeave(_: *gtk.EventControllerFocus, self: *Self) callconv(.c) void {
+        self.updateFocus(false);
+    }
+
+    fn updateFocus(self: *Self, focused: bool) void {
         const priv = self.private();
-        priv.focused = true;
-        priv.im_context.as(gtk.IMContext).focusIn();
+        priv.focused = focused;
+
+        const ctx = priv.im_context.as(gtk.IMContext);
+        if (focused) ctx.focusIn() else ctx.focusOut();
+
         _ = glib.idleAddOnce(idleFocus, self.ref());
         self.as(gobject.Object).notifyByPspec(properties.focused.impl.param_spec);
 
         // Bell stops ringing as soon as we gain focus
-        self.setBellRinging(false);
-    }
-
-    fn ecFocusLeave(_: *gtk.EventControllerFocus, self: *Self) callconv(.c) void {
-        const priv = self.private();
-        priv.focused = false;
-        priv.im_context.as(gtk.IMContext).focusOut();
-        _ = glib.idleAddOnce(idleFocus, self.ref());
-        self.as(gobject.Object).notifyByPspec(properties.focused.impl.param_spec);
+        if (focused) self.setBellRinging(false);
     }
 
     /// The focus callback must be triggered on an idle loop source because
@@ -3272,6 +3296,35 @@ pub const Surface = extern struct {
         priv.im_context.as(gtk.IMContext).setClientWidget(null);
     }
 
+    fn glareaMap(
+        _: *gtk.GLArea,
+        self: *Self,
+    ) callconv(.c) void {
+        self.updateMapped(true);
+        self.updateOcclusion(true);
+    }
+
+    fn glareaUnmap(
+        _: *gtk.GLArea,
+        self: *Self,
+    ) callconv(.c) void {
+        self.updateMapped(false);
+        self.updateOcclusion(false);
+    }
+
+    fn updateMapped(self: *Self, mapped: bool) void {
+        const priv = self.private();
+        priv.mapped = mapped;
+        self.as(gobject.Object).notifyByPspec(properties.mapped.impl.param_spec);
+    }
+
+    fn updateOcclusion(self: *Self, visible: bool) void {
+        const surface = self.core() orelse return;
+        surface.occlusionCallback(visible) catch |err| {
+            log.warn("error in occlusion callback err={}", .{err});
+        };
+    }
+
     fn glareaRender(
         _: *gtk.GLArea,
         _: *gdk.GLContext,
@@ -3317,10 +3370,13 @@ pub const Surface = extern struct {
 
         // Store our cached size
         const priv = self.private();
-        priv.size = .{
+
+        const new_size: apprt.SurfaceSize = .{
             .width = @intCast(width),
             .height = @intCast(height),
         };
+        const changed = !priv.size.eql(&new_size);
+        priv.size = new_size;
 
         // If our surface is realize, we send callbacks.
         if (priv.core_surface) |surface| {
@@ -3330,12 +3386,13 @@ pub const Surface = extern struct {
                 log.warn("error in content scale callback err={}", .{err});
             };
 
-            surface.sizeCallback(priv.size) catch |err| {
-                log.warn("error in size callback err={}", .{err});
-            };
-
-            // Setup our resize overlay if configured
-            self.resizeOverlaySchedule();
+            if (changed) {
+                surface.sizeCallback(new_size) catch |err| {
+                    log.warn("error in size callback err={}", .{err});
+                };
+                // Setup our resize overlay if configured
+                self.resizeOverlaySchedule();
+            }
 
             return;
         }
@@ -3427,6 +3484,8 @@ pub const Surface = extern struct {
             .{},
             null,
         );
+
+        self.updateFocus(priv.focused);
     }
 
     fn resizeOverlaySchedule(self: *Self) void {
@@ -3479,35 +3538,6 @@ pub const Surface = extern struct {
         const priv = self.private();
         const right = priv.url_right.as(gtk.Widget);
         right.setVisible(0);
-    }
-
-    fn mediaFileError(
-        media_file: *gtk.MediaFile,
-        _: *gobject.ParamSpec,
-        _: ?*anyopaque,
-    ) callconv(.c) void {
-        const path = path: {
-            const file = media_file.getFile() orelse break :path null;
-            break :path file.getPath();
-        };
-        defer if (path) |p| glib.free(p);
-
-        const media_stream = media_file.as(gtk.MediaStream);
-        const err = media_stream.getError() orelse return;
-        log.warn("error playing bell from {s}: {s} {d} {s}", .{
-            path orelse "<<unknown>>",
-            glib.quarkToString(err.f_domain),
-            err.f_code,
-            err.f_message orelse "",
-        });
-    }
-
-    fn mediaFileEnded(
-        media_file: *gtk.MediaFile,
-        _: *gobject.ParamSpec,
-        _: ?*anyopaque,
-    ) callconv(.c) void {
-        media_file.unref();
     }
 
     fn titleDialogSet(
@@ -3605,6 +3635,8 @@ pub const Surface = extern struct {
             class.bindTemplateCallback("drop", &dtDrop);
             class.bindTemplateCallback("gl_realize", &glareaRealize);
             class.bindTemplateCallback("gl_unrealize", &glareaUnrealize);
+            class.bindTemplateCallback("gl_map", &glareaMap);
+            class.bindTemplateCallback("gl_unmap", &glareaUnmap);
             class.bindTemplateCallback("gl_render", &glareaRender);
             class.bindTemplateCallback("gl_resize", &glareaResize);
             class.bindTemplateCallback("im_preedit_start", &imPreeditStart);
@@ -3637,6 +3669,7 @@ pub const Surface = extern struct {
                 properties.@"error".impl,
                 properties.@"font-size-request".impl,
                 properties.focused.impl,
+                properties.mapped.impl,
                 properties.@"key-sequence".impl,
                 properties.@"key-table".impl,
                 properties.@"min-size".impl,

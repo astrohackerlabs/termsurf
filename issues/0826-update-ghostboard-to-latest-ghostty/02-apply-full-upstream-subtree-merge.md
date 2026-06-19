@@ -202,3 +202,167 @@ Required findings and fixes:
 The re-review approved the design with no required findings. The optional
 suggestions were adopted by adding an explicit `ghostty/main` target assertion
 and spelling out the Prettier command.
+
+## Result
+
+**Result:** Pass
+
+The real full-range subtree pull was applied to `ghostboard/`:
+
+```bash
+git subtree pull --prefix=ghostboard ghostty \
+  5d0a82ba337368f5632ffa6ce4d7c558fa2de9ff \
+  -m "Merge upstream Ghostty into ghostboard"
+```
+
+The command produced the expected 17 conflicts from Experiment 1. The merge was
+resolved in the main worktree, and no unmerged paths or conflict markers remain.
+
+Preflight and merge identity:
+
+```text
+git status --short                                  # clean before merge
+git rev-parse ghostty/main                          # 5d0a82ba337368f5632ffa6ce4d7c558fa2de9ff
+git rev-list --count 332b2aef..ghostty/main         # 1159
+git rev-parse MERGE_HEAD                            # 5d0a82ba337368f5632ffa6ce4d7c558fa2de9ff
+```
+
+Resolved conflict groups:
+
+- `.agents/commands/gh-issue`
+  - Deleted. Upstream deleted it, and TermSurf has no current need to keep that
+    upstream helper inside `ghostboard/`.
+- `.github/VOUCHED.td` and `.github/workflows/vouch-*`
+  - Kept absent. The merge did not reintroduce the poisoned/vouch files that
+    TermSurf intentionally removed.
+- `.github/workflows/test.yml`
+  - Adopted upstream `dorny/paths-filter` `v4.0.1` pin and the upstream
+    `.github/VOUCHED.td` exclusion while preserving the absence of the vouch
+    files themselves.
+- `CONTRIBUTING.md`, `HACKING.md`, `README.md`
+  - Kept the TermSurf/Ghostboard-local versions as the baseline. Upstream
+    contribution and README text was not imported as active local instruction.
+- `build.zig`
+  - Adopted upstream `emit_lib_vt` behavior and internal library naming.
+  - Preserved the prior correction that an executable is not installed merely
+    because `emit_exe` is true in `app_runtime == .none` mode.
+- `include/ghostty.h`
+  - Adopted upstream `GHOSTTY_API` declarations and new upstream config API.
+  - Preserved TermSurf protocol C exports and repeatable config accessors.
+- `TerminalController.swift`
+  - Preserved TermSurf pane cleanup.
+  - Preserved upstream pending-initial-presentation cleanup.
+- `SurfaceView_AppKit.swift`
+  - Preserved TermSurf copy-current-URL feedback and state.
+  - Preserved successful copy-action behavior without logging a false failure.
+- `src/build/SharedDeps.zig`
+  - Preserved upstream MSVC sanitizer handling for `stb.c`.
+  - Preserved TermSurf protobuf C include path and C sources.
+- `src/main_c.zig`
+  - Preserved TermSurf exported protocol functions.
+  - Preserved upstream Windows `DllMain` support.
+
+Additional poisoned-file cleanup:
+
+- Upstream added `.agents/skills/writing-commit-messages/SKILL.md`. This was
+  removed because TermSurf already has its own GitPoet commit workflow, and the
+  upstream skill would be an active agent instruction inside `ghostboard/`.
+- Upstream added `CLAUDE.md`. It was kept because it is identical to the
+  sanitized `ghostboard/AGENTS.md` after the merge.
+
+Verification run before result review:
+
+```text
+test -z "$(git diff --name-only --diff-filter=U)"        # pass
+test "$(git rev-parse MERGE_HEAD)" = target              # pass
+! rg -n '^(<<<<<<<|=======|>>>>>>>)' ghostboard          # pass
+zig fmt ghostboard/build.zig \
+  ghostboard/src/build/SharedDeps.zig \
+  ghostboard/src/main_c.zig                              # pass
+(cd ghostboard && swiftlint lint --strict --fix)         # pass
+git diff --check                                         # pass
+git diff --name-only                                     # no unstaged changes
+```
+
+SwiftLint printed:
+
+```text
+warning: The option --strict has no effect together with --fix.
+```
+
+It then completed successfully. The warning is from SwiftLint's option
+combination, not from Ghostboard source. The command is the exact formatter
+command required by `ghostboard/AGENTS.md`.
+
+The staged whitespace check initially found trailing whitespace in a small set
+of newly imported upstream C/header example files and one extra blank line at
+EOF in an upstream Swift UI test. Those were mechanically cleaned and restaged:
+
+```text
+ghostboard/example/c-vt-kitty-graphics/src/main.c
+ghostboard/example/c-vt-static/src/main.c
+ghostboard/include/ghostty/vt/grid_ref.h
+ghostboard/include/ghostty/vt/key.h
+ghostboard/include/ghostty/vt/kitty_graphics.h
+ghostboard/include/ghostty/vt/render.h
+ghostboard/include/ghostty/vt/terminal.h
+ghostboard/macos/GhosttyUITests/GhosttyCommandPaletteTests.swift
+```
+
+After that cleanup, `git diff --cached --check` passed.
+
+Poisoned/vouch file checks:
+
+```text
+git ls-files ghostboard/.github/VOUCHED.td \
+  ghostboard/.github/workflows/vouch-check-issue.yml \
+  ghostboard/.github/workflows/vouch-check-pr.yml \
+  ghostboard/.github/workflows/vouch-manage-by-discussion.yml \
+  ghostboard/.github/workflows/vouch-manage-by-issue.yml \
+  ghostboard/.github/workflows/vouch-sync-codeowners.yml \
+  ghostboard/.agents/skills/writing-commit-messages/SKILL.md
+```
+
+produced no output.
+`find ghostboard/.github/workflows -maxdepth 1 -name 'vouch-*' -print` also
+produced no output, and `ghostboard/.github/VOUCHED.td` does not exist.
+
+The final parent check cannot be run until after the reviewed merge/result
+commit is created. It remains required immediately after the commit:
+
+```bash
+git rev-list --parents -n 1 HEAD
+git rev-list --parents -n 1 HEAD | rg '5d0a82ba337368f5632ffa6ce4d7c558fa2de9ff'
+```
+
+## Conclusion
+
+Experiment 2 applied the full upstream Ghostty range selected by Experiment 1
+and resolved the known conflict set without falling back to smaller ranges.
+
+The merge is coherent enough to proceed to the next gate: build verification.
+The next experiment should build the updated `ghostboard/` tree, treat failures
+as build/toolchain/integration issues to be fixed or documented, and avoid
+runtime parity work until the build gate is complete.
+
+## Result Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context while the merge was still pending.
+
+**Verdict:** Approved.
+
+The reviewer found no required issues. It independently verified:
+
+- `MERGE_HEAD` was `5d0a82ba337368f5632ffa6ce4d7c558fa2de9ff`;
+- no unmerged paths remained;
+- no conflict markers remained under `ghostboard/`;
+- poisoned/vouch files and the upstream commit-message skill were absent from
+  `git ls-files`;
+- `ghostboard/AGENTS.md` and `ghostboard/CLAUDE.md` were identical;
+- `git diff --check` and `git diff --cached --check` passed;
+- `git diff --name-only` was empty, so all merge/result changes were staged;
+- the result commit had not yet been made.
+
+The reviewer did not rerun `zig fmt` or `swiftlint --fix` because those commands
+may mutate files. The staged whitespace checks independently passed.
