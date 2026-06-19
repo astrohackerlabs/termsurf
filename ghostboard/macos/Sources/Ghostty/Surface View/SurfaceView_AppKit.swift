@@ -261,13 +261,23 @@ extension Ghostty {
             let hostFrame = termsurfOverlayHostLayer.map { NSStringFromRect($0.frame) } ?? "none"
             let overlayFrame = termsurfOverlayFrame.map { NSStringFromRect($0) } ?? "none"
             let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+            let paddingPixels = surfaceSize.map {
+                "top:\($0.padding_top_px),bottom:\($0.padding_bottom_px),right:\($0.padding_right_px),left:\($0.padding_left_px)"
+            } ?? "unknown:not-provided"
+            let paddingPoints = surfaceSize.map {
+                let top = CGFloat($0.padding_top_px) / scale
+                let bottom = CGFloat($0.padding_bottom_px) / scale
+                let right = CGFloat($0.padding_right_px) / scale
+                let left = CGFloat($0.padding_left_px) / scale
+                return "top:\(top),bottom:\(bottom),right:\(right),left:\(left)"
+            } ?? "unknown:not-provided"
             let hitValue = hit.map { String($0) } ?? "unknown:not-hit-test"
             let raw = rawPoint.map { NSStringFromPoint($0) } ?? "none"
             let top = topPoint.map { NSStringFromPoint($0) } ?? "none"
             let web = webPoint.map { NSStringFromPoint($0) } ?? "none"
 
             termsurfLogGeometry(
-                "layer=appkit event=\(event) scenario=\(termsurfGeometryScenario()) identity=\(termSurfGeometryIdentity(browserTabID: browserTabID)) bounds=\(NSStringFromRect(bounds)) cell=\(cellSize.width)x\(cellSize.height) grid=\(grid) overlay_frame=\(overlayFrame) root_frame=\(rootFrame) positioning_frame=\(positioningFrame) host_frame=\(hostFrame) browser_pixel=\(browserPixel) backing_scale=\(scale) context_id=\(context) visible=\(termsurfOverlayHostLayer != nil) hit=\(hitValue) raw_point=\(raw) top_point=\(top) web_point=\(web) note=\(note)")
+                "layer=appkit event=\(event) scenario=\(termsurfGeometryScenario()) identity=\(termSurfGeometryIdentity(browserTabID: browserTabID)) bounds=\(NSStringFromRect(bounds)) cell=\(cellSize.width)x\(cellSize.height) grid=\(grid) overlay_frame=\(overlayFrame) root_frame=\(rootFrame) positioning_frame=\(positioningFrame) host_frame=\(hostFrame) browser_pixel=\(browserPixel) backing_scale=\(scale) renderer_padding_px=\(paddingPixels) renderer_padding_pt=\(paddingPoints) context_id=\(context) visible=\(termsurfOverlayHostLayer != nil) hit=\(hitValue) raw_point=\(raw) top_point=\(top) web_point=\(web) note=\(note)")
         }
 
         // This is the title from the terminal. This is nil if we're currently using
@@ -517,9 +527,12 @@ extension Ghostty {
 
             let cellWidth = cellSize.width > 0 ? cellSize.width : 10
             let cellHeight = cellSize.height > 0 ? cellSize.height : 20
+            let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+            let paddingLeft = surfaceSize.map { CGFloat($0.padding_left_px) / backingScale } ?? 0
+            let paddingTop = surfaceSize.map { CGFloat($0.padding_top_px) / backingScale } ?? 0
             let frame = CGRect(
-                x: CGFloat(col) * cellWidth,
-                y: CGFloat(row) * cellHeight,
+                x: paddingLeft + CGFloat(col) * cellWidth,
+                y: paddingTop + CGFloat(row) * cellHeight,
                 width: CGFloat(width) * cellWidth,
                 height: CGFloat(height) * cellHeight)
             guard frame.width > 0, frame.height > 0 else {
@@ -582,7 +595,6 @@ extension Ghostty {
             }
 
             termsurfOverlayHostLayer?.frame = CGRect(origin: .zero, size: frame.size)
-            let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
             termsurfOverlayHostLayer?.contentsScale = backingScale
             let appkitPixelWidth = UInt64((frame.width * backingScale).rounded())
             let appkitPixelHeight = UInt64((frame.height * backingScale).rounded())

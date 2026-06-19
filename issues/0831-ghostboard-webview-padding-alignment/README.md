@@ -101,4 +101,4 @@ from Issue 830 and only change overlay placement math.
 ## Experiments
 
 - [Experiment 1: Use renderer padding for AppKit overlay frames](01-use-renderer-padding-for-appkit-overlay-frames.md)
-  — **Designed**
+  — **Pass**

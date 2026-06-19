@@ -1281,6 +1281,10 @@ pub const CAPI = struct {
         height_px: u32,
         cell_width_px: u32,
         cell_height_px: u32,
+        padding_top_px: u32,
+        padding_bottom_px: u32,
+        padding_right_px: u32,
+        padding_left_px: u32,
     };
 
     // ghostty_clipboard_content_s
@@ -1708,6 +1712,10 @@ pub const CAPI = struct {
             .height_px = surface.core_surface.size.screen.height,
             .cell_width_px = surface.core_surface.size.cell.width,
             .cell_height_px = surface.core_surface.size.cell.height,
+            .padding_top_px = surface.core_surface.size.padding.top,
+            .padding_bottom_px = surface.core_surface.size.padding.bottom,
+            .padding_right_px = surface.core_surface.size.padding.right,
+            .padding_left_px = surface.core_surface.size.padding.left,
         };
     }
 

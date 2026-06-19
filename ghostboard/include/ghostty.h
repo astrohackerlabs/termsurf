@@ -486,6 +486,10 @@ typedef struct {
   uint32_t height_px;
   uint32_t cell_width_px;
   uint32_t cell_height_px;
+  uint32_t padding_top_px;
+  uint32_t padding_bottom_px;
+  uint32_t padding_right_px;
+  uint32_t padding_left_px;
 } ghostty_surface_size_s;
 
 // Config types

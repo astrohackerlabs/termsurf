@@ -154,3 +154,76 @@ Fix applied:
 - Updated log verification to require proving non-zero renderer padding, either
   through an explicit padding trace field or through an equivalent calculation
   from logged surface size, grid, cell size, and backing scale.
+
+## Result
+
+**Result:** Pass
+
+Implementation changed the current AppKit overlay path to use the same
+padding-aware grid-to-surface conversion that Ghostboard Legacy used in the
+renderer path.
+
+Code changes:
+
+- `ghostboard/src/apprt/embedded.zig` now exports renderer padding through the
+  existing `SurfaceSize` bridge.
+- `ghostboard/include/ghostty.h` now exposes the matching
+  `ghostty_surface_size_s` padding fields to Swift.
+- `ghostboard/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` now
+  adds `padding_left_px / backing_scale` and `padding_top_px / backing_scale` to
+  the AppKit overlay frame origin, while preserving the Issue 830
+  AppKit-presented-pixel resize path.
+- The AppKit geometry trace now logs renderer padding in pixels and logical
+  points so future geometry runs can prove whether the padding is actually in
+  use.
+
+Verification run:
+
+```bash
+zig fmt ghostboard/src/apprt/embedded.zig
+git diff --check
+./scripts/build.sh ghostboard
+scripts/ghostboard-geometry-matrix.sh window-resize
+scripts/ghostboard-geometry-matrix.sh split-right
+scripts/ghostboard-geometry-matrix.sh split-down
+```
+
+`./scripts/build.sh ghostboard` passed. The build still emitted existing ImGui
+symbol warnings from `ghostty-internal.a(ext.o)`, but the macOS app build
+completed successfully.
+
+Geometry scenario logs:
+
+- `logs/ghostboard-geometry-window-resize-app-20260619-183521.log`
+- `logs/ghostboard-geometry-split-right-app-20260619-183538.log`
+- `logs/ghostboard-geometry-split-down-app-20260619-183623.log`
+
+All three geometry matrix scenarios passed.
+
+The padding audit proved non-zero renderer padding and exact frame alignment:
+
+```text
+window:      grid=139x45+1+1 frame={{10,19},{1112,765}} padding=4px/2pt expected={{10,19},{1112,765}} PASS
+window grow: grid=179x55+1+1 frame={{10,19},{1432,935}} padding=4px/2pt expected={{10,19},{1432,935}} PASS
+window shrink: grid=149x49+1+1 frame={{10,19},{1192,833}} padding=4px/2pt expected={{10,19},{1192,833}} PASS
+split right: grid=73x49+1+1 frame={{10,19},{584,833}} padding=4px/2pt expected={{10,19},{584,833}} PASS
+split down:  grid=149x21+1+1 frame={{10,19},{1192,357}} padding=4px/2pt expected={{10,19},{1192,357}} PASS
+```
+
+Manual visual inspection of
+`logs/ghostboard-geometry-window-resize-screenshot-20260619-183521.png`
+confirmed the webview starts inside the viewport border and is no longer
+anchored to the raw view edge.
+
+## Conclusion
+
+The asymmetry came from Swift converting terminal grid coordinates directly to
+AppKit points without adding the renderer's terminal-grid padding. Current
+Ghostboard now follows Ghostboard Legacy's coordinate model: the webview frame
+origin is renderer padding plus the grid cell offset, while the size remains the
+grid cell extent.
+
+## Completion Review
+
+Fresh-context adversarial completion review returned **APPROVED** with no
+findings.
