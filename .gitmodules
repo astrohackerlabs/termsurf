@@ -1,16 +1,3 @@
-# Wezboard (WezTerm fork) submodules
-[submodule "wezboard/deps/harfbuzz/harfbuzz"]
-	path = wezboard/deps/harfbuzz/harfbuzz
-	url = https://github.com/harfbuzz/harfbuzz.git
-[submodule "wezboard/deps/freetype/libpng"]
-	path = wezboard/deps/freetype/libpng
-	url = https://github.com/glennrp/libpng.git
-[submodule "wezboard/deps/freetype/zlib"]
-	path = wezboard/deps/freetype/zlib
-	url = https://github.com/madler/zlib.git
-[submodule "wezboard/deps/freetype/freetype2"]
-	path = wezboard/deps/freetype/freetype2
-	url = https://github.com/freetype/freetype2.git
 [submodule "homebrew"]
 	path = homebrew
 	url = git@github.com:termsurf/homebrew-termsurf.git

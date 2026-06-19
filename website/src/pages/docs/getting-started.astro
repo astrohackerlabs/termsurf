@@ -21,8 +21,8 @@ const cb =
 <span class="text-primary">brew</span> install --cask termsurf</code></pre>
 
   <p>
-    This installs the Wezboard app to <code>/Applications/</code>, the
-    <code>web</code> and <code>wezboard</code> CLIs to
+    This installs the TermSurf app to <code>/Applications/</code>, the
+    <code>web</code> CLI to
     <code>/opt/homebrew/bin/</code>, and Roamium (Chromium engine) to
     <code>/opt/homebrew/opt/termsurf-roamium/</code>.
   </p>
@@ -51,7 +51,7 @@ const cb =
   <h2>Build</h2>
 
   <p>
-    Build all components (Chromium, Roamium, Wezboard, and the <code>web</code>
+    Build all components (Chromium, Roamium, Ghostboard, and the <code>web</code>
     TUI) with:
   </p>
 
@@ -63,7 +63,7 @@ const cb =
   <pre
     class={cb}><code><span class="text-primary">scripts/build.sh</span> chromium --release   <span class="text-muted"># Chromium + libtermsurf_chromium</span>
 <span class="text-primary">scripts/build.sh</span> roamium --release    <span class="text-muted"># Roamium (Chromium engine binary)</span>
-<span class="text-primary">scripts/build.sh</span> wezboard --release   <span class="text-muted"># Wezboard GUI + CLI</span>
+<span class="text-primary">scripts/build.sh</span> ghostboard --release <span class="text-muted"># TermSurf GUI</span>
 <span class="text-primary">scripts/build.sh</span> webtui --release     <span class="text-muted"># web TUI</span></code></pre>
 
   <h2>Install</h2>
@@ -74,20 +74,19 @@ const cb =
   <p>This installs:</p>
 
   <ul>
-    <li><strong>Wezboard</strong> to <code>/Applications/TermSurf Wezboard.app</code></li>
-    <li><strong>Wezboard CLI</strong> to <code>/usr/local/bin/wezboard</code></li>
-    <li><strong>Roamium</strong> + Chromium dylibs to <code>/usr/local/roamium/</code></li>
+    <li><strong>TermSurf</strong> to <code>/Applications/TermSurf.app</code></li>
+    <li><strong>Roamium</strong> + Chromium dylibs to <code>/opt/homebrew/opt/termsurf-roamium/</code></li>
     <li><strong>web</strong> TUI to <code>/usr/local/bin/web</code></li>
   </ul>
 
   <h2>Usage</h2>
 
-  <p>Launch Wezboard:</p>
+  <p>Launch TermSurf:</p>
 
   <pre
-    class={cb}><code><span class="text-primary">open</span> <span class="text-success">"/Applications/TermSurf Wezboard.app"</span></code></pre>
+    class={cb}><code><span class="text-primary">open</span> <span class="text-success">"/Applications/TermSurf.app"</span></code></pre>
 
-  <p>In any Wezboard pane, open a browser:</p>
+  <p>In any TermSurf pane, open a browser:</p>
 
   <pre
     class={cb}><code><span class="text-primary">web</span> ryanxcharles.com</code></pre>

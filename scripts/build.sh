@@ -20,7 +20,7 @@ for arg in "$@"; do
     -*)
       echo "Unknown flag: $arg"
       echo "Usage: $0 <component> [--release] [--clean] [--open]"
-      echo "Components: wezboard, ghostboard, roamium, webtui, chromium, all"
+      echo "Components: ghostboard, roamium, webtui, chromium, all"
       exit 1
       ;;
     *)
@@ -36,7 +36,7 @@ done
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: wezboard, ghostboard, roamium, webtui, chromium, all"
+  echo "Components: ghostboard, roamium, webtui, chromium, all"
   exit 1
 fi
 
@@ -96,25 +96,6 @@ build_roamium() {
   echo "  Roamium: $CHROMIUM_OUT/roamium"
 }
 
-build_wezboard() {
-  cd "$REPO_DIR/wezboard"
-  if $CLEAN; then
-    echo "==> Cleaning Wezboard..."
-    cargo clean
-  fi
-  if $RELEASE; then
-    echo "==> Building Wezboard (release)..."
-    cargo build --release -p wezboard-gui -p wezboard
-    echo "  Wezboard: $REPO_DIR/wezboard/target/release/wezboard-gui"
-    echo "  Wezboard CLI: $REPO_DIR/wezboard/target/release/wezboard"
-  else
-    echo "==> Building Wezboard (debug)..."
-    cargo build -p wezboard-gui -p wezboard
-    echo "  Wezboard: $REPO_DIR/wezboard/target/debug/wezboard-gui"
-    echo "  Wezboard CLI: $REPO_DIR/wezboard/target/debug/wezboard"
-  fi
-}
-
 build_ghostboard() {
   local CONFIGURATION="Debug"
   local ZIG_OPTIMIZE="Debug"
@@ -136,30 +117,28 @@ build_ghostboard() {
   echo "==> Building Ghostboard ($CONFIGURATION)..."
   ./build.nu --configuration "$CONFIGURATION" --action build
   if $RELEASE; then
-    codesign --force --deep --sign - "build/$CONFIGURATION/TermSurf Ghostboard.app"
+    codesign --force --deep --sign - "build/$CONFIGURATION/TermSurf.app"
   fi
-  echo "  Ghostboard: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf Ghostboard.app"
-  echo "  Ghostboard executable: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf Ghostboard.app/Contents/MacOS/ghostboard"
+  echo "  Ghostboard: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf.app"
+  echo "  Ghostboard executable: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf.app/Contents/MacOS/termsurf"
 }
 
 case "$COMPONENT" in
   chromium)   build_chromium ;;
   webtui)     build_webtui ;;
   roamium)    build_roamium ;;
-  wezboard)   build_wezboard ;;
   ghostboard) build_ghostboard ;;
   all)
     build_chromium
     build_webtui
     build_roamium
-    build_wezboard
     build_ghostboard
     echo ""
     echo "Done (all)."
     ;;
   *)
     echo "Unknown component: $COMPONENT"
-    echo "Components: wezboard, ghostboard, roamium, webtui, chromium, all"
+    echo "Components: ghostboard, roamium, webtui, chromium, all"
     exit 1
     ;;
 esac

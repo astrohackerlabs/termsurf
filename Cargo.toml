@@ -5,7 +5,6 @@ members = [
     "roastty",
 ]
 exclude = [
-    "wezboard",
     "vendor",
     "chromium",
     "proto/test-rust",

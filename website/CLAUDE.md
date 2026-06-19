@@ -29,7 +29,6 @@ deployed to Cloudflare Pages.
 | `/docs` | `src/pages/docs/index.astro` | Docs landing |
 | `/docs/getting-started` | `src/pages/docs/getting-started.astro` | Install + setup |
 | `/docs/architecture` | `src/pages/docs/architecture.astro` | Multi-process design |
-| `/docs/components/wezboard` | `src/pages/docs/components/wezboard.astro` | Wezboard GUI |
 | `/docs/components/webtui` | `src/pages/docs/components/webtui.astro` | Web TUI |
 | `/docs/components/roamium` | `src/pages/docs/components/roamium.astro` | Roamium engine |
 | `/docs/protocol/overview` | `src/pages/docs/protocol/overview.astro` | Protocol design |

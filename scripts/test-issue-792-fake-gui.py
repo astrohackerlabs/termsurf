@@ -2,7 +2,7 @@
 """Run Roamium against a minimal TermSurf GUI socket.
 
 This harness is intentionally narrow: it proves browser-side Roamium/Chromium
-plumbing without needing a real Wezboard pane or terminal PTY. It accepts
+plumbing without needing a real GUI pane or terminal PTY. It accepts
 Roamium's ServerRegister message, sends CreateTab, records returned protobuf
 message kinds, and optionally serves the local bitcoin.pdf fixture with an
 explicit application/pdf MIME type.

@@ -100,7 +100,7 @@ impl CompositorConnection {
         let (reply_tx, reply_rx) = mpsc::channel();
 
         // Reader thread: reads length-prefixed protobuf messages.
-        // tab_id=0: Wezboard messages don't need tab filtering.
+        // tab_id=0: GUI messages don't need tab filtering.
         std::thread::spawn(move || {
             reader_loop(reader, tx, reply_tx, 0);
         });

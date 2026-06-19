@@ -908,8 +908,8 @@ async function runChecks(client, args, summary) {
 
   {
     const logText =
-      args.wezboardLog && fs.existsSync(args.wezboardLog)
-        ? fs.readFileSync(args.wezboardLog, "utf8")
+      args.guiLog && fs.existsSync(args.guiLog)
+        ? fs.readFileSync(args.guiLog, "utf8")
         : "";
     const titleLines = logText
       .split("\n")
@@ -930,8 +930,8 @@ async function runChecks(client, args, summary) {
           screenshots: [baseline.screenshot.relativePath],
         },
         titleLines.length > 0
-          ? "found title-like lines in Wezboard log"
-          : "no title-like Wezboard log lines found",
+          ? "found title-like lines in GUI log"
+          : "no title-like GUI log lines found",
       ),
     );
   }

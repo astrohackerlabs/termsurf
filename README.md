@@ -129,15 +129,12 @@ logging into Google in one profile doesn't affect the others.
 
 ### Install with Homebrew
 
-The Homebrew cask currently packages the deprecated Wezboard frontend while
-Ghostboard packaging is being updated:
+The Homebrew cask installs the current TermSurf app, the `web` CLI, and Roamium:
 
 ```bash
 brew tap termsurf/termsurf
 brew install --cask termsurf
 ```
-
-Use the source build below for the current primary Ghostboard frontend.
 
 To upgrade: `brew update && brew upgrade --cask termsurf`
 

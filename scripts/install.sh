@@ -6,7 +6,7 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CHROMIUM_OUT="$REPO_DIR/chromium/src/out/Default"
 source "$SCRIPT_DIR/roamium-resources.sh"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-GHOSTBOARD_RELEASE_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf Ghostboard.app"
+GHOSTBOARD_RELEASE_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf.app"
 APPLICATIONS_DIR="${TERMSURF_APPLICATIONS_DIR:-/Applications}"
 ROAMIUM_INSTALL_DIR="${TERMSURF_ROAMIUM_INSTALL_DIR:-/opt/homebrew/opt/termsurf-roamium}"
 
@@ -14,11 +14,20 @@ COMPONENT="${1:-}"
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component>"
-  echo "Components: wezboard, ghostboard, roamium, webtui, all"
+  echo "Components: ghostboard, roamium, webtui, all"
   exit 1
 fi
 
-if [ "$COMPONENT" = "ghostboard" ] && [ ! -x "$GHOSTBOARD_RELEASE_APP/Contents/MacOS/ghostboard" ]; then
+case "$COMPONENT" in
+  roamium | ghostboard | webtui | all) ;;
+  *)
+    echo "Unknown component: $COMPONENT"
+    echo "Components: ghostboard, roamium, webtui, all"
+    exit 1
+    ;;
+esac
+
+if [ "$COMPONENT" = "ghostboard" ] && [ ! -x "$GHOSTBOARD_RELEASE_APP/Contents/MacOS/termsurf" ]; then
   echo "Error: Release app not found at $GHOSTBOARD_RELEASE_APP"
   echo "Run: scripts/build.sh ghostboard --release"
   exit 1
@@ -82,46 +91,15 @@ install_roamium() {
   echo "  Bin: $INSTALL_DIR/roamium"
 }
 
-install_wezboard() {
-  local BINARY="$REPO_DIR/wezboard/target/release/wezboard-gui"
-  local TEMPLATE="$REPO_DIR/wezboard/assets/macos/TermSurf Wezboard.app"
-  local APP="/Applications/TermSurf Wezboard.app"
-
-  if [ ! -f "$BINARY" ]; then
-    echo "Error: Release build not found at $BINARY"
-    echo "Run: scripts/build.sh wezboard --release"
-    exit 1
-  fi
-
-  echo "==> Installing Wezboard to $APP..."
-  rm -rf "$APP"
-  cp -R "$TEMPLATE" "$APP"
-  mkdir -p "$APP/Contents/MacOS"
-  cp "$BINARY" "$APP/Contents/MacOS/wezboard-gui"
-
-  echo "==> Codesigning..."
-  codesign --force --deep --sign - "$APP" || true
-
-  local CLI="$REPO_DIR/wezboard/target/release/wezboard"
-  if [ -f "$CLI" ]; then
-    echo "==> Installing wezboard CLI to /usr/local/bin/wezboard..."
-    cp "$CLI" /usr/local/bin/wezboard
-    codesign --force --sign - /usr/local/bin/wezboard || true
-    echo "  Bin: /usr/local/bin/wezboard"
-  fi
-
-  echo "  App: $APP"
-}
-
 install_ghostboard() {
   local APP_SRC="$GHOSTBOARD_RELEASE_APP"
   local APP_DIR="/Applications"
   if [ "$COMPONENT" = "ghostboard" ]; then
     APP_DIR="$APPLICATIONS_DIR"
   fi
-  local APP="$APP_DIR/TermSurf Ghostboard.app"
+  local APP="$APP_DIR/TermSurf.app"
 
-  if [ ! -x "$APP_SRC/Contents/MacOS/ghostboard" ]; then
+  if [ ! -x "$APP_SRC/Contents/MacOS/termsurf" ]; then
     echo "Error: Release app not found at $APP_SRC"
     echo "Run: scripts/build.sh ghostboard --release"
     exit 1
@@ -159,20 +137,13 @@ install_webtui() {
 
 case "$COMPONENT" in
   roamium)    install_roamium ;;
-  wezboard)   install_wezboard ;;
   ghostboard) install_ghostboard ;;
   webtui)     install_webtui ;;
   all)
     install_roamium
-    install_wezboard
     install_ghostboard
     install_webtui
     echo ""
     echo "Done (all)."
-    ;;
-  *)
-    echo "Unknown component: $COMPONENT"
-    echo "Components: wezboard, ghostboard, roamium, webtui, all"
-    exit 1
     ;;
 esac

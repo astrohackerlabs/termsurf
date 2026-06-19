@@ -7,9 +7,18 @@ ROAMIUM_INSTALL_DIR="${TERMSURF_ROAMIUM_INSTALL_DIR:-/opt/homebrew/opt/termsurf-
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component>"
-  echo "Components: wezboard, ghostboard, roamium, webtui, all"
+  echo "Components: ghostboard, roamium, webtui, all"
   exit 1
 fi
+
+case "$COMPONENT" in
+  roamium | ghostboard | webtui | all) ;;
+  *)
+    echo "Unknown component: $COMPONENT"
+    echo "Components: ghostboard, roamium, webtui, all"
+    exit 1
+    ;;
+esac
 
 needs_root() {
   if [ "$COMPONENT" = "roamium" ] && [ "$ROAMIUM_INSTALL_DIR" != "/opt/homebrew/opt/termsurf-roamium" ]; then
@@ -53,21 +62,12 @@ uninstall_roamium() {
   echo "  Removed: $ROAMIUM_INSTALL_DIR"
 }
 
-uninstall_wezboard() {
-  local APP="/Applications/TermSurf Wezboard.app"
-
-  echo "==> Uninstalling Wezboard..."
-  rm -rf "$APP"
-
-  echo "  Removed: $APP"
-}
-
 uninstall_ghostboard() {
   local APP_DIR="/Applications"
   if [ "$COMPONENT" = "ghostboard" ]; then
     APP_DIR="$APPLICATIONS_DIR"
   fi
-  local APP="$APP_DIR/TermSurf Ghostboard.app"
+  local APP="$APP_DIR/TermSurf.app"
 
   echo "==> Uninstalling Ghostboard..."
   rm -rf "$APP"
@@ -84,20 +84,13 @@ uninstall_webtui() {
 
 case "$COMPONENT" in
   roamium)    uninstall_roamium ;;
-  wezboard)   uninstall_wezboard ;;
   ghostboard) uninstall_ghostboard ;;
   webtui)     uninstall_webtui ;;
   all)
     uninstall_roamium
-    uninstall_wezboard
     uninstall_ghostboard
     uninstall_webtui
     echo ""
     echo "Done (all)."
-    ;;
-  *)
-    echo "Unknown component: $COMPONENT"
-    echo "Components: wezboard, ghostboard, roamium, webtui, all"
-    exit 1
     ;;
 esac

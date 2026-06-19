@@ -8,47 +8,41 @@ const cb =
   <h1>Configuration</h1>
 
   <p>
-    Wezboard uses WezTerm's Lua configuration system. All WezTerm config options
-    are supported. This page covers the config file location and settings
-    relevant to TermSurf.
+    TermSurf uses Ghostboard's Ghostty-based configuration system. This page
+    covers the current config file location and settings relevant to TermSurf.
   </p>
 
   <h2>Config File</h2>
 
-  <p>Wezboard looks for config in this order:</p>
+  <p>TermSurf looks for config at:</p>
 
   <ol>
-    <li><code>$XDG_CONFIG_HOME/termsurf/wezboard/wezboard.lua</code></li>
-    <li><code>~/.config/termsurf/wezboard/wezboard.lua</code></li>
+    <li><code>~/.config/termsurf/config</code></li>
   </ol>
 
   <p>Minimal config example:</p>
 
   <pre
-    class={cb}><code><span class="text-muted">-- ~/.config/termsurf/wezboard/wezboard.lua</span>
-<span class="text-primary">local</span> config = {}
-
-config.font_size = <span class="text-success">14.0</span>
-config.window_decorations = <span class="text-success">"RESIZE"</span>
-config.color_scheme = <span class="text-success">"Tokyo Night"</span>
-
-<span class="text-primary">return</span> config</code></pre>
+    class={cb}><code><span class="text-muted"># ~/.config/termsurf/config</span>
+font-size = <span class="text-success">14</span>
+theme = <span class="text-success">TokyoNight</span>
+window-decoration = <span class="text-success">false</span></code></pre>
 
   <h2>TermSurf-Relevant Settings</h2>
 
-  <h3>window_decorations</h3>
+  <h3>window-decoration</h3>
 
   <p>
     Controls the window title bar and frame. Default is
-    <code>"TITLE | RESIZE"</code> (standard macOS title bar).
+    <code>true</code> (standard macOS title bar).
   </p>
 
   <pre
-    class={cb}><code><span class="text-muted">-- No title bar, just resize handles</span>
-config.window_decorations = <span class="text-success">"RESIZE"</span></code></pre>
+    class={cb}><code><span class="text-muted"># No title bar</span>
+window-decoration = <span class="text-success">false</span></code></pre>
 
   <p>
-    With <code>"RESIZE"</code>, the title bar is hidden and the content view
+    With <code>false</code>, the title bar is hidden and the content view
     fills the entire window. Browser overlays align correctly in both modes.
   </p>
 
@@ -62,7 +56,7 @@ config.window_decorations = <span class="text-success">"RESIZE"</span></code></p
   <h3>color_scheme</h3>
 
   <p>
-    WezTerm's built-in color schemes apply to terminal panes. Browser content
+    Ghostty-compatible color themes apply to terminal panes. Browser content
     uses its own color scheme, controlled via the <code>:dark</code> command in
     the Web TUI.
   </p>
@@ -90,11 +84,11 @@ config.window_decorations = <span class="text-success">"RESIZE"</span></code></p
     </thead>
     <tbody>
       <tr>
-        <td><code>~/.config/termsurf/wezboard/</code></td>
+        <td><code>~/.config/termsurf/</code></td>
         <td>Config files</td>
       </tr>
       <tr>
-        <td><code>~/.local/share/termsurf/wezboard/</code></td>
+        <td><code>~/.local/share/termsurf/</code></td>
         <td>Application data</td>
       </tr>
       <tr>
@@ -115,11 +109,11 @@ config.window_decorations = <span class="text-success">"RESIZE"</span></code></p
   <h2>Socket Paths</h2>
 
   <p>
-    Wezboard listens on a PID-scoped socket:
+    Ghostboard listens on a PID-scoped socket:
   </p>
 
   <pre
-    class={cb}><code>$TMPDIR/termsurf/wezboard-<span class="text-accent">&lt;pid&gt;</span>.sock</code></pre>
+    class={cb}><code>$TMPDIR/termsurf/termsurf-ghostboard-<span class="text-accent">&lt;pid&gt;</span>.sock</code></pre>
 
   <p>
     This path is exposed to child processes via the
@@ -130,12 +124,10 @@ config.window_decorations = <span class="text-success">"RESIZE"</span></code></p
   <pre
     class={cb}><code>$TMPDIR/termsurf/roamium-<span class="text-accent">&lt;hash&gt;</span>-<span class="text-accent">&lt;gui-pid&gt;</span>-<span class="text-accent">&lt;profile&gt;</span>.sock</code></pre>
 
-  <h2>WezTerm Documentation</h2>
+  <h2>Ghostty Documentation</h2>
 
   <p>
-    For the full configuration reference (fonts, colors, keybindings, Lua API,
-    multiplexer, SSH, etc.), see the
-    <a href="https://wezfurlong.org/wezterm/config/files.html">WezTerm
-    configuration docs</a>.
+    For the upstream terminal configuration model, see the
+    <a href="https://ghostty.org/docs/config">Ghostty configuration docs</a>.
   </p>
 </DocPage>

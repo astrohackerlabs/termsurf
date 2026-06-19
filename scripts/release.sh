@@ -13,7 +13,7 @@ ARCH="aarch64-apple-darwin"
 TARBALL_NAME="termsurf-${VERSION}-${ARCH}.tar.gz"
 STAGING_DIR="$REPO_DIR/dist/release"
 CHROMIUM_OUT="$REPO_DIR/chromium/src/out/Default"
-APP_TEMPLATE="$REPO_DIR/wezboard/assets/macos/TermSurf Wezboard.app"
+GHOSTBOARD_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf.app"
 CASK_FILE="$REPO_DIR/homebrew/Casks/termsurf.rb"
 
 echo "==> Packaging TermSurf v${VERSION} for ${ARCH}..."
@@ -21,8 +21,7 @@ echo "==> Packaging TermSurf v${VERSION} for ${ARCH}..."
 # Check release builds exist
 for f in \
   "$REPO_DIR/target/release/web" \
-  "$REPO_DIR/wezboard/target/release/wezboard" \
-  "$REPO_DIR/wezboard/target/release/wezboard-gui" \
+  "$GHOSTBOARD_APP/Contents/MacOS/termsurf" \
   "$REPO_DIR/target/release/roamium"; do
   if [ ! -f "$f" ]; then
     echo "Error: Release build not found: $f"
@@ -38,25 +37,14 @@ mkdir -p "$STAGING_DIR/roamium"
 # Copy binaries
 echo "==> Copying binaries..."
 cp "$REPO_DIR/target/release/web" "$STAGING_DIR/"
-cp "$REPO_DIR/wezboard/target/release/wezboard" "$STAGING_DIR/"
 cp "$REPO_DIR/target/release/roamium" "$STAGING_DIR/roamium/"
 
 # Copy Chromium dylibs and resources
 copy_roamium_runtime_resources "$CHROMIUM_OUT" "$STAGING_DIR/roamium"
 
 # Copy .app bundle
-echo "==> Copying Wezboard.app..."
-cp -R "$APP_TEMPLATE" "$STAGING_DIR/TermSurf Wezboard.app"
-mkdir -p "$STAGING_DIR/TermSurf Wezboard.app/Contents/MacOS"
-mkdir -p "$STAGING_DIR/TermSurf Wezboard.app/Contents/Frameworks"
-cp "$REPO_DIR/wezboard/target/release/wezboard-gui" "$STAGING_DIR/TermSurf Wezboard.app/Contents/MacOS/wezboard-gui"
-
-# Move dylibs from bundle root to Contents/Frameworks (fixes codesign)
-for dylib in "$STAGING_DIR/TermSurf Wezboard.app"/*.dylib; do
-  if [ -f "$dylib" ]; then
-    mv "$dylib" "$STAGING_DIR/TermSurf Wezboard.app/Contents/Frameworks/"
-  fi
-done
+echo "==> Copying TermSurf.app..."
+cp -R "$GHOSTBOARD_APP" "$STAGING_DIR/TermSurf.app"
 
 # Create tarball
 echo "==> Creating tarball..."

@@ -55,8 +55,8 @@ planned implementations:
   TermSurf front-end and the focus for new frontend work.
 - **Ghostboard Legacy** (`ghostboard-legacy/`) — archived historical
   implementation. Use it as reference for previously solved behavior.
-- **Wezboard** (`wezboard/`) — Deprecated GUI. WezTerm fork, Rust. Kept as
-  reference code unless explicitly revived for a specific issue.
+- **Wezboard** — Archived deprecated GUI. The source was deleted from the repo;
+  recover it from git history if a historical comparison is needed.
 - **Roastty** (`roastty/`) — Proof-of-concept Rust rewrite of Ghostty internals.
   Not the production frontend direction.
 - **Kitty** — Planned.
@@ -195,7 +195,6 @@ This keeps every issue's Chromium changes isolated and traceable.
 
 - `ghostboard/` — Ghostboard (Ghostty fork, Zig/Swift). **Primary frontend.**
 - `ghostboard-legacy/` — Archived Ghostboard implementation. Reference only.
-- `wezboard/` — Deprecated Wezboard implementation. Reference only.
 - `roastty/` — Proof-of-concept Rust rewrite. Reference only.
 - `webtui/` — The `web` TUI (Rust/ratatui). Browser chrome in the terminal pane.
 - `roamium/` — Roamium (Chromium browser binary, Rust).
@@ -211,12 +210,12 @@ This keeps every issue's Chromium changes isolated and traceable.
 ### Current State
 
 Ghostboard is the primary TermSurf frontend. New terminal/frontend behavior
-should target `ghostboard/` unless the user explicitly asks for legacy Wezboard
-or Roastty proof-of-concept work.
+should target `ghostboard/` unless the user explicitly asks for Roastty
+proof-of-concept work or historical Wezboard recovery from git history.
 
 Wezboard was the active GUI during an earlier phase of protocol work. It is now
-deprecated and kept as reference code. Roastty is a proof-of-concept Rust
-rewrite and is not the production frontend direction.
+archived in git history and no longer present in the worktree. Roastty is a
+proof-of-concept Rust rewrite and is not the production frontend direction.
 
 ### Source Layout
 
@@ -226,15 +225,6 @@ rewrite and is not the production frontend direction.
 - `ghostboard/macos/` — macOS app wrapper and Swift integration
 - `ghostboard/HACKING.md` — Local Ghostboard build notes
 - `ghostboard/AGENTS.md` — Local Ghostboard agent/build guidance
-
-#### Deprecated Wezboard Reference
-
-- `wezboard/wezboard/src/main.rs` — Main GUI application entry point
-- `wezboard/wezboard-gui/` — GUI rendering and window management
-- `wezboard/wezboard-surface/` — Surface/pane rendering
-- `wezboard/mux/` — Terminal multiplexer core
-- `wezboard/termwiz/` — Terminal widget library
-- `wezboard/config/` — Configuration parsing
 
 #### Roamium
 
@@ -260,22 +250,16 @@ cd ghostboard
 macos/build.nu --configuration Debug --action build
 ```
 
-The app output is
-`ghostboard/macos/build/<configuration>/TermSurf Ghostboard.app`.
+The app output is `ghostboard/macos/build/<configuration>/TermSurf.app`.
 
-The legacy scripts in `scripts/` still describe the deprecated Wezboard/Roamium
-flow and should not be used as the default frontend development path unless the
-user explicitly asks for Wezboard work.
-
-| Script                                                   | Purpose                                                                    |
-| -------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `scripts/build.sh <comp> [--release] [--clean] [--open]` | Legacy build helper. Components: wezboard, roamium, webtui, chromium, all. |
-| `scripts/install.sh <comp>`                              | Legacy install helper. Components: wezboard, roamium, webtui, all.         |
-| `scripts/uninstall.sh <comp>`                            | Legacy uninstall helper. Components: wezboard, roamium, webtui, all.       |
-| `scripts/deploy.sh <comp>`                               | Deploy a component. Components: website.                                   |
-| `scripts/release.sh [version]`                           | Package, upload to GitHub, and publish to Homebrew. Default: 0.1.0.        |
-| `scripts/rename-wezterm.sh [dir]`                        | Rename all WezTerm references to Wezboard in `wezboard/`. Re-runnable.     |
-| `scripts/nerd-font-test.sh`                              | Print Nerd Font test glyphs for visual verification.                       |
+| Script                                                   | Purpose                                                               |
+| -------------------------------------------------------- | --------------------------------------------------------------------- |
+| `scripts/build.sh <comp> [--release] [--clean] [--open]` | Build helper. Components: ghostboard, roamium, webtui, chromium, all. |
+| `scripts/install.sh <comp>`                              | Install helper. Components: ghostboard, roamium, webtui, all.         |
+| `scripts/uninstall.sh <comp>`                            | Uninstall helper. Components: ghostboard, roamium, webtui, all.       |
+| `scripts/deploy.sh <comp>`                               | Deploy a component. Components: website.                              |
+| `scripts/release.sh [version]`                           | Package, upload to GitHub, and publish to Homebrew. Default: 0.1.0.   |
+| `scripts/nerd-font-test.sh`                              | Print Nerd Font test glyphs for visual verification.                  |
 
 The build scripts auto-detect Chromium's `protoc` so you don't need a system
 install.
@@ -324,10 +308,7 @@ tap (submodule at `homebrew/`).
 
 **User install:** `brew tap termsurf/termsurf && brew install --cask termsurf`
 
-The current cask/release workflow still packages the deprecated Wezboard
-frontend. Treat it as legacy packaging until Ghostboard packaging is updated.
-
-**Legacy release workflow:**
+**Release workflow:**
 
 1. Build all components: `scripts/build.sh all --release`
 2. Run: `scripts/release.sh <version>`
@@ -338,8 +319,8 @@ Homebrew cask SHA and version, and pushes to `termsurf/homebrew-termsurf`.
 
 **Current cask installs:**
 
-- `.app` bundle → `/Applications/TermSurf Wezboard.app`
-- `web`, `wezboard` CLIs → `/opt/homebrew/bin/`
+- `.app` bundle → `/Applications/TermSurf.app`
+- `web` CLI → `/opt/homebrew/bin/`
 - Roamium + Chromium dylibs → `/opt/homebrew/opt/termsurf-roamium/`
 
 ## Documentation
