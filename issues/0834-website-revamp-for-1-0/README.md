@@ -267,6 +267,8 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
   — **Pass**
 - [Experiment 2: Config & keybind reference generation](02-config-keybind-reference-generation.md)
   — **Pass**
+- [Experiment 3: VT reference infrastructure + proof slice](03-vt-infrastructure-and-slice.md)
+  — **Designed**
 
 ## Process notes
 
