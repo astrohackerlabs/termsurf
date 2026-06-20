@@ -1,0 +1,41 @@
+---
+// Docs search via Pagefind (https://pagefind.app). Pagefind indexes the built
+// HTML after `astro build` (see package.json `build`) and emits its UI assets
+// into dist/pagefind/. The script/style are loaded verbatim with `is:inline`
+// because the files exist only post-build (not in src/public/the module graph),
+// so Astro must not try to bundle them. Init guards on the global so `astro dev`
+// (where the assets 404) shows an inert box instead of throwing.
+---
+
+<link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
+<div id="docs-search" class="docs-search"></div>
+<script src="/pagefind/pagefind-ui.js" is:inline></script>
+<script is:inline>
+  window.addEventListener("DOMContentLoaded", () => {
+    if (typeof PagefindUI !== "undefined") {
+      new PagefindUI({
+        element: "#docs-search",
+        showImages: false,
+        showSubResults: true,
+        resetStyles: false,
+      });
+    }
+  });
+</script>
+
+<style>
+  .docs-search {
+    margin-bottom: 1rem;
+    /* Map Pagefind UI tokens onto the Tokyo Night palette. */
+    --pagefind-ui-primary: var(--color-primary);
+    --pagefind-ui-text: var(--color-foreground);
+    --pagefind-ui-background: var(--color-background);
+    --pagefind-ui-border: var(--color-border);
+    --pagefind-ui-tag: var(--color-background-dark);
+    --pagefind-ui-font: var(--font-mono);
+    --pagefind-ui-border-width: 1px;
+    --pagefind-ui-border-radius: 0;
+    --pagefind-ui-font-size: 0.8125rem;
+    --pagefind-ui-scale: 0.85;
+  }
+</style>

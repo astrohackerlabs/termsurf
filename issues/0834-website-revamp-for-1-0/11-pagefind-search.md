@@ -121,3 +121,53 @@ binary risk). Two **Required** fixes, folded in:
 
 Optional/nit folded in: the `md:block` sidebar means no search on mobile for now
 (recorded as a Phase-2 concern); `astro check` is invoked as `bunx astro check`.
+
+## Result
+
+**Result:** Pass
+
+Pagefind search is wired: the build runs `astro build && pagefind --site dist`,
+a `Search.astro` box sits atop the docs sidebar, and only doc prose is indexed.
+
+### What was built
+
+- `package.json` — `build` = `astro build && pagefind --site dist`.
+- `src/components/Search.astro` — Pagefind UI mount, `is:inline` script +
+  guarded init, Tokyo Night CSS-variable mapping.
+- `src/components/DocPage.astro` — `<Search />` atop the sidebar;
+  `data-pagefind-body` on the `<article>`.
+
+### Implementation fix
+
+The first build failed `astro check` with one error: `is:inline` is invalid on
+`<link>` (it's only for `<script>`/`<style>`). Removed it — a plain
+`<link href>` to an external path isn't bundled by Astro anyway. Rebuild: 0
+errors.
+
+### Verification results
+
+1. **Index builds** — `bun run build` runs Astro then Pagefind; Pagefind reports
+   "Indexed 74 pages, 3597 words"; `dist/pagefind/` has `pagefind-ui.js` +
+   `pagefind-ui.css`. **Pass.**
+2. **Doc content indexed, boilerplate/home excluded** — Pagefind found the
+   `data-pagefind-body` element; distinctive tokens (`DECSTBM`, `bell-features`)
+   appear in the index fragments; the 74 indexed pages exclude `/` and
+   `/welcome` (no `<article>` there). **Pass.**
+3. **Search UI on docs only** — built doc pages include `#docs-search` +
+   `/pagefind/pagefind-ui.{js,css}` (the `is:inline` script emitted verbatim,
+   not bundled); `/` and `/welcome` load **0** pagefind JS (stay zero-JS).
+   **Pass.**
+4. **Build + check clean** — `bun run build` succeeds; `astro check` 0 errors;
+   76 pages (search is a component, no new pages); `gen:references --check` and
+   `import:vt --check` still exit 0. **Pass.**
+5. **No regressions** — `/`, `/welcome`, and the doc pages build; nav unchanged
+   apart from the added search box. **Pass.**
+
+## Conclusion
+
+The docs have working client-side search (Pagefind), self-hosted and SaaS-free,
+indexing only doc prose and shipping JS only on docs pages — the marketing home
+and `/welcome` stay zero-JS. Known limitation (Phase 2): no search below the
+`md` breakpoint (sidebar is `md:block`); responsive nav/search is a design-phase
+concern. Remaining Phase 1: the versioning posture and the full IA/sitemap; then
+Phases 2–4.

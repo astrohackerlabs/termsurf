@@ -1,6 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import { getDocsNav } from "../lib/docs-nav.ts";
+import Search from "./Search.astro";
 
 interface Props {
   title: string;
@@ -16,6 +17,7 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "");
 <Base title={`${title} — TermSurf`} description={description}>
   <div class="flex gap-8">
     <aside class="hidden w-48 shrink-0 md:block">
+      <Search />
       <nav class="space-y-1 text-xs">
         {
           nav.map((group) => (
@@ -68,7 +70,7 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "");
         }
       </nav>
     </aside>
-    <article class="prose-termsurf min-w-0 flex-1">
+    <article class="prose-termsurf min-w-0 flex-1" data-pagefind-body>
       <slot />
     </article>
   </div>

@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && pagefind --site dist",
     "build:icons": "bun run scripts/process-icons.ts",
     "gen:references": "bun run scripts/gen-references.ts",
     "import:vt": "bun run scripts/import-vt.ts",
@@ -26,6 +26,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "github-slugger": "^2.0.0",
+    "pagefind": "^1.5.2",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "typescript": "^5.9.3",

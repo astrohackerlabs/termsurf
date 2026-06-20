@@ -285,8 +285,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
   TermSurf-branded)
 - [Experiment 10: Deploy script cleanup (Cloudflare Pages)](10-deploy-script-cleanup.md)
   — **Pass**
-- [Experiment 11: Docs search with Pagefind](11-pagefind-search.md) —
-  **Designed**
+- [Experiment 11: Docs search with Pagefind](11-pagefind-search.md) — **Pass**
 
 ## Process notes
 
