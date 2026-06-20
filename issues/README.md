@@ -8,12 +8,12 @@
 | [0795](0795-pdf-native-print/README.md)           | PDF Native Print                     | 2026-05-30 |
 | [0797](0797-pdf-core-workflow-coverage/README.md) | PDF Core Workflow Coverage           | 2026-05-30 |
 | [0798](0798-pdf-advanced-features/README.md)      | PDF Advanced Features                | 2026-05-30 |
-| [0834](0834-website-revamp-for-1-0/README.md)     | Complete Website Revamp for 1.0      | 2026-06-20 |
 
 ## Closed
 
 | #                                                               | Title                                                                         | Opened     | Closed     |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0834](0834-website-revamp-for-1-0/README.md)                   | Complete Website Revamp for 1.0                                               | 2026-06-20 | 2026-06-20 |
 | [0833](0833-update-website-and-docs-for-1-0-0/README.md)        | Update Website and Docs for 1.0.0                                             | 2026-06-20 | 2026-06-20 |
 | [0832](0832-publish-1-0-0-to-homebrew/README.md)                | Publish 1.0.0 to Homebrew                                                     | 2026-06-19 | 2026-06-19 |
 | [0831](0831-ghostboard-webview-padding-alignment/README.md)     | Ghostboard Webview Padding Alignment                                          | 2026-06-19 | 2026-06-19 |

@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-20"
+closed = "2026-06-20"
 +++
 
 # Issue 834: Complete Website Revamp for 1.0
@@ -331,3 +332,63 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
   does not modify the Chromium fork, the protocol, the engines, or the release
   scripts beyond the website deploy path, unless an experiment surfaces a doc
   claim that cannot be made true without a separate code issue.
+
+## Conclusion
+
+**Outcome: the 1.0 website revamp is delivered.** All four phases are complete
+across 28 experiments, each with an independent adversarial design-gate and
+result-gate review and separate plan/result commits. The site grew from ~10
+hand-authored `.astro` pages to **83 built pages** on a content-collection +
+generated-navigation architecture, with accurate, accessible, source-verified
+documentation.
+
+**What was built, by phase:**
+
+- **Phase 1 — Architecture (Exps 1–12):** MDX content collections + generated
+  sidebar; a config/keybind **reference-generation pipeline** from the fork man
+  page; the **64-page VT reference** imported from Ghostty's MIT MDX and
+  fork-verified subsection by subsection; Pagefind search; Cloudflare-only
+  deploy cleanup; and the documented IA/sitemap + single-version posture.
+- **Phase 2 — Design (Exps 13–18):** a documented Tokyo Night design system +
+  callout primitive; responsive zero-JS mobile nav; an **accessibility
+  baseline** (skip link, labeled landmarks, focus-visible, reduced-motion); a
+  **WCAG-AA contrast refinement** of the palette (both modes); an accurate
+  home/marketing treatment; and a drift-proof generated docs landing.
+- **Phase 3 — Ghostty-parity docs (Exps 19–22):** About, a Keybindings overview
+  (Configuration section now at parity), a Features overview (themes, shell
+  integration, SSH, AppleScript — fork-verified), and Help (terminfo,
+  synchronized output, macOS). **Sponsor deferred** — see below.
+- **Phase 4 — TermSurf-specific docs (Exps 23–28):** the source-verified **`web`
+  TUI reference**, the **How TermSurf Works** UX narrative, **Split Pane
+  Borders**, the consolidated **Roadmap**, the completed **Roamium** engine
+  reference, and the **complete 40-message protocol reference**.
+
+**Scope decisions honored:** stayed on Astro; kept and _refined_ Tokyo Night (to
+AA); macOS-only and accurate throughout; roadmap items clearly marked "planned";
+the VT reference reused-and-extended with attribution. Accuracy was the
+load-bearing constraint — every product claim was verified against the
+Ghostboard fork (`Config.zig`, `ffi.rs`, `proto/termsurf.proto`,
+`webtui/src/main.rs`, the generated man page, the `.sdef`), and the adversarial
+reviews repeatedly caught real issues (the live home-page WebKit/"only browser"
+overclaims, the systemic light-mode contrast debt, the stale `q`-quit and
+missing modes/commands on the Web TUI page, the incomplete Roamium/protocol
+surfaces, a false `CLAUDE.md` citation, and a mistaken "16 missing messages"
+count).
+
+**Deferred follow-ups (documented, not abandoned):**
+
+1. **Sponsor / Financial Support page** — not built: TermSurf has **no funding
+   channel** in the repo (no `FUNDING.yml`, GitHub Sponsors, etc.), and
+   inventing a payment destination would violate the accuracy rule. Where
+   donations go is a user business decision. Build it once a real channel is
+   provided; the "Sponsor" `SECTION_ORDER` slot is harmlessly unused until then.
+   (See `memory/issue-834-sponsor-deferred.md`.)
+2. **`/welcome` on-black contrast** — Exp 16's palette deepening marginally
+   reduced the welcome modal's contrast (light tokens on a black surface via an
+   inert `class="dark"`); a real fix needs a `/welcome`-page change, which is
+   out of the established site-styling scope. Logged in Exp 16.
+
+These two are the only items outstanding; the substantive revamp —
+comprehensive, accurate, accessible coverage of everything TermSurf 1.0 ships,
+with Ghostty parity plus the TermSurf-specific protocol/TUI/engine/pane-border
+docs — is complete.
