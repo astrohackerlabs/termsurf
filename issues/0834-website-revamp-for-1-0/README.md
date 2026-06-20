@@ -284,7 +284,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
   — **Pass** (completes scope decision 1 — entire VT reference fork-verified +
   TermSurf-branded)
 - [Experiment 10: Deploy script cleanup (Cloudflare Pages)](10-deploy-script-cleanup.md)
-  — **Designed**
+  — **Pass**
 
 ## Process notes
 

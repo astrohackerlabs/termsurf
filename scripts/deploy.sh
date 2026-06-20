@@ -32,13 +32,9 @@ if [ -z "$COMPONENT" ]; then
 fi
 
 deploy_website() {
-  echo "==> Building blog and commit data..."
+  echo "==> Building and deploying website to Cloudflare Pages..."
   cd "$REPO_DIR/website"
-  bun run build:data
-
-  echo "==> Deploying website to Fly.io..."
-  cd "$REPO_DIR"
-  fly deploy --config website/fly.toml --dockerfile website/Dockerfile
+  bun run deploy
 }
 
 case "$COMPONENT" in

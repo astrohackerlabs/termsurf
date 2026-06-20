@@ -80,3 +80,32 @@ Confirmed: the current script is genuinely dead (`build:data` script +
   cannot ship a broken site. No other live stale Fly.io references (`build.sh`,
   both `CLAUDE.md`s are clean; remaining Fly.io hits are in closed/immutable
   issues, correctly left untouched). One cosmetic nit (wording) — non-blocking.
+
+## Result
+
+**Result:** Pass
+
+`deploy_website()` now delegates to the canonical Cloudflare flow; the
+`build:data`/Fly.io/`fly.toml`/`Dockerfile` references are gone. Only
+`scripts/deploy.sh` changed (−6/+2 lines).
+
+### Verification results
+
+1. **No stale references** — `grep -E 'build:data|fly|fly.toml|Dockerfile'` over
+   `scripts/deploy.sh` returns nothing. **Pass.**
+2. **Delegates to the real flow** — `deploy_website()` is
+   `cd "$REPO_DIR/website" && bun run deploy` (=
+   `bun run build && wrangler pages deploy dist`). **Pass.**
+3. **Valid + behaves** — `bash -n scripts/deploy.sh` passes; no-args and `bogus`
+   both exit 1 with usage; `website` reaches the build/deploy command (an actual
+   deploy needs `wrangler` auth, not run here). **Pass.**
+4. **No regressions** — `website/package.json` `deploy` unchanged; dispatch and
+   usage logic untouched. **Pass.**
+
+## Conclusion
+
+The last broken/stale deploy path is gone — Cloudflare Pages (`wrangler`) is now
+the single, working, documented deploy mechanism, reached identically via
+`scripts/deploy.sh website` or `cd website && bun run deploy`. Phase 1's
+remaining loose ends are search (Pagefind), the versioning posture, and the full
+IA/sitemap; then Phases 2–4.
