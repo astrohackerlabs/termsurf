@@ -306,7 +306,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 
 ### Phase 3 — Ghostty-parity terminal docs & pages
 
-- [Experiment 19: About page](19-about-page.md) — **Designed**
+- [Experiment 19: About page](19-about-page.md) — **Pass**
 
 ## Process notes
 

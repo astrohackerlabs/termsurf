@@ -135,3 +135,76 @@ findings (all Optional/Nit), folded in:
    install steps, and contradicts neither.
 4. **(Nit)** Verification "no regressions" reworded so it doesn't contradict the
    intended new sidebar/`/docs` entry.
+
+## Result
+
+**Result:** Pass
+
+`/docs/about` is added as an accurate, macOS-only foundational page; all
+criteria pass.
+
+### What was built
+
+`src/content/docs/about.mdx` (`order: 1.5`) — raw-HTML MDX matching the existing
+doc style, in `prose-termsurf`: an intro (browser-in-terminal, no alt+tab);
+**The protocol is the product** (engine-agnostic multi-process, one engine per
+profile, links to Architecture); **What ships in 1.0** (macOS; Ghostboard /
+`web` / Roamium with links to Getting Started, the config guide, and the
+protocol overview); **Relationship to Ghostty** (fork, inherited VT, the
+`NOTICE` attribution, links to the VT reference); and a **Planned** section that
+keeps the status nuance (WebKit _planned_; Gecko/Ladybird _researched_;
+Kitty/Alacritty/ iTerm2 frontends; Linux/Windows then iOS/Android;
+bookmarks/tabs/history/ downloads/PDF).
+
+### Verification results
+
+1. **Builds + placed** — `bun run build` 77 pages; `/docs/about` emitted; both
+   the sidebar lead group and the `/docs` "Overview" list read **Getting Started
+   → About → Architecture** (order 1 / 1.5 / 2); `astro check` 0 errors.
+   **Pass.**
+2. **Accuracy (verified)** — built `/docs/about` has no uniqueness superlative
+   ("the only"/"only browser"/"first-ever"/"best" all absent; factual "macOS"
+   present); WebKit, Gecko, Ladybird, Linux, and Windows appear **only** inside
+   the Planned section (none before it), so nothing non-macOS/non-Chromium reads
+   as shipped; shipped components are exactly Ghostboard + `web` + Roamium;
+   Ghostty credited. Each present-tense claim matches root `CLAUDE.md`.
+   **Pass.**
+3. **Roadmap labeled** — all planned engines/frontends/platforms/features sit
+   under the "Planned" `<h2>`, with the planned-vs-researched distinction kept.
+   **Pass.**
+4. **Design system, zero JS, links resolve** — `prose-termsurf`; no hardcoded
+   hex; 0 `astro-island`; dead-link crawl over `/docs/about` = 0 broken (all six
+   cross-links resolve). **Pass.**
+5. **a11y** — one `<h1>` ("About") → four ordered `<h2>`s, no skipped levels;
+   link text is descriptive. **Pass.**
+6. **No duplication** — About summarizes the protocol/architecture in two
+   paragraphs and links to Architecture for detail; install is a link to Getting
+   Started, not repeated; no contradictions. **Pass.**
+7. **No regressions** — `gen:references --check` + `import:vt --check` exit 0;
+   only `about.mdx` added (untracked, nothing else changed); search/other
+   pages/`/`/`/welcome` unaffected. **Pass.**
+
+## Conclusion
+
+Phase 3 has its foundational About page and its content pattern: accurate,
+fork-/source-verified, macOS-only, roadmap clearly marked, generated nav/index
+picking it up automatically. Next Phase-3 candidates: a dedicated Install
+section, Features (macOS-applicable: theme, shell integration, SSH, AppleScript
+— each fork-verified), Help (terminfo, macOS notes, synchronized output), and
+Sponsor.
+
+## Completion Review
+
+Independent `adversarial-reviewer` at the result gate. **Verdict: APPROVE** (no
+findings). Against a fresh 77-page build the reviewer read every sentence and
+confirmed all 13 future engine/frontend/platform terms (WebKit, Surfari, Gecko,
+Waterwolf, Ladybird, Girlbat, Kitty, Alacritty, iTerm2, Linux, Windows, iOS,
+Android) occur **strictly after** the "Planned" heading; the
+planned-vs-researched nuance matches the `CLAUDE.md` table; the shipped stack is
+exactly Ghostboard + `web` + Roamium with Ghostty credited; no uniqueness
+superlative; the one claim not in `CLAUDE.md` ("split pane borders" as a
+TermSurf addition) is corroborated by shipped closed issues (0823, 0786, 0787,
+0785, 0777). Also confirmed: nav order Getting Started → About → Architecture,
+all 7 internal links resolve, one `<h1>` + four ordered `<h2>`s, no hardcoded
+hex, 0 `astro-island`, no Architecture/Getting-Started duplication,
+`astro check` 0 errors, drift checks exit 0, and only `about.mdx` added.

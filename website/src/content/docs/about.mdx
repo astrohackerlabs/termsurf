@@ -1,0 +1,111 @@
+---
+title: About
+description: What TermSurf is — a protocol for embedding real web browsers inside terminal emulators, shipping on macOS with the Chromium-based Roamium engine.
+order: 1.5
+---
+
+<h1>About</h1>
+
+<p>
+  TermSurf is a protocol for embedding web browsers inside terminal emulators.
+  Type <code>web example.com</code> in a terminal pane and a real browser
+  renders as a GPU overlay right there — no alt+tab, no context switch. You
+  navigate the web with a small, keyboard-driven chrome (a URL bar and status
+  line) drawn in the terminal itself.
+</p>
+
+<h2>The protocol is the product</h2>
+
+<p>
+  TermSurf is a protocol, not just an app. The terminal (the GUI), each browser
+  engine, and each terminal UI are separate processes that speak one
+  protobuf/Unix-socket protocol. The GUI is the hub: terminal UIs and browser
+  engines connect to it, and it composites browser content into the window as
+  pixel-positioned overlays.
+</p>
+
+<p>
+  The design is multi-process by necessity — each browser engine process serves
+  exactly one profile (one set of cookies, storage, and cache). That same
+  separation is what lets the protocol stay engine-agnostic: the GUI does not
+  care which engine renders a given pane. For the full process topology, IPC
+  framing, and GPU-compositing details, see{" "}
+  <a href="/docs/architecture">Architecture</a>.
+</p>
+
+<h2>What ships in 1.0</h2>
+
+<p>
+  TermSurf 1.0 runs on <strong>macOS</strong>. Three components make up the
+  shipping stack:
+</p>
+
+<ul>
+  <li>
+    <strong>Ghostboard</strong> — the GUI terminal emulator, a fork of{" "}
+    <a href="https://ghostty.org">Ghostty</a>. It hosts the browser overlays and
+    renders the terminal.
+  </li>
+  <li>
+    <a href="/docs/components/webtui">
+      <strong>
+        <code>web</code>
+      </strong>
+    </a>{" "}
+    — the terminal UI that provides the browser chrome (URL bar, modes,
+    commands) in a pane.
+  </li>
+  <li>
+    <a href="/docs/components/roamium">
+      <strong>Roamium</strong>
+    </a>{" "}
+    — the browser engine binary, built on <strong>Chromium</strong>.
+  </li>
+</ul>
+
+<p>
+  To install it and open your first page, see{" "}
+  <a href="/docs/getting-started">Getting Started</a>. To tune the terminal, see
+  the <a href="/docs/reference/configuration">configuration guide</a>. The
+  underlying message protocol is documented in the{" "}
+  <a href="/docs/protocol/overview">protocol overview</a>.
+</p>
+
+<h2>Relationship to Ghostty</h2>
+
+<p>
+  Ghostboard is a fork of Ghostty, so TermSurf inherits Ghostty's terminal
+  behavior and its VT (terminal escape-sequence) support, then adds the
+  browser-overlay protocol and terminal features built for it — such as split
+  pane borders. The <a href="/docs/vt">Terminal API reference</a> documents the
+  escape sequences TermSurf supports; that reference is adapted from Ghostty's
+  MIT-licensed documentation (see the repository <code>NOTICE</code>), with each
+  page verified against the TermSurf fork.
+</p>
+
+<h2>Planned</h2>
+
+<p>
+  These are <strong>not in 1.0</strong> — they describe the project's direction,
+  at varying levels of commitment:
+</p>
+
+<ul>
+  <li>
+    <strong>More browser engines.</strong> A WebKit engine (Surfari) is{" "}
+    <em>planned</em>; Gecko (Waterwolf) and Ladybird (Girlbat) are{" "}
+    <em>researched</em> — under consideration, not yet committed.
+  </li>
+  <li>
+    <strong>More terminal front-ends.</strong> Kitty, Alacritty, and iTerm2 are
+    planned hosts in addition to Ghostboard.
+  </li>
+  <li>
+    <strong>More platforms.</strong> Linux and Windows are planned; iOS and
+    Android may follow.
+  </li>
+  <li>
+    <strong>More browser features.</strong> Bookmarks, tabs, history, downloads,
+    and PDF viewing are on the roadmap.
+  </li>
+</ul>
