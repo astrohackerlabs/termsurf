@@ -1,0 +1,57 @@
+---
+title: Help
+description: Help for TermSurf's terminal — terminfo and the TERM value, synchronized output (DEC mode 2026), and macOS notes.
+section: Help
+order: 1
+---
+
+<h1>Help</h1>
+
+<p>
+  Notes for getting TermSurf's terminal to behave well with other programs.
+</p>
+
+<h2>Terminfo</h2>
+
+<p>
+  TermSurf reports <code>TERM=xterm-ghostty</code> and ships the matching
+  terminfo entry (named <code>xterm-ghostty</code>, inherited from Ghostty).
+  Locally this is installed for you, so terminal programs render correctly out
+  of the box.
+</p>
+
+<p>
+  Over SSH, a remote host may not have the <code>xterm-ghostty</code> entry. Two
+  shell-integration features handle this (see{" "}
+  <a href="/docs/features">Features → SSH integration</a>): with{" "}
+  <code>ssh-terminfo</code>, TermSurf installs the terminfo entry on the remote
+  host automatically; with <code>ssh-env</code>, it falls back to{" "}
+  <code>xterm-256color</code> so programs still behave. Enable them with{" "}
+  <a href="/docs/reference/config#shell-integration-features">
+    <code>shell-integration-features</code>
+  </a>
+  . The <code>TERM</code> value itself is the{" "}
+  <a href="/docs/reference/config#term">
+    <code>term</code>
+  </a>{" "}
+  option.
+</p>
+
+<h2>Synchronized output</h2>
+
+<p>
+  TermSurf supports the synchronized-output mode (DEC private mode{" "}
+  <code>2026</code>). A full-screen program brackets a frame of updates with the
+  mode on, and TermSurf holds the display until the frame is complete, so the
+  screen repaints atomically with no flicker or tearing. It is enabled by the
+  running program, not a config option — most modern TUIs use it automatically
+  when the terminal advertises support.
+</p>
+
+<h2>macOS</h2>
+
+<p>
+  TermSurf 1.0 runs on macOS. For where the app, the <code>web</code> CLI, and
+  the Roamium engine are installed (Homebrew cask paths) and how to upgrade, see{" "}
+  <a href="/docs/getting-started">Getting Started</a>.
+</p>

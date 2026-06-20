@@ -112,3 +112,68 @@ confirmed. One **Optional** finding, folded in:
   records the mode bit). The design's evidence trail now cites the renderer; the
   page claim ("supports synchronized output, repaints atomically") was already
   accurate.
+
+## Result
+
+**Result:** Pass
+
+The Help section is added at Ghostty parity (two fork-verified terminal topics +
+a macOS note); all criteria pass.
+
+### What was built
+
+`src/content/docs/help.mdx` (`section: Help`, `order: 1`) — raw-HTML MDX in
+`prose-termsurf` with three `<h2>` subsections: **Terminfo**
+(`TERM=xterm-ghostty`, ships the `xterm-ghostty` entry; SSH `ssh-terminfo`
+install + `ssh-env` `xterm-256color` fallback, linking Features and the
+`#shell-integration-features` / `#term` config-reference anchors);
+**Synchronized output** (DEC mode 2026 — program-driven atomic repaints, no
+flicker; not a config option); **macOS** (macOS-only; install paths link to
+Getting Started).
+
+### Verification results
+
+1. **Builds + placed** — `bun run build` 80 pages; `/docs/help` emitted; the
+   `/docs` index section order is Overview → Configuration → Features → Terminal
+   API → Components → Protocol → **Help** (per `SECTION_ORDER`, Help after
+   Protocol since the TermSurf group isn't built yet); `astro check` 0 errors.
+   **Pass.**
+2. **Accuracy (fork-verified)** — `TERM=xterm-ghostty` (`Config.zig:3749`), mode
+   2026 (`modes.zig:296`, renderer pause `generic.zig:1176`) confirmed at the
+   design gate; no invented modes/options; exact option text linked, not
+   restated. **Pass.**
+3. **macOS-accurate** — built page has zero "gtk"/"linux" text; macOS note links
+   Getting Started. **Pass.**
+4. **Design system, zero JS, links resolve** — `prose-termsurf`; no hardcoded
+   hex; 0 `astro-island`; dead-link + **anchor** crawl over `/docs/help` = 0
+   broken (`#term` and `#shell-integration-features` both resolve in the
+   generated config reference). **Pass.**
+5. **a11y** — one `<h1>` ("Help") → three ordered `<h2>`s, no skipped levels;
+   descriptive link text. **Pass.**
+6. **No regressions** — `gen:references --check` + `import:vt --check` exit 0;
+   only `help.mdx` added (a new "Help" nav group is the sole nav addition);
+   search/`/`/`/welcome`/other pages unchanged. **Pass.**
+
+## Conclusion
+
+The Help section exists at Ghostty parity — terminfo (`xterm-ghostty`, stated
+honestly), synchronized output (mode 2026, implementation-verified), and a macOS
+note — all fork-verified and macOS-scoped, with config details linked to the
+generated reference. The last Phase-3 page is **Sponsor** (Financial Support),
+after which Phase 3 is complete and the issue moves to Phase 4
+(TermSurf-specific docs).
+
+## Completion Review
+
+Independent `adversarial-reviewer` at the result gate. **Verdict: APPROVE** (no
+findings). Against a fresh 80-page build the reviewer confirmed:
+`TERM=xterm- ghostty` (`Config.zig:3749`); the shipped terminfo entry is
+literally named `xterm-ghostty|ghostty|Ghostty` (so the page's statement is a
+true present-tense fact); `ssh-terminfo` install + `ssh-env` `xterm-256color`
+fallback via `shell-integration-features` (man page 3180–3204); mode 2026
+(`modes.zig:296`), correctly described as program-driven and "not a config
+option," with the atomic-repaint behavior real (`generic.zig:1176`). Also: zero
+"gtk"/"linux" on the page; Help group placed after Protocol; the `#term` and
+`#shell-integration-features` anchors both exist in the built config reference;
+one `<h1>` + three ordered `<h2>`; no hex; 0 `astro-island`; `astro check` 0
+errors; drift checks exit 0; scope only `help.mdx`.
