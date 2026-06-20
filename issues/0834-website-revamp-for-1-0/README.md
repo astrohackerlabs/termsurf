@@ -308,6 +308,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 
 - [Experiment 19: About page](19-about-page.md) — **Pass**
 - [Experiment 20: Keybindings overview](20-keybindings-overview.md) — **Pass**
+- [Experiment 21: Features overview](21-features-overview.md) — **Designed**
 
 ## Process notes
 
