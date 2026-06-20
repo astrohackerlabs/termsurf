@@ -127,3 +127,68 @@ real and the fix correct; 32 + 8 = 40 makes the "every protobuf message" claim
 true; and the revised diff method is sound. One **Optional**, folded in:
 `SetGuiActive` is documented under the existing **State** section (with
 `FocusChanged`/`SetColorScheme`) rather than a new heading.
+
+## Result
+
+**Result:** Pass
+
+The protocol message reference is now complete (all 40 messages); all criteria
+pass.
+
+### What was built
+
+`src/content/docs/protocol/messages.mdx` — added the 8 missing messages:
+`SetGuiActive` (under the existing **State** section); `ConsoleMessage` +
+`RendererCrashed` (appended to **Engine Events**); `TabInfo` and two new `<h2>`
+sections — **HTTP Authentication** (`HttpAuthRequest / HttpAuthReply`) and
+**JavaScript Dialogs** (`JavaScriptDialogRequest / JavaScriptDialogReply`) —
+with field tables transcribed from `proto/termsurf.proto`. Also fixed the
+existing `QueryDevtoolsRequest` table to include its `browser` Request field.
+
+### Verification results
+
+1. **Completeness (proto-verified)** — the built page's `<h3>` set (combined
+   `A / B` headings split, deduped) = **40** unique messages = the 40
+   `proto/termsurf.proto` messages minus the `TermSurfMessage` wrapper: 0 in
+   proto-not-on-page, 0 on-page-not-in-proto, 0 duplicate headings. The intro's
+   "every protobuf message" claim now holds. **Pass.**
+2. **Accuracy** — the 8 added messages' fields/types are transcribed from the
+   proto (incl. `int32` `line_no`/`termination_status_code`); the
+   `QueryDevtoolsRequest` `browser` field is now present. No invented field.
+   **Pass.**
+3. **Builds + checks** — `bun run build` 83 pages; `bunx astro check` 0 errors;
+   `gen:references --check` + `import:vt --check` exit 0. **Pass.**
+4. **Design system, zero JS, links resolve** — `prose-termsurf`; no hardcoded
+   hex; 0 `astro-island`; dead-link crawl over `/docs/protocol/messages` = 0
+   broken. **Pass.**
+5. **a11y** — one `<h1>` ("Messages"); ordered `<h2>`/`<h3>` (no skipped
+   levels). **Pass.**
+6. **No regressions** — only `messages.mdx` changed; the existing entries are
+   unchanged except the `QueryDevtools*` `browser` fix; routes/nav/search/`/`/
+   `/welcome` unchanged. **Pass.**
+
+## Conclusion
+
+The protocol message reference is genuinely complete — all 40 `termsurf.proto`
+messages documented (the 8 added: HTTP auth, JS dialogs, console, renderer
+crash, GUI-active, TabInfo), plus an accuracy fix to `QueryDevtoolsRequest`.
+This closes the last Phase-4 content gap. **Phase 4 is complete**, and with it
+the issue's documentation coverage — every shipped surface (the `web` TUI, the
+UX story, the protocol, Roamium, Ghostboard's pane borders, the architecture) is
+documented and source-verified, with a clearly-marked roadmap. The issue can now
+move to its Conclusion; the only outstanding item is the deferred Sponsor page,
+which awaits a real funding channel from the user.
+
+## Completion Review
+
+Independent `adversarial-reviewer` at the result gate. **Verdict: APPROVE** (no
+findings). Against a fresh 83-page build the reviewer confirmed: splitting the 4
+combined `A / B` headings yields exactly **40 unique** messages = proto minus
+`TermSurfMessage` (0 in proto-not-on-page, 0 on-page-not-in-proto, 0
+duplicates); all 8 added messages' fields/types match the proto (both `int32`
+cases, `HttpAuthRequest`'s 10 fields, no invented field); the
+`QueryDevtoolsRequest` `browser` field is added; `git diff` is purely additive
+(99 insertions, 0 deletions) so the existing 32 are untouched; one `<h1>`,
+ordered headings, no hex, 0 `astro-island`, dead-link crawl 0 broken;
+`astro check` 0 errors; drift checks exit 0; scope only `messages.mdx`; and the
+README Exp 28 line is a clean single `— **Pass**`.

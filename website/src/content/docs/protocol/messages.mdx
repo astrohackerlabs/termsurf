@@ -153,6 +153,17 @@ order: 2
   </tbody>
 </table>
 
+<h3>SetGuiActive</h3>
+<p>GUI &rarr; Engine. Tells the engine whether the GUI is active/foreground.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab (0 = all tabs in the receiving engine)</td></tr>
+    <tr><td><code>active</code></td><td>bool</td><td>Whether the GUI is active</td></tr>
+    <tr><td><code>reason</code></td><td>string</td><td>Reason for the change</td></tr>
+  </tbody>
+</table>
+
 <h2>Engine Events</h2>
 
 <p>Engine &rarr; GUI. Browser state changes.</p>
@@ -232,6 +243,32 @@ order: 2
   <tbody>
     <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
     <tr><td><code>url</code></td><td>string</td><td>Hovered link URL (empty = hover ended)</td></tr>
+  </tbody>
+</table>
+
+<h3>ConsoleMessage</h3>
+<p>Fired for each console log entry from the page.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>level</code></td><td>string</td><td>Log level</td></tr>
+    <tr><td><code>message</code></td><td>string</td><td>Log message</td></tr>
+    <tr><td><code>line_no</code></td><td>int32</td><td>Source line number</td></tr>
+    <tr><td><code>source_id</code></td><td>string</td><td>Source identifier</td></tr>
+  </tbody>
+</table>
+
+<h3>RendererCrashed</h3>
+<p>Fired when a tab's renderer process terminates (crash recovery).</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Affected tab</td></tr>
+    <tr><td><code>termination_status</code></td><td>string</td><td>Termination status</td></tr>
+    <tr><td><code>termination_status_code</code></td><td>int32</td><td>Status code</td></tr>
+    <tr><td><code>url</code></td><td>string</td><td>URL at the time of the crash</td></tr>
+    <tr><td><code>can_reload</code></td><td>bool</td><td>Whether the tab can be reloaded</td></tr>
   </tbody>
 </table>
 
@@ -345,6 +382,7 @@ order: 2
     <tr><td>Request</td><td><code>pane_id</code></td><td>string</td><td>Requesting pane</td></tr>
     <tr><td>Request</td><td><code>inspected_tab_id</code></td><td>int64</td><td>Tab to inspect (0 = auto)</td></tr>
     <tr><td>Request</td><td><code>profile</code></td><td>string</td><td>Profile filter</td></tr>
+    <tr><td>Request</td><td><code>browser</code></td><td>string</td><td>Browser engine filter</td></tr>
     <tr><td>Reply</td><td><code>tab_id</code></td><td>int64</td><td>Resolved tab ID</td></tr>
     <tr><td>Reply</td><td><code>browser</code></td><td>string</td><td>Engine name</td></tr>
     <tr><td>Reply</td><td><code>profile</code></td><td>string</td><td>Profile name</td></tr>
@@ -365,5 +403,66 @@ order: 2
     <tr><td>Reply</td><td><code>chromium_devtools</code></td><td>int64</td><td>DevTools tab count</td></tr>
     <tr><td>Reply</td><td><code>tabs</code></td><td>TabInfo[]</td><td>Tab details</td></tr>
     <tr><td>Reply</td><td><code>error</code></td><td>string</td><td>Error (empty = success)</td></tr>
+  </tbody>
+</table>
+
+<h3>TabInfo</h3>
+<p>A single tab entry, returned in <code>QueryTabsReply.tabs</code>.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>id</code></td><td>int64</td><td>Tab ID</td></tr>
+    <tr><td><code>inspected_tab_id</code></td><td>int64</td><td>Inspected tab ID (DevTools tabs)</td></tr>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Owning pane</td></tr>
+    <tr><td><code>url</code></td><td>string</td><td>Current URL</td></tr>
+  </tbody>
+</table>
+
+<h2>HTTP Authentication</h2>
+
+<p>Engine &harr; GUI/TUI. Prompt for and submit HTTP auth credentials.</p>
+
+<h3>HttpAuthRequest / HttpAuthReply</h3>
+<p>The engine requests credentials when a server issues an auth challenge; the TUI collects them and replies.</p>
+<table>
+  <thead><tr><th>Message</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Request</td><td><code>tab_id</code></td><td>int64</td><td>Requesting tab</td></tr>
+    <tr><td>Request</td><td><code>request_id</code></td><td>uint64</td><td>Correlates the reply</td></tr>
+    <tr><td>Request</td><td><code>url</code></td><td>string</td><td>Challenging URL</td></tr>
+    <tr><td>Request</td><td><code>auth_scheme</code></td><td>string</td><td>Scheme (basic, digest, …)</td></tr>
+    <tr><td>Request</td><td><code>challenger</code></td><td>string</td><td>Challenging origin</td></tr>
+    <tr><td>Request</td><td><code>realm</code></td><td>string</td><td>Auth realm</td></tr>
+    <tr><td>Request</td><td><code>is_proxy</code></td><td>bool</td><td>Proxy authentication</td></tr>
+    <tr><td>Request</td><td><code>first_auth_attempt</code></td><td>bool</td><td>First attempt for this challenge</td></tr>
+    <tr><td>Request</td><td><code>is_primary_main_frame_navigation</code></td><td>bool</td><td>Main-frame navigation</td></tr>
+    <tr><td>Request</td><td><code>is_navigation</code></td><td>bool</td><td>Triggered by a navigation</td></tr>
+    <tr><td>Reply</td><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td>Reply</td><td><code>request_id</code></td><td>uint64</td><td>Matches the request</td></tr>
+    <tr><td>Reply</td><td><code>accepted</code></td><td>bool</td><td>Whether credentials were provided</td></tr>
+    <tr><td>Reply</td><td><code>username</code></td><td>string</td><td>Username (empty if cancelled)</td></tr>
+    <tr><td>Reply</td><td><code>password</code></td><td>string</td><td>Password (empty if cancelled)</td></tr>
+  </tbody>
+</table>
+
+<h2>JavaScript Dialogs</h2>
+
+<p>Engine &harr; GUI/TUI. Handle <code>alert</code>/<code>confirm</code>/<code>prompt</code>/<code>beforeunload</code> dialogs.</p>
+
+<h3>JavaScriptDialogRequest / JavaScriptDialogReply</h3>
+<p>The engine requests a dialog response; the TUI presents it and replies.</p>
+<table>
+  <thead><tr><th>Message</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Request</td><td><code>tab_id</code></td><td>int64</td><td>Requesting tab</td></tr>
+    <tr><td>Request</td><td><code>request_id</code></td><td>uint64</td><td>Correlates the reply</td></tr>
+    <tr><td>Request</td><td><code>dialog_type</code></td><td>string</td><td><code>alert</code>, <code>confirm</code>, <code>prompt</code>, or <code>beforeunload</code></td></tr>
+    <tr><td>Request</td><td><code>origin_url</code></td><td>string</td><td>Originating URL</td></tr>
+    <tr><td>Request</td><td><code>message</code></td><td>string</td><td>Dialog message</td></tr>
+    <tr><td>Request</td><td><code>default_prompt_text</code></td><td>string</td><td>Default text (prompt dialogs)</td></tr>
+    <tr><td>Reply</td><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td>Reply</td><td><code>request_id</code></td><td>uint64</td><td>Matches the request</td></tr>
+    <tr><td>Reply</td><td><code>accepted</code></td><td>bool</td><td>Accept (OK) vs. cancel</td></tr>
+    <tr><td>Reply</td><td><code>prompt_text</code></td><td>string</td><td>Entered text (prompt dialogs)</td></tr>
   </tbody>
 </table>
