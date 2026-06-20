@@ -304,6 +304,10 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 - [Experiment 18: Docs landing / section-index template](18-docs-landing-section-index.md)
   — **Pass** (closes Phase 2 — Design)
 
+### Phase 3 — Ghostty-parity terminal docs & pages
+
+- [Experiment 19: About page](19-about-page.md) — **Designed**
+
 ## Process notes
 
 - Experiments are created one at a time inside their phase, each with its own
