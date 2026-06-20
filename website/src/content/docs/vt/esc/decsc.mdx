@@ -1,0 +1,87 @@
+---
+title: Save Cursor (DECSC)
+navLabel: DECSC
+description: Save various cursor-related state that can be restored with Restore Cursor (DECRC).
+section: Terminal API
+subsection: ESC
+order: 5
+---
+
+# Save Cursor (DECSC)
+
+<VTSequence sequence={["ESC", "7"]} />
+
+The following attributes are saved:
+
+- Cursor row and column in absolute screen coordinates
+- Character sets
+- Pending wrap state
+- SGR attributes
+- Origin mode (DEC Mode 6)
+
+Only one cursor can be saved at any time. If save cursor is repeated, the
+previously save cursor is overwritten.
+
+Primary and alternate screens have separate saved cursor state. A cursor
+saved on the primary screen is inaccessible from the alternate screen
+and vice versa.
+
+## Validation
+
+### SC V-1: Cursor Position
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[1;5H"
+printf "A"
+printf "\0337" # Save Cursor
+printf "\033[1;1H"
+printf "B"
+printf "\0338" # Restore Cursor
+printf "X"
+```
+
+```
+|B___AX____|
+```
+
+### SC V-2: Pending Wrap State
+
+```bash
+cols=$(tput cols)
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[${cols}G"
+printf "A"
+printf "\0337" # Save Cursor
+printf "\033[1;1H"
+printf "B"
+printf "\0338" # Restore Cursor
+printf "X"
+```
+
+```
+|B________A|
+|X_________|
+```
+
+### SC V-3: SGR Attributes
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[1;4;33;44m"
+printf "A"
+printf "\0337" # Save Cursor
+printf "\033[0m"
+printf "B"
+printf "\0338" # Restore Cursor
+printf "X"
+```
+
+```
+|AX________|
+```
+
+The "A" and "X" should have identical styling.

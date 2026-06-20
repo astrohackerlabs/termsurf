@@ -1,0 +1,143 @@
+---
+title: Reverse Index (RI)
+navLabel: RI
+description: Move the cursor up one cell, scrolling if necessary.
+section: Terminal API
+subsection: ESC
+order: 7
+---
+
+# Reverse Index (RI)
+
+<VTSequence sequence={["ESC", "M"]} />
+
+This sequence does not unset the pending wrap state.
+
+If the cursor is exactly on the [top margin](/docs/vt/csi/decstbm) and is within
+[left and right margins](/docs/vt/csi/decslrm), invoke [scroll down (SD)](/docs/vt/csi/sd)
+with `n = 1`. The operation is complete.
+
+Otherwise, scrolling isn't necessary. Perform a
+[cursor up](/docs/vt/csi/cuu) operation with `n = 1`.
+
+## Validation
+
+### RI V-1: No Scroll Region, Top of Screen
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "A\n"
+printf "B\n"
+printf "C\n"
+printf "\033[1;1H" # move to top-left
+printf "\033M" # reverse index
+printf "X"
+```
+
+```
+|Xc________|
+|A_________|
+|B_________|
+|C_________|
+```
+
+### RI V-2: No Scroll Region, Not Top of Screen
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "A\n"
+printf "B\n"
+printf "C\n"
+printf "\033[2;1H"
+printf "\033M" # reverse index
+printf "X"
+```
+
+```
+|Xc________|
+|B_________|
+|C_________|
+```
+
+### RI V-3: Top/Bottom Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "A\n"
+printf "B\n"
+printf "C\n"
+printf "\033[2;3r" # scroll region
+printf "\033[2;1H"
+printf "\033M" # reverse index
+```
+
+```
+|A_________|
+|c_________|
+|B_________|
+```
+
+### RI V-4: Outside of Top/Bottom Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "A\n"
+printf "B\n"
+printf "C\n"
+printf "\033[2;3r" # scroll region
+printf "\033[1;1H"
+printf "\033M" # reverse index
+```
+
+```
+|A_________|
+|B_________|
+|C_________|
+```
+
+### RI V-5: Left/Right Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "ABC\n"
+printf "DEF\n"
+printf "GHI\n"
+printf "\033[?69h" # enable left/right margins
+printf "\033[2;3s" # scroll region left/right
+printf "\033[1;2H"
+printf "\033M"
+```
+
+```
+|A_________|
+|DBC_______|
+|GEF_______|
+|_HI_______|
+```
+
+### RI V-6: Outside Left/Right Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "ABC\n"
+printf "DEF\n"
+printf "GHI\n"
+printf "\033[?69h" # enable left/right margins
+printf "\033[2;3s" # scroll region left/right
+printf "\033[2;1H"
+printf "\033M"
+```
+
+```
+|ABC_______|
+|DEF_______|
+|GHI_______|
+```
+
+Cursor on the `A`.

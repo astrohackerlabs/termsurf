@@ -270,7 +270,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 - [Experiment 3: VT reference infrastructure + proof slice](03-vt-infrastructure-and-slice.md)
   — **Pass**
 - [Experiment 4: VT bulk import + nested navigation](04-vt-bulk-import-nested-nav.md)
-  — **Designed** (mechanical import + nested nav; TermSurf rebrand + fork
+  — **Pass** (mechanical import + nested nav; TermSurf rebrand + fork
   verification decomposed into Experiment 5+)
 
 ## Process notes

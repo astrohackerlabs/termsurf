@@ -1,0 +1,164 @@
+---
+title: Index (IND)
+navLabel: IND
+description: Move the cursor down one cell, scrolling if necessary.
+section: Terminal API
+subsection: ESC
+order: 6
+---
+
+# Index (IND)
+
+<VTSequence sequence={["ESC", "D"]} />
+
+This sequence always unsets the pending wrap state.
+
+If the cursor is exactly on the bottom margin and is at or within the
+left and right margin, scroll up one line.
+If the scroll region is the full terminal screen and the terminal is on
+the primary screen, this may create scrollback. See the
+scroll documentation for more details.
+
+If the cursor is outside of the scroll region or not on the bottom
+margin of the scroll region, perform the [cursor down](/docs/vt/csi/cud) operation with
+`n = 1`.
+
+This sequence will only scroll when the cursor is exactly on the bottom
+margin and within the remaining scroll region. If the cursor is outside
+the scroll region and on the bottom line of the terminal, the cursor
+does not move.
+
+## Validation
+
+### IND V-1: No Scroll Region, Top of Screen
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "A"
+printf "\033D" # index
+printf "X"
+```
+
+```
+|A_________|
+|_Xc_______|
+```
+
+### IND V-2: Bottom of Primary Screen
+
+```bash
+lines=$(tput lines)
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[${lines};1H" # move to bottom-left
+printf "A"
+printf "\033D" # index
+printf "X"
+```
+
+```
+|A_________|
+|_Xc_______|
+```
+
+### IND V-3: Inside Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[1;3r" # scroll region
+printf "A"
+printf "\033D" # index
+printf "X"
+```
+
+```
+|A_________|
+|_Xc_______|
+```
+
+### IND V-4: Bottom of Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[1;3r" # scroll region
+printf "\033[4;1H" # below scroll region
+printf "B"
+printf "\033[3;1H" # move to last row of region
+printf "A"
+printf "\033D" # index
+printf "X"
+```
+
+```
+|__________|
+|A_________|
+|_Xc_______|
+|B_________|
+```
+
+### IND V-5: Bottom of Primary Screen with Scroll Region
+
+```bash
+lines=$(tput lines)
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[1;3r" # scroll region
+printf "\033[3;1H" # move to last row of region
+printf "A"
+printf "\033[${lines};1H" # move to bottom-left
+printf "\033D" # index
+printf "X"
+```
+
+```
+|__________|
+|__________|
+|A_________|
+|__________|
+|Xc________|
+```
+
+### IND V-6: Outside of Left/Right Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[?69h" # enable left/right margins
+printf "\033[1;3r" # scroll region top/bottom
+printf "\033[3;5s" # scroll region left/right
+printf "\033[3;3H"
+printf "A"
+printf "\033[3;1H"
+printf "\033D" # index
+printf "X"
+```
+
+```
+|__________|
+|__________|
+|XcA_______|
+```
+
+### IND V-7: Inside of Left/Right Scroll Region
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J"   # clear screen
+printf "AAAAAA\n"
+printf "AAAAAA\n"
+printf "AAAAAA"
+printf "\033[?69h" # enable left/right margins
+printf "\033[1;3s" # set scroll region left/right
+printf "\033[1;3r" # set scroll region top/bottom
+printf "\033[3;1H" # Move to bottom left
+printf "\033D" # index
+```
+
+```
+|AAAAAA____|
+|AAAAAA____|
+|c__AAA____|
+```

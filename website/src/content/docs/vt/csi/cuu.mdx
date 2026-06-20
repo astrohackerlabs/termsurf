@@ -1,0 +1,83 @@
+---
+title: Cursor Up (CUU)
+navLabel: CUU
+description: Move the cursor `n` cells up.
+section: Terminal API
+subsection: CSI
+order: 9
+---
+
+# Cursor Up (CUU)
+
+<VTSequence sequence={["CSI", "Pn", "A"]} />
+
+The parameter `n` must be an integer greater than or equal to 1. If `n` is less than
+or equal to 0, adjust `n` to be 1. If `n` is omitted, `n` defaults to 1.
+
+This sequence always unsets the pending wrap state.
+
+If the current cursor position is at or below the top margin,
+the highest point the cursor can move is the top margin. If the current
+cursor position is above the top margin, the highest point the cursor
+can move is the first row.
+
+## Validation
+
+### CUU V-1: Cursor Up
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\033[3;1H"
+printf "A"
+printf "\033[2A" # cursor up
+printf "X"
+```
+
+```
+|_Xc_______|
+|__________|
+|A_________|
+```
+
+### CUU V-2: Cursor Up Below Top Margin
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\n\n\n\n" # screen is 4 high
+printf "\033[2;4r" # set scrolling region
+printf "\033[3;1H"
+printf "A"
+printf "\033[5A" # cursor up
+printf "X"
+```
+
+```
+|__________|
+|_Xc_______|
+|A_________|
+|__________|
+```
+
+### CUU V-3: Cursor Up Above Top Margin
+
+```bash
+printf "\033[1;1H" # move to top-left
+printf "\033[0J" # clear screen
+printf "\n\n\n\n\n" # screen is 5 high
+printf "\033[3;5r" # set scrolling region
+printf "\033[3;1H"
+printf "A"
+printf "\033[2;1H" # move above region
+printf "\033[5A" # cursor up
+printf "X"
+```
+
+```
+|Xc________|
+|__________|
+|A_________|
+|__________|
+|__________|
+```

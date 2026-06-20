@@ -65,17 +65,24 @@ with `--in <path>` or `GHOSTTY_DOC`.
 
 ## Terminal API (VT) docs
 
-The `/docs/vt/**` pages are **adapted from Ghostty's MIT-licensed VT
-documentation** (`ghostty-org/website`); see the repo `NOTICE`.
+The `/docs/vt/**` pages (64) are **adapted from Ghostty's MIT-licensed VT
+documentation** (`ghostty-org/website`); see the repo `NOTICE`. They are
+**generated, do not edit by hand** — `scripts/import-vt.ts` reads a Ghostty
+website checkout (`--in <repo>/docs/vt` or `GHOSTTY_VT_DIR`) and writes all VT
+pages with nested-nav frontmatter (`section: Terminal API`, `subsection`,
+`order`, `navLabel`), adapted links/anchors (placeholders inlined, Ghostty
+config links → `/docs/reference/config`, in-page fragments re-slugged to match
+heading ids), and the safe `## Ghostty Status` → `## Implementation Status`
+rename. `bun run import:vt` regenerates; `--check` flags drift.
 `src/components/VTSequence.astro` is a static (zero-JS) port of Ghostty's
-`VTSequence` component, provided to MDX via `components={{ VTSequence }}` in
-`src/pages/docs/[...slug].astro`. When importing VT pages, adapt: rewrite
-Ghostty product references to TermSurf (keep "Ghostty" only for upstream
-attribution); rename `## Ghostty Status` → `## Implementation Status`; and
-rewrite/inline every internal link so none points at a page the site does not
-build (`#TODO` → text; Ghostty's `/docs/config/reference` → `/docs/reference/config`).
-Only a proof slice is imported so far; the full ~64-file import and nested VT
-navigation are pending (issue 834, Experiment 4).
+`VTSequence` component, provided to MDX via `components={{ VTSequence }}`.
+
+**Interim voice:** product/behavior claims remain **upstream-attributed** (they
+name Ghostty, which is true — TermSurf's Ghostboard inherits its VT engine),
+behind the framing note on `/docs/vt`. The full **TermSurf rebrand + per-claim
+fork verification** (against `ghostboard/src/**`, platform-aware) is done by
+issue 834's Experiment 5+ (one per subsection), after which those pages are
+hand-maintained, not regenerated.
 
 ## Components
 

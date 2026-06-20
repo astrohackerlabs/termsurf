@@ -16,6 +16,8 @@ const docs = defineCollection({
     description: z.string().optional(),
     // Sidebar group heading. Ungrouped entries render above the first group.
     section: z.string().optional(),
+    // Optional second-level group within a section (e.g. VT: CSI/OSC/...).
+    subsection: z.string().optional(),
     // Sort order within a section (lower first); unset sorts last.
     order: z.number().default(1000),
     // Excluded from the build and from navigation.

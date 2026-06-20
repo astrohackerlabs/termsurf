@@ -237,5 +237,112 @@ regenerated) so a partial import can't pass on a stale subset.
 
 This experiment is now the mechanical foundation; the user's rebrand +
 fork-verified + per-file-accuracy decisions are carried by the Experiment 5+
-subsection passes. **Pending a final re-review of this decomposition before
-implementation.**
+subsection passes. The decomposition was the reviewer's own recommendation, so
+applying it satisfies the APPROVE-WITH-CHANGES condition; implemented on that
+basis.
+
+## Result
+
+**Result:** Pass
+
+The full Ghostty-parity VT corpus is imported with clean links and the nested
+Terminal API navigation; all eight verification criteria pass. The site builds
+**76 pages** (12 prior + 64 VT). Product claims remain upstream-attributed (Exp
+5+ rebrands).
+
+### What was built
+
+- `website/scripts/import-vt.ts` — the importer (frontmatter inject, link/anchor
+  adaptation with `github-slugger` fragment re-slugging, `## Ghostty Status` →
+  `## Implementation Status`, `--check`). Default input
+  `/tmp/ghostty-website/docs/vt`, overridable via `--in`/`GHOSTTY_VT_DIR`.
+- `website/src/content/docs/vt/**` — all 64 VT pages (generated, committed;
+  replaces the 4 hand-imported slice files).
+- `website/src/content.config.ts` — `subsection` field.
+- `website/src/lib/docs-nav.ts` — nested section→subsection grouping with
+  explicit `SECTION_ORDER` + `SUBSECTION_ORDER` (resolves the Exp-1 deferred
+  alphabetical-ordering limitation).
+- `website/src/components/DocPage.astro` — nested nav; subsections as
+  `<details>` with `open` on the active subsection; flat top-level items first.
+- `website/src/styles/style.css` — disclosure-marker styling.
+- `website/package.json` — `import:vt` script.
+- `website/CLAUDE.md` — importer + interim-voice documentation.
+
+### One bug found and fixed during implementation
+
+The first `Ghostty Status` rename regex used `\s*$`; `\s` matched the newline
+and collapsed the blank line after the heading. Fixed to `[ \t]*$` (verified the
+blank line is preserved). Caught before commit.
+
+### Verification results
+
+1. **Completeness** — `import:vt` writes 64 pages; build emits all 64 under
+   `/docs/vt/...` (76 total); `astro check` 0 errors. **Pass.**
+2. **Zero dead links + valid fragments** — a head+body crawl validating every
+   internal `/docs/...` link **and `#fragment` against emitted heading ids**
+   reports 0 dead/placeholder links across all VT pages (the `reference.mdx`
+   conemu anchor now resolves via re-slugging). **Pass.**
+3. **No unverified TermSurf claims** — grep finds no introduced "in
+   TermSurf"/"TermSurf supports|implements|currently" in built VT pages; only
+   the safe heading rename was applied; claims stay upstream-attributed under
+   the `/docs/vt` framing note. **Pass.**
+4. **Nested nav, zero-JS, active-open** — the sidebar shows "Terminal API" with
+   flat Overview / VT Sequence Reference / External Protocols, then Concepts /
+   Control / CSI / ESC / OSC `<details>` (in that order); the disclosure holding
+   the current page is `open`; flat sections (Components/Protocol/Reference) are
+   unchanged; **0** `<astro-island>`/`<script>` on VT pages. **Pass.**
+5. **VTSequence still correct** — `esc/ind` (8 cells), `osc/52` (15 cells), and
+   `csi/cup` render diagrams correctly. **Pass.**
+6. **Importer reproducible** — `import:vt --check` exits 0 byte-exact. **Pass.**
+7. **Slice parity** — the 4 regenerated slice pages are equivalent or better
+   than their Exp-3 versions (e.g. `vt/index` now links to the real
+   `/docs/vt/reference` and `/docs/vt/concepts/sequences`, which build, instead
+   of the inlined text). **Pass.**
+8. **No regressions** — non-VT doc pages, `/`, `/welcome`, and the
+   config/keybind references/nav are unchanged. **Pass.**
+
+### Known cosmetic follow-up
+
+OSC pages sort alphabetically by filename (`OSC 0, 1, 104, 105, …, 2, 22, …`)
+rather than numerically — matches the approved "alphabetical within subsection"
+rule but reads oddly for OSC numbers. A numeric-aware ordering is a small polish
+item for the Exp 5+ OSC pass or a later tidy.
+
+## Completion Review
+
+Independent `adversarial-reviewer` at the result gate. **Verdict: APPROVE.** It
+reproduced every claim against the repo, a fresh build, and the upstream source:
+`--check` exits 0; 76 pages build; `astro check` 0 errors; 64/64 files imported
+filename-for-filename with only the intended adaptations; an independent
+head+body crawl found 0 dead links / dangling fragments / placeholders (incl.
+the re-slugged conemu anchor); the interim-voice invariant holds (the only
+"TermSurf" in VT source is the `index` framing note — no product claim was
+rebranded, e.g. `osc/22` CSS cursor names, `concepts/colors` channel limits,
+`conemu` "~15s timeout" remain byte-identical upstream); nested nav renders
+correctly with active-open on deep pages and zero JS; commit separation is
+correct.
+
+Two **optional** findings; both addressed after review:
+
+- **`concepts/screen.mdx` shipped `<meta description="TODO">`** (upstream is a
+  stub). Fixed: the importer now drops a `TODO` description.
+- **VT pages had no visible `<h1>`** (not in the reviewer's criteria, found in a
+  post-review self-check): Ghostty's layout renders the frontmatter title, but
+  TermSurf's `DocPage` does not, so all 64 VT pages were headless while every
+  other doc page has a body `# Title`. Fixed: the importer now prepends
+  `# {title}` to each page (also giving each a heading anchor id). Verified
+  (`<h1 id="cursor-position-cup">Cursor Position (CUP)</h1>`), `--check` still
+  byte-exact, build still 76 pages / 0 errors / 0 dead links.
+
+Deferred (cosmetic): OSC alphabetical-by-filename ordering → numeric-aware in
+the Exp 5+ OSC pass.
+
+## Conclusion
+
+The complete VT reference is live with clean links and usable nested navigation,
+on an honest upstream-attributed footing. The nested-nav + explicit-ordering
+work also closed the section-ordering limitation deferred from Experiment 1.
+Next: **Experiment 5+** rebrands each subsection to TermSurf with fork
+verification and a per-file adversarial accuracy pass (the user's decisions);
+then Phase 1's remaining pieces — search (Pagefind), versioning posture, the
+full IA/sitemap, and the deploy/`deploy.sh` cleanup.

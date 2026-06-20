@@ -1,0 +1,116 @@
+---
+title: VT Sequence Reference
+navLabel: VT Sequence Reference
+description: A reference of all VT sequences supported by Ghostty.
+section: Terminal API
+order: 2
+---
+
+# VT Sequence Reference
+
+This page lists many of the VT sequences that Ghostty supports.
+
+This page is a work-in-progress. Ghostty supports many more sequences
+than are listed here and for the sequences listed here the quality
+of the linked documentation varies. This is a very contributor
+friendly area to help improve the documentation!
+
+They are currently grouped by sequence type (control, esc, CSI, etc.)
+and the listed alphabetically by syntax. In the future, we will
+introduce better organization and search capabilities.
+
+| Name | Syntax | Description |
+|------|------|-------------|
+| [BEL](/docs/vt/control/bel) | `0x07`  | Alert the user (beep) |
+| [BS](/docs/vt/control/bs) | `0x08`  | Move cursor backward one position |
+| [TAB](/docs/vt/control/tab) | `0x09`  | Move cursor right to the next tab stop |
+| [LF](/docs/vt/control/lf) | `0x0A`  | Move cursor down one line, scrolling if necessary |
+| [CR](/docs/vt/control/cr) | `0x0D`  | Move cursor to the left margin |
+| [DECSC](/docs/vt/esc/decsc) | `ESC 7` | Save cursor |
+| [DECRC](/docs/vt/esc/decrc) | `ESC 8` | Restore cursor |
+| [IND](/docs/vt/esc/ind) | `ESC D` | Move cursor down, scrolling if necessary |
+| [RI](/docs/vt/esc/ri) | `ESC M` | Move cursor up, scrolling if necessary |
+| [RIS](/docs/vt/esc/ris) | `ESC c` | Full reset |
+| [DECSCUSR](/docs/vt/csi/decscusr) | `CSI Pn " " q` | Set cursor style |
+| [DECKPAM](/docs/vt/esc/deckpam) | `ESC =` | Set numeric keypad to application mode |
+| [DECKPNM](/docs/vt/esc/deckpnm) | `ESC >` | Set numeric keypad to numeric mode |
+| [DECALN](/docs/vt/esc/decaln) | `ESC # 8` | Screen alignment test |
+| [CUU](/docs/vt/csi/cuu) | `CSI Pn A` | Move cursor up |
+| [CUD](/docs/vt/csi/cud) | `CSI Pn B` | Move cursor down |
+| [CUF](/docs/vt/csi/cuf) | `CSI Pn C` | Move cursor right |
+| [CUB](/docs/vt/csi/cub) | `CSI Pn D` | Move cursor left |
+| [CNL](/docs/vt/csi/cnl) | `CSI Pn E` | Move cursor down `n` lines and to the leftmost column |
+| [CPL](/docs/vt/csi/cpl) | `CSI Pn F` | Move cursor up `n` lines and to the leftmost column |
+| [CUP](/docs/vt/csi/cup) | `CSI Py ; Px H` | Move cursor to the specified row and column |
+| [CHT](/docs/vt/csi/cht) | `CSI Pn I` | Move cursor right `n` tabs |
+| [ED](/docs/vt/csi/ed) | `CSI Pn J` | Erase display |
+| [EL](/docs/vt/csi/el) | `CSI Pn K` | Erase line |
+| [DL](/docs/vt/csi/dl) | `CSI Pn M` | Delete `n` lines at the cursor |
+| [IL](/docs/vt/csi/il) | `CSI Pn L` | Insert `n` lines at the cursor |
+| [DCH](/docs/vt/csi/dch) | `CSI Pn P` | Delete `n` characters at the cursor |
+| [SU](/docs/vt/csi/su) | `CSI Pn S` | Scroll up `n` lines |
+| [SD](/docs/vt/csi/sd) | `CSI Pn T` | Scroll down `n` lines |
+| [ECH](/docs/vt/csi/ech) | `CSI Pn X` | Erase `n` characters at the cursor |
+| [CBT](/docs/vt/csi/cbt) | `CSI Pn Z` | Move cursor left `n` tabs |
+| [HPR](/docs/vt/csi/hpr) | `CSI Pn a` | Move cursor to a column relative to the cursor |
+| [REP](/docs/vt/csi/rep) | `CSI Pn b` | Repeat the preceding character `n` times |
+| [VPA](/docs/vt/csi/vpa) | `CSI Py d` | Move cursor to the specified row |
+| [VPR](/docs/vt/csi/vpr) | `CSI Pn e` | Move cursor down `n` rows relative to the cursor |
+| [TBC](/docs/vt/csi/tbc) | `CSI Pn g` | Clear one or all tab stops |
+| [DSR](/docs/vt/csi/dsr) | `CSI Pn n` | Device status report |
+| [DECSTBM](/docs/vt/csi/decstbm) | `CSI Pt ; Pb r` | Set top and bottom margins |
+| [DECSLRM](/docs/vt/csi/decslrm) | `CSI Pl ; Pr s` | Set left and right margins |
+| [ICH](/docs/vt/csi/ich) | `CSI Pn @` | Insert `n` characters at the cursor |
+| [HPA](/docs/vt/csi/hpa) | `CSI Px ` ` | Move cursor to the specified column |
+| [XTSHIFTESCAPE](/docs/vt/csi/xtshiftescape) | `CSI > Pn s` | Configure `shift` modifier behavior with mouse reports |
+| [OSC 0] | `OSC 0 ; Pt ST` | Change window icon and window title |
+| [OSC 1] | `OSC 1 ; Pt ST` | Change window icon |
+| [OSC 2] | `OSC 2 ; Pt ST` | Change window title |
+| [OSC 4] | `OSC 4 ; Pn ; Pc ST` | Query or change palette colors |
+| [OSC 5] | `OSC 5 ; Pn ; Pc ST` | Query or change special colors |
+| [OSC 7] | `OSC 7 ; Pu ; ST` | Change the working directory |
+| [OSC 8] | `OSC 8 ; Pp ; Pu ; ST` | Begin or end a hyperlink |
+| [OSC 9] | `OSC 9 ; Pt ; ST` | Show a desktop notification |
+| [OSC 9;4] | `OSC 9 ; 4 ; Ps ; Pn ; ST` | Report progress state |
+| [OSC 10][OSC 1x] | `OSC 10 ; Pc ST` | Query or change the foreground color |
+| [OSC 11][OSC 1x] | `OSC 11 ; Pc ST` | Query or change the background color |
+| [OSC 12][OSC 1x] | `OSC 12 ; Pc ST` | Query or change the cursor color |
+| [OSC 13][OSC 1x] | `OSC 13 ; Pc ST` | Query or change the pointer foreground color |
+| [OSC 14][OSC 1x] | `OSC 14 ; Pc ST` | Query or change the pointer background color |
+| [OSC 15][OSC 1x] | `OSC 15 ; Pc ST` | Query or change the Tektronix foreground color |
+| [OSC 16][OSC 1x] | `OSC 16 ; Pc ST` | Query or change the Tektronix background color |
+| [OSC 17][OSC 1x] | `OSC 17 ; Pc ST` | Query or change the highlight background color |
+| [OSC 18][OSC 1x] | `OSC 18 ; Pc ST` | Query or change the Tektronix cursor color |
+| [OSC 19][OSC 1x] | `OSC 19 ; Pc ST` | Query or change the highlight foreground color |
+| [OSC 21] | `OSC 21 ; Pk = Pv ; ... ST ` | Query or change any color using the Kitty Color Protocol |
+| [OSC 22] | `OSC 22 ; Pt ST ` | Change the pointer shape |
+| [OSC 52] | `OSC 52 ; Pc ; Pd ST ` | Query or change clipboard data |
+| [OSC 104] | `OSC 104 ; Pn ST` | Reset palette colors |
+| [OSC 105] | `OSC 105 ; Pn ST` | Reset special colors |
+| [OSC 110][OSC 11x] | `OSC 110 ST` | Reset the foreground color |
+| [OSC 111][OSC 11x] | `OSC 111 ST` | Reset the background color |
+| [OSC 112][OSC 11x] | `OSC 112 ST` | Reset the cursor color |
+| [OSC 113][OSC 11x] | `OSC 113 ST` | Reset the pointer foreground color |
+| [OSC 114][OSC 11x] | `OSC 114 ST` | Reset the pointer background color |
+| [OSC 115][OSC 11x] | `OSC 115 ST` | Reset the Tektronix foreground color |
+| [OSC 116][OSC 11x] | `OSC 116 ST` | Reset the Tektronix background color |
+| [OSC 117][OSC 11x] | `OSC 117 ST` | Reset the highlight background color |
+| [OSC 118][OSC 11x] | `OSC 118 ST` | Reset the Tektronix cursor color |
+| [OSC 119][OSC 11x] | `OSC 119 ST` | Reset the highlight foreground color |
+
+[OSC 0]: /docs/vt/osc/0
+[OSC 1]: /docs/vt/osc/1
+[OSC 2]: /docs/vt/osc/2
+[OSC 4]: /docs/vt/osc/4
+[OSC 5]: /docs/vt/osc/5
+[OSC 7]: /docs/vt/osc/7
+[OSC 8]: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
+[OSC 9]: /docs/vt/osc/9
+[OSC 9;4]: /docs/vt/osc/conemu#change-progress-state-osc-94
+[OSC 1x]: /docs/vt/osc/1x
+[OSC 21]: https://sw.kovidgoyal.net/kitty/color-stack/
+[OSC 22]: /docs/vt/osc/22
+[OSC 52]: /docs/vt/osc/52
+[OSC 104]: /docs/vt/osc/104
+[OSC 105]: /docs/vt/osc/105
+[OSC 11x]: /docs/vt/osc/11x

@@ -1,9 +1,13 @@
 ---
 title: Bell (BEL)
+navLabel: BEL
 description: Raise the attention of the user.
 section: Terminal API
-order: 3
+subsection: Control
+order: 1
 ---
+
+# Bell (BEL)
 
 <VTSequence sequence="BEL" />
 
@@ -31,13 +35,14 @@ also terminate with the `BEL` character.[^1]
 
 ## Implementation Status
 
-This control character is implemented in TermSurf, although by default
-most behaviors that TermSurf implements are disabled. See the documentation
+This control character is implemented in Ghostty, although by default
+most behaviors that Ghostty implements are disabled. See the documentation
 for the [`bell-features`](/docs/reference/config) configuration
 option for more information.
 
 The BEL character can be used as an OSC terminator. If it is used as an OSC
-terminator, TermSurf will terminate any responses with the
+terminator, Ghostty will terminate any responses with the
 `BEL` character.
+
 
 [^1]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html

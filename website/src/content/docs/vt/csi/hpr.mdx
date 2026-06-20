@@ -1,0 +1,24 @@
+---
+title: Horizontal Position Relative (HPR)
+navLabel: HPR
+description: Move the cursor to a specific column relative to the current position.
+section: Terminal API
+subsection: CSI
+order: 20
+---
+
+# Horizontal Position Relative (HPR)
+
+<VTSequence sequence={["CSI", "Px", "a"]} />
+
+This sequence performs [cursor position (CUP)](/docs/vt/csi/cup) with `x` set
+to the current cursor column plus `x` and `y` set to the current cursor row.
+There is no additional or different behavior for using `HPR`.
+
+The parameter `x` must be an integer greater than or equal to 1. If `x` is less than
+or equal to 0, adjust `x` to be 1. If `x` is omitted, `x` defaults to 1.
+
+Because this invokes `CUP`, the cursor row (`y`) can change if it is
+outside the bounds of the `CUP` operation. For example, if
+origin mode is set and the current cursor position is outside
+of the scroll region, the row will be adjusted.

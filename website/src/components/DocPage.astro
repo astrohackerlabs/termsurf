@@ -38,6 +38,31 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "");
                   {item.label}
                 </a>
               ))}
+              {group.subgroups.map((sub) => (
+                <details
+                  class="docs-nav-sub"
+                  open={sub.items.some((i) => i.href === currentPath)}
+                >
+                  <summary class="text-foreground-dark mt-1 cursor-pointer py-0.5">
+                    {sub.subsection}
+                  </summary>
+                  <div class="border-border ml-2 border-l pl-2">
+                    {sub.items.map((item) => (
+                      <a
+                        href={item.href}
+                        class:list={[
+                          "block py-0.5",
+                          currentPath === item.href
+                            ? "text-accent"
+                            : "text-muted hover:text-foreground-dark",
+                        ]}
+                      >
+                        {item.label}
+                      </a>
+                    ))}
+                  </div>
+                </details>
+              ))}
             </>
           ))
         }

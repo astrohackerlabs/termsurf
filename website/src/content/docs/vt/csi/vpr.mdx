@@ -1,0 +1,24 @@
+---
+title: Vertical Position Relative (VPR)
+navLabel: VPR
+description: Move the cursor to a specific row relative to the current position.
+section: Terminal API
+subsection: CSI
+order: 28
+---
+
+# Vertical Position Relative (VPR)
+
+<VTSequence sequence={["CSI", "Py", "e"]} />
+
+This sequence performs [cursor position (CUP)](/docs/vt/csi/cup) with `y` set
+to the current cursor row plus `y` and `x` set to the current cursor column.
+There is no additional or different behavior for using `VPR`.
+
+The parameter `y` must be an integer greater than or equal to 1. If `y` is less than
+or equal to 0, adjust `y` to be 1. If `y` is omitted, `y` defaults to 1.
+
+Because this invokes `CUP`, the cursor column (`x`) can change if it is
+outside the bounds of the `CUP` operation. For example, if
+origin mode is set and the current cursor position is outside
+of the scroll region, the column will be adjusted.

@@ -6,6 +6,7 @@
     "build": "astro build",
     "build:icons": "bun run scripts/process-icons.ts",
     "gen:references": "bun run scripts/gen-references.ts",
+    "import:vt": "bun run scripts/import-vt.ts",
     "deploy": "bun run build && wrangler pages deploy dist"
   },
   "dependencies": {

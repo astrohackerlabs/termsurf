@@ -159,6 +159,21 @@ body {
   margin: 1.5rem 0;
 }
 
+/* Nested docs sidebar disclosures (Terminal API subsections). */
+.docs-nav-sub > summary {
+  list-style: none;
+}
+.docs-nav-sub > summary::-webkit-details-marker {
+  display: none;
+}
+.docs-nav-sub > summary::before {
+  content: "▸ ";
+  color: var(--color-muted);
+}
+.docs-nav-sub[open] > summary::before {
+  content: "▾ ";
+}
+
 /* GFM footnotes (e.g. on Terminal API pages). */
 .prose-termsurf .footnotes {
   margin-top: 2rem;
