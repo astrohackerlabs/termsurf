@@ -81,4 +81,4 @@ Closed issues are historical records and must not be edited.
 ## Experiments
 
 - [Experiment 1: Audit and refresh public docs](01-audit-and-refresh-public-docs.md)
-  — **Designed**
+  — **Pass**

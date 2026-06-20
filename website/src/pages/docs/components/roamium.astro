@@ -193,12 +193,19 @@ const cb =
   <h2>Installation</h2>
 
   <p>
-    Roamium installs to <code>/usr/local/roamium/</code> alongside Chromium's
-    dylibs, <code>.pak</code> resource files, and ICU data. The GUI knows to
-    look for it there.
+    Homebrew installs Roamium to
+    <code>/opt/homebrew/opt/termsurf-roamium/</code>. That install root contains
+    the <code>roamium</code> binary, Chromium dylibs, <code>.pak</code> resource
+    files, ICU data, V8 snapshots, and generated resources under
+    <code>gen/</code>. The GUI resolves the installed browser at
+    <code>/opt/homebrew/opt/termsurf-roamium/roamium</code>.
   </p>
 
   <pre
     class={cb}><code><span class="text-primary">scripts/build.sh</span> roamium --release
 <span class="text-primary">sudo</span> scripts/install.sh roamium</code></pre>
+
+  <p>
+    Source installs use the same current Roamium install root by default.
+  </p>
 </DocPage>

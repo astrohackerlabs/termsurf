@@ -18,12 +18,14 @@ const cb =
 
   <pre
     class={cb}><code><span class="text-primary">brew</span> tap termsurf/termsurf
+<span class="text-primary">brew</span> trust termsurf/termsurf
 <span class="text-primary">brew</span> install --cask termsurf</code></pre>
 
   <p>
-    This installs the TermSurf app to <code>/Applications/</code>, the
-    <code>web</code> CLI to
-    <code>/opt/homebrew/bin/</code>, and Roamium (Chromium engine) to
+    The Homebrew cask currently installs TermSurf <code>1.0.0</code>. It puts
+    the TermSurf app at <code>/Applications/TermSurf.app</code>, the
+    <code>web</code> CLI at <code>/opt/homebrew/bin/web</code>, and Roamium
+    (Chromium engine) under
     <code>/opt/homebrew/opt/termsurf-roamium/</code>.
   </p>
 
@@ -76,7 +78,7 @@ const cb =
   <ul>
     <li><strong>TermSurf</strong> to <code>/Applications/TermSurf.app</code></li>
     <li><strong>Roamium</strong> + Chromium dylibs to <code>/opt/homebrew/opt/termsurf-roamium/</code></li>
-    <li><strong>web</strong> TUI to <code>/usr/local/bin/web</code></li>
+    <li><strong>web</strong> TUI to <code>/usr/local/bin/web</code> for source installs</li>
   </ul>
 
   <h2>Usage</h2>

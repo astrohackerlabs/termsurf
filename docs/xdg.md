@@ -8,7 +8,7 @@ for storing user data.
 
 | Variable          | Default          | TermSurf path              | Contents                                                      |
 | ----------------- | ---------------- | -------------------------- | ------------------------------------------------------------- |
-| `XDG_CONFIG_HOME` | `~/.config`      | `~/.config/termsurf/`      | TermSurf Ghostboard configuration, TermSurf settings (future) |
+| `XDG_CONFIG_HOME` | `~/.config`      | `~/.config/termsurf/`      | TermSurf/Ghostboard configuration, TermSurf settings (future) |
 | `XDG_DATA_HOME`   | `~/.local/share` | `~/.local/share/termsurf/` | Chromium browser profile data                                 |
 | `XDG_STATE_HOME`  | `~/.local/state` | `~/.local/state/termsurf/` | Log files                                                     |
 
@@ -18,7 +18,7 @@ The folder name is always `termsurf` under the XDG base directory.
 
 **Config** (`XDG_CONFIG_HOME/termsurf/`):
 
-- TermSurf Ghostboard config file
+- TermSurf/Ghostboard config file
 - Future TermSurf-specific settings
 
 **Data** (`XDG_DATA_HOME/termsurf/`):
@@ -31,7 +31,7 @@ The folder name is always `termsurf` under the XDG base directory.
 
 If `XDG_DATA_HOME` is set, TermSurf uses it. Otherwise it falls back to
 `$HOME/.local/share`. The same pattern applies to `XDG_CONFIG_HOME` (used by
-TermSurf Ghostboard for its config) and `XDG_STATE_HOME` (default:
+TermSurf/Ghostboard for its config) and `XDG_STATE_HOME` (default:
 `$HOME/.local/state`).
 
 **State** (`XDG_STATE_HOME/termsurf/`):

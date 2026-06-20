@@ -15,7 +15,7 @@ old installed Roamium.
 The debug app binary is:
 
 ```bash
-ghostboard/macos/build/Debug/TermSurf Ghostboard.app/Contents/MacOS/ghostboard
+ghostboard/macos/build/Debug/TermSurf.app/Contents/MacOS/termsurf
 ```
 
 The geometry harness launches this binary directly from

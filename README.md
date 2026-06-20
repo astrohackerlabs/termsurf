@@ -224,8 +224,8 @@ cd ghostboard
 macos/build.nu --configuration Debug --action build
 ```
 
-The app output is `ghostboard/macos/build/Debug/TermSurf Ghostboard.app`. Launch
-that app and run:
+The app output is `ghostboard/macos/build/Debug/TermSurf.app`. Launch that app
+and run:
 
 ```bash
 web google.com

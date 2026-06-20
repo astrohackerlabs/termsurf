@@ -147,3 +147,67 @@ Re-review:
 The fresh-context reviewer verified that the planned audit, post-change audit,
 `docs/xdg.md` classification, pass criteria, and README experiment link now
 cover the prior finding. No new required findings remain.
+
+## Result
+
+**Result:** Pass.
+
+Implemented the public documentation refresh:
+
+- `website/src/pages/docs/getting-started.astro` now includes
+  `brew trust termsurf/termsurf`, states that Homebrew currently installs
+  TermSurf `1.0.0`, and names the current Homebrew paths:
+  `/Applications/TermSurf.app`, `/opt/homebrew/bin/web`, and
+  `/opt/homebrew/opt/termsurf-roamium/`.
+- `website/src/pages/docs/components/roamium.astro` now documents the current
+  Roamium install root and its required colocated Chromium resources.
+- `README.md` now names the debug app bundle as `TermSurf.app`.
+- `docs/ghostboard-launch-discovery.md` now names the debug app executable as
+  `TermSurf.app/Contents/MacOS/termsurf`.
+- `docs/xdg.md` now uses `TermSurf/Ghostboard` wording for config identity
+  instead of the ambiguous `TermSurf Ghostboard` phrase.
+
+Verification run:
+
+```bash
+prettier --write --prose-wrap always --print-width 80 README.md docs/ghostboard-launch-discovery.md docs/xdg.md issues/0833-update-website-and-docs-for-1-0-0/README.md issues/0833-update-website-and-docs-for-1-0-0/01-audit-and-refresh-public-docs.md
+git diff --check
+cd website
+bun install --frozen-lockfile
+bun run build
+rg -n "/usr/local/roamium|/usr/local/bin/roamium|/usr/local/lib/roamium|TermSurf Ghostboard|TermSurf Ghostboard\\.app|Ghostboard\\.app|brew tap termsurf/termsurf|brew install --cask termsurf|brew trust termsurf/termsurf|0\\.1\\." website README.md docs -g'*.md' -g'*.astro' -g'*.tsx' -g'*.ts' -g'*.js'
+rg -n "0\\.1\\.|1\\.0\\.0|Homebrew|brew trust|brew install|/usr/local/roamium|/usr/local/bin/roamium|/usr/local/lib/roamium|TermSurf Ghostboard|TermSurf Ghostboard\\.app|Ghostboard\\.app|TermSurf\\.app|Wezboard|wezboard|Roamium installs|/opt/homebrew/opt/termsurf-roamium|/opt/homebrew/bin/web" website README.md docs -g'*.md' -g'*.astro' -g'*.tsx' -g'*.ts' -g'*.js'
+```
+
+Notes:
+
+- Root Prettier does not have an Astro parser installed, so Astro pages were
+  validated by the successful website build instead of Prettier formatting.
+- `bun install --frozen-lockfile` was required because `website/node_modules`
+  was absent.
+- `bun run build` succeeded and generated all 10 website pages.
+- The post-change audit has expected remaining matches only:
+  - current README Homebrew install commands;
+  - explicit negative debug no-fallback examples for `/usr/local/roamium` and
+    `/usr/local/bin/roamium` in `docs/ghostboard-launch-discovery.md`.
+- The broad audit confirms the website uses the current Homebrew paths,
+  `docs/early-prototypes.md` contains only historical prototype `TermSurf.app`
+  references, and Wezboard is described as archived in git history.
+
+## Conclusion
+
+The active website and repo docs now describe the current `1.0.0` Homebrew
+install flow and layout. No follow-up experiment is needed for the scoped docs
+refresh unless the website should be deployed as a separate explicit action.
+
+## Completion Review
+
+Adversarial review, fresh-context Codex subagent:
+
+**Verdict:** Approved.
+
+The reviewer found no issues. Read-only checks passed for `git diff --check`,
+targeted stale-reference audits, result commit absence, and the Roamium source
+install default path in `scripts/install.sh`. The reviewer did not rerun
+`bun run build` because it can generate `website/dist`; the implementation pass
+had already run the build successfully.
