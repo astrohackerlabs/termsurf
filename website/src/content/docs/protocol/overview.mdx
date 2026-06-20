@@ -1,0 +1,153 @@
+---
+title: Protocol Overview
+navLabel: Overview
+description: The TermSurf protocol — wire format, connection types, message categories, and the session message flow.
+section: Protocol
+order: 1
+---
+
+<h1>Protocol Overview</h1>
+
+<p>
+  The TermSurf protocol is the most important artifact in the project. It
+  defines how terminals, browser engines, and TUIs communicate over Unix sockets
+  using length-prefixed protobuf messages.
+</p>
+
+<h2>Wire Format</h2>
+
+<p>
+  Every message on the wire is a serialized <code>TermSurfMessage</code>
+  protobuf, prefixed with a 4-byte little-endian length:
+</p>
+
+<pre class="bg-background-dark p-3 border-l-2 border-border text-foreground-dark text-xs mb-6 overflow-x-auto"><code>[4 bytes: length (LE u32)] [N bytes: serialized protobuf]</code></pre>
+
+<p>
+  <code>TermSurfMessage</code> is a wrapper with a <code>oneof msg</code> field.
+  Each message on the wire is exactly one variant.
+</p>
+
+<h2>Connections</h2>
+
+<p>
+  The GUI (Ghostboard) listens on a PID-scoped Unix socket. Two types of clients
+  connect:
+</p>
+
+<ul>
+  <li>
+    <strong>TUIs</strong> — discover the socket via the
+    <code>TERMSURF_SOCKET</code> environment variable. Send overlay and
+    navigation messages.
+  </li>
+  <li>
+    <strong>Browser engines</strong> — receive the socket path via
+    <code>--ipc-socket=</code> command-line argument. Send registration and
+    state updates.
+  </li>
+</ul>
+
+<p>
+  The GUI identifies the connection type from the first message:
+  <code>ServerRegister</code> means browser engine, anything else means TUI.
+</p>
+
+<h2>Message Categories</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Direction</th>
+      <th>Messages</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Tab lifecycle</td>
+      <td>GUI &rarr; Engine</td>
+      <td>CreateTab, CreateDevtoolsTab, Resize, CloseTab</td>
+    </tr>
+    <tr>
+      <td>Navigation</td>
+      <td>TUI &rarr; GUI, GUI &rarr; Engine</td>
+      <td>Navigate</td>
+    </tr>
+    <tr>
+      <td>Input</td>
+      <td>GUI &rarr; Engine</td>
+      <td>MouseEvent, MouseMove, ScrollEvent, KeyEvent</td>
+    </tr>
+    <tr>
+      <td>State</td>
+      <td>GUI &rarr; Engine</td>
+      <td>FocusChanged, SetColorScheme</td>
+    </tr>
+    <tr>
+      <td>Engine events</td>
+      <td>Engine &rarr; GUI</td>
+      <td>ServerRegister, TabReady, CaContext, UrlChanged, LoadingState, TitleChanged, CursorChanged, TargetUrlChanged</td>
+    </tr>
+    <tr>
+      <td>Overlay</td>
+      <td>TUI &rarr; GUI</td>
+      <td>SetOverlay, SetDevtoolsOverlay, OpenSplit</td>
+    </tr>
+    <tr>
+      <td>Mode sync</td>
+      <td>TUI &harr; GUI</td>
+      <td>ModeChanged</td>
+    </tr>
+    <tr>
+      <td>Direct connection</td>
+      <td>GUI &rarr; TUI</td>
+      <td>BrowserReady</td>
+    </tr>
+    <tr>
+      <td>Request/reply</td>
+      <td>TUI &harr; GUI</td>
+      <td>Hello, QueryLast, QueryDevtools, QueryTabs</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Message Flow</h2>
+
+<p>A typical session when a user types <code>web example.com</code>:</p>
+
+<ol>
+  <li>TUI connects to GUI socket</li>
+  <li>TUI sends <code>HelloRequest</code> &rarr; GUI replies <code>HelloReply</code></li>
+  <li>TUI sends <code>SetOverlay</code> with URL, profile, pane dimensions</li>
+  <li>GUI spawns browser engine (if not already running for this profile)</li>
+  <li>Engine connects, sends <code>ServerRegister</code></li>
+  <li>GUI sends <code>CreateTab</code> to engine</li>
+  <li>Engine creates WebContents, sends <code>TabReady</code></li>
+  <li>GUI sends <code>BrowserReady</code> to TUI (with engine's listen socket)</li>
+  <li>TUI connects directly to engine for navigation</li>
+  <li>Engine renders, sends <code>CaContext</code> (GPU layer ID)</li>
+  <li>GUI creates <code>CALayerHost</code> overlay &mdash; browser appears in pane</li>
+</ol>
+
+<h2>Direct Browser Connection</h2>
+
+<p>
+  After initialization, the TUI can send <code>Navigate</code> and
+  <code>SetColorScheme</code> directly to the browser engine, bypassing the GUI.
+  The engine also listens on its own socket (passed via
+  <code>--listen-socket=</code>). The GUI provides this path to the TUI in the
+  <code>BrowserReady</code> message.
+</p>
+
+<h2>Serialization</h2>
+
+<ul>
+  <li><strong>Rust</strong> (GUI, TUI, engines) &mdash; prost</li>
+  <li><strong>C++</strong> (Chromium) &mdash; protobuf</li>
+</ul>
+
+<p>
+  The protocol is defined in <code>proto/termsurf.proto</code>. See
+  <a href="/docs/protocol/messages">Messages</a> for the full reference.
+</p>

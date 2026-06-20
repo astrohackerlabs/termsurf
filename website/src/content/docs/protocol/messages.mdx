@@ -1,0 +1,369 @@
+---
+title: Messages
+description: Complete reference for every protobuf message in termsurf.proto.
+section: Protocol
+order: 2
+---
+
+<h1>Messages</h1>
+
+<p>
+  Complete reference for all protobuf messages in <code>termsurf.proto</code>.
+  Every message on the wire is a <code>TermSurfMessage</code> wrapper with one
+  <code>oneof msg</code> variant.
+</p>
+
+<h2>Tab Lifecycle</h2>
+
+<p>GUI &rarr; Engine. Manage browser tabs.</p>
+
+<h3>CreateTab</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>url</code></td><td>string</td><td>Initial URL to load</td></tr>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Terminal pane identifier</td></tr>
+    <tr><td><code>pixel_width</code></td><td>uint64</td><td>Viewport width in pixels</td></tr>
+    <tr><td><code>pixel_height</code></td><td>uint64</td><td>Viewport height in pixels</td></tr>
+    <tr><td><code>dark</code></td><td>bool</td><td>Dark mode preference</td></tr>
+  </tbody>
+</table>
+
+<h3>CreateDevtoolsTab</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Terminal pane identifier</td></tr>
+    <tr><td><code>inspected_tab_id</code></td><td>int64</td><td>Tab ID to inspect</td></tr>
+    <tr><td><code>pixel_width</code></td><td>uint64</td><td>Viewport width</td></tr>
+    <tr><td><code>pixel_height</code></td><td>uint64</td><td>Viewport height</td></tr>
+    <tr><td><code>dark</code></td><td>bool</td><td>Dark mode preference</td></tr>
+  </tbody>
+</table>
+
+<h3>Resize</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td><code>pixel_width</code></td><td>uint64</td><td>New width</td></tr>
+    <tr><td><code>pixel_height</code></td><td>uint64</td><td>New height</td></tr>
+  </tbody>
+</table>
+
+<h3>CloseTab</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Tab to close</td></tr>
+  </tbody>
+</table>
+
+<h2>Navigation</h2>
+
+<p>TUI &rarr; GUI or GUI &rarr; Engine.</p>
+
+<h3>Navigate</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Nonzero when GUI &rarr; Engine</td></tr>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Nonempty when TUI &rarr; GUI</td></tr>
+    <tr><td><code>url</code></td><td>string</td><td>URL to navigate to</td></tr>
+  </tbody>
+</table>
+
+<h2>Input</h2>
+
+<p>GUI &rarr; Engine. Forward user input to the browser.</p>
+
+<h3>MouseEvent</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td><code>type</code></td><td>string</td><td><code>"down"</code> or <code>"up"</code></td></tr>
+    <tr><td><code>button</code></td><td>string</td><td><code>"left"</code>, <code>"right"</code>, <code>"middle"</code></td></tr>
+    <tr><td><code>x</code></td><td>double</td><td>X coordinate</td></tr>
+    <tr><td><code>y</code></td><td>double</td><td>Y coordinate</td></tr>
+    <tr><td><code>click_count</code></td><td>int64</td><td>Click count (1 = single, 2 = double)</td></tr>
+    <tr><td><code>modifiers</code></td><td>uint64</td><td>Modifier bitmask</td></tr>
+  </tbody>
+</table>
+
+<h3>MouseMove</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td><code>x</code></td><td>double</td><td>X coordinate</td></tr>
+    <tr><td><code>y</code></td><td>double</td><td>Y coordinate</td></tr>
+    <tr><td><code>modifiers</code></td><td>uint64</td><td>Modifier bitmask</td></tr>
+  </tbody>
+</table>
+
+<h3>ScrollEvent</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td><code>x</code></td><td>double</td><td>Scroll position X</td></tr>
+    <tr><td><code>y</code></td><td>double</td><td>Scroll position Y</td></tr>
+    <tr><td><code>delta_x</code></td><td>double</td><td>Scroll delta X</td></tr>
+    <tr><td><code>delta_y</code></td><td>double</td><td>Scroll delta Y</td></tr>
+    <tr><td><code>phase</code></td><td>uint64</td><td>Scroll phase</td></tr>
+    <tr><td><code>momentum_phase</code></td><td>uint64</td><td>Momentum phase</td></tr>
+    <tr><td><code>precise</code></td><td>bool</td><td>Precise scrolling (trackpad)</td></tr>
+    <tr><td><code>modifiers</code></td><td>uint64</td><td>Modifier bitmask</td></tr>
+  </tbody>
+</table>
+
+<h3>KeyEvent</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td><code>type</code></td><td>string</td><td><code>"down"</code>, <code>"up"</code>, <code>"repeat"</code></td></tr>
+    <tr><td><code>windows_key_code</code></td><td>int64</td><td>Windows virtual key code</td></tr>
+    <tr><td><code>utf8</code></td><td>string</td><td>UTF-8 text generated by keystroke</td></tr>
+    <tr><td><code>modifiers</code></td><td>uint64</td><td>Modifier bitmask (Shift=1, Ctrl=2, Alt=4, Meta=8)</td></tr>
+  </tbody>
+</table>
+
+<h2>State</h2>
+
+<p>GUI &rarr; Engine. Update browser state.</p>
+
+<h3>FocusChanged</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Target tab</td></tr>
+    <tr><td><code>focused</code></td><td>bool</td><td>Whether the browser has focus (browse mode)</td></tr>
+  </tbody>
+</table>
+
+<h3>SetColorScheme</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Nonzero when GUI &rarr; Engine</td></tr>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Nonempty when TUI &rarr; GUI</td></tr>
+    <tr><td><code>dark</code></td><td>bool</td><td>Dark mode on/off</td></tr>
+  </tbody>
+</table>
+
+<h2>Engine Events</h2>
+
+<p>Engine &rarr; GUI. Browser state changes.</p>
+
+<h3>ServerRegister</h3>
+<p>First message from a browser engine. Identifies its profile.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>profile</code></td><td>string</td><td>Profile name</td></tr>
+  </tbody>
+</table>
+
+<h3>TabReady</h3>
+<p>Tab created and assigned an ID.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Pane that requested the tab</td></tr>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Chromium's tab identifier</td></tr>
+  </tbody>
+</table>
+
+<h3>CaContext</h3>
+<p>GPU layer ready for compositing (macOS <code>CALayerHost</code>).</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>ca_context_id</code></td><td>uint64</td><td>CAContext layer ID for Window Server</td></tr>
+    <tr><td><code>pixel_width</code></td><td>uint64</td><td>Rendered width</td></tr>
+    <tr><td><code>pixel_height</code></td><td>uint64</td><td>Rendered height</td></tr>
+  </tbody>
+</table>
+
+<h3>UrlChanged</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>url</code></td><td>string</td><td>New URL</td></tr>
+  </tbody>
+</table>
+
+<h3>LoadingState</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>state</code></td><td>string</td><td><code>"loading"</code>, <code>"progress"</code>, <code>"done"</code>, <code>"error"</code></td></tr>
+    <tr><td><code>progress</code></td><td>uint64</td><td>0&ndash;100</td></tr>
+  </tbody>
+</table>
+
+<h3>TitleChanged</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>title</code></td><td>string</td><td>New page title</td></tr>
+  </tbody>
+</table>
+
+<h3>CursorChanged</h3>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>cursor_type</code></td><td>int64</td><td>Cursor type (pointer, text, etc.)</td></tr>
+  </tbody>
+</table>
+
+<h3>TargetUrlChanged</h3>
+<p>Fired when the user hovers over a link.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Source tab</td></tr>
+    <tr><td><code>url</code></td><td>string</td><td>Hovered link URL (empty = hover ended)</td></tr>
+  </tbody>
+</table>
+
+<h2>Overlay</h2>
+
+<p>TUI &rarr; GUI. Create and manage browser overlays.</p>
+
+<h3>SetOverlay</h3>
+<p>Create or resize a browser overlay in a terminal pane.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Terminal pane identifier</td></tr>
+    <tr><td><code>col</code></td><td>uint64</td><td>Column offset in pane</td></tr>
+    <tr><td><code>row</code></td><td>uint64</td><td>Row offset in pane</td></tr>
+    <tr><td><code>width</code></td><td>uint64</td><td>Overlay width in cells</td></tr>
+    <tr><td><code>height</code></td><td>uint64</td><td>Overlay height in cells</td></tr>
+    <tr><td><code>url</code></td><td>string</td><td>Initial URL</td></tr>
+    <tr><td><code>profile</code></td><td>string</td><td>Browser profile name</td></tr>
+    <tr><td><code>browsing</code></td><td>bool</td><td>Initial browse mode state</td></tr>
+    <tr><td><code>browser</code></td><td>string</td><td>Engine name (e.g., <code>"roamium"</code>)</td></tr>
+  </tbody>
+</table>
+
+<h3>SetDevtoolsOverlay</h3>
+<p>Create a DevTools overlay inspecting an existing tab.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Terminal pane identifier</td></tr>
+    <tr><td><code>col</code></td><td>uint64</td><td>Column offset</td></tr>
+    <tr><td><code>row</code></td><td>uint64</td><td>Row offset</td></tr>
+    <tr><td><code>width</code></td><td>uint64</td><td>Width in cells</td></tr>
+    <tr><td><code>height</code></td><td>uint64</td><td>Height in cells</td></tr>
+    <tr><td><code>profile</code></td><td>string</td><td>Profile name</td></tr>
+    <tr><td><code>browsing</code></td><td>bool</td><td>Initial browse mode</td></tr>
+    <tr><td><code>inspected_tab_id</code></td><td>int64</td><td>Tab to inspect</td></tr>
+    <tr><td><code>browser</code></td><td>string</td><td>Engine name</td></tr>
+  </tbody>
+</table>
+
+<h3>OpenSplit</h3>
+<p>Request the GUI to open a split pane with a command.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Source pane</td></tr>
+    <tr><td><code>direction</code></td><td>string</td><td><code>"horizontal"</code> or <code>"vertical"</code></td></tr>
+    <tr><td><code>command</code></td><td>string</td><td>Command to run in new pane</td></tr>
+  </tbody>
+</table>
+
+<h2>Mode Sync</h2>
+
+<h3>ModeChanged</h3>
+<p>Bidirectional — sent by both TUI and GUI.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>browsing</code></td><td>bool</td><td>Whether browse mode is active</td></tr>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Nonempty when TUI &rarr; GUI</td></tr>
+  </tbody>
+</table>
+
+<h3>BrowserReady</h3>
+<p>GUI &rarr; TUI. Provides the browser's direct connection info.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>pane_id</code></td><td>string</td><td>Pane identifier</td></tr>
+    <tr><td><code>tab_id</code></td><td>int64</td><td>Tab identifier</td></tr>
+    <tr><td><code>browser_socket</code></td><td>string</td><td>Browser's listen socket path</td></tr>
+    <tr><td><code>browser</code></td><td>string</td><td>Engine name</td></tr>
+  </tbody>
+</table>
+
+<h2>Request/Reply</h2>
+
+<p>TUI &harr; GUI. Synchronous query pairs.</p>
+
+<h3>HelloRequest / HelloReply</h3>
+<p>Initial handshake when TUI connects.</p>
+<table>
+  <thead><tr><th>Message</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Request</td><td><code>pane_id</code></td><td>string</td><td>Pane identifier</td></tr>
+    <tr><td>Reply</td><td><code>homepage</code></td><td>string</td><td>Configured homepage URL</td></tr>
+    <tr><td>Reply</td><td><code>browsers</code></td><td>string[]</td><td>Available browser engines</td></tr>
+  </tbody>
+</table>
+
+<h3>QueryLastRequest / QueryLastReply</h3>
+<p>Find the last active browser pane (for DevTools auto-targeting).</p>
+<table>
+  <thead><tr><th>Message</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Request</td><td><code>pane_id</code></td><td>string</td><td>Requesting pane</td></tr>
+    <tr><td>Request</td><td><code>profile</code></td><td>string</td><td>Filter by profile (empty = any)</td></tr>
+    <tr><td>Reply</td><td><code>pane_id</code></td><td>string</td><td>Last active pane</td></tr>
+    <tr><td>Reply</td><td><code>tab_id</code></td><td>int64</td><td>Its tab ID</td></tr>
+    <tr><td>Reply</td><td><code>profile</code></td><td>string</td><td>Its profile</td></tr>
+    <tr><td>Reply</td><td><code>error</code></td><td>string</td><td>Error message (empty = success)</td></tr>
+  </tbody>
+</table>
+
+<h3>QueryDevtoolsRequest / QueryDevtoolsReply</h3>
+<p>Check if DevTools can be opened for a tab.</p>
+<table>
+  <thead><tr><th>Message</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Request</td><td><code>pane_id</code></td><td>string</td><td>Requesting pane</td></tr>
+    <tr><td>Request</td><td><code>inspected_tab_id</code></td><td>int64</td><td>Tab to inspect (0 = auto)</td></tr>
+    <tr><td>Request</td><td><code>profile</code></td><td>string</td><td>Profile filter</td></tr>
+    <tr><td>Reply</td><td><code>tab_id</code></td><td>int64</td><td>Resolved tab ID</td></tr>
+    <tr><td>Reply</td><td><code>browser</code></td><td>string</td><td>Engine name</td></tr>
+    <tr><td>Reply</td><td><code>profile</code></td><td>string</td><td>Profile name</td></tr>
+    <tr><td>Reply</td><td><code>error</code></td><td>string</td><td>Error (empty = success)</td></tr>
+  </tbody>
+</table>
+
+<h3>QueryTabsRequest / QueryTabsReply</h3>
+<p>List all tabs across GUI and engines.</p>
+<table>
+  <thead><tr><th>Message</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Request</td><td><code>pane_id</code></td><td>string</td><td>Requesting pane</td></tr>
+    <tr><td>Request</td><td><code>profile</code></td><td>string</td><td>Profile filter (empty = all)</td></tr>
+    <tr><td>Reply</td><td><code>gui_panes</code></td><td>int64</td><td>GUI pane count</td></tr>
+    <tr><td>Reply</td><td><code>chromium_tabs</code></td><td>int64</td><td>Total Chromium tabs</td></tr>
+    <tr><td>Reply</td><td><code>chromium_browser</code></td><td>int64</td><td>Browser tab count</td></tr>
+    <tr><td>Reply</td><td><code>chromium_devtools</code></td><td>int64</td><td>DevTools tab count</td></tr>
+    <tr><td>Reply</td><td><code>tabs</code></td><td>TabInfo[]</td><td>Tab details</td></tr>
+    <tr><td>Reply</td><td><code>error</code></td><td>string</td><td>Error (empty = success)</td></tr>
+  </tbody>
+</table>

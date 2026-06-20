@@ -264,7 +264,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 ### Phase 1 — Architecture
 
 - [Experiment 1: Content model & generated navigation](01-content-build-architecture.md)
-  — **Designed**
+  — **Pass**
 
 ## Process notes
 

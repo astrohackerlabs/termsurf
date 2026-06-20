@@ -243,4 +243,146 @@ Verification (steps 1, 5); and the `src/pages/docs/index.astro` `DocPage` import
 removal called out explicitly (step 9) so retiring `DocPage.astro` cannot break
 the build.
 
-With these resolutions the design is approved to implement.
+## Result
+
+**Result:** Pass
+
+The content substrate is in place: a typed `docs` content collection, MDX
+authoring, a generated docs route, and generated navigation — with full URL and
+brand parity. All six verification criteria pass.
+
+### What was built (final state)
+
+- `package.json` — added `@astrojs/mdx` and `@astrojs/check` (dev); bumped
+  `astro` `^6.1.1` → `^6.4.8` (see deviation 1).
+- `astro.config.mjs` — `integrations: [react(), mdx()]`,
+  `markdown: { syntaxHighlight: false }`.
+- `src/content.config.ts` — `docs` collection,
+  `glob({ base: "./src/content/docs", pattern: "**/*.{md,mdx}" })`, schema
+  `{ title, navLabel?, description?, section?, order=1000, draft=false }`.
+- `src/styles/style.css` — added `@source "../content";` (see deviation 2).
+- `src/content/docs/**` — 7 migrated pages: `getting-started.mdx`,
+  `architecture.mdx`, `components/{webtui,roamium}.mdx`,
+  `protocol/{overview,messages}.mdx`, `reference/configuration.mdx`.
+- `src/lib/docs-nav.ts` — builds grouped, sorted, draft-filtered nav from the
+  collection.
+- `src/pages/docs/[...slug].astro` — dynamic route over the collection
+  (draft-filtered in `getStaticPaths`), renders MDX body in the docs layout.
+- `src/components/DocPage.astro` — refactored to consume `getDocsNav()` (see
+  deviation 4).
+- `src/layouts/Base.astro` — optional `description` →
+  `<meta name="description">`.
+- Retired: the 7 old `src/pages/docs/**/*.astro` content pages.
+  `docs/index.astro` retained (now renders generated nav via the refactored
+  `DocPage`).
+
+### Deviations from the approved design (with rationale)
+
+1. **Astro bumped 6.1.1 → 6.4.8 (required).** `@astrojs/mdx@6.0.3`'s peer
+   dependency is `astro ^6.4.0`; 6.1.1 was too old. Bumped to the latest 6.x —
+   still Astro 6, so scope decision 3 ("keep Astro") holds. Build and
+   `astro check` are clean on 6.4.8.
+2. **Code-block parity via `@source` + verbatim utilities, not a `.code-block`
+   semantic class.** The design proposed rewriting code-block token colors into
+   a `.code-block` CSS class to avoid depending on Tailwind scanning MDX. In
+   practice the pages use Tailwind utilities beyond code tokens (table status
+   colors `text-success`/`text-muted`, the diagram `<pre>`), so the cleanest
+   faithful migration was the design's documented fallback: an explicit
+   `@source "../content"` directive (deterministic, not the automatic-detection
+   gamble) plus copying markup verbatim. `markdown.syntaxHighlight: false` is
+   still set. Verified: zero `astro-code`/Shiki inline styles in any built doc
+   page; token spans and utility classes render.
+3. **Code-block frame uses the existing `.prose-termsurf pre` rule, no new
+   `.code-block` class.** `.prose-termsurf pre` already styles code blocks
+   (background, left border, padding) and is _more_ specific than a bare
+   `.code-block` class would be, so adding `.code-block` would lose the
+   specificity battle. Reusing the existing rule is simpler and achieves parity.
+4. **`DocPage.astro` refactored to consume generated nav, not retired in favor
+   of a separate `DocsSidebar`.** The experiment's goal is _generated
+   navigation_; feeding `getDocsNav()` into the existing layout shell delivers
+   that with less churn and leaves `docs/index.astro` working unchanged (it
+   inherits the generated nav). No half-migrated mix remains.
+5. **Added `navLabel` to the schema.** The original sidebar showed "Overview"
+   for the page titled "Protocol Overview". `navLabel` preserves the short
+   sidebar label while keeping the full page `<title>`. Falls back to `title`.
+
+None of these change the architecture the design established or the deferral
+list; they are implementation refinements, each lower-risk than the written
+approach.
+
+### Verification results
+
+1. **Build + type-check** — `bun run build` builds 10 pages (8 docs + `/` +
+   `/welcome`); `astro check` reports 0 errors (only pre-existing `THREE.Clock`
+   deprecation notices in `WelcomePage.tsx`, unrelated). **Pass.**
+2. **URL parity** — all 7 doc URLs plus `/docs` emit at their original paths
+   (directory format, no trailing slash), unchanged. **Pass.**
+3. **Brand parity + code-block mechanism** — code blocks render with the Tokyo
+   Night utility classes and manual token `<span>`s; grep confirms **zero**
+   `astro-code`/inline Shiki styles across `dist/docs/`. **Pass.**
+4. **Generated nav** — sidebar order and section grouping are identical to the
+   old hardcoded nav (Getting Started, Architecture, [Components] Web TUI,
+   Roamium, [Protocol] Overview, Messages, [Reference] Configuration). A
+   temporary non-draft entry appeared automatically with no component edits; a
+   temporary `draft: true` entry was excluded from both nav and the build; both
+   reverted. **Pass.**
+5. **Internal links resolve** — all `/docs/...` links in `index.astro` and
+   `docs/index.astro` map to built files. **Pass.**
+6. **Custom pages intact** — `/` and `/welcome` build unchanged; the Three.js
+   island still loads via `client:only="react"`. **Pass.**
+
+## Conclusion
+
+Extending bespoke Astro with content collections + MDX + a generated route works
+cleanly and preserves the Tokyo Night brand exactly — the Starlight
+restyling/compatibility tax was correctly avoided. The substrate is ready for
+the rest of Phase 1. The natural next experiments, in rough order: (2) the
+config + keybind reference auto-generation pipeline from the Ghostboard fork;
+(3) the VT MDX import pipeline (reuse + extend Ghostty's MIT MDX); then search
+(Pagefind), versioning posture, the full IA/sitemap, and the deploy/`deploy.sh`
+cleanup. The `@source`-based Tailwind scanning and the
+`markdown.syntaxHighlight: false` choice are now baseline facts those
+experiments inherit.
+
+## Completion Review
+
+**Reviewer:** independent `adversarial-reviewer` agent (separate context,
+read-only), at the result gate before the result commit.
+
+**Verdict:** APPROVED — no Required findings.
+
+The reviewer independently re-ran `bun run build` (10 pages, correct directory
+paths under `trailingSlash: "never"`) and `astro check` (0 errors), confirmed
+**zero** `astro-code`/Shiki artifacts in `dist/docs/`, diffed all 7 migrated MDX
+files against the deleted `.astro` originals (bodies byte-identical apart from
+the intended `class={cb}` → verbatim Tailwind string substitution; entity counts
+match; no JSX hazards), confirmed the generated nav reproduces the original
+order/grouping with working active state and draft exclusion, confirmed no
+leftover hardcoded `pages` array, and confirmed the plan commit was separate and
+contained no result. All five deviations were judged sound and lower-risk than
+the written design.
+
+Findings addressed after the review:
+
+- **(Optional) `z` deprecation hint.** `astro check` emitted new
+  `'z' is deprecated` hints from re-exporting `z` via `astro:content`. Fixed:
+  `src/content.config.ts` now imports `z` from `zod` directly; `astro check`
+  drops to 2 hints (only the pre-existing `THREE.Clock` notices). The
+  Verification text above is corrected to reflect this.
+- **(Nit) Stale `website/CLAUDE.md`.** Its Pages/Components tables still listed
+  the deleted `.astro` doc pages. Updated to document the `docs` content
+  collection, the `[...slug].astro` route, `docs-nav.ts`, and the frontmatter
+  schema.
+
+Findings deferred (with rationale):
+
+- **(Optional) Section ordering relies on alphabetical `localeCompare`.** Output
+  is correct today (Components < Protocol < Reference is alphabetical), but a
+  future section like "Advanced" would mis-sort. Section ordering is properly an
+  information-architecture concern, so it is deferred to the IA/sitemap
+  experiment, which will add an explicit section-order mechanism before
+  authoring the full Ghostty-parity tree. Tracked here so it is not lost.
+- **(Nit) Changes step 10 wording** ("home hardcodes links to doc URLs")
+  slightly overstated — `index.astro` links only `/docs`. The verification
+  conclusion was unaffected; recorded here rather than rewriting the committed
+  plan narrative.

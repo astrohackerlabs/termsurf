@@ -8,10 +8,11 @@
     "deploy": "bun run build && wrangler pages deploy dist"
   },
   "dependencies": {
+    "@astrojs/mdx": "^6.0.3",
     "@astrojs/react": "^4.3.0",
     "@tailwindcss/vite": "^4.2.1",
     "@types/three": "^0.183.1",
-    "astro": "^6.1.1",
+    "astro": "^6.4.8",
     "lucide-astro": "^0.556.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
@@ -19,6 +20,7 @@
     "three": "^0.183.2"
   },
   "devDependencies": {
+    "@astrojs/check": "^0.9.9",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "png-to-ico": "^3.0.1",

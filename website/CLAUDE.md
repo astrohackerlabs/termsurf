@@ -21,19 +21,31 @@ deployed to Cloudflare Pages.
 - **Hosting:** Cloudflare Pages via `wrangler pages deploy dist`
 - **Package manager:** Bun
 
-## Pages
+## Docs content
 
-| Path | File | Content |
-|------|------|---------|
+Doc pages are MDX entries in the `docs` content collection
+(`src/content/docs/**/*.mdx`), rendered by the dynamic route
+`src/pages/docs/[...slug].astro`. The collection schema and loader live in
+`src/content.config.ts`; the sidebar is generated from the collection by
+`src/lib/docs-nav.ts` (no hardcoded nav). To add a doc page, create an `.mdx`
+file under `src/content/docs/` with frontmatter — it appears in the build and
+sidebar automatically.
+
+Frontmatter: `title` (required), `navLabel` (optional shorter sidebar label),
+`description`, `section` (sidebar group heading), `order` (sort within section),
+`draft` (excludes from build + nav).
+
+| Path | Source | Content |
+|------|--------|---------|
 | `/` | `src/pages/index.astro` | Homepage — hero, screenshot, description |
 | `/docs` | `src/pages/docs/index.astro` | Docs landing |
-| `/docs/getting-started` | `src/pages/docs/getting-started.astro` | Install + setup |
-| `/docs/architecture` | `src/pages/docs/architecture.astro` | Multi-process design |
-| `/docs/components/webtui` | `src/pages/docs/components/webtui.astro` | Web TUI |
-| `/docs/components/roamium` | `src/pages/docs/components/roamium.astro` | Roamium engine |
-| `/docs/protocol/overview` | `src/pages/docs/protocol/overview.astro` | Protocol design |
-| `/docs/protocol/messages` | `src/pages/docs/protocol/messages.astro` | Message reference |
-| `/docs/reference/configuration` | `src/pages/docs/reference/configuration.astro` | Config reference |
+| `/docs/getting-started` | `src/content/docs/getting-started.mdx` | Install + setup |
+| `/docs/architecture` | `src/content/docs/architecture.mdx` | Multi-process design |
+| `/docs/components/webtui` | `src/content/docs/components/webtui.mdx` | Web TUI |
+| `/docs/components/roamium` | `src/content/docs/components/roamium.mdx` | Roamium engine |
+| `/docs/protocol/overview` | `src/content/docs/protocol/overview.mdx` | Protocol design |
+| `/docs/protocol/messages` | `src/content/docs/protocol/messages.mdx` | Message reference |
+| `/docs/reference/configuration` | `src/content/docs/reference/configuration.mdx` | Config reference |
 | `/welcome` | `src/pages/welcome.astro` | Three.js 3D experience |
 
 ## Components
@@ -43,8 +55,10 @@ deployed to Cloudflare Pages.
 | `src/layouts/Base.astro` | HTML shell, fonts, header, footer |
 | `src/components/Header.astro` | Logo + nav links |
 | `src/components/Footer.astro` | Astrohacker branding + copyright |
-| `src/components/DocPage.astro` | Docs layout with sidebar nav |
+| `src/components/DocPage.astro` | Docs layout shell (sidebar from `docs-nav.ts` + prose article) |
 | `src/components/WelcomePage.tsx` | Three.js welcome scene (React island) |
+| `src/pages/docs/[...slug].astro` | Renders `docs` collection entries |
+| `src/lib/docs-nav.ts` | Generates the docs sidebar from the collection |
 
 ## Styling
 

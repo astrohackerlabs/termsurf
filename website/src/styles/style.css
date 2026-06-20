@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Docs content lives in MDX under src/content; tell Tailwind to scan it so
+   utility classes used inside doc pages (code-token spans, table status
+   colors) are emitted. */
+@source "../content";
+
 @theme {
   /* Tokyo Night Day (light) — default */
   --color-background: #e1e2e7;

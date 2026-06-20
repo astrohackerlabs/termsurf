@@ -1,0 +1,249 @@
+---
+title: Web TUI
+description: The web TUI — browser chrome in the terminal pane, with modes, keybindings, and commands.
+section: Components
+order: 1
+---
+
+<h1>Web TUI</h1>
+
+<p>
+  The <code>web</code> command is a TUI that provides browser chrome — URL bar,
+  navigation, modes — inside a terminal pane. It connects to the GUI
+  (Ghostboard) via the TermSurf protocol and controls browser engine processes
+  (Roamium) to render web pages.
+</p>
+
+<h2>Usage</h2>
+
+<p>Open a URL in the current pane:</p>
+
+<pre class="bg-background-dark p-3 border-l-2 border-border text-foreground-dark text-xs mb-6 overflow-x-auto"><code><span class="text-primary">web</span> ryanxcharles.com</code></pre>
+
+<p>
+  The browser appears inline. You start in Control mode. Press
+  <code>Enter</code> to switch to Browse mode and interact with the page. Press
+  <code>Esc</code> to return to Control mode.
+</p>
+
+<h2>Modes</h2>
+
+<p>
+  The TUI has four modes. The GUI only tracks a boolean (<code>browsing</code>
+  or not) — it does not distinguish between Control, Edit, and Command.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Mode</th>
+      <th>Behavior</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Control</strong></td>
+      <td>Terminal keybindings active. Default on startup.</td>
+    </tr>
+    <tr>
+      <td><strong>Browse</strong></td>
+      <td>Keyboard and mouse go to the browser.</td>
+    </tr>
+    <tr>
+      <td><strong>Edit</strong></td>
+      <td>Vim-style URL editing with Normal/Insert/Visual submodes.</td>
+    </tr>
+    <tr>
+      <td><strong>Command</strong></td>
+      <td>Command entry prefixed with <code>:</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Keybindings</h2>
+
+<h3>Control Mode</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Enter</code></td><td>Switch to Browse mode</td></tr>
+    <tr><td><code>i</code></td><td>Edit URL (insert at cursor)</td></tr>
+    <tr><td><code>A</code></td><td>Edit URL (insert at end)</td></tr>
+    <tr><td><code>I</code></td><td>Edit URL (insert at start)</td></tr>
+    <tr><td><code>n</code></td><td>Edit URL (normal mode)</td></tr>
+    <tr><td><code>v</code></td><td>Edit URL (visual mode)</td></tr>
+    <tr><td><code>V</code></td><td>Edit URL (visual line select)</td></tr>
+    <tr><td><code>:</code></td><td>Enter Command mode</td></tr>
+    <tr><td><code>q</code></td><td>Quit</td></tr>
+  </tbody>
+</table>
+
+<h3>Browse Mode</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Esc</code></td><td>Switch to Control mode</td></tr>
+    <tr><td><code>Cmd+[</code></td><td>Back</td></tr>
+    <tr><td><code>Cmd+]</code></td><td>Forward</td></tr>
+    <tr><td><code>Cmd+R</code></td><td>Reload</td></tr>
+  </tbody>
+</table>
+
+<p>
+  All other keys in Browse mode go directly to the browser — typing, scrolling,
+  clicking, and standard web shortcuts all work as expected.
+</p>
+
+<h3>Edit Mode</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Enter</code></td><td>Navigate to URL, switch to Browse mode</td></tr>
+    <tr><td><code>Esc</code></td><td>Exit to Control mode (from Normal submode)</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The URL editor uses vim-style keybindings (via edtui): <code>h</code>,
+  <code>l</code>, <code>w</code>, <code>b</code>, <code>x</code>,
+  <code>d</code>, <code>y</code>, <code>p</code>, etc. System clipboard
+  integration is built in.
+</p>
+
+<h3>Any Mode</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Ctrl+C</code></td><td>Force quit</td></tr>
+  </tbody>
+</table>
+
+<h2>Commands</h2>
+
+<p>
+  Enter Command mode by pressing <code>:</code> in Control mode. Commands use
+  exact matching — no subsequence shortcuts.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Shortcut</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>:quit</code></td>
+      <td><code>:q</code></td>
+      <td>Quit</td>
+    </tr>
+    <tr>
+      <td><code>:dark</code></td>
+      <td><code>:da</code></td>
+      <td>Toggle dark mode</td>
+    </tr>
+    <tr>
+      <td><code>:dark on|off|s</code></td>
+      <td><code>:da on</code></td>
+      <td>Force dark on, off, or system</td>
+    </tr>
+    <tr>
+      <td><code>:devtools [dir]</code></td>
+      <td><code>:de</code></td>
+      <td>Open DevTools in a split pane</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>DevTools Directions</h3>
+
+<p>
+  The <code>:devtools</code> command accepts a direction for the split:
+  <code>right</code> (default), <code>down</code>, <code>left</code>, or
+  <code>up</code>. Shortcuts: <code>r</code>, <code>d</code>, <code>l</code>,
+  <code>u</code>.
+</p>
+
+<h2>Mode Synchronization</h2>
+
+<p>
+  Mode state is shared between the TUI and GUI via <code>mode_changed</code>
+  protobuf messages. Both sides send and receive:
+</p>
+
+<ul>
+  <li>
+    <strong>TUI changes mode</strong> (Esc, Enter) &rarr; sends
+    <code>mode_changed</code> to GUI
+  </li>
+  <li>
+    <strong>GUI changes mode</strong> (Esc in Browse mode) &rarr; sends
+    <code>mode_changed</code> to TUI
+  </li>
+  <li>
+    <strong>Initial mode</strong> is set via the <code>browsing</code> field in
+    the <code>SetOverlay</code> message
+  </li>
+</ul>
+
+<h2>Loading Screen</h2>
+
+<p>
+  When a browser is first launched, the TUI displays a loading log in the
+  viewport showing each startup stage:
+</p>
+
+<ul>
+  <li><strong>✓ Connected to GUI</strong></li>
+  <li><strong>✓ Starting browser engine</strong></li>
+  <li><strong>⠋ Waiting for Chromium (12s)</strong> — animated spinner with elapsed time</li>
+  <li><strong>✓ Loading page</strong></li>
+  <li><strong>✓ Ready</strong></li>
+</ul>
+
+<p>
+  On first launch, Chromium takes ~60 seconds to initialize (GPU process, shader
+  compilation, browser context creation). Subsequent launches are much faster.
+  If Chromium takes longer than 30 seconds, a note appears: "First launch is
+  slow — Chromium is initializing." If it exceeds 120 seconds, the stage shows an
+  error suggesting Roamium may not be installed.
+</p>
+
+<p>
+  The loading screen disappears automatically when the browser overlay appears.
+</p>
+
+<h2>Direct Browser Connection</h2>
+
+<p>
+  After the browser engine starts, the GUI sends a <code>BrowserReady</code>
+  message to the TUI containing the browser's listen socket path. The TUI
+  connects directly to the browser for navigation and color scheme commands,
+  bypassing the GUI for content messages.
+</p>
