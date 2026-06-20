@@ -5,6 +5,7 @@
     "dev": "astro dev",
     "build": "astro build",
     "build:icons": "bun run scripts/process-icons.ts",
+    "gen:references": "bun run scripts/gen-references.ts",
     "deploy": "bun run build && wrangler pages deploy dist"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "@astrojs/check": "^0.9.9",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "github-slugger": "^2.0.0",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "typescript": "^5.9.3",

@@ -10,6 +10,7 @@ deployed to Cloudflare Pages.
 | `bun run dev`        | Start Astro dev server               |
 | `bun run build`      | Build static site to `dist/`         |
 | `bun run build:icons`| Process icons from `raw-icons/`      |
+| `bun run gen:references`| Regenerate the config + keybind reference pages |
 | `bun run deploy`     | Build + deploy to Cloudflare Pages   |
 
 ## Stack
@@ -45,8 +46,22 @@ Frontmatter: `title` (required), `navLabel` (optional shorter sidebar label),
 | `/docs/components/roamium` | `src/content/docs/components/roamium.mdx` | Roamium engine |
 | `/docs/protocol/overview` | `src/content/docs/protocol/overview.mdx` | Protocol design |
 | `/docs/protocol/messages` | `src/content/docs/protocol/messages.mdx` | Message reference |
-| `/docs/reference/configuration` | `src/content/docs/reference/configuration.mdx` | Config reference |
+| `/docs/reference/configuration` | `src/content/docs/reference/configuration.mdx` | Config guide (hand-written) |
+| `/docs/reference/config` | `src/content/docs/reference/config.md` | Config option reference (generated) |
+| `/docs/reference/keybind-actions` | `src/content/docs/reference/keybind-actions.md` | Keybind action reference (generated) |
 | `/welcome` | `src/pages/welcome.astro` | Three.js 3D experience |
+
+## Generated reference pages
+
+`src/content/docs/reference/config.md` and
+`src/content/docs/reference/keybind-actions.md` are **generated, do not edit by
+hand.** `scripts/gen-references.ts` parses the Ghostboard fork's
+`zig-out/share/ghostty/doc/ghostty.5.md` (config man page) and writes both pages;
+the output is committed so the Cloudflare build needs no fork checkout (Ghostty's
+`sync-webdata` model). Regenerate with `bun run gen:references` whenever the
+fork's config options or keybind actions change; `bun run gen:references --check`
+fails if the committed pages are stale. The fork man-page path can be overridden
+with `--in <path>` or `GHOSTTY_DOC`.
 
 ## Components
 

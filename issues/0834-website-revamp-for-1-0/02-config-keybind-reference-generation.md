@@ -224,3 +224,103 @@ Three nits to apply during implementation (folded in):
   length; do not index past the end).
 - Guard the bodyless-term case where there is no preceding bodied entry in the
   section (emit no dangling `#` link), even though the real data never hits it.
+
+## Result
+
+**Result:** Pass
+
+`scripts/gen-references.ts` generates both reference pages from the fork's
+`ghostty.5.md`; all seven verification criteria pass.
+
+### What was built
+
+- `website/scripts/gen-references.ts` — the generator (section-bounded parse,
+  preceding-parent bodyless linking, `github-slugger`, clamped de-indent,
+  `--check` mode); all three review nits folded in.
+- `website/src/content/docs/reference/config.md` — generated, committed; 209
+  config-option entries.
+- `website/src/content/docs/reference/keybind-actions.md` — generated,
+  committed; 85 keybind-action entries.
+- `website/package.json` — `gen:references` script.
+- `website/package.json` / `bun.lock` — added `github-slugger` (dev).
+- `website/CLAUDE.md` — documents the generator, the generated pages, and the
+  `--check`/override flags.
+
+### One implementation refinement beyond the design
+
+The `keybind` option's body contains its own `## Chained Actions` /
+`## Key Tables` subsections. De-indented verbatim these became `##` headings —
+the same level as entry headings — inflating the apparent entry count (211) and
+reading as sibling entries. The generator now **demotes in-body headings by two
+levels** (`##` → `####`) so they nest under their entry. Column-0 only, so `#`
+inside indented code blocks is untouched. Entry-heading counts are then exactly
+209 / 85.
+
+### Verification results
+
+1. **Completeness + boundaries** — `config.md` has 209
+   `## \`name\``entries,`keybind-actions.md` has 85; spot-checks (`font-family`, `font-family-bold`, `font-style`, `window-width`, `clipboard-write`, `keybind`, `theme`, `window-decoration`; `ignore`, `unbind`, `csi`, `new_split`, `crash`)
+   land on the correct page. **Pass.**
+2. **No cross-contamination** — config page contains no `csi`/`unbind`/`crash`
+   entry; keybind page contains no `font-family`. **Pass.**
+3. **Bodyless handling** — `## \`font-family-bold\``is present with body`See
+   [\`font-family\`](#font-family).`; the `font-family`heading emits`id="font-family"`,
+   so the link resolves. **Pass.**
+4. **TermSurf provenance** — the captured options contain TermSurf markers
+   (`termsurf +list-themes`, `~/.config/termsurf/themes`, `TermSurf.icns`),
+   proving the content came from the fork, not vanilla Ghostty. (The
+   `~/.config/termsurf/config` string itself lives in the man page's DESCRIPTION
+   preamble, which is intentionally not part of the per-option reference — the
+   original criterion's exact string was in the uncaptured preamble; the
+   provenance check is met by the in-section TermSurf markers.) **Pass.**
+5. **Idempotent + `--check`** — regenerating yields byte-identical files;
+   `gen:references --check` exits 0 against the committed output. **Pass.**
+6. **Builds + renders + nav** — `bun run build` builds 12 pages; `astro check`
+   reports 0 errors; `/docs/reference/config` and
+   `/docs/reference/keybind-actions` emit; the Reference sidebar reads
+   Configuration → Config Options → Keybind Actions; zero Shiki artifacts in the
+   generated pages. **Pass.**
+7. **No regressions** — the other doc pages, `/`, and `/welcome` still build at
+   their URLs (12 = 10 prior + 2 new). **Pass.**
+
+## Completion Review
+
+Independent `adversarial-reviewer` agent at the result gate. **Verdict:
+APPROVE.** The reviewer reproduced every claim against the real artifacts and a
+fresh build: it extracted every column-0 `**`name`**` header from the man page's
+bounded ranges and `diff`'d them against the generated entry names —
+**identical** in both sections (no drop/dup/leak/mis-attribution); confirmed all
+16 bodyless links point to the correct preceding option; confirmed all 10
+`See […](#slug)` targets match real heading `id`s in built HTML; confirmed
+de-indent fidelity and that heading demotion produced exactly the `#` title +
+209/85 `##` entries + two `####` subsections with zero corruption; `--check`
+exits 0 (and 1 on drift); build = 12 pages, `astro check` 0 errors, 0 Shiki;
+provenance reasoning honest; no fork files touched; commit separation correct.
+
+Non-blocking findings, recorded as follow-ups (none block this result):
+
+- **(Follow-up, fork)** The generated reference faithfully reproduces vanilla
+  upstream CLI names that survive in the fork's man page —
+  `ghostty +list-fonts`, `ghostty +list-actions` — while others are rebranded
+  (`termsurf +list-themes`). The published docs will name a command that does
+  not match the product. The fix belongs in the **fork's mdgen / source**, not
+  this generator; worth a separate issue against the Ghostboard fork.
+- **(Known limitation)** The in-body heading-demotion regex is not
+  fenced-code-block aware. It is clean for the current artifact (verified zero
+  corruption), but a future man-page code block with a column-0 `#` comment
+  after de-indent would be wrongly rewritten. Add fence tracking if the source
+  format evolves.
+- **(Nit, fixed-in-spirit)** The design's Changes section wrote
+  `### \`name\``; the implementation uses `## \`name\`` (documented in Result).
+  Stale design text only.
+
+## Conclusion
+
+Scope decision 2 is fulfilled: TermSurf regenerates accurate, complete config
+**and** keybind references from its own fork artifact with one parser, no fork
+changes, and a `--check` guard against staleness. The committed-output /
+`github-slugger`-anchor / in-body-heading-demotion patterns are now established
+for any future man-page-derived reference. Next: the VT reference — import and
+extend Ghostty's MIT-licensed VT MDX (scope decision 1) — then search, the IA
+section-ordering mechanism (deferred from Experiment 1), versioning, and the
+deploy cleanup.

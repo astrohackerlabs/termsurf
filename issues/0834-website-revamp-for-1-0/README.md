@@ -266,7 +266,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 - [Experiment 1: Content model & generated navigation](01-content-build-architecture.md)
   — **Pass**
 - [Experiment 2: Config & keybind reference generation](02-config-keybind-reference-generation.md)
-  — **Designed**
+  — **Pass**
 
 ## Process notes
 
