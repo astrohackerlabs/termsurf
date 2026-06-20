@@ -1,35 +1,48 @@
 ---
 import DocPage from "../../components/DocPage.astro";
+import { getDocsNav } from "../../lib/docs-nav.ts";
+
+// Generated section index: mirrors the sidebar (same getDocsNav() source) so it
+// never drifts and only ever links built collection routes. See issue 834.
+const nav = await getDocsNav();
 ---
 
 <DocPage title="Docs">
   <h1>Documentation</h1>
 
   <p>
-    TermSurf is a protocol for embedding web browsers inside terminal emulators.
-    Any terminal, any browser engine, any TUI — connected by a protobuf/Unix
-    socket protocol.
+    TermSurf is a protocol for embedding web browsers inside terminal emulators
+    — the terminal, the <code>web</code> TUI, and each browser engine are
+    separate processes speaking a protobuf/Unix-socket protocol. Browse the
+    sections below.
   </p>
 
-  <h2>Quick Start</h2>
-
-  <p>
-    See <a href="/docs/getting-started">Getting Started</a> for installation and
-    setup.
-  </p>
-
-  <h2>Components</h2>
-
-  <ul>
-    <li>Ghostboard — TermSurf's Ghostty-based GUI terminal emulator</li>
-    <li><a href="/docs/components/webtui">Web TUI</a> — browser chrome in the terminal pane</li>
-    <li><a href="/docs/components/roamium">Roamium</a> — Chromium browser engine binary</li>
-  </ul>
-
-  <h2>Protocol</h2>
-
-  <ul>
-    <li><a href="/docs/protocol/overview">Overview</a> — architecture and IPC design</li>
-    <li><a href="/docs/protocol/messages">Messages</a> — protobuf message reference</li>
-  </ul>
+  {
+    nav.map((group) => (
+      <section>
+        <h2>{group.section ?? "Overview"}</h2>
+        {group.items.length > 0 && (
+          <ul>
+            {group.items.map((item) => (
+              <li>
+                <a href={item.href}>{item.label}</a>
+              </li>
+            ))}
+          </ul>
+        )}
+        {group.subgroups.map((sub) => (
+          <>
+            <h3>{sub.subsection}</h3>
+            <ul>
+              {sub.items.map((item) => (
+                <li>
+                  <a href={item.href}>{item.label}</a>
+                </li>
+              ))}
+            </ul>
+          </>
+        ))}
+      </section>
+    ))
+  }
 </DocPage>

@@ -302,7 +302,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 - [Experiment 17: Home / marketing page treatment](17-home-marketing-treatment.md)
   — **Pass**
 - [Experiment 18: Docs landing / section-index template](18-docs-landing-section-index.md)
-  — **Designed**
+  — **Pass** (closes Phase 2 — Design)
 
 ## Process notes
 

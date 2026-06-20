@@ -110,3 +110,66 @@ static = 76 pages. Two **Optional** nits, folded in:
 2. The intro should be explicitly rewritten rather than carrying forward the
    existing "any browser engine" line — decision 4 now specifies the rewritten,
    accurate intro.
+
+## Result
+
+**Result:** Pass
+
+`/docs` is now a generated section index that mirrors the sidebar exactly; all
+six criteria pass.
+
+### What was built
+
+`src/pages/docs/index.astro` — derives the landing from `await getDocsNav()`: a
+rewritten one-sentence intro (protocol framing, no engine/platform overclaim),
+then each nav group rendered as a section (`{group.section ?? "Overview"}` h2,
+its `items` as a link list, and each VT `subgroups` entry as an h3 + link list),
+all inside the existing `DocPage` shell. The hand-authored Quick
+Start/Components/Protocol lists are gone.
+
+### Verification results
+
+1. **Mirrors the sidebar** — built `/docs`: the article and the sidebar `<nav>`
+   each expose the **same 73** `/docs` hrefs (set difference empty both ways),
+   no label mismatches; article headings are Overview → Configuration → Terminal
+   API (Concepts/Control/CSI/ESC/OSC) → Components → Protocol, matching nav
+   order. **Pass.**
+2. **All links resolve** — dead-link crawl over the `/docs` article = 0 broken
+   (every href is a real collection route). **Pass.**
+3. **Accuracy** — greps of built `/docs` for
+   webkit/only-browser/the-only/multiple-engines/linux/windows = empty; nothing
+   unbuilt is linked. **Pass.**
+4. **Design system, zero new JS** — no hardcoded hex in `docs/index.astro`;
+   `prose-termsurf` + DocPage; `0` `astro-island` (only the inherited Pagefind
+   search). **Pass.**
+5. **Build + checks** — `bun run build` 76 pages; `bunx astro check` 0 errors /
+   0 warnings / 3 pre-existing hints; `gen:references --check` +
+   `import:vt --check` exit 0. **Pass.**
+6. **No regressions** — diff is `docs/index.astro` only; sidebar, search, other
+   docs, `/`, `/welcome` unchanged; `/docs` still renders inside `DocPage`.
+   **Pass.**
+
+## Conclusion
+
+Phase 2 (Design) is complete. The docs landing is an accurate, drift-proof
+section index generated from the content tree — it will list new sections/pages
+automatically as Phases 3–4 add them, with no risk of stale or dead links. Phase
+2 delivered: the documented design system + callouts (Exp 13), responsive mobile
+nav (Exp 14), the accessibility baseline (Exp 15), AA contrast refinement (Exp
+16), the home/marketing treatment (Exp 17), and this section-index template (Exp
+18). The issue now moves to **Phase 3** (Ghostty-parity terminal docs) and
+**Phase 4** (TermSurf-specific docs). Logged follow-up: the `/welcome` on-black
+contrast fix (needs a welcome-page change).
+
+## Completion Review
+
+Independent `adversarial-reviewer` at the result gate. **Verdict: APPROVE** (no
+Required/Optional/Nit findings). Against a fresh build the reviewer confirmed
+the landing and sidebar each expose exactly **73** identical `/docs` hrefs
+(empty set difference both ways, no label mismatches), that all 64 VT pages
+appear under their subsection h3s (the `subgroups`-drop failure mode did not
+occur), that the mirror is structural (both call `getDocsNav()`), 0 broken
+links, accuracy greps empty (intro is the rewritten line, not the old "any
+browser engine"), one `<h1>` with IA-ordered h2/h3 and no literal
+"null"/"undefined", zero hardcoded hex / no new JS, 76 pages, `astro check` 0
+errors, drift checks exit 0, and diff scoped to `docs/index.astro` only.
