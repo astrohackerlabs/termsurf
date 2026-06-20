@@ -143,3 +143,41 @@ blockquotes are all styled.
 The `/welcome` route is a standalone Three.js 3D experience with its own
 layout (no header/footer). Uses `client:only="react"`. Do not modify when
 changing site-wide styles.
+
+## Design system (issue 834, Phase 2)
+
+Refine-don't-reinvent: the system formalizes the existing Tokyo Night look.
+
+**Color tokens** (`@theme` in `style.css`, light default + `prefers-color-scheme:
+dark` override — never hardcode hex, use these): `--color-background`,
+`--color-background-dark`, `--color-background-highlight`, `--color-foreground`,
+`--color-foreground-dark`, `--color-primary` (blue), `--color-secondary`
+(purple), `--color-accent` (cyan), `--color-success` (green), `--color-warning`
+(amber), `--color-caution` (red), `--color-muted`, `--color-border`. Tailwind
+exposes them as `text-*`/`bg-*`/`border-*` utilities.
+
+**Typography:** `--font-heading` Space Grotesk (headings), `--font-mono`
+JetBrains Mono (code), loaded in `Base.astro`. The doc size scale is in
+`.prose-termsurf` (body 0.875rem/1.7; h1 1.125rem; h2 1rem primary; h3
+0.875rem; code 0.8125rem). Spacing: 1rem block rhythm, 0.75rem code padding,
+2rem h2 top margin.
+
+**Component inventory** (all Tokyo Night, mostly zero-JS):
+
+- `prose-termsurf` — doc article typography (headings, p, links, lists, tables,
+  blockquotes, hr).
+- Code blocks — `bg-background-dark` + left border; hand-highlighted token
+  `<span>`s (Shiki disabled).
+- Generated reference layout — `# Title` + `## \`name\`` entries (config/keybind).
+- Sidebar nav — generated from `docs-nav.ts`; VT subsections as zero-JS
+  `<details>` disclosures (`.docs-nav-sub`).
+- Search — Pagefind UI in the sidebar (`Search.astro`); the one JS feature,
+  docs-pages only.
+- `VTSequence.astro` — static escape-sequence diagram.
+- Footnotes — `.prose-termsurf .footnotes`.
+- Callouts — GitHub `[!NOTE]`-style alerts via `remark-github-blockquote-alert`
+  → `.markdown-alert*`, accented per kind (note/tip/important/warning/caution).
+
+**No version switcher** (single-version posture, Exp 12). Pending Phase-2 work:
+page templates, responsive/mobile nav (sidebar is `md:block` — no search/nav
+below `md` yet), and an accessibility baseline.

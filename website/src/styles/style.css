@@ -16,6 +16,8 @@
   --color-secondary: #9854f1;
   --color-accent: #007197;
   --color-success: #587539;
+  --color-warning: #8f5e15;
+  --color-caution: #c64343;
   --color-muted: #848cb5;
   --color-border: #a8aecb;
 
@@ -36,6 +38,8 @@
     --color-secondary: #bb9af7;
     --color-accent: #7dcfff;
     --color-success: #9ece6a;
+    --color-warning: #e0af68;
+    --color-caution: #f7768e;
     --color-muted: #565f89;
     --color-border: #3b4261;
   }
@@ -172,6 +176,46 @@ body {
 }
 .docs-nav-sub[open] > summary::before {
   content: "▾ ";
+}
+
+/* GitHub-style callouts (> [!NOTE] etc.), rendered by
+   remark-github-blockquote-alert into .markdown-alert divs. Accent per kind via
+   the semantic color tokens; icon inherits the accent via currentColor. */
+.prose-termsurf .markdown-alert {
+  margin-bottom: 1rem;
+  padding: 0.5rem 1rem;
+  border-left: 3px solid var(--alert-accent, var(--color-muted));
+  background-color: var(--color-background-dark);
+  font-size: 0.8125rem;
+}
+.prose-termsurf .markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+.prose-termsurf .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-weight: bold;
+  color: var(--alert-accent, var(--color-foreground));
+  margin-bottom: 0.25rem;
+}
+.prose-termsurf .markdown-alert-title svg {
+  fill: currentColor;
+}
+.prose-termsurf .markdown-alert-note {
+  --alert-accent: var(--color-primary);
+}
+.prose-termsurf .markdown-alert-tip {
+  --alert-accent: var(--color-success);
+}
+.prose-termsurf .markdown-alert-important {
+  --alert-accent: var(--color-secondary);
+}
+.prose-termsurf .markdown-alert-warning {
+  --alert-accent: var(--color-warning);
+}
+.prose-termsurf .markdown-alert-caution {
+  --alert-accent: var(--color-caution);
 }
 
 /* GFM footnotes (e.g. on Terminal API pages). */

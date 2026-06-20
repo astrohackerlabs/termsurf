@@ -292,7 +292,7 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 ### Phase 2 — Design
 
 - [Experiment 13: Design system foundation + callout primitive](13-design-system-and-callouts.md)
-  — **Designed**
+  — **Pass**
 
 ## Process notes
 

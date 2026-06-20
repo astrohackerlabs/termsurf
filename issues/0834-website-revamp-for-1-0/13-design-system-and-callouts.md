@@ -119,3 +119,47 @@ folded in:
 Optional/nit folded in: only NOTE + WARNING are actually used (TIP/IMPORTANT/
 CAUTION styled for future, not build-validated); add an `astro.config.mjs`
 comment recording the MDX-inheritance dependency on `mdx()` staying option-free.
+
+## Result
+
+**Result:** Pass
+
+The callout primitive works and the design system is documented; all five
+verification criteria pass.
+
+### What was built
+
+- `astro.config.mjs` — `remarkAlert` added to `markdown.remarkPlugins` (with the
+  MDX-inheritance comment).
+- `src/styles/style.css` — new `--color-warning`/`--color-caution` tokens (light
+  - dark) and `.markdown-alert*` Tokyo Night styling (per-kind accent via
+    `--alert-accent`, icon `fill: currentColor`).
+- `website/CLAUDE.md` — a "Design system" section (color tokens, typography +
+  size scale, spacing, component inventory incl. callouts; no version switcher).
+
+### Verification results
+
+1. **Callouts render styled** — built `vt/osc/1x` (note), `vt/osc/52` (note +
+   warning), `vt/concepts/colors` (note) emit `.markdown-alert-note` /
+   `.markdown-alert-warning` divs; **zero** literal `[!NOTE]`/`[!WARNING]` text
+   remains. **Pass.**
+2. **Tokyo Night, zero new JS** — alerts use the semantic tokens (no hardcoded
+   hex in the rules); the icon `fill: currentColor` ships in the built CSS;
+   `remarkAlert` is build-time (no client JS). **Pass.**
+3. **Build + checks clean** — `bun run build` 76 pages; `astro check` 0 errors;
+   `gen:references --check` + `import:vt --check` exit 0; dead-link crawl = 0.
+   **Pass.**
+4. **Design system documented** — `website/CLAUDE.md` Design system section is
+   complete (tokens, type scale, spacing, inventory, no switcher). **Pass.**
+5. **No regressions** — `/`, `/welcome`, search, nav unchanged; plain
+   blockquotes (e.g. the VT index attribution note, which isn't an `[!…]` alert)
+   still render via `.prose-termsurf blockquote`. **Pass.**
+
+## Conclusion
+
+Phase 2 has its documented design-system foundation, and a real rendering bug
+(literal `[!NOTE]` across 9 pages) is fixed with a properly themed callout
+primitive. The token set gained `--color-warning`/`--color-caution`. Remaining
+Phase-2 experiments: page templates (home/article/reference/section-index),
+responsive/mobile nav + an accessibility baseline, and the home/marketing-page
+treatment. Then Phases 3–4 build the content into the IA.
