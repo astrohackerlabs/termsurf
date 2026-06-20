@@ -278,6 +278,8 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
   — **Pass**
 - [Experiment 7: VT CSI + ESC — verify (no claims) + mark verified](07-vt-csi-esc-verify.md)
   — **Pass**
+- [Experiment 8: VT OSC — TermSurf rebrand + fork verification](08-vt-osc-rebrand-verify.md)
+  — **Designed**
 
 ## Process notes
 
