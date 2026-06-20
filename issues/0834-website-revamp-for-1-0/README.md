@@ -283,6 +283,8 @@ Document everything TermSurf adds on top of a terminal. Deliverables:
 - [Experiment 9: VT top-level pages — TermSurf rebrand + finalize](09-vt-toplevel-rebrand-verify.md)
   — **Pass** (completes scope decision 1 — entire VT reference fork-verified +
   TermSurf-branded)
+- [Experiment 10: Deploy script cleanup (Cloudflare Pages)](10-deploy-script-cleanup.md)
+  — **Designed**
 
 ## Process notes
 
