@@ -269,3 +269,5 @@ recovery. Much of this code can inform Surfari's implementation.
   — **Pass**
 - [Experiment 4: Establish WebKit branch workflow](04-webkit-branch-workflow.md)
   — **Pass**
+- [Experiment 5: Create initial libtermsurf_webkit ABI](05-initial-libtermsurf-webkit-abi.md)
+  — **Designed**
