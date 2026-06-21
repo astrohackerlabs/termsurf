@@ -70,8 +70,9 @@ Implemented:
 - HTTP Basic auth requests through `WKNavigationDelegate`, with
   Roamium/Chromium-compatible field normalization and `ts_reply_http_auth`;
 - renderer crash reporting through WebKit process-termination delegate
-  callbacks.
+  callbacks;
+- DevTools tab creation through WebKit Inspector's frontend `WKWebView`, exposed
+  as a normal TermSurf CA context surface.
 
-Still unsupported:
-
-- DevTools;
+No unsupported C ABI entry points are currently known in the smoke-tested
+Surfari surface. Ghostboard integration remains unproven.

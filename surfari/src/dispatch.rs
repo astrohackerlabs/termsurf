@@ -200,6 +200,13 @@ pub fn handle_message(msg: &TermSurfMessage) {
                     m.dark,
                 )
             };
+            if entry.handle.is_null() {
+                trace_pdf_input(format!(
+                    "create-tab pane={} result=unsupported-null-handle",
+                    m.pane_id
+                ));
+                tabs().pop();
+            }
         }
         Msg::CreateDevtoolsTab(m) => {
             trace_pdf_input(format!(
@@ -223,6 +230,13 @@ pub fn handle_message(msg: &TermSurfMessage) {
                     m.dark,
                 )
             };
+            if entry.handle.is_null() {
+                trace_pdf_input(format!(
+                    "create-devtools-tab pane={} inspected_tab_id={} result=devtools-unsupported",
+                    m.pane_id, m.inspected_tab_id
+                ));
+                tabs().pop();
+            }
         }
         Msg::Resize(m) => {
             if let Some(t) = find_by_tab_id(m.tab_id) {

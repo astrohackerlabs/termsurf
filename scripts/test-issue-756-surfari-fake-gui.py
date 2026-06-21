@@ -148,13 +148,50 @@ def close_tab_payload(tab_id: int) -> bytes:
     return varint_field(1, tab_id)
 
 
+def create_devtools_tab_payload(tab_id: int, width: int, height: int) -> bytes:
+    return (
+        string_field(1, "surfari-devtools-pane")
+        + varint_field(2, tab_id)
+        + varint_field(3, width)
+        + varint_field(4, height)
+        + bool_field(5, False)
+    )
+
+
+def query_tabs_payload() -> bytes:
+    return string_field(1, "surfari-fake-pane") + string_field(2, "profile")
+
+
+def parse_tab_info(payload: bytes) -> dict[str, int | str]:
+    return {
+        "id": parse_varint(payload, 1),
+        "inspected_tab_id": parse_varint(payload, 2),
+        "pane_id": parse_string(payload, 3),
+        "url": parse_string(payload, 4),
+    }
+
+
+def parse_query_tabs_reply(payload: bytes) -> dict[str, int | str | list[dict[str, int | str]]]:
+    tabs = []
+    for field_number, wire_type, value in iter_fields(payload):
+        if field_number == 5 and wire_type == 2:
+            tabs.append(parse_tab_info(bytes(value)))
+    return {
+        "gui_panes": parse_varint(payload, 1),
+        "chromium_tabs": parse_varint(payload, 2),
+        "chromium_browser": parse_varint(payload, 3),
+        "chromium_devtools": parse_varint(payload, 4),
+        "tabs": tabs,
+        "error": parse_string(payload, 6),
+    }
+
+
 class State:
     def __init__(self) -> None:
         self.server_register = False
         self.profile = ""
         self.sent_create = False
         self.sent_resize = False
-        self.sent_close = False
         self.tab_id = 0
         self.ca_context_id = 0
         self.ca_width = 0
@@ -162,9 +199,21 @@ class State:
         self.url = ""
         self.loading_states: list[str] = []
         self.title = ""
+        self.sent_query_before_devtools = False
+        self.query_before_devtools_ok = False
+        self.sent_create_devtools = False
+        self.devtools_request_time = 0.0
+        self.devtools_tab_id = 0
+        self.devtools_ca_context_id = 0
+        self.sent_devtools_resize = False
+        self.sent_query_after_devtools = False
+        self.query_after_devtools_ok = False
+        self.devtools_supported = False
+        self.sent_close_devtools = False
+        self.sent_close_browser = False
         self.process_clean_exit = False
 
-    def ready_to_close(self) -> bool:
+    def browser_ready_for_devtools(self) -> bool:
         return (
             self.tab_id > 0
             and self.ca_context_id > 0
@@ -172,7 +221,6 @@ class State:
             and "done" in self.loading_states
             and self.title == EXPECTED_TITLE
             and self.sent_resize
-            and not self.sent_close
         )
 
 
@@ -181,7 +229,51 @@ def fail(message: str, log_dir: pathlib.Path) -> None:
     raise SystemExit(f"SMOKE_FAIL {message}")
 
 
-def check_trace(log_dir: pathlib.Path) -> str:
+def has_zero_id_tab(reply: dict[str, int | str | list[dict[str, int | str]]]) -> bool:
+    return any(tab["id"] == 0 for tab in reply["tabs"])
+
+
+def validate_query_before_devtools(
+    reply: dict[str, int | str | list[dict[str, int | str]]],
+    state: State,
+    log_dir: pathlib.Path,
+) -> None:
+    if reply["chromium_browser"] != 1 or reply["chromium_devtools"] != 0:
+        fail(f"unexpected pre-devtools tab counts {reply}", log_dir)
+    if has_zero_id_tab(reply):
+        fail(f"pre-devtools QueryTabsReply contained id=0 tab {reply}", log_dir)
+    tabs = reply["tabs"]
+    if len(tabs) != 1:
+        fail(f"expected one pre-devtools TabInfo, got {reply}", log_dir)
+    tab = tabs[0]
+    if tab["id"] != state.tab_id or tab["inspected_tab_id"] != 0:
+        fail(f"unexpected pre-devtools TabInfo {reply}", log_dir)
+
+
+def validate_query_after_devtools(
+    reply: dict[str, int | str | list[dict[str, int | str]]],
+    state: State,
+    log_dir: pathlib.Path,
+) -> None:
+    if has_zero_id_tab(reply):
+        fail(f"post-devtools QueryTabsReply contained id=0 tab {reply}", log_dir)
+    if state.devtools_tab_id > 0:
+        if reply["chromium_browser"] != 1 or reply["chromium_devtools"] != 1:
+            fail(f"unexpected post-devtools supported counts {reply}", log_dir)
+        devtools_tabs = [
+            tab
+            for tab in reply["tabs"]
+            if tab["id"] == state.devtools_tab_id
+            and tab["inspected_tab_id"] == state.tab_id
+        ]
+        if len(devtools_tabs) != 1:
+            fail(f"missing DevTools TabInfo {reply}", log_dir)
+    else:
+        if reply["chromium_browser"] != 1 or reply["chromium_devtools"] != 0:
+            fail(f"unexpected post-devtools unsupported counts {reply}", log_dir)
+
+
+def check_trace(log_dir: pathlib.Path, state: State) -> str:
     trace_path = log_dir / "surfari-trace.log"
     if not trace_path.exists():
         fail("surfari trace missing", log_dir)
@@ -194,6 +286,13 @@ def check_trace(log_dir: pathlib.Path) -> str:
     ):
         if needle not in trace:
             fail(f"surfari trace missing {needle}", log_dir)
+    if "surfari create-devtools-tab" not in trace:
+        fail("surfari trace missing create-devtools-tab", log_dir)
+    if state.devtools_supported:
+        if f"resize tab_id={state.devtools_tab_id}" not in trace:
+            fail("surfari trace missing DevTools resize", log_dir)
+    elif "devtools-unsupported" not in trace:
+        fail("surfari trace missing devtools-unsupported marker", log_dir)
     return trace
 
 
@@ -252,7 +351,7 @@ def main() -> int:
 
         with (log_dir / "messages.log").open("w", encoding="utf-8") as messages:
             while time.time() - start < args.seconds:
-                if state.sent_close and proc.poll() is not None:
+                if state.sent_close_browser and proc.poll() is not None:
                     state.process_clean_exit = proc.returncode == 0
                     break
 
@@ -281,8 +380,23 @@ def main() -> int:
                             state.sent_create = True
                             messages.write("sent CreateTab\n")
                     elif top == 13:
-                        state.tab_id = parse_varint(body, 2)
-                        messages.write(f"tab_ready id={state.tab_id}\n")
+                        pane_id = parse_string(body, 1)
+                        tab_id = parse_varint(body, 2)
+                        messages.write(f"tab_ready pane={pane_id} id={tab_id}\n")
+                        if pane_id == "surfari-devtools-pane":
+                            state.devtools_tab_id = tab_id
+                            if state.devtools_tab_id > 0 and not state.sent_devtools_resize:
+                                send_message(
+                                    conn,
+                                    3,
+                                    resize_payload(
+                                        state.devtools_tab_id, args.width, args.height
+                                    ),
+                                )
+                                state.sent_devtools_resize = True
+                                messages.write("sent DevTools Resize\n")
+                        else:
+                            state.tab_id = tab_id
                         if state.tab_id > 0 and not state.sent_resize:
                             send_message(
                                 conn,
@@ -292,11 +406,21 @@ def main() -> int:
                             state.sent_resize = True
                             messages.write("sent Resize\n")
                     elif top == 14:
-                        state.ca_context_id = parse_varint(body, 2)
-                        state.ca_width = parse_varint(body, 3)
-                        state.ca_height = parse_varint(body, 4)
+                        ca_tab_id = parse_varint(body, 1)
+                        ca_context_id = parse_varint(body, 2)
+                        ca_width = parse_varint(body, 3)
+                        ca_height = parse_varint(body, 4)
+                        if (
+                            state.devtools_tab_id > 0
+                            and ca_tab_id == state.devtools_tab_id
+                        ):
+                            state.devtools_ca_context_id = ca_context_id
+                        else:
+                            state.ca_context_id = ca_context_id
+                            state.ca_width = ca_width
+                            state.ca_height = ca_height
                         messages.write(
-                            f"ca_context id={state.ca_context_id} width={state.ca_width} height={state.ca_height}\n"
+                            f"ca_context tab={ca_tab_id} id={ca_context_id} width={ca_width} height={ca_height}\n"
                         )
                     elif top == 15:
                         state.url = parse_string(body, 2)
@@ -308,14 +432,77 @@ def main() -> int:
                     elif top == 17:
                         state.title = parse_string(body, 2)
                         messages.write(f"title_changed title={state.title}\n")
+                    elif top == 30:
+                        reply = parse_query_tabs_reply(body)
+                        messages.write(f"query_tabs_reply {reply}\n")
+                        if not state.query_before_devtools_ok:
+                            validate_query_before_devtools(reply, state, log_dir)
+                            state.query_before_devtools_ok = True
+                            send_message(
+                                conn,
+                                2,
+                                create_devtools_tab_payload(
+                                    state.tab_id, args.width, args.height
+                                ),
+                            )
+                            state.sent_create_devtools = True
+                            state.devtools_request_time = time.time()
+                            messages.write("sent CreateDevtoolsTab\n")
+                        elif not state.query_after_devtools_ok:
+                            validate_query_after_devtools(reply, state, log_dir)
+                            state.query_after_devtools_ok = True
+                            state.devtools_supported = state.devtools_tab_id > 0
+                            if state.devtools_supported and not state.sent_close_devtools:
+                                send_message(
+                                    conn, 4, close_tab_payload(state.devtools_tab_id)
+                                )
+                                state.sent_close_devtools = True
+                                messages.write("sent DevTools CloseTab\n")
+                            if not state.devtools_supported and not state.sent_close_browser:
+                                send_message(conn, 4, close_tab_payload(state.tab_id))
+                                state.sent_close_browser = True
+                                messages.write("sent Browser CloseTab\n")
 
-                    if state.ready_to_close():
+                    if (
+                        state.browser_ready_for_devtools()
+                        and not state.sent_query_before_devtools
+                    ):
+                        send_message(conn, 29, query_tabs_payload())
+                        state.sent_query_before_devtools = True
+                        messages.write("sent QueryTabsRequest before DevTools\n")
+
+                    if (
+                        state.sent_create_devtools
+                        and not state.sent_query_after_devtools
+                        and (
+                            state.devtools_ca_context_id > 0
+                            or time.time() - state.devtools_request_time > 1.0
+                        )
+                    ):
+                        send_message(conn, 29, query_tabs_payload())
+                        state.sent_query_after_devtools = True
+                        messages.write("sent QueryTabsRequest after DevTools\n")
+
+                    if (
+                        state.sent_close_devtools
+                        and not state.sent_close_browser
+                        and state.query_after_devtools_ok
+                    ):
                         send_message(conn, 4, close_tab_payload(state.tab_id))
-                        state.sent_close = True
-                        messages.write("sent CloseTab\n")
+                        state.sent_close_browser = True
+                        messages.write("sent Browser CloseTab\n")
 
                     messages.flush()
                 except socket.timeout:
+                    if (
+                        state.sent_create_devtools
+                        and not state.sent_query_after_devtools
+                        and time.time() - state.devtools_request_time > 1.0
+                    ):
+                        send_message(conn, 29, query_tabs_payload())
+                        state.sent_query_after_devtools = True
+                        messages.write("sent QueryTabsRequest after DevTools timeout\n")
+                        messages.flush()
                     continue
     finally:
         if conn:
@@ -328,7 +515,7 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
-        if state.sent_close and proc.returncode == 0:
+        if state.sent_close_browser and proc.returncode == 0:
             state.process_clean_exit = True
         stdout.close()
         stderr.close()
@@ -353,15 +540,37 @@ def main() -> int:
         fail(f"TitleChanged mismatch {state.title!r}", log_dir)
     if not state.sent_resize:
         fail("Resize not sent", log_dir)
-    if not state.sent_close:
-        fail("CloseTab not sent", log_dir)
+    if not state.sent_query_before_devtools or not state.query_before_devtools_ok:
+        fail("pre-DevTools QueryTabsRequest/Reply not verified", log_dir)
+    if not state.sent_create_devtools:
+        fail("CreateDevtoolsTab not sent", log_dir)
+    if not state.sent_query_after_devtools or not state.query_after_devtools_ok:
+        fail("post-DevTools QueryTabsRequest/Reply not verified", log_dir)
+    if state.devtools_supported:
+        if state.devtools_tab_id <= 0:
+            fail("DevTools supported without positive tab id", log_dir)
+        if state.devtools_ca_context_id <= 0:
+            fail("DevTools supported without CaContext", log_dir)
+        if not state.sent_devtools_resize:
+            fail("DevTools Resize not sent", log_dir)
+        if not state.sent_close_devtools:
+            fail("DevTools CloseTab not sent", log_dir)
+    else:
+        if state.devtools_tab_id != 0:
+            fail("DevTools unsupported path emitted a tab id", log_dir)
+        if state.devtools_ca_context_id != 0:
+            fail("DevTools unsupported path emitted a CaContext", log_dir)
+    if not state.sent_close_browser:
+        fail("Browser CloseTab not sent", log_dir)
     if not state.process_clean_exit:
         fail(f"Surfari did not exit cleanly after CloseTab rc={proc.returncode}", log_dir)
 
-    check_trace(log_dir)
+    check_trace(log_dir, state)
     summary = (
         "SMOKE_PASS "
         f"profile={state.profile} tab_id={state.tab_id} "
+        f"devtools_supported={int(state.devtools_supported)} "
+        f"devtools_tab_id={state.devtools_tab_id} "
         f"ca_context_id={state.ca_context_id} title={state.title!r} "
         f"loading_states={','.join(state.loading_states)} clean_exit=1\n"
     )

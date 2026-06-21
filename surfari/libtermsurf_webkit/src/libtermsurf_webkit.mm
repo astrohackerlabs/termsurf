@@ -4,13 +4,18 @@
 #import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
 #import <WebKit/WKNavigationDelegatePrivate.h>
+#import <WebKit/WKPreferencesPrivate.h>
 #import <WebKit/WKUIDelegatePrivate.h>
 #import <WebKit/WKWebViewPrivate.h>
 #import <WebKit/_WKHitTestResult.h>
+#import <WebKit/_WKInspector.h>
+#import <WebKit/_WKInspectorPrivateForTesting.h>
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 @interface CAContext : NSObject
 + (instancetype)remoteContextWithOptions:(NSDictionary *)options;
@@ -107,8 +112,11 @@ struct WebContents;
 
 struct WebContents {
     int tab_id;
+    int inspected_tab_id;
+    bool is_devtools;
     NSWindow *window;
     WKWebView *web_view;
+    _WKInspector *inspector;
     TSNavigationDelegate *navigation_delegate;
     TSUIDelegate *ui_delegate;
     TSConsoleMessageHandler *console_message_handler;
@@ -126,6 +134,27 @@ struct WebContents {
     bool focused;
     bool dark;
 };
+
+static std::vector<WebContents *> g_web_contents;
+
+static void registerContents(WebContents *contents)
+{
+    g_web_contents.push_back(contents);
+}
+
+static void unregisterContents(WebContents *contents)
+{
+    g_web_contents.erase(std::remove(g_web_contents.begin(), g_web_contents.end(), contents), g_web_contents.end());
+}
+
+static WebContents *findContentsByTabId(int tab_id)
+{
+    for (WebContents *contents : g_web_contents) {
+        if (contents && contents->tab_id == tab_id)
+            return contents;
+    }
+    return nullptr;
+}
 
 typedef void (*ts_webkit_test_eval_cb)(const char *result, void *user_data);
 typedef void (*ts_webkit_test_task_cb)(void *user_data);
@@ -792,13 +821,15 @@ void ts_destroy_browser_context(ts_browser_context_t ctx)
 
 ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *url, int width, int height, bool dark)
 {
-    (void)dark;
     BrowserContext *context = static_cast<BrowserContext *>(ctx);
     if (!context)
         return nullptr;
 
     WebContents *contents = new WebContents;
     contents->tab_id = g_next_tab_id.fetch_add(1);
+    contents->inspected_tab_id = 0;
+    contents->is_devtools = false;
+    contents->inspector = nil;
     contents->width = width;
     contents->height = height;
     contents->gui_active = true;
@@ -818,6 +849,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = context->data_store;
+    configuration.preferences._developerExtrasEnabled = YES;
     WKUserContentController *user_content_controller = [[WKUserContentController alloc] init];
     contents->console_message_handler = [[TSConsoleMessageHandler alloc] init];
     contents->console_message_handler.owner = contents;
@@ -842,6 +874,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
 
     [contents->window.contentView addSubview:contents->web_view];
     [contents->window orderFront:nil];
+    registerContents(contents);
 
     if (g_callbacks.on_tab_ready)
         g_callbacks.on_tab_ready(contents, contents->tab_id, g_callbacks.on_tab_ready_data);
@@ -859,11 +892,64 @@ ts_web_contents_t ts_create_devtools_web_contents(
     bool dark)
 {
     (void)ctx;
-    (void)inspected_tab_id;
-    (void)width;
-    (void)height;
-    (void)dark;
-    return nullptr;
+    WebContents *inspected = findContentsByTabId(inspected_tab_id);
+    if (!inspected || !inspected->web_view) {
+        fprintf(stderr, "[libtermsurf_webkit] devtools-unsupported inspected_tab_id=%d reason=missing-inspected-tab\n", inspected_tab_id);
+        return nullptr;
+    }
+
+    _WKInspector *inspector = inspected->web_view._inspector;
+    if (!inspector) {
+        fprintf(stderr, "[libtermsurf_webkit] devtools-unsupported inspected_tab_id=%d reason=missing-inspector\n", inspected_tab_id);
+        return nullptr;
+    }
+
+    [inspector show];
+    WKWebView *inspector_web_view = [inspector inspectorWebView];
+    if (!inspector_web_view) {
+        fprintf(stderr, "[libtermsurf_webkit] devtools-unsupported inspected_tab_id=%d reason=missing-inspector-webview\n", inspected_tab_id);
+        return nullptr;
+    }
+
+    WebContents *contents = new WebContents;
+    contents->tab_id = g_next_tab_id.fetch_add(1);
+    contents->inspected_tab_id = inspected_tab_id;
+    contents->is_devtools = true;
+    contents->inspector = inspector;
+    contents->width = width;
+    contents->height = height;
+    contents->gui_active = true;
+    contents->focused = false;
+    contents->dark = dark;
+    contents->last_cursor_type = -999;
+    contents->suppress_cursor_notifications = false;
+    contents->renderer_crash_reported = false;
+    contents->pending_javascript_dialogs = [[NSMutableDictionary alloc] init];
+    contents->pending_http_auth_requests = [[NSMutableDictionary alloc] init];
+
+    NSRect frame = NSMakeRect(120, 120, MAX(width, 64), MAX(height, 64));
+    contents->window = [[TSHostWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    contents->window.releasedWhenClosed = NO;
+    contents->window.title = @"libtermsurf_webkit_devtools";
+    contents->window.acceptsMouseMovedEvents = YES;
+
+    contents->web_view = inspector_web_view;
+    [contents->web_view removeFromSuperview];
+    contents->web_view.frame = contents->window.contentView.bounds;
+    contents->web_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    contents->web_view.wantsLayer = YES;
+    contents->web_view.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+    installCursorObserver(contents);
+
+    [contents->window.contentView addSubview:contents->web_view];
+    [contents->window orderFront:nil];
+    registerContents(contents);
+
+    if (g_callbacks.on_tab_ready)
+        g_callbacks.on_tab_ready(contents, contents->tab_id, g_callbacks.on_tab_ready_data);
+
+    exportContext(contents);
+    return contents;
 }
 
 void ts_destroy_web_contents(ts_web_contents_t wc)
@@ -872,13 +958,18 @@ void ts_destroy_web_contents(ts_web_contents_t wc)
     if (!contents)
         return;
 
+    unregisterContents(contents);
     [contents->remote_context invalidate];
     if (contents->cursor_observer)
         [[NSNotificationCenter defaultCenter] removeObserver:contents->cursor_observer];
-    contents->web_view.navigationDelegate = nil;
-    contents->web_view.UIDelegate = nil;
-    [contents->web_view.configuration.userContentController removeScriptMessageHandlerForName:@"termsurfConsole"];
-    contents->console_message_handler.owner = nullptr;
+    if (contents->is_devtools) {
+        [contents->inspector close];
+    } else {
+        contents->web_view.navigationDelegate = nil;
+        contents->web_view.UIDelegate = nil;
+        [contents->web_view.configuration.userContentController removeScriptMessageHandlerForName:@"termsurfConsole"];
+        contents->console_message_handler.owner = nullptr;
+    }
     [contents->pending_javascript_dialogs removeAllObjects];
     [contents->pending_http_auth_requests removeAllObjects];
     [contents->web_view removeFromSuperview];
