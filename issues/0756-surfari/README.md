@@ -267,3 +267,5 @@ recovery. Much of this code can inform Surfari's implementation.
   — **Pass**
 - [Experiment 3: Stress hosted WebKit surface lifecycle](03-hosted-surface-lifecycle.md)
   — **Pass**
+- [Experiment 4: Establish WebKit branch workflow](04-webkit-branch-workflow.md)
+  — **Designed**
