@@ -7,6 +7,9 @@ import { remarkAlert } from "remark-github-blockquote-alert";
 export default defineConfig({
   output: "static",
   trailingSlash: "never",
+  // Disable the Astro dev toolbar (the debug overlay at the bottom of the page
+  // during `astro dev`).
+  devToolbar: { enabled: false },
   // mdx() after react() so MDX inherits the JSX renderer config. mdx() MUST stay
   // option-free: @astrojs/mdx defaults extendMarkdownConfig:true, which is how
   // MDX pages inherit markdown.remarkPlugins below (e.g. remarkAlert). If mdx()
