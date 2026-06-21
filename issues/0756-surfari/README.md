@@ -288,4 +288,4 @@ recovery. Much of this code can inform Surfari's implementation.
 - [Experiment 13: Implement WebKit console messages](13-webkit-console-messages.md)
   — **Pass**
 - [Experiment 14: Implement WebKit renderer crash callbacks](14-webkit-renderer-crash.md)
-  — **Designed**
+  — **Pass**

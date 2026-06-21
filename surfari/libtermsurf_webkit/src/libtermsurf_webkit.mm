@@ -3,11 +3,14 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
+#import <WebKit/WKNavigationDelegatePrivate.h>
 #import <WebKit/WKUIDelegatePrivate.h>
+#import <WebKit/WKWebViewPrivate.h>
 #import <WebKit/_WKHitTestResult.h>
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 
 @interface CAContext : NSObject
 + (instancetype)remoteContextWithOptions:(NSDictionary *)options;
@@ -69,6 +72,7 @@ struct CallbackState {
 static CallbackState g_callbacks;
 static std::atomic<int> g_next_tab_id{1};
 static std::atomic<uint64_t> g_next_request_id{1};
+static std::atomic<int> g_test_renderer_crash_delegate_count{0};
 static NSString *const TermSurfCursorChangedNotification = @"TermSurfWebKitCursorChangedNotification";
 static NSString *const TermSurfCursorTypeKey = @"cursorType";
 
@@ -78,7 +82,7 @@ struct BrowserContext {
 
 struct WebContents;
 
-@interface TSNavigationDelegate : NSObject <WKNavigationDelegate>
+@interface TSNavigationDelegate : NSObject <WKNavigationDelegatePrivate>
 @property(nonatomic) WebContents *owner;
 @end
 
@@ -114,6 +118,7 @@ struct WebContents {
     id cursor_observer;
     int last_cursor_type;
     bool suppress_cursor_notifications;
+    bool renderer_crash_reported;
     CAContext *remote_context;
     int width;
     int height;
@@ -391,6 +396,47 @@ static void fireConsoleMessage(WebContents *contents, NSDictionary *body)
     });
 }
 
+static NSString *rendererCrashReason(NSInteger reason)
+{
+    switch (reason) {
+    case 0:
+        return @"memory";
+    case 1:
+        return @"cpu";
+    case 2:
+        return @"requested";
+    case 3:
+        return @"crash";
+    case 4:
+        return @"crash-limit";
+    default:
+        return @"unknown";
+    }
+}
+
+static void fireRendererCrashed(WebContents *contents, NSString *reason)
+{
+    if (!contents || !g_callbacks.on_renderer_crashed)
+        return;
+    if (contents->renderer_crash_reported)
+        return;
+
+    contents->renderer_crash_reported = true;
+    NSString *url = contents->web_view.URL.absoluteString ?: @"";
+    bool visible = contents->window.visible;
+    withCString(reason ?: @"unknown", ^(const char *c_reason) {
+        withCString(url, ^(const char *c_url) {
+            g_callbacks.on_renderer_crashed(
+                contents,
+                c_reason,
+                0,
+                c_url,
+                visible,
+                g_callbacks.on_renderer_crashed_data);
+        });
+    });
+}
+
 static void installCursorObserver(WebContents *contents)
 {
     contents->cursor_observer = [[NSNotificationCenter defaultCenter]
@@ -524,7 +570,24 @@ static void exportContext(WebContents *contents)
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation
 {
     (void)navigation;
+    if (self.owner)
+        self.owner->renderer_crash_reported = false;
     fireLoading(self.owner, webView.URL.absoluteString, 1);
+}
+
+- (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(_WKProcessTerminationReason)reason
+{
+    (void)webView;
+    g_test_renderer_crash_delegate_count++;
+    printf("CALLBACK renderer_crash_delegate reason=%s\n", rendererCrashReason((NSInteger)reason).UTF8String);
+    fflush(stdout);
+    fireRendererCrashed(self.owner, rendererCrashReason((NSInteger)reason));
+}
+
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
+{
+    (void)webView;
+    fireRendererCrashed(self.owner, @"unknown");
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation
@@ -743,6 +806,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->dark = dark;
     contents->last_cursor_type = -999;
     contents->suppress_cursor_notifications = false;
+    contents->renderer_crash_reported = false;
     contents->pending_javascript_dialogs = [[NSMutableDictionary alloc] init];
     contents->pending_http_auth_requests = [[NSMutableDictionary alloc] init];
 
@@ -1191,4 +1255,17 @@ extern "C" void ts_webkit_test_post_delayed_task(double seconds, ts_webkit_test_
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         callback(user_data);
     });
+}
+
+extern "C" void ts_webkit_test_kill_web_content_process(ts_web_contents_t wc)
+{
+    WebContents *contents = static_cast<WebContents *>(wc);
+    if (!contents)
+        return;
+    [contents->web_view _killWebContentProcessAndResetState];
+}
+
+extern "C" int ts_webkit_test_renderer_crash_delegate_count(void)
+{
+    return g_test_renderer_crash_delegate_count.load();
 }

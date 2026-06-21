@@ -18,6 +18,9 @@ void ts_webkit_test_evaluate_javascript(
 
 void ts_webkit_test_post_delayed_task(double seconds, ts_webkit_test_task_cb callback, void *user_data);
 
+void ts_webkit_test_kill_web_content_process(ts_web_contents_t wc);
+int ts_webkit_test_renderer_crash_delegate_count(void);
+
 #ifdef __cplusplus
 }
 #endif

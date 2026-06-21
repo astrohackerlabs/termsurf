@@ -51,6 +51,13 @@ struct State {
     int http_auth_accept_checked;
     int http_auth_reject_checked;
     int stale_http_auth_replies;
+    int renderer_crash_checked;
+    int renderer_crash_events;
+    int renderer_crash_delegate_count_before;
+    char renderer_crash_reason[64];
+    int renderer_crash_exit_code;
+    char renderer_crash_url[512];
+    int renderer_crash_visible;
 };
 
 static void run_input_sequence(void *user_data);
@@ -69,6 +76,8 @@ static void check_console_sequence(void *user_data);
 static void run_javascript_dialog_sequence(void *user_data);
 static void run_http_auth_sequence(void *user_data);
 static void query_http_auth_accept_state(void *user_data);
+static void run_renderer_crash_sequence(void *user_data);
+static void check_renderer_crash_sequence(void *user_data);
 static void on_cursor_changed(ts_web_contents_t wc, int cursor_type, void *user_data);
 static void on_console_message(
     ts_web_contents_t wc,
@@ -76,6 +85,13 @@ static void on_console_message(
     const char *message,
     int line_number,
     const char *source,
+    void *user_data);
+static void on_renderer_crashed(
+    ts_web_contents_t wc,
+    const char *reason,
+    int exit_code,
+    const char *url,
+    bool visible,
     void *user_data);
 
 static void fail(const char *message)
@@ -237,12 +253,14 @@ static void finish(void *user_data)
         fail("http auth rejected navigation missing");
     if (state->stale_http_auth_replies != 2)
         fail("stale http auth replies were not rejected");
+    if (!state->renderer_crash_checked)
+        fail("renderer crash check missing");
 
     ts_destroy_web_contents(state->web_contents);
     ts_destroy_browser_context(state->persistent_context);
     ts_destroy_browser_context(state->incognito_context);
     stop_auth_server(state);
-    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d target_url=%d cursor=%d console=%d js_dialogs=%d http_auth=%d\n",
+    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d target_url=%d cursor=%d console=%d js_dialogs=%d http_auth=%d renderer_crash=%d\n",
         state->initialized,
         state->tab_ready,
         state->context_id_count,
@@ -258,7 +276,8 @@ static void finish(void *user_data)
         state->cursor_checked,
         state->console_checked,
         state->javascript_dialog_checked,
-        state->http_auth_accept_checked && state->http_auth_reject_checked);
+        state->http_auth_accept_checked && state->http_auth_reject_checked,
+        state->renderer_crash_checked);
     fflush(stdout);
     ts_quit();
 }
@@ -524,6 +543,38 @@ static void run_http_auth_sequence(void *user_data)
     ts_load_url(state->web_contents, state->auth_url);
 }
 
+static void check_renderer_crash_sequence(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    int delegate_count = ts_webkit_test_renderer_crash_delegate_count() - state->renderer_crash_delegate_count_before;
+    if (delegate_count != 1)
+        fail("renderer crash delegate count mismatch");
+    if (state->renderer_crash_events != 1)
+        fail("renderer crash callback count mismatch");
+    if (strcmp(state->renderer_crash_reason, "requested") != 0)
+        fail("renderer crash reason mismatch");
+    if (state->renderer_crash_exit_code != 0)
+        fail("renderer crash exit code mismatch");
+    if (!strstr(state->renderer_crash_url, "/auth-reject") && !strstr(state->renderer_crash_url, "/auth-accept") && !strstr(state->renderer_crash_url, "navigation.html"))
+        fail("renderer crash URL mismatch");
+    if (!state->renderer_crash_visible)
+        fail("renderer crash visible flag mismatch");
+
+    state->renderer_crash_checked = 1;
+    ts_set_on_renderer_crashed(NULL, NULL);
+    ts_post_task(finish, state);
+}
+
+static void run_renderer_crash_sequence(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    state->renderer_crash_delegate_count_before = ts_webkit_test_renderer_crash_delegate_count();
+    ts_set_on_renderer_crashed(on_renderer_crashed, state);
+    printf("CALLBACK renderer_crash_trigger helper=_killWebContentProcessAndResetState\n");
+    ts_webkit_test_kill_web_content_process(state->web_contents);
+    ts_webkit_test_post_delayed_task(1.0, check_renderer_crash_sequence, state);
+}
+
 static void on_initialized(void *user_data)
 {
     struct State *state = (struct State *)user_data;
@@ -581,7 +632,7 @@ static void on_loading_state(ts_web_contents_t wc, const char *url, int loading,
             ts_webkit_test_post_delayed_task(0.2, query_http_auth_accept_state, state);
         } else if (state->navigations_finished == 4) {
             state->http_auth_reject_checked = 1;
-            ts_post_task(finish, state);
+            ts_post_task(run_renderer_crash_sequence, state);
         }
     }
     printf("CALLBACK loading_state loading=%d url=%s\n", loading, url ? url : "");
@@ -732,6 +783,31 @@ static void on_http_auth_request(
         fail("http auth reply failed");
     if (!ts_reply_http_auth(wc, request_id, accept, "surfari", "secret"))
         state->stale_http_auth_replies++;
+}
+
+static void on_renderer_crashed(
+    ts_web_contents_t wc,
+    const char *reason,
+    int exit_code,
+    const char *url,
+    bool visible,
+    void *user_data)
+{
+    (void)wc;
+    struct State *state = (struct State *)user_data;
+    printf("CALLBACK renderer_crashed reason=%s exit_code=%d url=%s visible=%d\n",
+        reason ? reason : "",
+        exit_code,
+        url ? url : "",
+        visible);
+
+    if (state->renderer_crash_events < 1) {
+        snprintf(state->renderer_crash_reason, sizeof(state->renderer_crash_reason), "%s", reason ? reason : "");
+        state->renderer_crash_exit_code = exit_code;
+        snprintf(state->renderer_crash_url, sizeof(state->renderer_crash_url), "%s", url ? url : "");
+        state->renderer_crash_visible = visible;
+    }
+    state->renderer_crash_events++;
 }
 
 int main(int argc, const char **argv)

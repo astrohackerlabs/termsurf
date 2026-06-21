@@ -68,9 +68,10 @@ Implemented:
 - JavaScript alert, confirm, and prompt requests through `WKUIDelegate`, with
   pending request IDs and `ts_reply_javascript_dialog`;
 - HTTP Basic auth requests through `WKNavigationDelegate`, with
-  Roamium/Chromium-compatible field normalization and `ts_reply_http_auth`.
+  Roamium/Chromium-compatible field normalization and `ts_reply_http_auth`;
+- renderer crash reporting through WebKit process-termination delegate
+  callbacks.
 
 Still unsupported:
 
 - DevTools;
-- renderer crash reporting;

@@ -167,3 +167,94 @@ The review also suggested making the delegate-path proof explicit. The design
 now requires an observable marker emitted only from
 `_webView:webContentProcessDidTerminateWithReason:` and asserted by the smoke
 harness before or alongside the C ABI callback.
+
+## Result
+
+**Result:** Pass
+
+Implemented renderer crash reporting in `libtermsurf_webkit` through WebKit's
+process-termination delegate path. `TSNavigationDelegate` now adopts
+`WKNavigationDelegatePrivate`, maps WebKit termination reasons to stable
+TermSurf strings, suppresses duplicate fallback reports for the same renderer
+termination, and forwards `ts_set_on_renderer_crashed` with reason, exit code,
+URL, and visibility.
+
+The smoke-only helper
+`ts_webkit_test_kill_web_content_process(ts_web_contents_t wc)` calls WebKit's
+private `_killWebContentProcessAndResetState`, matching WebKit's own
+`RequestedByClient` test path. A second smoke-only helper,
+`ts_webkit_test_renderer_crash_delegate_count`, exposes a counter incremented
+only inside `_webView:webContentProcessDidTerminateWithReason:` so the smoke
+harness can prove the C ABI callback came from WebKit's private delegate path
+rather than a local fake callback.
+
+The smoke test now runs renderer crash verification as the final stage after
+Experiment 6-13 coverage has passed. The recorded log at
+`logs/issue756-exp14-renderer-crash.log` includes:
+
+```text
+CALLBACK renderer_crash_trigger helper=_killWebContentProcessAndResetState
+CALLBACK renderer_crash_delegate reason=requested
+CALLBACK renderer_crashed reason=requested exit_code=0 url=http://127.0.0.1:52204/auth-accept visible=1
+SMOKE_PASS initialized=1 tab_ready=1 ca_context=5 url=6 loading_started=4 loading_finished=4 title=3 navigations=4 resized=1 focus=1 input=1 target_url=1 cursor=1 console=1 js_dialogs=1 http_auth=1 renderer_crash=1
+SMOKE_EXIT_STATUS=0
+```
+
+Verification completed:
+
+```bash
+surfari/libtermsurf_webkit/build.sh
+DYLD_FRAMEWORK_PATH="$PWD/webkit/src/WebKitBuild/Debug" \
+  surfari/libtermsurf_webkit/build/smoke-test \
+  "$PWD/surfari/libtermsurf_webkit/test-content/index.html" \
+  "$PWD/surfari/libtermsurf_webkit/test-content/navigation.html"
+nm -gU surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib | rg ' _ts_|_ts_webkit_test' | sort
+otool -L surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib | rg 'WebKit|JavaScriptCore|libtermsurf'
+otool -L surfari/libtermsurf_webkit/build/smoke-test | rg 'WebKit|JavaScriptCore|libtermsurf'
+git diff --check
+prettier --check --prose-wrap always --print-width 80 \
+  issues/0756-surfari/README.md \
+  issues/0756-surfari/14-webkit-renderer-crash.md \
+  surfari/libtermsurf_webkit/README.md
+git -C webkit/src status --short
+git -C webkit/src rev-parse HEAD
+git -C webkit/src rev-parse --abbrev-ref HEAD
+git -C webkit/src rev-parse --is-shallow-repository
+```
+
+The build completed successfully. It emitted the existing linker warning about
+building for macOS 26.0 while linking the system WebKit framework built for
+26.5, but produced both
+`surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib` and
+`surfari/libtermsurf_webkit/build/smoke-test`.
+
+`webkit/src` remained unchanged:
+
+```text
+cdfb8cbf86f7c5e52cef0b2f14e8ab30ceeea91c
+webkit-1452a439-issue-756-exp12
+true
+```
+
+`surfari/libtermsurf_webkit/README.md` now lists renderer crash reporting as
+implemented. DevTools remains unsupported.
+
+## Completion Review
+
+Adversarial result review approved the completed experiment with no findings.
+The reviewer confirmed the working-tree diff was scoped to the six expected
+files, the result commit had not yet been made, the implementation uses WebKit's
+private process-termination delegate path with a public fallback, the smoke test
+enforces exactly one delegate marker and one C callback with the expected
+`requested` payload, the verification log contains `SMOKE_EXIT_STATUS=0`, and
+`webkit/src` remained unchanged at `cdfb8cbf86f7c5e52cef0b2f14e8ab30ceeea91c` on
+branch `webkit-1452a439-issue-756-exp12`.
+
+## Conclusion
+
+Renderer crash reporting is now implemented for the macOS WebKit C ABI and
+covered by the smoke harness. The remaining unsupported browser-state callback
+in `libtermsurf_webkit` is DevTools. The next experiment should decide whether
+to implement DevTools next or pivot to the Surfari Rust binary/protocol audit
+now that the core browser lifecycle, input, browser-state, auth, console, and
+crash paths are covered at the C ABI layer.
