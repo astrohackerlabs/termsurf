@@ -28,6 +28,9 @@ struct State {
     int resized;
     int focus_checked;
     int input_checked;
+    int target_url_checked;
+    int target_url_events;
+    char target_url_sequence[2][256];
     int javascript_dialog_requests;
     int javascript_dialog_checked;
     int stale_javascript_dialog_replies;
@@ -44,6 +47,8 @@ struct State {
 static void run_input_sequence(void *user_data);
 static void query_focus_state(void *user_data);
 static void run_pointer_key_sequence(void *user_data);
+static void run_target_url_sequence(void *user_data);
+static void check_target_url_sequence(void *user_data);
 static void run_javascript_dialog_sequence(void *user_data);
 static void run_http_auth_sequence(void *user_data);
 static void query_http_auth_accept_state(void *user_data);
@@ -187,6 +192,8 @@ static void finish(void *user_data)
         fail("focus check missing");
     if (!state->input_checked)
         fail("input check missing");
+    if (!state->target_url_checked)
+        fail("target URL check missing");
     if (state->javascript_dialog_requests != 3)
         fail("javascript dialog request count mismatch");
     if (!state->javascript_dialog_checked)
@@ -206,7 +213,7 @@ static void finish(void *user_data)
     ts_destroy_browser_context(state->persistent_context);
     ts_destroy_browser_context(state->incognito_context);
     stop_auth_server(state);
-    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d js_dialogs=%d http_auth=%d\n",
+    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d target_url=%d js_dialogs=%d http_auth=%d\n",
         state->initialized,
         state->tab_ready,
         state->context_id_count,
@@ -218,6 +225,7 @@ static void finish(void *user_data)
         state->resized,
         state->focus_checked,
         state->input_checked,
+        state->target_url_checked,
         state->javascript_dialog_checked,
         state->http_auth_accept_checked && state->http_auth_reject_checked);
     fflush(stdout);
@@ -251,7 +259,29 @@ static void check_input_result(const char *result, void *user_data)
     if (!strstr(result, "\"colorScheme\":\"dark\""))
         fail("dark color scheme was not observed");
     state->input_checked = 1;
+    ts_post_task(run_target_url_sequence, state);
+}
+
+static void check_target_url_sequence(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    if (state->target_url_events != 2)
+        fail("target URL callback count mismatch");
+    if (strcmp(state->target_url_sequence[0], "https://example.test/surfari-target") != 0)
+        fail("target URL link callback mismatch");
+    if (strcmp(state->target_url_sequence[1], "") != 0)
+        fail("target URL clear callback mismatch");
+    state->target_url_checked = 1;
     ts_post_task(run_javascript_dialog_sequence, state);
+}
+
+static void run_target_url_sequence(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_forward_mouse_move(state->web_contents, 392, 112, 0);
+    ts_forward_mouse_move(state->web_contents, 408, 116, 0);
+    ts_forward_mouse_move(state->web_contents, 20, 20, 0);
+    ts_webkit_test_post_delayed_task(0.5, check_target_url_sequence, state);
 }
 
 static void query_input_state(void *user_data)
@@ -441,6 +471,21 @@ static void on_title_changed(ts_web_contents_t wc, const char *title, void *user
     printf("CALLBACK title_changed title=%s\n", title ? title : "");
 }
 
+static void on_target_url_changed(ts_web_contents_t wc, const char *url, void *user_data)
+{
+    (void)wc;
+    struct State *state = (struct State *)user_data;
+    printf("CALLBACK target_url url=%s\n", url ? url : "");
+    if (state->target_url_events < 2) {
+        snprintf(
+            state->target_url_sequence[state->target_url_events],
+            sizeof(state->target_url_sequence[state->target_url_events]),
+            "%s",
+            url ? url : "");
+    }
+    state->target_url_events++;
+}
+
 static void on_javascript_dialog_request(
     ts_web_contents_t wc,
     uint64_t request_id,
@@ -537,6 +582,7 @@ int main(int argc, const char **argv)
     ts_set_on_url_changed(on_url_changed, &state);
     ts_set_on_loading_state(on_loading_state, &state);
     ts_set_on_title_changed(on_title_changed, &state);
+    ts_set_on_target_url_changed(on_target_url_changed, &state);
     ts_set_on_javascript_dialog_request(on_javascript_dialog_request, &state);
     ts_set_on_http_auth_request(on_http_auth_request, &state);
 

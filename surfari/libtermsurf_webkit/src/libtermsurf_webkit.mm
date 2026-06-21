@@ -3,6 +3,8 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
+#import <WebKit/WKUIDelegatePrivate.h>
+#import <WebKit/_WKHitTestResult.h>
 
 #include <atomic>
 #include <cstdint>
@@ -78,7 +80,7 @@ struct WebContents;
 @property(nonatomic) WebContents *owner;
 @end
 
-@interface TSUIDelegate : NSObject <WKUIDelegate>
+@interface TSUIDelegate : NSObject <WKUIDelegatePrivate>
 @property(nonatomic) WebContents *owner;
 @end
 
@@ -101,6 +103,7 @@ struct WebContents {
     TSUIDelegate *ui_delegate;
     NSMutableDictionary<NSNumber *, TSPendingJavaScriptDialog *> *pending_javascript_dialogs;
     NSMutableDictionary<NSNumber *, TSPendingHttpAuthRequest *> *pending_http_auth_requests;
+    NSString *last_target_url;
     CAContext *remote_context;
     int width;
     int height;
@@ -249,6 +252,24 @@ static void fireTitle(WebContents *contents, NSString *title)
         return;
     withCString(title, ^(const char *c_title) {
         g_callbacks.on_title_changed(contents, c_title, g_callbacks.on_title_changed_data);
+    });
+}
+
+static void fireTargetUrl(WebContents *contents, NSString *url)
+{
+    if (!contents || !g_callbacks.on_target_url_changed)
+        return;
+
+    NSString *target_url = url ?: @"";
+    if (!contents->last_target_url && [target_url length] == 0)
+        return;
+
+    if (contents->last_target_url && [contents->last_target_url isEqualToString:target_url])
+        return;
+
+    contents->last_target_url = [target_url copy];
+    withCString(target_url, ^(const char *c_url) {
+        g_callbacks.on_target_url_changed(contents, c_url, g_callbacks.on_target_url_changed_data);
     });
 }
 
@@ -444,6 +465,14 @@ static void exportContext(WebContents *contents)
 @end
 
 @implementation TSUIDelegate
+- (void)_webView:(WKWebView *)webView mouseDidMoveOverElement:(_WKHitTestResult *)hitTestResult withFlags:(NSEventModifierFlags)flags userInfo:(id<NSSecureCoding>)userInfo
+{
+    (void)webView;
+    (void)flags;
+    (void)userInfo;
+    fireTargetUrl(self.owner, hitTestResult.absoluteLinkURL.absoluteString);
+}
+
 - (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler
 {
     (void)webView;

@@ -60,6 +60,7 @@ Implemented:
   events;
 - dark/light appearance assignment through `NSAppearance`;
 - tab ready, CA context ID, URL, loading, and title callbacks;
+- target URL updates through WebKit hover hit testing;
 - JavaScript alert, confirm, and prompt requests through `WKUIDelegate`, with
   pending request IDs and `ts_reply_javascript_dialog`;
 - HTTP Basic auth requests through `WKNavigationDelegate`, with
@@ -70,5 +71,4 @@ Still unsupported:
 - DevTools;
 - renderer crash reporting;
 - cursor updates;
-- target URL updates;
 - console messages.

@@ -146,3 +146,76 @@ blocker and the next experiment.
 **Fail** = the implementation regresses prior lifecycle/input/focus/dialog/auth
 coverage, fakes target URL changes without WebKit hover evidence, or cannot
 identify a concrete next step.
+
+## Result
+
+**Result:** Pass
+
+Implemented target URL callbacks in `libtermsurf_webkit` by adopting WebKit's
+private macOS `WKUIDelegatePrivate` hover-hit-test callback on `TSUIDelegate`.
+The implementation reads `_WKHitTestResult.absoluteLinkURL.absoluteString`,
+suppresses duplicate target URL values, suppresses the initial empty non-link
+state, and sends an empty string after leaving a previously hovered link.
+
+The smoke harness now places a deterministic link on the navigation test page,
+moves over it twice, moves away, and fails unless the callback sequence is
+exactly:
+
+1. `https://example.test/surfari-target`
+2. empty string
+
+Verification was run with:
+
+```bash
+surfari/libtermsurf_webkit/build.sh
+
+mkdir -p logs
+DYLD_FRAMEWORK_PATH="$PWD/webkit/src/WebKitBuild/Debug" \
+surfari/libtermsurf_webkit/build/smoke-test \
+  "$PWD/surfari/libtermsurf_webkit/test-content/index.html" \
+  "$PWD/surfari/libtermsurf_webkit/test-content/navigation.html" \
+  > logs/issue756-exp10-target-url.log 2>&1
+rc=$?
+echo "SMOKE_EXIT_STATUS=$rc" >> logs/issue756-exp10-target-url.log
+```
+
+Key evidence from `logs/issue756-exp10-target-url.log`:
+
+```text
+CALLBACK input_state {"focus":true,"focusIn":false,"blur":true,"move":"120,130","click":"140,150,0","scroll":-120,"key":"a","colorScheme":"dark"}
+CALLBACK target_url url=https://example.test/surfari-target
+CALLBACK target_url url=
+CALLBACK javascript_dialog_state {"alert":"done","confirm":true,"prompt":"surfari-prompt-reply"}
+CALLBACK http_auth request_id=4 url=http://127.0.0.1:50382/auth-accept scheme=basic challenger=http://127.0.0.1:50382 realm=surfari proxy=0 first=1 primary=1 navigation=1
+CALLBACK http_auth_accept_state Surfari Auth OK:auth-ok
+CALLBACK http_auth request_id=5 url=http://127.0.0.1:50382/auth-reject scheme=basic challenger=http://127.0.0.1:50382 realm=surfari proxy=0 first=1 primary=1 navigation=1
+SMOKE_PASS initialized=1 tab_ready=1 ca_context=5 url=6 loading_started=4 loading_finished=4 title=3 navigations=4 resized=1 focus=1 input=1 target_url=1 js_dialogs=1 http_auth=1
+SMOKE_EXIT_STATUS=0
+```
+
+Additional verification:
+
+- `nm -gU surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib | rg ' _ts_|_ts_webkit_test' | sort`
+  listed the expected exported `ts_*` and `ts_webkit_test_*` symbols, including
+  `_ts_set_on_target_url_changed`.
+- `otool -L` showed the library links to
+  `@rpath/WebKit.framework/Versions/A/WebKit` and the smoke test links to
+  `@rpath/libtermsurf_webkit.dylib`.
+- `git diff --check` passed.
+- `prettier --check --prose-wrap always --print-width 80 issues/0756-surfari/README.md issues/0756-surfari/10-webkit-target-url-hover.md`
+  passed.
+- `webkit/src` remained clean at `1452a43959523449099b2616793fd2c5b6a6487e` on
+  `webkit-1452a439-issue-756`, with shallow repository state `true`.
+
+## Conclusion
+
+WebKit's real hover-hit-test path works through forwarded Cocoa mouse movement,
+so Surfari can now report target URL changes without JavaScript injection or
+local synthetic hit testing. The remaining unsupported browser-state gaps are
+DevTools, renderer crash reporting, cursor updates, and console messages.
+
+## Completion Review
+
+Adversarial subagent review, fresh context, read-only.
+
+Verdict: **Approved**. No Required findings.
