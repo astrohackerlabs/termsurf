@@ -292,4 +292,4 @@ recovery. Much of this code can inform Surfari's implementation.
 - [Experiment 15: Stand up the Surfari Rust binary](15-surfari-rust-binary.md) —
   **Pass**
 - [Experiment 16: Prove Surfari fake-GUI IPC](16-surfari-fake-gui-ipc.md) —
-  **Designed**
+  **Pass**

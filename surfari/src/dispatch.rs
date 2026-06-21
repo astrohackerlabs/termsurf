@@ -644,24 +644,26 @@ pub unsafe extern "C" fn on_url_changed(
 
 pub unsafe extern "C" fn on_loading_state(
     wc: TsWebContents,
-    state: *const std::os::raw::c_char,
-    progress: i32,
+    url: *const std::os::raw::c_char,
+    loading: i32,
     _user_data: *mut c_void,
 ) {
-    let state_str = unsafe { std::ffi::CStr::from_ptr(state) }
+    let url_str = unsafe { std::ffi::CStr::from_ptr(url) }
         .to_string_lossy()
         .into_owned();
+    let state_str = if loading != 0 { "loading" } else { "done" }.to_string();
+    let progress = if loading != 0 { 1 } else { 0 };
     let Some(t) = find_by_handle(wc) else {
         let pending_null_handle = tabs().iter().any(|t| t.handle.is_null());
         trace_pdf_input(format!(
-            "loading-state-callback-missing-tab handle={:p} pending_null_handle={} state={} progress={}",
-            wc, pending_null_handle, state_str, progress
+            "loading-state-callback-missing-tab handle={:p} pending_null_handle={} url={} state={} progress={}",
+            wc, pending_null_handle, url_str, state_str, progress
         ));
         return;
     };
     trace_pdf_input(format!(
-        "loading-state-callback tab={} pane={} state={} progress={}",
-        t.tab_id, t.pane_id, state_str, progress
+        "loading-state-callback tab={} pane={} url={} state={} progress={}",
+        t.tab_id, t.pane_id, url_str, state_str, progress
     ));
     let msg = TermSurfMessage {
         msg: Some(Msg::LoadingState(proto::termsurf::LoadingState {
