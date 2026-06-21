@@ -93,6 +93,10 @@ browser/zig-out/
 !/chromium/patches/
 !/chromium/README.md
 
+# WebKit build workspace (src/ and build products ignored)
+/webkit/*
+!/webkit/README.md
+
 # TermSurf 4.0 (ts4/) build outputs
 ts4/termsurf-window/.build/
 ts4/termsurf-terminal/target/

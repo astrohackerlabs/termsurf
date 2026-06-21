@@ -120,3 +120,150 @@ The fixed design was re-reviewed by a fresh adversarial Codex subagent.
 The re-review confirmed that the repo-root command issue, shallow-state capture,
 and concrete `.gitignore` pattern are all resolved, with no new required
 findings.
+
+## Result
+
+**Result:** Pass
+
+The shallow WebKit checkout and official macOS debug build succeeded on this VM.
+
+Commands and relevant output:
+
+```text
+$ git clone --depth 1 https://github.com/WebKit/WebKit.git webkit/src
+Cloning into 'webkit/src'...
+Updating files: 100% (456693/456693), done.
+
+$ xcode-select -p
+/Applications/Xcode.app/Contents/Developer
+
+$ xcodebuild -version
+Xcode 26.6
+Build version 17F109
+
+$ xcodebuild -downloadComponent MetalToolchain
+Beginning asset download...
+Downloaded asset to: /System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/5f4a441a6d0a11f2e9b28c67384263afe92320f7.asset/AssetData/Restore/022-21788-058.dmg
+Done downloading: Metal Toolchain 17F109.
+
+$ webkit/src/Tools/Scripts/build-webkit --debug
+** BUILD SUCCEEDED ** [2.187 sec]
+
+====================================================================
+ WebKit is now built (17m:21s).
+ To run Safari with this newly-built code, use
+ the command "webkit/src/Tools/Scripts/run-safari --debug".
+====================================================================
+```
+
+Verification artifacts:
+
+```text
+$ git -C webkit/src rev-parse HEAD
+1452a43959523449099b2616793fd2c5b6a6487e
+
+$ git -C webkit/src rev-parse --is-shallow-repository
+true
+
+$ find webkit/src/WebKitBuild -maxdepth 2 -type d | sort | head -50
+webkit/src/WebKitBuild
+webkit/src/WebKitBuild/ANGLE.build
+webkit/src/WebKitBuild/ANGLE.build/Debug
+webkit/src/WebKitBuild/Debug
+webkit/src/WebKitBuild/Debug/DerivedSources
+webkit/src/WebKitBuild/Debug/DumpRenderTree.app
+webkit/src/WebKitBuild/Debug/DumpRenderTree.dSYM
+webkit/src/WebKitBuild/Debug/DumpRenderTree.resources
+webkit/src/WebKitBuild/Debug/ImageDiff.dSYM
+webkit/src/WebKitBuild/Debug/InjectedBundleTestWebKitAPI.bundle
+webkit/src/WebKitBuild/Debug/InjectedBundleTestWebKitAPI.bundle.dSYM
+webkit/src/WebKitBuild/Debug/JavaScriptCore.framework
+webkit/src/WebKitBuild/Debug/LLIntOffsets
+webkit/src/WebKitBuild/Debug/LayoutTestHelper.dSYM
+webkit/src/WebKitBuild/Debug/MiniBrowser.app
+webkit/src/WebKitBuild/Debug/MiniBrowser.app.dSYM
+webkit/src/WebKitBuild/Debug/SwiftBrowser.app
+webkit/src/WebKitBuild/Debug/SwiftBrowser.swiftmodule
+webkit/src/WebKitBuild/Debug/TestIPC.dSYM
+webkit/src/WebKitBuild/Debug/TestIPC.swiftmodule
+webkit/src/WebKitBuild/Debug/TestWGSL.dSYM
+webkit/src/WebKitBuild/Debug/TestWGSL.swiftmodule
+webkit/src/WebKitBuild/Debug/TestWTF.dSYM
+webkit/src/WebKitBuild/Debug/TestWTF.swiftmodule
+webkit/src/WebKitBuild/Debug/TestWebKitAPI.app
+webkit/src/WebKitBuild/Debug/TestWebKitAPI.app.dSYM
+webkit/src/WebKitBuild/Debug/TestWebKitAPI.dSYM
+webkit/src/WebKitBuild/Debug/TestWebKitAPI.swiftmodule
+webkit/src/WebKitBuild/Debug/TestWebKitAPI.wkbundle
+webkit/src/WebKitBuild/Debug/TestWebKitAPI.wkbundle.dSYM
+webkit/src/WebKitBuild/Debug/TestWebKitAPIBundle.swiftmodule
+webkit/src/WebKitBuild/Debug/TestWebKitAPILibrary.swiftmodule
+webkit/src/WebKitBuild/Debug/TestWebKitAPIResources.bundle
+webkit/src/WebKitBuild/Debug/Testing.framework
+webkit/src/WebKitBuild/Debug/WebCore.framework
+webkit/src/WebKitBuild/Debug/WebGPU.framework
+webkit/src/WebKitBuild/Debug/WebInspectorUI.framework
+webkit/src/WebKitBuild/Debug/WebKit.framework
+webkit/src/WebKitBuild/Debug/WebKitLegacy.framework
+webkit/src/WebKitBuild/Debug/WebKitSwift.swiftmodule
+webkit/src/WebKitBuild/Debug/WebKitTestRunner.dSYM
+webkit/src/WebKitBuild/Debug/WebKitTestRunnerApp.app
+webkit/src/WebKitBuild/Debug/WebKitTestRunnerInjectedBundle.bundle
+webkit/src/WebKitBuild/Debug/WebKitTestRunnerInjectedBundle.bundle.dSYM
+webkit/src/WebKitBuild/Debug/WebKitTestSupport
+webkit/src/WebKitBuild/Debug/_Testing_AppKit.framework
+webkit/src/WebKitBuild/Debug/_Testing_CoreGraphics.framework
+webkit/src/WebKitBuild/Debug/_Testing_CoreImage.framework
+webkit/src/WebKitBuild/Debug/_Testing_Foundation.framework
+webkit/src/WebKitBuild/Debug/_Testing_UIKit.framework
+
+$ du -sh webkit/src webkit/src/WebKitBuild
+45G     webkit/src
+37G     webkit/src/WebKitBuild
+
+$ df -h .
+Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk2s5   384Gi   230Gi   133Gi    64%    2.7M  1.4G    0%   /System/Volumes/Data
+
+$ git status --short
+ M .gitignore
+ M issues/0756-surfari/README.md
+ M issues/0756-surfari/01-shallow-clone-and-build-webkit.md
+?? webkit/
+```
+
+The `webkit/` entry is expected because `webkit/README.md` is the only tracked
+file under the new workspace; `webkit/src/` and `WebKitBuild/` are ignored by
+the new `.gitignore` rule.
+
+## Conclusion
+
+The macOS VM can shallow-clone upstream WebKit into `webkit/src` and complete
+the official WebKit debug build from the TermSurf repo root. No source changes
+to WebKit, Surfari, Ghostboard, Roamium, webtui, or the protocol were needed.
+
+The next experiment can assume a source-built WebKit exists locally and should
+begin researching the compositing hook needed for Surfari, especially where
+WebKit owns or exports the layer-hosting context that could map onto
+Ghostboard's existing `CAContext` / `CALayerHost` path.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+**Verdict:** Approved.
+
+Findings: none.
+
+The reviewer independently confirmed that:
+
+- the issue README marks Experiment 1 as `Pass`;
+- this experiment file has `Result` and `Conclusion` sections;
+- `.gitignore` ignores `/webkit/*` and unignores `/webkit/README.md`;
+- `webkit/src` is ignored while `webkit/README.md` is trackable;
+- local WebKit state matches the recorded commit
+  `1452a43959523449099b2616793fd2c5b6a6487e`;
+- the checkout is shallow;
+- `webkit/src/WebKitBuild/Debug` products exist;
+- the result commit had not yet been made at review time.

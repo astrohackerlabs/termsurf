@@ -176,4 +176,4 @@ recovery. Much of this code can inform Surfari's implementation.
 ## Experiments
 
 - [Experiment 1: Shallow clone and build WebKit](01-shallow-clone-and-build-webkit.md)
-  — **Designed**
+  — **Pass**
