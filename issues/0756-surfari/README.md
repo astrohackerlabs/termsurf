@@ -157,13 +157,15 @@ surrounding issue text.
       and destroy browser views, navigate, reload, stop, resize, focus, forward
       mouse/keyboard/wheel input, report browser state, and expose compositing
       handles.
-- [ ] Create the Surfari Rust binary by reusing the Roamium-style Unix socket,
-      protobuf dispatch, process lifecycle, and profile management code.
-- [ ] Run Surfari outside Ghostboard with a small test driver or harness and
-      prove the Rust process can drive WebKit through `libtermsurf_webkit`.
-- [ ] Audit Surfari against Roamium and the existing TermSurf protobuf messages;
+- [x] Create the Surfari Rust binary by reusing the Roamium-style Unix socket,
+      protobuf dispatch, process lifecycle, and profile management code
+      (Experiment 15).
+- [x] Run Surfari outside Ghostboard with a small test driver or harness and
+      prove the Rust process can drive WebKit through `libtermsurf_webkit`
+      (Experiment 16).
+- [x] Audit Surfari against Roamium and the existing TermSurf protobuf messages;
       mark every message supported, unsupported, or requiring a protocol
-      extension.
+      extension (Experiment 17).
 - [ ] Modify `termsurf.proto` only where WebKit exposes a real browser
       capability that the current protocol cannot express.
 - [ ] Integrate Surfari with Ghostboard engine launching, profile selection,
@@ -294,4 +296,4 @@ recovery. Much of this code can inform Surfari's implementation.
 - [Experiment 16: Prove Surfari fake-GUI IPC](16-surfari-fake-gui-ipc.md) —
   **Pass**
 - [Experiment 17: Audit Surfari protocol parity](17-surfari-protocol-parity-audit.md)
-  — **Designed**
+  — **Pass**
