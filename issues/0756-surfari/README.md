@@ -153,10 +153,10 @@ surrounding issue text.
       commands, and a clear record of each TermSurf patch.
 - [x] Create `libtermsurf_webkit` with a C ABI backed by Objective-C++/Cocoa on
       macOS.
-- [ ] Implement the core `libtermsurf_webkit` API: initialize, shutdown, create
+- [x] Implement the core `libtermsurf_webkit` API: initialize, shutdown, create
       and destroy browser views, navigate, reload, stop, resize, focus, forward
       mouse/keyboard/wheel input, report browser state, and expose compositing
-      handles.
+      handles (Experiments 5-14, 18).
 - [x] Create the Surfari Rust binary by reusing the Roamium-style Unix socket,
       protobuf dispatch, process lifecycle, and profile management code
       (Experiment 15).
@@ -166,8 +166,9 @@ surrounding issue text.
 - [x] Audit Surfari against Roamium and the existing TermSurf protobuf messages;
       mark every message supported, unsupported, or requiring a protocol
       extension (Experiment 17).
-- [ ] Modify `termsurf.proto` only where WebKit exposes a real browser
-      capability that the current protocol cannot express.
+- [x] Modify `termsurf.proto` only where WebKit exposes a real browser
+      capability that the current protocol cannot express; Experiments 17-18
+      found no required protocol changes.
 - [ ] Integrate Surfari with Ghostboard engine launching, profile selection,
       socket routing, and overlay hosting.
 - [ ] Test Surfari inside the real TermSurf app with navigation, keyboard input,
@@ -299,3 +300,5 @@ recovery. Much of this code can inform Surfari's implementation.
   — **Pass**
 - [Experiment 18: Implement Surfari DevTools Path](18-surfari-devtools-path.md)
   — **Pass**
+- [Experiment 19: Add Ghostboard Surfari Launch Path](19-ghostboard-surfari-launch.md)
+  — **Designed**
