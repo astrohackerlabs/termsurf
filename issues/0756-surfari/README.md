@@ -172,3 +172,8 @@ recovery. Much of this code can inform Surfari's implementation.
 5. Update Ghostboard to launch Surfari processes for WebKit profiles
 6. Update the `web` TUI to support `--browser webkit` (or similar)
 7. Test with all existing protocol messages
+
+## Experiments
+
+- [Experiment 1: Shallow clone and build WebKit](01-shallow-clone-and-build-webkit.md)
+  — **Designed**
