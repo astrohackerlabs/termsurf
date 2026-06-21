@@ -33,15 +33,18 @@ static NSURL *navigationPageURL(void)
 
 @interface HostDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic) uint32_t contextId;
+@property(nonatomic) BOOL stressMode;
 @property(nonatomic, strong) NSWindow *window;
 @end
 
 @implementation HostDelegate
-- (instancetype)initWithContextId:(uint32_t)contextId
+- (instancetype)initWithContextId:(uint32_t)contextId stressMode:(BOOL)stressMode
 {
     self = [super init];
-    if (self)
+    if (self) {
         _contextId = contextId;
+        _stressMode = stressMode;
+    }
     return self;
 }
 
@@ -68,12 +71,58 @@ static NSURL *navigationPageURL(void)
     [NSApp activateIgnoringOtherApps:YES];
 
     NSLog(@"HOST_READY pid=%d context_id=%u host_has_no_wkwebview=1", getpid(), self.contextId);
+
+    if (self.stressMode)
+        [self scheduleStressLifecycle];
+}
+
+- (void)scheduleStressLifecycle
+{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self resizeHostWindow];
+    });
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self runHideShowCycle:1];
+    });
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(7.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self runHideShowCycle:2];
+    });
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"HOST_FINAL_VISIBLE pid=%d context_id=%u visible=%d", getpid(), self.contextId, self.window.visible);
+    });
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"HOST_TERMINATING pid=%d context_id=%u", getpid(), self.contextId);
+        [NSApp terminate:nil];
+    });
+}
+
+- (void)resizeHostWindow
+{
+    NSRect frame = self.window.frame;
+    frame.size = NSMakeSize(820, 620);
+    [self.window setFrame:frame display:YES animate:NO];
+    NSLog(@"HOST_RESIZED pid=%d size=%0.0fx%0.0f", getpid(), self.window.contentView.bounds.size.width, self.window.contentView.bounds.size.height);
+}
+
+- (void)runHideShowCycle:(NSInteger)cycle
+{
+    [self.window orderOut:nil];
+    NSLog(@"HOST_HIDDEN pid=%d cycle=%ld", getpid(), (long)cycle);
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.55 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self.window makeKeyAndOrderFront:nil];
+        NSLog(@"HOST_HIDE_SHOW_CYCLE_%ld_COMPLETE pid=%d visible=%d", (long)cycle, getpid(), self.window.visible);
+    });
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
 {
     (void)sender;
-    return YES;
+    return !self.stressMode;
 }
 @end
 
@@ -83,6 +132,7 @@ static NSURL *navigationPageURL(void)
 @property(nonatomic, strong) CAContext *remoteContext;
 @property(nonatomic, strong) NSTask *hostTask;
 @property(nonatomic) BOOL exportedInitialContext;
+@property(nonatomic) BOOL stressMode;
 @end
 
 @implementation OwnerDelegate
@@ -142,9 +192,21 @@ static NSURL *navigationPageURL(void)
     NSString *executablePath = [[NSBundle mainBundle] executablePath];
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:executablePath];
-    task.arguments = @[ @"--host", [NSString stringWithFormat:@"%u", contextId] ];
+    if (self.stressMode)
+        task.arguments = @[ @"--host", [NSString stringWithFormat:@"%u", contextId], @"--stress" ];
+    else
+        task.arguments = @[ @"--host", [NSString stringWithFormat:@"%u", contextId] ];
     task.standardOutput = NSFileHandle.fileHandleWithStandardOutput;
     task.standardError = NSFileHandle.fileHandleWithStandardError;
+    task.terminationHandler = ^(NSTask *finishedTask) {
+        NSLog(@"OWNER_OBSERVED_HOST_TERMINATION host_pid=%d status=%d", finishedTask.processIdentifier, finishedTask.terminationStatus);
+        if (self.stressMode) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSLog(@"OWNER_TERMINATING pid=%d", getpid());
+                [NSApp terminate:nil];
+            });
+        }
+    };
 
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
@@ -196,23 +258,24 @@ static NSURL *navigationPageURL(void)
 }
 @end
 
-static void runHost(uint32_t contextId)
+static void runHost(uint32_t contextId, BOOL stressMode)
 {
     @autoreleasepool {
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-        HostDelegate *delegate = [[HostDelegate alloc] initWithContextId:contextId];
+        HostDelegate *delegate = [[HostDelegate alloc] initWithContextId:contextId stressMode:stressMode];
         application.delegate = delegate;
         [application run];
     }
 }
 
-static void runOwner(void)
+static void runOwner(BOOL stressMode)
 {
     @autoreleasepool {
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyRegular];
         OwnerDelegate *delegate = [[OwnerDelegate alloc] init];
+        delegate.stressMode = stressMode;
         application.delegate = delegate;
         [application run];
     }
@@ -220,21 +283,31 @@ static void runOwner(void)
 
 int main(int argc, const char *argv[])
 {
-    if (argc == 3 && strcmp(argv[1], "--host") == 0) {
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "--host") == 0) {
         uint32_t contextId = (uint32_t)strtoul(argv[2], NULL, 10);
         if (!contextId) {
             fprintf(stderr, "invalid context id: %s\n", argv[2]);
             return 2;
         }
-        runHost(contextId);
+        BOOL stressMode = argc == 4 && strcmp(argv[3], "--stress") == 0;
+        if (argc == 4 && !stressMode) {
+            fprintf(stderr, "unknown host argument: %s\n", argv[3]);
+            return 2;
+        }
+        runHost(contextId, stressMode);
         return 0;
     }
 
-    if (argc == 2 && strcmp(argv[1], "--owner") == 0) {
-        runOwner();
+    if ((argc == 2 || argc == 3) && strcmp(argv[1], "--owner") == 0) {
+        BOOL stressMode = argc == 3 && strcmp(argv[2], "--stress") == 0;
+        if (argc == 3 && !stressMode) {
+            fprintf(stderr, "unknown owner argument: %s\n", argv[2]);
+            return 2;
+        }
+        runOwner(stressMode);
         return 0;
     }
 
-    fprintf(stderr, "usage: %s --owner | --host <context-id>\n", argv[0]);
+    fprintf(stderr, "usage: %s --owner [--stress] | --host <context-id> [--stress]\n", argv[0]);
     return 2;
 }

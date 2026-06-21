@@ -146,7 +146,7 @@ surrounding issue text.
 - [x] Prove WebKit content can be hosted outside its original WebKit process
       boundary by exporting a WebKit render surface or hosting context and
       displaying it in a separate host window/process.
-- [ ] Confirm the hosted WebKit surface resizes correctly, animates, scrolls,
+- [x] Confirm the hosted WebKit surface resizes correctly, animates, scrolls,
       survives navigation, and remains stable across repeated show/hide cycles.
 - [ ] Establish WebKit branch and patch management analogous to Chromium:
       issue-specific branches, documented upstream commit ancestry, build
@@ -266,4 +266,4 @@ recovery. Much of this code can inform Surfari's implementation.
 - [Experiment 2: Prove WebKit hosting context export](02-webkit-hosting-context-proof.md)
   — **Pass**
 - [Experiment 3: Stress hosted WebKit surface lifecycle](03-hosted-surface-lifecycle.md)
-  — **Designed**
+  — **Pass**

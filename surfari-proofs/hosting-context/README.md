@@ -32,3 +32,15 @@ surfari-proofs/hosting-context/build/WebKitHostingProof --owner
 
 The owner process writes a log to stdout and launches the host process. The host
 prints its own log to stdout when run directly with `--host`.
+
+## Stress Run
+
+Experiment 3 uses stress mode:
+
+```bash
+surfari-proofs/hosting-context/build/WebKitHostingProof --owner --stress
+```
+
+Stress mode keeps the same two-process architecture, then runs deterministic
+owner resize, host resize, navigation, host hide/show, and clean termination
+steps.
