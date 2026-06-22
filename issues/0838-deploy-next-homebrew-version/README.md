@@ -115,6 +115,8 @@ This issue covers the next Homebrew deployment. It may include:
 
 - [Experiment 1: Bootstrap WebKit and Surfari](01-bootstrap-webkit-surfari.md) —
   **Partial** (smoke test fails on focus observation)
+- [Experiment 2: Restore Surfari focus activation](02-restore-surfari-focus-activation.md)
+  — **Designed**
 
 ## Acceptance Criteria
 
