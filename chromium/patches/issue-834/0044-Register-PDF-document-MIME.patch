@@ -1,7 +1,7 @@
 From e2be44c245affe63900c7885d91bb1b13a8bae0c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 16:00:16 -0500
-Subject: [PATCH 44/77] Register PDF document MIME
+Subject: [PATCH 44/78] Register PDF document MIME
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

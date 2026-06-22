@@ -1,7 +1,7 @@
 From de4cdb11d3c7a08de126fe35b03015f5526249fa Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 23 May 2026 06:50:33 -0500
-Subject: [PATCH 16/77] Sync GUI focus into Chromium
+Subject: [PATCH 16/78] Sync GUI focus into Chromium
 
 When Wezboard steps out of sight,
 The popups bow and quit the light.

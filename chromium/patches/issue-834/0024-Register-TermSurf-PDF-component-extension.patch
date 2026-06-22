@@ -1,7 +1,7 @@
 From 183ad2832d2444aebd36e4fc3868b50ff88b6b1c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 09:08:26 -0500
-Subject: [PATCH 24/77] Register TermSurf PDF component extension
+Subject: [PATCH 24/78] Register TermSurf PDF component extension
 
 ---
  content/libtermsurf_chromium/BUILD.gn         |   5 +

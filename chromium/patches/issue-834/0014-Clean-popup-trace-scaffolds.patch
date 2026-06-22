@@ -1,7 +1,7 @@
 From ee7d0323efe922a6a27f633b428fb926b6300fe8 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 23 May 2026 05:44:25 -0500
-Subject: [PATCH 14/77] Clean popup trace scaffolds
+Subject: [PATCH 14/78] Clean popup trace scaffolds
 
 Old watchers packed their clipboards away,
 While popups kept their place in the play.

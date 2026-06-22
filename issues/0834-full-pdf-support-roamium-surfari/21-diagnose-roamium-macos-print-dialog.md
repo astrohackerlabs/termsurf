@@ -205,3 +205,100 @@ Re-review verdict: **Approved**.
 
 The reviewer confirmed the prior Required finding is resolved and found no new
 Required findings.
+
+## Result
+
+**Result:** Partial
+
+Implemented the diagnostic path planned by this experiment:
+
+- added browser-side Roamium print-manager trace events in
+  `TsPdfPrintManager::ScriptedPrint()`;
+- added macOS `PrintingContextMac::AskUserForSettings()` trace events around
+  parent view/window discovery, `CATransaction` completion-block installation,
+  completion-block entry, and `[panel runModalWithPrintInfo:]`;
+- extended the native-print harness to merge browser-process `pdf-native-print`
+  stderr lines into `probe_summary.print.printNativeLines`;
+- extended the native-print classifier with macOS-specific sub-hop names;
+- extended the CoreGraphics watcher to retain a small candidate-window snapshot
+  when no `Print`/`Printer` dialog is observed.
+
+The first probe run exposed a bug in the initial trace implementation:
+browser-side `base::AppendToFile()` tripped Chromium's blocking-call DCHECK
+during the synchronous print Mojo call. The trace implementation was changed to
+use Chromium logging for browser/macOS events, and the Python harness now folds
+those stderr trace lines into the existing native-print event list.
+
+The final guarded probe completed with:
+
+```text
+first_failing_hop = "mac-print-modal-response-missing"
+safety_gate_passed = true
+probe_status = "ok"
+print_status = "print-native-click-sent"
+dialog_observed = false
+cancel_sent = false
+print_queue_before = ""
+print_queue_after = ""
+```
+
+The trace proves:
+
+```text
+ts-scripted-print-enter
+ts-scripted-print-call-ask-user-for-settings
+mac-ask-user-enter main_thread=true
+mac-ask-user-parent-view-present
+mac-ask-user-parent-window-present
+mac-ask-user-install-completion-block-enter
+mac-ask-user-install-completion-block-exit
+mac-ask-user-completion-block-enter
+mac-ask-user-run-modal-enter
+```
+
+No `mac-ask-user-modal-response-ok`, `mac-ask-user-modal-response-cancel`, or
+callback result event was recorded before the harness terminated Roamium. The
+CoreGraphics watcher did not observe a `Print` or `Printer` window. Its
+candidate-window snapshot repeatedly saw the existing Roamium `Content Shell`
+window but no separate visible print panel candidate.
+
+Verification evidence:
+
+- `autoninja -C out/Default libtermsurf_chromium` passed on
+  `148.0.7778.97-issue-834-exp21`.
+- Chromium source commit: `94e579f240d99bad9de011fc8f652939b997dc69`.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/test-issue-834-pdf-native-print.py`
+  passed and `scripts/__pycache__` was removed.
+- `node --check scripts/probe-pdf-save-print-title-local.mjs` passed.
+- `git diff --check` and `git -C chromium/src diff --check` passed.
+- `scripts/test-issue-834-pdf-native-print.py --log-dir logs/issue-834-exp21-macos-print-dialog --probe native-dialog --allow-native-dialog-click`
+  completed with `probe_status = "ok"`,
+  `first_failing_hop = "mac-print-modal-response-missing"`, and unchanged print
+  queues.
+- The cumulative Issue 834 patch archive was regenerated from
+  `6b3fa66a923a9442c8ab0bc71b4b41ff24528d3b` and now includes
+  `0078-Trace-macOS-PDF-print-modal.patch`.
+
+## Conclusion
+
+Experiment 21 replaced the broad `native-print-click-sent-no-dialog` failure
+with a precise macOS sub-hop. Roamium reaches the macOS print implementation on
+the main thread with a native parent window, installs and enters Chromium's
+`CATransaction` completion block, and calls `[panel runModalWithPrintInfo:]`.
+The path then blocks without an observed/cancellable native print panel and
+without a modal response.
+
+The next experiment should focus on why `NSPrintPanel runModalWithPrintInfo:`
+does not produce a visible window or response in Roamium's content-shell style
+embedding. Likely directions are AppKit application activation/presentation
+state, modal-session behavior in this embedding, and whether the print panel
+needs to be presented as a sheet or with an explicit app/window activation step
+instead of Chromium's stock modal path.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed result with fresh context.
+
+Verdict: **Approved**.
+
+The reviewer found no Required findings.

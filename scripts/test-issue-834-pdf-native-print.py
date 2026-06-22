@@ -394,6 +394,24 @@ import Foundation
 let titles = CommandLine.arguments[1].split(separator: "\u{1f}").map(String.init)
 let deadline = Date().addingTimeInterval(Double(CommandLine.arguments[2]) ?? 5.0)
 
+func emit(_ object: [String: Any], status: Int32) -> Never {
+    let data = try! JSONSerialization.data(withJSONObject: object, options: [])
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    exit(status)
+}
+
+func windowRecord(_ owner: String, _ pid: Int, _ name: String, _ x: Int, _ y: Int, _ width: Int, _ height: Int) -> [String: Any] {
+    return [
+        "owner": owner,
+        "pid": pid,
+        "name": name,
+        "bounds": ["x": x, "y": y, "width": width, "height": height]
+    ]
+}
+
+var candidates: [[String: Any]] = []
+
 while Date() < deadline {
     if let info = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
         for window in info {
@@ -407,15 +425,24 @@ while Date() < deadline {
             let width = Int((bounds["Width"] as? Double) ?? 0)
             let height = Int((bounds["Height"] as? Double) ?? 0)
             if onscreen && titles.contains(where: { name.contains($0) }) {
-                print("{\"observed\":true,\"owner\":\"\(owner)\",\"pid\":\(pid),\"name\":\"\(name)\",\"bounds\":{\"x\":\(x),\"y\":\(y),\"width\":\(width),\"height\":\(height)}}")
-                exit(0)
+                emit([
+                    "observed": true,
+                    "owner": owner,
+                    "pid": pid,
+                    "name": name,
+                    "bounds": ["x": x, "y": y, "width": width, "height": height],
+                    "candidates": candidates
+                ], status: 0)
+            }
+            let lowerOwner = owner.lowercased()
+            if onscreen && candidates.count < 80 && (!name.isEmpty || lowerOwner.contains("roamium")) {
+                candidates.append(windowRecord(owner, pid, name, x, y, width, height))
             }
         }
     }
     Thread.sleep(forTimeInterval: 0.2)
 }
-print("{\"observed\":false}")
-exit(1)
+emit(["observed": false, "candidates": candidates], status: 1)
 '''
     with tempfile.TemporaryDirectory(prefix="ts834-cgwindow-") as tmp:
         script = pathlib.Path(tmp) / "observe.swift"
@@ -919,6 +946,7 @@ def classify(
         print_summary = probe_summary.get("print") or {}
         status = print_summary.get("status")
         native_lines = print_summary.get("printNativeLines") or []
+        has_native_event = lambda event: any(f" event={event}" in line for line in native_lines)
         if status == "print-control-missing":
             state.first_failing_hop = "native-print-control-missing"
         elif status == "print-ready-disabled-by-flags":
@@ -929,12 +957,65 @@ def classify(
             state.first_failing_hop = "browser-default-print-settings-null"
         elif any(" event=print-init-settings-failed " in line for line in native_lines):
             state.first_failing_hop = "print-render-frame-helper-init-settings-failed"
+        elif has_native_event("ts-scripted-print-missing-request"):
+            state.first_failing_hop = "native-print-request-cookie-missing"
+        elif has_native_event("ts-scripted-print-context-null"):
+            state.first_failing_hop = "native-print-context-null"
+        elif has_native_event("ts-scripted-print-call-ask-user-for-settings") and not has_native_event(
+            "mac-ask-user-enter"
+        ):
+            state.first_failing_hop = "mac-print-ask-user-not-entered"
+        elif has_native_event("mac-ask-user-enter main_thread=false"):
+            state.first_failing_hop = "mac-print-dialog-wrong-thread"
+        elif has_native_event("mac-ask-user-parent-view-missing") or has_native_event(
+            "mac-ask-user-parent-window-missing"
+        ):
+            state.first_failing_hop = "mac-print-parent-window-missing"
+        elif has_native_event("mac-ask-user-enter") and not has_native_event(
+            "mac-ask-user-completion-block-enter"
+        ):
+            state.first_failing_hop = "mac-print-completion-block-not-run"
+        elif has_native_event("mac-ask-user-run-modal-enter") and not (
+            has_native_event("mac-ask-user-modal-response-ok")
+            or has_native_event("mac-ask-user-modal-response-cancel")
+        ):
+            state.first_failing_hop = "mac-print-modal-response-missing"
+        elif has_native_event("mac-ask-user-modal-response-ok") or has_native_event(
+            "mac-ask-user-callback-success"
+        ) or has_native_event("ts-scripted-print-callback-result-success"):
+            state.first_failing_hop = "mac-print-dialog-ok-safety-failure"
         elif print_watch and print_watch.get("dialog_observed") and print_watch.get("cancel_sent"):
             state.first_failing_hop = "native-print-dialog-seen-cancelled"
         elif print_watch and print_watch.get("dialog_observed"):
             state.first_failing_hop = "native-print-dialog-seen-cancel-failed"
+        elif has_native_event("mac-ask-user-modal-response-cancel") or has_native_event(
+            "mac-ask-user-callback-canceled"
+        ) or has_native_event("ts-scripted-print-callback-result-canceled"):
+            state.first_failing_hop = "mac-print-dialog-cancel-no-observed-dialog"
         else:
             state.first_failing_hop = "native-print-click-sent-no-dialog"
+
+
+def merge_roamium_native_trace_lines(log_dir: pathlib.Path, probe_summary: dict[str, Any] | None) -> None:
+    if not probe_summary:
+        return
+    print_summary = probe_summary.get("print")
+    if not isinstance(print_summary, dict):
+        return
+    stderr_path = log_dir / "roamium.stderr"
+    if not stderr_path.exists():
+        return
+    lines = print_summary.setdefault("printNativeLines", [])
+    seen = set(lines)
+    for raw_line in stderr_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        marker = "pdf-native-print pid="
+        marker_index = raw_line.find(marker)
+        if marker_index < 0:
+            continue
+        trace_line = raw_line[marker_index:]
+        if trace_line not in seen:
+            lines.append(trace_line)
+            seen.add(trace_line)
 
 
 def write_summary(
@@ -1090,6 +1171,7 @@ def main() -> int:
             }
             extra["print_dialog_watch"] = print_watch
             probe_summary = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.exists() else None
+            merge_roamium_native_trace_lines(log_dir, probe_summary)
             extra["probe_summary"] = probe_summary
             queue_after = print_queue_state()
             extra["print_queue_after"] = queue_after

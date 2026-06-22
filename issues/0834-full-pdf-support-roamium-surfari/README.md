@@ -161,7 +161,7 @@ Each feature row should ultimately record:
 - [Experiment 20: Wire Roamium browser print settings](20-wire-roamium-browser-print-settings.md)
   — **Partial**
 - [Experiment 21: Diagnose Roamium macOS print dialog](21-diagnose-roamium-macos-print-dialog.md)
-  — **Designed**
+  — **Partial**
 
 ## Roamium Phase
 

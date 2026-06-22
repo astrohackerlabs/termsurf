@@ -1,7 +1,7 @@
 From 309ef605233ed9dec5d70148ed5e2ec323caaebb Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Mon, 18 May 2026 08:38:27 -0500
-Subject: [PATCH 08/77] Adapt Shell popup hook for Chromium 148
+Subject: [PATCH 08/78] Adapt Shell popup hook for Chromium 148
 
 Two new args knocked at Shell,
 Old override lost its hat.

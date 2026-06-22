@@ -1,7 +1,7 @@
 From 321d50656f4b41fb8383d4b33240ddf8bae38a19 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 14:34:33 -0500
-Subject: [PATCH 39/77] Wire PDF stream info probes
+Subject: [PATCH 39/78] Wire PDF stream info probes
 
 The viewer stood beside the stream,
 But never asked it for a dream.

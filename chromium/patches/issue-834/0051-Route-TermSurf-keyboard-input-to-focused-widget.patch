@@ -1,7 +1,7 @@
 From 499fe3f298d2b93c707dfb54c08c7ff878133aca Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 09:07:58 -0500
-Subject: [PATCH 51/77] Route TermSurf keyboard input to focused widget
+Subject: [PATCH 51/78] Route TermSurf keyboard input to focused widget
 
 ---
  .../ts_browser_main_parts.cc                  | 131 +++++++++++++++++-
