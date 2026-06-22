@@ -124,6 +124,8 @@ This issue covers the next Homebrew deployment. It may include:
 - [Experiment 6: Package-only release validation](06-package-only-release-validation.md)
   — **Pass**
 - [Experiment 7: Publish release 1.4.0](07-publish-release-1-4-0.md) — **Pass**
+- [Experiment 8: Homebrew install verification](08-homebrew-install-verification.md)
+  — **Designed**
 
 ## Acceptance Criteria
 
