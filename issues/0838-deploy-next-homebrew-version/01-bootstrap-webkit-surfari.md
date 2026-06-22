@@ -156,3 +156,113 @@ Findings:
 Resolution:
 
 - Accepted. Added the tip commit/stat capture to verification and pass criteria.
+
+## Result
+
+**Result:** Partial
+
+WebKit bootstrap and build succeeded on this VM.
+
+Prerequisite checks:
+
+- `xcode-select -p` resolved to `/Applications/Xcode.app/Contents/Developer`.
+- `xcodebuild -version` reported Xcode `26.6`, build `17F109`.
+- `xcodebuild -downloadComponent MetalToolchain` completed successfully.
+
+WebKit checkout state after applying the archived Issue 756 patch:
+
+```text
+branch: webkit-1452a439-issue-756-exp12
+HEAD: ff39892387ab076d7c0ab3d94fdc1bc5727c9ee3
+shallow: true
+tip: ff39892387 Notify TermSurf cursor changes
+stat: Source/WebKit/UIProcess/mac/PageClientImplMac.mm | 9 +++++++++
+status: clean
+```
+
+`webkit/src/Tools/Scripts/build-webkit --debug` completed successfully:
+
+```text
+** BUILD SUCCEEDED **
+WebKit is now built (19m:45s).
+```
+
+The build produced the expected debug framework tree under
+`webkit/src/WebKitBuild/Debug`, including `WebKit.framework`,
+`WebCore.framework`, `JavaScriptCore.framework`, `WebGPU.framework`,
+`WebInspectorUI.framework`, and `WebKitLegacy.framework`.
+
+`surfari/libtermsurf_webkit/build.sh` completed and produced:
+
+```text
+surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib
+surfari/libtermsurf_webkit/build/smoke-test
+```
+
+It also emitted this linker warning:
+
+```text
+ld: warning: building for macOS-26.0, but linking with dylib
+'/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit' which was built
+for newer version 26.5
+```
+
+The smoke test loaded both deterministic local pages and reported CA context,
+URL, title, loading, resize, and focus callbacks, but failed because focus was
+not observed:
+
+```text
+SMOKE_FAIL focus was not observed
+CALLBACK initialized
+CALLBACK tab_ready tab_id=1
+CALLBACK ca_context_id context_id=3723379767 width=320 height=240
+CALLBACK loading_state loading=1 url=file:///Users/astrohacker/dev/termsurf/surfari/libtermsurf_webkit/test-content/index.html
+CALLBACK title_changed title=Surfari ABI First Page
+CALLBACK loading_state loading=0 url=file:///Users/astrohacker/dev/termsurf/surfari/libtermsurf_webkit/test-content/index.html
+CALLBACK loading_state loading=1 url=file:///Users/astrohacker/dev/termsurf/surfari/libtermsurf_webkit/test-content/navigation.html
+CALLBACK title_changed title=Surfari ABI Navigation Page
+CALLBACK loading_state loading=0 url=file:///Users/astrohacker/dev/termsurf/surfari/libtermsurf_webkit/test-content/navigation.html
+CALLBACK ca_context_id context_id=3723379767 width=640 height=480
+CALLBACK focus_state {"focus":false,"focusIn":false,"hasFocus":false,"activeElement":""}
+```
+
+`cargo build -p surfari` completed successfully and produced
+`target/debug/surfari`.
+
+Final verification state:
+
+- `surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib` exists.
+- `surfari/libtermsurf_webkit/build/smoke-test` exists.
+- `target/debug/surfari` exists.
+- `git -C webkit/src status --short` was clean.
+- `git diff --check` reported no whitespace errors.
+- The main TermSurf working tree had no tracked changes before recording this
+  result.
+
+## Conclusion
+
+The machine can build the patched WebKit workspace, `libtermsurf_webkit`, and
+the Rust `surfari` binary. The remaining blocker for Stage 3 is the
+`libtermsurf_webkit` smoke test's focus assertion. The next experiment should
+investigate whether the smoke test is too strict for a headless/non-key window
+context, whether the WebKit focus API changed under Xcode/macOS 26.5/26.6, or
+whether `libtermsurf_webkit` needs an explicit focus activation step before the
+focus check.
+
+## Completion Review
+
+Adversarial subagent review, fresh context, completed after implementation and
+result recording.
+
+Verdict: **Approved**.
+
+Findings:
+
+- No required fixes.
+- Optional: the result text says "focus callbacks" plural, while the captured
+  output shows one `focus_state` callback reporting false focus.
+
+Resolution:
+
+- No change required. The optional wording issue does not affect the recorded
+  result or next-step decision.
