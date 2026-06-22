@@ -1,7 +1,7 @@
 From 264d6f85cd2a61c0346b98788def44b9e930f0cf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 15:05:47 -0500
-Subject: [PATCH 41/81] Load components PDF resources
+Subject: [PATCH 41/82] Load components PDF resources
 
 The iframe recipe hid from sight,
 In components pak tucked tight.

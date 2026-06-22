@@ -1,7 +1,7 @@
 From e6135ddf43e5162d97d25f4e35ff0cac55aad15f Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 08:47:52 -0500
-Subject: [PATCH 50/81] Route TermSurf mouse input through Chromium router
+Subject: [PATCH 50/82] Route TermSurf mouse input through Chromium router
 
 ---
  .../ts_browser_main_parts.cc                  | 168 +++++++++++++-----

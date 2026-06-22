@@ -1,7 +1,7 @@
 From 9d7f8b7265640a4ea22a9aae1a3717819cef429a Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 15:44:39 -0500
-Subject: [PATCH 81/81] Probe GUI active print focus
+Subject: [PATCH 81/82] Probe GUI active print focus
 
 A print panel knocked, but stayed offstage,
 So active state stepped onto the page.

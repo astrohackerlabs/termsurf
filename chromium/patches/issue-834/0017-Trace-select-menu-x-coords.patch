@@ -1,7 +1,7 @@
 From 99328a4ab6b628918d90c37ae07955eadbdebf90 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 23 May 2026 07:10:34 -0500
-Subject: [PATCH 17/81] Trace select menu x coords
+Subject: [PATCH 17/82] Trace select menu x coords
 
 The menu slipped sideways,
 So every bridge now names its place.

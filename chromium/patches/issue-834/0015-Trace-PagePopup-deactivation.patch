@@ -1,7 +1,7 @@
 From 19acc7ff908a9585413009afbbd65cdf76effb72 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 23 May 2026 06:14:06 -0500
-Subject: [PATCH 15/81] Trace PagePopup deactivation
+Subject: [PATCH 15/82] Trace PagePopup deactivation
 
 When Wezboard leaves the stage,
 Chromium keeps the props in view;

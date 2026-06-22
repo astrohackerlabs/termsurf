@@ -1,7 +1,7 @@
 From 7d0ed56bf1693468a6e992932c32fdf67f29ceaf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 23:10:40 -0500
-Subject: [PATCH 73/81] Expose incognito context
+Subject: [PATCH 73/82] Expose incognito context
 
 A context slipped out through a door,
 Promising crumbs nevermore.

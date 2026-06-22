@@ -1,7 +1,7 @@
 From c922e4638e0df6780bd57474ee7a33de56f63a25 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 08:24:42 -0500
-Subject: [PATCH 49/81] Route TermSurf wheel input through Chromium router
+Subject: [PATCH 49/82] Route TermSurf wheel input through Chromium router
 
 ---
  .../ts_browser_main_parts.cc                  | 85 ++++++++++++++++++-

@@ -1,7 +1,7 @@
 From 0d37f9375fddacd6b0672e9998bff6f5e496f268 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 12:28:33 -0500
-Subject: [PATCH 55/81] Complete PDF viewer strings
+Subject: [PATCH 55/82] Complete PDF viewer strings
 
 ---
  ...ts_component_extension_resource_manager.cc | 192 +++++++++++++++++-

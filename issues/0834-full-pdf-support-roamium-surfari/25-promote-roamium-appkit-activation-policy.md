@@ -186,3 +186,111 @@ The reviewer suggested one optional improvement: require the helper to log the
 boolean return value from `setActivationPolicy:` so the result can distinguish
 setter rejection from immediate reversion. That suggestion was accepted and
 added to the Changes and Verification requirements.
+
+## Result
+
+**Result:** Partial
+
+The AppKit activation policy hypothesis was real, but not sufficient to pass
+native print.
+
+The Chromium `SetGuiActive(active=true)` path now promotes Roamium from
+`NSApplicationActivationPolicyProhibited` to
+`NSApplicationActivationPolicyRegular` before calling the content-shell window
+activation path. The probe records:
+
+- `set-gui-active-policy-promotion policy_before=2 attempted=1 setter_result=1 policy_after=0 changed=1`;
+- after shell activation, `activation_policy=0` but `app_active=0`, with no key
+  or main window yet;
+- by the print path's before-activation trace, AppKit has completed activation:
+  `activation_policy=regular active=true`;
+- the parent window is also key/main by then:
+  `present=true key=true main=true visible=true ... matches_key=true matches_main=true`.
+
+So Experiment 25 proves that:
+
+- Roamium starts in prohibited AppKit activation policy;
+- `setActivationPolicy:NSApplicationActivationPolicyRegular` succeeds when run
+  before shell activation;
+- the active/key/main state is available by the time native print starts;
+- the previous inactive/non-key/non-main AppKit state is no longer the first
+  remaining blocker.
+
+Native print still does not pass:
+
+- the harness records `gui_active_sent=true`;
+- the probe status is `print-native-click-sent`;
+- the first failing hop remains `mac-print-app-modal-response-missing`;
+- the watcher does not observe a native print dialog;
+- print queue state is unchanged;
+- no print job is submitted;
+- Roamium remains alive until harness shutdown.
+
+Verification run:
+
+```bash
+git status --short
+git -C chromium/src status --short
+git -C chromium/src rev-parse --abbrev-ref HEAD
+git -C chromium/src rev-parse HEAD
+git diff --check
+
+cd chromium/src
+export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
+autoninja -C out/Default libtermsurf_chromium
+
+cd /Users/astrohacker/dev/termsurf
+rm -rf scripts/__pycache__
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-pdf-native-print.py
+rm -rf scripts/__pycache__
+node --check scripts/probe-pdf-save-print-title-local.mjs
+
+rm -rf logs/issue-834-exp25-appkit-activation-policy
+python3 scripts/test-issue-834-pdf-native-print.py \
+  --log-dir logs/issue-834-exp25-appkit-activation-policy \
+  --probe native-dialog \
+  --allow-native-dialog-click
+```
+
+The final probe returned nonzero because the experiment did not reach safe
+native-dialog cancellation. Its summary is at
+`logs/issue-834-exp25-appkit-activation-policy/pdf-native-print-summary.json`.
+
+The Chromium branch `148.0.7778.97-issue-834-exp25` was committed at
+`588501a88803e2ce02e4c29a1918329316a22562`, and `chromium/patches/issue-834/`
+was regenerated through `0082-Promote-AppKit-before-print.patch`.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Initial verdict: **Changes required**.
+
+The reviewer found one Required documentation issue: this experiment initially
+recorded the wrong Chromium commit hash. The actual Chromium branch tip and the
+`0082` patch both identify `588501a88803e2ce02e4c29a1918329316a22562`.
+
+Fix:
+
+- corrected the recorded Chromium commit hash in this experiment file;
+- formatted the file with Prettier.
+
+Re-review verdict: **Approved**.
+
+The reviewer confirmed that the recorded hash now matches `chromium/src` HEAD
+and `chromium/patches/issue-834/0082-Promote-AppKit-before-print.patch`, with no
+new Required findings.
+
+## Conclusion
+
+Experiment 25 eliminates AppKit activation policy and key/main window state as
+the remaining native-print blocker. The next experiment should stop trying to
+activate Roamium and instead examine the presentation API itself now that the
+app/window are valid. The evidence points specifically at
+`beginSheetWithPrintInfo:modalForWindow:nil`: it enters and exits without a
+response or observable dialog even when the app is regular, active, and has a
+key/main parent window. A likely next probe is to retry a real parent-window
+sheet or synchronous modal path after policy promotion, with the same print-job
+safety checks.
