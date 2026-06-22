@@ -140,6 +140,8 @@ Each feature row should ultimately record:
   — **Pass**
 - [Experiment 10: Probe Roamium native print dialog safely](10-probe-roamium-native-print-dialog.md)
   — **Partial**
+- [Experiment 11: Inventory Roamium advanced PDF surfaces](11-inventory-roamium-advanced-pdf-surfaces.md)
+  — **Designed**
 
 ## Roamium Phase
 
