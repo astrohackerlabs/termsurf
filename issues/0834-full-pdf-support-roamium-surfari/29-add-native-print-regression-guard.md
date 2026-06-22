@@ -139,3 +139,165 @@ Experiment 28, keeps native OS UI behind an explicit `native-print` tier,
 preserves `smoke` / `focused` / `forms`, includes stale-summary and cheap-tier
 checks, and has no implementation changes beyond the README link and new
 experiment file.
+
+## Result
+
+**Result:** Pass
+
+Added an explicit `native-print` tier to
+`scripts/test-issue-834-roamium-pdf-regression.py`. The tier runs the guarded
+native print harness with `--probe native-dialog --allow-native-dialog-click`
+and classifies it with a dedicated native-print proof checker.
+
+The native-print check passes only when the child summary proves:
+
+- `first_failing_hop = "native-print-dialog-seen-cancelled"`;
+- `safety_gate_passed = true`;
+- `roamium_exited_before_shutdown = false`;
+- print queue state is unchanged before/after;
+- `print_dialog_watch.cancel_sent = true`;
+- `print_dialog_watch.sheet_evidence.observed = true`;
+- `print_dialog_watch.sheet_cancel.requireSheet = true`;
+- native trace contains `ts-scripted-print-callback-result-canceled`.
+
+The existing `smoke`, `focused`, and `forms` tiers were left unchanged, so
+native OS UI remains out of routine fast/focused runs. The `unsafe-manual` tier
+remains dry/list-only and now points to the explicit `native-print` tier instead
+of claiming native print is still unproven.
+
+Verification run:
+
+```bash
+rm -rf scripts/__pycache__
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-roamium-pdf-regression.py \
+  scripts/test-issue-834-pdf-native-print.py
+rm -rf scripts/__pycache__
+git diff --check
+git -C chromium/src diff --check
+
+rm -rf logs/issue-834-exp29-native-print-regression
+python3 scripts/test-issue-834-roamium-pdf-regression.py \
+  --log-dir logs/issue-834-exp29-native-print-regression \
+  --tier native-print
+
+rm -rf logs/issue-834-exp29-unsafe-manual
+python3 scripts/test-issue-834-roamium-pdf-regression.py \
+  --log-dir logs/issue-834-exp29-unsafe-manual \
+  --tier unsafe-manual
+
+rm -rf logs/issue-834-exp29-smoke
+python3 scripts/test-issue-834-roamium-pdf-regression.py \
+  --log-dir logs/issue-834-exp29-smoke \
+  --tier smoke
+```
+
+Final evidence:
+
+- `logs/issue-834-exp29-native-print-regression/roamium-pdf-regression-summary.json`
+  recorded `overall_result = "pass"`,
+  `first_failing_hop = "no-failure-observed"`, duration `92.173` seconds, and 1
+  passing native print check.
+- The native print child summary recorded
+  `first_failing_hop = "native-print-dialog-seen-cancelled"`,
+  `safety_gate_passed = true`, `roamium_exited_before_shutdown = false`,
+  unchanged print queue state, `print_dialog_watch.cancel_sent = true`,
+  `print_dialog_watch.sheet_evidence.observed = true`,
+  `print_dialog_watch.sheet_cancel.requireSheet = true`, and one
+  `ts-scripted-print-callback-result-canceled` native trace line.
+- `logs/issue-834-exp29-unsafe-manual/roamium-pdf-regression-summary.json`
+  recorded `overall_result = "skipped-unsafe"`, ran no checks, and listed native
+  print as skipped from `unsafe-manual` because it has the replacement
+  `native-print` tier.
+- `logs/issue-834-exp29-smoke/roamium-pdf-regression-summary.json` recorded
+  `overall_result = "pass"`, `first_failing_hop = "no-failure-observed"`,
+  duration `31.915` seconds, and the same 2 passing smoke checks as before.
+
+## Conclusion
+
+Roamium native PDF print cancellation is now protected by a durable, explicit
+regression tier. It is intentionally not part of the cheap `smoke` or broad
+`focused` tiers because it opens native OS UI, but the `native-print` tier can
+be run when validating PDF/native-print work.
+
+The next Issue 834 experiment should continue the remaining Roamium PDF matrix
+items, with native print no longer the blocking gap.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Initial verdict: **Changes required**.
+
+Required finding:
+
+- `scripts/test-issue-834-roamium-pdf-regression.py` allowed native print to
+  pass if both `print_queue_before` and `print_queue_after` were missing,
+  because the queue comparison defaulted absent fields to empty dictionaries.
+
+Fix:
+
+- `print_queue_unchanged()` now requires both queue fields to be present
+  dictionaries, to have the same command keys, and to contain successful,
+  non-timed-out command results before comparing the queue snapshots.
+
+Additional verification after the fix:
+
+```bash
+python3 - <<'PY'
+import importlib.util, sys
+
+spec = importlib.util.spec_from_file_location(
+    "reg", "scripts/test-issue-834-roamium-pdf-regression.py"
+)
+reg = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = reg
+spec.loader.exec_module(reg)
+
+base = {
+    "first_failing_hop": "native-print-dialog-seen-cancelled",
+    "safety_gate_passed": True,
+    "roamium_exited_before_shutdown": False,
+    "print_dialog_watch": {
+        "cancel_sent": True,
+        "sheet_evidence": {"observed": True},
+        "sheet_cancel": {"requireSheet": True},
+    },
+    "probe_summary": {
+        "print": {
+            "printNativeLines": [
+                "ts-scripted-print-callback-result-canceled"
+            ]
+        }
+    },
+}
+
+print("missing queue:", reg.classify_native_print(base))
+queue = {
+    "lpstat_o": {
+        "returncode": 0,
+        "timed_out": False,
+        "stdout": "",
+        "stderr": "",
+        "cmd": ["lpstat", "-o"],
+    }
+}
+base["print_queue_before"] = queue
+base["print_queue_after"] = queue
+print("present queue:", reg.classify_native_print(base))
+PY
+```
+
+The probe recorded:
+
+- missing queue:
+  `('fail', 'native-print-safety-proof-missing:queue_unchanged', None)`;
+- present successful queue:
+  `('pass', 'native-print-dialog-seen-cancelled', None)`.
+
+The full `native-print` tier was rerun after the fix and still passed.
+
+Final verdict after re-review: **Approved**.
+
+The re-review found no findings.

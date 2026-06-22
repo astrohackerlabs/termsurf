@@ -29,6 +29,7 @@ class Check:
     accepted_limitation: str | None = None
     tiers: tuple[str, ...] = ("focused",)
     use_temp_log_dir: bool = False
+    classifier: str = "default"
 
 
 @dataclass
@@ -301,6 +302,19 @@ def checks() -> list[Check]:
             summary_file="pdf-forms-summary.json",
             tiers=("forms", "focused"),
         ),
+        Check(
+            name="native-print-cancel",
+            short_dir="npc",
+            command=py_script(
+                "scripts/test-issue-834-pdf-native-print.py",
+                "--probe",
+                "native-dialog",
+                "--allow-native-dialog-click",
+            ),
+            summary_file="pdf-native-print-summary.json",
+            tiers=("native-print",),
+            classifier="native-print",
+        ),
     ]
 
 
@@ -309,9 +323,11 @@ UNSAFE_MANUAL_CHECKS = [
         "name": "native-print-production-dialog",
         "result": "skipped-unsafe",
         "reason": (
-            "Experiment 10 could not prove a safe macOS native-dialog watcher "
-            "preflight on this VM. Production print clicks remain manual/unsafe."
+            "Native print now has an explicit safety-gated native-print tier. "
+            "The unsafe-manual tier remains dry/list-only and does not run the "
+            "production print control."
         ),
+        "replacement_tier": "native-print",
     }
 ]
 
@@ -325,9 +341,65 @@ def load_summary(path: pathlib.Path) -> tuple[dict[str, Any] | None, str | None]
         return None, f"summary-json-invalid: {exc}"
 
 
-def classify(check: Check, returncode: int, summary: dict[str, Any] | None, missing: bool) -> tuple[str, str | None, str | None]:
+def print_queue_unchanged(summary: dict[str, Any]) -> bool:
+    before = summary.get("print_queue_before")
+    after = summary.get("print_queue_after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    if not before or set(before.keys()) != set(after.keys()):
+        return False
+    for name in before:
+        before_result = before.get(name)
+        after_result = after.get(name)
+        if not isinstance(before_result, dict) or not isinstance(after_result, dict):
+            return False
+        if before_result.get("returncode") != 0 or after_result.get("returncode") != 0:
+            return False
+        if before_result.get("timed_out") is True or after_result.get("timed_out") is True:
+            return False
+    return json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True)
+
+
+def native_trace_has(summary: dict[str, Any], event: str) -> bool:
+    print_summary = (summary.get("probe_summary") or {}).get("print") or {}
+    native_lines = print_summary.get("printNativeLines") or []
+    return any(event in line for line in native_lines)
+
+
+def classify_native_print(summary: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    hop = summary.get("first_failing_hop")
+    status = summary.get("status")
+    watch = summary.get("print_dialog_watch") or {}
+    sheet_cancel = watch.get("sheet_cancel") or {}
+    sheet_evidence = watch.get("sheet_evidence") or {}
+    required = {
+        "cancel_hop": hop == "native-print-dialog-seen-cancelled",
+        "safety_gate": summary.get("safety_gate_passed") is True,
+        "roamium_alive": summary.get("roamium_exited_before_shutdown") is False,
+        "queue_unchanged": print_queue_unchanged(summary),
+        "cancel_sent": watch.get("cancel_sent") is True,
+        "sheet_evidence": sheet_evidence.get("observed") is True,
+        "require_sheet": sheet_cancel.get("requireSheet") is True,
+        "canceled_trace": native_trace_has(
+            summary, "ts-scripted-print-callback-result-canceled"
+        ),
+    }
+    if all(required.values()):
+        return "pass", hop, status
+    missing = [name for name, ok in required.items() if not ok]
+    return "fail", f"native-print-safety-proof-missing:{','.join(missing)}", status
+
+
+def classify(
+    check: Check,
+    returncode: int,
+    summary: dict[str, Any] | None,
+    missing: bool,
+) -> tuple[str, str | None, str | None]:
     if missing or summary is None:
         return "automation-gap", None, None
+    if check.classifier == "native-print":
+        return classify_native_print(summary)
     hop = summary.get("first_failing_hop")
     status = summary.get("status")
     if check.accepted_limitation and hop in check.accepted_hops:
@@ -441,7 +513,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-dir", required=True)
     parser.add_argument(
         "--tier",
-        choices=["smoke", "focused", "forms", "unsafe-manual"],
+        choices=["smoke", "focused", "forms", "native-print", "unsafe-manual"],
         required=True,
     )
     return parser.parse_args()
