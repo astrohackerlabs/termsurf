@@ -163,3 +163,121 @@ This experiment fails if no valid restricted fixture can be produced, if the
 unrestricted control does not work, if restriction claims are made without a
 control comparison, or if the probe bypasses the TermSurf protocol input path
 for copy behavior.
+
+## Result
+
+**Result:** Partial
+
+Experiment 6 added a focused Roamium PDF restriction harness:
+
+- `scripts/probe-pdf-restrictions.mjs` inspects the Chromium PDF viewer through
+  DevTools, records toolbar/download-control state, and attempts the
+  user-visible PDF download path.
+- `scripts/test-issue-834-pdf-restrictions.py` generates paired unrestricted and
+  restricted fixtures with `qpdf`, launches repo-built Roamium, drives copy
+  attempts through TermSurf protocol mouse/key messages, reads the clipboard
+  through DevTools, and writes `pdf-restrictions-summary.json`.
+
+The restricted fixture is generated deterministically from
+`test-html/public/bitcoin.pdf`:
+
+```bash
+qpdf --encrypt "" owner-issue834-exp6 256 \
+  --print=none --modify=none --extract=n --annotate=n -- \
+  unrestricted.pdf restricted.pdf
+```
+
+`qpdf --show-encryption` confirms:
+
+- empty user password;
+- `extract for any purpose: not allowed`;
+- low- and high-resolution print not allowed;
+- document modification not allowed;
+- AESv3 encryption.
+
+Verification commands:
+
+```bash
+node --check scripts/probe-pdf-restrictions.mjs
+python3 -m py_compile scripts/test-issue-834-pdf-restrictions.py
+git diff --check
+python3 scripts/test-issue-834-pdf-restrictions.py \
+  --log-dir logs/issue-834-exp6-unrestricted-control-final \
+  --probe unrestricted-control
+python3 scripts/test-issue-834-pdf-restrictions.py \
+  --log-dir logs/issue-834-exp6-restricted-final \
+  --probe restricted-document
+```
+
+Results:
+
+- syntax checks passed;
+- `git diff --check` passed;
+- unrestricted control exited `0`;
+- restricted document exited `1`, because the copy-restriction row passed but
+  the download-restriction row did not.
+
+Unrestricted control evidence:
+
+- summary:
+  `logs/issue-834-exp6-unrestricted-control-final/pdf-restrictions-summary.json`;
+- `first_failing_hop = "no-failure-observed"`;
+- `row_results.unrestricted_copy = "pass"`;
+- `row_results.unrestricted_download = "pass"`;
+- `clipboard_after_text_length = 21230`;
+- `devtools_summary.download.status = "download-file-created"`;
+- TermSurf sent 2 protocol mouse messages and 4 protocol key messages;
+- Chromium routed keys to `classification=pdf-plugin`.
+
+Restricted-document evidence:
+
+- summary: `logs/issue-834-exp6-restricted-final/pdf-restrictions-summary.json`;
+- `first_failing_hop = "restricted-download-not-blocked"`;
+- `row_results.copy_restricted_pdf = "pass"`;
+- `row_results.save_download_restricted_pdf = "unsupported-by-current-chromium-pdf-permissions"`;
+- `row_results.disabled_download_toolbar_state = "not-observed"`;
+- `clipboard_after_text_length = 0`;
+- `devtools_summary.download.status = "download-file-created"`;
+- the visible `Download` toolbar control stayed enabled;
+- TermSurf sent 2 protocol mouse messages and 4 protocol key messages;
+- Chromium routed keys to `classification=pdf-plugin`;
+- Roamium logged `pdf-content-restrictions ... restrictions=15` for the
+  restricted fixture.
+
+No product code changed in this experiment. The probe showed that Chromium's PDF
+permission plumbing reports copy and print restrictions for this fixture, but
+does not set `kContentRestrictionSave` after the document loads. Local Chromium
+source matches the observation: `PdfViewWebPlugin::GetContentRestrictions()`
+adds copy and print restrictions from PDF permissions and always includes cut
+and paste, while save is used as a transient restriction during loading to avoid
+saving incomplete data. The PDF viewer's original-file download path therefore
+remains available for an encrypted, copy/print-restricted PDF.
+
+## Completion Review
+
+Fresh-context adversarial review by Codex subagent `Sartre`: **Approved**.
+
+Findings: none.
+
+The reviewer independently checked `node --check`, Python compilation with
+bytecode cleanup, `git diff --check`, the uncommitted result state, README
+status, the two final summary JSON files, and the relevant Chromium PDF source.
+The reviewer agreed that the evidence supports the Partial result: copy
+restriction is proven, restricted download remains enabled and creates a file,
+and Chromium's `GetContentRestrictions()` does not add save after load except
+transiently during loading.
+
+## Conclusion
+
+Roamium now has direct evidence for copy-restricted PDFs: the unrestricted
+control copies text, the restricted fixture receives the same TermSurf protocol
+input, Chromium routes the keys to the PDF plugin, and the clipboard remains
+empty.
+
+The save/download-restricted and disabled-download-toolbar rows are not proven
+for Roamium. The experiment found a likely matrix correction rather than a
+TermSurf integration bug: current Chromium PDF permissions do not appear to
+define an original-file download prohibition for this fixture after load. A
+future experiment should either narrow the matrix row to the restrictions
+Chromium/WebKit actually expose, or find a different fixture/browser policy that
+sets an observable save restriction before treating this as product work.
