@@ -118,6 +118,8 @@ This issue covers the next Homebrew deployment. It may include:
 - [Experiment 3: Wire Surfari into packaging paths](03-wire-surfari-packaging-paths.md)
   — **Partial** (Surfari wiring works, but packaged runtime needs WebKit
   closure)
+- [Experiment 4: Package Surfari WebKit runtime](04-package-surfari-webkit-runtime.md)
+  — **Designed**
 
 ## Acceptance Criteria
 
