@@ -47,6 +47,9 @@ function parseArgs(argv) {
   if (args.printBridgeTraceFile) {
     args.printBridgeTraceFile = path.resolve(args.printBridgeTraceFile);
   }
+  if (args.nativePrintTraceFile) {
+    args.nativePrintTraceFile = path.resolve(args.nativePrintTraceFile);
+  }
   args.allowNativePrintClick =
     args.allowNativePrintClick === "1" || args.allowNativePrintClick === "true";
   return args;
@@ -1147,6 +1150,16 @@ function readPrintBridgeTraceLines(args) {
     .filter(Boolean);
 }
 
+function readNativePrintTraceLines(args) {
+  if (!args.nativePrintTraceFile || !fs.existsSync(args.nativePrintTraceFile)) {
+    return [];
+  }
+  return fs
+    .readFileSync(args.nativePrintTraceFile, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean);
+}
+
 function parseTraceFields(line) {
   const fields = {};
   for (const part of line.split(/\s+/)) {
@@ -1329,7 +1342,7 @@ async function probePrint(client, args, baseline, children) {
   }
   if (!args.printInterceptFile) {
     if (args.allowNativePrintClick) {
-      const beforePrintBridgeNativeLines = readPrintBridgeTraceLines(args);
+      const beforeNativePrintLines = readNativePrintTraceLines(args);
       const beforePrintBridgeJsRecords = await readJsPrintBridgeTrace(
         client,
         baseline,
@@ -1352,8 +1365,9 @@ async function probePrint(client, args, baseline, children) {
         flags,
         loadTimePrintingEnabled,
         bridgeTraceFile: args.printBridgeTraceFile || null,
-        printNativeLines: readPrintBridgeTraceLines(args).slice(
-          beforePrintBridgeNativeLines.length,
+        nativePrintTraceFile: args.nativePrintTraceFile || null,
+        printNativeLines: readNativePrintTraceLines(args).slice(
+          beforeNativePrintLines.length,
         ),
         printJsRecords: (
           await readJsPrintBridgeTrace(client, baseline, children)

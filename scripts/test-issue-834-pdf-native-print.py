@@ -828,7 +828,11 @@ def run_save_print_probe(
     downloads_dir = out_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
     bridge_trace_file = log_dir / "pdf-print-bridge.log"
-    bridge_trace_file.write_text("", encoding="utf-8")
+    native_trace_file = log_dir / "pdf-native-print.log"
+    if allow_native_print_click:
+        native_trace_file.write_text("", encoding="utf-8")
+    else:
+        bridge_trace_file.write_text("", encoding="utf-8")
     cmd = [
         "node",
         str(SAVE_PRINT_TITLE_LOCAL_PROBE),
@@ -854,11 +858,12 @@ def run_save_print_probe(
         str(log_dir / "pdf-input.log"),
         "--roamium-stderr",
         str(log_dir / "roamium.stderr"),
-        "--print-bridge-trace-file",
-        str(bridge_trace_file),
     ]
     if allow_native_print_click:
         cmd.extend(["--allow-native-print-click", "1"])
+        cmd.extend(["--native-print-trace-file", str(native_trace_file)])
+    else:
+        cmd.extend(["--print-bridge-trace-file", str(bridge_trace_file)])
     proc = subprocess.run(
         cmd,
         cwd=str(ROOT),
@@ -913,12 +918,17 @@ def classify(
     else:
         print_summary = probe_summary.get("print") or {}
         status = print_summary.get("status")
+        native_lines = print_summary.get("printNativeLines") or []
         if status == "print-control-missing":
             state.first_failing_hop = "native-print-control-missing"
         elif status == "print-ready-disabled-by-flags":
             state.first_failing_hop = "native-print-disabled-by-load-time-flags"
         elif status != "print-native-click-sent":
             state.first_failing_hop = "native-print-click-not-sent"
+        elif any(" event=get-default-print-settings-null " in line for line in native_lines):
+            state.first_failing_hop = "browser-default-print-settings-null"
+        elif any(" event=print-init-settings-failed " in line for line in native_lines):
+            state.first_failing_hop = "print-render-frame-helper-init-settings-failed"
         elif print_watch and print_watch.get("dialog_observed") and print_watch.get("cancel_sent"):
             state.first_failing_hop = "native-print-dialog-seen-cancelled"
         elif print_watch and print_watch.get("dialog_observed"):
@@ -1017,8 +1027,12 @@ def main() -> int:
     env = os.environ.copy()
     env["TERMSURF_PDF_INPUT_TRACE"] = "1"
     env["TERMSURF_PDF_INPUT_TRACE_FILE"] = str(log_dir / "pdf-input.log")
-    env["TERMSURF_PDF_PRINT_BRIDGE_TRACE"] = "1"
-    env["TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE"] = str(log_dir / "pdf-print-bridge.log")
+    if args.allow_native_dialog_click:
+        env["TERMSURF_PDF_NATIVE_PRINT_TRACE"] = "1"
+        env["TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE"] = str(log_dir / "pdf-native-print.log")
+    else:
+        env["TERMSURF_PDF_PRINT_BRIDGE_TRACE"] = "1"
+        env["TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE"] = str(log_dir / "pdf-print-bridge.log")
     proc = subprocess.Popen(
         [
             str(ROAMIUM),

@@ -187,3 +187,136 @@ Fix:
 Re-review verdict: **Approved**.
 
 The reviewer found no remaining Required findings.
+
+## Result
+
+**Result:** Pass
+
+Experiment 19 identified the first missing Roamium native PDF print hop:
+`browser-default-print-settings-null`.
+
+The initial audit found that Experiment 18's production native-print probe was
+still setting `TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE`. That bridge trace is not a
+passive trace in the production native path. In
+`chromium/src/pdf/pdf_view_web_plugin.cc`, `PdfViewWebPlugin::Print()` returns
+early when `bridge_trace_path` exists and no contained print intercept is active
+(`chromium/src/pdf/pdf_view_web_plugin.cc:1613`). That explained why Experiment
+18 reached `handle-print` but did not display a dialog: the probe stopped before
+`OnInvokePrintDialog()`.
+
+Tooling changes:
+
+- `scripts/test-issue-834-pdf-native-print.py` now uses
+  `TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE` for guarded production native clicks
+  and keeps `TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE` for non-production bridge
+  probing.
+- `scripts/probe-pdf-save-print-title-local.mjs` now accepts
+  `--native-print-trace-file` and reads native print trace lines for the
+  production native-click summary.
+- `scripts/test-issue-834-pdf-native-print.py` now classifies native print as
+  `browser-default-print-settings-null` when the native trace reaches
+  `get-default-print-settings-null`.
+
+No Chromium source was changed in this experiment, so no Chromium branch,
+`autoninja`, branch table update, or patch archive regeneration was required.
+
+Static audit evidence:
+
+- The upstream PDF print button path is exercised by
+  `chromium/src/chrome/browser/pdf/pdf_extension_printing_test.cc`; the
+  `PrintButton` test clicks the PDF toolbar print button and waits for print
+  preview readiness.
+- TermSurf creates a renderer-side `PrintRenderFrameHelper` in
+  `chromium/src/content/libtermsurf_chromium/ts_pdf_renderer_support.cc:88`.
+- TermSurf's renderer delegate disables print preview through
+  `IsPrintPreviewEnabled() == false` in
+  `chromium/src/content/libtermsurf_chromium/ts_pdf_renderer_support.cc:46`, so
+  `PrintRenderFrameHelper::PrintNode()` takes the basic-print path instead of
+  `print-node-preview`.
+- In that basic-print path, `PrintRenderFrameHelper::InitPrintSettings()` calls
+  `GetPrintManagerHost()->GetDefaultPrintSettings(&settings.params)` at
+  `chromium/src/components/printing/renderer/print_render_frame_helper.cc:2486`.
+  Chromium treats null `settings.params` as no available printer settings and
+  aborts before showing a dialog at
+  `chromium/src/components/printing/renderer/print_render_frame_helper.cc:2493`.
+
+Runtime evidence from
+`logs/issue-834-exp19-print-plumbing/pdf-native-print-summary.json`:
+
+- `safety_gate_passed = true`;
+- `probe_status = "ok"`;
+- `probe_summary.print.status = "print-native-click-sent"`;
+- `probe_summary.print.clicked = true`;
+- `first_failing_hop = "browser-default-print-settings-null"`;
+- `print_dialog_watch.dialog_observed = false`;
+- `lpstat -o` and `lpstat -W completed -o` were empty before and after the
+  probe, so no print job was submitted.
+
+Native print trace evidence from
+`logs/issue-834-exp19-print-plumbing/pdf-native-print.log`:
+
+```text
+post-invoke-print-dialog
+invoke-print-dialog
+client-print helper=present enable_printing=1
+print-node
+print-node-enter
+print-node-call-print
+print-init-settings-enter
+get-default-print-settings-enter
+get-default-print-settings-null
+print-init-settings-failed
+print-node-exit
+```
+
+This proves the path gets past the PDF plugin, past `client_->Print()`, past
+`PrintRenderFrameHelper::PrintNode()`, and into the renderer print settings
+initialization. It stops when the browser returns null default print settings.
+
+Verification run:
+
+```bash
+node --check scripts/probe-pdf-save-print-title-local.mjs
+
+rm -rf scripts/__pycache__
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-pdf-native-print.py
+rm -rf scripts/__pycache__
+
+python3 scripts/test-issue-834-pdf-native-print.py \
+  --log-dir logs/issue-834-exp19-print-plumbing \
+  --probe native-dialog \
+  --allow-native-dialog-click
+
+git diff --check
+```
+
+The guarded probe exited nonzero because it correctly classified
+`browser-default-print-settings-null`, not because it submitted a print job.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Verdict: **Approved**.
+
+The reviewer found no Required, Optional, or Nit findings.
+
+The reviewer verified that the plan commit was still `HEAD`, no result commit
+had been made yet, the README marked Experiment 19 as `Pass`, the main diff was
+limited to the two issue docs plus probe/harness scripts, `chromium/src` was
+clean, and the logs/source supported `browser-default-print-settings-null` as
+the first failing hop.
+
+## Conclusion
+
+Roamium native PDF print is blocked after renderer-side `PrintNode()` begins the
+basic-print path. The first missing hop is browser default print settings:
+`PrintRenderFrameHelper` asks the browser for default print settings, gets null,
+and aborts before `DidShowPrintDialog()` or `ScriptedPrint()`.
+
+The next experiment should fix browser-side print settings/manager integration
+for Roamium. The likely implementation direction is to provide the browser-side
+printing manager and default settings path expected by `PrintRenderFrameHelper`,
+while preserving the safety-gated native print probe as the regression check.
