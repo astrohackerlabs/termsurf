@@ -95,7 +95,7 @@ This issue covers the next Homebrew deployment. It may include:
       `scripts/build.sh`, `scripts/install.sh`, `scripts/release.sh`,
       `homebrew/Casks/termsurf.rb`, and Ghostboard's installed browser
       resolution.
-- [ ] **Stage 5: Full release build** — run the full `1.4.0` release build and
+- [x] **Stage 5: Full release build** — run the full `1.4.0` release build and
       verify Roamium, Surfari, WebTUI, and Ghostboard artifacts are present.
 - [ ] **Stage 6: Package-only release validation** — generate the `1.4.0`
       tarball without publishing and inspect it for `TermSurf.app`, `web`,
@@ -120,7 +120,7 @@ This issue covers the next Homebrew deployment. It may include:
   closure)
 - [Experiment 4: Package Surfari WebKit runtime](04-package-surfari-webkit-runtime.md)
   — **Pass**
-- [Experiment 5: Full release build](05-full-release-build.md) — **Designed**
+- [Experiment 5: Full release build](05-full-release-build.md) — **Pass**
 
 ## Acceptance Criteria
 

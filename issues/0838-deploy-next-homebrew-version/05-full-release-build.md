@@ -86,3 +86,60 @@ The design was updated to verify every Surfari WebKit runtime artifact and to
 include an explicit `git status --short` cleanliness check.
 
 Re-review returned **Approved** with no required findings.
+
+## Result
+
+**Result:** Pass
+
+The canonical full release build completed successfully:
+
+```bash
+./scripts/build.sh all --release
+```
+
+The build completed Chromium first with no work to do, then built release
+WebTUI, release Roamium, `libtermsurf_webkit.dylib`, release Surfari, and
+Ghostboard Release. The Ghostboard Xcode phase completed with
+`** BUILD SUCCEEDED **`, then `scripts/build.sh` codesigned `TermSurf.app` and
+printed `Done (all).`
+
+Verification passed:
+
+- `test -x target/release/web`
+- `test -x target/release/roamium`
+- `test -x target/release/surfari`
+- `test -f surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib`
+- `test -x ghostboard/macos/build/Release/TermSurf.app/Contents/MacOS/termsurf`
+- existence checks for the Surfari WebKit runtime closure in
+  `webkit/src/WebKitBuild/Debug`:
+  - `WebKit.framework`
+  - `WebCore.framework`
+  - `JavaScriptCore.framework`
+  - `WebKitLegacy.framework`
+  - `WebInspectorUI.framework`
+  - `WebGPU.framework`
+  - `libANGLE-shared.dylib`
+  - `libwebrtc.dylib`
+  - the seven WebKit XPC bundles
+- `bash -n scripts/build.sh scripts/install.sh scripts/uninstall.sh scripts/release.sh scripts/ghostboard-geometry-matrix.sh scripts/surfari-resources.sh`
+- `prettier --check issues/0838-deploy-next-homebrew-version/README.md issues/0838-deploy-next-homebrew-version/05-full-release-build.md`
+- `git diff --check`
+- `git status --short`, which produced no output
+
+The build produced expected nonfatal warnings already seen in prior local
+builds, including the Surfari WebKit SDK version linker warning and Ghostboard
+SwiftLint/dSYM warnings. None caused the release build to fail.
+
+## Conclusion
+
+Stage 5 is complete. The repo now has current release artifacts for WebTUI,
+Roamium, Surfari, `libtermsurf_webkit.dylib`, Ghostboard, Chromium, and the
+Surfari WebKit runtime closure. Issue 838 can move to package-only release
+validation.
+
+## Completion Review
+
+Fresh-context adversarial completion review returned **Approved** with no
+required findings. The reviewer confirmed that the result stayed within the
+approved no-code-change scope, that README status matched the experiment result
+and Stage 5 completion, and that the result commit had not yet been made.
