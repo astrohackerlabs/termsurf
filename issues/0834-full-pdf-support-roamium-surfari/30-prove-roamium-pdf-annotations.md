@@ -168,3 +168,153 @@ as `Designed`, the experiment has the required Description, Changes, and
 Verification sections, the scope is limited to the remaining Roamium annotation
 gap, the plan is technically plausible, and the verification criteria do not
 overclaim annotation editing support when Chromium flags disable it.
+
+## Result
+
+**Result:** Pass
+
+Implemented deterministic Roamium PDF annotation proof in the advanced PDF
+harness.
+
+Changes:
+
+- `scripts/test-issue-834-pdf-advanced.py` now generates:
+  - `annotation-control.pdf`, a matching control PDF with no annotation;
+  - `annotation.pdf`, a deterministic square annotation PDF with a yellow fill,
+    red border, and an appearance stream;
+  - fixture metadata with the annotation type, page size, PDF-space rectangle,
+    and expected rendered region.
+- `scripts/probe-pdf-advanced.mjs` now preserves attached DevTools iframe
+  sessions across polls and adds an annotation path that captures the control
+  PDF, navigates to the annotated PDF, waits for the PDF plugin again, and
+  captures the annotated state.
+- The Python harness decodes Chromium screenshots with stdlib PNG/zlib code,
+  maps the expected PDF annotation rectangle into screenshot pixels, compares
+  the annotated crop against the control crop, and records
+  `annotation_rendering` evidence.
+- The harness records `annotation_editing` state from viewer and toolbar
+  properties instead of treating disabled Chromium annotation editing UI as a
+  TermSurf failure.
+
+Verification run:
+
+```bash
+rm -rf logs/issue-834-exp30-roamium-pdf-annotations
+python3 scripts/test-issue-834-pdf-advanced.py \
+  --log-dir logs/issue-834-exp30-roamium-pdf-annotations \
+  --probe annotations
+
+rm -rf scripts/__pycache__
+node --check scripts/probe-pdf-advanced.mjs
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-pdf-advanced.py
+rm -rf scripts/__pycache__
+qpdf --check \
+  logs/issue-834-exp30-roamium-pdf-annotations/fixtures/annotation-control.pdf
+qpdf --check \
+  logs/issue-834-exp30-roamium-pdf-annotations/fixtures/annotation.pdf
+git diff --check
+git -C chromium/src diff --check
+
+rm -rf logs/issue-834-exp30-advanced-forms-smoke
+python3 scripts/test-issue-834-pdf-advanced.py \
+  --log-dir logs/issue-834-exp30-advanced-forms-smoke \
+  --probe forms
+```
+
+Final annotation evidence:
+
+- `logs/issue-834-exp30-roamium-pdf-annotations/pdf-advanced-summary.json`
+  recorded `first_failing_hop = "no-failure-observed"` and
+  `probe_status = "ok"`.
+- Both fixtures loaded through Roamium over the TermSurf protocol:
+  `/annotation-control.pdf` and `/annotation.pdf` each returned HTTP 200.
+- The DevTools summary recorded `annotationControl.pluginLoaded = true` with
+  title `annotation-control.pdf`, and `annotationAnnotated.pluginLoaded = true`
+  with title `annotation.pdf`.
+- The pixel proof compared the expected annotation region between the control
+  and annotated screenshots:
+  - load proof: both control and annotated plugins loaded, with expected titles,
+    viewer `originalUrl` values, and viewer `fileName_` values;
+  - region: `x1 = 814`, `y1 = 275`, `x2 = 987`, `y2 = 400`;
+  - pixels sampled: `21625`;
+  - changed pixels: `16692`;
+  - changed ratio: `0.771884`;
+  - mean RGB distance: `255.366`;
+  - comparison status: `pass`.
+- The annotation editing state recorded:
+  - `toolbarAnnotationAvailable = true`;
+  - `toolbarPdfInk2Enabled = false`;
+  - `toolbarPdfTextAnnotationsEnabled = false`;
+  - `annotationMode = "off"`;
+  - `hasEdits = false`;
+  - `hasUnsavedEdits = false`;
+  - `hasCommittedInk2Edits = false`.
+- The editing classification is `annotation-editing-disabled-by-flags`, which
+  means existing annotation rendering is proven and annotation editing is not
+  currently available in this Chromium viewer configuration.
+
+Regression sanity:
+
+- The existing advanced forms probe still runs and records the prior expected
+  classification, `form-value-observable-missing`, with
+  `roamium_mouse_event_line = true`. That confirms the shared DevTools session
+  tracking change did not break the non-annotation advanced harness path.
+
+## Conclusion
+
+The Roamium annotations row is now proven for existing PDF annotation rendering.
+TermSurf can display embedded PDF annotations through Roamium, and the evidence
+is pixel-based rather than DOM-only.
+
+Chromium's annotation editing controls are present at the metadata level but
+disabled by current viewer flags in this build (`pdfInk2Enabled = false`,
+`pdfTextAnnotationsEnabled = false`). That is recorded as an engine/viewer
+capability classification, not a TermSurf integration failure.
+
+The next Issue 834 Roamium experiment should target the remaining advanced
+surfaces from Experiment 11: context menus or accessibility/searchify. Context
+menus likely need a safe native-menu watcher before right-click automation can
+be considered a pass.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Initial verdict: **Changes required**.
+
+Required finding:
+
+- The annotation rendering classifier could pass from a screenshot comparison
+  without requiring proof that the control PDF plugin loaded. Because the
+  DevTools helper can return the last collected state on timeout, a missing
+  control plugin could still yield a screenshot and then be compared against the
+  annotated screenshot.
+
+Fix:
+
+- Added `annotation_load_proof()` to require both the control and annotated PDF
+  plugin states to be loaded before accepting pixel proof.
+- The proof now checks:
+  - `annotationControl.pluginLoaded = true`;
+  - `annotationAnnotated.pluginLoaded = true`;
+  - expected control and annotated titles;
+  - expected viewer `originalUrl` values;
+  - expected viewer `fileName_` values.
+- If any load-proof check fails, `annotation_rendering.status` fails before the
+  PNG comparison can count.
+
+Additional verification after the fix:
+
+- A direct helper probe confirmed that missing control plugin proof returns
+  `status = "fail"` and
+  `first_failing_hop = "annotation-pdf-load-proof-missing"`.
+- The full annotation probe was rerun and passed with
+  `annotation_rendering.load_proof.status = "pass"`.
+- The advanced forms smoke probe was rerun and still recorded the prior expected
+  classification, `form-value-observable-missing`.
+
+Final verdict after re-review: **Approved**.
+
+The re-review found no findings.

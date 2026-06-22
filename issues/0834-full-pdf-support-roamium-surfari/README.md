@@ -179,7 +179,7 @@ Each feature row should ultimately record:
 - [Experiment 29: Add native print to Roamium regression guards](29-add-native-print-regression-guard.md)
   — **Pass**
 - [Experiment 30: Prove Roamium PDF annotations](30-prove-roamium-pdf-annotations.md)
-  — **Designed**
+  — **Pass**
 
 ## Roamium Phase
 

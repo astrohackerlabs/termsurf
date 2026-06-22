@@ -36,7 +36,8 @@ function writeJson(filePath, value) {
 
 async function fetchJson(url) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`GET ${url} failed: HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`GET ${url} failed: HTTP ${response.status}`);
   return await response.json();
 }
 
@@ -62,7 +63,9 @@ async function pollTarget(args, summary) {
     url: item.url,
     title: item.title,
   }));
-  throw new Error(`no page target contained ${JSON.stringify(args.urlContains)}`);
+  throw new Error(
+    `no page target contained ${JSON.stringify(args.urlContains)}`,
+  );
 }
 
 function connectDevTools(wsUrl) {
@@ -70,6 +73,7 @@ function connectDevTools(wsUrl) {
   let nextId = 1;
   const pending = new Map();
   const events = [];
+  const attachedTargets = new Map();
 
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
@@ -77,13 +81,27 @@ function connectDevTools(wsUrl) {
       const { resolve, reject } = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) {
-        reject(new Error(`${message.error.message || "DevTools error"} (${message.error.code})`));
+        reject(
+          new Error(
+            `${message.error.message || "DevTools error"} (${message.error.code})`,
+          ),
+        );
       } else {
         resolve(message.result || {});
       }
       return;
     }
-    if (message.method) events.push(message);
+    if (message.method) {
+      events.push(message);
+      if (message.method === "Target.attachedToTarget") {
+        attachedTargets.set(message.params.sessionId, {
+          sessionId: message.params.sessionId,
+          targetInfo: message.params.targetInfo,
+        });
+      } else if (message.method === "Target.detachedFromTarget") {
+        attachedTargets.delete(message.params.sessionId);
+      }
+    }
   });
 
   const open = new Promise((resolve, reject) => {
@@ -103,7 +121,7 @@ function connectDevTools(wsUrl) {
     return promise;
   }
 
-  return { socket, open, send, events };
+  return { socket, open, send, events, attachedTargets };
 }
 
 async function safeSend(client, method, params = {}, sessionId = undefined) {
@@ -273,7 +291,13 @@ async function collectStates(client) {
       sessionId: event.params.sessionId,
       targetInfo: event.params.targetInfo,
     }));
+  const attachedChildren = [...client.attachedTargets.values()];
   for (const child of children) {
+    if (!client.attachedTargets.has(child.sessionId)) {
+      client.attachedTargets.set(child.sessionId, child);
+    }
+  }
+  for (const child of attachedChildren) {
     await safeSend(client, "Runtime.enable", {}, child.sessionId);
     await safeSend(client, "Page.enable", {}, child.sessionId);
     await safeSend(client, "DOM.enable", {}, child.sessionId);
@@ -285,7 +309,7 @@ async function collectStates(client) {
       state: await evaluate(client, STATE_SOURCE),
     },
   ];
-  for (const child of children) {
+  for (const child of attachedChildren) {
     states.push({
       sessionId: child.sessionId,
       targetInfo: child.targetInfo,
@@ -299,7 +323,7 @@ async function collectStates(client) {
       targetInfo: state.targetInfo,
       value: state.state.value,
     }));
-  return { children, states, values };
+  return { children: attachedChildren, states, values };
 }
 
 function pluginLoaded(collected) {
@@ -315,14 +339,97 @@ function pluginLoaded(collected) {
   });
 }
 
+function pdfValue(collected) {
+  return (
+    (collected.values || []).find(
+      (item) => item.value?.viewerPresent || item.value?.pluginPresent,
+    )?.value || null
+  );
+}
+
+async function waitForPlugin(client, expectedUrlPart, timeoutSeconds) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let lastCollected = null;
+  while (Date.now() < deadline) {
+    const collected = await collectStates(client);
+    lastCollected = collected;
+    const value = pdfValue(collected);
+    if (
+      pluginLoaded(collected) &&
+      (!expectedUrlPart ||
+        value?.url?.includes(expectedUrlPart) ||
+        value?.title?.includes(expectedUrlPart))
+    ) {
+      return collected;
+    }
+    await sleep(250);
+  }
+  return lastCollected;
+}
+
+async function captureAnnotationComparison(client, args, summary) {
+  const control = await waitForPlugin(
+    client,
+    args.urlContains,
+    args.timeoutSeconds,
+  );
+  summary.annotationControl = {
+    pluginLoaded: pluginLoaded(control),
+    value: pdfValue(control),
+    screenshot: await captureScreenshot(client, args, "annotation-control.png"),
+  };
+
+  if (!args.annotationUrl) {
+    throw new Error("annotation probe missing --annotation-url");
+  }
+
+  summary.annotationNavigate = await safeSend(client, "Page.navigate", {
+    url: args.annotationUrl,
+  });
+  const annotatedName = path.basename(new URL(args.annotationUrl).pathname);
+  await sleep(args.settleSeconds * 1000);
+  const annotated = await waitForPlugin(
+    client,
+    annotatedName,
+    args.timeoutSeconds,
+  );
+  summary.annotationAnnotated = {
+    pluginLoaded: pluginLoaded(annotated),
+    value: pdfValue(annotated),
+    screenshot: await captureScreenshot(
+      client,
+      args,
+      "annotation-annotated.png",
+    ),
+  };
+  summary.children = annotated.children;
+  summary.states = annotated.states;
+  summary.values = annotated.values;
+  summary.pluginLoaded = pluginLoaded(annotated);
+  summary.screenshot = await captureScreenshot(
+    client,
+    args,
+    "advanced-state.png",
+  );
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(args.outDir, { recursive: true });
-  const summary = { devtoolsPort: args.devtoolsPort, urlContains: args.urlContains, probe: args.probe };
+  const summary = {
+    devtoolsPort: args.devtoolsPort,
+    urlContains: args.urlContains,
+    probe: args.probe,
+  };
   let client = null;
   try {
     const target = await pollTarget(args, summary);
-    summary.selectedTarget = { id: target.id, type: target.type, url: target.url, title: target.title };
+    summary.selectedTarget = {
+      id: target.id,
+      type: target.type,
+      url: target.url,
+      title: target.title,
+    };
     client = connectDevTools(target.webSocketDebuggerUrl);
     await client.open;
     for (const domain of ["Page", "Runtime", "DOM", "Target"]) {
@@ -330,12 +437,20 @@ async function main() {
     }
     await safeSend(client, "Page.bringToFront");
     await sleep(args.settleSeconds * 1000);
-    const collected = await collectStates(client);
-    summary.children = collected.children;
-    summary.states = collected.states;
-    summary.values = collected.values;
-    summary.pluginLoaded = pluginLoaded(collected);
-    summary.screenshot = await captureScreenshot(client, args, "advanced-state.png");
+    if (args.probe === "annotations") {
+      await captureAnnotationComparison(client, args, summary);
+    } else {
+      const collected = await collectStates(client);
+      summary.children = collected.children;
+      summary.states = collected.states;
+      summary.values = collected.values;
+      summary.pluginLoaded = pluginLoaded(collected);
+      summary.screenshot = await captureScreenshot(
+        client,
+        args,
+        "advanced-state.png",
+      );
+    }
     summary.status = "pass";
     summary.firstFailingHop = "no-failure-observed";
   } catch (error) {
@@ -344,7 +459,10 @@ async function main() {
     summary.error = String(error.stack || error);
     throw error;
   } finally {
-    writeJson(path.join(args.outDir, "pdf-advanced-devtools-summary.json"), summary);
+    writeJson(
+      path.join(args.outDir, "pdf-advanced-devtools-summary.json"),
+      summary,
+    );
     client?.socket?.close();
   }
 }

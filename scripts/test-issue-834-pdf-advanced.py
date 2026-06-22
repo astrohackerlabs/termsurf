@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
@@ -262,15 +263,87 @@ def write_acroform_pdf(path: pathlib.Path) -> None:
     path.write_bytes(bytes(data))
 
 
+def pdf_object(index: int, body: bytes) -> bytes:
+    return b"%d 0 obj\n%s\nendobj\n" % (index, body)
+
+
+def build_pdf(objects: list[bytes]) -> bytes:
+    data = bytearray(b"%PDF-1.7\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(data))
+        data.extend(pdf_object(index, obj))
+    xref_offset = len(data)
+    data.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    data.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        data.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    data.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(data)
+
+
+def annotation_base_objects(with_annotation: bool) -> list[bytes]:
+    content = (
+        b"BT /F1 22 Tf 72 720 Td (TermSurf Annotation Probe) Tj "
+        b"0 -40 Td (The box below is generated as a PDF annotation.) Tj ET"
+    )
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R"
+    )
+    if with_annotation:
+        page += b" /Annots [6 0 R]"
+    page += b" >>"
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        page,
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+    ]
+    if with_annotation:
+        appearance = b"q 1 0.9 0 rg 0 0 160 110 re f 1 0 0 RG 8 w 4 4 152 102 re S Q"
+        objects.extend(
+            [
+                b"<< /Type /Annot /Subtype /Square /Rect [226 510 386 620] "
+                b"/Contents (TermSurf visible annotation) /C [1 0 0] "
+                b"/IC [1 0.9 0] /Border [0 0 8] /F 4 /P 3 0 R "
+                b"/AP << /N 7 0 R >> >>",
+                b"<< /Type /XObject /Subtype /Form /BBox [0 0 160 110] "
+                b"/Resources << >> /Length %d >>\nstream\n%s\nendstream"
+                % (len(appearance), appearance),
+            ]
+        )
+    return objects
+
+
+def write_annotation_pdfs(control_path: pathlib.Path, annotated_path: pathlib.Path) -> dict[str, Any]:
+    control_path.write_bytes(build_pdf(annotation_base_objects(False)))
+    annotated_path.write_bytes(build_pdf(annotation_base_objects(True)))
+    return {
+        "annotation_type": "Square",
+        "page_size": {"width": 612, "height": 792},
+        "pdf_rect": {"x1": 226, "y1": 510, "x2": 386, "y2": 620},
+        "expected_region": "yellow filled square annotation with red border",
+        "generation": "deterministic-square-annotation-with-appearance-stream",
+    }
+
+
 def prepare_fixtures(log_dir: pathlib.Path) -> dict[str, Any]:
     fixtures_dir = log_dir / "fixtures"
     fixtures_dir.mkdir(parents=True, exist_ok=True)
     valid = fixtures_dir / "valid.pdf"
     valid.write_bytes(BITCOIN_PDF.read_bytes())
     form = fixtures_dir / "form.pdf"
+    annotation_control = fixtures_dir / "annotation-control.pdf"
     annotation = fixtures_dir / "annotation.pdf"
     write_acroform_pdf(form)
-    write_minimal_pdf(annotation, "TermSurf Annotation Probe")
+    annotation_metadata = write_annotation_pdfs(annotation_control, annotation)
     fixture_info: dict[str, Any] = {
         "/valid.pdf": {
             "kind": "valid-control",
@@ -289,8 +362,14 @@ def prepare_fixtures(log_dir: pathlib.Path) -> dict[str, Any]:
             "kind": "annotation",
             "path": str(annotation),
             "bytes": annotation.stat().st_size,
-            "generation": "minimal-pdf-placeholder",
-            "note": "Placeholder until a deterministic annotation fixture generator is added.",
+            **annotation_metadata,
+        },
+        "/annotation-control.pdf": {
+            "kind": "annotation-control",
+            "path": str(annotation_control),
+            "bytes": annotation_control.stat().st_size,
+            "generation": "deterministic-control-without-annotation",
+            "page_size": annotation_metadata["page_size"],
         },
     }
     qpdf = shutil_which("qpdf")
@@ -439,26 +518,30 @@ def run_devtools_probe(
     probe: str,
     timeout_seconds: int,
     settle_seconds: int,
+    annotation_url: str | None = None,
 ) -> tuple[str, str, pathlib.Path]:
     out_dir = log_dir / "devtools"
     out_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "node",
+        str(ADVANCED_PROBE),
+        "--devtools-port",
+        str(devtools_port),
+        "--url-contains",
+        url_contains,
+        "--out-dir",
+        str(out_dir),
+        "--probe",
+        probe,
+        "--timeout-seconds",
+        str(timeout_seconds),
+        "--settle-seconds",
+        str(settle_seconds),
+    ]
+    if annotation_url:
+        command.extend(["--annotation-url", annotation_url])
     proc = subprocess.run(
-        [
-            "node",
-            str(ADVANCED_PROBE),
-            "--devtools-port",
-            str(devtools_port),
-            "--url-contains",
-            url_contains,
-            "--out-dir",
-            str(out_dir),
-            "--probe",
-            probe,
-            "--timeout-seconds",
-            str(timeout_seconds),
-            "--settle-seconds",
-            str(settle_seconds),
-        ],
+        command,
         cwd=str(ROOT),
         text=True,
         stdout=subprocess.PIPE,
@@ -476,6 +559,196 @@ def run_devtools_probe(
 
 def load_json(path: pathlib.Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def decode_png(path: pathlib.Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError(f"not a PNG: {path}")
+    offset = 8
+    width = height = color_type = bit_depth = None
+    compressed = bytearray()
+    while offset < len(data):
+        length = int.from_bytes(data[offset : offset + 4], "big")
+        chunk_type = data[offset + 4 : offset + 8]
+        chunk_data = data[offset + 8 : offset + 8 + length]
+        offset += 12 + length
+        if chunk_type == b"IHDR":
+            width = int.from_bytes(chunk_data[0:4], "big")
+            height = int.from_bytes(chunk_data[4:8], "big")
+            bit_depth = chunk_data[8]
+            color_type = chunk_data[9]
+        elif chunk_type == b"IDAT":
+            compressed.extend(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+    if bit_depth != 8 or color_type not in (2, 6) or width is None or height is None:
+        raise ValueError(f"unsupported PNG format: {path}")
+    channels = 4 if color_type == 6 else 3
+    row_bytes = width * channels
+    raw = zlib.decompress(bytes(compressed))
+    rows: list[bytes] = []
+    previous = [0] * row_bytes
+    index = 0
+    for _ in range(height):
+        filter_type = raw[index]
+        index += 1
+        row = list(raw[index : index + row_bytes])
+        index += row_bytes
+        for i, value in enumerate(row):
+            left = row[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if filter_type == 1:
+                row[i] = (value + left) & 0xFF
+            elif filter_type == 2:
+                row[i] = (value + up) & 0xFF
+            elif filter_type == 3:
+                row[i] = (value + ((left + up) // 2)) & 0xFF
+            elif filter_type == 4:
+                predictor = paeth_predictor(left, up, up_left)
+                row[i] = (value + predictor) & 0xFF
+            elif filter_type != 0:
+                raise ValueError(f"unsupported PNG filter {filter_type}: {path}")
+        rows.append(bytes(row))
+        previous = row
+    return {"width": width, "height": height, "channels": channels, "rows": rows}
+
+
+def paeth_predictor(left: int, up: int, up_left: int) -> int:
+    estimate = left + up - up_left
+    pa = abs(estimate - left)
+    pb = abs(estimate - up)
+    pc = abs(estimate - up_left)
+    if pa <= pb and pa <= pc:
+        return left
+    if pb <= pc:
+        return up
+    return up_left
+
+
+def channel_distance(a: bytes, b: bytes) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+
+
+def compare_png_region(control_path: pathlib.Path, annotated_path: pathlib.Path, region: dict[str, int]) -> dict[str, Any]:
+    control = decode_png(control_path)
+    annotated = decode_png(annotated_path)
+    if control["width"] != annotated["width"] or control["height"] != annotated["height"]:
+        return {
+            "status": "error",
+            "reason": "screenshot-size-mismatch",
+            "control_size": {"width": control["width"], "height": control["height"]},
+            "annotated_size": {"width": annotated["width"], "height": annotated["height"]},
+        }
+    channels = control["channels"]
+    x1 = max(0, min(control["width"] - 1, region["x1"]))
+    y1 = max(0, min(control["height"] - 1, region["y1"]))
+    x2 = max(x1 + 1, min(control["width"], region["x2"]))
+    y2 = max(y1 + 1, min(control["height"], region["y2"]))
+    changed = 0
+    total = 0
+    distance_sum = 0
+    for y in range(y1, y2):
+        control_row = control["rows"][y]
+        annotated_row = annotated["rows"][y]
+        for x in range(x1, x2):
+            start = x * channels
+            distance = channel_distance(
+                control_row[start : start + channels],
+                annotated_row[start : start + channels],
+            )
+            if distance > 60:
+                changed += 1
+            distance_sum += distance
+            total += 1
+    return {
+        "status": "pass" if total and changed / total > 0.02 else "fail",
+        "region": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        "pixels": total,
+        "changed_pixels": changed,
+        "changed_ratio": round(changed / total, 6) if total else 0,
+        "mean_rgb_distance": round(distance_sum / total, 3) if total else 0,
+    }
+
+
+def nested_value(props: dict[str, Any], name: str) -> Any:
+    value = (props or {}).get(name)
+    if isinstance(value, dict) and "value" in value:
+        return value["value"]
+    return None
+
+
+def annotation_region_from_summary(summary: dict[str, Any], fixtures: dict[str, Any]) -> dict[str, int] | None:
+    annotated = (summary.get("annotationAnnotated") or {}).get("value") or {}
+    screenshot = ((summary.get("annotationAnnotated") or {}).get("screenshot") or {})
+    plugin_rect = annotated.get("pluginRect") or {}
+    viewport = annotated.get("viewport") or {}
+    rect = (fixtures.get("/annotation.pdf") or {}).get("pdf_rect") or {}
+    page_size = (fixtures.get("/annotation.pdf") or {}).get("page_size") or {}
+    if not plugin_rect or not viewport or not rect or not page_size or not screenshot:
+        return None
+    dpr = float(viewport.get("devicePixelRatio") or 1)
+    page_width = float(page_size["width"])
+    page_height = float(page_size["height"])
+    plugin_x = float(plugin_rect["x"])
+    plugin_y = float(plugin_rect["y"])
+    plugin_width = float(plugin_rect["width"])
+    plugin_height = float(plugin_rect["height"])
+    padding = 8
+    x1 = int((plugin_x + float(rect["x1"]) / page_width * plugin_width) * dpr) - padding
+    x2 = int((plugin_x + float(rect["x2"]) / page_width * plugin_width) * dpr) + padding
+    y1 = int((plugin_y + (page_height - float(rect["y2"])) / page_height * plugin_height) * dpr) - padding
+    y2 = int((plugin_y + (page_height - float(rect["y1"])) / page_height * plugin_height) * dpr) + padding
+    return {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+
+
+def annotation_state(summary: dict[str, Any] | None) -> dict[str, Any]:
+    value = pdf_value(summary)
+    viewer_props = value.get("viewerProps") or {}
+    toolbar_props = value.get("toolbarProps") or {}
+    controls = value.get("annotationControls") or []
+    visible = visible_controls(controls)
+    return {
+        "annotationMode": nested_value(viewer_props, "annotationMode_"),
+        "hasEdits": nested_value(viewer_props, "hasEdits_"),
+        "hasUnsavedEdits": nested_value(viewer_props, "hasUnsavedEdits_"),
+        "hasCommittedInk2Edits": nested_value(viewer_props, "hasCommittedInk2Edits_"),
+        "toolbarAnnotationAvailable": nested_value(toolbar_props, "annotationAvailable"),
+        "toolbarAnnotationMode": nested_value(toolbar_props, "annotationMode"),
+        "toolbarPdfInk2Enabled": nested_value(toolbar_props, "pdfInk2Enabled"),
+        "toolbarPdfTextAnnotationsEnabled": nested_value(toolbar_props, "pdfTextAnnotationsEnabled_"),
+        "annotationControls": controls,
+        "visibleAnnotationControls": visible,
+    }
+
+
+def annotation_load_proof(summary: dict[str, Any]) -> dict[str, Any]:
+    control = summary.get("annotationControl") or {}
+    annotated = summary.get("annotationAnnotated") or {}
+    control_value = control.get("value") or {}
+    annotated_value = annotated.get("value") or {}
+    control_props = control_value.get("viewerProps") or {}
+    annotated_props = annotated_value.get("viewerProps") or {}
+    checks = {
+        "control_plugin_loaded": control.get("pluginLoaded") is True,
+        "annotated_plugin_loaded": annotated.get("pluginLoaded") is True,
+        "control_title": control_value.get("title") == "annotation-control.pdf",
+        "annotated_title": annotated_value.get("title") == "annotation.pdf",
+        "control_original_url": str(nested_value(control_props, "originalUrl") or "").endswith("/annotation-control.pdf"),
+        "annotated_original_url": str(nested_value(annotated_props, "originalUrl") or "").endswith("/annotation.pdf"),
+        "control_file_name": nested_value(control_props, "fileName_") == "annotation-control.pdf",
+        "annotated_file_name": nested_value(annotated_props, "fileName_") == "annotation.pdf",
+    }
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "first_failing_hop": (
+            "no-failure-observed"
+            if all(checks.values())
+            else "annotation-pdf-load-proof-missing"
+        ),
+    }
 
 
 SOURCE_AUDIT = {
@@ -532,7 +805,13 @@ def pdf_value(summary: dict[str, Any] | None) -> dict[str, Any]:
     return values[0].get("value", {}) if values else {}
 
 
-def classify(args: argparse.Namespace, state: HarnessState, summary: dict[str, Any] | None, fixtures: dict[str, Any]) -> None:
+def classify(
+    args: argparse.Namespace,
+    state: HarnessState,
+    summary: dict[str, Any] | None,
+    fixtures: dict[str, Any],
+    extra: dict[str, Any],
+) -> None:
     if not state.server_register_received:
         state.first_failing_hop = "roamium-not-registered"
     elif not state.tab_ready_id:
@@ -553,17 +832,20 @@ def classify(args: argparse.Namespace, state: HarnessState, summary: dict[str, A
         else:
             state.first_failing_hop = "form-value-observable-missing"
     elif args.probe == "annotations":
-        value = pdf_value(summary)
-        flags = value.get("loadTimeFlags", {})
-        controls = value.get("annotationControls") or []
-        if not controls:
-            state.first_failing_hop = "annotation-ui-missing"
-        elif not visible_controls(controls):
-            state.first_failing_hop = "annotation-state-observable-missing"
-        elif flags.get("pdfInk2Enabled") is not True:
-            state.first_failing_hop = "annotation-ui-disabled-by-flags"
+        rendering = extra.get("annotation_rendering") or {}
+        editing = extra.get("annotation_editing") or {}
+        if fixtures.get("/annotation.pdf", {}).get("generation") != "deterministic-square-annotation-with-appearance-stream":
+            state.first_failing_hop = "annotation-fixture-generation-gap"
+        elif rendering.get("status") != "pass":
+            state.first_failing_hop = rendering.get("first_failing_hop") or "annotation-pixel-proof-missing"
+        elif editing.get("status") in (
+            "available",
+            "annotation-editing-disabled-by-flags",
+            "annotation-editing-ui-hidden",
+        ):
+            state.first_failing_hop = "no-failure-observed"
         else:
-            state.first_failing_hop = "annotation-state-observable-missing"
+            state.first_failing_hop = editing.get("status") or "annotation-editing-state-observable-missing"
     elif args.probe == "context-menu":
         state.first_failing_hop = "context-menu-native-watcher-missing"
     elif args.probe == "accessibility-searchify":
@@ -638,11 +920,12 @@ def main() -> int:
     host, port = pdf_server.server_address
     request_path = {
         "forms": "/form.pdf",
-        "annotations": "/annotation.pdf",
+        "annotations": "/annotation-control.pdf",
         "context-menu": "/valid.pdf",
         "accessibility-searchify": "/valid.pdf",
     }[args.probe]
     url = f"http://{host}:{port}{request_path}"
+    annotation_url = f"http://{host}:{port}/annotation.pdf" if args.probe == "annotations" else None
     socket_path = log_dir / "gui.sock"
     try:
         socket_path.unlink()
@@ -704,13 +987,61 @@ def main() -> int:
                 args.probe,
                 args.capture_timeout_seconds,
                 args.settle_seconds,
+                annotation_url,
             )
             extra["probe_error"] = probe_error
             devtools_summary = load_json(probe_path) if probe_path.exists() else None
             extra["devtools_summary"] = devtools_summary
+            if args.probe == "annotations" and devtools_summary:
+                load_proof = annotation_load_proof(devtools_summary)
+                region = annotation_region_from_summary(devtools_summary, fixtures)
+                if load_proof.get("status") != "pass":
+                    comparison = {
+                        "status": "fail",
+                        "first_failing_hop": load_proof["first_failing_hop"],
+                        "reason": "missing-control-or-annotated-plugin-load-proof",
+                    }
+                elif region:
+                    comparison = compare_png_region(
+                        log_dir / "devtools" / "annotation-control.png",
+                        log_dir / "devtools" / "annotation-annotated.png",
+                        region,
+                    )
+                else:
+                    comparison = {
+                        "status": "fail",
+                        "first_failing_hop": "annotation-pixel-proof-missing",
+                        "reason": "missing-plugin-rect-or-fixture-region",
+                    }
+                rendering_status = "pass" if comparison.get("status") == "pass" else "fail"
+                extra["annotation_rendering"] = {
+                    "status": rendering_status,
+                    "first_failing_hop": (
+                        "no-failure-observed"
+                        if rendering_status == "pass"
+                        else comparison.get("first_failing_hop") or "annotation-rendering-failed"
+                    ),
+                    "comparison": comparison,
+                    "load_proof": load_proof,
+                    "control_screenshot": "devtools/annotation-control.png",
+                    "annotated_screenshot": "devtools/annotation-annotated.png",
+                }
+                editing_state = annotation_state(devtools_summary)
+                if editing_state["toolbarPdfInk2Enabled"] is False:
+                    editing_status = "annotation-editing-disabled-by-flags"
+                elif editing_state["visibleAnnotationControls"]:
+                    editing_status = "available"
+                elif editing_state["annotationControls"]:
+                    editing_status = "annotation-editing-ui-hidden"
+                else:
+                    editing_status = "annotation-editing-state-observable-missing"
+                extra["annotation_editing"] = {
+                    "status": editing_status,
+                    "state": editing_state,
+                }
         trace_flags(log_dir, state)
         extra["http_requests"] = AdvancedPdfHandler.requests
-        classify(args, state, devtools_summary, fixtures)
+        classify(args, state, devtools_summary, fixtures, extra)
         write_summary(log_dir, args, state, extra)
         return 0 if state.first_failing_hop != "automation-gap" else 1
     finally:
