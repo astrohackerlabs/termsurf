@@ -172,24 +172,32 @@ sockets, and Issue 702 removed all dead XPC code. CALayerHost compositing
   733 made Ghostboard use it instead of SIGKILL). This allows engines to clean
   up resources and exit gracefully.
 
-### Every Chromium issue gets its own branch
+### Engine workspace branches and patches
 
-TermSurf's Chromium fork tracks the Chromium version used by the latest stable
-Electron release. When upgrading Chromium, target latest stable Electron's
-Chromium version — not Chromium stable, beta, tip-of-tree, or Electron
-prerelease/nightly — unless the user explicitly says otherwise. If a temporary
-exception is necessary, record it in the issue before implementing it.
+TermSurf's browser engine workspaces keep upstream source checkouts outside the
+main repo history. The main repo tracks workspace instructions, branch ledgers,
+and patch archives.
 
-When modifying the Chromium fork (`chromium/src/`), ALWAYS create a new branch
-for the current issue. Never commit directly to an existing issue's branch.
+Before modifying or building an engine workspace, read its local instructions:
 
-1. Find the most relevant recent branch (usually the one with the latest
-   TermSurf modifications).
-2. Create a new branch from it: `{version}-issue-{N}` (e.g.,
-   `146.0.7650.0-issue-625`).
-3. Add the new branch to the Branches table in `chromium/README.md`.
+- `chromium/AGENTS.md` — Chromium/Roamium build, branch, and patch workflow.
+- `webkit/AGENTS.md` — WebKit/Surfari build, branch, and patch workflow.
 
-This keeps every issue's Chromium changes isolated and traceable.
+Both engine workspaces use issue-specific branches and tracked patch archives.
+Never commit TermSurf engine changes directly to upstream/default branches or to
+a stale issue branch. When an issue modifies engine source:
+
+1. Create the appropriate issue branch inside the engine checkout.
+2. Build and test with the commands from the workspace `AGENTS.md`.
+3. Commit inside the engine checkout when required.
+4. Regenerate the engine patch archive.
+5. Update the engine README branch table/current-state notes.
+6. Commit the patch archive, README update, and issue experiment docs in the
+   main repo.
+
+Chromium tracks the Chromium version used by the latest stable Electron release
+unless an issue explicitly records a temporary exception. WebKit currently
+tracks an upstream commit recorded in `webkit/README.md`.
 
 ## Directory Structure
 
@@ -198,7 +206,11 @@ This keeps every issue's Chromium changes isolated and traceable.
 - `roastty/` — Proof-of-concept Rust rewrite. Reference only.
 - `webtui/` — The `web` TUI (Rust/ratatui). Browser chrome in the terminal pane.
 - `roamium/` — Roamium (Chromium browser binary, Rust).
-- `chromium/` — Chromium fork build workspace (gitignored).
+- `surfari/` — Surfari (WebKit browser binary, Rust).
+- `chromium/` — Chromium fork build workspace. Read `chromium/AGENTS.md` before
+  modifying or building it.
+- `webkit/` — WebKit fork build workspace. Read `webkit/AGENTS.md` before
+  modifying or building it.
 - `issues/` — Issue folders with README.md and TOML frontmatter. See
   `issues/README.md` for the full index.
 - `website/` — termsurf.com project website.
@@ -233,6 +245,14 @@ proof-of-concept Rust rewrite and is not the production frontend direction.
 - `roamium/src/ipc.rs` — Unix socket IPC protocol (socket framing)
 - `roamium/src/ffi.rs` — FFI bindings to libtermsurf_chromium C library
 - `roamium/build.rs` — Build script for protobuf code generation
+
+#### Surfari
+
+- `surfari/src/main.rs` — Entry point, process initialization and lifecycle
+- `surfari/src/dispatch.rs` — Message dispatch and routing (core IPC handler)
+- `surfari/src/ipc.rs` — Unix socket IPC protocol (socket framing)
+- `surfari/src/ffi.rs` — FFI bindings to libtermsurf_webkit C library
+- `surfari/libtermsurf_webkit/` — WebKit C ABI wrapper used by Surfari.
 
 ### Build & Install
 
