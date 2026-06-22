@@ -62,7 +62,7 @@ should be informed by the previous result.
 
 - [x] Preserve the Issue 795, 797, and 798 scopes by closing them as superseded
       and pointing them here.
-- [ ] Define the full cross-engine PDF feature matrix.
+- [x] Define the full cross-engine PDF feature matrix.
 - [ ] Finish Roamium PDF support.
 - [ ] Add durable Roamium regression guards for every completed PDF workflow.
 - [ ] Audit WebKit/Safari PDF capabilities relevant to Surfari.
@@ -117,6 +117,13 @@ Each feature row should ultimately record:
 - automation coverage;
 - known engine-specific differences;
 - links to the experiment(s) and logs proving the status.
+
+## Experiments
+
+- [Experiment 1: Define the cross-engine PDF matrix](01-define-cross-engine-pdf-matrix.md)
+  — **Pass**
+- [Experiment 2: Rerun the Roamium PDF baseline](02-rerun-roamium-pdf-baseline.md)
+  — **Designed**
 
 ## Roamium Phase
 
