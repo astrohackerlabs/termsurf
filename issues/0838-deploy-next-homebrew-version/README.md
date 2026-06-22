@@ -120,6 +120,7 @@ This issue covers the next Homebrew deployment. It may include:
   closure)
 - [Experiment 4: Package Surfari WebKit runtime](04-package-surfari-webkit-runtime.md)
   — **Pass**
+- [Experiment 5: Full release build](05-full-release-build.md) — **Designed**
 
 ## Acceptance Criteria
 
