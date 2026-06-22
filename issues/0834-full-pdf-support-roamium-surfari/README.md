@@ -150,6 +150,8 @@ Each feature row should ultimately record:
   — **Pass**
 - [Experiment 15: Add Roamium PDF regression guard](15-add-roamium-pdf-regression-guard.md)
   — **Pass**
+- [Experiment 16: Prove native dialog watcher preflight](16-prove-native-dialog-watcher-preflight.md)
+  — **Designed**
 
 ## Roamium Phase
 
