@@ -5,13 +5,13 @@
 | #                                                       | Title                                       | Opened     |
 | ------------------------------------------------------- | ------------------------------------------- | ---------- |
 | [0834](0834-full-pdf-support-roamium-surfari/README.md) | Full PDF Support Across Roamium and Surfari | 2026-06-22 |
-| [0836](0836-webtui-top-browser-controls/README.md)      | WebTUI Top Browser Controls                 | 2026-06-22 |
 
 ## Closed
 
 | #                                                               | Title                                                                         | Opened     | Closed     |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
 | [0837](0837-website-revamp-for-1-0/README.md)                   | Complete Website Revamp for 1.0                                               | 2026-06-20 | 2026-06-20 |
+| [0836](0836-webtui-top-browser-controls/README.md)              | WebTUI Top Browser Controls                                                   | 2026-06-22 | 2026-06-22 |
 | [0835](0835-engine-workspace-agent-docs/README.md)              | Engine Workspace Agent Docs                                                   | 2026-06-22 | 2026-06-22 |
 | [0833](0833-update-website-and-docs-for-1-0-0/README.md)        | Update Website and Docs for 1.0.0                                             | 2026-06-20 | 2026-06-20 |
 | [0832](0832-publish-1-0-0-to-homebrew/README.md)                | Publish 1.0.0 to Homebrew                                                     | 2026-06-19 | 2026-06-19 |

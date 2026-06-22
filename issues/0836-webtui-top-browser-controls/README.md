@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-22"
+closed = "2026-06-22"
 +++
 
 # Issue 836: WebTUI Top Browser Controls
@@ -61,3 +62,14 @@ Ghostboard should continue to match the actual browser overlay area.
 
 - [Experiment 1: Move browser controls above viewport](01-move-browser-controls-above-viewport.md)
   — **Pass**
+
+## Conclusion
+
+Experiment 1 moved the WebTUI browser chrome above the viewport. The URL bar,
+keybinding/status strip, and mode indicator now render at the top of the pane in
+Browse and Control modes, while the viewport begins below them.
+
+The implementation added a shared layout helper and regression tests covering
+default layout, `:viewport height <rows>`, small-height clamp behavior, and
+rendered Browse/Control terminal captures. Verification passed with formatting,
+`git diff --check`, `cargo test -p webtui`, and `cargo build -p webtui`.
