@@ -136,6 +136,8 @@ Each feature row should ultimately record:
   — **Partial**
 - [Experiment 8: Fix Roamium PDF password Enter submission](08-fix-roamium-password-enter-submit.md)
   — **Pass**
+- [Experiment 9: Prove Roamium malformed PDF errors](09-prove-roamium-malformed-pdf-errors.md)
+  — **Designed**
 
 ## Roamium Phase
 
