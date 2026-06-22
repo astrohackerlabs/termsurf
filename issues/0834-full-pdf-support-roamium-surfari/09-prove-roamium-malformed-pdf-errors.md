@@ -188,3 +188,114 @@ Optional finding:
   same-tab stale-state probes.
 
 Re-review verdict: **Approved**.
+
+## Result
+
+**Result:** Pass
+
+Implemented a harness-only malformed PDF probe:
+
+- `scripts/test-issue-834-pdf-errors.py` launches the repo-built Roamium binary,
+  serves deterministic PDF fixtures from a local HTTP server, drives tab
+  creation through the TermSurf protocol, records HTTP request status and
+  content type, and writes `<log-dir>/pdf-error-summary.json`.
+- `scripts/probe-pdf-error.mjs` attaches to Roamium DevTools, captures PDF
+  viewer/plugin state, detects normal loaded-plugin success, records visible
+  error evidence where Chromium exposes it, and can navigate the same tab from a
+  valid PDF to malformed fixtures.
+
+No Chromium, Roamium, Ghostboard, protocol, or other product source changes were
+needed.
+
+Final verification commands:
+
+```bash
+node --check scripts/probe-pdf-error.mjs
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/test-issue-834-pdf-errors.py
+
+python3 scripts/test-issue-834-pdf-errors.py \
+  --log-dir logs/issue-834-exp9-errors-control-final-v3 \
+  --probe valid-control
+
+python3 scripts/test-issue-834-pdf-errors.py \
+  --log-dir logs/issue-834-exp9-errors-malformed-final-v3 \
+  --probe malformed-fixtures
+
+python3 scripts/test-issue-834-pdf-errors.py \
+  --log-dir logs/issue-834-exp9-errors-stale-state-final-v3 \
+  --probe valid-to-malformed-same-tab
+
+git diff --check
+```
+
+Final evidence:
+
+- `logs/issue-834-exp9-errors-control-final-v3/pdf-error-summary.json`:
+  `first_failing_hop = "no-failure-observed"`, `valid_control_loaded = true`,
+  `malformed_snapshot_count = 0`, one HTTP 200 `application/pdf` request for
+  `/valid.pdf`, `errorEvidence = false` for the valid-control snapshot, and
+  `roamium_exited_before_shutdown = false`.
+- `logs/issue-834-exp9-errors-malformed-final-v3/pdf-error-summary.json`:
+  `first_failing_hop = "no-failure-observed"`, three malformed snapshots,
+  `malformed_loaded_labels = []`, HTTP 200 `application/pdf` requests for
+  `/truncated-header.pdf`, `/not-pdf.pdf`, and `/empty.pdf`,
+  `malformed_outcomes = {"truncated-header": "visible-error-evidence", "not-pdf": "no-viewer-no-plugin", "empty": "no-viewer-no-plugin"}`,
+  and `roamium_exited_before_shutdown = false`.
+- `logs/issue-834-exp9-errors-stale-state-final-v3/pdf-error-summary.json`:
+  `first_failing_hop = "no-failure-observed"`, `valid_control_loaded = true`,
+  three same-tab malformed snapshots, `malformed_loaded_labels = []`,
+  `malformed_outcomes = {"truncated-header": "no-viewer-no-plugin", "not-pdf": "no-viewer-no-plugin", "empty": "no-viewer-no-plugin"}`,
+  HTTP 200 `application/pdf` requests for the valid and malformed fixtures, and
+  `roamium_exited_before_shutdown = false`.
+
+The standalone malformed probe found no normal loaded-plugin success for any
+malformed fixture. The same-tab valid-to-malformed probe first proved a valid
+PDF loaded, then navigated the same tab through every malformed fixture and
+proved none retained the prior successful loaded PDF state.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Initial verdict: **Changes Required**.
+
+Required finding:
+
+- The harness's first `errorEvidence` detector was too broad. It could treat
+  hidden script text and SVG icon ids as error evidence, which made the valid
+  control and malformed snapshots look like visible error states.
+
+Fix:
+
+- `scripts/probe-pdf-error.mjs` now ignores script/style/template/SVG noise,
+  requires visible error text for `visible-error-evidence`, and records explicit
+  `malformedOutcome` values.
+- `scripts/test-issue-834-pdf-errors.py` now classifies malformed snapshots
+  using those explicit outcomes and records them in `malformed_outcomes`.
+- The final evidence was rerun into the v3 log directories.
+
+Re-review verdict: **Approved**. The reviewer confirmed the v3 valid control has
+`errorEvidence = false`, malformed snapshots report explicit `malformedOutcome`
+values, and the only visible-error case has actual visible text: `Error` /
+`Failed to load PDF document.`
+
+## Conclusion
+
+Roamium's malformed/error PDF row is proven for this matrix pass. Invalid,
+truncated, and empty PDF responses served as `application/pdf` do not crash
+Roamium, do not hang the harness, do not report normal loaded-plugin success,
+and do not leak stale normal loaded-plugin success after a valid-to-malformed
+same-tab transition.
+
+The completion review initially found that the harness's `errorEvidence`
+detector was too broad because hidden script text and SVG icon ids could make
+the valid control and malformed snapshots look like visible error states. The
+harness now ignores script/style/template/SVG noise, requires visible error text
+for `visible-error-evidence`, and records explicit `malformedOutcome` values.
+The corrected v3 evidence reclassifies no-viewer/no-plugin malformed loads as
+deterministic safe outcomes instead of claiming visible error UI for them.
+
+The next Roamium PDF experiment should continue with another unproven matrix
+row, likely native print, forms, annotations, context menus, or the remaining
+download-restriction/disabled-toolbar-state gap from Experiment 6.
