@@ -315,4 +315,4 @@ recovery. Much of this code can inform Surfari's implementation.
 - [Experiment 24: Define Surfari real-app matrix](24-surfari-real-app-matrix.md)
   — **Pass**
 - [Experiment 25: Run Surfari lifecycle tranche](25-surfari-lifecycle-tranche.md)
-  — **Designed**
+  — **Pass**

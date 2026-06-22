@@ -89,3 +89,62 @@ panes, tabs, windows, focus switching, profiles, crash handling, click/drag, and
 the full comparison, the verification requires proof for navigation, resize,
 shutdown, and restart, matrix updates are guarded against overclaiming, hygiene
 checks are present, and the plan commit had not already been made.
+
+## Result
+
+**Result:** Pass
+
+Added `scripts/test-issue-756-surfari-lifecycle-tranche.sh` and ran it
+successfully with run ID `20260621-190346`.
+
+Evidence:
+
+- `logs/issue-756-exp25-surfari-lifecycle/app-20260621-190346.log`
+- `logs/issue-756-exp25-surfari-lifecycle/surfari-trace-20260621-190346.log`
+- `logs/issue-756-exp25-surfari-lifecycle/webtui-20260621-190346.log`
+- `logs/issue-756-exp25-surfari-lifecycle/harness-20260621-190346.log`
+
+The harness proved the lifecycle tranche inside the real Debug `TermSurf.app`:
+
+- run 1 produced `BrowserReady` for `browser=surfari`;
+- AppKit presented the Surfari overlay;
+- Surfari created fixture A and loaded title `Issue 756 Lifecycle A`;
+- WebTUI observed the fixture A title;
+- the harness sent an explicit `Navigate` protobuf to Surfari;
+- Surfari loaded fixture B and emitted the fixture B URL/title;
+- WebTUI observed the fixture B URL/title;
+- resizing the real TermSurf window from `950, 720` to `900x680` produced a
+  Surfari `resize ... ffi=ts_set_view_size` trace;
+- direct `CloseTab` removed the tab and reached `no-tabs-remaining`;
+- relaunch produced a fresh Surfari trace init, `BrowserReady`, AppKit overlay
+  presentation, fixture A creation, and WebTUI title state.
+
+Updated `issues/0756-surfari/real-app-matrix.md` conservatively:
+
+- `Navigation` is now `Proven` for single-pane explicit navigation after initial
+  load.
+- `Resize` and `Shutdown` remain `Proven` with Experiment 25 as additional
+  evidence.
+- `Restart` is now `Proven` for clean relaunch after shutdown.
+
+## Conclusion
+
+The first real-app Surfari tranche is complete. Surfari can launch through
+Ghostboard, navigate after initial load, resize with the real app window, close
+cleanly, and restart without stale overlay state in the single-window,
+single-pane case.
+
+The next experiment should move to pane/split/tab/window/focus geometry. It
+should not claim profile isolation, crash handling, click/drag parity, or full
+Roamium comparison until those rows have their own direct evidence.
+
+## Completion Review
+
+Adversarial completion review returned `APPROVED` with no Required findings. The
+reviewer independently confirmed that the result commit had not been made, the
+expected uncommitted docs and harness were present, the harness assertions were
+non-vacuous for launch, overlay presentation, explicit navigation, WebTUI
+URL/title updates, resize, `CloseTab` shutdown, and relaunch, and the run
+`20260621-190346` logs support the matrix updates. The reviewer also verified
+`bash -n`, scoped `git diff --check`, and Prettier checks; they did not rerun
+build commands because those can mutate build artifacts.
