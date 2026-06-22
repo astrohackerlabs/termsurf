@@ -60,4 +60,4 @@ Ghostboard should continue to match the actual browser overlay area.
 ## Experiments
 
 - [Experiment 1: Move browser controls above viewport](01-move-browser-controls-above-viewport.md)
-  — **Designed**
+  — **Pass**

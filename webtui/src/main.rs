@@ -1603,6 +1603,48 @@ fn viewport_identity_label(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BrowserChromeLayout {
+    viewport_area: Rect,
+    viewport_inner: Rect,
+    url_area: Rect,
+    status_area: Rect,
+}
+
+fn viewport_inner_rect(viewport_area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(viewport_area)
+}
+
+fn browser_chrome_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserChromeLayout {
+    let (url_area, status_area, viewport_area) = if let Some(rows) = viewport_height_override {
+        let available = area.height.saturating_sub(4);
+        let viewport_height = rows.saturating_add(2).clamp(1, available.max(1));
+        let layout = Layout::vertical([
+            Constraint::Length(3),               // URL bar
+            Constraint::Length(1),               // Status bar
+            Constraint::Length(viewport_height), // Viewport override
+            Constraint::Min(0),                  // Filler
+        ])
+        .split(area);
+        (layout[0], layout[1], layout[2])
+    } else {
+        let layout = Layout::vertical([
+            Constraint::Length(3), // URL bar (1 line + top/bottom border)
+            Constraint::Length(1), // Status bar
+            Constraint::Min(1),    // Viewport (fill remaining)
+        ])
+        .split(area);
+        (layout[0], layout[1], layout[2])
+    };
+
+    BrowserChromeLayout {
+        viewport_area,
+        viewport_inner: viewport_inner_rect(viewport_area),
+        url_area,
+        status_area,
+    }
+}
+
 /// Render the UI and return the viewport inner rect (grid coordinates).
 fn ui(
     frame: &mut Frame,
@@ -1634,26 +1676,10 @@ fn ui(
         frame.area(),
     );
 
-    let (viewport_area, url_area, status_area) = if let Some(rows) = viewport_height_override {
-        let available = frame.area().height.saturating_sub(4);
-        let viewport_height = rows.saturating_add(2).clamp(1, available.max(1));
-        let layout = Layout::vertical([
-            Constraint::Length(viewport_height), // Viewport override
-            Constraint::Min(0),                  // Filler
-            Constraint::Length(3),               // URL bar
-            Constraint::Length(1),               // Status bar
-        ])
-        .split(frame.area());
-        (layout[0], layout[2], layout[3])
-    } else {
-        let layout = Layout::vertical([
-            Constraint::Min(1),    // Viewport (fill remaining)
-            Constraint::Length(3), // URL bar (1 line + top/bottom border)
-            Constraint::Length(1), // Status bar
-        ])
-        .split(frame.area());
-        (layout[0], layout[1], layout[2])
-    };
+    let chrome_layout = browser_chrome_layout(frame.area(), viewport_height_override);
+    let viewport_area = chrome_layout.viewport_area;
+    let url_area = chrome_layout.url_area;
+    let status_area = chrome_layout.status_area;
 
     // Border colors based on mode.
     let (url_border, viewport_border) = match mode {
@@ -1790,7 +1816,7 @@ fn ui(
         let hover_label = Line::from(Span::raw(target_url).style(Style::default().fg(DIM)));
         viewport_block = viewport_block.title_bottom(hover_label);
     }
-    let inner = viewport_block.inner(viewport_area);
+    let inner = chrome_layout.viewport_inner;
 
     if let Some(dialog) = pending_dialog {
         let prompt_line = match dialog.dialog_type.as_str() {
@@ -2120,4 +2146,112 @@ fn ui(
     frame.render_widget(label_widget, status_layout[1]);
 
     inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn render_capture(mode: Mode) -> (Rect, String) {
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut editor_state = EditorState::new(Lines::from("https://example.com"));
+        let mut cmd_state = EditorState::new(Lines::from(""));
+        let mut viewport_inner = Rect::default();
+
+        terminal
+            .draw(|frame| {
+                viewport_inner = ui(
+                    frame,
+                    "https://example.com",
+                    "default",
+                    &mode,
+                    &mut editor_state,
+                    &mut cmd_state,
+                    "Example",
+                    false,
+                    0,
+                    1,
+                    &None,
+                    "roamium",
+                    "",
+                    &None,
+                    &None,
+                    None,
+                    &[],
+                    &[],
+                    &None,
+                    true,
+                    None,
+                    None,
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        (viewport_inner, out)
+    }
+
+    #[test]
+    fn default_layout_places_controls_above_viewport() {
+        let layout = browser_chrome_layout(Rect::new(0, 0, 80, 30), None);
+
+        assert_eq!(layout.url_area, Rect::new(0, 0, 80, 3));
+        assert_eq!(layout.status_area, Rect::new(0, 3, 80, 1));
+        assert_eq!(layout.viewport_area, Rect::new(0, 4, 80, 26));
+        assert_eq!(layout.viewport_inner, Rect::new(1, 5, 78, 24));
+    }
+
+    #[test]
+    fn viewport_height_override_places_controls_above_viewport() {
+        let layout = browser_chrome_layout(Rect::new(0, 0, 80, 30), Some(10));
+
+        assert_eq!(layout.url_area, Rect::new(0, 0, 80, 3));
+        assert_eq!(layout.status_area, Rect::new(0, 3, 80, 1));
+        assert_eq!(layout.viewport_area, Rect::new(0, 4, 80, 12));
+        assert_eq!(layout.viewport_inner, Rect::new(1, 5, 78, 10));
+    }
+
+    #[test]
+    fn small_height_override_clamps_below_controls() {
+        let layout = browser_chrome_layout(Rect::new(0, 0, 80, 5), Some(100));
+
+        assert_eq!(layout.url_area, Rect::new(0, 0, 80, 3));
+        assert_eq!(layout.status_area, Rect::new(0, 3, 80, 1));
+        assert_eq!(layout.viewport_area, Rect::new(0, 4, 80, 1));
+        assert_eq!(layout.viewport_inner, Rect::new(1, 5, 78, 0));
+    }
+
+    #[test]
+    fn issue_836_after_control_capture() {
+        let (viewport_inner, capture) = render_capture(Mode::Control);
+        println!("viewport_inner={viewport_inner:?}\n{capture}");
+
+        let lines: Vec<&str> = capture.lines().collect();
+        assert!(lines[0].starts_with("┌URL"));
+        assert!(lines[3].contains("CONTROL"));
+        assert!(lines[4].starts_with("┌Example"));
+        assert_eq!(viewport_inner, Rect::new(1, 5, 58, 6));
+    }
+
+    #[test]
+    fn issue_836_after_browse_capture() {
+        let (viewport_inner, capture) = render_capture(Mode::Browse);
+        println!("viewport_inner={viewport_inner:?}\n{capture}");
+
+        let lines: Vec<&str> = capture.lines().collect();
+        assert!(lines[0].starts_with("┌URL"));
+        assert!(lines[3].contains("BROWSE"));
+        assert!(lines[4].starts_with("┌Example"));
+        assert_eq!(viewport_inner, Rect::new(1, 5, 58, 6));
+    }
 }

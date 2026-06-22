@@ -136,3 +136,121 @@ Third re-review:
 The reviewer confirmed that the small-height case now specifies exact URL,
 status, viewport outer, and viewport inner rectangles with x, y, width, and
 height. No required findings remain.
+
+## Result
+
+**Result:** Pass.
+
+Implemented the top-controls layout in `webtui/src/main.rs`:
+
+- Added `BrowserChromeLayout` and `browser_chrome_layout()` so URL/status/
+  viewport rectangles are allocated in one place.
+- Normal layout now allocates URL bar first, status/keybinding strip second, and
+  viewport third.
+- `:viewport height <rows>` layout now keeps URL/status above the viewport and
+  puts filler below the requested viewport area.
+- The returned viewport inner rectangle still comes from the viewport border
+  block geometry and remains the rectangle sent to Ghostboard for webview
+  overlay placement.
+- Added regression tests for default layout, viewport-height override, small
+  terminal clamp behavior, and rendered Browse/Control captures.
+
+Before terminal capture from the actual pre-change renderer:
+
+```text
+viewport_inner=Rect { x: 1, y: 1, width: 58, height: 6 }
+┌Example───────────────────────────────────────────────────┐
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└─────────────────────────────────────── roamium/default#1┘
+┌URL───────────────────────────────────────────────────────┐
+│https://example.com                                       │
+└──────────────────────────────────────────────────────────┘
+:q⏎ quit  i edit url  ⏎ browse                      CONTROL
+```
+
+After terminal capture from the changed Control-mode renderer:
+
+```text
+viewport_inner=Rect { x: 1, y: 5, width: 58, height: 6 }
+┌URL───────────────────────────────────────────────────────┐
+│https://example.com                                       │
+└──────────────────────────────────────────────────────────┘
+:q⏎ quit  i edit url  ⏎ browse                      CONTROL
+┌Example───────────────────────────────────────────────────┐
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└─────────────────────────────────────── roamium/default#1┘
+```
+
+After terminal capture from the changed Browse-mode renderer:
+
+```text
+viewport_inner=Rect { x: 1, y: 5, width: 58, height: 6 }
+┌URL───────────────────────────────────────────────────────┐
+│https://example.com                                       │
+└──────────────────────────────────────────────────────────┘
+⌘[ back  ⌘] fwd  ⌘r reload  esc control             󰖟 BROWSE
+┌Example───────────────────────────────────────────────────┐
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└─────────────────────────────────────── roamium/default#1┘
+```
+
+Verification run:
+
+```bash
+cargo fmt -p webtui
+cargo test -p webtui issue_836_after_ -- --nocapture
+cargo test -p webtui layout -- --nocapture
+git diff --check
+cargo test -p webtui
+cargo build -p webtui
+```
+
+Results:
+
+- Targeted after-capture tests passed for Browse and Control modes.
+- Layout helper tests passed for default top-controls layout, `rows = 10`
+  viewport override, and `80x5` small-height clamp behavior.
+- Full `cargo test -p webtui` passed: 5 tests.
+- `cargo build -p webtui` passed.
+- `git diff --check` passed.
+
+## Conclusion
+
+Experiment 1 satisfies the issue: WebTUI browser controls now render above the
+viewport in Browse and Control modes, viewport geometry starts below the
+controls, and the same invariant is covered for `:viewport height <rows>` and
+small terminal heights. No follow-up experiment is needed for the scoped layout
+change.
+
+## Completion Review
+
+Adversarial review, fresh-context Codex subagent:
+
+**Verdict:** Approved.
+
+The reviewer found no issues. It independently verified that scope was limited
+to `webtui/src/main.rs` plus issue docs, controls render above the viewport in
+Browse and Control captures, returned viewport geometry starts below controls,
+the `:viewport height <rows>` and `80x5` clamp tests assert exact rectangles,
+keybinding logic was not changed, the result commit had not been made yet, and
+the required checks passed:
+
+- `git diff --check`
+- `cargo fmt --check -p webtui`
+- `cargo test -p webtui`
+- `cargo build -p webtui`
