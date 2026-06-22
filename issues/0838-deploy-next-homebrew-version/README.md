@@ -109,6 +109,11 @@ This issue covers the next Homebrew deployment. It may include:
       deployment changed install instructions, close the issue, and regenerate
       `issues/README.md`.
 
+## Experiments
+
+- [Experiment 1: Bootstrap WebKit and Surfari](01-bootstrap-webkit-surfari.md) —
+  **Designed**
+
 ## Acceptance Criteria
 
 - The issue records the intended next version number: `1.4.0`.
