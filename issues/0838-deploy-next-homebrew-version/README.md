@@ -97,7 +97,7 @@ This issue covers the next Homebrew deployment. It may include:
       resolution.
 - [x] **Stage 5: Full release build** — run the full `1.4.0` release build and
       verify Roamium, Surfari, WebTUI, and Ghostboard artifacts are present.
-- [ ] **Stage 6: Package-only release validation** — generate the `1.4.0`
+- [x] **Stage 6: Package-only release validation** — generate the `1.4.0`
       tarball without publishing and inspect it for `TermSurf.app`, `web`,
       Roamium, Surfari, and required runtime resources.
 - [ ] **Stage 7: Publish release** — publish GitHub Release `v1.4.0`, update and
@@ -122,7 +122,7 @@ This issue covers the next Homebrew deployment. It may include:
   — **Pass**
 - [Experiment 5: Full release build](05-full-release-build.md) — **Pass**
 - [Experiment 6: Package-only release validation](06-package-only-release-validation.md)
-  — **Designed**
+  — **Pass**
 
 ## Acceptance Criteria
 

@@ -8,6 +8,7 @@ SURFARI_REQUIRED_RUNTIME_RESOURCES=(
   "WebInspectorUI.framework"
   "WebGPU.framework"
   "libANGLE-shared.dylib"
+  "libWebKitSwift.dylib"
   "libwebrtc.dylib"
   "com.apple.WebKit.GPU.xpc"
   "com.apple.WebKit.Model.xpc"
@@ -39,6 +40,28 @@ surfari_xpc_executable() {
   printf '%s/Contents/MacOS/%s\n' "$xpc" "$executable"
 }
 
+materialize_webkit_bundle_symlinks() {
+  local destination="$1"
+  local webkit_framework="$destination/WebKit.framework/Versions/A"
+
+  local symlink
+  for symlink in \
+    "$webkit_framework/Frameworks/libWebKitSwift.dylib" \
+    "$webkit_framework/XPCServices"/*.xpc; do
+    [ -L "$symlink" ] || continue
+
+    local target
+    target="$destination/$(basename "$symlink")"
+    if [ ! -e "$target" ]; then
+      echo "Error: Surfari WebKit bundle symlink target missing: $target" >&2
+      return 1
+    fi
+
+    rm "$symlink"
+    cp -R "$target" "$symlink"
+  done
+}
+
 copy_surfari_runtime_resources() {
   local webkit_build="$1"
   local destination="$2"
@@ -60,6 +83,16 @@ copy_surfari_runtime_resources() {
     rm -rf "$destination_path"
     cp -R "$source_path" "$destination_path"
   done
+
+  # The WebKit debug build currently ships this dangling framework-level
+  # symlink. It is not needed at runtime and breaks strict bundle verification
+  # after packaging.
+  if [ -L "$destination/WebCore.framework/Frameworks" ] &&
+    [ ! -e "$destination/WebCore.framework/Frameworks" ]; then
+    rm "$destination/WebCore.framework/Frameworks"
+  fi
+
+  materialize_webkit_bundle_symlinks "$destination"
 }
 
 rewrite_surfari_runtime_paths() {
@@ -93,6 +126,8 @@ rewrite_surfari_runtime_paths() {
     "$destination/WebKitLegacy.framework/Versions/A/WebKitLegacy"
     "$destination/WebGPU.framework/Versions/A/WebGPU"
     "$destination/libANGLE-shared.dylib"
+    "$destination/libWebKitSwift.dylib"
+    "$destination/WebKit.framework/Versions/A/Frameworks/libWebKitSwift.dylib"
     "$destination/libwebrtc.dylib"
   )
 
@@ -125,8 +160,19 @@ rewrite_surfari_runtime_paths() {
       "$artifact" 2>/dev/null || true
   done
 
+  for artifact in \
+    "$destination/libWebKitSwift.dylib" \
+    "$destination/WebKit.framework/Versions/A/Frameworks/libWebKitSwift.dylib"; do
+    [ -f "$artifact" ] || continue
+    install_name_tool \
+      -id @rpath/WebKit.framework/Versions/A/Frameworks/libWebKitSwift.dylib \
+      "$artifact"
+  done
+
   local xpc
-  for xpc in "$destination"/*.xpc; do
+  for xpc in \
+    "$destination"/*.xpc \
+    "$destination/WebKit.framework/Versions/A/XPCServices"/*.xpc; do
     [ -d "$xpc" ] || continue
     local executable
     executable="$(surfari_xpc_executable "$xpc")"
@@ -145,6 +191,6 @@ sign_surfari_runtime_artifacts() {
   for artifact in surfari libtermsurf_webkit.dylib "${SURFARI_REQUIRED_RUNTIME_RESOURCES[@]}"; do
     local path="$destination/$artifact"
     [ -e "$path" ] || continue
-    codesign --force --deep --sign - "$path" || true
+    codesign --force --deep --sign - "$path"
   done
 }

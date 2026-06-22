@@ -48,6 +48,7 @@ cp "$REPO_DIR/target/release/surfari" "$STAGING_DIR/surfari/"
 cp "$REPO_DIR/surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib" "$STAGING_DIR/surfari/"
 copy_surfari_runtime_resources "$WEBKIT_BUILD" "$STAGING_DIR/surfari"
 rewrite_surfari_runtime_paths "$WEBKIT_BUILD" "$STAGING_DIR/surfari"
+sign_surfari_runtime_artifacts "$STAGING_DIR/surfari"
 
 # Copy Chromium dylibs and resources
 copy_roamium_runtime_resources "$CHROMIUM_OUT" "$STAGING_DIR/roamium"
