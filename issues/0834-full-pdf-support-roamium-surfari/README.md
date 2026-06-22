@@ -142,6 +142,8 @@ Each feature row should ultimately record:
   — **Partial**
 - [Experiment 11: Inventory Roamium advanced PDF surfaces](11-inventory-roamium-advanced-pdf-surfaces.md)
   — **Pass**
+- [Experiment 12: Prove Roamium PDF forms](12-prove-roamium-pdf-forms.md) —
+  **Designed**
 
 ## Roamium Phase
 
