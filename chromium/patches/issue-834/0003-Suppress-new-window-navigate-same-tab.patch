@@ -1,7 +1,7 @@
 From 68f68f2a4450efa1fbbe58357834c32e9a93f359 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 14 Mar 2026 15:02:19 -0500
-Subject: [PATCH 03/79] Suppress new-window, navigate same tab
+Subject: [PATCH 03/80] Suppress new-window, navigate same tab
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

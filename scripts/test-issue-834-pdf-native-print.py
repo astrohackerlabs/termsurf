@@ -917,6 +917,10 @@ def classify(
     probe_summary: dict[str, Any] | None,
     print_watch: dict[str, Any] | None,
 ) -> None:
+    print_summary = (probe_summary or {}).get("print") or {}
+    native_lines = print_summary.get("printNativeLines") or []
+    has_native_event = lambda event: any(f" event={event}" in line for line in native_lines)
+
     if args.probe == "safety-gate":
         state.first_failing_hop = "native-print-safety-gate-not-ready"
         return
@@ -932,6 +936,12 @@ def classify(
         state.first_failing_hop = "tab-not-ready"
     elif not state.devtools_port:
         state.first_failing_hop = "devtools-missing"
+    elif (
+        has_native_event("mac-ask-user-begin-app-modal-sheet-enter")
+        and has_native_event("mac-ask-user-begin-app-modal-sheet-exit")
+        and state.roamium_exited_before_shutdown
+    ):
+        state.first_failing_hop = "mac-print-app-modal-callback-dropped-crash"
     elif state.probe_status != "ok" or not probe_summary:
         state.first_failing_hop = "native-print-observation-gap"
     elif state.roamium_exited_before_shutdown:
@@ -941,10 +951,7 @@ def classify(
     ):
         state.first_failing_hop = "native-print-job-submitted-unexpectedly"
     else:
-        print_summary = probe_summary.get("print") or {}
         status = print_summary.get("status")
-        native_lines = print_summary.get("printNativeLines") or []
-        has_native_event = lambda event: any(f" event={event}" in line for line in native_lines)
         if status == "print-control-missing":
             state.first_failing_hop = "native-print-control-missing"
         elif status == "print-ready-disabled-by-flags":
@@ -973,6 +980,11 @@ def classify(
             "mac-ask-user-completion-block-enter"
         ):
             state.first_failing_hop = "mac-print-completion-block-not-run"
+        elif has_native_event("mac-ask-user-begin-app-modal-sheet-enter") and not (
+            has_native_event("mac-ask-user-app-modal-sheet-response-printed")
+            or has_native_event("mac-ask-user-app-modal-sheet-response-cancel")
+        ):
+            state.first_failing_hop = "mac-print-app-modal-response-missing"
         elif has_native_event("mac-ask-user-begin-sheet-enter") and not (
             has_native_event("mac-ask-user-sheet-response-printed")
             or has_native_event("mac-ask-user-sheet-response-cancel")
@@ -985,6 +997,7 @@ def classify(
             state.first_failing_hop = "mac-print-modal-response-missing"
         elif (
             has_native_event("mac-ask-user-modal-response-ok")
+            or has_native_event("mac-ask-user-app-modal-sheet-response-printed")
             or has_native_event("mac-ask-user-sheet-response-printed")
             or has_native_event("mac-ask-user-callback-success")
             or has_native_event("ts-scripted-print-callback-result-success")
@@ -996,11 +1009,15 @@ def classify(
             state.first_failing_hop = "native-print-dialog-seen-cancel-failed"
         elif (
             has_native_event("mac-ask-user-modal-response-cancel")
+            or has_native_event("mac-ask-user-app-modal-sheet-response-cancel")
             or has_native_event("mac-ask-user-sheet-response-cancel")
             or has_native_event("mac-ask-user-callback-canceled")
             or has_native_event("ts-scripted-print-callback-result-canceled")
         ):
-            state.first_failing_hop = "mac-print-dialog-cancel-no-observed-dialog"
+            if has_native_event("mac-ask-user-app-modal-sheet-response-cancel"):
+                state.first_failing_hop = "mac-print-app-modal-response-cancel-no-observed-dialog"
+            else:
+                state.first_failing_hop = "mac-print-dialog-cancel-no-observed-dialog"
         else:
             state.first_failing_hop = "native-print-click-sent-no-dialog"
 

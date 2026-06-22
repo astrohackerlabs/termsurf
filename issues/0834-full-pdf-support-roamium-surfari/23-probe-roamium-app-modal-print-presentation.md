@@ -190,3 +190,141 @@ Partial / Failure criteria, follows directly from Experiment 22's
 `mac-print-sheet-response-missing` result, preserves the native-print safety
 contract, includes branch / patch / build / harness / probe / diff / review /
 commit gates, and requires the plan commit before implementation begins.
+
+## Result
+
+**Result:** Partial
+
+Chromium branch `148.0.7778.97-issue-834-exp23` was created from
+`148.0.7778.97-issue-834-exp22`, and `chromium/README.md` was updated with the
+new branch. Chromium commit `890c437d5fc8a9773ed9e4de2d725b99a0aa7bb6` records
+the fork change, and the cumulative patch archive was regenerated through
+`chromium/patches/issue-834/0080-Probe-app-modal-PDF-print-panels.patch`.
+
+The implementation tried two app-modal print-panel variants during iteration:
+
+1. `beginSheetUsingPrintInfo:onWindow:completionHandler:` with a nil parent
+   window variable.
+2. The older async
+   `beginSheetWithPrintInfo:modalForWindow:delegate:didEndSelector:contextInfo:`
+   path with a nil parent window and a retained delegate helper.
+
+The first variant was an intermediate, unarchived probe. It built only after
+avoiding a literal `nil` argument, but appeared to fail at runtime by returning
+from the begin call without retaining/running the completion block, which
+destroyed Chromium's pending `ScriptedPrintCallback`. That intermediate log
+directory was overwritten by the final delegate-based verification run, so this
+is recorded only as development context, not as primary experiment evidence. The
+harness keeps a classifier for that possible failure:
+
+`mac-print-app-modal-callback-dropped-crash`.
+
+The verified second variant avoided callback destruction by retaining a
+`TermSurfPrintPanelDelegate` helper through `contextInfo`. It built and ran, but
+the guarded native-print probe still did not observe a native print panel and
+the delegate callback never fired.
+
+Verification run:
+
+```bash
+cd chromium/src
+/Users/astrohacker/dev/termsurf/chromium/depot_tools/autoninja \
+  -C out/Default libtermsurf_chromium
+
+cd /Users/astrohacker/dev/termsurf
+rm -rf scripts/__pycache__
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-pdf-native-print.py
+rm -rf scripts/__pycache__
+node --check scripts/probe-pdf-save-print-title-local.mjs
+git diff --check
+
+rm -rf logs/issue-834-exp23-app-modal-print-presentation scripts/__pycache__
+python3 scripts/test-issue-834-pdf-native-print.py \
+  --log-dir logs/issue-834-exp23-app-modal-print-presentation \
+  --probe native-dialog \
+  --allow-native-dialog-click
+```
+
+Evidence from
+`logs/issue-834-exp23-app-modal-print-presentation/pdf-native-print-summary.json`:
+
+- `first_failing_hop`: `mac-print-app-modal-response-missing`;
+- `safety_gate_passed`: `true`;
+- `probe_status`: `ok`;
+- `server_register_received`: `true`;
+- `tab_ready_id`: `1`;
+- `devtools_port`: `50853`;
+- `roamium_exited_before_shutdown`: `false`;
+- `roamium_exit_code_before_shutdown`: `null`;
+- `print_dialog_watch.dialog_observed`: `false`;
+- `print_dialog_watch.cancel_sent`: `false`;
+- `print_queue_before.lpstat_o.stdout`: empty;
+- `print_queue_after.lpstat_o.stdout`: empty;
+- `print_queue_before.lpstat_W_completed_o.stdout`: empty;
+- `print_queue_after.lpstat_W_completed_o.stdout`: empty.
+
+The native trace reached:
+
+```text
+mac-ask-user-before-activation-app activation_policy=prohibited active=false
+mac-ask-user-before-activation-window present=true key=false main=false visible=true miniaturized=false can_key=true can_main=true matches_key=false matches_main=false
+mac-ask-user-set-activation-policy-regular-enter
+mac-ask-user-set-activation-policy-regular-exit
+mac-ask-user-after-activation-app activation_policy=regular active=false
+mac-ask-user-after-activation-window present=true key=false main=false visible=true miniaturized=false can_key=true can_main=true matches_key=false matches_main=false
+mac-ask-user-begin-app-modal-sheet-enter
+mac-ask-user-begin-app-modal-sheet-exit
+```
+
+No `mac-ask-user-app-modal-sheet-response-cancel`,
+`mac-ask-user-app-modal-sheet-response-printed`, or `mac-ask-user-callback-*`
+event was observed. No print job was submitted.
+
+## Conclusion
+
+App-modal print-panel presentation did not solve native PDF print. It did
+distinguish two important behaviors:
+
+- the modern block-based sheet API requires a real parent window for safe async
+  callback retention at compile time; the unarchived nil-parent runtime probe
+  was not strong enough to keep as primary evidence;
+- the deprecated delegate-based async API can retain the Chromium callback
+  safely with a helper object, but app-modal nil-window presentation still
+  produces no observable print panel and no completion callback.
+
+This makes the parent-window sheet vs app-modal distinction less likely to be
+the root cause. The remaining evidence still points at Roamium's process/window
+activation state: even after switching to regular activation policy and ordering
+the content-shell window front, `NSApp.active` stays false and the parent window
+stays non-key/non-main. The next experiment should focus earlier in the macOS
+application lifecycle and content-shell platform delegate, not on more
+`NSPrintPanel` presentation variants.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Initial verdict: **Changes Required**.
+
+Required finding:
+
+- The result recorded the intermediate block-based nil-window
+  `beginSheetUsingPrintInfo:onWindow:completionHandler:` crash as though it were
+  primary experiment evidence, but the final log directory only contains the
+  delegate-based app-modal run.
+
+Fix:
+
+- Revised the result to mark the block-based nil-window crash as unarchived
+  development context, not primary experiment evidence.
+- Kept the verified Experiment 23 conclusion anchored to the archived
+  delegate-based run, which records `mac-print-app-modal-response-missing`, no
+  observed dialog, no cancel sent, unchanged queues, and no pre-shutdown Roamium
+  exit.
+
+Re-review verdict: **Approved**.
+
+The reviewer confirmed that the prior Required finding is resolved and found no
+new Required issue.

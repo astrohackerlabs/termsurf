@@ -1,7 +1,7 @@
 From a46e288b2e1d71495ae8ff5cc2ddfb42cfaec9c5 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 12:15:42 -0500
-Subject: [PATCH 33/79] Bind PDF MIME handlers
+Subject: [PATCH 33/80] Bind PDF MIME handlers
 
 Two quiet binders hold the line,
 No stream to pour, no guest to sign.

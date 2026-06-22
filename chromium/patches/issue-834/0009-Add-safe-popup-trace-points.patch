@@ -1,7 +1,7 @@
 From 079ed79ce3cddd4a60f4e074ced928f0f94d5d07 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Tue, 19 May 2026 19:11:29 -0500
-Subject: [PATCH 09/79] Add safe popup trace points
+Subject: [PATCH 09/80] Add safe popup trace points
 
 A select menu lost its map,
 So logs now mark the trail.

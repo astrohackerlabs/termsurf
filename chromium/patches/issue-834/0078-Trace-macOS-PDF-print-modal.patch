@@ -1,7 +1,7 @@
 From 94e579f240d99bad9de011fc8f652939b997dc69 Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 14:24:33 -0500
-Subject: [PATCH 78/79] Trace macOS PDF print modal
+Subject: [PATCH 78/80] Trace macOS PDF print modal
 
 The panel stepped on stage,
 Then froze before a line.

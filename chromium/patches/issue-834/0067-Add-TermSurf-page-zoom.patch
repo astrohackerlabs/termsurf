@@ -1,7 +1,7 @@
 From 62b0216016aac7f65a1da6fbd2505978ff4235cc Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 19:43:29 -0500
-Subject: [PATCH 67/79] Add TermSurf page zoom
+Subject: [PATCH 67/80] Add TermSurf page zoom
 
 A page once sat too small to read,
 Its letters pleading, "help with speed."

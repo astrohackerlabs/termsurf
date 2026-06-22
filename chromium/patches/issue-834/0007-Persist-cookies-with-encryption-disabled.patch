@@ -1,7 +1,7 @@
 From 2e1ccd864da2689673c6bc36285ff69074ae4d27 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 20 Mar 2026 07:22:44 -0500
-Subject: [PATCH 07/79] Persist cookies with encryption disabled
+Subject: [PATCH 07/80] Persist cookies with encryption disabled
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
