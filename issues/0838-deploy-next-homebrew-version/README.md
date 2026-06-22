@@ -81,6 +81,34 @@ This issue covers the next Homebrew deployment. It may include:
 - installing the cask from a clean or existing Homebrew install;
 - documenting any deployment blockers.
 
+## Major Stages
+
+- [ ] **Stage 1: WebKit workspace bootstrap** — shallow clone `webkit/src`,
+      switch to `1452a43959523449099b2616793fd2c5b6a6487e`, apply
+      `webkit/patches/issue-756/`, and record the resulting WebKit state.
+- [ ] **Stage 2: WebKit build** — verify Xcode/Metal prerequisites and build
+      WebKit with `webkit/src/Tools/Scripts/build-webkit --debug`.
+- [ ] **Stage 3: Surfari local build** — build
+      `surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib`, run its smoke
+      test, and build the `surfari` Rust binary.
+- [ ] **Stage 4: Surfari packaging integration** — wire Surfari into
+      `scripts/build.sh`, `scripts/install.sh`, `scripts/release.sh`,
+      `homebrew/Casks/termsurf.rb`, and Ghostboard's installed browser
+      resolution.
+- [ ] **Stage 5: Full release build** — run the full `1.4.0` release build and
+      verify Roamium, Surfari, WebTUI, and Ghostboard artifacts are present.
+- [ ] **Stage 6: Package-only release validation** — generate the `1.4.0`
+      tarball without publishing and inspect it for `TermSurf.app`, `web`,
+      Roamium, Surfari, and required runtime resources.
+- [ ] **Stage 7: Publish release** — publish GitHub Release `v1.4.0`, update and
+      push the Homebrew cask, and record the generated SHA.
+- [ ] **Stage 8: Homebrew install verification** — install or upgrade through
+      Homebrew and verify WebTUI top controls plus `web --browser surfari`
+      without `TERMSURF_SURFARI_PATH`.
+- [ ] **Stage 9: Closeout** — record final verification evidence, update docs if
+      deployment changed install instructions, close the issue, and regenerate
+      `issues/README.md`.
+
 ## Acceptance Criteria
 
 - The issue records the intended next version number: `1.4.0`.
