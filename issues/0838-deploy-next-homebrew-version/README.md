@@ -123,6 +123,8 @@ This issue covers the next Homebrew deployment. It may include:
 - [Experiment 5: Full release build](05-full-release-build.md) — **Pass**
 - [Experiment 6: Package-only release validation](06-package-only-release-validation.md)
   — **Pass**
+- [Experiment 7: Publish release 1.4.0](07-publish-release-1-4-0.md) —
+  **Designed**
 
 ## Acceptance Criteria
 
