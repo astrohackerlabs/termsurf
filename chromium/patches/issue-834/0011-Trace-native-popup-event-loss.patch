@@ -1,7 +1,7 @@
 From f3ead0f994281a6fd620255e08faf3855d6a8aec Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 22 May 2026 07:30:40 -0500
-Subject: [PATCH 11/80] Trace native popup event loss
+Subject: [PATCH 11/81] Trace native popup event loss
 
 The clicks went missing in the mist,
 So every border got a list:

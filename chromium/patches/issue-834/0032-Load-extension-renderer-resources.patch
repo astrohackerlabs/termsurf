@@ -1,7 +1,7 @@
 From e1e62c8ccbbb07a05e5f67f792d548ce4d7ce983 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 12:00:01 -0500
-Subject: [PATCH 32/80] Load extension renderer resources
+Subject: [PATCH 32/81] Load extension renderer resources
 
 The module map had named its prize,
 But bytes were hiding from its eyes.

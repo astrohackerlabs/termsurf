@@ -1,7 +1,7 @@
 From 53e113e9ac5216d7cba1349aef1696d37d8ace77 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 14:33:58 -0500
-Subject: [PATCH 59/80] Probe PDF print intercept guard
+Subject: [PATCH 59/81] Probe PDF print intercept guard
 
 ---
  pdf/pdf_view_web_plugin.cc | 158 ++++++++++++++++++++++++++++++++-----

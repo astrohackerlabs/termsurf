@@ -1,7 +1,7 @@
 From 8c6dacf838bacd7ab32b16329cf7ee1f0a9c5adf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 13:37:03 -0500
-Subject: [PATCH 36/80] Probe PDF attach path
+Subject: [PATCH 36/81] Probe PDF attach path
 
 The stream wore a wrapper hat,
 The helper arrived after that.

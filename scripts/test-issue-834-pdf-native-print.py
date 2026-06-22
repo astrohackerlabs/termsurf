@@ -27,6 +27,7 @@ from termsurf_pdf_protocol_harness import (
     double_field,
     inner_payload,
     send_message,
+    string_field,
     tab_ready_id,
     varint_field,
 )
@@ -56,6 +57,10 @@ def resize_payload(tab_id: int, width: int, height: int) -> bytes:
 
 def focus_payload(tab_id: int, focused: bool) -> bytes:
     return varint_field(1, tab_id) + bool_field(2, focused)
+
+
+def set_gui_active_payload(tab_id: int, active: bool, reason: str) -> bytes:
+    return varint_field(1, tab_id) + bool_field(2, active) + string_field(3, reason)
 
 
 class ReusableTcpServer(socketserver.TCPServer):
@@ -104,6 +109,7 @@ class HarnessState:
     tab_ready_id: int | None = None
     resize_sent: bool = False
     focus_sent: bool = False
+    gui_active_sent: bool = False
     devtools_port: int | None = None
     probe_status: str = "not-run"
     roamium_exited_before_shutdown: bool = False
@@ -220,9 +226,17 @@ def wait_for_tab_ready(
                             resize_payload(state.tab_ready_id, width, height),
                         )
                         send_message(conn, 10, focus_payload(state.tab_ready_id, True))
+                        send_message(
+                            conn,
+                            33,
+                            set_gui_active_payload(
+                                state.tab_ready_id, True, "native_print_probe"
+                            ),
+                        )
                         state.resize_sent = True
                         state.focus_sent = True
-                        messages.write("sent Resize and Focus\n")
+                        state.gui_active_sent = True
+                        messages.write("sent Resize, Focus, and SetGuiActive\n")
                         messages.flush()
                         return
             except socket.timeout:
@@ -1058,6 +1072,7 @@ def write_summary(
         "tab_ready_id": state.tab_ready_id,
         "resize_sent": state.resize_sent,
         "focus_sent": state.focus_sent,
+        "gui_active_sent": state.gui_active_sent,
         "devtools_port": state.devtools_port,
         "probe_status": state.probe_status,
         "roamium_exited_before_shutdown": state.roamium_exited_before_shutdown,

@@ -1,7 +1,7 @@
 From 184e100840738ce30e7fe6e542b14d602493c05e Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 14:56:49 -0500
-Subject: [PATCH 79/80] Probe macOS print sheet presentation
+Subject: [PATCH 79/81] Probe macOS print sheet presentation
 
 The print panel tried a new disguise,
 A sheet that rose before our eyes.

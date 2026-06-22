@@ -1,7 +1,7 @@
 From 7f022732665bd6f2559d1503ba75e95f219eacdf Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 15:48:05 -0500
-Subject: [PATCH 43/80] Trace PDF wrapper body bytes
+Subject: [PATCH 43/81] Trace PDF wrapper body bytes
 
 The parser chewed a tiny page,
 Not what the wrapper wrote on stage.

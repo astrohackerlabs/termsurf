@@ -1,7 +1,7 @@
 From 453d826490b5134341fce36bb199c34843bd421e Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 13:55:20 -0500
-Subject: [PATCH 77/80] Issue 834 exp20: wire PDF print manager
+Subject: [PATCH 77/81] Issue 834 exp20: wire PDF print manager
 
 ---
  content/libtermsurf_chromium/BUILD.gn         |   5 +

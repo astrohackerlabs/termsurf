@@ -1,7 +1,7 @@
 From 26a03731e04fb0bdae335bea0693e0fcc2951f23 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 16:42:52 -0500
-Subject: [PATCH 63/80] Harden PDF extension boundary
+Subject: [PATCH 63/81] Harden PDF extension boundary
 
 One PDF key now guards the gate,
 Fake IDs must simply wait.

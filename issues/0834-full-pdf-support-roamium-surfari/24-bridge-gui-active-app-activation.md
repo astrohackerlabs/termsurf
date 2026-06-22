@@ -190,3 +190,107 @@ linked as `Designed`, has Description / Changes / Verification plus Pass /
 Partial / Failure criteria, follows directly from Experiments 21-23, preserves
 the native-print safety contract, correctly identifies protocol field `33` as
 `SetGuiActive`, and requires the plan commit before implementation begins.
+
+## Result
+
+**Result:** Partial
+
+The harness now sends `SetGuiActive(active=true, reason="native_print_probe")`
+after `Resize` and `FocusChanged`. The guarded native-print probe still does not
+pass, but it proves the GUI-active hop:
+
+- `pdf-native-print-summary.json` records `gui_active_sent=true`,
+  `probe_status=ok`, `safety_gate_passed=true`, and unchanged Roamium process
+  state before shutdown.
+- `messages.log` records `sent Resize, Focus, and SetGuiActive`.
+- Roamium's existing input trace records the GUI-active dispatch.
+- Chromium now records:
+  - `set-gui-active-enter active=1 reason=native_print_probe`;
+  - `set-gui-active-before ... activation_policy=2 app_active=0 ... key=0 main=0`;
+  - `set-gui-active-activate-shell-called`;
+  - `set-gui-active-after ... activation_policy=2 app_active=0 ... key=0 main=0`;
+  - `set-gui-active-page-focus active=1`.
+
+So the missing harness message was a real representativeness gap, and
+`SetGuiActive` reaches both Roamium and Chromium. However, calling Chromium's
+macOS shell activation path from `SetGuiActive(active=true)` does not make
+Roamium's app active and does not make its shell window key/main in this VM:
+before and after shell activation, `NSApp.activationPolicy` remains prohibited
+and `NSApp.active`, `NSApp.keyWindow`, and `NSApp.mainWindow` remain false/null.
+
+The native print path is otherwise unchanged from Experiment 23:
+
+- print control is clicked successfully;
+- default print settings are available;
+- `PrintingContextMac::AskUserForSettings()` runs on the main thread;
+- parent view and parent window are present;
+- print queue state does not change;
+- no print job is submitted;
+- no native print dialog is observed or cancelled;
+- the first failing hop remains `mac-print-app-modal-response-missing`.
+
+Verification run:
+
+```bash
+rm -rf scripts/__pycache__
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-pdf-native-print.py
+rm -rf scripts/__pycache__
+node --check scripts/probe-pdf-save-print-title-local.mjs
+git diff --check
+
+cd chromium/src
+export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
+autoninja -C out/Default libtermsurf_chromium
+
+cd /Users/astrohacker/dev/termsurf
+rm -rf logs/issue-834-exp24-gui-active-app-activation
+python3 scripts/test-issue-834-pdf-native-print.py \
+  --log-dir logs/issue-834-exp24-gui-active-app-activation \
+  --probe native-dialog \
+  --allow-native-dialog-click
+```
+
+The final probe returned nonzero because the experiment did not reach safe
+native-dialog cancellation. Its summary is at
+`logs/issue-834-exp24-gui-active-app-activation/pdf-native-print-summary.json`.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Initial verdict: **Changes required**.
+
+The reviewer found one Required workflow issue: the Chromium source changes had
+been built and recorded in the experiment, but they had not yet been committed
+inside `chromium/src` and the cumulative Issue 834 patch archive had not yet
+been regenerated.
+
+Fix:
+
+- committed the Chromium branch `148.0.7778.97-issue-834-exp24` at
+  `9d7f8b7265640a4ea22a9aae1a3717819cef429a`;
+- regenerated `chromium/patches/issue-834/` from the Chromium base through the
+  Experiment 24 branch tip;
+- verified that
+  `chromium/patches/issue-834/0081-Probe-GUI-active-print-focus.patch` exists
+  and contains the three Chromium activation-trace files;
+- reran `git diff --check`, `git -C chromium/src diff --check`, Python compile,
+  Node syntax check, and `autoninja -C out/Default libtermsurf_chromium`.
+
+Re-review verdict: **Approved**.
+
+The reviewer confirmed that the prior Required finding is resolved, the Chromium
+branch is clean, the branch tip is the Experiment 24 commit, the patch archive
+contains the expected `0081` patch, and no new Required findings were
+introduced.
+
+## Conclusion
+
+Experiment 24 narrowed the problem: native print is not failing because the
+standalone harness omitted `SetGuiActive`, and it is not fixed by simply routing
+GUI-active state through `Shell::ActivateContents()`. The next experiment should
+focus on why AppKit refuses to activate the Roamium app/window even after the
+print path temporarily changes the activation policy to regular and calls
+`makeKeyAndOrderFront:` / `activateIgnoringOtherApps:`.

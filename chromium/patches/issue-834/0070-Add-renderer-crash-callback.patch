@@ -1,7 +1,7 @@
 From 53928baf47835c605741c602dcb1619435cc7b9b Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 21:21:02 -0500
-Subject: [PATCH 70/80] Add renderer crash callback
+Subject: [PATCH 70/81] Add renderer crash callback
 
 When renderers trip and hit the floor,
 The tab now knocks on TermSurf's door.
