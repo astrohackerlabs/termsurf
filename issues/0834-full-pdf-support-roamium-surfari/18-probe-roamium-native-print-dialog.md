@@ -173,3 +173,102 @@ Fixes:
 Re-review verdict: **Approved**.
 
 The reviewer found no remaining issues.
+
+## Result
+
+**Result:** Partial
+
+The guarded production native-dialog probe ran after the harmless preflight
+passed. The harness compiled, the standalone watcher preflight passed, and the
+native-dialog run recorded its own successful internal preflight before allowing
+the production print click.
+
+Standalone preflight evidence from
+`logs/issue-834-exp18-native-print-preflight/native-dialog-preflight-summary.json`:
+
+- `overall_result = "pass"`;
+- `first_failing_hop = "no-failure-observed"`;
+- `selected_mechanism = "accessibility-press-cancel-button"`;
+- `safe_for_production_print_probe = true`;
+- `production_print_click_attempted = false`.
+
+Production native-dialog evidence from
+`logs/issue-834-exp18-native-print-dialog/pdf-native-print-summary.json`:
+
+- `safety_gate_passed = true`;
+- internal `preflight.passed = true`;
+- internal `preflight.selected_mechanism = "accessibility-press-cancel-button"`;
+- `server_register_received = true`;
+- `tab_ready_id = 1`;
+- `probe_status = "ok"`;
+- `probe_summary.print.status = "print-native-click-sent"`;
+- `probe_summary.print.clicked = true`;
+- `probe_summary.print.controlFound = true`;
+- the PDF viewer JavaScript emitted `viewer-on-print`, `controller-print`, and
+  `post-message` records for activation `native-print-1`;
+- native Chromium trace lines reached
+  `pdf_view_web_plugin.cc event=handle-print`;
+- `print_dialog_watch.dialog_observed = false`;
+- `print_dialog_watch.cancel_sent = false`;
+- `first_failing_hop = "native-print-click-sent-no-dialog"`;
+- `lpstat -o` and `lpstat -W completed -o` were empty before and after the
+  probe, so no print job was submitted.
+
+The product path is therefore still not proven complete. Roamium successfully
+reaches the PDF print control and native print bridge, but no observable macOS
+native Print/Printer dialog appears in this VM during the watcher window.
+
+Verification run:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  scripts/test-issue-834-pdf-native-print.py
+
+rm -rf scripts/__pycache__
+
+python3 scripts/test-issue-834-pdf-native-print.py \
+  --log-dir logs/issue-834-exp18-native-print-preflight \
+  --probe watcher-preflight
+
+python3 scripts/test-issue-834-pdf-native-print.py \
+  --log-dir logs/issue-834-exp18-native-print-dialog \
+  --probe native-dialog \
+  --allow-native-dialog-click
+
+git diff --check
+```
+
+The native-dialog command exited nonzero because it classified the result as
+`native-print-click-sent-no-dialog`, not because it submitted a print job.
+
+## Completion Review
+
+An adversarial Codex subagent reviewed the completed experiment with fresh
+context.
+
+Verdict: **Approved**.
+
+The reviewer found no Required findings.
+
+Optional finding:
+
+- The recorded verification block omitted `git diff --check`, even though the
+  experiment's verification plan required it.
+
+Fix:
+
+- Added `git diff --check` to the recorded verification block.
+
+## Conclusion
+
+Experiment 18 proved that the automation safety gate is strong enough to click
+the real Roamium PDF print control without submitting a job. It did not prove
+native print support, because the production click reached Chromium's PDF print
+bridge but did not surface an observable native print dialog.
+
+The next experiment should investigate why Chromium's PDF
+`pdf_view_web_plugin.cc` print path reaches `handle-print` but does not display
+the macOS print dialog. That experiment should compare the current TermSurf
+Chromium embedding path against the upstream Chrome/content-shell print plumbing
+and identify whether Roamium is missing print manager, WebContents delegate,
+print preview, or platform dialog integration.
