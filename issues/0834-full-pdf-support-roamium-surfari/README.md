@@ -134,6 +134,8 @@ Each feature row should ultimately record:
   — **Partial**
 - [Experiment 7: Prove Roamium password-protected PDFs](07-prove-roamium-password-pdfs.md)
   — **Partial**
+- [Experiment 8: Fix Roamium PDF password Enter submission](08-fix-roamium-password-enter-submit.md)
+  — **Designed**
 
 ## Roamium Phase
 
