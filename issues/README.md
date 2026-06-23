@@ -2,15 +2,15 @@
 
 ## Open
 
-| #                                                        | Title                                       | Opened     |
-| -------------------------------------------------------- | ------------------------------------------- | ---------- |
-| [0834](0834-full-pdf-support-roamium-surfari/README.md)  | Full PDF Support Across Roamium and Surfari | 2026-06-22 |
-| [0839](0839-theme-defined-split-border-colors/README.md) | Theme-Derived Split Border Colors           | 2026-06-23 |
+| #                                                       | Title                                       | Opened     |
+| ------------------------------------------------------- | ------------------------------------------- | ---------- |
+| [0834](0834-full-pdf-support-roamium-surfari/README.md) | Full PDF Support Across Roamium and Surfari | 2026-06-22 |
 
 ## Closed
 
 | #                                                               | Title                                                                         | Opened     | Closed     |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------- | ---------- |
+| [0839](0839-theme-defined-split-border-colors/README.md)        | Theme-Derived Split Border Colors                                             | 2026-06-23 | 2026-06-23 |
 | [0838](0838-deploy-next-homebrew-version/README.md)             | Deploy Next Homebrew Version                                                  | 2026-06-22 | 2026-06-22 |
 | [0837](0837-website-revamp-for-1-0/README.md)                   | Complete Website Revamp for 1.0                                               | 2026-06-20 | 2026-06-20 |
 | [0836](0836-webtui-top-browser-controls/README.md)              | WebTUI Top Browser Controls                                                   | 2026-06-22 | 2026-06-22 |

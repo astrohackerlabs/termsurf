@@ -1,6 +1,7 @@
 +++
-status = "open"
+status = "closed"
 opened = "2026-06-23"
+closed = "2026-06-23"
 +++
 
 # Issue 839: Theme-Derived Split Border Colors
@@ -175,3 +176,24 @@ before changing runtime behavior.
   — **Pass**
 - [Experiment 2: Implement theme-derived split border colors](02-implement-theme-derived-split-border-colors.md)
   — **Pass**
+
+## Conclusion
+
+Issue 839 is solved.
+
+Ghostboard now keeps `focused-split-border-color` and
+`unfocused-split-border-color` nullable in Zig config, but derives usable macOS
+runtime defaults from the loaded theme palette when those options are unset.
+Focused split borders use palette 6 when it has sufficient contrast, otherwise
+they fall back to the best contrast among palette 14, 4, and 12. Unfocused split
+borders use palette 8. Explicit config values still override the derived colors
+independently.
+
+TokyoNight now works without explicit border color overrides: focused borders
+derive `#7dcfff` and unfocused borders derive `#414868`. `split-border-width`
+remains opt-in and defaults to `0`, so derived colors do not enable border
+drawing unless the user enables a nonzero width.
+
+No bundled theme files were vendored, patched, or modified. The authoritative
+Ghostboard config comments, generated website config reference, and hand-written
+split pane border guide now document the theme-derived behavior.
