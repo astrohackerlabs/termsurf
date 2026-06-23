@@ -236,6 +236,8 @@ Each feature row should ultimately record:
   — **Pass**
 - [Experiment 58: Trace WebKit PDF selection tracking](58-trace-webkit-pdf-selection-tracking.md)
   — **Fail**
+- [Experiment 59: Fix Surfari PDF point scaling](59-fix-surfari-pdf-point-scaling.md)
+  — **Designed**
 
 ## Roamium Phase
 
