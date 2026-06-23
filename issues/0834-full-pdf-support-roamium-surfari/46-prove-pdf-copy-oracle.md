@@ -175,3 +175,106 @@ Follow-up verdict: **Approved**.
 
 The reviewer found no remaining must-fix design issues and approved the
 Experiment 46 plan commit.
+
+## Result
+
+**Result:** Pass
+
+The copy-oracle harness was added as
+`scripts/test-issue-834-pdf-copy-oracles.sh` and run from a clean log directory.
+
+Verification:
+
+```bash
+bash -n scripts/test-issue-834-pdf-copy-oracles.sh
+git diff --check
+git -C webkit/src status --short
+rm -rf logs/issue-834-exp46-pdf-copy-oracles
+scripts/test-issue-834-pdf-copy-oracles.sh
+```
+
+The successful diagnostic run was `20260622-223816`. Its summary is:
+
+```text
+logs/issue-834-exp46-pdf-copy-oracles/pdf-copy-oracles-summary.json
+```
+
+The run classified the standalone copy-oracle result as:
+
+```json
+{
+  "classification": "copy-oracle-found",
+  "overall_result": "pass",
+  "trusted_external_routes": ["cg-event", "system-events", "menu"]
+}
+```
+
+Standalone evidence:
+
+- `NSTextView` copied `TS834PDFCOPYQXJZ` through all four tested routes: CGEvent
+  `Cmd+C`, System Events `Cmd+C`, Edit > Copy menu activation, and the
+  in-process AppKit `copy:` action.
+- PDFKit `PDFView` copied `TS834PDFCOPYQXJZ` through all four tested routes.
+- Standalone `WKWebView` PDF copied `TS834PDFCOPYQXJZ` through all four tested
+  routes after the WKWebView drag was widened to cover the full marker.
+- Clipboard restoration succeeded, and no required probes were missing.
+
+Because a trusted external copy route was found, the harness reran the existing
+Surfari-in-Ghostboard PDF selection/copy probe. Surfari still reproduced the
+Experiment 44 partial result:
+
+```json
+{
+  "surfari_classification": "surfari-pdf-selection-copy-partial",
+  "surfari_overall_result": "partial"
+}
+```
+
+This matters because Experiment 45 could not distinguish a Surfari integration
+problem from a bad standalone copy oracle. Experiment 46 proved the standalone
+oracle is good: the same external CGEvent `Cmd+C` path copies selected PDF text
+from standalone `WKWebView`. Therefore the remaining Surfari copy failure is no
+longer explained by macOS refusing to copy selected WKWebView PDF text in
+general.
+
+No Ghostboard, Surfari, WebKit, protocol, or product code was changed.
+
+## Conclusion
+
+Experiment 46 established a trusted copy oracle. The copy path works in
+standalone macOS controls, including standalone `WKWebView` PDF, through the
+same CGEvent route that Surfari receives in Ghostboard.
+
+The next experiment can now target the Surfari/Ghostboard integration boundary:
+Surfari receives drag and `Cmd+C`, standalone `WKWebView` PDF can copy selected
+text, but Surfari-in-Ghostboard still leaves the clipboard unchanged. The next
+step should inspect whether Surfari's embedded WKWebView actually has selection
+state and first-responder/copy target state when Ghostboard forwards `Cmd+C`.
+
+## Completion Review
+
+An external Codex review checked the completed experiment, harness, logs, and
+issue text.
+
+Initial verdict: **Changes required**.
+
+Finding:
+
+- the completion review had not yet been recorded in this experiment file.
+
+Resolution:
+
+- added this completion-review section before the result commit.
+
+The reviewer found no other must-fix issues. The review confirmed that the Pass
+result is supported by the logs: the summary shows `copy-oracle-found`,
+`overall_result: pass`, restored clipboard, no missing probes, and the same
+external routes passing for `NSTextView`, PDFKit `PDFView`, and standalone
+`WKWebView` PDF. The review also confirmed that the harness satisfies the
+Surfari retest requirement by running the Surfari probe when trusted external
+routes are present and embedding that result separately in the summary.
+
+Follow-up verdict: **Approved**.
+
+The reviewer found no remaining must-fix issues and approved the Experiment 46
+result commit.

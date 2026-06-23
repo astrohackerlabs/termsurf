@@ -211,7 +211,7 @@ Each feature row should ultimately record:
 - [Experiment 45: Diagnose Surfari PDF selection source](45-diagnose-surfari-pdf-selection-source.md)
   — **Pass**
 - [Experiment 46: Prove PDF copy oracles](46-prove-pdf-copy-oracle.md) —
-  **Designed**
+  **Pass**
 
 ## Roamium Phase
 
