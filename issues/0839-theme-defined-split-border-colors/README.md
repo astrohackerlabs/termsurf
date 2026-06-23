@@ -172,4 +172,4 @@ before changing runtime behavior.
 ## Experiments
 
 - [Experiment 1: Audit theme palette border candidates](01-audit-theme-palette-border-candidates.md)
-  — **Designed**
+  — **Pass**
