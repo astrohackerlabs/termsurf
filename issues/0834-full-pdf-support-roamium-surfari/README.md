@@ -208,6 +208,8 @@ Each feature row should ultimately record:
   **Pass**
 - [Experiment 44: Prove Surfari PDF text selection and copy](44-prove-surfari-pdf-selection-copy.md)
   — **Partial**
+- [Experiment 45: Diagnose Surfari PDF selection source](45-diagnose-surfari-pdf-selection-source.md)
+  — **Designed**
 
 ## Roamium Phase
 
