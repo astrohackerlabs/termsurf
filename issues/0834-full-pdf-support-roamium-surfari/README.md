@@ -218,6 +218,8 @@ Each feature row should ultimately record:
   — **Pass**
 - [Experiment 49: Map Surfari PDF selection bounds](49-map-surfari-pdf-selection-bounds.md)
   — **Partial**
+- [Experiment 50: Prove separated-token PDF copy oracle](50-prove-separated-token-copy-oracle.md)
+  — **Designed**
 
 ## Roamium Phase
 
