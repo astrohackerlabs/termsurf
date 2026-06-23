@@ -65,8 +65,8 @@ should be informed by the previous result.
 - [x] Define the full cross-engine PDF feature matrix.
 - [ ] Finish Roamium PDF support.
 - [x] Add durable Roamium regression guards for every completed PDF workflow.
-- [ ] Audit WebKit/Safari PDF capabilities relevant to Surfari.
-- [ ] Prove basic Surfari PDF rendering in the real TermSurf app.
+- [x] Audit WebKit/Safari PDF capabilities relevant to Surfari.
+- [x] Prove basic Surfari PDF rendering in the real TermSurf app.
 - [ ] Implement or fix Surfari PDF behavior where probes expose TermSurf
       integration gaps.
 - [ ] Add durable Surfari regression guards for every completed PDF workflow.
@@ -201,7 +201,7 @@ Each feature row should ultimately record:
 - [Experiment 40: Prove Surfari snapshot refresh deltas](40-prove-surfari-snapshot-refresh-deltas.md)
   — **Pass**
 - [Experiment 41: Prove Surfari PDF load variants](41-prove-surfari-pdf-load-variants.md)
-  — **Designed**
+  — **Pass**
 
 ## Roamium Phase
 

@@ -153,3 +153,96 @@ Follow-up verdict: **Approved**.
 
 The reviewer found no remaining required design changes before the plan commit
 and implementation.
+
+## Result
+
+**Result:** Pass.
+
+Added `scripts/test-issue-834-surfari-pdf-load-variants.sh` and ran it against
+repo-built Ghostboard, WebTUI, Surfari, and WebKit artifacts with
+`TERMSURF_SURFARI_CACONTEXT_LAYER` unset.
+
+The verification run `20260622-204730` produced
+`logs/issue-834-exp41-surfari-pdf-load-variants/surfari-pdf-load-variants-summary.json`
+with `overall_result = pass` and classification
+`surfari-pdf-load-variants-proven`.
+
+All six load variants passed:
+
+- full-page HTTP `.pdf`;
+- extensionless HTTP PDF with `application/pdf`;
+- local `file://` PDF;
+- embedded `iframe` PDF;
+- embedded `embed` PDF;
+- embedded `object` PDF.
+
+For each scenario, the harness required the WebTUI Surfari launch request,
+`BrowserReady`, WebTUI readiness, a Surfari trace for the scenario URL, nonzero
+CAContext, scenario-specific internal render proof, AppKit-presented overlay
+pixels, and visible Ghostboard overlay-cropped PDF page-color proof. The HTTP
+and embedded scenarios also required request evidence with `application/pdf`.
+The local-file scenario required the observed `file://` URL. The embedded
+scenarios used form-specific PDF resource paths (`/iframe-fixture.pdf`,
+`/embed-fixture.pdf`, and `/object-fixture.pdf`) so each embedded form had to
+prove its own PDF request. The wrapper HTML used neutral colors, while the PDF
+pages used green and magenta target colors, so wrapper pixels could not satisfy
+the PDF visibility proof.
+
+The summary recorded cleanup as successful: all scenario Ghostboard processes
+were terminated and the fixture server was terminated.
+
+Build and hygiene checks:
+
+```bash
+./surfari/libtermsurf_webkit/build.sh
+cargo fmt -p surfari
+cargo build -p surfari
+cargo build -p webtui
+(cd ghostboard && macos/build.nu --configuration Debug --action build)
+bash -n scripts/test-issue-834-surfari-pdf-load-variants.sh
+git diff --check
+git -C webkit/src status --short
+```
+
+All checks passed. The WebKit C wrapper build emitted only the existing macOS
+SDK/WebKit version warning. The Ghostboard build emitted the existing SwiftLint
+warning in `SurfaceView_AppKit.swift`.
+
+## Conclusion
+
+Surfari's basic PDF load surface is now proven in the real TermSurf app for
+full-page HTTP PDFs, extensionless HTTP PDFs, local file PDFs, and embedded PDFs
+through `iframe`, `embed`, and `object`. The proof is tied to PDF page pixels
+presented inside the Ghostboard overlay, not to helper windows or wrapper HTML.
+
+The next Surfari PDF experiment can move beyond loading and visibility into
+interactive PDF behavior such as scroll/key navigation, links, find/search,
+toolbar controls, restrictions, forms, print, annotations, or context menus.
+
+## Completion Review
+
+An external Codex review checked the completed experiment.
+
+Initial verdict: **Changes required**.
+
+Findings:
+
+- embedded PDF request evidence was not scenario-specific because the first
+  implementation reused `/fixture.pdf` for every embedded form, allowing an
+  earlier full-page request to satisfy later embedded request checks;
+- the completion review itself still needed to be recorded before the result
+  commit.
+
+Resolution:
+
+- the harness now gives each embedded form a distinct PDF resource path:
+  `/iframe-fixture.pdf`, `/embed-fixture.pdf`, and `/object-fixture.pdf`;
+- the fixture server serves those paths as `application/pdf`, and each embedded
+  scenario records its wrapper path and PDF path in its scenario JSON;
+- the harness was rerun after the fix and passed as run `20260622-204730`.
+
+Follow-up verdict: **Approved**.
+
+The reviewer found no remaining required findings and confirmed that the
+scenario-specific embedded PDF request evidence and completion-review recording
+issues were resolved.
