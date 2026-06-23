@@ -234,6 +234,8 @@ Each feature row should ultimately record:
   — **Partial**
 - [Experiment 57: Probe PDF mouse dispatch path](57-probe-pdf-mouse-dispatch-path.md)
   — **Pass**
+- [Experiment 58: Trace WebKit PDF selection tracking](58-trace-webkit-pdf-selection-tracking.md)
+  — **Designed**
 
 ## Roamium Phase
 
