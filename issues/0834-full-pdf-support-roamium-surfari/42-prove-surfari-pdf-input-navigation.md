@@ -186,3 +186,114 @@ Follow-up verdict: **Approved**.
 
 The reviewer found no remaining required design findings and approved the plan
 for the Experiment 42 plan commit and implementation.
+
+## Result
+
+**Result:** Pass.
+
+Added `scripts/test-issue-834-surfari-pdf-input-navigation.sh` and ran it
+against repo-built Ghostboard, WebTUI, Surfari, and WebKit artifacts with
+`TERMSURF_SURFARI_CACONTEXT_LAYER` unset.
+
+The verification run `20260622-210703` produced
+`logs/issue-834-exp42-surfari-pdf-input-navigation/surfari-pdf-input-navigation-summary.json`
+with `overall_result = pass` and classification
+`surfari-pdf-input-navigation-proven`.
+
+The harness generates a deterministic three-page PDF:
+
+- page 1: green;
+- page 2: magenta;
+- page 3: cyan.
+
+It runs two fresh-load scenarios against `/navigation.pdf` served as
+`application/pdf`:
+
+- scroll scenario: enter Browse mode, send real CGEvent scroll input through the
+  TermSurf path, require Surfari `scroll-event` trace evidence, require
+  `snapshot-layer-refresh`, and prove a green-to-magenta visible delta in the
+  Ghostboard overlay crop;
+- keyboard scenario: enter Browse mode, click inside the overlay, require
+  Surfari `mouse-event` trace evidence, prove the click did not break visible
+  PDF pixels, send real `PageDown` and `PageUp` CGEvents through the TermSurf
+  path, require Surfari `key-event` trace evidence, require
+  `snapshot-layer-refresh`, and prove green-to-magenta then magenta-to-green
+  visible deltas.
+
+Key summary values:
+
+- scroll: pass;
+- click: pass;
+- click-to-keyboard route: pass;
+- PageDown: pass;
+- PageUp: pass;
+- cleanup: pass;
+- scroll green drop: 621,860 pixels;
+- scroll magenta rise: 371,700 pixels;
+- PageDown green drop: 509,176 pixels;
+- PageDown magenta rise: 140,998 pixels;
+- PageUp magenta drop: 140,998 pixels;
+- PageUp green rise: 149,864 pixels.
+
+Build and hygiene checks:
+
+```bash
+./surfari/libtermsurf_webkit/build.sh
+cargo fmt -p surfari
+cargo build -p surfari
+cargo build -p webtui
+(cd ghostboard && macos/build.nu --configuration Debug --action build)
+bash -n scripts/test-issue-834-surfari-pdf-input-navigation.sh
+git diff --check
+git -C webkit/src status --short
+rm -rf logs/issue-834-exp42-surfari-pdf-input-navigation
+env -u TERMSURF_SURFARI_CACONTEXT_LAYER \
+  scripts/test-issue-834-surfari-pdf-input-navigation.sh
+```
+
+All checks passed. The WebKit C wrapper build emitted only the existing macOS
+SDK/WebKit version warning. The Ghostboard build emitted the existing SwiftLint
+warning in `SurfaceView_AppKit.swift`.
+
+## Conclusion
+
+Surfari PDF input navigation is now proven for the first interactive PDF slice:
+real TermSurf-routed scroll wheel input, mouse click delivery, `PageDown`, and
+`PageUp` all reach Surfari and produce the expected visible PDF behavior in the
+Ghostboard overlay. The next Surfari PDF experiment can move to higher-level PDF
+workflows such as links, find/search, toolbar controls, restrictions, forms,
+print, annotations, context menus, or accessibility classification.
+
+## Completion Review
+
+An external Codex review checked the completed experiment.
+
+Initial verdict: **Changes required**.
+
+Findings:
+
+- click/focus proof overclaimed the click's role because the first harness
+  focused Surfari before the click and only checked mouse-event delivery plus
+  preserved pixels;
+- the JSON summary did not include the relevant matched Ghostboard, WebTUI,
+  Surfari, and fixture-server evidence lines required by the design;
+- the completion review itself still needed to be recorded before the result
+  commit.
+
+Resolution:
+
+- click now records a separate `click_keyboard_route_status`, which passes only
+  after a subsequent `PageDown` key event reaches Surfari after the click;
+- each scenario JSON now records matched evidence lines for BrowserReady, WebTUI
+  ready state, PDF request/content type, CAContext, render proof, Browse mode,
+  focus, scroll/click/key input, and snapshot refreshes;
+- the summary click status now requires both click delivery/visibility and the
+  click-to-keyboard route proof;
+- the harness was rerun after the fix and passed as run `20260622-210703`.
+
+Follow-up verdict: **Approved**.
+
+The reviewer found no remaining required findings. The remaining caveat is that
+the harness proves click delivery, preserved visibility, and post-click keyboard
+routing rather than proving that the click alone newly created focus; the result
+language is intentionally scoped to that evidence.
