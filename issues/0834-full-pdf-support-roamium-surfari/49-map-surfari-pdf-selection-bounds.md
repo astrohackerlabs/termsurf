@@ -195,3 +195,105 @@ about whether the matrix bound counted direct-copy reruns was resolved by
 clarifying that the experiment has at most 12 baseline embedded Surfari cells
 and at most 24 total embedded Surfari cells when direct-copy diagnostic reruns
 are included.
+
+## Result
+
+**Result:** Partial
+
+Implemented the separated-token fixture support in
+`scripts/test-issue-834-surfari-pdf-selection-copy.sh` and added the Exp49
+matrix wrapper as `scripts/test-issue-834-surfari-pdf-selection-bounds.sh`.
+
+The existing single-marker fixture remains the default. The separated-token
+fixture is opt-in through `TERMSURF_ISSUE834_PDF_FIXTURE_MODE=separated-tokens`
+and records expected tokens, text operators, approximate token boxes, generated
+PDF text extraction status, drag coordinates, copy delay, and clipboard evidence
+in the summary.
+
+Verification:
+
+```bash
+bash -n scripts/test-issue-834-surfari-pdf-selection-bounds.sh
+bash -n scripts/test-issue-834-surfari-pdf-selection-copy.sh
+cargo fmt -p surfari -- --check
+git diff --check
+git -C webkit/src status --short
+rm -rf logs/issue-834-exp49-surfari-pdf-selection-bounds
+scripts/test-issue-834-surfari-pdf-selection-bounds.sh
+```
+
+The diagnostic run was `20260622-234505`. Its summary is:
+
+```text
+logs/issue-834-exp49-surfari-pdf-selection-bounds/surfari-pdf-selection-bounds-summary.json
+```
+
+The run classified the result as:
+
+```json
+{
+  "cell_count": 18,
+  "classification": "harness-insufficient",
+  "overall_result": "partial"
+}
+```
+
+Key evidence:
+
+- The generated separated-token PDF text extraction passed for every embedded
+  cell.
+- The standalone PDFKit/WKWebView copy oracle required by the design was not
+  implemented in this wrapper, so the result cannot honestly classify the
+  embedded behavior as a final `right-edge-selection-gap`.
+- The embedded Surfari matrix did run 18 real cells: 9 normal external-copy
+  baseline cells and 9 env-gated direct-copy diagnostic cells.
+- Normal external-copy baseline cells did not copy the separated tokens.
+- Direct-copy diagnostic cells repeatedly copied `LEFT834 MID834`, but not
+  `RIGHT834`.
+- The same `LEFT834 MID834` partial copy appeared in direct all-token,
+  right-to-left, y-offset, and over-wide delayed-copy cells.
+- Clipboard restoration succeeded.
+
+The strongest embedded clue is a right-edge-selection-gap candidate: the
+rightmost token remained absent even when the drag was over-wide and delayed.
+Because the exact separated-token fixture was not independently proven through
+standalone PDFKit and standalone `WKWebView` copy, this experiment stays
+Partial.
+
+## Conclusion
+
+Experiment 49 produced useful embedded Surfari evidence but did not satisfy its
+own fixture-oracle requirement. The next experiment should either add the exact
+standalone separated-token PDFKit/WKWebView copy oracle, then rerun this matrix,
+or narrow the oracle requirement if there is a simpler way to prove the fixture.
+
+If the standalone oracle passes and the same embedded pattern remains, the next
+classification should likely be `right-edge-selection-gap`, because Surfari's
+direct-copy diagnostic can extract left and middle tokens but consistently
+misses the rightmost token.
+
+## Completion Review
+
+An external Codex completion review checked the implementation, result language,
+and final summary.
+
+Verdict: **Approved after documentation fixes**.
+
+Findings:
+
+- the recorded verification omitted `cargo fmt -p surfari -- --check` and
+  `git -C webkit/src status --short`, both of which had been run;
+- the experiment file needed to record the completion review before the result
+  commit.
+
+Resolution:
+
+- added the missing verification commands to the Result section;
+- this section records the completion review verdict and findings.
+
+The reviewer found no implementation must-fix issues. It agreed that `Partial` /
+`harness-insufficient` is supported because text extraction passed, the
+standalone separated-token PDFKit/WKWebView copy oracle is `not-run`, and
+clipboard restoration succeeded. It also agreed that the result language is
+careful because it calls the embedded pattern a right-edge-selection-gap
+candidate, not a proven final classification.

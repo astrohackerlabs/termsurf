@@ -26,8 +26,20 @@ SELECTED_PNG="$LOG_DIR/selected-$RUN_ID.png"
 BASELINE_JSON="$LOG_DIR/baseline-$RUN_ID.json"
 SELECTED_JSON="$LOG_DIR/selected-$RUN_ID.json"
 SUMMARY="$LOG_DIR/surfari-pdf-selection-copy-summary.json"
-MARKER="TS834PDFCOPYQXJZ"
-ACCEPTED_SUBSTRING="$MARKER"
+FIXTURE_MODE="${TERMSURF_ISSUE834_PDF_FIXTURE_MODE:-single-marker}"
+if [ "$FIXTURE_MODE" = "separated-tokens" ]; then
+  EXPECTED_TOKENS="${TERMSURF_ISSUE834_PDF_EXPECTED_TOKENS:-LEFT834 MID834 RIGHT834}"
+  MARKER="${TERMSURF_ISSUE834_PDF_MARKER:-$EXPECTED_TOKENS}"
+  ACCEPTED_SUBSTRING="${TERMSURF_ISSUE834_PDF_ACCEPTED_SUBSTRING:-RIGHT834}"
+  PDF_TEXT_OPERATORS_SUMMARY="${TERMSURF_ISSUE834_PDF_TEXT_OPERATORS:-BT /F1 24 Tf 72 620 Td (LEFT834) Tj ET | BT /F1 24 Tf 220 620 Td (MID834) Tj ET | BT /F1 24 Tf 360 620 Td (RIGHT834) Tj ET}"
+  PDF_TEXT_BBOXES_JSON='[{"token":"LEFT834","x":72,"y":604,"width":96,"height":32},{"token":"MID834","x":220,"y":604,"width":84,"height":32},{"token":"RIGHT834","x":360,"y":604,"width":108,"height":32}]'
+else
+  EXPECTED_TOKENS="${TERMSURF_ISSUE834_PDF_EXPECTED_TOKENS:-TS834PDFCOPYQXJZ}"
+  MARKER="${TERMSURF_ISSUE834_PDF_MARKER:-TS834PDFCOPYQXJZ}"
+  ACCEPTED_SUBSTRING="${TERMSURF_ISSUE834_PDF_ACCEPTED_SUBSTRING:-$MARKER}"
+  PDF_TEXT_OPERATORS_SUMMARY="BT /F1 24 Tf 72 620 Td ($MARKER) Tj ET"
+  PDF_TEXT_BBOXES_JSON='[{"token":"TS834PDFCOPYQXJZ","x":72,"y":604,"width":280,"height":32}]'
+fi
 SENTINEL="ISSUE834_EXP44_CLIPBOARD_SENTINEL_$RUN_ID"
 SERVER_PID=""
 CURRENT_PID=""
@@ -37,6 +49,9 @@ CLIPBOARD_RESTORE_STATUS="not-attempted"
 FALLBACK_CLIPBOARD_CONTAINS_MARKER=false
 FALLBACK_CLIPBOARD_AFTER_LENGTH=0
 FALLBACK_CLIPBOARD_AFTER_SAMPLE=""
+COPY_DELAY_AFTER_DRAG="${TERMSURF_ISSUE834_PDF_COPY_DELAY_AFTER_DRAG:-1}"
+PDF_TEXT_EXTRACTION_STATUS="not-run"
+PDF_TEXT_EXTRACTED=""
 
 mkdir -p "$LOG_DIR" "$SITE_DIR"
 
@@ -217,12 +232,14 @@ activate_pid() {
 }
 
 write_pdf_fixture() {
-  python3 - "$SITE_DIR/selectable.pdf" "$MARKER" <<'PY'
+  python3 - "$SITE_DIR/selectable.pdf" "$MARKER" "$FIXTURE_MODE" "$EXPECTED_TOKENS" <<'PY'
 from pathlib import Path
 import sys
 
 out = Path(sys.argv[1])
 marker = sys.argv[2]
+fixture_mode = sys.argv[3]
+expected_tokens = sys.argv[4].split()
 objects = []
 
 def esc(value):
@@ -232,18 +249,32 @@ def add(body):
     objects.append(body)
     return len(objects)
 
-stream = "\n".join([
+stream_lines = [
     "0 1 1 rg",
     "0 0 612 792 re",
     "f",
     "0 0 0 rg",
-    "BT",
-    "/F1 24 Tf",
-    "72 620 Td",
-    f"({esc(marker)}) Tj",
-    "ET",
-    "",
-])
+]
+if fixture_mode == "separated-tokens":
+    positions = [(72, 620), (220, 620), (360, 620)]
+    for token, (x, y) in zip(expected_tokens, positions):
+        stream_lines.extend([
+            "BT",
+            "/F1 24 Tf",
+            f"{x} {y} Td",
+            f"({esc(token)}) Tj",
+            "ET",
+        ])
+else:
+    stream_lines.extend([
+        "BT",
+        "/F1 24 Tf",
+        "72 620 Td",
+        f"({esc(marker)}) Tj",
+        "ET",
+    ])
+stream_lines.append("")
+stream = "\n".join(stream_lines)
 
 add("<< /Type /Catalog /Pages 2 0 R >>")
 add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
@@ -266,6 +297,29 @@ data.extend(
 )
 out.write_bytes(data)
 PY
+}
+
+verify_pdf_fixture_text() {
+  local result
+  result="$(python3 - "$SITE_DIR/selectable.pdf" "$EXPECTED_TOKENS" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+pdf = Path(sys.argv[1]).read_bytes().decode("latin1", errors="ignore")
+expected = sys.argv[2].split()
+tokens = []
+for match in re.finditer(r"\(([^()]*)\)\s*Tj", pdf):
+    token = match.group(1).replace(r"\(", "(").replace(r"\)", ")").replace(r"\\", "\\")
+    tokens.append(token)
+joined = " ".join(tokens)
+missing = [token for token in expected if token not in joined]
+status = "pass" if not missing else "fail"
+print(f"{status}\t{joined}")
+PY
+)"
+  PDF_TEXT_EXTRACTION_STATUS="$(printf '%s\n' "$result" | cut -f1)"
+  PDF_TEXT_EXTRACTED="$(printf '%s\n' "$result" | cut -f2-)"
 }
 
 start_server() {
@@ -501,10 +555,14 @@ data = {
     "run_id": "$RUN_ID",
     "termsurf_surfari_cacontext_layer": "unset",
     "fixture": {
+        "mode": "$FIXTURE_MODE",
         "marker": "$MARKER",
+        "expected_tokens": "$EXPECTED_TOKENS".split(),
         "accepted_substring": "$ACCEPTED_SUBSTRING",
-        "pdf_text_operator": "BT /F1 24 Tf 72 620 Td ($MARKER) Tj ET",
-        "pdf_text_bbox": {"x": 72, "y": 604, "width": 280, "height": 32},
+        "pdf_text_operator": "$PDF_TEXT_OPERATORS_SUMMARY",
+        "pdf_text_bboxes": json.loads("""$PDF_TEXT_BBOXES_JSON"""),
+        "text_extraction_status": "$PDF_TEXT_EXTRACTION_STATUS",
+        "text_extracted": "$PDF_TEXT_EXTRACTED",
     },
     "binaries": {
         "ghostboard_app_bin": "$APP_BIN",
@@ -550,6 +608,9 @@ data = {
         "web_drag_end": {"x": ${DRAG_WEB_END_X:-0}, "y": ${DRAG_WEB_END_Y:-0}},
         "global_drag_start": {"x": ${DRAG_GLOBAL_START_X:-0}, "y": ${DRAG_GLOBAL_START_Y:-0}},
         "global_drag_end": {"x": ${DRAG_GLOBAL_END_X:-0}, "y": ${DRAG_GLOBAL_END_Y:-0}},
+    },
+    "timing": {
+        "copy_delay_after_drag_seconds": float("${COPY_DELAY_AFTER_DRAG:-1}"),
     },
     "clipboard": {
         "original_length": ${ORIGINAL_CLIPBOARD_LENGTH:-0},
@@ -600,8 +661,11 @@ log "web=$WEB"
 log "surfari=$SURFARI"
 log "webkit_debug=$WEBKIT_DEBUG"
 log "termsurf_surfari_cacontext_layer=${TERMSURF_SURFARI_CACONTEXT_LAYER-__unset__}"
+log "fixture_mode=$FIXTURE_MODE"
 log "marker=$MARKER"
+log "expected_tokens=$EXPECTED_TOKENS"
 log "accepted_substring=$ACCEPTED_SUBSTRING"
+log "copy_delay_after_drag=$COPY_DELAY_AFTER_DRAG"
 
 PB_CHANGE_INITIAL="$(pasteboard_change_count)"
 pbpaste >"$ORIGINAL_CLIPBOARD" || true
@@ -613,6 +677,9 @@ CLIPBOARD_BEFORE_COPY="$(pbpaste)"
 [ "$CLIPBOARD_BEFORE_COPY" = "$SENTINEL" ] || fail "clipboard sentinel write failed"
 
 write_pdf_fixture
+verify_pdf_fixture_text
+log "pdf_text_extraction_status=$PDF_TEXT_EXTRACTION_STATUS"
+log "pdf_text_extracted=$PDF_TEXT_EXTRACTED"
 start_server
 PORT="$(cat "$PORT_FILE")"
 PDF_URL="http://127.0.0.1:${PORT}/selectable.pdf"
@@ -675,8 +742,8 @@ capture_overlay_counts "$WINDOW_ID" "$PRESENTED_LINE" "$BASELINE_PNG" "$BASELINE
 read -r DRAG_WEB_START_X DRAG_WEB_START_Y DRAG_WEB_END_X DRAG_WEB_END_Y <<<"$(drag_points_for_text "$PRESENTED_LINE")"
 read -r DRAG_GLOBAL_START_X DRAG_GLOBAL_START_Y <<<"$(global_point_for_web_point "$WIN_LINE" "$PRESENTED_LINE" "$DRAG_WEB_START_X" "$DRAG_WEB_START_Y")"
 read -r DRAG_GLOBAL_END_X DRAG_GLOBAL_END_Y <<<"$(global_point_for_web_point "$WIN_LINE" "$PRESENTED_LINE" "$DRAG_WEB_END_X" "$DRAG_WEB_END_Y")"
-log "pdf_text_operator=BT /F1 24 Tf 72 620 Td ($MARKER) Tj ET"
-log "pdf_text_bbox=72,604,280,32"
+log "pdf_text_operator=$PDF_TEXT_OPERATORS_SUMMARY"
+log "pdf_text_bboxes=$PDF_TEXT_BBOXES_JSON"
 log "web_drag=${DRAG_WEB_START_X},${DRAG_WEB_START_Y}-${DRAG_WEB_END_X},${DRAG_WEB_END_Y}"
 log "global_drag=${DRAG_GLOBAL_START_X},${DRAG_GLOBAL_START_Y}-${DRAG_GLOBAL_END_X},${DRAG_GLOBAL_END_Y}"
 
@@ -689,7 +756,7 @@ DRAG_UP_LINE="$(wait_for_line_after "$SURFARI_TRACE" "$DRAG_SURFARI_START" "mous
 APP_DRAG_DOWN_LINE="$(wait_for_line_after "$APP_LOG" "$DRAG_APP_START" "TermSurf geometry layer=appkit event=mouse_forwarded .*pane_id:${PANE_ID} .*note=kind=event .*type=down .*terminal_fallback=false" "Ghostboard forwarded drag down")"
 APP_DRAG_MOVE_LINE="$(wait_for_line_after "$APP_LOG" "$DRAG_APP_START" "TermSurf geometry layer=appkit event=mouse_forwarded .*pane_id:${PANE_ID} .*note=kind=move .*terminal_fallback=false" "Ghostboard forwarded drag move")"
 APP_DRAG_UP_LINE="$(wait_for_line_after "$APP_LOG" "$DRAG_APP_START" "TermSurf geometry layer=appkit event=mouse_forwarded .*pane_id:${PANE_ID} .*note=kind=event .*type=up .*terminal_fallback=false" "Ghostboard forwarded drag up")"
-delay 1
+delay "$COPY_DELAY_AFTER_DRAG"
 capture_overlay_counts "$WINDOW_ID" "$PRESENTED_LINE" "$SELECTED_PNG" "$SELECTED_JSON"
 
 COPY_APP_START="$(line_count "$APP_LOG")"

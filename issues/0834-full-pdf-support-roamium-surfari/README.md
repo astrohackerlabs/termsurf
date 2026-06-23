@@ -217,7 +217,7 @@ Each feature row should ultimately record:
 - [Experiment 48: Probe Surfari direct copy fix](48-probe-surfari-direct-copy-fix.md)
   — **Pass**
 - [Experiment 49: Map Surfari PDF selection bounds](49-map-surfari-pdf-selection-bounds.md)
-  — **Designed**
+  — **Partial**
 
 ## Roamium Phase
 
