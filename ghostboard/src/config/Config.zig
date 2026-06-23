@@ -1086,12 +1086,14 @@ palette: Palette = .{},
 /// Available since: 1.1.0
 @"split-divider-color": ?Color = null,
 
-/// The border color of the focused split pane. If not set, no border is drawn.
-/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+/// The border color of the focused split pane. If not set, Ghostboard derives a
+/// focused accent from the active theme palette. Specified as either hex
+/// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
 @"focused-split-border-color": ?Color = null,
 
-/// The border color of unfocused split panes. If not set, no border is drawn.
-/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+/// The border color of unfocused split panes. If not set, Ghostboard derives a
+/// muted border color from the active theme palette. Specified as either hex
+/// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
 @"unfocused-split-border-color": ?Color = null,
 
 /// The width of the split pane border in points. Set to 0 to disable borders.

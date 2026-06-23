@@ -207,6 +207,46 @@ test "ghostty_config_get: optional null returns false" {
     try testing.expect(!ghostty_config_get(&cfg, @ptrCast(&out), key, key.len));
 }
 
+test "ghostty_config_get: split border colors remain nullable" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+
+    var out: Config.Color.C = undefined;
+
+    const focused_key = "focused-split-border-color";
+    try testing.expect(!ghostty_config_get(&cfg, @ptrCast(&out), focused_key, focused_key.len));
+
+    const unfocused_key = "unfocused-split-border-color";
+    try testing.expect(!ghostty_config_get(&cfg, @ptrCast(&out), unfocused_key, unfocused_key.len));
+}
+
+test "ghostty_config_get: split border color overrides" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+    cfg.@"focused-split-border-color" = .{ .r = 0x11, .g = 0x22, .b = 0x33 };
+    cfg.@"unfocused-split-border-color" = .{ .r = 0x44, .g = 0x55, .b = 0x66 };
+
+    var focused: Config.Color.C = undefined;
+    const focused_key = "focused-split-border-color";
+    try testing.expect(ghostty_config_get(&cfg, @ptrCast(&focused), focused_key, focused_key.len));
+    try testing.expectEqual(@as(u8, 0x11), focused.r);
+    try testing.expectEqual(@as(u8, 0x22), focused.g);
+    try testing.expectEqual(@as(u8, 0x33), focused.b);
+
+    var unfocused: Config.Color.C = undefined;
+    const unfocused_key = "unfocused-split-border-color";
+    try testing.expect(ghostty_config_get(&cfg, @ptrCast(&unfocused), unfocused_key, unfocused_key.len));
+    try testing.expectEqual(@as(u8, 0x44), unfocused.r);
+    try testing.expectEqual(@as(u8, 0x55), unfocused.g);
+    try testing.expectEqual(@as(u8, 0x66), unfocused.b);
+}
+
 test "ghostty_config_get: unknown key returns false" {
     const testing = std.testing;
     const alloc = testing.allocator;

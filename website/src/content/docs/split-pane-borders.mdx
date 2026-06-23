@@ -1,7 +1,9 @@
 ---
 title: Split Pane Borders
 navLabel: Split Pane Borders
-description: TermSurf's split pane border configuration — colored borders around focused and unfocused splits, border width, and unfocused desaturation.
+description:
+  TermSurf's split pane border configuration — colored borders around focused
+  and unfocused splits, border width, and unfocused desaturation.
 section: Features
 order: 2
 ---
@@ -9,50 +11,88 @@ order: 2
 <h1>Split Pane Borders</h1>
 
 <p>
-  TermSurf's Ghostboard fork adds configuration for <strong>split pane
-  borders</strong> on top of what Ghostty provides: you can outline split panes
-  with colored borders and fade unfocused panes, so the active pane is always
-  obvious. These options don't exist in upstream Ghostty — they're part of the
-  fork.
+  TermSurf's Ghostboard fork adds configuration for{" "}
+  <strong>split pane borders</strong> on top of what Ghostty provides: you can
+  outline split panes with colored borders and fade unfocused panes, so the
+  active pane is always obvious. These options don't exist in upstream Ghostty —
+  they're part of the fork.
 </p>
 
 <h2>Options</h2>
 
 <table>
   <thead>
-    <tr><th>Option</th><th>Effect</th></tr>
+    <tr>
+      <th>Option</th>
+      <th>Effect</th>
+    </tr>
   </thead>
   <tbody>
     <tr>
-      <td><code>focused-split-border-color</code></td>
-      <td>Border color of the focused split. Unset (the default) draws no border. Hex (<code>#RRGGBB</code> or <code>RRGGBB</code>) or a named X11 color.</td>
+      <td>
+        <code>focused-split-border-color</code>
+      </td>
+      <td>
+        Border color of the focused split. If unset, Ghostboard derives an
+        accent from the active theme palette. Hex (<code>#RRGGBB</code> or{" "}
+        <code>RRGGBB</code>) or a named X11 color.
+      </td>
     </tr>
     <tr>
-      <td><code>unfocused-split-border-color</code></td>
-      <td>Border color of unfocused splits. Unset draws no border. Same color formats.</td>
+      <td>
+        <code>unfocused-split-border-color</code>
+      </td>
+      <td>
+        Border color of unfocused splits. If unset, Ghostboard derives a muted
+        color from the active theme palette. Same color formats.
+      </td>
     </tr>
     <tr>
-      <td><code>split-border-width</code></td>
-      <td>Border width in points. <code>0</code> (the default) disables borders; values are clamped to the range <code>0</code>–<code>10</code>.</td>
+      <td>
+        <code>split-border-width</code>
+      </td>
+      <td>
+        Border width in points. <code>0</code> (the default) disables borders;
+        values are clamped to the range <code>0</code>–<code>10</code>.
+      </td>
     </tr>
     <tr>
-      <td><code>unfocused-split-saturation</code></td>
-      <td>Color saturation of unfocused splits: <code>1.0</code> is full color, <code>0.0</code> is grayscale (clamped <code>0</code>–<code>1</code>). Only applies in a split layout.</td>
+      <td>
+        <code>unfocused-split-saturation</code>
+      </td>
+      <td>
+        Color saturation of unfocused splits: <code>1.0</code> is full color,{" "}
+        <code>0.0</code> is grayscale (clamped <code>0</code>–<code>1</code>).
+        Only applies in a split layout.
+      </td>
     </tr>
   </tbody>
 </table>
 
 <p>
-  Set a focused and/or unfocused border color along with a non-zero width to
-  outline panes, and lower <code>unfocused-split-saturation</code> to visually
-  push inactive panes back.
+  Set a non-zero width to outline panes with colors derived from the active
+  theme. Add focused and/or unfocused border colors only when you want to
+  override the theme-derived defaults, and lower{" "}
+  <code>unfocused-split-saturation</code> to visually push inactive panes back.
 </p>
 
-<pre class="bg-background-dark p-3 border-l-2 border-border text-foreground-dark text-xs mb-6 overflow-x-auto"><code><span class="text-muted"># ~/.config/termsurf/config</span>
-focused-split-border-color = <span class="text-success">#7aa2f7</span>
-unfocused-split-border-color = <span class="text-success">#3b4261</span>
-split-border-width = <span class="text-success">2</span>
-unfocused-split-saturation = <span class="text-success">0.6</span></code></pre>
+<pre class="bg-background-dark p-3 border-l-2 border-border text-foreground-dark text-xs mb-6 overflow-x-auto">
+  <code>
+    <span class="text-muted"># ~/.config/termsurf/config</span>
+    split-border-width = <span class="text-success">2</span>
+    unfocused-split-saturation = <span class="text-success">0.6</span>
+  </code>
+</pre>
+
+<p>Explicit colors still win when you need a custom border color:</p>
+
+<pre class="bg-background-dark p-3 border-l-2 border-border text-foreground-dark text-xs mb-6 overflow-x-auto">
+  <code>
+    <span class="text-muted"># Optional overrides</span>
+    focused-split-border-color = <span class="text-success">#7dcfff</span>
+    unfocused-split-border-color = <span class="text-success">#414868</span>
+  </code>
+</pre>
 
 <p>
   For the authoritative, generated text of each option, see the{" "}

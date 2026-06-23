@@ -108,14 +108,18 @@ theme file should be changed.
    cd ..
    prettier --check issues/0839-theme-defined-split-border-colors/README.md \
      issues/0839-theme-defined-split-border-colors/02-implement-theme-derived-split-border-colors.md \
-     website/src/content/docs/reference/config.md \
      website/src/content/docs/split-pane-borders.mdx
+   cd website
+   bun run gen:references --check
    git diff --check
    ```
 
-   Pass: all available checks succeed. If `swiftlint` is unavailable, record
-   that explicitly in the result and rely on the macOS test/build checks for
-   Swift compilation.
+   Pass: all available checks succeed. The generated
+   `website/src/content/docs/reference/config.md` is validated with
+   `bun run gen:references --check` instead of Prettier because it is generated
+   from Ghostboard's `ghostty.5.md`. If `swiftlint` is unavailable, record that
+   explicitly in the result and rely on the macOS test/build checks for Swift
+   compilation.
 
 6. Manual behavior check:
 
@@ -140,3 +144,103 @@ Experiment 1 audit result, preserves nullable Zig config and explicit override
 behavior, avoids theme vendoring, keeps `split-border-width` opt-in, and
 includes concrete Zig, Swift, build, formatting, documentation, and manual
 behavior verification.
+
+## Result
+
+**Result:** Pass
+
+Implemented theme-derived split border color defaults without modifying bundled
+theme files.
+
+Changed files:
+
+- `ghostboard/macos/Sources/Ghostty/Ghostty.Config.swift`
+  - Added helpers for reading explicit colors, reading effective palette
+    entries, converting C colors to SwiftUI `Color`, and calculating contrast.
+  - `focusedSplitBorderColor` now returns explicit config first, then palette 6
+    when contrast against `background` is at least 2.0, then the
+    highest-contrast fallback among palette 14, 4, and 12.
+  - `unfocusedSplitBorderColor` now returns explicit config first, then
+    palette 8.
+- `ghostboard/src/config/CApi.zig`
+  - Added targeted tests proving focused/unfocused split border colors remain
+    nullable at the Zig/C boundary and explicit values cross the C API exactly.
+- `ghostboard/src/config/Config.zig`
+  - Updated the authoritative config comments for the two split border color
+    options so generated docs describe theme-derived defaults.
+- `ghostboard/macos/Tests/Ghostty/ConfigTests.swift`
+  - Added tests for TokyoNight-derived defaults, independent explicit overrides,
+    `splitBorderWidth` staying `0` by default, and focused fallback selection
+    when palette 6 has low contrast.
+- `website/src/content/docs/reference/config.md`
+  - Regenerated from Ghostboard's updated `ghostty.5.md` so unset
+    focused/unfocused border colors are documented as theme-derived.
+- `website/src/content/docs/split-pane-borders.mdx`
+  - Updated the guide so `split-border-width` enables borders with theme-derived
+    colors, while explicit colors remain optional overrides.
+
+Verification:
+
+- No theme files, generated theme output, theme dependency metadata, or vendored
+  theme source changed.
+- `cd ghostboard && zig build test` passed.
+- `cd ghostboard && zig build test -Dtest-filter="split border"` passed after
+  the generated-doc source fix.
+- `cd ghostboard && macos/build.nu --action test` passed, including:
+  - `ConfigTests/splitBorderColorsDeriveFromTokyoNightPalette`
+  - `ConfigTests/splitBorderColorOverridesWinIndependently`
+  - `ConfigTests/focusedSplitBorderUsesFallbackWhenPaletteSixContrastIsLow`
+  - `ConfigTests/splitBorderWidthDefaultsToZero`
+- `cd ghostboard && macos/build.nu --configuration Debug --action build` passed.
+- `cd ghostboard && zig build -Demit-docs=true -Demit-macos-app=false` passed.
+- `cd website && bun run gen:references` passed.
+- `cd ghostboard && zig fmt --check src/config/CApi.zig` passed.
+- `cd ghostboard && swiftlint` exited 0. It reported one existing warning in
+  `ghostboard/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`,
+  which was not touched by this experiment.
+- `prettier --check` passed for hand-authored markdown changed by this
+  experiment. The generated config reference is intentionally checked with
+  `bun run gen:references --check` instead.
+- `git diff --check` passed.
+
+The manual GUI behavior check was not run as an interactive visual session. The
+same behavior is covered by automated config tests plus the existing draw gate
+in `SurfaceView.swift`, which still requires `splitBorderWidth > 0` before a
+border is drawn.
+
+## Completion Review
+
+Reviewed by a fresh-context Codex adversarial subagent.
+
+Initial verdict: **Changes Required**.
+
+- Required: the authoritative config comments in
+  `ghostboard/src/config/Config.zig` still said unset split border colors draw
+  no border, and the generated website config reference had been edited without
+  regenerating it from Ghostboard's generated `ghostty.5.md`.
+
+Fixes:
+
+- Updated the `Config.zig` comments for focused and unfocused split border
+  colors.
+- Regenerated Ghostboard docs with
+  `zig build -Demit-docs=true -Demit-macos-app=false`.
+- Regenerated website references with `bun run gen:references`.
+- Updated verification so the generated config reference is checked with
+  `bun run gen:references --check` instead of Prettier.
+
+Final verdict: **Approved**.
+
+## Conclusion
+
+The implementation satisfies the issue requirements:
+
+- TokyoNight now derives focused `#7dcfff` and unfocused `#414868` when explicit
+  border colors are omitted.
+- Explicit focused and unfocused border color config values still override the
+  derived defaults independently.
+- The Zig config values remain nullable; derivation happens in the macOS config
+  accessor layer, not in the theme files or Zig defaults.
+- `split-border-width = 0` remains the default and continues to disable border
+  drawing even though derived colors are available.
+- The website docs now describe the theme-derived behavior and override model.

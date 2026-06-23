@@ -174,4 +174,4 @@ before changing runtime behavior.
 - [Experiment 1: Audit theme palette border candidates](01-audit-theme-palette-border-candidates.md)
   — **Pass**
 - [Experiment 2: Implement theme-derived split border colors](02-implement-theme-derived-split-border-colors.md)
-  — **Designed**
+  — **Pass**

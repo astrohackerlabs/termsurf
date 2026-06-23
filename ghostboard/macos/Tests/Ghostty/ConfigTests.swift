@@ -1,9 +1,18 @@
 import Testing
 @testable import Ghostty
+import AppKit
 import SwiftUI
 
 @Suite
 struct ConfigTests {
+    private func expectColor(_ color: Color?, red: Int, green: Int, blue: Int) throws {
+        let color = try #require(color)
+        let nsColor = try #require(NSColor(color).usingColorSpace(.sRGB))
+        #expect(Int((nsColor.redComponent * 255).rounded()) == red)
+        #expect(Int((nsColor.greenComponent * 255).rounded()) == green)
+        #expect(Int((nsColor.blueComponent * 255).rounded()) == blue)
+    }
+
     // MARK: - Boolean Properties
 
     @Test func initialWindowDefaultsToTrue() throws {
@@ -163,10 +172,56 @@ struct ConfigTests {
         #expect(config.backgroundOpacity == 0.5)
     }
 
+    @Test func splitBorderWidthDefaultsToZero() throws {
+        let config = try TemporaryConfig("")
+        #expect(config.splitBorderWidth == 0)
+    }
+
     @Test func windowPositionDefaultsToNil() throws {
         let config = try TemporaryConfig("")
         #expect(config.windowPositionX == nil)
         #expect(config.windowPositionY == nil)
+    }
+
+    // MARK: - Split Border Colors
+
+    @Test func splitBorderColorsDeriveFromTokyoNightPalette() throws {
+        let config = try TemporaryConfig("""
+        background = #1a1b26
+        palette = 6=#7dcfff
+        palette = 8=#414868
+        palette = 14=#7dcfff
+        """)
+
+        try expectColor(config.focusedSplitBorderColor, red: 0x7d, green: 0xcf, blue: 0xff)
+        try expectColor(config.unfocusedSplitBorderColor, red: 0x41, green: 0x48, blue: 0x68)
+        #expect(config.splitBorderWidth == 0)
+    }
+
+    @Test func splitBorderColorOverridesWinIndependently() throws {
+        let config = try TemporaryConfig("""
+        background = #1a1b26
+        palette = 6=#7dcfff
+        palette = 8=#414868
+        focused-split-border-color = #112233
+        unfocused-split-border-color = #445566
+        """)
+
+        try expectColor(config.focusedSplitBorderColor, red: 0x11, green: 0x22, blue: 0x33)
+        try expectColor(config.unfocusedSplitBorderColor, red: 0x44, green: 0x55, blue: 0x66)
+    }
+
+    @Test func focusedSplitBorderUsesFallbackWhenPaletteSixContrastIsLow() throws {
+        let config = try TemporaryConfig("""
+        background = #f4f4f4
+        palette = 4=#003e8a
+        palette = 6=#7cc4df
+        palette = 8=#888888
+        palette = 12=#807d7c
+        palette = 14=#7cc4df
+        """)
+
+        try expectColor(config.focusedSplitBorderColor, red: 0x00, green: 0x3e, blue: 0x8a)
     }
 
     // MARK: - Config Loading
