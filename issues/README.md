@@ -2,9 +2,10 @@
 
 ## Open
 
-| #                                                       | Title                                       | Opened     |
-| ------------------------------------------------------- | ------------------------------------------- | ---------- |
-| [0834](0834-full-pdf-support-roamium-surfari/README.md) | Full PDF Support Across Roamium and Surfari | 2026-06-22 |
+| #                                                        | Title                                       | Opened     |
+| -------------------------------------------------------- | ------------------------------------------- | ---------- |
+| [0834](0834-full-pdf-support-roamium-surfari/README.md)  | Full PDF Support Across Roamium and Surfari | 2026-06-22 |
+| [0839](0839-theme-defined-split-border-colors/README.md) | Theme-Defined Split Border Colors           | 2026-06-23 |
 
 ## Closed
 
