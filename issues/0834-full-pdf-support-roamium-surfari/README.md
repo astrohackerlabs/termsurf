@@ -200,6 +200,8 @@ Each feature row should ultimately record:
   — **Partial**
 - [Experiment 40: Prove Surfari snapshot refresh deltas](40-prove-surfari-snapshot-refresh-deltas.md)
   — **Pass**
+- [Experiment 41: Prove Surfari PDF load variants](41-prove-surfari-pdf-load-variants.md)
+  — **Designed**
 
 ## Roamium Phase
 
