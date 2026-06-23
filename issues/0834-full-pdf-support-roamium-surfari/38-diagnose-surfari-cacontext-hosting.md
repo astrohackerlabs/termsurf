@@ -158,3 +158,105 @@ Resolution:
 Follow-up verdict after fixes: **Approved**.
 
 The reviewer found no remaining required design changes before the plan commit.
+
+## Result
+
+**Result:** Pass
+
+The baseline `WKWebView.layer` export still reproduces the Ghostboard-visible
+blank:
+
+- run: `20260622-194729`;
+- candidate: `baseline`;
+- harness log:
+  `logs/issue-834-exp38-surfari-cacontext-hosting/harness-20260622-194729.log`;
+- classification: `candidate-did-not-fix-hosting`;
+- Surfari internal render proof passed for HTML and PDF;
+- Ghostboard app-window visible pixel proof failed for HTML and PDF.
+
+The diagnostic local-layer candidate proved the Ghostboard `CAContext` /
+`CALayerHost` path itself can host a Surfari-exported local layer. The failure
+is therefore specific to using `WKWebView.layer` as the remote context layer,
+not to Ghostboard's host layer plumbing.
+
+The passing candidate is `snapshot-layer`. Surfari keeps the hidden live
+`WKWebView` for navigation, input, and WebKit rendering, but exports a local
+`CALayer` through `CAContext` and refreshes that layer from
+`WKWebView.takeSnapshot` after export, resize, and navigation completion.
+
+Final proof:
+
+- run: `20260622-194754`;
+- candidate: `snapshot-layer`;
+- summary:
+  `logs/issue-834-exp38-surfari-cacontext-hosting/surfari-cacontext-hosting-summary.json`;
+- harness log:
+  `logs/issue-834-exp38-surfari-cacontext-hosting/harness-20260622-194754.log`;
+- Ghostboard app binary:
+  `ghostboard/macos/build/Debug/TermSurf.app/Contents/MacOS/termsurf`;
+- classification: `cacontext-hosting-fixed`;
+- overall result: `pass`;
+- HTML internal render: `pass`;
+- PDF internal render: `pass`;
+- HTML Ghostboard-window visible pixel proof: `pass`;
+- PDF Ghostboard-window visible pixel proof: `pass`;
+- cleanup: HTML process terminated, PDF process terminated, server terminated;
+- `webkit/src` remained clean.
+
+Verification commands run:
+
+```bash
+./surfari/libtermsurf_webkit/build.sh
+cargo fmt -p surfari
+cargo build -p surfari
+(cd ghostboard && macos/build.nu --configuration Debug --action build)
+bash -n scripts/test-issue-834-surfari-cacontext-hosting.sh
+git diff --check
+git -C webkit/src status --short
+rm -rf logs/issue-834-exp38-surfari-cacontext-hosting \
+  logs/issue-834-exp37-surfari-side-render-pixels \
+  logs/issue-834-exp36-surfari-visual-compositing
+TERMSURF_SURFARI_CACONTEXT_CANDIDATE=baseline \
+  scripts/test-issue-834-surfari-cacontext-hosting.sh
+TERMSURF_SURFARI_CACONTEXT_CANDIDATE=snapshot-layer \
+  scripts/test-issue-834-surfari-cacontext-hosting.sh
+```
+
+## Conclusion
+
+Surfari's public `WKWebView` layer tree is not directly hostable by Ghostboard's
+existing `CALayerHost` path, even though WebKit renders the page and the
+CAContext ID is nonzero. A Surfari-owned local CAContext layer is hostable, and
+a snapshot-backed layer makes both HTML and PDF pixels visible in the real
+Ghostboard window.
+
+This fixes the immediate Surfari visible-rendering blocker for PDF proof. The
+next experiment should make the snapshot-backed path usable as Surfari's normal
+TermSurf presentation path, including refreshes after user input and scroll,
+then continue the PDF feature matrix from the now-visible Surfari overlay.
+
+## Completion Review
+
+An external Codex review checked the completed experiment result.
+
+Initial verdict: **Changes required**.
+
+Findings:
+
+- the completion review had not yet been recorded in this experiment file;
+- the recorded verification block was not directly replayable from the repo root
+  because it changed into `ghostboard/` and did not change back before later
+  commands;
+- the result overclaimed the failed layer by saying `WKWebView`/content-view
+  when the recorded baseline evidence only proved `WKWebView.layer` failed.
+
+Resolution:
+
+- this completion review section was added;
+- the Ghostboard build command was wrapped in a subshell so the remaining
+  verification commands run from the repo root;
+- the failure claim was narrowed to `WKWebView.layer`.
+
+Follow-up verdict: **Approved**.
+
+The reviewer found no remaining required changes before the result commit.

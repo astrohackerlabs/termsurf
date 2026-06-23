@@ -195,7 +195,7 @@ Each feature row should ultimately record:
 - [Experiment 37: Prove Surfari-side render pixels](37-prove-surfari-side-render-pixels.md)
   — **Pass**
 - [Experiment 38: Diagnose Surfari CAContext hosting](38-diagnose-surfari-cacontext-hosting.md)
-  — **Designed**
+  — **Pass**
 
 ## Roamium Phase
 

@@ -97,6 +97,19 @@ static NSURL *profileURL(NSString *basePath, NSString *component, bool directory
     return [baseURL URLByAppendingPathComponent:component isDirectory:directory];
 }
 
+static CGFloat hostWindowAlpha()
+{
+    NSString *value = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_HOST_WINDOW_ALPHA"];
+    if (!value.length)
+        return 0.0;
+    double alpha = value.doubleValue;
+    if (alpha < 0.0)
+        alpha = 0.0;
+    if (alpha > 1.0)
+        alpha = 1.0;
+    return (CGFloat)alpha;
+}
+
 static void createProfileDirectory(NSURL *url)
 {
     [[NSFileManager defaultManager] createDirectoryAtURL:url withIntermediateDirectories:YES attributes:nil error:nil];
@@ -190,6 +203,7 @@ struct WebContents {
     bool suppress_cursor_notifications;
     bool renderer_crash_reported;
     CAContext *remote_context;
+    CALayer *snapshot_layer;
     int width;
     int height;
     bool gui_active;
@@ -203,6 +217,68 @@ struct WebContents {
     int mouse_last_button = 0;
     NSUInteger mouse_buttons_down = 0;
 };
+
+static void refreshSnapshotLayer(WebContents *contents);
+
+static bool useSnapshotLayer()
+{
+    NSString *mode = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_CACONTEXT_LAYER"];
+    return [mode isEqualToString:@"snapshot"];
+}
+
+static CALayer *snapshotLayerForContents(WebContents *contents)
+{
+    if (!contents->snapshot_layer) {
+        contents->snapshot_layer = [CALayer layer];
+        contents->snapshot_layer.name = @"TermSurfSurfariSnapshotLayer";
+        contents->snapshot_layer.contentsGravity = kCAGravityResize;
+        contents->snapshot_layer.backgroundColor = NSColor.blackColor.CGColor;
+    }
+    contents->snapshot_layer.frame = CGRectMake(0, 0, MAX(contents->width, 64), MAX(contents->height, 64));
+    contents->snapshot_layer.contentsScale = NSScreen.mainScreen.backingScaleFactor ?: 1.0;
+    return contents->snapshot_layer;
+}
+
+static CALayer *remoteContextLayerForContents(WebContents *contents)
+{
+    NSString *mode = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_CACONTEXT_LAYER"];
+    if ([mode isEqualToString:@"snapshot"])
+        return snapshotLayerForContents(contents);
+    if ([mode isEqualToString:@"diagnostic-color"]) {
+        CALayer *root = [CALayer layer];
+        root.frame = CGRectMake(0, 0, MAX(contents->width, 64), MAX(contents->height, 64));
+        root.backgroundColor = NSColor.blackColor.CGColor;
+        root.contentsScale = NSScreen.mainScreen.backingScaleFactor ?: 1.0;
+
+        BOOL pdf = [contents->web_view.URL.pathExtension.lowercaseString isEqualToString:@"pdf"];
+        if (pdf) {
+            CALayer *green = [CALayer layer];
+            green.frame = root.bounds;
+            green.backgroundColor = [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:0.25 alpha:1.0].CGColor;
+            [root addSublayer:green];
+        } else {
+            CGFloat halfWidth = root.bounds.size.width / 2.0;
+            CALayer *cyan = [CALayer layer];
+            cyan.frame = CGRectMake(0, 0, halfWidth, root.bounds.size.height);
+            cyan.backgroundColor = NSColor.cyanColor.CGColor;
+            [root addSublayer:cyan];
+
+            CALayer *yellow = [CALayer layer];
+            yellow.frame = CGRectMake(halfWidth, 0, root.bounds.size.width - halfWidth, root.bounds.size.height);
+            yellow.backgroundColor = NSColor.yellowColor.CGColor;
+            [root addSublayer:yellow];
+        }
+
+        return root;
+    }
+    if ([mode isEqualToString:@"content-view"]) {
+        NSView *content_view = contents->window.contentView;
+        content_view.wantsLayer = YES;
+        [content_view layoutSubtreeIfNeeded];
+        return content_view.layer ?: contents->web_view.layer;
+    }
+    return contents->web_view.layer;
+}
 
 static std::vector<WebContents *> g_web_contents;
 
@@ -542,6 +618,32 @@ static void classifySnapshotImage(WebContents *contents, NSString *method, NSIma
     fireRenderProbe(contents, method, status, (int)width, (int)height, magenta, cyan, yellow, webkit_green, @"");
 }
 
+static void refreshSnapshotLayer(WebContents *contents)
+{
+    if (!contents || !contents->web_view || !useSnapshotLayer())
+        return;
+
+    CALayer *snapshot_layer = snapshotLayerForContents(contents);
+    WKSnapshotConfiguration *configuration = [[WKSnapshotConfiguration alloc] init];
+    configuration.rect = contents->web_view.bounds;
+    [contents->web_view takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage *snapshotImage, NSError *error) {
+        if (error || !snapshotImage) {
+            fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh failed: %s\n", error.localizedDescription.UTF8String ?: "missing-image");
+            return;
+        }
+        CGImageRef cg_image = [snapshotImage CGImageForProposedRect:nil context:nil hints:nil];
+        if (!cg_image) {
+            fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh failed: missing-cgimage\n");
+            return;
+        }
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        snapshot_layer.contents = (__bridge id)cg_image;
+        snapshot_layer.frame = CGRectMake(0, 0, MAX(contents->width, 64), MAX(contents->height, 64));
+        [CATransaction commit];
+    }];
+}
+
 static void captureRenderProbe(WebContents *contents)
 {
     if (!contents || !contents->web_view)
@@ -839,8 +941,9 @@ static void exportContext(WebContents *contents)
         contents->remote_context = [CAContext remoteContextWithOptions:@{
             @"kCAContextCIFilterBehavior" : @"ignore",
         }];
-        contents->remote_context.layer = contents->web_view.layer;
+        contents->remote_context.layer = remoteContextLayerForContents(contents);
     }
+    refreshSnapshotLayer(contents);
 
     if (g_callbacks.on_ca_context_id) {
         g_callbacks.on_ca_context_id(
@@ -893,6 +996,7 @@ static void exportContext(WebContents *contents)
         fireTitle(self.owner, title);
         fireLoading(self.owner, webView.URL.absoluteString, 0);
         exportContext(self.owner);
+        refreshSnapshotLayer(self.owner);
         captureRenderProbe(self.owner);
     }];
 }
@@ -1104,7 +1208,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->window.title = @"libtermsurf_webkit";
     contents->window.acceptsMouseMovedEvents = YES;
     contents->window.ignoresMouseEvents = YES;
-    contents->window.alphaValue = 0.0;
+    contents->window.alphaValue = hostWindowAlpha();
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = context->data_store;
@@ -1192,7 +1296,7 @@ ts_web_contents_t ts_create_devtools_web_contents(
     contents->window.title = @"libtermsurf_webkit_devtools";
     contents->window.acceptsMouseMovedEvents = YES;
     contents->window.ignoresMouseEvents = YES;
-    contents->window.alphaValue = 0.0;
+    contents->window.alphaValue = hostWindowAlpha();
 
     contents->web_view = inspector_web_view;
     [contents->web_view removeFromSuperview];
@@ -1282,6 +1386,7 @@ void ts_set_view_size(
     contents->web_view.frame = contents->window.contentView.bounds;
     [contents->web_view layoutSubtreeIfNeeded];
     exportContext(contents);
+    refreshSnapshotLayer(contents);
 }
 
 void ts_forward_mouse_event(ts_web_contents_t wc, int type, int button, int x, int y, int click_count, int modifiers)
