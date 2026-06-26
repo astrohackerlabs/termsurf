@@ -42,6 +42,42 @@ SURFARI_RUNTIME_ARTIFACTS=(
 
 echo "==> Packaging TermSurf v${VERSION} for ${ARCH}..."
 
+check_ghostboard_version() {
+  local cli_version
+  local short_version
+  local build_version
+  local first_line
+
+  cli_version="$("$GHOSTBOARD_APP/Contents/MacOS/termsurf" +version 2>&1)"
+  first_line="$(printf '%s\n' "$cli_version" | sed -n '1p')"
+  short_version="$(/usr/bin/defaults read "$GHOSTBOARD_APP/Contents/Info" CFBundleShortVersionString)"
+  build_version="$(/usr/bin/defaults read "$GHOSTBOARD_APP/Contents/Info" CFBundleVersion)"
+
+  if [ "$first_line" != "TermSurf $VERSION" ]; then
+    echo "Error: Ghostboard CLI version mismatch"
+    echo "  expected: TermSurf $VERSION"
+    echo "  actual:   $first_line"
+    echo "Rebuild with: TERMSURF_VERSION=$VERSION scripts/build.sh all --release"
+    exit 1
+  fi
+
+  if [ "$short_version" != "$VERSION" ]; then
+    echo "Error: CFBundleShortVersionString mismatch"
+    echo "  expected: $VERSION"
+    echo "  actual:   $short_version"
+    echo "Rebuild with: TERMSURF_VERSION=$VERSION scripts/build.sh all --release"
+    exit 1
+  fi
+
+  if [ "$build_version" != "$VERSION" ]; then
+    echo "Error: CFBundleVersion mismatch"
+    echo "  expected: $VERSION"
+    echo "  actual:   $build_version"
+    echo "Rebuild with: TERMSURF_VERSION=$VERSION scripts/build.sh all --release"
+    exit 1
+  fi
+}
+
 # Check release builds exist
 for f in \
   "$REPO_DIR/target/release/web" \
@@ -55,6 +91,8 @@ for f in \
     exit 1
   fi
 done
+
+check_ghostboard_version
 
 for artifact in "${SURFARI_RUNTIME_ARTIFACTS[@]}"; do
   if [ ! -e "$WEBKIT_RELEASE_OUT/$artifact" ]; then

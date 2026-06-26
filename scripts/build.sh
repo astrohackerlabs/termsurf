@@ -172,14 +172,19 @@ build_surfari() {
 build_ghostboard() {
   local CONFIGURATION="Debug"
   local ZIG_OPTIMIZE="Debug"
+  local ZIG_VERSION_ARGS=()
   if $RELEASE; then
     CONFIGURATION="Release"
     ZIG_OPTIMIZE="ReleaseFast"
   fi
 
+  if [ -n "${TERMSURF_VERSION:-}" ]; then
+    ZIG_VERSION_ARGS=("-Dversion-string=$TERMSURF_VERSION")
+  fi
+
   echo "==> Building GhostboardKit ($ZIG_OPTIMIZE)..."
   cd "$REPO_DIR/ghostboard"
-  zig build -Demit-macos-app=false -Doptimize="$ZIG_OPTIMIZE"
+  zig build -Demit-macos-app=false -Doptimize="$ZIG_OPTIMIZE" "${ZIG_VERSION_ARGS[@]}"
 
   cd "$REPO_DIR/ghostboard/macos"
   if $CLEAN; then
@@ -188,7 +193,11 @@ build_ghostboard() {
   fi
 
   echo "==> Building Ghostboard ($CONFIGURATION)..."
-  ./build.nu --configuration "$CONFIGURATION" --action build
+  if [ -n "${TERMSURF_VERSION:-}" ]; then
+    ./build.nu --configuration "$CONFIGURATION" --action build --version "$TERMSURF_VERSION"
+  else
+    ./build.nu --configuration "$CONFIGURATION" --action build
+  fi
   if $RELEASE; then
     codesign --force --deep --sign - "build/$CONFIGURATION/TermSurf.app"
   fi

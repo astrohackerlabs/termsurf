@@ -7,6 +7,7 @@ def main [
     --scheme: string = "Ghostty"       # Xcode scheme (Ghostty, Ghostty-iOS, DockTilePlugin)
     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
+    --version: string = ""             # Optional release version for MARKETING_VERSION and CURRENT_PROJECT_VERSION
 ] {
     let project = ($env.FILE_PWD | path join "Ghostty.xcodeproj")
     let build_dir = ($env.FILE_PWD | path join "build")
@@ -19,6 +20,15 @@ def main [
         []
     }
 
+    let version_settings = if $version == "" {
+        []
+    } else {
+        [
+            $"MARKETING_VERSION=($version)"
+            $"CURRENT_PROJECT_VERSION=($version)"
+        ]
+    }
+
     (^env -i
         $"HOME=($env.HOME)"
         "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
@@ -28,5 +38,6 @@ def main [
         -configuration $configuration
         $"SYMROOT=($build_dir)"
         ...$skip_testing
+        ...$version_settings
         $action)
 }
