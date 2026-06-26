@@ -1,0 +1,1268 @@
+From 29939eb4c40db3b2d82e20cbad9a67c7da148eeb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 21 May 2026 07:38:54 -0500
+Subject: [PATCH 10/87] Anchor native popup windows
+
+A hidden window learned the map,
+And shuffled to the pane;
+The popups found the neighborhood,
+Though y still needs a lane.
+---
+ .../browser/ui/autofill_external_delegate.cc  |  34 ++++
+ .../native_widget_ns_window_bridge.mm         | 157 ++++++++++++++++-
+ .../render_widget_host_ns_view_bridge.mm      |  49 ++++++
+ .../web_menu_runner_mac.mm                    |  67 ++++++++
+ .../date_time_chooser/date_time_chooser.cc    |  34 ++++
+ .../renderer_host/render_frame_host_impl.cc   |  37 ++++
+ .../render_widget_host_view_mac.mm            |  71 ++++++++
+ .../web_contents/web_contents_view_mac.mm     |  28 ++++
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../libtermsurf_chromium.cc                   |  12 +-
+ .../libtermsurf_chromium.h                    |   9 +-
+ .../ts_browser_main_parts.cc                  |  15 +-
+ .../ts_browser_main_parts.h                   |   9 +-
+ .../ts_shell_window_mac.h                     |  24 +++
+ .../ts_shell_window_mac.mm                    | 158 ++++++++++++++++++
+ .../browser/shell_platform_delegate_mac.mm    |  76 +++++++++
+ 16 files changed, 776 insertions(+), 6 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_shell_window_mac.h
+ create mode 100644 content/libtermsurf_chromium/ts_shell_window_mac.mm
+
+diff --git a/components/autofill/core/browser/ui/autofill_external_delegate.cc b/components/autofill/core/browser/ui/autofill_external_delegate.cc
+index f48d4a2d06..99b0ffbd2d 100644
+--- a/components/autofill/core/browser/ui/autofill_external_delegate.cc
++++ b/components/autofill/core/browser/ui/autofill_external_delegate.cc
+@@ -7,6 +7,7 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <functional>
+ #include <iterator>
+ #include <optional>
+@@ -21,6 +22,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/i18n/case_conversion.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
+@@ -93,6 +95,20 @@ namespace autofill {
+ 
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
+ std::optional<AutofillProfile> GetTestAddressByGUID(
+     base::span<const AutofillProfile> test_addresses,
+     const std::string& guid) {
+@@ -440,6 +456,24 @@ void AutofillExternalDelegate::AttemptToDisplayAutofillSuggestions(
+       query_field_.form_control_ax_id(),
+       should_use_caret_bounds ? PopupAnchorType::kCaret : default_anchor_type,
+       show_tabbed_popup, prefer_prev_arrow_side_on_suggestions_update);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] AutofillExternalDelegate::ShowSuggestions"
++              << " delegate=" << static_cast<void*>(this)
++              << " manager=" << static_cast<void*>(&*manager_)
++              << " query_field_bounds=" << query_field_.bounds().ToString()
++              << " caret_bounds=" << caret_bounds_.ToString()
++              << " open_args_element_bounds="
++              << open_args.element_bounds.ToString()
++              << " suggestion_count=" << open_args.suggestions.size()
++              << " trigger_source="
++              << static_cast<int>(open_args.trigger_source)
++              << " anchor_type=" << static_cast<int>(open_args.anchor_type)
++              << " form_control_ax_id=" << open_args.form_control_ax_id
++              << " show_tabbed_popup=" << open_args.show_tabbed_popup
++              << " prefer_prev_arrow_side="
++              << open_args.prefer_prev_arrow_side_on_suggestions_update;
++  }
+   manager_->client().ShowAutofillSuggestions(open_args, GetWeakPtr());
+ }
+ 
+diff --git a/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm b/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
+index d58c5eff9f..7af7fde9ed 100644
+--- a/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
++++ b/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
+@@ -14,7 +14,9 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <cstdlib>
+ #include <memory>
++#include <string>
+ 
+ #include "base/apple/bridging.h"
+ #import "base/apple/foundation_util.h"
+@@ -89,6 +91,35 @@ display::Display GetDisplayForWindow(NSWindow* window) {
+       gfx::NativeWindow(window));
+ }
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled = std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=native-widget";
++  }
++}
++
++std::string Issue779NSRectToString(NSRect rect) {
++  return base::SysNSStringToUTF8(NSStringFromRect(rect));
++}
++
++std::string Issue779WindowFrame(NSWindow* window) {
++  if (!window)
++    return "null";
++  return Issue779NSRectToString([window frame]);
++}
++
++std::string Issue779ScreenFrame(NSWindow* window) {
++  if (!window || ![window screen])
++    return "null";
++  return Issue779NSRectToString([[window screen] frame]);
++}
++
+ }  // namespace
+ 
+ @class NSWindowRestorationOptions;
+@@ -636,6 +667,29 @@ void NativeWidgetNSWindowBridge::SetBounds(
+     const gfx::Rect& new_bounds,
+     const gfx::Size& minimum_content_size,
+     const std::optional<gfx::Size>& maximum_content_size) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    NSWindow* parent_window = [window_ parentWindow];
++    LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetBounds"
++              << " bridge=" << static_cast<void*>(this)
++              << " window=" << (__bridge void*)window_
++              << " parent_bridge=" << static_cast<void*>(parent_.get())
++              << " new_bounds_dip=" << new_bounds.ToString()
++              << " minimum_content_size=" << minimum_content_size.ToString()
++              << " maximum_content_size="
++              << (maximum_content_size.has_value()
++                      ? maximum_content_size->ToString()
++                      : std::string("none"))
++              << " window_frame_before=" << Issue779WindowFrame(window_)
++              << " window_screen=" << Issue779ScreenFrame(window_)
++              << " parent_window=" << (__bridge void*)parent_window
++              << " parent_frame=" << Issue779WindowFrame(parent_window)
++              << " level=" << [window_ level]
++              << " is_visible=" << [window_ isVisible]
++              << " wants_visible=" << wants_to_be_visible_
++              << " window_visible=" << window_visible_;
++  }
++
+   // -[NSWindow contentMinSize] and [NSWindow contentMaxSize] are only checked
+   // by Cocoa for user-initiated resizes. This is not what toolkit-views
+   // expects, so clamp.
+@@ -657,6 +711,13 @@ void NativeWidgetNSWindowBridge::SetBounds(
+     // the first time. They also have no frame, so just update the content size.
+     [window_ setContentSize:NSMakeSize(clamped_content_size.width(),
+                                        clamped_content_size.height())];
++    if (Issue779TraceEnabled()) {
++      LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetBounds"
++                   " sheet_content_size_only"
++                << " bridge=" << static_cast<void*>(this)
++                << " window=" << (__bridge void*)window_
++                << " window_frame_after=" << Issue779WindowFrame(window_);
++    }
+     return;
+   }
+   gfx::Rect actual_new_bounds(
+@@ -669,6 +730,20 @@ void NativeWidgetNSWindowBridge::SetBounds(
+             display:YES
+             animate:NO];
+ 
++  if (Issue779TraceEnabled()) {
++    NSWindow* parent_window = [window_ parentWindow];
++    LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetBounds"
++                 " applied"
++              << " bridge=" << static_cast<void*>(this)
++              << " window=" << (__bridge void*)window_
++              << " actual_new_bounds_dip=" << actual_new_bounds.ToString()
++              << " window_frame_after=" << Issue779WindowFrame(window_)
++              << " window_screen=" << Issue779ScreenFrame(window_)
++              << " parent_window=" << (__bridge void*)parent_window
++              << " parent_frame=" << Issue779WindowFrame(parent_window)
++              << " appkit_changed_screen=" << ([window_ screen] != previous_screen);
++  }
++
+   // If the window has focus but is not on the active space and the window was
+   // moved to a different display, re-activate it to switch the space to the
+   // active window. (crbug.com/1316543)
+@@ -851,6 +926,26 @@ void NativeWidgetNSWindowBridge::CloseWindowNow() {
+ 
+ void NativeWidgetNSWindowBridge::SetVisibilityState(
+     WindowVisibilityState new_state) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    NSWindow* parent_window = [window_ parentWindow];
++    LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++              << " event=begin"
++              << " bridge=" << static_cast<void*>(this)
++              << " window=" << (__bridge void*)window_
++              << " state=" << static_cast<int>(new_state)
++              << " window_frame=" << Issue779WindowFrame(window_)
++              << " window_screen=" << Issue779ScreenFrame(window_)
++              << " parent_window=" << (__bridge void*)parent_window
++              << " parent_frame=" << Issue779WindowFrame(parent_window)
++              << " is_visible=" << [window_ isVisible]
++              << " is_key=" << [window_ isKeyWindow]
++              << " is_main=" << [window_ isMainWindow]
++              << " level=" << [window_ level]
++              << " wants_visible=" << wants_to_be_visible_
++              << " window_visible=" << window_visible_;
++  }
++
+   // During session restore this method gets called from RestoreTabsToBrowser()
+   // with new_state = kShowAndActivateWindow. We consume restoration data on our
+   // first time through this method so we can use its existence as an
+@@ -944,10 +1039,26 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
+     // DCHECK(![window_ attachedSheet]);
+ 
+     [window_ orderOut:nil];
++    if (Issue779TraceEnabled()) {
++      LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                << " event=orderOut"
++                << " bridge=" << static_cast<void*>(this)
++                << " window=" << (__bridge void*)window_
++                << " window_frame=" << Issue779WindowFrame(window_)
++                << " is_visible=" << [window_ isVisible];
++    }
+     DCHECK(!window_visible_);
+     return;
+   } else if (new_state == WindowVisibilityState::kMiniaturizeWindow) {
+     [window_ miniaturize:nil];
++    if (Issue779TraceEnabled()) {
++      LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                << " event=miniaturize"
++                << " bridge=" << static_cast<void*>(this)
++                << " window=" << (__bridge void*)window_
++                << " window_frame=" << Issue779WindowFrame(window_)
++                << " is_visible=" << [window_ isVisible];
++    }
+     return;
+   }
+ 
+@@ -959,8 +1070,16 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
+   // If the parent (or an ancestor) is hidden, return and wait for it to become
+   // visible.
+   for (auto* ancestor = parent_.get(); ancestor; ancestor = ancestor->parent_) {
+-    if (!ancestor->window_visible_)
++    if (!ancestor->window_visible_) {
++      if (Issue779TraceEnabled()) {
++        LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                  << " event=blocked_by_hidden_ancestor"
++                  << " bridge=" << static_cast<void*>(this)
++                  << " ancestor=" << static_cast<void*>(ancestor)
++                  << " window_frame=" << Issue779WindowFrame(window_);
++      }
+       return;
++    }
+   }
+ 
+   // Don't activate a window during session restore, to avoid switching spaces
+@@ -972,6 +1091,14 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
+ 
+   if (IsWindowModalSheet()) {
+     ShowAsModalSheet();
++    if (Issue779TraceEnabled()) {
++      LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                << " event=show_modal_sheet"
++                << " bridge=" << static_cast<void*>(this)
++                << " window=" << (__bridge void*)window_
++                << " window_frame=" << Issue779WindowFrame(window_)
++                << " is_visible=" << [window_ isVisible];
++    }
+     return;
+   }
+ 
+@@ -983,6 +1110,16 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
+     if (![window_ activationIndependence]) {
+       [NSApp activateIgnoringOtherApps:YES];
+     }
++    if (Issue779TraceEnabled()) {
++      LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                << " event=makeKeyAndOrderFront"
++                << " bridge=" << static_cast<void*>(this)
++                << " window=" << (__bridge void*)window_
++                << " window_frame=" << Issue779WindowFrame(window_)
++                << " is_visible=" << [window_ isVisible]
++                << " is_key=" << [window_ isKeyWindow]
++                << " is_main=" << [window_ isMainWindow];
++    }
+   } else if (new_state == WindowVisibilityState::kShowInactive && !parent_ &&
+              ![window_ isMiniaturized]) {
+     if ([[NSApp mainWindow] screen] == [window_ screen] ||
+@@ -993,10 +1130,28 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
+       // cause a space switch.
+       [window_ orderWindow:NSWindowBelow
+                 relativeTo:NSApp.mainWindow.windowNumber];
++      if (Issue779TraceEnabled()) {
++        LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                  << " event=orderWindowBelowMain"
++                  << " bridge=" << static_cast<void*>(this)
++                  << " window=" << (__bridge void*)window_
++                  << " window_frame=" << Issue779WindowFrame(window_)
++                  << " main_window=" << (__bridge void*)NSApp.mainWindow
++                  << " main_frame=" << Issue779WindowFrame(NSApp.mainWindow)
++                  << " is_visible=" << [window_ isVisible];
++      }
+     } else {
+       // When opening an inactive window on another screen, put the window at
+       // the front and trigger a space switch.
+       [window_ orderFrontKeepWindowKeyState];
++      if (Issue779TraceEnabled()) {
++        LOG(INFO) << "[issue-779-trace] NativeWidgetNSWindowBridge::SetVisibilityState"
++                  << " event=orderFrontKeepWindowKeyState"
++                  << " bridge=" << static_cast<void*>(this)
++                  << " window=" << (__bridge void*)window_
++                  << " window_frame=" << Issue779WindowFrame(window_)
++                  << " is_visible=" << [window_ isVisible];
++      }
+     }
+   }
+ 
+diff --git a/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm b/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm
+index 5d208ab175..f1b928a61f 100644
+--- a/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm
++++ b/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm
+@@ -4,12 +4,16 @@
+ 
+ #import "content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.h"
+ 
++#include <cstdlib>
+ #include <Foundation/Foundation.h>
+ 
++#include <string>
++
+ #include "base/apple/bridging.h"
+ #include "base/apple/foundation_util.h"
+ #include "base/apple/scoped_cftyperef.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #import "base/mac/scoped_sending_event.h"
+ #import "base/message_loop/message_pump_apple.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -38,6 +42,28 @@ using blink::WebGestureEvent;
+ 
+ namespace remote_cocoa {
+ 
++namespace {
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
++std::string Issue779NSRectToString(NSRect rect) {
++  return base::SysNSStringToUTF8(NSStringFromRect(rect));
++}
++
++}  // namespace
++
+ RenderWidgetHostNSViewBridge::RenderWidgetHostNSViewBridge(
+     mojom::RenderWidgetHostNSViewHost* host,
+     RenderWidgetHostNSViewHostHelper* host_helper,
+@@ -436,6 +462,29 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
+   // `NativeWidgetMacNSWindow`, so this doesn't use a strict cast.
+   NativeWidgetMacNSWindow* ns_window =
+       base::apple::ObjCCast<NativeWidgetMacNSWindow>(cocoa_view_.window);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    NSRect flipped_bounds = [cocoa_view_ flipRectToNSRect:menu->bounds];
++    LOG(INFO) << "[issue-779-trace] "
++                 "RenderWidgetHostNSViewBridge::DisplayPopupMenu"
++              << " bridge=" << static_cast<void*>(this)
++              << " cocoa_view=" << (__bridge void*)cocoa_view_
++              << " menu_bounds=" << menu->bounds.ToString()
++              << " flipped_bounds=" << Issue779NSRectToString(flipped_bounds)
++              << " selected_item=" << menu->selected_item
++              << " item_count=" << menu->items.size()
++              << " item_font_size=" << menu->item_font_size
++              << " cocoa_view_frame="
++              << Issue779NSRectToString(cocoa_view_.frame)
++              << " cocoa_view_bounds="
++              << Issue779NSRectToString(cocoa_view_.bounds)
++              << " window=" << (__bridge void*)cocoa_view_.window
++              << " window_frame="
++              << (cocoa_view_.window
++                      ? Issue779NSRectToString(cocoa_view_.window.frame)
++                      : std::string("null"))
++              << " is_headless=" << (ns_window && ns_window.isHeadless);
++  }
+   if (ns_window && ns_window.isHeadless) {
+     std::move(callback).Run(std::nullopt);
+     return;
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index 0a7029b759..9577c1f649 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -9,9 +9,12 @@
+ #include <objc/runtime.h>
+ #include <stddef.h>
+ 
++#include <cstdlib>
+ #include <optional>
++#include <string>
+ 
+ #include "base/base64.h"
++#include "base/logging.h"
+ #include "base/mac/mac_util.h"
+ #include "base/strings/sys_string_conversions.h"
+ 
+@@ -20,6 +23,24 @@ namespace {
+ // A key to attach a MenuWasRunCallbackHolder to the NSView*.
+ static const char kMenuWasRunCallbackKey = 0;
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
++std::string Issue779NSRectToString(NSRect rect) {
++  return base::SysNSStringToUTF8(NSStringFromRect(rect));
++}
++
+ }  // namespace
+ 
+ @interface MenuWasRunCallbackHolder : NSObject
+@@ -140,6 +161,31 @@ static const char kMenuWasRunCallbackKey = 0;
+ - (void)runMenuInView:(NSView*)view
+            withBounds:(NSRect)bounds
+          initialIndex:(int)index {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    NSRect windowBounds = [view convertRect:bounds toView:nil];
++    NSRect screenBounds =
++        view.window ? [view.window convertRectToScreen:windowBounds]
++                    : NSZeroRect;
++    LOG(INFO) << "[issue-779-trace] WebMenuRunner::runMenuInView"
++              << " runner=" << (__bridge void*)self
++              << " view=" << (__bridge void*)view
++              << " input_bounds=" << Issue779NSRectToString(bounds)
++              << " view_frame=" << Issue779NSRectToString(view.frame)
++              << " view_bounds=" << Issue779NSRectToString(view.bounds)
++              << " window=" << (__bridge void*)view.window
++              << " window_frame="
++              << (view.window ? Issue779NSRectToString(view.window.frame)
++                              : std::string("null"))
++              << " bounds_in_window="
++              << Issue779NSRectToString(windowBounds)
++              << " bounds_in_screen="
++              << (view.window ? Issue779NSRectToString(screenBounds)
++                              : std::string("null"))
++              << " initial_index=" << index
++              << " item_count=" << _menu.numberOfItems;
++  }
++
+   // In a testing situation, make the callback and early-exit.
+   MenuWasRunCallbackHolder* holder =
+       objc_getAssociatedObject(view, &kMenuWasRunCallbackKey);
+@@ -208,6 +254,27 @@ static const char kMenuWasRunCallbackKey = 0;
+   // repositioned relative to that.
+   NSView* fakeControlView = [[NSView alloc] initWithFrame:bounds];
+   [view addSubview:fakeControlView];
++  if (Issue779TraceEnabled()) {
++    NSRect fakeWindowBounds =
++        [fakeControlView convertRect:fakeControlView.bounds toView:nil];
++    NSRect fakeScreenBounds =
++        fakeControlView.window
++            ? [fakeControlView.window convertRectToScreen:fakeWindowBounds]
++            : NSZeroRect;
++    LOG(INFO) << "[issue-779-trace] WebMenuRunner::fakeControlView"
++              << " runner=" << (__bridge void*)self
++              << " fake_control_view=" << (__bridge void*)fakeControlView
++              << " fake_frame="
++              << Issue779NSRectToString(fakeControlView.frame)
++              << " fake_bounds="
++              << Issue779NSRectToString(fakeControlView.bounds)
++              << " fake_bounds_in_window="
++              << Issue779NSRectToString(fakeWindowBounds)
++              << " fake_bounds_in_screen="
++              << (fakeControlView.window
++                      ? Issue779NSRectToString(fakeScreenBounds)
++                      : std::string("null"));
++  }
+ 
+   // Display the menu.
+   [cell attachPopUpWithFrame:fakeControlView.bounds inView:fakeControlView];
+diff --git a/content/browser/date_time_chooser/date_time_chooser.cc b/content/browser/date_time_chooser/date_time_chooser.cc
+index c4ec72ce6c..af4fef9306 100644
+--- a/content/browser/date_time_chooser/date_time_chooser.cc
++++ b/content/browser/date_time_chooser/date_time_chooser.cc
+@@ -4,10 +4,32 @@
+ 
+ #include "content/browser/date_time_chooser/date_time_chooser.h"
+ 
++#include <cstdlib>
+ #include <string_view>
+ 
++#include "base/logging.h"
++#include "content/public/browser/web_contents.h"
++
+ namespace content {
+ 
++namespace {
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
++}  // namespace
++
+ DateTimeChooser::DateTimeChooser(WebContents* web_contents)
+     : WebContentsUserData<DateTimeChooser>(*web_contents) {}
+ 
+@@ -33,6 +55,18 @@ void DateTimeChooser::OnDateTimeChooserReceiverConnectionError() {
+ void DateTimeChooser::OpenDateTimeDialog(
+     blink::mojom::DateTimeDialogValuePtr value,
+     OpenDateTimeDialogCallback callback) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] DateTimeChooser::OpenDateTimeDialog"
++              << " chooser=" << static_cast<void*>(this)
++              << " webcontents=" << static_cast<void*>(&GetWebContents())
++              << " dialog_type=" << static_cast<int>(value->dialog_type)
++              << " dialog_value=" << value->dialog_value
++              << " minimum=" << value->minimum
++              << " maximum=" << value->maximum
++              << " step=" << value->step
++              << " suggestion_count=" << value->suggestions.size();
++  }
+   OpenPlatformDialog(std::move(value), std::move(callback));
+ }
+ 
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index 2bacb736c7..de7bb38609 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -5,6 +5,7 @@
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <cstdint>
+ #include <deque>
+ #include <limits>
+@@ -221,6 +222,7 @@
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/tracing_support.h"
+ #include "content/public/browser/weak_document_ptr.h"
++#include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_ui_url_loader_factory.h"
+ #include "content/public/common/alternative_error_page_override_info.mojom.h"
+ #include "content/public/common/bindings_policy.h"
+@@ -428,6 +430,20 @@ class RenderFrameHostOrProxy {
+ 
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
+ // Maximum amount of time to wait for beforeunload/unload handlers to be
+ // processed by the renderer process.
+ constexpr base::TimeDelta kUnloadTimeout = base::Milliseconds(500);
+@@ -9646,6 +9662,27 @@ void RenderFrameHostImpl::ShowPopupMenu(
+           ->TransformPointToRootCoordSpace(original_point);
+   gfx::Rect transformed_bounds(transformed_point.x(), transformed_point.y(),
+                                bounds.width(), bounds.height());
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    RenderWidgetHostView* widget_view = GetView();
++    LOG(INFO) << "[issue-779-trace] RenderFrameHostImpl::ShowPopupMenu"
++              << " rfh=" << static_cast<void*>(this)
++              << " webcontents="
++              << static_cast<void*>(WebContents::FromRenderFrameHost(this))
++              << " input_bounds=" << bounds.ToString()
++              << " transformed_bounds=" << transformed_bounds.ToString()
++              << " view=" << static_cast<void*>(view)
++              << " widget_view=" << static_cast<void*>(widget_view)
++              << " widget_view_bounds="
++              << (widget_view ? widget_view->GetViewBounds().ToString()
++                              : std::string("null"))
++              << " item_count=" << menu_items.size()
++              << " selected_item=" << selected_item
++              << " right_aligned=" << right_aligned
++              << " allow_multiple_selection=" << allow_multiple_selection
++              << " visibility=" << static_cast<int>(delegate()->GetVisibility())
++              << " is_active=" << IsActive();
++  }
+   view->ShowPopupMenu(this, std::move(popup_client), transformed_bounds,
+                       font_size, selected_item, std::move(menu_items),
+                       right_aligned, allow_multiple_selection);
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 025d2ce065..a32ca95b86 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -6,6 +6,7 @@
+ 
+ #import <Carbon/Carbon.h>
+ 
++#include <cstdlib>
+ #include <limits>
+ #include <memory>
+ #include <optional>
+@@ -115,6 +116,43 @@ enum class GetCachedFirstRectResult {
+ };
+ // LINT.ThenChange(//tools/metrics/histograms/metadata/input/enums.xml:GetCachedFirstRectResult)
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled = std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium-rwhv-mac";
++  }
++}
++
++void Issue779TraceWebviewBounds(const char* event,
++                                RenderWidgetHostViewMac* view,
++                                const gfx::Rect& input,
++                                const gfx::Rect& view_bounds_in_window,
++                                const gfx::Rect& window_frame_in_screen,
++                                const gfx::Rect& computed_view_bounds,
++                                bool attached_to_window,
++                                bool is_headless) {
++  if (!Issue779TraceEnabled())
++    return;
++
++  Issue779TraceAnnounce();
++  WebContents* web_contents = view->GetWebContents();
++  LOG(INFO) << "[issue-779-trace] chromium_webview_bounds event=" << event
++            << " view=" << static_cast<void*>(view)
++            << " webcontents=" << static_cast<void*>(web_contents)
++            << " input=" << input.ToString()
++            << " view_bounds_in_window=" << view_bounds_in_window.ToString()
++            << " window_frame_in_screen=" << window_frame_in_screen.ToString()
++            << " computed_view_bounds=" << computed_view_bounds.ToString()
++            << " attached_to_window=" << attached_to_window
++            << " is_headless=" << is_headless;
++}
++
+ }  // namespace
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+@@ -621,7 +659,17 @@ void RenderWidgetHostViewMac::SetSize(const gfx::Size& size) {
+ }
+ 
+ void RenderWidgetHostViewMac::SetBounds(const gfx::Rect& rect) {
++  Issue779TraceWebviewBounds("SetBounds.before", this, rect,
++                             view_bounds_in_window_dip_,
++                             window_frame_in_screen_dip_, GetViewBounds(),
++                             [GetInProcessNSView() window] != nil,
++                             IsHeadless());
+   ns_view_->SetBounds(rect);
++  Issue779TraceWebviewBounds("SetBounds.after", this, rect,
++                             view_bounds_in_window_dip_,
++                             window_frame_in_screen_dip_, GetViewBounds(),
++                             [GetInProcessNSView() window] != nil,
++                             IsHeadless());
+ 
+   // Check if running with no associated NSWindow and force bounds change
+   // propagation. This occurs while running headless and causes problems with
+@@ -1858,6 +1906,11 @@ void RenderWidgetHostViewMac::OnWindowIsKeyChanged(bool is_key) {
+ void RenderWidgetHostViewMac::OnBoundsInWindowChanged(
+     const gfx::Rect& view_bounds_in_window_dip,
+     bool attached_to_window) {
++  Issue779TraceWebviewBounds("OnBoundsInWindowChanged.before", this,
++                             view_bounds_in_window_dip,
++                             view_bounds_in_window_dip_,
++                             window_frame_in_screen_dip_, GetViewBounds(),
++                             attached_to_window, IsHeadless());
+   bool view_size_changed =
+       view_bounds_in_window_dip_.size() != view_bounds_in_window_dip.size();
+ 
+@@ -1872,14 +1925,32 @@ void RenderWidgetHostViewMac::OnBoundsInWindowChanged(
+ 
+   if (view_size_changed)
+     UpdateScreenInfo();
++
++  Issue779TraceWebviewBounds("OnBoundsInWindowChanged.after", this,
++                             view_bounds_in_window_dip,
++                             view_bounds_in_window_dip_,
++                             window_frame_in_screen_dip_, GetViewBounds(),
++                             attached_to_window, IsHeadless());
+ }
+ 
+ void RenderWidgetHostViewMac::OnWindowFrameInScreenChanged(
+     const gfx::Rect& window_frame_in_screen_dip) {
++  Issue779TraceWebviewBounds("OnWindowFrameInScreenChanged.before", this,
++                             window_frame_in_screen_dip,
++                             view_bounds_in_window_dip_,
++                             window_frame_in_screen_dip_, GetViewBounds(),
++                             [GetInProcessNSView() window] != nil,
++                             IsHeadless());
+   if (window_frame_in_screen_dip_ == window_frame_in_screen_dip)
+     return;
+ 
+   window_frame_in_screen_dip_ = window_frame_in_screen_dip;
++  Issue779TraceWebviewBounds("OnWindowFrameInScreenChanged.after", this,
++                             window_frame_in_screen_dip,
++                             view_bounds_in_window_dip_,
++                             window_frame_in_screen_dip_, GetViewBounds(),
++                             [GetInProcessNSView() window] != nil,
++                             IsHeadless());
+   if (host()->delegate())
+     host()->delegate()->SendScreenRects();
+   else
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 7d49f22216..21aaec5d98 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -5,6 +5,7 @@
+ #import "content/browser/web_contents/web_contents_view_mac.h"
+ 
+ #import <Carbon/Carbon.h>
++#include <cstdlib>
+ #include <fcntl.h>
+ #include <sys/stat.h>
+ 
+@@ -14,6 +15,7 @@
+ 
+ #include "base/compiler_specific.h"
+ #include "base/containers/span.h"
++#include "base/logging.h"
+ #import "base/mac/mac_util.h"
+ #import "base/mac/scoped_sending_event.h"
+ #import "base/message_loop/message_pump_apple.h"
+@@ -63,6 +65,20 @@ STATIC_ASSERT_ENUM(NSDragOperationEvery, blink::kDragOperationEvery);
+ namespace content {
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
+ // This helper's sole task is to write out data for a promised file; the caller
+ // is responsible for opening the file. It takes the drop data and an open file
+ // stream.
+@@ -384,6 +400,18 @@ void WebContentsViewMac::ShowPopupMenu(
+     std::vector<blink::mojom::MenuItemPtr> menu_items,
+     bool right_aligned,
+     bool allow_multiple_selection) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebContentsViewMac::ShowPopupMenu"
++              << " webcontents=" << static_cast<void*>(web_contents_)
++              << " render_frame_host="
++              << static_cast<void*>(render_frame_host)
++              << " input_bounds=" << bounds.ToString()
++              << " item_count=" << menu_items.size()
++              << " selected_item=" << selected_item
++              << " right_aligned=" << right_aligned
++              << " allow_multiple_selection=" << allow_multiple_selection;
++  }
+   popup_menu_helper_ = std::make_unique<PopupMenuHelper>(
+       this, render_frame_host, std::move(popup_client));
+   popup_menu_helper_->ShowPopupMenu(bounds, item_font_size, selected_item,
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index a698f7a811..a2438eb4ce 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -25,6 +25,8 @@ shared_library("libtermsurf_chromium") {
+       "ts_ca_layer_bridge_mac.mm",
+       "ts_compositor_bridge_mac.h",
+       "ts_compositor_bridge_mac.mm",
++      "ts_shell_window_mac.h",
++      "ts_shell_window_mac.mm",
+     ]
+   }
+ 
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 04fece6d0a..a5167e4081 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -222,9 +222,17 @@ void ts_set_color_scheme(ts_web_contents_t wc, bool dark) {
+   g_main_parts->SetColorScheme(wc, dark);
+ }
+ 
+-void ts_set_view_size(ts_web_contents_t wc, int width, int height) {
++void ts_set_view_size(ts_web_contents_t wc,
++                      int width,
++                      int height,
++                      double screen_x,
++                      double screen_y,
++                      double screen_width,
++                      double screen_height,
++                      double screen_scale) {
+   if (!g_main_parts) return;
+-  g_main_parts->ResizeTab(wc, width, height);
++  g_main_parts->ResizeTab(wc, width, height, screen_x, screen_y, screen_width,
++                          screen_height, screen_scale);
+ }
+ 
+ void ts_set_on_tab_ready(
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index cfb790f7d4..884bee6465 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -130,7 +130,14 @@ TS_EXPORT void ts_forward_key_event(ts_web_contents_t wc,
+ 
+ TS_EXPORT void ts_set_focus(ts_web_contents_t wc, bool focused);
+ TS_EXPORT void ts_set_color_scheme(ts_web_contents_t wc, bool dark);
+-TS_EXPORT void ts_set_view_size(ts_web_contents_t wc, int width, int height);
++TS_EXPORT void ts_set_view_size(ts_web_contents_t wc,
++                                int width,
++                                int height,
++                                double screen_x,
++                                double screen_y,
++                                double screen_width,
++                                double screen_height,
++                                double screen_scale);
+ 
+ /* --- Callbacks --- */
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 27c2f57080..40bf5d180c 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -31,6 +31,7 @@
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h"
+ #include "content/libtermsurf_chromium/ts_compositor_bridge_mac.h"
++#include "content/libtermsurf_chromium/ts_shell_window_mac.h"
+ #include "content/public/browser/context_factory.h"
+ #include "components/viz/common/surfaces/local_surface_id.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+@@ -454,7 +455,14 @@ void TsBrowserMainParts::NavigateTab(void* wc_handle, const char* url) {
+   tab->shell->web_contents()->GetController().LoadURLWithParams(params);
+ }
+ 
+-void TsBrowserMainParts::ResizeTab(void* wc_handle, int width, int height) {
++void TsBrowserMainParts::ResizeTab(void* wc_handle,
++                                   int width,
++                                   int height,
++                                   double screen_x,
++                                   double screen_y,
++                                   double screen_width,
++                                   double screen_height,
++                                   double screen_scale) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   if (width <= 0 || height <= 0) return;
+ 
+@@ -468,6 +476,11 @@ void TsBrowserMainParts::ResizeTab(void* wc_handle, int width, int height) {
+     gfx::Size logical(
+         static_cast<int>(std::ceil(width / scale)),
+         static_cast<int>(std::ceil(height / scale)));
++#if BUILDFLAG(IS_MAC)
++    MoveShellWindowToTermSurfScreenRect(tab->shell, screen_x, screen_y,
++                                        screen_width, screen_height,
++                                        screen_scale, logical);
++#endif
+     tab->shell->ResizeWebContentForTests(logical);
+   }
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index f83d575a14..9496b86dcb 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -56,7 +56,14 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+                           bool dark);
+   void DestroyTab(void* wc_handle);
+   void NavigateTab(void* wc_handle, const char* url);
+-  void ResizeTab(void* wc_handle, int width, int height);
++  void ResizeTab(void* wc_handle,
++                 int width,
++                 int height,
++                 double screen_x,
++                 double screen_y,
++                 double screen_width,
++                 double screen_height,
++                 double screen_scale);
+   void ForwardMouseEvent(void* wc_handle, int type, int button,
+                          int x, int y, int click_count, int modifiers);
+   void ForwardMouseMove(void* wc_handle, int x, int y, int modifiers);
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+new file mode 100644
+index 0000000000..4d6d4df0ad
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -0,0 +1,24 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_SHELL_WINDOW_MAC_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_SHELL_WINDOW_MAC_H_
++
++#include "ui/gfx/geometry/size.h"
++
++namespace content {
++
++class Shell;
++
++void MoveShellWindowToTermSurfScreenRect(Shell* shell,
++                                         double screen_x,
++                                         double screen_y,
++                                         double screen_width,
++                                         double screen_height,
++                                         double screen_scale,
++                                         const gfx::Size& content_size);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_SHELL_WINDOW_MAC_H_
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+new file mode 100644
+index 0000000000..93ac878f0b
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -0,0 +1,158 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_shell_window_mac.h"
++
++#import <Cocoa/Cocoa.h>
++
++#include <algorithm>
++#include <cmath>
++#include <cstdlib>
++#include <string>
++
++#include "base/logging.h"
++#include "base/strings/sys_string_conversions.h"
++#include "content/public/browser/web_contents.h"
++#include "content/shell/browser/shell.h"
++#include "ui/gfx/native_ui_types.h"
++
++namespace content {
++namespace {
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium-shell-window";
++  }
++}
++
++std::string NSRectToString(NSRect rect) {
++  return base::SysNSStringToUTF8(NSStringFromRect(rect));
++}
++
++bool NearlyEqual(CGFloat lhs, CGFloat rhs) {
++  return std::abs(lhs - rhs) <= 0.5;
++}
++
++bool RectNearlyEqual(NSRect lhs, NSRect rhs) {
++  return NearlyEqual(lhs.origin.x, rhs.origin.x) &&
++         NearlyEqual(lhs.origin.y, rhs.origin.y) &&
++         NearlyEqual(lhs.size.width, rhs.size.width) &&
++         NearlyEqual(lhs.size.height, rhs.size.height);
++}
++
++NSString* BoolString(BOOL value) {
++  return value ? @"true" : @"false";
++}
++
++NSRect PrimaryScreenFrame() {
++  NSScreen* screen = NSScreen.screens.firstObject ?: NSScreen.mainScreen;
++  if (!screen)
++    return NSZeroRect;
++  return screen.frame;
++}
++
++}  // namespace
++
++void MoveShellWindowToTermSurfScreenRect(Shell* shell,
++                                         double screen_x,
++                                         double screen_y,
++                                         double screen_width,
++                                         double screen_height,
++                                         double screen_scale,
++                                         const gfx::Size& content_size) {
++  if (!shell || screen_width <= 0 || screen_height <= 0)
++    return;
++
++  NSWindow* window = shell->window().GetNativeNSWindow();
++  if (!window)
++    return;
++
++  NSRect primary_frame = PrimaryScreenFrame();
++  if (NSIsEmptyRect(primary_frame))
++    return;
++
++  NSView* content_view = window.contentView;
++  NSView* web_view = shell->web_contents()
++                         ? shell->web_contents()->GetNativeView().GetNativeNSView()
++                         : nil;
++  CGFloat web_chrome_height = 0;
++  if (content_view && web_view) {
++    web_chrome_height =
++        std::max<CGFloat>(0, NSHeight(content_view.frame) - NSHeight(web_view.frame));
++  }
++  NSRect target_webview_frame = NSMakeRect(
++      screen_x,
++      NSMaxY(primary_frame) - screen_y - screen_height,
++      screen_width,
++      screen_height);
++  NSRect target_content_frame =
++      NSMakeRect(screen_x, NSMinY(target_webview_frame), screen_width,
++                 screen_height + web_chrome_height);
++  NSRect target_frame = [window frameRectForContentRect:target_content_frame];
++  NSRect current_frame = window.frame;
++  BOOL already_there = RectNearlyEqual(current_frame, target_frame);
++
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] content_shell_window"
++              << " event=TermSurfMoveShellWindow.before"
++              << " shell=" << static_cast<void*>(shell)
++              << " webcontents=" << static_cast<void*>(shell->web_contents())
++              << " window=" << (__bridge void*)window
++              << " screen_top_left=(" << screen_x << "," << screen_y << " "
++              << screen_width << "x" << screen_height << ")"
++              << " screen_scale=" << screen_scale
++              << " primary_screen_frame=" << NSRectToString(primary_frame)
++              << " current_frame=" << NSRectToString(current_frame)
++              << " target_webview_frame=" << NSRectToString(target_webview_frame)
++              << " target_content_frame=" << NSRectToString(target_content_frame)
++              << " target_window_frame=" << NSRectToString(target_frame)
++              << " web_chrome_height=" << web_chrome_height
++              << " already_there=" << BoolString(already_there)
++              << " alphaValue=" << window.alphaValue
++              << " isVisible=" << BoolString(window.isVisible)
++              << " ignoresMouseEvents=" << BoolString(window.ignoresMouseEvents)
++              << " level=" << window.level
++              << " styleMask=" << window.styleMask
++              << " collectionBehavior=" << window.collectionBehavior
++              << " isKey=" << BoolString(window.isKeyWindow)
++              << " isMain=" << BoolString(window.isMainWindow)
++              << " content_size=" << content_size.ToString();
++  }
++
++  if (!already_there)
++    [window setFrame:target_frame display:NO];
++
++  if (Issue779TraceEnabled()) {
++    LOG(INFO) << "[issue-779-trace] content_shell_window"
++              << " event=TermSurfMoveShellWindow.after"
++              << " shell=" << static_cast<void*>(shell)
++              << " webcontents=" << static_cast<void*>(shell->web_contents())
++              << " window=" << (__bridge void*)window
++              << " window_frame=" << NSRectToString(window.frame)
++              << " content_frame="
++              << (content_view ? NSRectToString(content_view.frame)
++                               : std::string("null"))
++              << " web_view=" << (__bridge void*)web_view
++              << " web_view_frame="
++              << (web_view ? NSRectToString(web_view.frame)
++                           : std::string("null"))
++              << " alphaValue=" << window.alphaValue
++              << " isVisible=" << BoolString(window.isVisible)
++              << " ignoresMouseEvents=" << BoolString(window.ignoresMouseEvents)
++              << " level=" << window.level
++              << " isKey=" << BoolString(window.isKeyWindow)
++              << " isMain=" << BoolString(window.isMainWindow);
++  }
++}
++
++}  // namespace content
+diff --git a/content/shell/browser/shell_platform_delegate_mac.mm b/content/shell/browser/shell_platform_delegate_mac.mm
+index 7997fb8925..fd4b3be9dc 100644
+--- a/content/shell/browser/shell_platform_delegate_mac.mm
++++ b/content/shell/browser/shell_platform_delegate_mac.mm
+@@ -7,10 +7,13 @@
+ #import <Cocoa/Cocoa.h>
+ 
+ #include <algorithm>
++#include <cstdlib>
++#include <string>
+ 
+ #import "base/apple/foundation_util.h"
+ #include "base/command_line.h"
+ #include "base/check_op.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/notreached.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -113,6 +116,73 @@ void MakeShellButton(NSRect* rect,
+   rect->origin.x += kButtonWidth;
+ }
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled = std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=content-shell-mac";
++  }
++}
++
++std::string Issue779NSRectToString(NSRect rect) {
++  return base::SysNSStringToUTF8(NSStringFromRect(rect));
++}
++
++std::string Issue779WindowFrame(NSWindow* window) {
++  if (!window)
++    return "null";
++  return Issue779NSRectToString([window frame]);
++}
++
++std::string Issue779ScreenFrame(NSWindow* window) {
++  if (!window || ![window screen])
++    return "null";
++  return Issue779NSRectToString([[window screen] frame]);
++}
++
++void Issue779LogShellWindowFrame(const char* event,
++                                 content::Shell* shell,
++                                 NSWindow* window) {
++  if (!Issue779TraceEnabled())
++    return;
++
++  Issue779TraceAnnounce();
++  NSView* content_view = [window contentView];
++  content::WebContents* web_contents = shell ? shell->web_contents() : nullptr;
++  NSView* web_view =
++      web_contents ? web_contents->GetNativeView().GetNativeNSView() : nil;
++  LOG(INFO) << "[issue-779-trace] content_shell_window"
++            << " event=" << event
++            << " shell=" << static_cast<void*>(shell)
++            << " webcontents=" << static_cast<void*>(web_contents)
++            << " window=" << (__bridge void*)window
++            << " window_frame=" << Issue779WindowFrame(window)
++            << " window_screen=" << Issue779ScreenFrame(window)
++            << " content_bounds="
++            << (content_view ? Issue779NSRectToString([content_view bounds])
++                             : std::string("null"))
++            << " content_frame="
++            << (content_view ? Issue779NSRectToString([content_view frame])
++                             : std::string("null"))
++            << " web_view=" << (__bridge void*)web_view
++            << " web_view_frame="
++            << (web_view ? Issue779NSRectToString([web_view frame])
++                         : std::string("null"))
++            << " web_view_window=" << (__bridge void*)[web_view window]
++            << " is_visible=" << [window isVisible]
++            << " alpha=" << [window alphaValue]
++            << " level=" << [window level]
++            << " window_number=" << [window windowNumber]
++            << " is_key=" << [window isKeyWindow]
++            << " is_main=" << [window isMainWindow]
++            << " hidden_toolbar=" << content::Shell::ShouldHideToolbar();
++}
++
+ }  // namespace
+ 
+ namespace content {
+@@ -212,11 +282,14 @@ void ShellPlatformDelegate::CreatePlatformWindow(
+     // stays active and CAContext survives navigation.
+     [window setAlphaValue:0.0];
+     [window orderWindow:NSWindowBelow relativeTo:0];
++    Issue779LogShellWindowFrame("CreatePlatformWindow.hidden", shell, window);
+   } else {
+     [window makeKeyAndOrderFront:nil];
++    Issue779LogShellWindowFrame("CreatePlatformWindow.visible", shell, window);
+   }
+ 
+   shell_data.delegate = delegate;
++  Issue779LogShellWindowFrame("CreatePlatformWindow.done", shell, window);
+ }
+ 
+ gfx::NativeWindow ShellPlatformDelegate::GetNativeWindow(Shell* shell) {
+@@ -247,6 +320,7 @@ void ShellPlatformDelegate::SetContents(Shell* shell) {
+   }
+   web_view.frame = frame;
+   web_view.needsDisplay = YES;
++  Issue779LogShellWindowFrame("SetContents", shell, window);
+ }
+ 
+ void ShellPlatformDelegate::ResizeWebContent(Shell* shell,
+@@ -258,6 +332,8 @@ void ShellPlatformDelegate::ResizeWebContent(Shell* shell,
+   NSRect frame = NSMakeRect(0, 0, content_size.width(),
+                             content_size.height() + toolbar_height);
+   shell_data.delegate.window.contentView.frame = frame;
++  Issue779LogShellWindowFrame("ResizeWebContent", shell,
++                              shell_data.delegate.window);
+ }
+ 
+ void ShellPlatformDelegate::EnableUIControl(Shell* shell,
+-- 
+2.54.0
+

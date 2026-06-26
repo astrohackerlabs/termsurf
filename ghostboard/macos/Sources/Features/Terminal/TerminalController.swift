@@ -291,6 +291,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
             // Only cascade if we aren't fullscreen.
             if let window = c.window {
+                // The new_window action should create an independent window even
+                // when AppKit's automatic tabbing policy tries to group it.
+                window.tabGroup?.removeWindow(window)
+
                 if !window.styleMask.contains(.fullScreen) {
                     let hasFixedPos = c.derivedConfig.windowPositionX != nil && c.derivedConfig.windowPositionY != nil
                     Self.applyCascade(to: window, hasFixedPos: hasFixedPos)

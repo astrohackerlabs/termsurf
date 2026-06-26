@@ -1,6 +1,0 @@
-// Makes libroastty available to the Xcode build of the renamed macOS app (Issue 802).
-// "Kit" suffix mirrors GhosttyKit (targets need unique names).
-module RoasttyKit {
-    umbrella header "roastty.h"
-    export *
-}

@@ -54,11 +54,21 @@ Issue 756 first verified this VM with:
 
 ## Build Rules
 
-Use WebKit's own build script:
+Use the repository build helper for normal TermSurf workflows:
+
+```bash
+scripts/build.sh webkit
+```
+
+That helper delegates to WebKit's own build script:
 
 ```bash
 webkit/src/Tools/Scripts/build-webkit --debug
 ```
+
+Use `scripts/build.sh webkit --release` for a Release WebKit build. Use
+`scripts/build.sh webkit --clean` only when you explicitly intend to clean the
+upstream WebKit build products before rebuilding.
 
 Build outputs stay under `webkit/src/WebKitBuild/`. Do not install frameworks,
 apps, or build products outside the repo unless the user explicitly approves.
@@ -88,6 +98,12 @@ If applying TermSurf WebKit patches, use the issue patch directory recorded in
 ## Normal Build
 
 From the repo root:
+
+```bash
+scripts/build.sh webkit
+```
+
+Equivalent direct WebKit command:
 
 ```bash
 webkit/src/Tools/Scripts/build-webkit --debug

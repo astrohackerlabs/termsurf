@@ -84,10 +84,10 @@ fn trace_pdf_input(line: impl AsRef<str>) {
     }
 }
 
-fn trace_render_proof(line: impl AsRef<str>) {
+fn trace_render_probe(line: impl AsRef<str>) {
     let path = RENDER_PROOF_TRACE_PATH.get_or_init(|| {
-        let path =
-            std::env::var_os("TERMSURF_SURFARI_RENDER_PROOF_TRACE_FILE").map(PathBuf::from)?;
+        let path = std::env::var_os("TERMSURF_SURFARI_RENDER_PROOF_TRACE_FILE")?;
+        let path = PathBuf::from(path);
         if let Some(parent) = path.parent() {
             let _ = create_dir_all(parent);
         }
@@ -100,6 +100,15 @@ fn trace_render_proof(line: impl AsRef<str>) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "surfari {}", line.as_ref());
     }
+}
+
+unsafe fn c_string(ptr: *const std::os::raw::c_char) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn remember_loading_state(msg: &TermSurfMessage) {
@@ -163,6 +172,55 @@ fn find_by_tab_id(tab_id: i64) -> Option<&'static mut TabEntry> {
     tabs().iter_mut().find(|t| t.tab_id == tab_id)
 }
 
+fn pdf_title_from_url(url: &str) -> Option<String> {
+    let base = url.split(['?', '#']).next().unwrap_or(url);
+    let raw_name = base.rsplit('/').next()?.trim();
+    if raw_name.is_empty() {
+        return None;
+    }
+
+    let decoded = percent_decode_path_segment(raw_name);
+    if decoded.len() < 4 || !decoded[decoded.len() - 4..].eq_ignore_ascii_case(".pdf") {
+        return None;
+    }
+    let title = decoded[..decoded.len() - 4].to_string();
+    let title = title.trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+fn percent_decode_path_segment(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = bytes[i + 1];
+            let lo = bytes[i + 2];
+            if let (Some(hi), Some(lo)) = (hex_value(hi), hex_value(lo)) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 // --- String-to-int mappings ---
 
 fn mouse_type(s: &str) -> i32 {
@@ -207,7 +265,7 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 tab_id: 0,
                 pane_id: m.pane_id.clone(),
                 inspected_tab_id: 0,
-                last_url: String::new(),
+                last_url: m.url.clone(),
             });
             let entry = tabs().last_mut().unwrap();
             entry.handle = unsafe {
@@ -331,6 +389,7 @@ pub fn handle_message(msg: &TermSurfMessage) {
                     "navigate tab={} pane={} url={} ffi=ts_load_url",
                     m.tab_id, t.pane_id, m.url
                 ));
+                t.last_url = m.url.clone();
                 unsafe { ffi::ts_load_url(t.handle, url.as_ptr()) };
             }
         }
@@ -770,16 +829,10 @@ pub unsafe extern "C" fn on_render_probe(
     _user_data: *mut c_void,
 ) {
     let Some(t) = find_by_handle(wc) else { return };
-    let method = unsafe { std::ffi::CStr::from_ptr(method) }
-        .to_string_lossy()
-        .into_owned();
-    let status = unsafe { std::ffi::CStr::from_ptr(status) }
-        .to_string_lossy()
-        .into_owned();
-    let error = unsafe { std::ffi::CStr::from_ptr(error) }
-        .to_string_lossy()
-        .into_owned();
-    trace_render_proof(format!(
+    let method = unsafe { c_string(method) };
+    let status = unsafe { c_string(status) };
+    let error = unsafe { c_string(error) };
+    trace_render_probe(format!(
         "render-proof tab={} pane={} url={} method={} status={} width={} height={} magenta={} cyan={} yellow={} webkit_green={} error={}",
         t.tab_id,
         t.pane_id,
@@ -802,12 +855,23 @@ pub unsafe extern "C" fn on_title_changed(
     _user_data: *mut c_void,
 ) {
     let Some(t) = find_by_handle(wc) else { return };
-    let title_str = unsafe { std::ffi::CStr::from_ptr(title) }
-        .to_string_lossy()
-        .into_owned();
+    let mut title_str = if title.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(title) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let mut source = "webkit";
+    if title_str.trim().is_empty() {
+        if let Some(fallback) = pdf_title_from_url(&t.last_url) {
+            title_str = fallback;
+            source = "pdf-url-fallback";
+        }
+    }
     trace_pdf_input(format!(
-        "title-changed tab={} pane={} title={}",
-        t.tab_id, t.pane_id, title_str
+        "title-changed tab={} pane={} title={} source={}",
+        t.tab_id, t.pane_id, title_str, source
     ));
     let msg = TermSurfMessage {
         msg: Some(Msg::TitleChanged(proto::termsurf::TitleChanged {

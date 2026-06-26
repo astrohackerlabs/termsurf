@@ -1,0 +1,427 @@
+From 0d37f9375fddacd6b0672e9998bff6f5e496f268 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 12:28:33 -0500
+Subject: [PATCH 55/87] Complete PDF viewer strings
+
+---
+ ...ts_component_extension_resource_manager.cc | 192 +++++++++++++++++-
+ .../extensions/ts_resources_private_api.cc    | 144 +++++++++++++
+ 2 files changed, 334 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+index 57a8dfea63..84195d18bf 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+@@ -4,9 +4,17 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h"
+ 
++#include <string>
++
+ #include "base/logging.h"
++#include "chrome/grit/generated_resources.h"
+ #include "chrome/grit/pdf_resources_map.h"
++#include "components/strings/grit/components_strings.h"
++#include "components/zoom/page_zoom_constants.h"
+ #include "extensions/common/constants.h"
++#include "pdf/buildflags.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/webui/web_ui_util.h"
+ 
+ namespace content {
+ namespace {
+@@ -15,12 +23,191 @@ base::FilePath NormalizeAsciiPath(const char* path) {
+   return base::FilePath().AppendASCII(path).NormalizePathSeparators();
+ }
+ 
++void AddPdfString(ui::TemplateReplacements* replacements,
++                  const char* name,
++                  int resource_id) {
++  (*replacements)[name] = l10n_util::GetStringUTF8(resource_id);
++}
++
++void PopulatePdfTemplateReplacements(ui::TemplateReplacements* replacements) {
++  static constexpr webui::LocalizedString kPdfResources[] = {
++      {"annotationsShowToggle", IDS_PDF_ANNOTATIONS_SHOW_TOGGLE},
++      {"bookmarkExpandIconAriaLabel", IDS_PDF_BOOKMARK_EXPAND_ICON_ARIA_LABEL},
++      {"bookmarks", IDS_PDF_BOOKMARKS},
++      {"downloadEdited", IDS_PDF_DOWNLOAD_EDITED},
++      {"downloadOriginal", IDS_PDF_DOWNLOAD_ORIGINAL},
++      {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
++      {"glicSummarize", IDS_PDF_GLIC_SUMMARIZE},
++      {"glicSummarizeTooltip", IDS_PDF_GLIC_SUMMARIZE_TOOLTIP},
++      {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
++      {"moreActions", IDS_DOWNLOAD_MORE_ACTIONS},
++      {"oversizeAttachmentWarning", IDS_PDF_OVERSIZE_ATTACHMENT_WARNING},
++      {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
++      {"pageLoading", IDS_PDF_PAGE_LOADING},
++      {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
++      {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
++      {"passwordInvalid", IDS_PDF_PASSWORD_INVALID},
++      {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
++      {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
++      {"present", IDS_PDF_PRESENT},
++      {"propertiesApplication", IDS_PDF_PROPERTIES_APPLICATION},
++      {"propertiesAuthor", IDS_PDF_PROPERTIES_AUTHOR},
++      {"propertiesCreated", IDS_PDF_PROPERTIES_CREATED},
++      {"propertiesDialogClose", IDS_CLOSE},
++      {"propertiesDialogTitle", IDS_PDF_PROPERTIES_DIALOG_TITLE},
++      {"propertiesFastWebView", IDS_PDF_PROPERTIES_FAST_WEB_VIEW},
++      {"propertiesFastWebViewNo", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_NO},
++      {"propertiesFastWebViewYes", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_YES},
++      {"propertiesFileName", IDS_PDF_PROPERTIES_FILE_NAME},
++      {"propertiesFileSize", IDS_PDF_PROPERTIES_FILE_SIZE},
++      {"propertiesKeywords", IDS_PDF_PROPERTIES_KEYWORDS},
++      {"propertiesModified", IDS_PDF_PROPERTIES_MODIFIED},
++      {"propertiesPageCount", IDS_PDF_PROPERTIES_PAGE_COUNT},
++      {"propertiesPageSize", IDS_PDF_PROPERTIES_PAGE_SIZE},
++      {"propertiesPdfProducer", IDS_PDF_PROPERTIES_PDF_PRODUCER},
++      {"propertiesPdfVersion", IDS_PDF_PROPERTIES_PDF_VERSION},
++      {"propertiesSubject", IDS_PDF_PROPERTIES_SUBJECT},
++      {"propertiesTitle", IDS_PDF_PROPERTIES_TITLE},
++      {"rotationStateLabel0", IDS_PDF_ROTATION_STATE_LABEL_0},
++      {"rotationStateLabel90", IDS_PDF_ROTATION_STATE_LABEL_90},
++      {"rotationStateLabel180", IDS_PDF_ROTATION_STATE_LABEL_180},
++      {"rotationStateLabel270", IDS_PDF_ROTATION_STATE_LABEL_270},
++      {"searchifyInProgress", IDS_PDF_SEARCHIFY_IN_PROGRESS},
++      {"sidebarLabel", IDS_PDF_SIDEBAR_LABEL},
++      {"thumbnailPageAriaLabel", IDS_PDF_THUMBNAIL_PAGE_ARIA_LABEL},
++      {"tooltipAttachments", IDS_PDF_TOOLTIP_ATTACHMENTS},
++      {"tooltipDocumentOutline", IDS_PDF_TOOLTIP_DOCUMENT_OUTLINE},
++      {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
++      {"tooltipDownloadAttachment", IDS_PDF_TOOLTIP_DOWNLOAD_ATTACHMENT},
++      {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
++      {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
++      {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
++      {"tooltipRotateCCW", IDS_PDF_TOOLTIP_ROTATE_CCW},
++      {"tooltipThumbnails", IDS_PDF_TOOLTIP_THUMBNAILS},
++      {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
++      {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
++      {"twoUpViewEnable", IDS_PDF_TWO_UP_VIEW_ENABLE},
++      {"zoomTextInputAriaLabel", IDS_PDF_ZOOM_TEXT_INPUT_ARIA_LABEL},
++
++#if BUILDFLAG(ENABLE_PDF_INK2)
++      {"annotationColorBlack", IDS_PDF_ANNOTATION_COLOR_BLACK},
++      {"annotationColorBlue", IDS_PDF_ANNOTATION_COLOR_BLUE},
++      {"annotationColorGreen", IDS_PDF_ANNOTATION_COLOR_GREEN},
++      {"annotationColorLightBlue", IDS_PDF_ANNOTATION_COLOR_LIGHT_BLUE},
++      {"annotationColorLightGreen", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREEN},
++      {"annotationColorLightGrey", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREY},
++      {"annotationColorLightOrange", IDS_PDF_ANNOTATION_COLOR_LIGHT_ORANGE},
++      {"annotationColorOrange", IDS_PDF_ANNOTATION_COLOR_ORANGE},
++      {"annotationColorRed", IDS_PDF_ANNOTATION_COLOR_RED},
++      {"annotationColorWhite", IDS_PDF_ANNOTATION_COLOR_WHITE},
++      {"annotationColorYellow", IDS_PDF_ANNOTATION_COLOR_YELLOW},
++      {"annotationEraser", IDS_PDF_ANNOTATION_ERASER},
++      {"annotationHighlighter", IDS_PDF_ANNOTATION_HIGHLIGHTER},
++      {"annotationPen", IDS_PDF_ANNOTATION_PEN},
++      {"annotationRedo", IDS_PDF_ANNOTATION_REDO},
++      {"annotationUndo", IDS_PDF_ANNOTATION_UNDO},
++      {"cancelButton", IDS_CANCEL},
++      {"ink2BrushColorBlue1", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_1},
++      {"ink2BrushColorBlue2", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_2},
++      {"ink2BrushColorBlue3", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_3},
++      {"ink2BrushColorDarkGrey1", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_1},
++      {"ink2BrushColorDarkGrey2", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_2},
++      {"ink2BrushColorGreen1", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_1},
++      {"ink2BrushColorGreen2", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_2},
++      {"ink2BrushColorGreen3", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_3},
++      {"ink2BrushColorLightRed", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_RED},
++      {"ink2BrushColorLightYellow", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_YELLOW},
++      {"ink2BrushColorRed1", IDS_PDF_INK2_ANNOTATION_COLOR_RED_1},
++      {"ink2BrushColorRed2", IDS_PDF_INK2_ANNOTATION_COLOR_RED_2},
++      {"ink2BrushColorRed3", IDS_PDF_INK2_ANNOTATION_COLOR_RED_3},
++      {"ink2BrushColorTan1", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_1},
++      {"ink2BrushColorTan2", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_2},
++      {"ink2BrushColorTan3", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_3},
++      {"ink2BrushColorYellow1", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_1},
++      {"ink2BrushColorYellow2", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_2},
++      {"ink2BrushColorYellow3", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_3},
++      {"ink2BrushSizeExtraThick", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THICK},
++      {"ink2BrushSizeExtraThin", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THIN},
++      {"ink2BrushSizeMedium", IDS_PDF_INK2_ANNOTATION_SIZE_MEDIUM},
++      {"ink2BrushSizeThick", IDS_PDF_INK2_ANNOTATION_SIZE_THICK},
++      {"ink2BrushSizeThin", IDS_PDF_INK2_ANNOTATION_SIZE_THIN},
++      {"ink2Color", IDS_PDF_INK2_ANNOTATION_COLOR},
++      {"ink2Draw", IDS_PDF_INK2_DRAW},
++      {"ink2Size", IDS_PDF_INK2_ANNOTATION_SIZE},
++      {"ink2TextAlignCenter", IDS_PDF_INK2_TEXT_ALIGN_CENTER},
++      {"ink2TextAlignLeft", IDS_PDF_INK2_TEXT_ALIGN_LEFT},
++      {"ink2TextAlignRight", IDS_PDF_INK2_TEXT_ALIGN_RIGHT},
++      {"ink2TextAlignment", IDS_PDF_INK2_TEXT_ALIGNMENT},
++      {"ink2TextAnnotation", IDS_PDF_INK2_TEXT_ANNOTATION},
++      {"ink2TextColor", IDS_PDF_INK2_TEXT_COLOR},
++      {"ink2TextColorCyan1", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_1},
++      {"ink2TextColorCyan2", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_2},
++      {"ink2TextColorCyan3", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_3},
++      {"ink2TextFont", IDS_PDF_INK2_TEXT_FONT},
++      {"ink2TextFontMonospace", IDS_PDF_INK2_TEXT_FONT_MONOSPACE},
++      {"ink2TextFontSansSerif", IDS_PDF_INK2_TEXT_FONT_SANS_SERIF},
++      {"ink2TextFontSerif", IDS_PDF_INK2_TEXT_FONT_SERIF},
++      {"ink2TextFontSize", IDS_PDF_INK2_TEXT_FONT_SIZE},
++      {"ink2TextStyleBold", IDS_PDF_INK2_TEXT_STYLE_BOLD},
++      {"ink2TextStyleItalic", IDS_PDF_INK2_TEXT_STYLE_ITALIC},
++      {"ink2TextStyles", IDS_PDF_INK2_TEXT_STYLES},
++      {"ink2Tool", IDS_PDF_INK2_ANNOTATION_TOOL},
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
++#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
++      {"saveToDriveDialogCancelUploadButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_CANCEL_UPLOAD_BUTTON_LABEL},
++      {"saveToDriveDialogConnectionErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_CONNECTION_ERROR_MESSAGE},
++      {"saveToDriveDialogErrorTitle", IDS_SAVE_TO_DRIVE_DIALOG_ERROR_TITLE},
++      {"saveToDriveDialogManageStorageButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_MANAGE_STORAGE_BUTTON_LABEL},
++      {"saveToDriveDialogOpenInDriveButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_OPEN_IN_DRIVE_BUTTON_LABEL},
++      {"saveToDriveDialogRetryButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_RETRY_BUTTON_LABEL},
++      {"saveToDriveDialogSessionTimeoutErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_SESSION_TIMEOUT_ERROR_MESSAGE},
++      {"saveToDriveDialogStorageFullErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_STORAGE_FULL_ERROR_MESSAGE},
++      {"saveToDriveDialogSuccessMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_MESSAGE},
++      {"saveToDriveDialogSuccessTitle", IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_TITLE},
++      {"saveToDriveDialogUnknownErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_UNKNOWN_ERROR_MESSAGE},
++      {"saveToDriveDialogUploadingTitle",
++       IDS_SAVE_TO_DRIVE_DIALOG_UPLOADING_TITLE},
++      {"tooltipSaveToDrive", IDS_PDF_TOOLTIP_SAVE_TO_DRIVE},
++#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
++  };
++
++  for (const auto& resource : kPdfResources) {
++    AddPdfString(replacements, resource.name, resource.id);
++  }
++
++#if BUILDFLAG(ENABLE_PDF_INK2)
++  std::string edit_string = l10n_util::GetStringUTF8(IDS_EDIT);
++  std::erase(edit_string, '&');
++  (*replacements)["editButton"] = edit_string;
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
++  (*replacements)["presetZoomFactors"] = zoom::GetPresetZoomFactorsAsJSON();
++  // TermSurf's current PDF bridge uses the legacy mime-handler viewer path.
++  // Enabling the OOPIF attribute switches the bundled viewer into
++  // pdfViewerPrivate.getStreamInfo(), which TermSurf has not implemented yet.
++  (*replacements)["pdfOopifEnabled"] = "";
++
++  webui::SetLoadTimeDataDefaults(l10n_util::GetApplicationLocale(std::string()),
++                                 replacements);
++}
++
+ }  // namespace
+ 
+ TsComponentExtensionResourceManager::TsComponentExtensionResourceManager() {
+   for (const auto& resource : kPdfResources) {
+     path_to_resource_id_[NormalizeAsciiPath(resource.path)] = resource.id;
+   }
++  PopulatePdfTemplateReplacements(&pdf_template_replacements_);
+ 
+   LOG(INFO) << "[issue-792-exp3] pdf-resource-manager-ready count="
+             << path_to_resource_id_.size() << " manifest_parsed=0";
+@@ -47,8 +234,9 @@ bool TsComponentExtensionResourceManager::IsComponentExtensionResource(
+     *resource_id = entry->second;
+   }
+   LOG(INFO) << "[issue-792-exp3] pdf-component-resource path="
+-            << resource_path.AsUTF8Unsafe() << " resource_id="
+-            << (found ? entry->second : 0) << " found=" << found;
++            << resource_path.AsUTF8Unsafe()
++            << " resource_id=" << (found ? entry->second : 0)
++            << " found=" << found;
+   return found;
+ }
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+index 45f5cada20..ae707f682d 100644
+--- a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -13,6 +13,7 @@
+ #include "components/strings/grit/components_strings.h"
+ #include "components/zoom/page_zoom_constants.h"
+ #include "extensions/browser/extensions_browser_client.h"
++#include "pdf/buildflags.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/webui/web_ui_util.h"
+ 
+@@ -26,32 +27,175 @@ base::DictValue GetPdfStringsForTermSurf() {
+   base::DictValue dict;
+ 
+   static constexpr webui::LocalizedString kPdfResources[] = {
++      {"annotationsShowToggle", IDS_PDF_ANNOTATIONS_SHOW_TOGGLE},
++      {"bookmarkExpandIconAriaLabel", IDS_PDF_BOOKMARK_EXPAND_ICON_ARIA_LABEL},
++      {"bookmarks", IDS_PDF_BOOKMARKS},
++      {"downloadEdited", IDS_PDF_DOWNLOAD_EDITED},
++      {"downloadOriginal", IDS_PDF_DOWNLOAD_ORIGINAL},
+       {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
++      {"glicSummarize", IDS_PDF_GLIC_SUMMARIZE},
++      {"glicSummarizeTooltip", IDS_PDF_GLIC_SUMMARIZE_TOOLTIP},
+       {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
+       {"moreActions", IDS_DOWNLOAD_MORE_ACTIONS},
++      {"oversizeAttachmentWarning", IDS_PDF_OVERSIZE_ATTACHMENT_WARNING},
+       {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
+       {"pageLoading", IDS_PDF_PAGE_LOADING},
+       {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
++      {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
++      {"passwordInvalid", IDS_PDF_PASSWORD_INVALID},
++      {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
++      {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
++      {"present", IDS_PDF_PRESENT},
++      {"propertiesApplication", IDS_PDF_PROPERTIES_APPLICATION},
++      {"propertiesAuthor", IDS_PDF_PROPERTIES_AUTHOR},
++      {"propertiesCreated", IDS_PDF_PROPERTIES_CREATED},
++      {"propertiesDialogClose", IDS_CLOSE},
++      {"propertiesDialogTitle", IDS_PDF_PROPERTIES_DIALOG_TITLE},
++      {"propertiesFastWebView", IDS_PDF_PROPERTIES_FAST_WEB_VIEW},
++      {"propertiesFastWebViewNo", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_NO},
++      {"propertiesFastWebViewYes", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_YES},
++      {"propertiesFileName", IDS_PDF_PROPERTIES_FILE_NAME},
++      {"propertiesFileSize", IDS_PDF_PROPERTIES_FILE_SIZE},
++      {"propertiesKeywords", IDS_PDF_PROPERTIES_KEYWORDS},
++      {"propertiesModified", IDS_PDF_PROPERTIES_MODIFIED},
++      {"propertiesPageCount", IDS_PDF_PROPERTIES_PAGE_COUNT},
++      {"propertiesPageSize", IDS_PDF_PROPERTIES_PAGE_SIZE},
++      {"propertiesPdfProducer", IDS_PDF_PROPERTIES_PDF_PRODUCER},
++      {"propertiesPdfVersion", IDS_PDF_PROPERTIES_PDF_VERSION},
++      {"propertiesSubject", IDS_PDF_PROPERTIES_SUBJECT},
++      {"propertiesTitle", IDS_PDF_PROPERTIES_TITLE},
++      {"rotationStateLabel0", IDS_PDF_ROTATION_STATE_LABEL_0},
++      {"rotationStateLabel90", IDS_PDF_ROTATION_STATE_LABEL_90},
++      {"rotationStateLabel180", IDS_PDF_ROTATION_STATE_LABEL_180},
++      {"rotationStateLabel270", IDS_PDF_ROTATION_STATE_LABEL_270},
++      {"searchifyInProgress", IDS_PDF_SEARCHIFY_IN_PROGRESS},
++      {"sidebarLabel", IDS_PDF_SIDEBAR_LABEL},
++      {"thumbnailPageAriaLabel", IDS_PDF_THUMBNAIL_PAGE_ARIA_LABEL},
++      {"tooltipAttachments", IDS_PDF_TOOLTIP_ATTACHMENTS},
++      {"tooltipDocumentOutline", IDS_PDF_TOOLTIP_DOCUMENT_OUTLINE},
+       {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
++      {"tooltipDownloadAttachment", IDS_PDF_TOOLTIP_DOWNLOAD_ATTACHMENT},
+       {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
+       {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
+       {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
+       {"tooltipRotateCCW", IDS_PDF_TOOLTIP_ROTATE_CCW},
++      {"tooltipThumbnails", IDS_PDF_TOOLTIP_THUMBNAILS},
+       {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
+       {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
+       {"twoUpViewEnable", IDS_PDF_TWO_UP_VIEW_ENABLE},
+       {"zoomTextInputAriaLabel", IDS_PDF_ZOOM_TEXT_INPUT_ARIA_LABEL},
++
++#if BUILDFLAG(ENABLE_PDF_INK2)
++      {"annotationColorBlack", IDS_PDF_ANNOTATION_COLOR_BLACK},
++      {"annotationColorBlue", IDS_PDF_ANNOTATION_COLOR_BLUE},
++      {"annotationColorGreen", IDS_PDF_ANNOTATION_COLOR_GREEN},
++      {"annotationColorLightBlue", IDS_PDF_ANNOTATION_COLOR_LIGHT_BLUE},
++      {"annotationColorLightGreen", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREEN},
++      {"annotationColorLightGrey", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREY},
++      {"annotationColorLightOrange", IDS_PDF_ANNOTATION_COLOR_LIGHT_ORANGE},
++      {"annotationColorOrange", IDS_PDF_ANNOTATION_COLOR_ORANGE},
++      {"annotationColorRed", IDS_PDF_ANNOTATION_COLOR_RED},
++      {"annotationColorWhite", IDS_PDF_ANNOTATION_COLOR_WHITE},
++      {"annotationColorYellow", IDS_PDF_ANNOTATION_COLOR_YELLOW},
++      {"annotationEraser", IDS_PDF_ANNOTATION_ERASER},
++      {"annotationHighlighter", IDS_PDF_ANNOTATION_HIGHLIGHTER},
++      {"annotationPen", IDS_PDF_ANNOTATION_PEN},
++      {"annotationRedo", IDS_PDF_ANNOTATION_REDO},
++      {"annotationUndo", IDS_PDF_ANNOTATION_UNDO},
++      {"cancelButton", IDS_CANCEL},
++      {"ink2BrushColorBlue1", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_1},
++      {"ink2BrushColorBlue2", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_2},
++      {"ink2BrushColorBlue3", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_3},
++      {"ink2BrushColorDarkGrey1", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_1},
++      {"ink2BrushColorDarkGrey2", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_2},
++      {"ink2BrushColorGreen1", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_1},
++      {"ink2BrushColorGreen2", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_2},
++      {"ink2BrushColorGreen3", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_3},
++      {"ink2BrushColorLightRed", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_RED},
++      {"ink2BrushColorLightYellow", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_YELLOW},
++      {"ink2BrushColorRed1", IDS_PDF_INK2_ANNOTATION_COLOR_RED_1},
++      {"ink2BrushColorRed2", IDS_PDF_INK2_ANNOTATION_COLOR_RED_2},
++      {"ink2BrushColorRed3", IDS_PDF_INK2_ANNOTATION_COLOR_RED_3},
++      {"ink2BrushColorTan1", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_1},
++      {"ink2BrushColorTan2", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_2},
++      {"ink2BrushColorTan3", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_3},
++      {"ink2BrushColorYellow1", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_1},
++      {"ink2BrushColorYellow2", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_2},
++      {"ink2BrushColorYellow3", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_3},
++      {"ink2BrushSizeExtraThick", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THICK},
++      {"ink2BrushSizeExtraThin", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THIN},
++      {"ink2BrushSizeMedium", IDS_PDF_INK2_ANNOTATION_SIZE_MEDIUM},
++      {"ink2BrushSizeThick", IDS_PDF_INK2_ANNOTATION_SIZE_THICK},
++      {"ink2BrushSizeThin", IDS_PDF_INK2_ANNOTATION_SIZE_THIN},
++      {"ink2Color", IDS_PDF_INK2_ANNOTATION_COLOR},
++      {"ink2Draw", IDS_PDF_INK2_DRAW},
++      {"ink2Size", IDS_PDF_INK2_ANNOTATION_SIZE},
++      {"ink2TextAlignCenter", IDS_PDF_INK2_TEXT_ALIGN_CENTER},
++      {"ink2TextAlignLeft", IDS_PDF_INK2_TEXT_ALIGN_LEFT},
++      {"ink2TextAlignRight", IDS_PDF_INK2_TEXT_ALIGN_RIGHT},
++      {"ink2TextAlignment", IDS_PDF_INK2_TEXT_ALIGNMENT},
++      {"ink2TextAnnotation", IDS_PDF_INK2_TEXT_ANNOTATION},
++      {"ink2TextColor", IDS_PDF_INK2_TEXT_COLOR},
++      {"ink2TextColorCyan1", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_1},
++      {"ink2TextColorCyan2", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_2},
++      {"ink2TextColorCyan3", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_3},
++      {"ink2TextFont", IDS_PDF_INK2_TEXT_FONT},
++      {"ink2TextFontMonospace", IDS_PDF_INK2_TEXT_FONT_MONOSPACE},
++      {"ink2TextFontSansSerif", IDS_PDF_INK2_TEXT_FONT_SANS_SERIF},
++      {"ink2TextFontSerif", IDS_PDF_INK2_TEXT_FONT_SERIF},
++      {"ink2TextFontSize", IDS_PDF_INK2_TEXT_FONT_SIZE},
++      {"ink2TextStyleBold", IDS_PDF_INK2_TEXT_STYLE_BOLD},
++      {"ink2TextStyleItalic", IDS_PDF_INK2_TEXT_STYLE_ITALIC},
++      {"ink2TextStyles", IDS_PDF_INK2_TEXT_STYLES},
++      {"ink2Tool", IDS_PDF_INK2_ANNOTATION_TOOL},
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
++#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
++      {"saveToDriveDialogCancelUploadButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_CANCEL_UPLOAD_BUTTON_LABEL},
++      {"saveToDriveDialogConnectionErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_CONNECTION_ERROR_MESSAGE},
++      {"saveToDriveDialogErrorTitle", IDS_SAVE_TO_DRIVE_DIALOG_ERROR_TITLE},
++      {"saveToDriveDialogManageStorageButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_MANAGE_STORAGE_BUTTON_LABEL},
++      {"saveToDriveDialogOpenInDriveButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_OPEN_IN_DRIVE_BUTTON_LABEL},
++      {"saveToDriveDialogRetryButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_RETRY_BUTTON_LABEL},
++      {"saveToDriveDialogSessionTimeoutErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_SESSION_TIMEOUT_ERROR_MESSAGE},
++      {"saveToDriveDialogStorageFullErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_STORAGE_FULL_ERROR_MESSAGE},
++      {"saveToDriveDialogSuccessMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_MESSAGE},
++      {"saveToDriveDialogSuccessTitle", IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_TITLE},
++      {"saveToDriveDialogUnknownErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_UNKNOWN_ERROR_MESSAGE},
++      {"saveToDriveDialogUploadingTitle",
++       IDS_SAVE_TO_DRIVE_DIALOG_UPLOADING_TITLE},
++      {"tooltipSaveToDrive", IDS_PDF_TOOLTIP_SAVE_TO_DRIVE},
++#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+   };
+ 
+   for (const auto& resource : kPdfResources) {
+     dict.Set(resource.name, l10n_util::GetStringUTF16(resource.id));
+   }
+ 
++#if BUILDFLAG(ENABLE_PDF_INK2)
++  std::u16string edit_string = l10n_util::GetStringUTF16(IDS_EDIT);
++  std::erase(edit_string, u'&');
++  dict.Set("editButton", edit_string);
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
+   // This is the load-bearing value for PDF toolbar zoom. Chrome normally
+   // returns it through chrome/browser/pdf/pdf_extension_util.cc, but linking
+   // that target pulls the full Chrome PDF browser stack and duplicates
+   // PdfViewerStreamManager in TermSurf's smaller embedder.
+   dict.Set("presetZoomFactors", zoom::GetPresetZoomFactorsAsJSON());
++  // TermSurf's current PDF bridge uses the legacy mime-handler viewer path.
++  // Enabling the OOPIF attribute switches the bundled viewer into
++  // pdfViewerPrivate.getStreamInfo(), which TermSurf has not implemented yet.
++  dict.Set("pdfOopifEnabled", "");
+ 
+   // Keep the PDF viewer's feature flags explicit and conservative. These match
+   // the embedder-owned surfaces TermSurf currently supports.
+-- 
+2.54.0
+

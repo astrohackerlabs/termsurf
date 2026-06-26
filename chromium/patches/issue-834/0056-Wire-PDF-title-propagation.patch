@@ -1,7 +1,7 @@
 From 6b7a1b91411b6f661f5913418efb4de199ef8e3f Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 13:00:27 -0500
-Subject: [PATCH 56/84] Wire PDF title propagation
+Subject: [PATCH 56/85] Wire PDF title propagation
 
 ---
  chrome/browser/resources/pdf/pdf_viewer.ts    | 13 ++-

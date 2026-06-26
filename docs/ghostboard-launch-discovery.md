@@ -35,7 +35,6 @@ Ghostboard currently supports these browser selection rules:
 | --------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------- |
 | `web --browser /absolute/path/to/roamium URL` | absolute path                              | Spawn exactly that path.                                            |
 | `web URL`                                     | named/default `roamium`                    | Debug: resolve through `TERMSURF_ROAMIUM_PATH`; release: installed. |
-| `web --browser surfari URL`                   | named `surfari`                            | Debug: resolve through `TERMSURF_SURFARI_PATH`; release: installed. |
 | `web --browser relative-name URL`             | named browser other than supported default | Fail as unsupported.                                                |
 
 In debug builds, the named/default `roamium` path is intentionally explicit:
@@ -62,30 +61,9 @@ Roamium binary path to test installed discovery without writing to
 `/opt/homebrew`. This override is for release/installed discovery tests; it does
 not change the debug no-installed-fallback contract.
 
-Named `surfari` follows the same debug/release split:
-
-- debug builds require `TERMSURF_SURFARI_PATH`;
-- the value must be an absolute path;
-- missing, empty, or relative values fail in debug with a clear
-  `SetOverlay: named browser unresolved` log line; and
-- debug builds do not fall through to an installed Surfari path.
-
-In non-debug builds, named `surfari` first accepts an absolute
-`TERMSURF_SURFARI_PATH` if one is present, then resolves through installed
-Surfari discovery. The canonical installed Surfari binary is:
-
-```bash
-/opt/homebrew/opt/termsurf-surfari/surfari
-```
-
-Release harnesses may set `TERMSURF_INSTALLED_SURFARI_PATH` to an absolute
-Surfari binary path to test installed discovery without writing to
-`/opt/homebrew`. This override is for release/installed discovery tests; it does
-not change the debug no-installed-fallback contract.
-
 Ghostboard keeps the pane/server/browser key as the requested browser name
-(`roamium` or `surfari`) even when it spawns the executable from an env var.
-That preserves protocol identity: `BrowserReady` reports the named browser,
+(`roamium`) even when it spawns the executable from `TERMSURF_ROAMIUM_PATH`.
+That preserves protocol identity: `BrowserReady` reports `browser=roamium`,
 while the process spawn log records the resolved executable path.
 
 ## Harness Coverage
@@ -110,9 +88,6 @@ Runtime coverage is provided by:
 - `scripts/ghostboard-geometry-matrix.sh installed-roamium-release-launch` for
   release named/default `roamium` resolving through installed discovery without
   `TERMSURF_ROAMIUM_PATH`.
-- `scripts/ghostboard-geometry-matrix.sh installed-surfari-release-launch` for
-  release named `surfari` resolving through installed discovery without
-  `TERMSURF_SURFARI_PATH`.
 
 ## Boundary With Issue 819
 
@@ -124,6 +99,3 @@ Issue 819 owns packaging identity and normal installed distribution behavior. It
 defines the installed Roamium location as
 `/opt/homebrew/opt/termsurf-roamium/roamium`, matching the Homebrew cask and
 manual install scripts.
-
-Issue 838 extends the same installed distribution contract to Surfari at
-`/opt/homebrew/opt/termsurf-surfari/surfari`.

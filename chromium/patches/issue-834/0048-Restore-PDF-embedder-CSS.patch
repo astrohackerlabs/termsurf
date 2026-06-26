@@ -1,7 +1,7 @@
 From f52885bef33e8ce1c2ad45360f40943d1af208f0 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 18:16:51 -0500
-Subject: [PATCH 48/84] Restore PDF embedder CSS
+Subject: [PATCH 48/85] Restore PDF embedder CSS
 
 A frame was small and shy,
 Its stylesheet locked outside.

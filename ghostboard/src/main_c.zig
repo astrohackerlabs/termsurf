@@ -255,6 +255,10 @@ pub export fn termsurf_forward_scroll_event(
     )) 1 else 0;
 }
 
+pub export fn termsurf_overlay_missed_left_click(pane_id: [*:0]const u8) void {
+    termsurf.overlayMissedLeftClick(std.mem.span(pane_id));
+}
+
 pub export fn termsurf_copy_current_url(
     pane_id: [*:0]const u8,
     out: [*]u8,

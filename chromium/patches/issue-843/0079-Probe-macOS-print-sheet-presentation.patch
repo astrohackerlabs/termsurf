@@ -1,0 +1,176 @@
+From 184e100840738ce30e7fe6e542b14d602493c05e Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 14:56:49 -0500
+Subject: [PATCH 79/87] Probe macOS print sheet presentation
+
+The print panel tried a new disguise,
+A sheet that rose before our eyes.
+It still stayed silent, still stayed shy,
+But now we know which floor is dry.
+---
+ printing/printing_context_mac.mm | 127 ++++++++++++++++++++++++++++++-
+ 1 file changed, 126 insertions(+), 1 deletion(-)
+
+diff --git a/printing/printing_context_mac.mm b/printing/printing_context_mac.mm
+index abad0b9c54..fed3bf7135 100644
+--- a/printing/printing_context_mac.mm
++++ b/printing/printing_context_mac.mm
+@@ -92,6 +92,46 @@ void TraceTermSurfPdfNativePrint(std::string_view event) {
+        " source=printing_context_mac.mm event=", event});
+ }
+ 
++std::string ActivationPolicyTraceName(NSApplicationActivationPolicy policy) {
++  switch (policy) {
++    case NSApplicationActivationPolicyRegular:
++      return "regular";
++    case NSApplicationActivationPolicyAccessory:
++      return "accessory";
++    case NSApplicationActivationPolicyProhibited:
++      return "prohibited";
++  }
++}
++
++void TraceMacPrintPresentationState(std::string_view prefix,
++                                    NSPrintPanel* panel,
++                                    NSWindow* parent_window) {
++  TraceTermSurfPdfNativePrint(base::StrCat(
++      {prefix, "-app activation_policy=",
++       ActivationPolicyTraceName(NSApp.activationPolicy),
++       " active=", NSApp.active ? "true" : "false"}));
++
++  TraceTermSurfPdfNativePrint(base::StrCat(
++      {prefix, "-window present=", parent_window ? "true" : "false",
++       " key=", parent_window && parent_window.keyWindow ? "true" : "false",
++       " main=", parent_window && parent_window.mainWindow ? "true" : "false",
++       " visible=", parent_window && parent_window.visible ? "true" : "false",
++       " miniaturized=",
++       parent_window && parent_window.miniaturized ? "true" : "false",
++       " can_key=",
++       parent_window && parent_window.canBecomeKeyWindow ? "true" : "false",
++       " can_main=",
++       parent_window && parent_window.canBecomeMainWindow ? "true" : "false",
++       " matches_key=",
++       parent_window && NSApp.keyWindow == parent_window ? "true" : "false",
++       " matches_main=",
++       parent_window && NSApp.mainWindow == parent_window ? "true" : "false"}));
++
++  TraceTermSurfPdfNativePrint(base::StrCat(
++      {prefix, "-panel class=",
++       base::SysNSStringToUTF8(NSStringFromClass(panel.class))}));
++}
++
+ // Return true if PPD name of paper is equal.
+ bool IsPaperNameEqual(CFStringRef name1, const PMPaper& paper2) {
+   CFStringRef name2 = nullptr;
+@@ -482,9 +522,10 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+     gfx::NativeView parent_view = delegate_->GetParentView();
+     TraceTermSurfPdfNativePrint(parent_view ? "mac-ask-user-parent-view-present"
+                                             : "mac-ask-user-parent-view-missing");
++    NSWindow* parent_window = nil;
+     if (parent_view) {
+       NSView* parent_ns_view = parent_view.GetNativeNSView();
+-      NSWindow* parent_window = parent_ns_view.window;
++      parent_window = parent_ns_view.window;
+       TraceTermSurfPdfNativePrint(
+           parent_window ? "mac-ask-user-parent-window-present"
+                         : "mac-ask-user-parent-window-missing");
+@@ -509,12 +550,96 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+     TraceTermSurfPdfNativePrint("mac-ask-user-install-completion-block-enter");
+     [CATransaction setCompletionBlock:^{
+       TraceTermSurfPdfNativePrint("mac-ask-user-completion-block-enter");
++      NSApplicationActivationPolicy previous_activation_policy =
++          NSApp.activationPolicy;
++      TraceMacPrintPresentationState("mac-ask-user-before-activation", panel,
++                                     parent_window);
++      if (NSApp.activationPolicy == NSApplicationActivationPolicyProhibited) {
++        TraceTermSurfPdfNativePrint(
++            "mac-ask-user-set-activation-policy-regular-enter");
++        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
++        TraceTermSurfPdfNativePrint(
++            "mac-ask-user-set-activation-policy-regular-exit");
++      }
++      if (parent_window) {
++        [parent_window makeKeyAndOrderFront:nil];
++      }
++      if (NSApp.activationPolicy != NSApplicationActivationPolicyProhibited) {
++        [NSApp activateIgnoringOtherApps:YES];
++      }
++      TraceMacPrintPresentationState("mac-ask-user-after-activation", panel,
++                                     parent_window);
++      if (parent_window) {
++        if (@available(macOS 14.0, *)) {
++          TraceTermSurfPdfNativePrint("mac-ask-user-begin-sheet-enter");
++          [panel beginSheetUsingPrintInfo:print_info_
++                                 onWindow:parent_window
++                        completionHandler:^(NSPrintPanelResult result) {
++                          TraceTermSurfPdfNativePrint(base::StrCat(
++                              {"mac-ask-user-sheet-response-",
++                               result == NSPrintPanelResultPrinted ? "printed"
++                                                                   : "cancel",
++                               " code=", base::NumberToString(result)}));
++                          if (NSApp.activationPolicy !=
++                              previous_activation_policy) {
++                            TraceTermSurfPdfNativePrint(
++                                "mac-ask-user-restore-activation-policy-enter");
++                            [NSApp
++                                setActivationPolicy:previous_activation_policy];
++                            TraceTermSurfPdfNativePrint(
++                                "mac-ask-user-restore-activation-policy-exit");
++                          }
++                          if (result == NSPrintPanelResultPrinted) {
++                            print_info_ = [panel printInfo];
++                            settings_->set_ranges(
++                                GetPageRangesFromPrintInfo());
++                            InitPrintSettingsFromPrintInfo();
++                            mojom::ResultCode result_code =
++                                mojom::ResultCode::kSuccess;
++#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
++                            if (out_of_process_behavior() ==
++                                OutOfProcessBehavior::
++                                    kEnabledSkipSystemCalls) {
++                              // This is running in the browser process, where
++                              // system calls are normally not allowed except for
++                              // this system dialog exception. Capture the
++                              // setting here to be transmitted to a PrintBackend
++                              // service when the document is printed.
++                              result_code = CaptureSystemPrintDialogData(
++                                  print_info_, settings_.get());
++                            }
++#endif
++                            TraceTermSurfPdfNativePrint(base::StrCat(
++                                {"mac-ask-user-callback-",
++                                 result_code == mojom::ResultCode::kSuccess
++                                     ? "success"
++                                     : "non-success"}));
++                            std::move(block_callback).Run(result_code);
++                          } else {
++                            TraceTermSurfPdfNativePrint(
++                                "mac-ask-user-callback-canceled");
++                            std::move(block_callback)
++                                .Run(mojom::ResultCode::kCanceled);
++                          }
++                        }];
++          TraceTermSurfPdfNativePrint("mac-ask-user-begin-sheet-exit");
++          return;
++        }
++        TraceTermSurfPdfNativePrint("mac-ask-user-begin-sheet-unavailable");
++      }
+       TraceTermSurfPdfNativePrint("mac-ask-user-run-modal-enter");
+       NSInteger selection = [panel runModalWithPrintInfo:print_info_];
+       TraceTermSurfPdfNativePrint(
+           base::StrCat({"mac-ask-user-modal-response-",
+                         selection == NSModalResponseOK ? "ok" : "cancel",
+                         " code=", base::NumberToString(selection)}));
++      if (NSApp.activationPolicy != previous_activation_policy) {
++        TraceTermSurfPdfNativePrint(
++            "mac-ask-user-restore-activation-policy-enter");
++        [NSApp setActivationPolicy:previous_activation_policy];
++        TraceTermSurfPdfNativePrint(
++            "mac-ask-user-restore-activation-policy-exit");
++      }
+       if (selection == NSModalResponseOK) {
+         print_info_ = [panel printInfo];
+         settings_->set_ranges(GetPageRangesFromPrintInfo());
+-- 
+2.54.0
+

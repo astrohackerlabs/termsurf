@@ -1,0 +1,3419 @@
+From 031963f5e7c3b87df8c533f449580809fba7e7a1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 16:07:47 -0500
+Subject: [PATCH 62/75] Organize TermSurf PDF support
+
+The PDF code packed a crowded hall,
+So helpers formed a tidy wall.
+Old issue tags took off their masks,
+And harnesses shared their little tasks.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   8 +-
+ ...ts_component_extension_resource_manager.cc | 212 +-------
+ .../ts_extension_resource_loader.cc           |   4 +-
+ .../extensions/ts_extensions_api_provider.cc  |   4 +-
+ .../ts_extensions_browser_client.cc           |   4 +-
+ .../extensions/ts_extensions_client.cc        |   6 +-
+ .../extensions/ts_pdf_component_extension.cc  |  30 +-
+ .../extensions/ts_pdf_load_time_data.cc       | 260 ++++++++++
+ .../extensions/ts_pdf_load_time_data.h        |  18 +
+ .../extensions/ts_pdf_resource_bundle.cc      |  18 +-
+ .../extensions/ts_pdf_viewer_private_api.cc   |  12 +-
+ .../extensions/ts_resources_private_api.cc    | 221 +--------
+ .../libtermsurf_chromium/ts_browser_client.cc | 388 +--------------
+ .../ts_browser_main_parts.cc                  |  62 +--
+ .../libtermsurf_chromium/ts_content_client.cc |   4 +-
+ .../ts_content_renderer_client.cc             | 151 +-----
+ .../ts_mime_handler_binders.cc                |  18 +-
+ .../ts_pdf_browser_support.cc                 | 456 ++++++++++++++++++
+ .../ts_pdf_browser_support.h                  |  94 ++++
+ .../ts_pdf_document_helper_client.cc          |  10 +-
+ .../ts_pdf_help_bubble_handler_factory.cc     |   6 +-
+ .../ts_pdf_iframe_navigation_throttle.cc      |   2 +-
+ .../ts_pdf_renderer_support.cc                | 174 +++++++
+ .../ts_pdf_renderer_support.h                 |  41 ++
+ .../ts_pdf_stream_delegate.cc                 |  12 +-
+ ...esponse_interceptor_url_loader_throttle.cc |  24 +-
+ .../libtermsurf_chromium/ts_plugin_utils.cc   |   2 +-
+ .../libtermsurf_chromium/ts_tab_observer.cc   |   2 +-
+ pdf/pdf_view_web_plugin.cc                    |   6 +-
+ pdf/pdfium/pdfium_engine.cc                   |  10 +-
+ 30 files changed, 1214 insertions(+), 1045 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_browser_support.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_browser_support.h
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_renderer_support.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index d2a80d78a7..d74a785183 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -31,6 +31,8 @@ shared_library("libtermsurf_chromium") {
+     "extensions/ts_extensions_renderer_client.h",
+     "extensions/ts_pdf_component_extension.cc",
+     "extensions/ts_pdf_component_extension.h",
++    "extensions/ts_pdf_load_time_data.cc",
++    "extensions/ts_pdf_load_time_data.h",
+     "extensions/ts_pdf_resource_bundle.cc",
+     "extensions/ts_pdf_resource_bundle.h",
+     "extensions/ts_pdf_viewer_private_api.cc",
+@@ -51,12 +53,16 @@ shared_library("libtermsurf_chromium") {
+     "ts_main_delegate.h",
+     "ts_mime_handler_binders.cc",
+     "ts_mime_handler_binders.h",
++    "ts_pdf_browser_support.cc",
++    "ts_pdf_browser_support.h",
+     "ts_pdf_document_helper_client.cc",
+     "ts_pdf_document_helper_client.h",
+     "ts_pdf_help_bubble_handler_factory.cc",
+     "ts_pdf_help_bubble_handler_factory.h",
+     "ts_pdf_iframe_navigation_throttle.cc",
+     "ts_pdf_iframe_navigation_throttle.h",
++    "ts_pdf_renderer_support.cc",
++    "ts_pdf_renderer_support.h",
+     "ts_pdf_stream_delegate.cc",
+     "ts_pdf_stream_delegate.h",
+     "ts_plugin_response_interceptor_url_loader_throttle.cc",
+@@ -90,9 +96,9 @@ shared_library("libtermsurf_chromium") {
+     "//components/pdf/browser",
+     "//components/pdf/browser:interceptors",
+     "//components/pdf/renderer",
+-    "//components/printing/renderer",
+     "//components/pref_registry",
+     "//components/prefs",
++    "//components/printing/renderer",
+     "//components/resources:components_resources",
+     "//components/strings:components_strings",
+     "//components/user_prefs",
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+index bb9dbcfddd..a84f507034 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+@@ -4,19 +4,12 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h"
+ 
+-#include <memory>
+ #include <string>
+ 
+-#include "base/environment.h"
+ #include "base/logging.h"
+-#include "chrome/grit/generated_resources.h"
+ #include "chrome/grit/pdf_resources_map.h"
+-#include "components/strings/grit/components_strings.h"
+-#include "components/zoom/page_zoom_constants.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h"
+ #include "extensions/common/constants.h"
+-#include "pdf/buildflags.h"
+-#include "ui/base/l10n/l10n_util.h"
+-#include "ui/base/webui/web_ui_util.h"
+ 
+ namespace content {
+ namespace {
+@@ -25,212 +18,15 @@ base::FilePath NormalizeAsciiPath(const char* path) {
+   return base::FilePath().AppendASCII(path).NormalizePathSeparators();
+ }
+ 
+-bool IsTermSurfPdfPrintBridgeTraceActive() {
+-  std::unique_ptr<base::Environment> env = base::Environment::Create();
+-  std::optional<std::string> enabled =
+-      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE");
+-  if (!enabled || *enabled != "1") {
+-    return false;
+-  }
+-
+-  std::optional<std::string> path =
+-      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
+-  return path && !path->empty();
+-}
+-
+-void AddPdfString(ui::TemplateReplacements* replacements,
+-                  const char* name,
+-                  int resource_id) {
+-  (*replacements)[name] = l10n_util::GetStringUTF8(resource_id);
+-}
+-
+-void PopulatePdfTemplateReplacements(ui::TemplateReplacements* replacements) {
+-  static constexpr webui::LocalizedString kPdfResources[] = {
+-      {"annotationsShowToggle", IDS_PDF_ANNOTATIONS_SHOW_TOGGLE},
+-      {"bookmarkExpandIconAriaLabel", IDS_PDF_BOOKMARK_EXPAND_ICON_ARIA_LABEL},
+-      {"bookmarks", IDS_PDF_BOOKMARKS},
+-      {"downloadEdited", IDS_PDF_DOWNLOAD_EDITED},
+-      {"downloadOriginal", IDS_PDF_DOWNLOAD_ORIGINAL},
+-      {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
+-      {"glicSummarize", IDS_PDF_GLIC_SUMMARIZE},
+-      {"glicSummarizeTooltip", IDS_PDF_GLIC_SUMMARIZE_TOOLTIP},
+-      {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
+-      {"moreActions", IDS_DOWNLOAD_MORE_ACTIONS},
+-      {"oversizeAttachmentWarning", IDS_PDF_OVERSIZE_ATTACHMENT_WARNING},
+-      {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
+-      {"pageLoading", IDS_PDF_PAGE_LOADING},
+-      {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
+-      {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
+-      {"passwordInvalid", IDS_PDF_PASSWORD_INVALID},
+-      {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
+-      {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
+-      {"present", IDS_PDF_PRESENT},
+-      {"propertiesApplication", IDS_PDF_PROPERTIES_APPLICATION},
+-      {"propertiesAuthor", IDS_PDF_PROPERTIES_AUTHOR},
+-      {"propertiesCreated", IDS_PDF_PROPERTIES_CREATED},
+-      {"propertiesDialogClose", IDS_CLOSE},
+-      {"propertiesDialogTitle", IDS_PDF_PROPERTIES_DIALOG_TITLE},
+-      {"propertiesFastWebView", IDS_PDF_PROPERTIES_FAST_WEB_VIEW},
+-      {"propertiesFastWebViewNo", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_NO},
+-      {"propertiesFastWebViewYes", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_YES},
+-      {"propertiesFileName", IDS_PDF_PROPERTIES_FILE_NAME},
+-      {"propertiesFileSize", IDS_PDF_PROPERTIES_FILE_SIZE},
+-      {"propertiesKeywords", IDS_PDF_PROPERTIES_KEYWORDS},
+-      {"propertiesModified", IDS_PDF_PROPERTIES_MODIFIED},
+-      {"propertiesPageCount", IDS_PDF_PROPERTIES_PAGE_COUNT},
+-      {"propertiesPageSize", IDS_PDF_PROPERTIES_PAGE_SIZE},
+-      {"propertiesPdfProducer", IDS_PDF_PROPERTIES_PDF_PRODUCER},
+-      {"propertiesPdfVersion", IDS_PDF_PROPERTIES_PDF_VERSION},
+-      {"propertiesSubject", IDS_PDF_PROPERTIES_SUBJECT},
+-      {"propertiesTitle", IDS_PDF_PROPERTIES_TITLE},
+-      {"rotationStateLabel0", IDS_PDF_ROTATION_STATE_LABEL_0},
+-      {"rotationStateLabel90", IDS_PDF_ROTATION_STATE_LABEL_90},
+-      {"rotationStateLabel180", IDS_PDF_ROTATION_STATE_LABEL_180},
+-      {"rotationStateLabel270", IDS_PDF_ROTATION_STATE_LABEL_270},
+-      {"searchifyInProgress", IDS_PDF_SEARCHIFY_IN_PROGRESS},
+-      {"sidebarLabel", IDS_PDF_SIDEBAR_LABEL},
+-      {"thumbnailPageAriaLabel", IDS_PDF_THUMBNAIL_PAGE_ARIA_LABEL},
+-      {"tooltipAttachments", IDS_PDF_TOOLTIP_ATTACHMENTS},
+-      {"tooltipDocumentOutline", IDS_PDF_TOOLTIP_DOCUMENT_OUTLINE},
+-      {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
+-      {"tooltipDownloadAttachment", IDS_PDF_TOOLTIP_DOWNLOAD_ATTACHMENT},
+-      {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
+-      {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
+-      {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
+-      {"tooltipRotateCCW", IDS_PDF_TOOLTIP_ROTATE_CCW},
+-      {"tooltipThumbnails", IDS_PDF_TOOLTIP_THUMBNAILS},
+-      {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
+-      {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
+-      {"twoUpViewEnable", IDS_PDF_TWO_UP_VIEW_ENABLE},
+-      {"zoomTextInputAriaLabel", IDS_PDF_ZOOM_TEXT_INPUT_ARIA_LABEL},
+-
+-#if BUILDFLAG(ENABLE_PDF_INK2)
+-      {"annotationColorBlack", IDS_PDF_ANNOTATION_COLOR_BLACK},
+-      {"annotationColorBlue", IDS_PDF_ANNOTATION_COLOR_BLUE},
+-      {"annotationColorGreen", IDS_PDF_ANNOTATION_COLOR_GREEN},
+-      {"annotationColorLightBlue", IDS_PDF_ANNOTATION_COLOR_LIGHT_BLUE},
+-      {"annotationColorLightGreen", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREEN},
+-      {"annotationColorLightGrey", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREY},
+-      {"annotationColorLightOrange", IDS_PDF_ANNOTATION_COLOR_LIGHT_ORANGE},
+-      {"annotationColorOrange", IDS_PDF_ANNOTATION_COLOR_ORANGE},
+-      {"annotationColorRed", IDS_PDF_ANNOTATION_COLOR_RED},
+-      {"annotationColorWhite", IDS_PDF_ANNOTATION_COLOR_WHITE},
+-      {"annotationColorYellow", IDS_PDF_ANNOTATION_COLOR_YELLOW},
+-      {"annotationEraser", IDS_PDF_ANNOTATION_ERASER},
+-      {"annotationHighlighter", IDS_PDF_ANNOTATION_HIGHLIGHTER},
+-      {"annotationPen", IDS_PDF_ANNOTATION_PEN},
+-      {"annotationRedo", IDS_PDF_ANNOTATION_REDO},
+-      {"annotationUndo", IDS_PDF_ANNOTATION_UNDO},
+-      {"cancelButton", IDS_CANCEL},
+-      {"ink2BrushColorBlue1", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_1},
+-      {"ink2BrushColorBlue2", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_2},
+-      {"ink2BrushColorBlue3", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_3},
+-      {"ink2BrushColorDarkGrey1", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_1},
+-      {"ink2BrushColorDarkGrey2", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_2},
+-      {"ink2BrushColorGreen1", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_1},
+-      {"ink2BrushColorGreen2", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_2},
+-      {"ink2BrushColorGreen3", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_3},
+-      {"ink2BrushColorLightRed", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_RED},
+-      {"ink2BrushColorLightYellow", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_YELLOW},
+-      {"ink2BrushColorRed1", IDS_PDF_INK2_ANNOTATION_COLOR_RED_1},
+-      {"ink2BrushColorRed2", IDS_PDF_INK2_ANNOTATION_COLOR_RED_2},
+-      {"ink2BrushColorRed3", IDS_PDF_INK2_ANNOTATION_COLOR_RED_3},
+-      {"ink2BrushColorTan1", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_1},
+-      {"ink2BrushColorTan2", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_2},
+-      {"ink2BrushColorTan3", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_3},
+-      {"ink2BrushColorYellow1", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_1},
+-      {"ink2BrushColorYellow2", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_2},
+-      {"ink2BrushColorYellow3", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_3},
+-      {"ink2BrushSizeExtraThick", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THICK},
+-      {"ink2BrushSizeExtraThin", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THIN},
+-      {"ink2BrushSizeMedium", IDS_PDF_INK2_ANNOTATION_SIZE_MEDIUM},
+-      {"ink2BrushSizeThick", IDS_PDF_INK2_ANNOTATION_SIZE_THICK},
+-      {"ink2BrushSizeThin", IDS_PDF_INK2_ANNOTATION_SIZE_THIN},
+-      {"ink2Color", IDS_PDF_INK2_ANNOTATION_COLOR},
+-      {"ink2Draw", IDS_PDF_INK2_DRAW},
+-      {"ink2Size", IDS_PDF_INK2_ANNOTATION_SIZE},
+-      {"ink2TextAlignCenter", IDS_PDF_INK2_TEXT_ALIGN_CENTER},
+-      {"ink2TextAlignLeft", IDS_PDF_INK2_TEXT_ALIGN_LEFT},
+-      {"ink2TextAlignRight", IDS_PDF_INK2_TEXT_ALIGN_RIGHT},
+-      {"ink2TextAlignment", IDS_PDF_INK2_TEXT_ALIGNMENT},
+-      {"ink2TextAnnotation", IDS_PDF_INK2_TEXT_ANNOTATION},
+-      {"ink2TextColor", IDS_PDF_INK2_TEXT_COLOR},
+-      {"ink2TextColorCyan1", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_1},
+-      {"ink2TextColorCyan2", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_2},
+-      {"ink2TextColorCyan3", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_3},
+-      {"ink2TextFont", IDS_PDF_INK2_TEXT_FONT},
+-      {"ink2TextFontMonospace", IDS_PDF_INK2_TEXT_FONT_MONOSPACE},
+-      {"ink2TextFontSansSerif", IDS_PDF_INK2_TEXT_FONT_SANS_SERIF},
+-      {"ink2TextFontSerif", IDS_PDF_INK2_TEXT_FONT_SERIF},
+-      {"ink2TextFontSize", IDS_PDF_INK2_TEXT_FONT_SIZE},
+-      {"ink2TextStyleBold", IDS_PDF_INK2_TEXT_STYLE_BOLD},
+-      {"ink2TextStyleItalic", IDS_PDF_INK2_TEXT_STYLE_ITALIC},
+-      {"ink2TextStyles", IDS_PDF_INK2_TEXT_STYLES},
+-      {"ink2Tool", IDS_PDF_INK2_ANNOTATION_TOOL},
+-#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+-
+-#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+-      {"saveToDriveDialogCancelUploadButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_CANCEL_UPLOAD_BUTTON_LABEL},
+-      {"saveToDriveDialogConnectionErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_CONNECTION_ERROR_MESSAGE},
+-      {"saveToDriveDialogErrorTitle", IDS_SAVE_TO_DRIVE_DIALOG_ERROR_TITLE},
+-      {"saveToDriveDialogManageStorageButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_MANAGE_STORAGE_BUTTON_LABEL},
+-      {"saveToDriveDialogOpenInDriveButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_OPEN_IN_DRIVE_BUTTON_LABEL},
+-      {"saveToDriveDialogRetryButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_RETRY_BUTTON_LABEL},
+-      {"saveToDriveDialogSessionTimeoutErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_SESSION_TIMEOUT_ERROR_MESSAGE},
+-      {"saveToDriveDialogStorageFullErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_STORAGE_FULL_ERROR_MESSAGE},
+-      {"saveToDriveDialogSuccessMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_MESSAGE},
+-      {"saveToDriveDialogSuccessTitle", IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_TITLE},
+-      {"saveToDriveDialogUnknownErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_UNKNOWN_ERROR_MESSAGE},
+-      {"saveToDriveDialogUploadingTitle",
+-       IDS_SAVE_TO_DRIVE_DIALOG_UPLOADING_TITLE},
+-      {"tooltipSaveToDrive", IDS_PDF_TOOLTIP_SAVE_TO_DRIVE},
+-#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+-  };
+-
+-  for (const auto& resource : kPdfResources) {
+-    AddPdfString(replacements, resource.name, resource.id);
+-  }
+-
+-#if BUILDFLAG(ENABLE_PDF_INK2)
+-  std::string edit_string = l10n_util::GetStringUTF8(IDS_EDIT);
+-  std::erase(edit_string, '&');
+-  (*replacements)["editButton"] = edit_string;
+-#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+-
+-  (*replacements)["presetZoomFactors"] = zoom::GetPresetZoomFactorsAsJSON();
+-  // TermSurf's current PDF bridge uses the legacy mime-handler viewer path.
+-  // Enabling the OOPIF attribute switches the bundled viewer into
+-  // pdfViewerPrivate.getStreamInfo(), which TermSurf has not implemented yet.
+-  (*replacements)["pdfOopifEnabled"] = "";
+-  // TermSurf no longer gates the production PDF print control on the
+-  // automation-only intercept. Document print permissions are still enforced in
+-  // the plugin print path before native print is invoked.
+-  (*replacements)["printingEnabled"] = "true";
+-  (*replacements)["termsurfPdfPrintBridgeTrace"] =
+-      IsTermSurfPdfPrintBridgeTraceActive() ? "true" : "false";
+-
+-  webui::SetLoadTimeDataDefaults(l10n_util::GetApplicationLocale(std::string()),
+-                                 replacements);
+-}
+-
+ }  // namespace
+ 
+ TsComponentExtensionResourceManager::TsComponentExtensionResourceManager() {
+   for (const auto& resource : kPdfResources) {
+     path_to_resource_id_[NormalizeAsciiPath(resource.path)] = resource.id;
+   }
+-  PopulatePdfTemplateReplacements(&pdf_template_replacements_);
++  PopulateTsPdfTemplateReplacements(&pdf_template_replacements_);
+ 
+-  LOG(INFO) << "[issue-792-exp3] pdf-resource-manager-ready count="
++  LOG(INFO) << "[termsurf-pdf] pdf-resource-manager-ready count="
+             << path_to_resource_id_.size() << " manifest_parsed=0";
+ }
+ 
+@@ -254,7 +50,7 @@ bool TsComponentExtensionResourceManager::IsComponentExtensionResource(
+   if (found) {
+     *resource_id = entry->second;
+   }
+-  LOG(INFO) << "[issue-792-exp3] pdf-component-resource path="
++  LOG(INFO) << "[termsurf-pdf] pdf-component-resource path="
+             << resource_path.AsUTF8Unsafe()
+             << " resource_id=" << (found ? entry->second : 0)
+             << " found=" << found;
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+index 2654eb6def..6d740f0a47 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+@@ -92,7 +92,7 @@ std::string LoadResourceBody(int resource_id,
+                                            &replaced_body)) {
+       return replaced_body;
+     }
+-    LOG(ERROR) << "[issue-792-exp5] bundle-resource-load"
++    LOG(ERROR) << "[termsurf-pdf] bundle-resource-load"
+                << " path= resource_id=" << resource_id << " bytes=0"
+                << " mime=" << mime_type << " ok=0";
+     return {};
+@@ -157,7 +157,7 @@ class TsResourceBundleFileLoader : public network::mojom::URLLoader {
+         LoadResourceBody(resource_id_, std::string(request.url.host()),
+                          mime_type);
+     const bool ok = !body.empty();
+-    LOG(INFO) << "[issue-792-exp5] bundle-resource-load"
++    LOG(INFO) << "[termsurf-pdf] bundle-resource-load"
+               << " path=" << resource_relative_path_.AsUTF8Unsafe()
+               << " resource_id=" << resource_id_ << " bytes=" << body.size()
+               << " mime=" << mime_type << " ok=" << ok;
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+index fe767224b2..880bdae9d8 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+@@ -50,7 +50,7 @@ void TsExtensionsAPIProvider::AddAPIJSONSources(
+ 
+ bool TsExtensionsAPIProvider::IsAPISchemaGenerated(const std::string& name) {
+   if (ShouldLogSchemaRequest(name)) {
+-    LOG(INFO) << "[issue-792-exp8] schema-request name=" << name << " found="
++    LOG(INFO) << "[termsurf-pdf] schema-request name=" << name << " found="
+               << extensions::api::ChromeGeneratedSchemas::IsGenerated(name);
+   }
+   return false;
+@@ -59,7 +59,7 @@ bool TsExtensionsAPIProvider::IsAPISchemaGenerated(const std::string& name) {
+ std::string_view TsExtensionsAPIProvider::GetAPISchema(
+     const std::string& name) {
+   if (ShouldLogSchemaRequest(name)) {
+-    LOG(INFO) << "[issue-792-exp8] schema-request name=" << name << " found="
++    LOG(INFO) << "[termsurf-pdf] schema-request name=" << name << " found="
+               << extensions::api::ChromeGeneratedSchemas::IsGenerated(name);
+   }
+   return {};
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 34396354b2..234d1842a3 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -314,7 +314,7 @@ base::FilePath TsExtensionsBrowserClient::GetBundleResourcePath(
+       component_extension_resource_manager_->IsComponentExtensionResource(
+           base::FilePath(FILE_PATH_LITERAL("pdf")), resource_relative_path,
+           resource_id);
+-  LOG(INFO) << "[issue-792-exp5] bundle-resource url=" << request.url
++  LOG(INFO) << "[termsurf-pdf] bundle-resource url=" << request.url
+             << " path=" << resource_relative_path.AsUTF8Unsafe()
+             << " resource_id=" << *resource_id << " found=" << found;
+   return found ? resource_relative_path : base::FilePath();
+@@ -426,7 +426,7 @@ void TsExtensionsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+     mojo::BinderMapWithContext<RenderFrameHost*>* binder_map,
+     RenderFrameHost* render_frame_host,
+     const extensions::Extension* extension) const {
+-  LOG(INFO) << "[issue-792-exp13] extensions-frame-binder-invoked frame_url="
++  LOG(INFO) << "[termsurf-pdf] extensions-frame-binder-invoked frame_url="
+             << render_frame_host->GetLastCommittedURL() << " site_url="
+             << render_frame_host->GetSiteInstance()->GetSiteURL()
+             << " extension_id=" << extension->id() << " populate_called=1";
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+index 63f9aa99f2..fbbde4900c 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+@@ -61,14 +61,14 @@ TsExtensionsClient::TsExtensionsClient() {
+   AddAPIProvider(std::make_unique<extensions::CoreExtensionsAPIProvider>());
+   AddAPIProvider(std::make_unique<TsExtensionsAPIProvider>());
+   AddAPIProvider(std::make_unique<extensions::ChromeExtensionsAPIProvider>());
+-  LOG(INFO) << "[issue-792-exp8] chrome-api-provider-enabled"
++  LOG(INFO) << "[termsurf-pdf] chrome-api-provider-enabled"
+             << " provider=ChromeExtensionsAPIProvider";
+ }
+ 
+ TsExtensionsClient::~TsExtensionsClient() = default;
+ 
+ void TsExtensionsClient::Initialize() {
+-  LOG(INFO) << "[issue-792-exp9] feature-map"
++  LOG(INFO) << "[termsurf-pdf] feature-map"
+             << " api_pdfViewerPrivate="
+             << (extensions::FeatureProvider::GetAPIFeature(
+                     "pdfViewerPrivate") != nullptr)
+@@ -150,7 +150,7 @@ void TsExtensionsClient::AddOriginAccessPermissions(
+       network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
+       network::mojom::CorsPortMatchMode::kAllowAnyPort,
+       network::mojom::CorsOriginAccessMatchPriority::kMaxPriority));
+-  LOG(INFO) << "[issue-792-exp7] chrome-resources-renderer-origin extension_id="
++  LOG(INFO) << "[termsurf-pdf] chrome-resources-renderer-origin extension_id="
+             << extension.id() << " active=" << is_extension_active;
+ }
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+index 3f7b998d83..d70a9b908f 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+@@ -68,10 +68,10 @@ std::string DescribePermissionForLog(const base::Value& permission) {
+ std::optional<base::DictValue> LoadPdfManifest(
+     std::vector<std::string>* stripped_manifest_keys) {
+   std::string manifest_contents = kPdfManifestFallback;
+-  LOG(INFO) << "[issue-792-exp3] pdf-manifest-source source=static-snapshot";
++  LOG(INFO) << "[termsurf-pdf] pdf-manifest-source source=static-snapshot";
+ 
+   if (manifest_contents.find(kPdfExtensionNameTag) == std::string::npos) {
+-    LOG(ERROR) << "[issue-792-exp3] pdf-manifest-error reason=missing-name-tag";
++    LOG(ERROR) << "[termsurf-pdf] pdf-manifest-error reason=missing-name-tag";
+     return std::nullopt;
+   }
+   base::ReplaceFirstSubstringAfterOffset(
+@@ -80,7 +80,7 @@ std::optional<base::DictValue> LoadPdfManifest(
+   std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
+       manifest_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+   if (!manifest) {
+-    LOG(ERROR) << "[issue-792-exp3] pdf-manifest-error reason=parse-failed";
++    LOG(ERROR) << "[termsurf-pdf] pdf-manifest-error reason=parse-failed";
+     return std::nullopt;
+   }
+ 
+@@ -97,14 +97,14 @@ std::optional<base::DictValue> LoadPdfManifest(
+       stripped_permissions.push_back(DescribePermissionForLog(permission));
+     }
+     manifest->Set("permissions", std::move(kept_permissions));
+-    LOG(INFO) << "[issue-792-exp8] pdf-permissions-kept"
++    LOG(INFO) << "[termsurf-pdf] pdf-permissions-kept"
+               << " values=pdfViewerPrivate,resourcesPrivate";
+-    LOG(INFO) << "[issue-792-exp8] pdf-permissions-stripped values="
++    LOG(INFO) << "[termsurf-pdf] pdf-permissions-stripped values="
+               << base::JoinString(stripped_permissions, ",");
+   }
+-  LOG(INFO) << "[issue-793-exp1] pdf-web-accessible-resource kept=1"
++  LOG(INFO) << "[termsurf-pdf] pdf-web-accessible-resource kept=1"
+             << " path=pdf_embedder.css";
+-  LOG(INFO) << "[issue-792-exp3] pdf-resource-manager-ready count="
++  LOG(INFO) << "[termsurf-pdf] pdf-resource-manager-ready count="
+             << std::size(kPdfResources) << " manifest_parsed=1";
+ 
+   return manifest;
+@@ -134,12 +134,12 @@ scoped_refptr<const extensions::Extension> CreateTsPdfComponentExtension(
+           *manifest, extensions::Extension::REQUIRE_KEY, error);
+   if (!extension) {
+     LOG(ERROR)
+-        << "[issue-792-exp3] pdf-component-extension-create-failed error="
++        << "[termsurf-pdf] pdf-component-extension-create-failed error="
+         << base::UTF16ToUTF8(*error);
+     return nullptr;
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp3] pdf-component-extension-created id="
++  LOG(INFO) << "[termsurf-pdf] pdf-component-extension-created id="
+             << extension->id() << " name=" << extension->name()
+             << " version=" << extension->version().GetString()
+             << " location=" << static_cast<int>(extension->location());
+@@ -153,14 +153,14 @@ bool RegisterTsPdfComponentExtension(BrowserContext* browser_context) {
+ 
+   auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+   if (!registry) {
+-    LOG(ERROR) << "[issue-792-exp3] pdf-component-extension-register-failed"
++    LOG(ERROR) << "[termsurf-pdf] pdf-component-extension-register-failed"
+                << " reason=no-registry context=" << browser_context;
+     return false;
+   }
+ 
+   if (registry->enabled_extensions().Contains(
+           extension_misc::kPdfExtensionId)) {
+-    LOG(INFO) << "[issue-792-exp3] pdf-component-extension-registered context="
++    LOG(INFO) << "[termsurf-pdf] pdf-component-extension-registered context="
+               << browser_context << " enabled=1";
+     return true;
+   }
+@@ -173,7 +173,7 @@ bool RegisterTsPdfComponentExtension(BrowserContext* browser_context) {
+       CreateTsPdfComponentExtension(extension_root, &stripped_manifest_keys,
+                                     &error);
+   if (!extension) {
+-    LOG(ERROR) << "[issue-792-exp3] pdf-component-extension-register-failed"
++    LOG(ERROR) << "[termsurf-pdf] pdf-component-extension-register-failed"
+                << " reason=create-failed context=" << browser_context
+                << " error=" << base::UTF16ToUTF8(error);
+     return false;
+@@ -193,14 +193,14 @@ bool RegisterTsPdfComponentExtension(BrowserContext* browser_context) {
+       on_extension_loaded_called = true;
+     }
+   }
+-  LOG(INFO) << "[issue-792-exp9] pdf-extension-load-broadcast"
++  LOG(INFO) << "[termsurf-pdf] pdf-extension-load-broadcast"
+             << " helper=" << renderer_startup_helper_found
+             << " called=" << on_extension_loaded_called;
+ 
+-  LOG(INFO) << "[issue-792-exp3] pdf-component-extension-stripped-keys count="
++  LOG(INFO) << "[termsurf-pdf] pdf-component-extension-stripped-keys count="
+             << stripped_manifest_keys.size()
+             << " keys=" << base::JoinString(stripped_manifest_keys, ",");
+-  LOG(INFO) << "[issue-792-exp3] pdf-component-extension-registered context="
++  LOG(INFO) << "[termsurf-pdf] pdf-component-extension-registered context="
+             << browser_context << " enabled="
+             << registry->enabled_extensions().Contains(
+                    extension_misc::kPdfExtensionId)
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.cc b/content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.cc
+new file mode 100644
+index 0000000000..68c59f03e4
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.cc
+@@ -0,0 +1,260 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++
++#include "base/environment.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/strings/grit/components_strings.h"
++#include "components/zoom/page_zoom_constants.h"
++#include "extensions/browser/extensions_browser_client.h"
++#include "pdf/buildflags.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/webui/web_ui_util.h"
++
++namespace content {
++namespace {
++
++bool IsTermSurfPdfPrintBridgeTraceActive() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE");
++  if (!enabled || *enabled != "1") {
++    return false;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
++  return path && !path->empty();
++}
++
++void AddPdfString(ui::TemplateReplacements* replacements,
++                  const char* name,
++                  int resource_id) {
++  (*replacements)[name] = l10n_util::GetStringUTF8(resource_id);
++}
++
++void AddPdfString(base::DictValue* dict, const char* name, int resource_id) {
++  dict->Set(name, l10n_util::GetStringUTF16(resource_id));
++}
++
++template <typename Output>
++void PopulatePdfLocalizedStrings(Output* output) {
++  static constexpr webui::LocalizedString kPdfResources[] = {
++      {"annotationsShowToggle", IDS_PDF_ANNOTATIONS_SHOW_TOGGLE},
++      {"bookmarkExpandIconAriaLabel", IDS_PDF_BOOKMARK_EXPAND_ICON_ARIA_LABEL},
++      {"bookmarks", IDS_PDF_BOOKMARKS},
++      {"downloadEdited", IDS_PDF_DOWNLOAD_EDITED},
++      {"downloadOriginal", IDS_PDF_DOWNLOAD_ORIGINAL},
++      {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
++      {"glicSummarize", IDS_PDF_GLIC_SUMMARIZE},
++      {"glicSummarizeTooltip", IDS_PDF_GLIC_SUMMARIZE_TOOLTIP},
++      {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
++      {"moreActions", IDS_DOWNLOAD_MORE_ACTIONS},
++      {"oversizeAttachmentWarning", IDS_PDF_OVERSIZE_ATTACHMENT_WARNING},
++      {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
++      {"pageLoading", IDS_PDF_PAGE_LOADING},
++      {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
++      {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
++      {"passwordInvalid", IDS_PDF_PASSWORD_INVALID},
++      {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
++      {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
++      {"present", IDS_PDF_PRESENT},
++      {"propertiesApplication", IDS_PDF_PROPERTIES_APPLICATION},
++      {"propertiesAuthor", IDS_PDF_PROPERTIES_AUTHOR},
++      {"propertiesCreated", IDS_PDF_PROPERTIES_CREATED},
++      {"propertiesDialogClose", IDS_CLOSE},
++      {"propertiesDialogTitle", IDS_PDF_PROPERTIES_DIALOG_TITLE},
++      {"propertiesFastWebView", IDS_PDF_PROPERTIES_FAST_WEB_VIEW},
++      {"propertiesFastWebViewNo", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_NO},
++      {"propertiesFastWebViewYes", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_YES},
++      {"propertiesFileName", IDS_PDF_PROPERTIES_FILE_NAME},
++      {"propertiesFileSize", IDS_PDF_PROPERTIES_FILE_SIZE},
++      {"propertiesKeywords", IDS_PDF_PROPERTIES_KEYWORDS},
++      {"propertiesModified", IDS_PDF_PROPERTIES_MODIFIED},
++      {"propertiesPageCount", IDS_PDF_PROPERTIES_PAGE_COUNT},
++      {"propertiesPageSize", IDS_PDF_PROPERTIES_PAGE_SIZE},
++      {"propertiesPdfProducer", IDS_PDF_PROPERTIES_PDF_PRODUCER},
++      {"propertiesPdfVersion", IDS_PDF_PROPERTIES_PDF_VERSION},
++      {"propertiesSubject", IDS_PDF_PROPERTIES_SUBJECT},
++      {"propertiesTitle", IDS_PDF_PROPERTIES_TITLE},
++      {"rotationStateLabel0", IDS_PDF_ROTATION_STATE_LABEL_0},
++      {"rotationStateLabel90", IDS_PDF_ROTATION_STATE_LABEL_90},
++      {"rotationStateLabel180", IDS_PDF_ROTATION_STATE_LABEL_180},
++      {"rotationStateLabel270", IDS_PDF_ROTATION_STATE_LABEL_270},
++      {"searchifyInProgress", IDS_PDF_SEARCHIFY_IN_PROGRESS},
++      {"sidebarLabel", IDS_PDF_SIDEBAR_LABEL},
++      {"thumbnailPageAriaLabel", IDS_PDF_THUMBNAIL_PAGE_ARIA_LABEL},
++      {"tooltipAttachments", IDS_PDF_TOOLTIP_ATTACHMENTS},
++      {"tooltipDocumentOutline", IDS_PDF_TOOLTIP_DOCUMENT_OUTLINE},
++      {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
++      {"tooltipDownloadAttachment", IDS_PDF_TOOLTIP_DOWNLOAD_ATTACHMENT},
++      {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
++      {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
++      {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
++      {"tooltipRotateCCW", IDS_PDF_TOOLTIP_ROTATE_CCW},
++      {"tooltipThumbnails", IDS_PDF_TOOLTIP_THUMBNAILS},
++      {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
++      {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
++      {"twoUpViewEnable", IDS_PDF_TWO_UP_VIEW_ENABLE},
++      {"zoomTextInputAriaLabel", IDS_PDF_ZOOM_TEXT_INPUT_ARIA_LABEL},
++
++#if BUILDFLAG(ENABLE_PDF_INK2)
++      {"annotationColorBlack", IDS_PDF_ANNOTATION_COLOR_BLACK},
++      {"annotationColorBlue", IDS_PDF_ANNOTATION_COLOR_BLUE},
++      {"annotationColorGreen", IDS_PDF_ANNOTATION_COLOR_GREEN},
++      {"annotationColorLightBlue", IDS_PDF_ANNOTATION_COLOR_LIGHT_BLUE},
++      {"annotationColorLightGreen", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREEN},
++      {"annotationColorLightGrey", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREY},
++      {"annotationColorLightOrange", IDS_PDF_ANNOTATION_COLOR_LIGHT_ORANGE},
++      {"annotationColorOrange", IDS_PDF_ANNOTATION_COLOR_ORANGE},
++      {"annotationColorRed", IDS_PDF_ANNOTATION_COLOR_RED},
++      {"annotationColorWhite", IDS_PDF_ANNOTATION_COLOR_WHITE},
++      {"annotationColorYellow", IDS_PDF_ANNOTATION_COLOR_YELLOW},
++      {"annotationEraser", IDS_PDF_ANNOTATION_ERASER},
++      {"annotationHighlighter", IDS_PDF_ANNOTATION_HIGHLIGHTER},
++      {"annotationPen", IDS_PDF_ANNOTATION_PEN},
++      {"annotationRedo", IDS_PDF_ANNOTATION_REDO},
++      {"annotationUndo", IDS_PDF_ANNOTATION_UNDO},
++      {"cancelButton", IDS_CANCEL},
++      {"ink2BrushColorBlue1", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_1},
++      {"ink2BrushColorBlue2", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_2},
++      {"ink2BrushColorBlue3", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_3},
++      {"ink2BrushColorDarkGrey1", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_1},
++      {"ink2BrushColorDarkGrey2", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_2},
++      {"ink2BrushColorGreen1", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_1},
++      {"ink2BrushColorGreen2", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_2},
++      {"ink2BrushColorGreen3", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_3},
++      {"ink2BrushColorLightRed", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_RED},
++      {"ink2BrushColorLightYellow", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_YELLOW},
++      {"ink2BrushColorRed1", IDS_PDF_INK2_ANNOTATION_COLOR_RED_1},
++      {"ink2BrushColorRed2", IDS_PDF_INK2_ANNOTATION_COLOR_RED_2},
++      {"ink2BrushColorRed3", IDS_PDF_INK2_ANNOTATION_COLOR_RED_3},
++      {"ink2BrushColorTan1", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_1},
++      {"ink2BrushColorTan2", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_2},
++      {"ink2BrushColorTan3", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_3},
++      {"ink2BrushColorYellow1", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_1},
++      {"ink2BrushColorYellow2", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_2},
++      {"ink2BrushColorYellow3", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_3},
++      {"ink2BrushSizeExtraThick", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THICK},
++      {"ink2BrushSizeExtraThin", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THIN},
++      {"ink2BrushSizeMedium", IDS_PDF_INK2_ANNOTATION_SIZE_MEDIUM},
++      {"ink2BrushSizeThick", IDS_PDF_INK2_ANNOTATION_SIZE_THICK},
++      {"ink2BrushSizeThin", IDS_PDF_INK2_ANNOTATION_SIZE_THIN},
++      {"ink2Color", IDS_PDF_INK2_ANNOTATION_COLOR},
++      {"ink2Draw", IDS_PDF_INK2_DRAW},
++      {"ink2Size", IDS_PDF_INK2_ANNOTATION_SIZE},
++      {"ink2TextAlignCenter", IDS_PDF_INK2_TEXT_ALIGN_CENTER},
++      {"ink2TextAlignLeft", IDS_PDF_INK2_TEXT_ALIGN_LEFT},
++      {"ink2TextAlignRight", IDS_PDF_INK2_TEXT_ALIGN_RIGHT},
++      {"ink2TextAlignment", IDS_PDF_INK2_TEXT_ALIGNMENT},
++      {"ink2TextAnnotation", IDS_PDF_INK2_TEXT_ANNOTATION},
++      {"ink2TextColor", IDS_PDF_INK2_TEXT_COLOR},
++      {"ink2TextColorCyan1", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_1},
++      {"ink2TextColorCyan2", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_2},
++      {"ink2TextColorCyan3", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_3},
++      {"ink2TextFont", IDS_PDF_INK2_TEXT_FONT},
++      {"ink2TextFontMonospace", IDS_PDF_INK2_TEXT_FONT_MONOSPACE},
++      {"ink2TextFontSansSerif", IDS_PDF_INK2_TEXT_FONT_SANS_SERIF},
++      {"ink2TextFontSerif", IDS_PDF_INK2_TEXT_FONT_SERIF},
++      {"ink2TextFontSize", IDS_PDF_INK2_TEXT_FONT_SIZE},
++      {"ink2TextStyleBold", IDS_PDF_INK2_TEXT_STYLE_BOLD},
++      {"ink2TextStyleItalic", IDS_PDF_INK2_TEXT_STYLE_ITALIC},
++      {"ink2TextStyles", IDS_PDF_INK2_TEXT_STYLES},
++      {"ink2Tool", IDS_PDF_INK2_ANNOTATION_TOOL},
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
++#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
++      {"saveToDriveDialogCancelUploadButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_CANCEL_UPLOAD_BUTTON_LABEL},
++      {"saveToDriveDialogConnectionErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_CONNECTION_ERROR_MESSAGE},
++      {"saveToDriveDialogErrorTitle", IDS_SAVE_TO_DRIVE_DIALOG_ERROR_TITLE},
++      {"saveToDriveDialogManageStorageButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_MANAGE_STORAGE_BUTTON_LABEL},
++      {"saveToDriveDialogOpenInDriveButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_OPEN_IN_DRIVE_BUTTON_LABEL},
++      {"saveToDriveDialogRetryButtonLabel",
++       IDS_SAVE_TO_DRIVE_DIALOG_RETRY_BUTTON_LABEL},
++      {"saveToDriveDialogSessionTimeoutErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_SESSION_TIMEOUT_ERROR_MESSAGE},
++      {"saveToDriveDialogStorageFullErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_STORAGE_FULL_ERROR_MESSAGE},
++      {"saveToDriveDialogSuccessMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_MESSAGE},
++      {"saveToDriveDialogSuccessTitle", IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_TITLE},
++      {"saveToDriveDialogUnknownErrorMessage",
++       IDS_SAVE_TO_DRIVE_DIALOG_UNKNOWN_ERROR_MESSAGE},
++      {"saveToDriveDialogUploadingTitle",
++       IDS_SAVE_TO_DRIVE_DIALOG_UPLOADING_TITLE},
++      {"tooltipSaveToDrive", IDS_PDF_TOOLTIP_SAVE_TO_DRIVE},
++#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
++  };
++
++  for (const auto& resource : kPdfResources) {
++    AddPdfString(output, resource.name, resource.id);
++  }
++}
++
++void PopulateTsPdfFeatureFlags(ui::TemplateReplacements* replacements) {
++  (*replacements)["presetZoomFactors"] = zoom::GetPresetZoomFactorsAsJSON();
++  (*replacements)["pdfOopifEnabled"] = "";
++  (*replacements)["printingEnabled"] = "true";
++  (*replacements)["termsurfPdfPrintBridgeTrace"] =
++      IsTermSurfPdfPrintBridgeTraceActive() ? "true" : "false";
++}
++
++void PopulateTsPdfFeatureFlags(base::DictValue* dict) {
++  dict->Set("presetZoomFactors", zoom::GetPresetZoomFactorsAsJSON());
++  dict->Set("pdfOopifEnabled", "");
++  dict->Set("pdfGetSaveDataInBlocks", false);
++  dict->Set("pdfGlicSummarizeEnabled", false);
++  dict->Set("pdfInk2Enabled", false);
++  dict->Set("pdfSaveToDrive", false);
++  dict->Set("pdfSearchifySaveEnabled", false);
++  dict->Set("pdfTextAnnotationsEnabled", false);
++  dict->Set("pdfUseShowSaveFilePicker", false);
++  dict->Set("printingEnabled", true);
++  dict->Set("termsurfPdfPrintBridgeTrace",
++            IsTermSurfPdfPrintBridgeTraceActive());
++}
++
++}  // namespace
++
++void PopulateTsPdfTemplateReplacements(ui::TemplateReplacements* replacements) {
++  PopulatePdfLocalizedStrings(replacements);
++
++#if BUILDFLAG(ENABLE_PDF_INK2)
++  std::string edit_string = l10n_util::GetStringUTF8(IDS_EDIT);
++  std::erase(edit_string, '&');
++  (*replacements)["editButton"] = edit_string;
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
++  PopulateTsPdfFeatureFlags(replacements);
++  webui::SetLoadTimeDataDefaults(l10n_util::GetApplicationLocale(std::string()),
++                                 replacements);
++}
++
++base::DictValue GetTsPdfStringsForTermSurf() {
++  base::DictValue dict;
++  PopulatePdfLocalizedStrings(&dict);
++
++#if BUILDFLAG(ENABLE_PDF_INK2)
++  std::u16string edit_string = l10n_util::GetStringUTF16(IDS_EDIT);
++  std::erase(edit_string, u'&');
++  dict.Set("editButton", edit_string);
++#endif  // BUILDFLAG(ENABLE_PDF_INK2)
++
++  PopulateTsPdfFeatureFlags(&dict);
++  webui::SetLoadTimeDataDefaults(
++      extensions::ExtensionsBrowserClient::Get()->GetApplicationLocale(),
++      &dict);
++  return dict;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h b/content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h
+new file mode 100644
+index 0000000000..2a2ba66390
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h
+@@ -0,0 +1,18 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_LOAD_TIME_DATA_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_LOAD_TIME_DATA_H_
++
++#include "base/values.h"
++#include "ui/base/template_expressions.h"
++
++namespace content {
++
++void PopulateTsPdfTemplateReplacements(ui::TemplateReplacements* replacements);
++base::DictValue GetTsPdfStringsForTermSurf();
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_LOAD_TIME_DATA_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index 28e7e86b85..1385544001 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -39,8 +39,8 @@ bool HasHtmlSignature(std::string contents) {
+ void LoadTsPdfResourceBundle(const std::string& process_type) {
+   base::FilePath assets_path;
+   if (!base::PathService::Get(base::DIR_ASSETS, &assets_path)) {
+-    LOG(INFO) << "[issue-792-exp4] pdf-resource-pak path= found=0 loaded=0";
+-    LOG(INFO) << "[issue-792-exp8] chrome-common-pak path= found=0 loaded=0";
++    LOG(INFO) << "[termsurf-pdf] pdf-resource-pak path= found=0 loaded=0";
++    LOG(INFO) << "[termsurf-pdf] chrome-common-pak path= found=0 loaded=0";
+     return;
+   }
+ 
+@@ -59,12 +59,12 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+         IDR_PDF_INDEX_HTML);
+   }
+   const bool pdf_loaded = !index_html.empty();
+-  LOG(INFO) << "[issue-792-exp4] pdf-resource-pak path="
++  LOG(INFO) << "[termsurf-pdf] pdf-resource-pak path="
+             << pdf_pak_path.AsUTF8Unsafe() << " found=" << pdf_found
+             << " loaded=" << pdf_loaded;
+ 
+   if (process_type.empty()) {
+-    LOG(INFO) << "[issue-792-exp4] pdf-resource-bytes id=" << IDR_PDF_INDEX_HTML
++    LOG(INFO) << "[termsurf-pdf] pdf-resource-bytes id=" << IDR_PDF_INDEX_HTML
+               << " bytes=" << index_html.size()
+               << " html_signature=" << HasHtmlSignature(index_html);
+   }
+@@ -85,7 +85,7 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+             IDR_PDF_EMBEDDER_HTML);
+   }
+-  LOG(INFO) << "[issue-792-exp20] components-resource-pak path="
++  LOG(INFO) << "[termsurf-pdf] components-resource-pak path="
+             << components_pak_path.AsUTF8Unsafe()
+             << " found=" << components_found
+             << " loaded=" << !pdf_embedder_html.empty()
+@@ -114,7 +114,7 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+         ui::ResourceBundle::GetSharedInstance().GetLocalizedString(
+             IDS_PDF_PROPERTIES_PAGE_SIZE_PORTRAIT);
+   }
+-  LOG(INFO) << "[issue-792-exp28] components-strings-pak path="
++  LOG(INFO) << "[termsurf-pdf] components-strings-pak path="
+             << components_strings_pak_path.AsUTF8Unsafe()
+             << " found=" << components_strings_found
+             << " loaded=" << !portrait_string.empty()
+@@ -134,7 +134,7 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+     zoom_in_string = ui::ResourceBundle::GetSharedInstance().GetLocalizedString(
+         IDS_PDF_TOOLTIP_ZOOM_IN);
+   }
+-  LOG(INFO) << "[issue-792-exp8] chrome-generated-strings-pak path="
++  LOG(INFO) << "[termsurf-pdf] chrome-generated-strings-pak path="
+             << chrome_strings_pak_path.AsUTF8Unsafe()
+             << " found=" << chrome_strings_found
+             << " loaded=" << !zoom_in_string.empty()
+@@ -155,7 +155,7 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+             IDR_CHROME_EXTENSION_API_FEATURES);
+   }
+-  LOG(INFO) << "[issue-792-exp8] chrome-common-pak path="
++  LOG(INFO) << "[termsurf-pdf] chrome-common-pak path="
+             << common_pak_path.AsUTF8Unsafe() << " found=" << common_found
+             << " loaded=" << !api_features.empty();
+ 
+@@ -182,7 +182,7 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+   }
+   const bool extensions_renderer_loaded =
+       !mime_handler_private.empty() && !mime_handler_mojom.empty();
+-  LOG(INFO) << "[issue-792-exp11] extensions-renderer-pak path="
++  LOG(INFO) << "[termsurf-pdf] extensions-renderer-pak path="
+             << extensions_renderer_pak_path.AsUTF8Unsafe()
+             << " found=" << extensions_renderer_found
+             << " loaded=" << extensions_renderer_loaded
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+index 57b7fdf7ab..7923d1b85e 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+@@ -34,13 +34,13 @@ TsPdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
+   WebContents* web_contents = GetSenderWebContents();
+   if (!web_contents) {
+     LOG(INFO)
+-        << "[issue-794-exp15] pdf-set-title success=0 reason=no-web-contents";
++        << "[termsurf-pdf-title] pdf-set-title success=0 reason=no-web-contents";
+     return RespondNow(Error("Could not find a valid web contents."));
+   }
+ 
+   const std::string mime_type = web_contents->GetContentsMimeType();
+   if (mime_type != pdf::kPDFMimeType) {
+-    LOG(INFO) << "[issue-794-exp15] pdf-set-title success=0 reason=mime-guard"
++    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0 reason=mime-guard"
+               << " mime_type=" << mime_type
+               << " url=" << web_contents->GetLastCommittedURL();
+     EXTENSION_FUNCTION_VALIDATE(false);
+@@ -49,7 +49,7 @@ TsPdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
+   std::optional<set_pdf_document_title::Params> params =
+       set_pdf_document_title::Params::Create(args());
+   if (!params) {
+-    LOG(INFO) << "[issue-794-exp15] pdf-set-title success=0 reason=bad-params"
++    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0 reason=bad-params"
+               << " mime_type=" << mime_type
+               << " url=" << web_contents->GetLastCommittedURL();
+     EXTENSION_FUNCTION_VALIDATE(false);
+@@ -58,13 +58,13 @@ TsPdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
+   NavigationEntry* entry =
+       web_contents->GetController().GetLastCommittedEntry();
+   if (!entry) {
+-    LOG(INFO) << "[issue-794-exp15] pdf-set-title success=0 reason=no-entry"
++    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0 reason=no-entry"
+               << " title=" << params->title << " mime_type=" << mime_type
+               << " url=" << web_contents->GetLastCommittedURL();
+     return RespondNow(Error("Could not find a committed navigation entry."));
+   }
+ 
+-  LOG(INFO) << "[issue-794-exp15] pdf-set-title before"
++  LOG(INFO) << "[termsurf-pdf-title] pdf-set-title before"
+             << " title=" << params->title << " mime_type=" << mime_type
+             << " url=" << web_contents->GetLastCommittedURL() << " has_entry=1"
+             << " entry_title="
+@@ -74,7 +74,7 @@ TsPdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
+ 
+   NavigationEntry* updated_entry =
+       web_contents->GetController().GetLastCommittedEntry();
+-  LOG(INFO) << "[issue-794-exp15] pdf-set-title after success=1"
++  LOG(INFO) << "[termsurf-pdf-title] pdf-set-title after success=1"
+             << " title=" << params->title
+             << " has_entry=" << (updated_entry ? 1 : 0) << " entry_title="
+             << (updated_entry
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+index e602f34bce..e8f53427ae 100644
+--- a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -4,19 +4,12 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_resources_private_api.h"
+ 
+-#include <memory>
+ #include <optional>
+ #include <utility>
+ 
+-#include "base/environment.h"
+-#include "base/values.h"
+ #include "chrome/common/extensions/api/resources_private.h"
+-#include "chrome/grit/generated_resources.h"
+-#include "components/strings/grit/components_strings.h"
+-#include "components/zoom/page_zoom_constants.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h"
+ #include "extensions/browser/extensions_browser_client.h"
+-#include "pdf/buildflags.h"
+-#include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/webui/web_ui_util.h"
+ 
+ namespace content {
+@@ -25,212 +18,6 @@ namespace {
+ namespace resources_private = extensions::api::resources_private;
+ namespace get_strings = resources_private::GetStrings;
+ 
+-bool IsTermSurfPdfPrintBridgeTraceActive() {
+-  std::unique_ptr<base::Environment> env = base::Environment::Create();
+-  std::optional<std::string> enabled =
+-      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE");
+-  if (!enabled || *enabled != "1") {
+-    return false;
+-  }
+-
+-  std::optional<std::string> path =
+-      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
+-  return path && !path->empty();
+-}
+-
+-base::DictValue GetPdfStringsForTermSurf() {
+-  base::DictValue dict;
+-
+-  static constexpr webui::LocalizedString kPdfResources[] = {
+-      {"annotationsShowToggle", IDS_PDF_ANNOTATIONS_SHOW_TOGGLE},
+-      {"bookmarkExpandIconAriaLabel", IDS_PDF_BOOKMARK_EXPAND_ICON_ARIA_LABEL},
+-      {"bookmarks", IDS_PDF_BOOKMARKS},
+-      {"downloadEdited", IDS_PDF_DOWNLOAD_EDITED},
+-      {"downloadOriginal", IDS_PDF_DOWNLOAD_ORIGINAL},
+-      {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
+-      {"glicSummarize", IDS_PDF_GLIC_SUMMARIZE},
+-      {"glicSummarizeTooltip", IDS_PDF_GLIC_SUMMARIZE_TOOLTIP},
+-      {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
+-      {"moreActions", IDS_DOWNLOAD_MORE_ACTIONS},
+-      {"oversizeAttachmentWarning", IDS_PDF_OVERSIZE_ATTACHMENT_WARNING},
+-      {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
+-      {"pageLoading", IDS_PDF_PAGE_LOADING},
+-      {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
+-      {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
+-      {"passwordInvalid", IDS_PDF_PASSWORD_INVALID},
+-      {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
+-      {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
+-      {"present", IDS_PDF_PRESENT},
+-      {"propertiesApplication", IDS_PDF_PROPERTIES_APPLICATION},
+-      {"propertiesAuthor", IDS_PDF_PROPERTIES_AUTHOR},
+-      {"propertiesCreated", IDS_PDF_PROPERTIES_CREATED},
+-      {"propertiesDialogClose", IDS_CLOSE},
+-      {"propertiesDialogTitle", IDS_PDF_PROPERTIES_DIALOG_TITLE},
+-      {"propertiesFastWebView", IDS_PDF_PROPERTIES_FAST_WEB_VIEW},
+-      {"propertiesFastWebViewNo", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_NO},
+-      {"propertiesFastWebViewYes", IDS_PDF_PROPERTIES_FAST_WEB_VIEW_YES},
+-      {"propertiesFileName", IDS_PDF_PROPERTIES_FILE_NAME},
+-      {"propertiesFileSize", IDS_PDF_PROPERTIES_FILE_SIZE},
+-      {"propertiesKeywords", IDS_PDF_PROPERTIES_KEYWORDS},
+-      {"propertiesModified", IDS_PDF_PROPERTIES_MODIFIED},
+-      {"propertiesPageCount", IDS_PDF_PROPERTIES_PAGE_COUNT},
+-      {"propertiesPageSize", IDS_PDF_PROPERTIES_PAGE_SIZE},
+-      {"propertiesPdfProducer", IDS_PDF_PROPERTIES_PDF_PRODUCER},
+-      {"propertiesPdfVersion", IDS_PDF_PROPERTIES_PDF_VERSION},
+-      {"propertiesSubject", IDS_PDF_PROPERTIES_SUBJECT},
+-      {"propertiesTitle", IDS_PDF_PROPERTIES_TITLE},
+-      {"rotationStateLabel0", IDS_PDF_ROTATION_STATE_LABEL_0},
+-      {"rotationStateLabel90", IDS_PDF_ROTATION_STATE_LABEL_90},
+-      {"rotationStateLabel180", IDS_PDF_ROTATION_STATE_LABEL_180},
+-      {"rotationStateLabel270", IDS_PDF_ROTATION_STATE_LABEL_270},
+-      {"searchifyInProgress", IDS_PDF_SEARCHIFY_IN_PROGRESS},
+-      {"sidebarLabel", IDS_PDF_SIDEBAR_LABEL},
+-      {"thumbnailPageAriaLabel", IDS_PDF_THUMBNAIL_PAGE_ARIA_LABEL},
+-      {"tooltipAttachments", IDS_PDF_TOOLTIP_ATTACHMENTS},
+-      {"tooltipDocumentOutline", IDS_PDF_TOOLTIP_DOCUMENT_OUTLINE},
+-      {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
+-      {"tooltipDownloadAttachment", IDS_PDF_TOOLTIP_DOWNLOAD_ATTACHMENT},
+-      {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
+-      {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
+-      {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
+-      {"tooltipRotateCCW", IDS_PDF_TOOLTIP_ROTATE_CCW},
+-      {"tooltipThumbnails", IDS_PDF_TOOLTIP_THUMBNAILS},
+-      {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
+-      {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
+-      {"twoUpViewEnable", IDS_PDF_TWO_UP_VIEW_ENABLE},
+-      {"zoomTextInputAriaLabel", IDS_PDF_ZOOM_TEXT_INPUT_ARIA_LABEL},
+-
+-#if BUILDFLAG(ENABLE_PDF_INK2)
+-      {"annotationColorBlack", IDS_PDF_ANNOTATION_COLOR_BLACK},
+-      {"annotationColorBlue", IDS_PDF_ANNOTATION_COLOR_BLUE},
+-      {"annotationColorGreen", IDS_PDF_ANNOTATION_COLOR_GREEN},
+-      {"annotationColorLightBlue", IDS_PDF_ANNOTATION_COLOR_LIGHT_BLUE},
+-      {"annotationColorLightGreen", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREEN},
+-      {"annotationColorLightGrey", IDS_PDF_ANNOTATION_COLOR_LIGHT_GREY},
+-      {"annotationColorLightOrange", IDS_PDF_ANNOTATION_COLOR_LIGHT_ORANGE},
+-      {"annotationColorOrange", IDS_PDF_ANNOTATION_COLOR_ORANGE},
+-      {"annotationColorRed", IDS_PDF_ANNOTATION_COLOR_RED},
+-      {"annotationColorWhite", IDS_PDF_ANNOTATION_COLOR_WHITE},
+-      {"annotationColorYellow", IDS_PDF_ANNOTATION_COLOR_YELLOW},
+-      {"annotationEraser", IDS_PDF_ANNOTATION_ERASER},
+-      {"annotationHighlighter", IDS_PDF_ANNOTATION_HIGHLIGHTER},
+-      {"annotationPen", IDS_PDF_ANNOTATION_PEN},
+-      {"annotationRedo", IDS_PDF_ANNOTATION_REDO},
+-      {"annotationUndo", IDS_PDF_ANNOTATION_UNDO},
+-      {"cancelButton", IDS_CANCEL},
+-      {"ink2BrushColorBlue1", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_1},
+-      {"ink2BrushColorBlue2", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_2},
+-      {"ink2BrushColorBlue3", IDS_PDF_INK2_ANNOTATION_COLOR_BLUE_3},
+-      {"ink2BrushColorDarkGrey1", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_1},
+-      {"ink2BrushColorDarkGrey2", IDS_PDF_INK2_ANNOTATION_COLOR_DARK_GREY_2},
+-      {"ink2BrushColorGreen1", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_1},
+-      {"ink2BrushColorGreen2", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_2},
+-      {"ink2BrushColorGreen3", IDS_PDF_INK2_ANNOTATION_COLOR_GREEN_3},
+-      {"ink2BrushColorLightRed", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_RED},
+-      {"ink2BrushColorLightYellow", IDS_PDF_INK2_ANNOTATION_COLOR_LIGHT_YELLOW},
+-      {"ink2BrushColorRed1", IDS_PDF_INK2_ANNOTATION_COLOR_RED_1},
+-      {"ink2BrushColorRed2", IDS_PDF_INK2_ANNOTATION_COLOR_RED_2},
+-      {"ink2BrushColorRed3", IDS_PDF_INK2_ANNOTATION_COLOR_RED_3},
+-      {"ink2BrushColorTan1", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_1},
+-      {"ink2BrushColorTan2", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_2},
+-      {"ink2BrushColorTan3", IDS_PDF_INK2_ANNOTATION_COLOR_TAN_3},
+-      {"ink2BrushColorYellow1", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_1},
+-      {"ink2BrushColorYellow2", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_2},
+-      {"ink2BrushColorYellow3", IDS_PDF_INK2_ANNOTATION_COLOR_YELLOW_3},
+-      {"ink2BrushSizeExtraThick", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THICK},
+-      {"ink2BrushSizeExtraThin", IDS_PDF_INK2_ANNOTATION_SIZE_EXTRA_THIN},
+-      {"ink2BrushSizeMedium", IDS_PDF_INK2_ANNOTATION_SIZE_MEDIUM},
+-      {"ink2BrushSizeThick", IDS_PDF_INK2_ANNOTATION_SIZE_THICK},
+-      {"ink2BrushSizeThin", IDS_PDF_INK2_ANNOTATION_SIZE_THIN},
+-      {"ink2Color", IDS_PDF_INK2_ANNOTATION_COLOR},
+-      {"ink2Draw", IDS_PDF_INK2_DRAW},
+-      {"ink2Size", IDS_PDF_INK2_ANNOTATION_SIZE},
+-      {"ink2TextAlignCenter", IDS_PDF_INK2_TEXT_ALIGN_CENTER},
+-      {"ink2TextAlignLeft", IDS_PDF_INK2_TEXT_ALIGN_LEFT},
+-      {"ink2TextAlignRight", IDS_PDF_INK2_TEXT_ALIGN_RIGHT},
+-      {"ink2TextAlignment", IDS_PDF_INK2_TEXT_ALIGNMENT},
+-      {"ink2TextAnnotation", IDS_PDF_INK2_TEXT_ANNOTATION},
+-      {"ink2TextColor", IDS_PDF_INK2_TEXT_COLOR},
+-      {"ink2TextColorCyan1", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_1},
+-      {"ink2TextColorCyan2", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_2},
+-      {"ink2TextColorCyan3", IDS_PDF_INK2_ANNOTATION_COLOR_CYAN_3},
+-      {"ink2TextFont", IDS_PDF_INK2_TEXT_FONT},
+-      {"ink2TextFontMonospace", IDS_PDF_INK2_TEXT_FONT_MONOSPACE},
+-      {"ink2TextFontSansSerif", IDS_PDF_INK2_TEXT_FONT_SANS_SERIF},
+-      {"ink2TextFontSerif", IDS_PDF_INK2_TEXT_FONT_SERIF},
+-      {"ink2TextFontSize", IDS_PDF_INK2_TEXT_FONT_SIZE},
+-      {"ink2TextStyleBold", IDS_PDF_INK2_TEXT_STYLE_BOLD},
+-      {"ink2TextStyleItalic", IDS_PDF_INK2_TEXT_STYLE_ITALIC},
+-      {"ink2TextStyles", IDS_PDF_INK2_TEXT_STYLES},
+-      {"ink2Tool", IDS_PDF_INK2_ANNOTATION_TOOL},
+-#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+-
+-#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+-      {"saveToDriveDialogCancelUploadButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_CANCEL_UPLOAD_BUTTON_LABEL},
+-      {"saveToDriveDialogConnectionErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_CONNECTION_ERROR_MESSAGE},
+-      {"saveToDriveDialogErrorTitle", IDS_SAVE_TO_DRIVE_DIALOG_ERROR_TITLE},
+-      {"saveToDriveDialogManageStorageButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_MANAGE_STORAGE_BUTTON_LABEL},
+-      {"saveToDriveDialogOpenInDriveButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_OPEN_IN_DRIVE_BUTTON_LABEL},
+-      {"saveToDriveDialogRetryButtonLabel",
+-       IDS_SAVE_TO_DRIVE_DIALOG_RETRY_BUTTON_LABEL},
+-      {"saveToDriveDialogSessionTimeoutErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_SESSION_TIMEOUT_ERROR_MESSAGE},
+-      {"saveToDriveDialogStorageFullErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_STORAGE_FULL_ERROR_MESSAGE},
+-      {"saveToDriveDialogSuccessMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_MESSAGE},
+-      {"saveToDriveDialogSuccessTitle", IDS_SAVE_TO_DRIVE_DIALOG_SUCCESS_TITLE},
+-      {"saveToDriveDialogUnknownErrorMessage",
+-       IDS_SAVE_TO_DRIVE_DIALOG_UNKNOWN_ERROR_MESSAGE},
+-      {"saveToDriveDialogUploadingTitle",
+-       IDS_SAVE_TO_DRIVE_DIALOG_UPLOADING_TITLE},
+-      {"tooltipSaveToDrive", IDS_PDF_TOOLTIP_SAVE_TO_DRIVE},
+-#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+-  };
+-
+-  for (const auto& resource : kPdfResources) {
+-    dict.Set(resource.name, l10n_util::GetStringUTF16(resource.id));
+-  }
+-
+-#if BUILDFLAG(ENABLE_PDF_INK2)
+-  std::u16string edit_string = l10n_util::GetStringUTF16(IDS_EDIT);
+-  std::erase(edit_string, u'&');
+-  dict.Set("editButton", edit_string);
+-#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+-
+-  // This is the load-bearing value for PDF toolbar zoom. Chrome normally
+-  // returns it through chrome/browser/pdf/pdf_extension_util.cc, but linking
+-  // that target pulls the full Chrome PDF browser stack and duplicates
+-  // PdfViewerStreamManager in TermSurf's smaller embedder.
+-  dict.Set("presetZoomFactors", zoom::GetPresetZoomFactorsAsJSON());
+-  // TermSurf's current PDF bridge uses the legacy mime-handler viewer path.
+-  // Enabling the OOPIF attribute switches the bundled viewer into
+-  // pdfViewerPrivate.getStreamInfo(), which TermSurf has not implemented yet.
+-  dict.Set("pdfOopifEnabled", "");
+-
+-  // Keep the PDF viewer's feature flags explicit and conservative. These match
+-  // the embedder-owned surfaces TermSurf currently supports.
+-  dict.Set("pdfGetSaveDataInBlocks", false);
+-  dict.Set("pdfGlicSummarizeEnabled", false);
+-  dict.Set("pdfInk2Enabled", false);
+-  dict.Set("pdfSaveToDrive", false);
+-  dict.Set("pdfSearchifySaveEnabled", false);
+-  dict.Set("pdfTextAnnotationsEnabled", false);
+-  dict.Set("pdfUseShowSaveFilePicker", false);
+-  // TermSurf no longer gates the production PDF print control on the
+-  // automation-only intercept. Document print permissions are still enforced in
+-  // the plugin print path before native print is invoked.
+-  dict.Set("printingEnabled", true);
+-  dict.Set("termsurfPdfPrintBridgeTrace",
+-           IsTermSurfPdfPrintBridgeTraceActive());
+-
+-  return dict;
+-}
+-
+ }  // namespace
+ 
+ TsResourcesPrivateGetStringsFunction::TsResourcesPrivateGetStringsFunction() =
+@@ -249,17 +36,13 @@ ExtensionFunction::ResponseAction TsResourcesPrivateGetStringsFunction::Run() {
+   base::DictValue dict;
+   switch (params->component) {
+     case resources_private::Component::kPdf:
+-      dict = GetPdfStringsForTermSurf();
++      dict = GetTsPdfStringsForTermSurf();
+       break;
+     case resources_private::Component::kIdentity:
+     case resources_private::Component::kNone:
+       break;
+   }
+ 
+-  webui::SetLoadTimeDataDefaults(
+-      extensions::ExtensionsBrowserClient::Get()->GetApplicationLocale(),
+-      &dict);
+-
+   return RespondNow(WithArguments(std::move(dict)));
+ }
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 2128a95ace..821d4402e7 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -5,131 +5,27 @@
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
+ #include "base/command_line.h"
+-#include "base/environment.h"
+-#include "base/logging.h"
+-#include "components/pdf/browser/pdf_document_helper.h"
+-#include "components/pdf/browser/pdf_navigation_throttle.h"
+-#include "components/pdf/browser/pdf_url_loader_request_interceptor.h"
+-#include "components/pdf/common/constants.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+-#include "content/libtermsurf_chromium/ts_mime_handler_binders.h"
+-#include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
+-#include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
+-#include "content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.h"
+-#include "content/libtermsurf_chromium/ts_pdf_stream_delegate.h"
+-#include "content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.h"
+-#include "content/libtermsurf_chromium/ts_plugin_utils.h"
++#include "content/libtermsurf_chromium/ts_pdf_browser_support.h"
+ #include "content/public/browser/browser_context.h"
+-#include "content/public/browser/child_process_security_policy.h"
+-#include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+-#include "content/public/browser/render_frame_host.h"
+-#include "content/public/browser/render_process_host.h"
+-#include "content/public/browser/security_principal.h"
+-#include "content/public/browser/site_instance.h"
+ #include "content/public/browser/url_loader_request_interceptor.h"
+-#include "content/public/browser/web_contents.h"
+-#include "content/public/browser/web_ui_url_loader_factory.h"
+ #include "content/public/common/content_switches.h"
+-#include "content/public/common/url_constants.h"
+ #include "content/shell/browser/shell_browser_context.h"
+-#include "extensions/browser/extension_protocols.h"
+-#include "extensions/browser/extension_registry.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
+ #include "extensions/browser/extensions_browser_client.h"
+-#include "extensions/browser/extensions_browser_interface_binders.h"
+-#include "extensions/browser/process_map.h"
+-#include "extensions/browser/renderer_startup_helper.h"
+-#include "extensions/common/api/mime_handler.mojom.h"
+-#include "extensions/common/constants.h"
+-#include "extensions/common/extension.h"
+-#include "extensions/common/manifest.h"
+-#include "extensions/common/mojom/frame.mojom.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+-#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
+-#include "pdf/mojom/pdf.mojom.h"
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+-#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+ #include "third_party/blink/public/common/loader/url_loader_throttle.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/badging/badging.mojom.h"
+ #include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+-#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
+ 
+ namespace content {
+-namespace {
+-
+-constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
+-constexpr char kTsPdfPrintInterceptFileSwitch[] =
+-    "termsurf-pdf-print-intercept-file";
+-constexpr char kTsPdfPrintBridgeTraceSwitch[] =
+-    "termsurf-pdf-print-bridge-trace";
+-constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
+-    "termsurf-pdf-print-bridge-trace-file";
+-constexpr char kTsPdfNativePrintTraceSwitch[] =
+-    "termsurf-pdf-native-print-trace";
+-constexpr char kTsPdfNativePrintTraceFileSwitch[] =
+-    "termsurf-pdf-native-print-trace-file";
+-
+-std::optional<std::string> GetTsPdfTraceFileFromEnv(
+-    const std::string& enabled_var,
+-    const std::string& path_var) {
+-  std::unique_ptr<base::Environment> env = base::Environment::Create();
+-  std::optional<std::string> enabled = env->GetVar(enabled_var);
+-  if (!enabled || *enabled != "1") {
+-    return std::nullopt;
+-  }
+-
+-  std::optional<std::string> path = env->GetVar(path_var);
+-  if (!path || path->empty()) {
+-    return std::nullopt;
+-  }
+-
+-  return path;
+-}
+-
+-bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
+-  return extension && extension->id() == extension_misc::kPdfExtensionId &&
+-         extensions::Manifest::IsComponentLocation(extension->location());
+-}
+-
+-bool IsTsPdfComponentExtensionUrl(const GURL& url) {
+-  return url.SchemeIs(extensions::kExtensionScheme) &&
+-         url.host() == extension_misc::kPdfExtensionId;
+-}
+-
+-const extensions::Extension* GetEnabledPdfExtension(
+-    content::BrowserContext* browser_context) {
+-  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+-  if (!registry) {
+-    return nullptr;
+-  }
+-
+-  const extensions::Extension* extension =
+-      registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
+-  return IsTsPdfComponentExtension(extension) ? extension : nullptr;
+-}
+-
+-const extensions::Extension* GetExtensionForInitiatorOrigin(
+-    content::BrowserContext* browser_context,
+-    const std::optional<url::Origin>& request_initiator_origin) {
+-  if (!request_initiator_origin.has_value()) {
+-    return nullptr;
+-  }
+-
+-  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+-  if (!registry) {
+-    return nullptr;
+-  }
+-
+-  return registry->enabled_extensions().GetExtensionOrAppByURL(
+-      request_initiator_origin->GetURL());
+-}
+-
+-}  // namespace
++namespace {}  // namespace
+ 
+ // Stub BadgeService — accepts and ignores Badging API calls (Issue 655).
+ // Prevents renderer kills on navigator.setAppBadge().
+@@ -163,14 +59,7 @@ std::unique_ptr<BrowserMainParts> TsBrowserClient::CreateBrowserMainParts(
+ void TsBrowserClient::CreateThrottlesForNavigation(
+     NavigationThrottleRegistry& registry) {
+   ShellContentBrowserClient::CreateThrottlesForNavigation(registry);
+-  TsPdfIframeNavigationThrottle::MaybeCreateAndAdd(registry);
+-  registry.AddThrottle(std::make_unique<pdf::PdfNavigationThrottle>(
+-      registry, std::make_unique<TsPdfStreamDelegate>()));
+-  NavigationHandle& handle = registry.GetNavigationHandle();
+-  LOG(INFO) << "[issue-792-exp14] navigation-throttles frame_tree_node_id="
+-            << handle.GetFrameTreeNodeId() << " url=" << handle.GetURL()
+-            << " pdf_throttle=1 iframe_throttle="
+-            << (handle.IsInMainFrame() ? 0 : 1);
++  AddTsPdfNavigationThrottles(registry);
+ }
+ 
+ std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
+@@ -184,13 +73,7 @@ TsBrowserClient::CreateURLLoaderThrottles(
+   auto result = ShellContentBrowserClient::CreateURLLoaderThrottles(
+       request, browser_context, wc_getter, navigation_ui_data,
+       frame_tree_node_id, navigation_id);
+-  result.push_back(
+-      std::make_unique<TsPluginResponseInterceptorURLLoaderThrottle>(
+-          request.destination, frame_tree_node_id));
+-  LOG(INFO) << "[issue-792-exp14] url-loader-throttle destination="
+-            << static_cast<int>(request.destination)
+-            << " frame_tree_node_id=" << frame_tree_node_id
+-            << " plugin_interceptor=1";
++  AddTsPdfURLLoaderThrottles(&result, request, frame_tree_node_id);
+   return result;
+ }
+ 
+@@ -205,29 +88,14 @@ TsBrowserClient::WillCreateURLLoaderRequestInterceptors(
+       ShellContentBrowserClient::WillCreateURLLoaderRequestInterceptors(
+           navigation_ui_data, frame_tree_node_id, navigation_id,
+           force_no_https_upgrade, navigation_response_task_runner);
+-  auto pdf_interceptor =
+-      pdf::PdfURLLoaderRequestInterceptor::MaybeCreateInterceptor(
+-          frame_tree_node_id, std::make_unique<TsPdfStreamDelegate>());
+-  LOG(INFO) << "[issue-792-exp14] pdf-request-interceptor frame_tree_node_id="
+-            << frame_tree_node_id << " created=" << (pdf_interceptor ? 1 : 0);
+-  if (pdf_interceptor) {
+-    interceptors.push_back(std::move(pdf_interceptor));
+-  }
++  AddTsPdfURLLoaderRequestInterceptors(&interceptors, frame_tree_node_id);
+   return interceptors;
+ }
+ 
+ base::flat_set<std::string>
+ TsBrowserClient::GetPluginMimeTypesWithExternalHandlers(
+     BrowserContext* browser_context) {
+-  base::flat_set<std::string> mime_types;
+-  auto map = GetTsPluginMimeTypeToExtensionIdMap(browser_context);
+-  for (const auto& pair : map) {
+-    mime_types.insert(pair.first);
+-  }
+-  LOG(INFO) << "[issue-792-exp14] external-plugin-mime-types count="
+-            << mime_types.size()
+-            << " has_pdf=" << (mime_types.contains(pdf::kPDFMimeType) ? 1 : 0);
+-  return mime_types;
++  return GetTsPdfExternalPluginMimeTypes(browser_context);
+ }
+ 
+ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+@@ -236,53 +104,8 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   // Call base class first to get NetworkHintsHandler etc.
+   ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+       render_frame_host, map);
+-  WebContents* web_contents =
+-      WebContents::FromRenderFrameHost(render_frame_host);
+-  auto* observer =
+-      extensions::ExtensionWebContentsObserver::GetForWebContents(web_contents);
+-  const extensions::Extension* extension =
+-      observer ? observer->GetExtensionFromFrame(render_frame_host, false)
+-               : nullptr;
+-  const bool is_pdf_extension = IsTsPdfComponentExtension(extension);
+-  const std::string frame_url = render_frame_host->GetLastCommittedURL().spec();
+-  const std::string site_url =
+-      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
+-  const std::string extension_id = extension ? extension->id() : "none";
+-
+-  LOG(INFO) << "[issue-792-exp13] extension-frame-binder-check frame_url="
+-            << frame_url << " site_url=" << site_url
+-            << " observer=" << (observer ? 1 : 0)
+-            << " extension_id=" << extension_id
+-            << " is_pdf_extension=" << (is_pdf_extension ? 1 : 0);
+-
+-  bool populated_extension_binders = false;
+-  if (extension) {
+-    extensions::ExtensionsBrowserClient::Get()
+-        ->RegisterBrowserInterfaceBindersForFrame(map, render_frame_host,
+-                                                  extension);
+-    populated_extension_binders = true;
+-    if (is_pdf_extension) {
+-      LOG(INFO) << "[issue-792-exp13] pdf-extension-frame-binders frame_url="
+-                << frame_url << " site_url=" << site_url
+-                << " extension_id=" << extension->id() << " source=canonical";
+-    }
+-  }
++  RegisterTsPdfBrowserInterfaceBindersForFrame(render_frame_host, map);
+ 
+-  if (!populated_extension_binders &&
+-      (IsTsPdfComponentExtensionUrl(render_frame_host->GetLastCommittedURL()) ||
+-       IsTsPdfComponentExtensionUrl(
+-           render_frame_host->GetSiteInstance()->GetSiteURL()))) {
+-    const extensions::Extension* pdf_extension = GetEnabledPdfExtension(
+-        render_frame_host->GetProcess()->GetBrowserContext());
+-    if (pdf_extension) {
+-      extensions::PopulateExtensionFrameBinders(map, render_frame_host,
+-                                                pdf_extension);
+-      LOG(INFO) << "[issue-792-exp13] pdf-extension-frame-binders frame_url="
+-                << frame_url << " site_url=" << site_url
+-                << " extension_id=" << pdf_extension->id()
+-                << " source=direct-populate";
+-    }
+-  }
+   // Add BadgeService stub (Issue 655).
+   map->Add<blink::mojom::BadgeService>(base::BindRepeating(
+       [](TsBrowserClient* self, RenderFrameHost*,
+@@ -293,14 +116,6 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+         self->stub_badge_service_->Bind(std::move(receiver));
+       },
+       base::Unretained(this)));
+-
+-  map->Add<help_bubble::mojom::PdfHelpBubbleHandlerFactory>(
+-      base::BindRepeating(&pdf::BindTsPdfHelpBubbleHandlerFactory));
+-
+-  map->Add<extensions::mime_handler::MimeHandlerService>(
+-      base::BindRepeating(&BindTsMimeHandlerService));
+-  map->Add<extensions::mime_handler::BeforeUnloadControl>(
+-      base::BindRepeating(&BindTsBeforeUnloadControl));
+ }
+ 
+ void TsBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
+@@ -309,27 +124,8 @@ void TsBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
+   ShellContentBrowserClient::
+       RegisterAssociatedInterfaceBindersForRenderFrameHost(render_frame_host,
+                                                            associated_registry);
+-  associated_registry.RemoveInterface(extensions::mojom::LocalFrameHost::Name_);
+-  associated_registry.AddInterface<extensions::mojom::LocalFrameHost>(
+-      base::BindRepeating(
+-          [](RenderFrameHost* render_frame_host,
+-             mojo::PendingAssociatedReceiver<extensions::mojom::LocalFrameHost>
+-                 receiver) {
+-            extensions::ExtensionWebContentsObserver::BindLocalFrameHost(
+-                std::move(receiver), render_frame_host);
+-          },
+-          &render_frame_host));
+-  associated_registry.AddInterface<pdf::mojom::PdfHost>(base::BindRepeating(
+-      [](RenderFrameHost* render_frame_host,
+-         mojo::PendingAssociatedReceiver<pdf::mojom::PdfHost> receiver) {
+-        LOG(INFO) << "[issue-792-exp10] pdf-host-binder frame_url="
+-                  << render_frame_host->GetLastCommittedURL() << " site_url="
+-                  << render_frame_host->GetSiteInstance()->GetSiteURL();
+-        pdf::PDFDocumentHelper::BindPdfHost(
+-            std::move(receiver), render_frame_host,
+-            std::make_unique<pdf::TsPDFDocumentHelperClient>());
+-      },
+-      &render_frame_host));
++  RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
++      render_frame_host, associated_registry);
+ }
+ 
+ void TsBrowserClient::OnWebContentsCreated(WebContents* web_contents) {
+@@ -365,46 +161,15 @@ void TsBrowserClient::AppendExtraCommandLineSwitches(
+     return;
+   }
+ 
+-  // Renderer processes do not reliably inherit the browser process environment.
+-  // Forward the contained PDF print test guards explicitly.
+-  std::optional<std::string> intercept_file = GetTsPdfTraceFileFromEnv(
+-      "TERMSURF_PDF_PRINT_INTERCEPT", "TERMSURF_PDF_PRINT_INTERCEPT_FILE");
+-  if (intercept_file) {
+-    command_line->AppendSwitch(kTsPdfPrintInterceptSwitch);
+-    command_line->AppendSwitchASCII(kTsPdfPrintInterceptFileSwitch,
+-                                    *intercept_file);
+-  }
+-
+-  std::optional<std::string> bridge_trace_file =
+-      GetTsPdfTraceFileFromEnv("TERMSURF_PDF_PRINT_BRIDGE_TRACE",
+-                               "TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
+-  if (bridge_trace_file) {
+-    command_line->AppendSwitch(kTsPdfPrintBridgeTraceSwitch);
+-    command_line->AppendSwitchASCII(kTsPdfPrintBridgeTraceFileSwitch,
+-                                    *bridge_trace_file);
+-  }
+-
+-  std::optional<std::string> native_print_trace_file =
+-      GetTsPdfTraceFileFromEnv("TERMSURF_PDF_NATIVE_PRINT_TRACE",
+-                               "TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE");
+-  if (native_print_trace_file) {
+-    command_line->AppendSwitch(kTsPdfNativePrintTraceSwitch);
+-    command_line->AppendSwitchASCII(kTsPdfNativePrintTraceFileSwitch,
+-                                    *native_print_trace_file);
+-  }
++  AppendTsPdfRendererCommandLineSwitches(command_line);
+ }
+ 
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+     const std::string& scheme,
+     FrameTreeNodeId frame_tree_node_id) {
+-  if (scheme == extensions::kExtensionScheme) {
+-    WebContents* web_contents =
+-        WebContents::FromFrameTreeNodeId(frame_tree_node_id);
+-    LOG(INFO) << "[issue-792-exp5] extension-factory"
+-              << " scheme=chrome-extension type=navigation";
+-    return extensions::CreateExtensionNavigationURLLoaderFactory(
+-        web_contents->GetBrowserContext(), false);
++  if (IsTsPdfExtensionScheme(scheme)) {
++    return CreateTsPdfExtensionNavigationURLLoaderFactory(frame_tree_node_id);
+   }
+   return ShellContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+       scheme, frame_tree_node_id);
+@@ -416,12 +181,8 @@ void TsBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
+   ShellContentBrowserClient::
+       RegisterNonNetworkWorkerMainResourceURLLoaderFactories(browser_context,
+                                                              factories);
+-  LOG(INFO) << "[issue-792-exp5] extension-factory"
+-            << " scheme=chrome-extension type=worker-main";
+-  factories->emplace(
+-      extensions::kExtensionScheme,
+-      extensions::CreateExtensionWorkerMainResourceURLLoaderFactory(
+-          browser_context));
++  RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(browser_context,
++                                                           factories);
+ }
+ 
+ void TsBrowserClient::RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
+@@ -430,12 +191,8 @@ void TsBrowserClient::RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
+   ShellContentBrowserClient::
+       RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(browser_context,
+                                                               factories);
+-  LOG(INFO) << "[issue-792-exp5] extension-factory"
+-            << " scheme=chrome-extension type=service-worker";
+-  factories->emplace(
+-      extensions::kExtensionScheme,
+-      extensions::CreateExtensionServiceWorkerScriptURLLoaderFactory(
+-          browser_context));
++  RegisterTsPdfExtensionServiceWorkerUpdateURLLoaderFactory(browser_context,
++                                                            factories);
+ }
+ 
+ void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+@@ -445,67 +202,25 @@ void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+     NonNetworkURLLoaderFactoryMap* factories) {
+   ShellContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+       render_process_id, render_frame_id, request_initiator_origin, factories);
+-  LOG(INFO) << "[issue-792-exp5] extension-factory"
+-            << " scheme=chrome-extension type=subresource";
+-  factories->emplace(extensions::kExtensionScheme,
+-                     extensions::CreateExtensionURLLoaderFactory(
+-                         render_process_id, render_frame_id));
+-
+-  RenderProcessHost* process_host =
+-      RenderProcessHost::FromID(render_process_id);
+-  if (!process_host) {
+-    return;
+-  }
+-  RenderFrameHost* frame_host =
+-      RenderFrameHost::FromID(render_process_id, render_frame_id);
+-  if (!frame_host) {
+-    return;
+-  }
+-  const extensions::Extension* extension = GetExtensionForInitiatorOrigin(
+-      process_host->GetBrowserContext(), request_initiator_origin);
+-  if (!IsTsPdfComponentExtension(extension)) {
+-    return;
+-  }
+-
+-  factories->emplace(kChromeUIScheme,
+-                     CreateWebUIURLLoaderFactory(frame_host, kChromeUIScheme,
+-                                                 {kChromeUIResourcesHost}));
+-  LOG(INFO) << "[issue-792-exp7] chrome-resources-factory extension_id="
+-            << extension->id() << " process_id=" << render_process_id
+-            << " frame_id=" << render_frame_id;
++  RegisterTsPdfExtensionSubresourceURLLoaderFactory(
++      render_process_id, render_frame_id, request_initiator_origin, factories);
+ }
+ 
+ bool TsBrowserClient::ShouldUseProcessPerSite(BrowserContext* browser_context,
+                                               const GURL& site_url) {
+-  if (!site_url.SchemeIs(extensions::kExtensionScheme)) {
++  bool use_process_per_site = false;
++  if (!MaybeUseTsPdfProcessPerSite(browser_context, site_url,
++                                   &use_process_per_site)) {
+     return ShellContentBrowserClient::ShouldUseProcessPerSite(browser_context,
+                                                               site_url);
+   }
+-
+-  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+-  if (!registry) {
+-    return false;
+-  }
+-
+-  const extensions::Extension* extension =
+-      registry->enabled_extensions().GetByID(site_url.GetHost());
+-  if (!extension) {
+-    return false;
+-  }
+-
+-  LOG(INFO) << "[issue-792-exp6] process-per-site extension_id="
+-            << extension->id() << " effective_url=" << site_url;
+-  return true;
++  return use_process_per_site;
+ }
+ 
+ bool TsBrowserClient::IsHandledURL(const GURL& url) {
+-  if (url.SchemeIs(extensions::kExtensionScheme)) {
+-    static bool logged_once = false;
+-    if (!logged_once) {
+-      logged_once = true;
+-      LOG(INFO) << "[issue-792-exp6] handled-url url=" << url;
+-    }
+-    return true;
++  bool handled = false;
++  if (MaybeHandleTsPdfExtensionURL(url, &handled)) {
++    return handled;
+   }
+ 
+   return ShellContentBrowserClient::IsHandledURL(url);
+@@ -513,58 +228,7 @@ bool TsBrowserClient::IsHandledURL(const GURL& url) {
+ 
+ void TsBrowserClient::SiteInstanceGotProcessAndSite(
+     SiteInstance* site_instance) {
+-  BrowserContext* browser_context = site_instance->GetBrowserContext();
+-  if (browser_context->IsOffTheRecord()) {
+-    return;
+-  }
+-
+-  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+-  if (!registry) {
+-    return;
+-  }
+-
+-  const extensions::Extension* extension =
+-      registry->enabled_extensions().GetExtensionOrAppByURL(
+-          site_instance->GetSiteURL());
+-  if (!extension) {
+-    if (site_instance->GetSiteURL().SchemeIs(extensions::kExtensionScheme)) {
+-      LOG(INFO) << "[issue-792-exp6] process-map-miss site_url="
+-                << site_instance->GetSiteURL();
+-    }
+-    return;
+-  }
+-
+-  if (site_instance->GetSecurityPrincipal().IsSandboxed()) {
+-    return;
+-  }
+-
+-  const int process_id = site_instance->GetProcess()->GetDeprecatedID();
+-  extensions::ProcessMap::Get(browser_context)
+-      ->Insert(extension->id(), process_id);
+-  LOG(INFO) << "[issue-792-exp6] process-map-insert extension_id="
+-            << extension->id() << " process_id=" << process_id
+-            << " site_url=" << site_instance->GetSiteURL();
+-
+-  if (IsTsPdfComponentExtension(extension)) {
+-    auto* renderer_startup_helper =
+-        extensions::RendererStartupHelperFactory::GetForBrowserContext(
+-            browser_context);
+-    LOG(INFO) << "[issue-792-exp9] pdf-process-map-helper extension_id="
+-              << extension->id() << " process_id=" << process_id
+-              << " helper=" << (renderer_startup_helper != nullptr);
+-    if (renderer_startup_helper) {
+-      renderer_startup_helper->ActivateExtensionInProcess(
+-          *extension, site_instance->GetProcess());
+-      LOG(INFO) << "[issue-792-exp9] pdf-activate-request extension_id="
+-                << extension->id() << " process_id=" << process_id
+-                << " called=1";
+-    }
+-    ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
+-        process_id, url::Origin::CreateFromNormalizedTuple(
+-                        kChromeUIScheme, kChromeUIResourcesHost, 0));
+-    LOG(INFO) << "[issue-792-exp7] chrome-resources-grant extension_id="
+-              << extension->id() << " process_id=" << process_id;
+-  }
++  MaybeActivateTsPdfSiteInstance(site_instance);
+ }
+ 
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index d466917950..d3aab68f92 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -209,16 +209,16 @@ void TsBrowserMainParts::InitializeMessageLoopContext() {
+ void TsBrowserMainParts::InitializeBrowserContexts() {
+   extensions_client_ = std::make_unique<TsExtensionsClient>();
+   extensions::ExtensionsClient::Set(extensions_client_.get());
+-  LOG(INFO) << "[issue-792-exp2] extensions-client-set";
++  LOG(INFO) << "[termsurf-pdf] extensions-client-set";
+ 
+   extensions_browser_client_ = std::make_unique<TsExtensionsBrowserClient>();
+   extensions_browser_client_->Init();
+   extensions::ExtensionsBrowserClient::Set(extensions_browser_client_.get());
+-  LOG(INFO) << "[issue-792-exp2] extensions-browser-client-set";
++  LOG(INFO) << "[termsurf-pdf] extensions-browser-client-set";
+ 
+   extensions::EnsureBrowserContextKeyedServiceFactoriesBuilt();
+   EnsureTsBrowserContextKeyedServiceFactoriesBuilt();
+-  LOG(INFO) << "[issue-792-exp2] keyed-service-factories-built";
++  LOG(INFO) << "[termsurf-pdf] keyed-service-factories-built";
+ 
+   set_browser_context(new ShellBrowserContext(false, true));
+   set_off_the_record_browser_context(new ShellBrowserContext(true, true));
+@@ -262,21 +262,21 @@ void TsBrowserMainParts::InitializeExtensionContext(
+   PrefService* pref_service_ptr = pref_service.get();
+   extension_pref_services_[context] = std::move(pref_service);
+   extensions_browser_client_->RegisterContext(context, pref_service_ptr);
+-  LOG(INFO) << "[issue-792-exp2] extension-prefs-ready context=" << context
++  LOG(INFO) << "[termsurf-pdf] extension-prefs-ready context=" << context
+             << " prefs=" << pref_service_ptr;
+ 
+   auto* extension_system = static_cast<TsExtensionSystem*>(
+       extensions::ExtensionSystem::Get(context));
+   CHECK(extension_system);
+   extension_system->InitForRegularProfile(/*extensions_enabled=*/true);
+-  LOG(INFO) << "[issue-792-exp2] extension-system-init-for-regular-profile"
++  LOG(INFO) << "[termsurf-pdf] extension-system-init-for-regular-profile"
+             << " context=" << context;
+   extension_system->FinishInitialization();
+-  LOG(INFO) << "[issue-792-exp2] extension-system-finish-initialization"
++  LOG(INFO) << "[termsurf-pdf] extension-system-finish-initialization"
+             << " context=" << context;
+ 
+   auto* registry = extensions::ExtensionRegistry::Get(context);
+-  LOG(INFO) << "[issue-792-exp2] extension-system-ready context=" << context
++  LOG(INFO) << "[termsurf-pdf] extension-system-ready context=" << context
+             << " registry=" << registry
+             << " is_ready=" << extension_system->is_ready();
+ }
+@@ -678,7 +678,7 @@ void TsBrowserMainParts::ResizeTab(void* wc_handle,
+     gfx::Size logical(static_cast<int>(std::ceil(width / scale)),
+                       static_cast<int>(std::ceil(height / scale)));
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp8] resize-tab requested_width=" << width
++      LOG(INFO) << "[termsurf-pdf-resize] resize-tab requested_width=" << width
+                 << " requested_height=" << height
+                 << " logical_width=" << logical.width()
+                 << " logical_height=" << logical.height()
+@@ -764,7 +764,7 @@ void TsBrowserMainParts::ForwardMouseEvent(void* wc_handle,
+       web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp5] mouse-event kind="
++    LOG(INFO) << "[termsurf-pdf-input] mouse-event kind="
+               << (type == 0 ? "down" : "up") << " web_contents=" << web_contents
+               << " url=" << web_contents->GetLastCommittedURL().spec()
+               << " view=" << view
+@@ -773,13 +773,13 @@ void TsBrowserMainParts::ForwardMouseEvent(void* wc_handle,
+               << ") button=" << button << " click_count=" << click_count
+               << " modifiers=" << modifiers
+               << " web_modifiers=" << web_modifiers;
+-    LogIssue794InputFrames("[issue-794-exp5]", web_contents, x, y);
++    LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, x, y);
+   }
+ 
+   if (view && router) {
+     auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp5] mouse-route kind="
++      LOG(INFO) << "[termsurf-pdf-input] mouse-route kind="
+                 << (type == 0 ? "down" : "up") << " route_mode=input-router"
+                 << " root_view=" << root_view << " router=" << router;
+     }
+@@ -787,13 +787,13 @@ void TsBrowserMainParts::ForwardMouseEvent(void* wc_handle,
+     router->RouteMouseEvent(root_view, &mouse_event, latency);
+   } else if (view) {
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp5] mouse-route kind="
++      LOG(INFO) << "[termsurf-pdf-input] mouse-route kind="
+                 << (type == 0 ? "down" : "up") << " route_mode=direct-fallback"
+                 << " reason=" << (router ? "missing-view" : "missing-router");
+     }
+     view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
+   } else if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp5] mouse-route kind="
++    LOG(INFO) << "[termsurf-pdf-input] mouse-route kind="
+               << (type == 0 ? "down" : "up") << " route_mode=drop"
+               << " reason=missing-view";
+   }
+@@ -830,7 +830,7 @@ void TsBrowserMainParts::ForwardMouseMove(void* wc_handle,
+       web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp5] mouse-event kind=move web_contents="
++    LOG(INFO) << "[termsurf-pdf-input] mouse-event kind=move web_contents="
+               << web_contents
+               << " url=" << web_contents->GetLastCommittedURL().spec()
+               << " view=" << view
+@@ -838,13 +838,13 @@ void TsBrowserMainParts::ForwardMouseMove(void* wc_handle,
+               << " router=" << router << " coords=(" << x << ", " << y
+               << ") button=none click_count=0 modifiers=" << modifiers
+               << " web_modifiers=" << web_modifiers;
+-    LogIssue794InputFrames("[issue-794-exp5]", web_contents, x, y);
++    LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, x, y);
+   }
+ 
+   if (view && router) {
+     auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp5] mouse-route kind=move"
++      LOG(INFO) << "[termsurf-pdf-input] mouse-route kind=move"
+                 << " route_mode=input-router"
+                 << " root_view=" << root_view << " router=" << router;
+     }
+@@ -852,13 +852,13 @@ void TsBrowserMainParts::ForwardMouseMove(void* wc_handle,
+     router->RouteMouseEvent(root_view, &mouse_event, latency);
+   } else if (view) {
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp5] mouse-route kind=move"
++      LOG(INFO) << "[termsurf-pdf-input] mouse-route kind=move"
+                 << " route_mode=direct-fallback"
+                 << " reason=" << (router ? "missing-view" : "missing-router");
+     }
+     view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
+   } else if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp5] mouse-route kind=move route_mode=drop"
++    LOG(INFO) << "[termsurf-pdf-input] mouse-route kind=move route_mode=drop"
+               << " reason=missing-view";
+   }
+ #endif
+@@ -903,7 +903,7 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+       web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp4] wheel-received web_contents=" << web_contents
++    LOG(INFO) << "[termsurf-pdf-input] wheel-received web_contents=" << web_contents
+               << " url=" << web_contents->GetLastCommittedURL().spec()
+               << " view=" << view
+               << " rwh=" << (view ? view->GetRenderWidgetHost() : nullptr)
+@@ -912,25 +912,25 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+               << ") phase=" << phase << " momentum_phase=" << momentum_phase
+               << " precise=" << (precise ? 1 : 0) << " modifiers=" << modifiers;
+ 
+-    LogIssue794InputFrames("[issue-794-exp4]", web_contents, x, y);
++    LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, x, y);
+   }
+ 
+   if (view && router) {
+     auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp4] wheel-route route_mode=input-router"
++      LOG(INFO) << "[termsurf-pdf-input] wheel-route route_mode=input-router"
+                 << " root_view=" << root_view << " router=" << router;
+     }
+     ui::LatencyInfo latency;
+     router->RouteMouseWheelEvent(root_view, &wheel_event, latency);
+   } else if (view) {
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp4] wheel-route route_mode=direct-fallback"
++      LOG(INFO) << "[termsurf-pdf-input] wheel-route route_mode=direct-fallback"
+                 << " reason=" << (router ? "missing-view" : "missing-router");
+     }
+     view->GetRenderWidgetHost()->ForwardWheelEvent(wheel_event);
+   } else if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp4] wheel-route route_mode=drop"
++    LOG(INFO) << "[termsurf-pdf-input] wheel-route route_mode=drop"
+               << " reason=missing-view";
+   }
+ #endif
+@@ -1002,7 +1002,7 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+   auto* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp6] key-route route_mode=drop"
++      LOG(INFO) << "[termsurf-pdf-input] key-route route_mode=drop"
+                 << " reason=missing-view"
+                 << " type=" << type << " keycode=" << keycode;
+     }
+@@ -1018,7 +1018,7 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+           : receiving_widget;
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp6] key-event type=" << type
++    LOG(INFO) << "[termsurf-pdf-input] key-event type=" << type
+               << " keycode=" << keycode << " utf8_len=" << utf8.size()
+               << " modifiers=" << modifiers
+               << " web_modifiers=" << web_modifiers
+@@ -1026,16 +1026,16 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+               << " url=" << web_contents->GetLastCommittedURL().spec()
+               << " view=" << view << " root_widget=" << receiving_widget
+               << " focused_widget=" << target_widget;
+-    LogIssue794InputFrames("[issue-794-exp6]", web_contents, 0, 0);
++    LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, 0, 0);
+     if (target_widget) {
+-      LogIssue794KeyTarget("[issue-794-exp6]", web_contents, receiving_widget,
++      LogIssue794KeyTarget("[termsurf-pdf-input]", web_contents, receiving_widget,
+                            target_widget);
+     }
+   }
+ 
+   if (!target_widget) {
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp6] key-route route_mode=drop"
++      LOG(INFO) << "[termsurf-pdf-input] key-route route_mode=drop"
+                 << " reason=missing-focused-widget"
+                 << " root_widget=" << receiving_widget;
+     }
+@@ -1071,7 +1071,7 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+ 
+   ui::LatencyInfo latency;
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp6] key-route route_mode="
++    LOG(INFO) << "[termsurf-pdf-input] key-route route_mode="
+               << (target_widget == receiving_widget ? "root-direct"
+                                                     : "focused-widget")
+               << " root_widget=" << receiving_widget
+@@ -1094,7 +1094,7 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+ 
+     std::vector<blink::mojom::EditCommandPtr> no_commands;
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[issue-794-exp6] key-route route_mode="
++      LOG(INFO) << "[termsurf-pdf-input] key-route route_mode="
+                 << (target_widget == receiving_widget ? "root-direct"
+                                                       : "focused-widget")
+                 << " char_event=1"
+@@ -1121,7 +1121,7 @@ void TsBrowserMainParts::SetFocus(void* wc_handle, bool focused) {
+   }
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp6] focus focused=" << (focused ? 1 : 0)
++    LOG(INFO) << "[termsurf-pdf-input] focus focused=" << (focused ? 1 : 0)
+               << " web_contents=" << web_contents
+               << " url=" << web_contents->GetLastCommittedURL().spec()
+               << " view=" << view;
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+index faf2818dbb..e374299b01 100644
+--- a/content/libtermsurf_chromium/ts_content_client.cc
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -53,7 +53,7 @@ void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
+   pdf_info.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
+   plugins->push_back(pdf_info);
+ 
+-  LOG(INFO) << "[issue-792-exp15] internal-pdf-plugin-registered mime_type="
++  LOG(INFO) << "[termsurf-pdf] internal-pdf-plugin-registered mime_type="
+             << pdf::kInternalPluginMimeType
+             << " document_mime_type=" << pdf::kPDFMimeType
+             << " path=" << pdf_info.path.value();
+@@ -72,7 +72,7 @@ void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   if (base::CommandLine::ForCurrentProcess()
+           ->GetSwitchValueASCII(switches::kProcessType)
+           .empty()) {
+-    LOG(INFO) << "[issue-792-exp6] extension-scheme-registered scheme="
++    LOG(INFO) << "[termsurf-pdf] extension-scheme-registered scheme="
+               << extensions::kExtensionScheme;
+   }
+ }
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index a260a9efb4..9a45df542b 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -4,89 +4,19 @@
+ 
+ #include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ 
+-#include <memory>
+-
+-#include "base/functional/bind.h"
+ #include "base/logging.h"
+-#include "components/pdf/common/constants.h"
+-#include "components/pdf/common/pdf_util.h"
+-#include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+-#include "components/printing/renderer/print_render_frame_helper.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
+-#include "content/public/common/url_constants.h"
++#include "content/libtermsurf_chromium/ts_pdf_renderer_support.h"
+ #include "content/public/renderer/render_frame.h"
+-#include "extensions/common/constants.h"
+ #include "extensions/common/extensions_client.h"
+-#include "extensions/common/mojom/guest_view.mojom.h"
+ #include "extensions/renderer/api/core_extensions_renderer_api_provider.h"
+ #include "extensions/renderer/dispatcher.h"
+ #include "extensions/renderer/extension_frame_helper.h"
+ #include "extensions/renderer/extensions_renderer_client.h"
+-#include "extensions/renderer/guest_view/mime_handler_view/mime_handler_view_container_manager.h"
+-#include "printing/buildflags/buildflags.h"
+-#include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
+-#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+-#include "third_party/blink/public/platform/web_string.h"
+-#include "third_party/blink/public/platform/web_url.h"
+-#include "third_party/blink/public/web/web_document.h"
+-#include "third_party/blink/public/web/web_element.h"
+-#include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
+-#include "third_party/blink/public/web/web_security_policy.h"
+ 
+ namespace content {
+-namespace {
+-
+-#if BUILDFLAG(ENABLE_PRINTING)
+-class TsPrintRenderFrameHelperDelegate
+-    : public printing::PrintRenderFrameHelper::Delegate {
+- public:
+-  TsPrintRenderFrameHelperDelegate() = default;
+-  ~TsPrintRenderFrameHelperDelegate() override = default;
+-
+-  blink::WebElement GetPdfElement(blink::WebLocalFrame* frame) override {
+-    return blink::WebElement();
+-  }
+-
+-  bool IsPrintPreviewEnabled() override { return false; }
+-
+-  bool IsScriptedPrintEnabled() override { return false; }
+-
+-  bool ShouldGenerateTaggedPDF() override { return false; }
+-
+-  bool OverridePrint(blink::WebLocalFrame* frame) override { return false; }
+-};
+-#endif  // BUILDFLAG(ENABLE_PRINTING)
+-
+-void AllowPdfViewerChromeResources() {
+-  // Renderer setup cannot consult the ExtensionRegistry, so keep this
+-  // process-wide rule keyed to the fixed PDF extension origin.
+-  blink::WebURL pdf_viewer_origin =
+-      GURL(std::string(extensions::kExtensionScheme) + "://" +
+-           extension_misc::kPdfExtensionId);
+-  blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
+-      pdf_viewer_origin, blink::WebString::FromUTF8(kChromeUIScheme),
+-      blink::WebString::FromUTF8(kChromeUIResourcesHost), /*port=*/0,
+-      network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
+-      network::mojom::CorsPortMatchMode::kAllowAnyPort,
+-      network::mojom::CorsOriginAccessMatchPriority::kMaxPriority);
+-  LOG(INFO) << "[issue-792-exp7] chrome-resources-renderer-origin extension_id="
+-            << extension_misc::kPdfExtensionId;
+-}
+-
+-bool HasInternalId(const blink::WebElement& plugin_element) {
+-  return plugin_element.HasAttribute(blink::WebString::FromUTF8("internalid"));
+-}
+-
+-std::string DocumentUrl(RenderFrame* render_frame) {
+-  if (!render_frame || !render_frame->GetWebFrame()) {
+-    return "";
+-  }
+-  return GURL(render_frame->GetWebFrame()->GetDocument().Url()).spec();
+-}
+-
+-}  // namespace
+ 
+ TsContentRendererClient::TsContentRendererClient() = default;
+ TsContentRendererClient::~TsContentRendererClient() = default;
+@@ -102,29 +32,20 @@ void TsContentRendererClient::RenderThreadStarted() {
+       std::make_unique<extensions::CoreExtensionsRendererAPIProvider>());
+   extensions::ExtensionsRendererClient::Set(extensions_renderer_client_.get());
+   extensions_renderer_client_->RenderThreadStarted();
+-  AllowPdfViewerChromeResources();
+-  LOG(INFO) << "[issue-792-exp2] extensions-renderer-client-set";
++  AllowTsPdfViewerChromeResources();
++  LOG(INFO) << "[termsurf-pdf] extensions-renderer-client-set";
+ }
+ 
+ void TsContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   ShellContentRendererClient::RenderFrameCreated(render_frame);
+ 
+-  render_frame->GetAssociatedInterfaceRegistry()
+-      ->AddInterface<extensions::mojom::MimeHandlerViewContainerManager>(
+-          base::BindRepeating(
+-              &extensions::MimeHandlerViewContainerManager::BindReceiver,
+-              base::Unretained(render_frame)));
+-  LOG(INFO) << "[issue-792-exp15] mime-handler-container-manager-bound "
+-            << "render_frame=" << render_frame;
++  BindTsPdfMimeHandlerView(render_frame);
+ 
+   // ExtensionFrameHelper destroys itself when the RenderFrame is destroyed.
+   new extensions::ExtensionFrameHelper(render_frame, dispatcher());
+   dispatcher()->OnRenderFrameCreated(render_frame);
+ 
+-#if BUILDFLAG(ENABLE_PRINTING)
+-  new printing::PrintRenderFrameHelper(
+-      render_frame, std::make_unique<TsPrintRenderFrameHelperDelegate>());
+-#endif  // BUILDFLAG(ENABLE_PRINTING)
++  CreateTsPdfPrintRenderFrameHelper(render_frame);
+ }
+ 
+ bool TsContentRendererClient::IsPluginHandledExternally(
+@@ -132,40 +53,9 @@ bool TsContentRendererClient::IsPluginHandledExternally(
+     const blink::WebElement& plugin_element,
+     const GURL& original_url,
+     const std::string& mime_type) {
+-  if (mime_type == pdf::kInternalPluginMimeType && render_frame &&
+-      render_frame->GetWebFrame()) {
+-    const bool allowed_origin = IsPdfInternalPluginAllowedOrigin(
+-        render_frame->GetWebFrame()->GetSecurityOrigin(), {});
+-    LOG(INFO) << "[issue-792-exp27] internal-plugin-external-check "
+-              << "document_url=" << DocumentUrl(render_frame)
+-              << " original_url=" << original_url << " mime_type=" << mime_type
+-              << " allowed_origin=" << (allowed_origin ? 1 : 0);
+-    if (allowed_origin) {
+-      LOG(INFO) << "[issue-792-exp27] internal-plugin-externalized "
+-                << "handled=1";
+-      return true;
+-    }
+-
+-    LOG(INFO) << "[issue-792-exp27] internal-plugin-externalized "
+-              << "handled=0 reason=disallowed-origin";
+-  }
+-
+-  const bool has_internal_id = HasInternalId(plugin_element);
+-  const bool is_pdf_mime = mime_type == pdf::kPDFMimeType ||
+-                           mime_type == pdf::kInternalPluginMimeType;
+-  const bool handled = has_internal_id && is_pdf_mime;
+-
+-  LOG(INFO) << "[issue-792-exp15] is-plugin-handled-externally mime_type="
+-            << mime_type << " url=" << original_url
+-            << " document_url=" << DocumentUrl(render_frame)
+-            << " has_internal_id=" << has_internal_id
+-            << " plugin_lookup=" << (handled ? "ok" : "missing")
+-            << " handled=" << handled;
+-  LOG(INFO) << "[issue-792-exp19] renderer-plugin-external document_url="
+-            << DocumentUrl(render_frame) << " original_url=" << original_url
+-            << " mime_type=" << mime_type
+-            << " has_internal_id=" << has_internal_id << " handled=" << handled;
+-
++  bool handled = false;
++  MaybeHandleTsPdfPluginExternally(render_frame, plugin_element, original_url,
++                                   mime_type, &handled);
+   return handled;
+ }
+ 
+@@ -173,30 +63,17 @@ bool TsContentRendererClient::OverrideCreatePlugin(
+     RenderFrame* render_frame,
+     const blink::WebPluginParams& params,
+     blink::WebPlugin** plugin) {
+-  if (params.mime_type.Utf8() == pdf::kInternalPluginMimeType) {
+-    const bool has_pdf_renderer = pdf::IsPdfRenderer();
+-    LOG(INFO) << "[issue-792-exp26] internal-plugin-create-check "
+-              << "document_url=" << DocumentUrl(render_frame)
+-              << " mime_type=" << params.mime_type.Utf8()
+-              << " url=" << GURL(params.url)
+-              << " has_pdf_renderer=" << (has_pdf_renderer ? 1 : 0);
+-    if (!has_pdf_renderer) {
+-      LOG(INFO) << "[issue-792-exp26] internal-plugin-create-skipped "
+-                << "reason=missing-pdf-renderer";
+-      return false;
+-    }
+-
+-    *plugin = pdf::CreateInternalPlugin(std::move(params), render_frame, {});
+-    LOG(INFO) << "[issue-792-exp26] internal-plugin-create-result "
+-              << "created=" << (*plugin ? 1 : 0);
+-    return true;
++  bool pdf_plugin_handled = false;
++  if (MaybeCreateTsPdfPlugin(render_frame, params, plugin,
++                             &pdf_plugin_handled)) {
++    return pdf_plugin_handled;
+   }
+ 
+   const bool delegated_to_extensions =
+       extensions_renderer_client_ &&
+       extensions_renderer_client_->OverrideCreatePlugin(render_frame, params);
+-  LOG(INFO) << "[issue-792-exp19] renderer-override-create-plugin "
+-            << "document_url=" << DocumentUrl(render_frame)
++  LOG(INFO) << "[termsurf-pdf] renderer-override-create-plugin "
++            << "document_url=" << TsPdfDocumentUrl(render_frame)
+             << " mime_type=" << params.mime_type.Utf8()
+             << " url=" << GURL(params.url)
+             << " delegated_to_extensions=" << delegated_to_extensions;
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+index 617d945906..f0fd85012a 100644
+--- a/content/libtermsurf_chromium/ts_mime_handler_binders.cc
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -50,7 +50,7 @@ class TsBeforeUnloadControl
+   void SetShowBeforeUnloadDialog(
+       bool show_dialog,
+       SetShowBeforeUnloadDialogCallback callback) override {
+-    LOG(INFO) << "[issue-792-exp12] before-unload-set-show frame_url="
++    LOG(INFO) << "[termsurf-pdf] before-unload-set-show frame_url="
+               << frame_url_ << " show=" << show_dialog;
+     std::move(callback).Run();
+   }
+@@ -71,14 +71,14 @@ void BindTsMimeHandlerService(
+ 
+   if (!is_pdf_extension) {
+     LOG(INFO)
+-        << "[issue-792-exp12] mime-handler-service-binder-reject frame_url="
++        << "[termsurf-pdf] mime-handler-service-binder-reject frame_url="
+         << frame_url << " site_url=" << site_url;
+-    LOG(INFO) << "[issue-792-exp18] mime-handler-service-no-stream frame_url="
++    LOG(INFO) << "[termsurf-pdf] mime-handler-service-no-stream frame_url="
+               << frame_url << " reason=not-pdf-extension";
+     return;
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp12] mime-handler-service-binder frame_url="
++  LOG(INFO) << "[termsurf-pdf] mime-handler-service-binder frame_url="
+             << frame_url << " site_url=" << site_url;
+   RenderFrameHost* embedder_host = render_frame_host->GetParent();
+   auto* manager =
+@@ -88,7 +88,7 @@ void BindTsMimeHandlerService(
+   base::WeakPtr<extensions::StreamContainer> stream =
+       manager && embedder_host ? manager->GetStreamContainer(embedder_host)
+                                : nullptr;
+-  LOG(INFO) << "[issue-792-exp18] mime-handler-service-request frame_url="
++  LOG(INFO) << "[termsurf-pdf] mime-handler-service-request frame_url="
+             << frame_url << " site_url=" << site_url
+             << " is_pdf_extension=" << (is_pdf_extension ? 1 : 0)
+             << " has_parent=" << (embedder_host ? 1 : 0)
+@@ -98,12 +98,12 @@ void BindTsMimeHandlerService(
+   if (!stream) {
+     const char* reason =
+         !embedder_host ? "no-parent" : (!manager ? "no-manager" : "no-stream");
+-    LOG(INFO) << "[issue-792-exp18] mime-handler-service-no-stream frame_url="
++    LOG(INFO) << "[termsurf-pdf] mime-handler-service-no-stream frame_url="
+               << frame_url << " reason=" << reason;
+     return;
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp18] mime-handler-service-bound frame_url="
++  LOG(INFO) << "[termsurf-pdf] mime-handler-service-bound frame_url="
+             << frame_url << " stream_url=" << stream->stream_url()
+             << " original_url=" << stream->original_url();
+   extensions::MimeHandlerServiceImpl::Create(stream, std::move(receiver));
+@@ -118,12 +118,12 @@ void BindTsBeforeUnloadControl(
+ 
+   if (!IsPdfExtensionFrame(render_frame_host)) {
+     LOG(INFO)
+-        << "[issue-792-exp12] before-unload-control-binder-reject frame_url="
++        << "[termsurf-pdf] before-unload-control-binder-reject frame_url="
+         << frame_url << " site_url=" << site_url;
+     return;
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp12] before-unload-control-binder frame_url="
++  LOG(INFO) << "[termsurf-pdf] before-unload-control-binder frame_url="
+             << frame_url << " site_url=" << site_url;
+   mojo::MakeSelfOwnedReceiver(
+       std::make_unique<TsBeforeUnloadControl>(frame_url), std::move(receiver));
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.cc b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+new file mode 100644
+index 0000000000..1555ea85be
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+@@ -0,0 +1,456 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_browser_support.h"
++
++#include "base/command_line.h"
++#include "base/environment.h"
++#include "base/logging.h"
++#include "components/pdf/browser/pdf_document_helper.h"
++#include "components/pdf/browser/pdf_navigation_throttle.h"
++#include "components/pdf/browser/pdf_url_loader_request_interceptor.h"
++#include "components/pdf/common/constants.h"
++#include "content/libtermsurf_chromium/ts_mime_handler_binders.h"
++#include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
++#include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
++#include "content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.h"
++#include "content/libtermsurf_chromium/ts_pdf_stream_delegate.h"
++#include "content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.h"
++#include "content/libtermsurf_chromium/ts_plugin_utils.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/child_process_security_policy.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/navigation_throttle_registry.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_process_host.h"
++#include "content/public/browser/security_principal.h"
++#include "content/public/browser/site_instance.h"
++#include "content/public/browser/url_loader_request_interceptor.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_ui_url_loader_factory.h"
++#include "content/public/common/content_switches.h"
++#include "content/public/common/url_constants.h"
++#include "extensions/browser/extension_protocols.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_web_contents_observer.h"
++#include "extensions/browser/extensions_browser_client.h"
++#include "extensions/browser/extensions_browser_interface_binders.h"
++#include "extensions/browser/process_map.h"
++#include "extensions/browser/renderer_startup_helper.h"
++#include "extensions/common/api/mime_handler.mojom.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/manifest.h"
++#include "extensions/common/mojom/frame.mojom.h"
++#include "mojo/public/cpp/bindings/binder_map.h"
++#include "pdf/mojom/pdf.mojom.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
++#include "third_party/blink/public/common/loader/url_loader_throttle.h"
++#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
++
++namespace content {
++namespace {
++
++constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
++constexpr char kTsPdfPrintInterceptFileSwitch[] =
++    "termsurf-pdf-print-intercept-file";
++constexpr char kTsPdfPrintBridgeTraceSwitch[] =
++    "termsurf-pdf-print-bridge-trace";
++constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
++    "termsurf-pdf-print-bridge-trace-file";
++constexpr char kTsPdfNativePrintTraceSwitch[] =
++    "termsurf-pdf-native-print-trace";
++constexpr char kTsPdfNativePrintTraceFileSwitch[] =
++    "termsurf-pdf-native-print-trace-file";
++
++std::optional<std::string> GetTsPdfTraceFileFromEnv(
++    const std::string& enabled_var,
++    const std::string& path_var) {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled = env->GetVar(enabled_var);
++  if (!enabled || *enabled != "1") {
++    return std::nullopt;
++  }
++
++  std::optional<std::string> path = env->GetVar(path_var);
++  if (!path || path->empty()) {
++    return std::nullopt;
++  }
++
++  return path;
++}
++
++bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
++  return extension && extension->id() == extension_misc::kPdfExtensionId &&
++         extensions::Manifest::IsComponentLocation(extension->location());
++}
++
++bool IsTsPdfComponentExtensionUrl(const GURL& url) {
++  return url.SchemeIs(extensions::kExtensionScheme) &&
++         url.host() == extension_misc::kPdfExtensionId;
++}
++
++const extensions::Extension* GetEnabledPdfExtension(
++    content::BrowserContext* browser_context) {
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return nullptr;
++  }
++
++  const extensions::Extension* extension =
++      registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
++  return IsTsPdfComponentExtension(extension) ? extension : nullptr;
++}
++
++const extensions::Extension* GetExtensionForInitiatorOrigin(
++    content::BrowserContext* browser_context,
++    const std::optional<url::Origin>& request_initiator_origin) {
++  if (!request_initiator_origin.has_value()) {
++    return nullptr;
++  }
++
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return nullptr;
++  }
++
++  return registry->enabled_extensions().GetExtensionOrAppByURL(
++      request_initiator_origin->GetURL());
++}
++
++}  // namespace
++
++void AddTsPdfNavigationThrottles(NavigationThrottleRegistry& registry) {
++  TsPdfIframeNavigationThrottle::MaybeCreateAndAdd(registry);
++  registry.AddThrottle(std::make_unique<pdf::PdfNavigationThrottle>(
++      registry, std::make_unique<TsPdfStreamDelegate>()));
++  NavigationHandle& handle = registry.GetNavigationHandle();
++  LOG(INFO) << "[termsurf-pdf] navigation-throttles frame_tree_node_id="
++            << handle.GetFrameTreeNodeId() << " url=" << handle.GetURL()
++            << " pdf_throttle=1 iframe_throttle="
++            << (handle.IsInMainFrame() ? 0 : 1);
++}
++
++void AddTsPdfURLLoaderThrottles(
++    std::vector<std::unique_ptr<blink::URLLoaderThrottle>>* throttles,
++    const network::ResourceRequest& request,
++    FrameTreeNodeId frame_tree_node_id) {
++  throttles->push_back(
++      std::make_unique<TsPluginResponseInterceptorURLLoaderThrottle>(
++          request.destination, frame_tree_node_id));
++  LOG(INFO) << "[termsurf-pdf] url-loader-throttle destination="
++            << static_cast<int>(request.destination)
++            << " frame_tree_node_id=" << frame_tree_node_id
++            << " plugin_interceptor=1";
++}
++
++void AddTsPdfURLLoaderRequestInterceptors(
++    std::vector<std::unique_ptr<URLLoaderRequestInterceptor>>* interceptors,
++    FrameTreeNodeId frame_tree_node_id) {
++  auto pdf_interceptor =
++      pdf::PdfURLLoaderRequestInterceptor::MaybeCreateInterceptor(
++          frame_tree_node_id, std::make_unique<TsPdfStreamDelegate>());
++  LOG(INFO) << "[termsurf-pdf] pdf-request-interceptor frame_tree_node_id="
++            << frame_tree_node_id << " created=" << (pdf_interceptor ? 1 : 0);
++  if (pdf_interceptor) {
++    interceptors->push_back(std::move(pdf_interceptor));
++  }
++}
++
++base::flat_set<std::string> GetTsPdfExternalPluginMimeTypes(
++    BrowserContext* browser_context) {
++  base::flat_set<std::string> mime_types;
++  auto map = GetTsPluginMimeTypeToExtensionIdMap(browser_context);
++  for (const auto& pair : map) {
++    mime_types.insert(pair.first);
++  }
++  LOG(INFO) << "[termsurf-pdf] external-plugin-mime-types count="
++            << mime_types.size()
++            << " has_pdf=" << (mime_types.contains(pdf::kPDFMimeType) ? 1 : 0);
++  return mime_types;
++}
++
++void RegisterTsPdfBrowserInterfaceBindersForFrame(
++    RenderFrameHost* render_frame_host,
++    mojo::BinderMapWithContext<RenderFrameHost*>* map) {
++  WebContents* web_contents =
++      WebContents::FromRenderFrameHost(render_frame_host);
++  auto* observer =
++      extensions::ExtensionWebContentsObserver::GetForWebContents(web_contents);
++  const extensions::Extension* extension =
++      observer ? observer->GetExtensionFromFrame(render_frame_host, false)
++               : nullptr;
++  const bool is_pdf_extension = IsTsPdfComponentExtension(extension);
++  const std::string frame_url = render_frame_host->GetLastCommittedURL().spec();
++  const std::string site_url =
++      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++  const std::string extension_id = extension ? extension->id() : "none";
++
++  LOG(INFO) << "[termsurf-pdf] extension-frame-binder-check frame_url="
++            << frame_url << " site_url=" << site_url
++            << " observer=" << (observer ? 1 : 0)
++            << " extension_id=" << extension_id
++            << " is_pdf_extension=" << (is_pdf_extension ? 1 : 0);
++
++  bool populated_extension_binders = false;
++  if (extension) {
++    extensions::ExtensionsBrowserClient::Get()
++        ->RegisterBrowserInterfaceBindersForFrame(map, render_frame_host,
++                                                  extension);
++    populated_extension_binders = true;
++    if (is_pdf_extension) {
++      LOG(INFO) << "[termsurf-pdf] pdf-extension-frame-binders frame_url="
++                << frame_url << " site_url=" << site_url
++                << " extension_id=" << extension->id() << " source=canonical";
++    }
++  }
++
++  if (!populated_extension_binders &&
++      (IsTsPdfComponentExtensionUrl(render_frame_host->GetLastCommittedURL()) ||
++       IsTsPdfComponentExtensionUrl(
++           render_frame_host->GetSiteInstance()->GetSiteURL()))) {
++    const extensions::Extension* pdf_extension = GetEnabledPdfExtension(
++        render_frame_host->GetProcess()->GetBrowserContext());
++    if (pdf_extension) {
++      extensions::PopulateExtensionFrameBinders(map, render_frame_host,
++                                                pdf_extension);
++      LOG(INFO) << "[termsurf-pdf] pdf-extension-frame-binders frame_url="
++                << frame_url << " site_url=" << site_url
++                << " extension_id=" << pdf_extension->id()
++                << " source=direct-populate";
++    }
++  }
++
++  map->Add<help_bubble::mojom::PdfHelpBubbleHandlerFactory>(
++      base::BindRepeating(&pdf::BindTsPdfHelpBubbleHandlerFactory));
++
++  map->Add<extensions::mime_handler::MimeHandlerService>(
++      base::BindRepeating(&BindTsMimeHandlerService));
++  map->Add<extensions::mime_handler::BeforeUnloadControl>(
++      base::BindRepeating(&BindTsBeforeUnloadControl));
++}
++
++void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
++    RenderFrameHost& render_frame_host,
++    blink::AssociatedInterfaceRegistry& associated_registry) {
++  associated_registry.RemoveInterface(extensions::mojom::LocalFrameHost::Name_);
++  associated_registry.AddInterface<extensions::mojom::LocalFrameHost>(
++      base::BindRepeating(
++          [](RenderFrameHost* render_frame_host,
++             mojo::PendingAssociatedReceiver<extensions::mojom::LocalFrameHost>
++                 receiver) {
++            extensions::ExtensionWebContentsObserver::BindLocalFrameHost(
++                std::move(receiver), render_frame_host);
++          },
++          &render_frame_host));
++  associated_registry.AddInterface<pdf::mojom::PdfHost>(base::BindRepeating(
++      [](RenderFrameHost* render_frame_host,
++         mojo::PendingAssociatedReceiver<pdf::mojom::PdfHost> receiver) {
++        LOG(INFO) << "[termsurf-pdf] pdf-host-binder frame_url="
++                  << render_frame_host->GetLastCommittedURL() << " site_url="
++                  << render_frame_host->GetSiteInstance()->GetSiteURL();
++        pdf::PDFDocumentHelper::BindPdfHost(
++            std::move(receiver), render_frame_host,
++            std::make_unique<pdf::TsPDFDocumentHelperClient>());
++      },
++      &render_frame_host));
++}
++
++void AppendTsPdfRendererCommandLineSwitches(base::CommandLine* command_line) {
++  std::optional<std::string> intercept_file = GetTsPdfTraceFileFromEnv(
++      "TERMSURF_PDF_PRINT_INTERCEPT", "TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  if (intercept_file) {
++    command_line->AppendSwitch(kTsPdfPrintInterceptSwitch);
++    command_line->AppendSwitchASCII(kTsPdfPrintInterceptFileSwitch,
++                                    *intercept_file);
++  }
++
++  std::optional<std::string> bridge_trace_file =
++      GetTsPdfTraceFileFromEnv("TERMSURF_PDF_PRINT_BRIDGE_TRACE",
++                               "TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
++  if (bridge_trace_file) {
++    command_line->AppendSwitch(kTsPdfPrintBridgeTraceSwitch);
++    command_line->AppendSwitchASCII(kTsPdfPrintBridgeTraceFileSwitch,
++                                    *bridge_trace_file);
++  }
++
++  std::optional<std::string> native_print_trace_file =
++      GetTsPdfTraceFileFromEnv("TERMSURF_PDF_NATIVE_PRINT_TRACE",
++                               "TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE");
++  if (native_print_trace_file) {
++    command_line->AppendSwitch(kTsPdfNativePrintTraceSwitch);
++    command_line->AppendSwitchASCII(kTsPdfNativePrintTraceFileSwitch,
++                                    *native_print_trace_file);
++  }
++}
++
++bool IsTsPdfExtensionScheme(const std::string& scheme) {
++  return scheme == extensions::kExtensionScheme;
++}
++
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++CreateTsPdfExtensionNavigationURLLoaderFactory(
++    FrameTreeNodeId frame_tree_node_id) {
++  WebContents* web_contents =
++      WebContents::FromFrameTreeNodeId(frame_tree_node_id);
++  LOG(INFO) << "[termsurf-pdf] extension-factory"
++            << " scheme=chrome-extension type=navigation";
++  return extensions::CreateExtensionNavigationURLLoaderFactory(
++      web_contents->GetBrowserContext(), false);
++}
++
++void RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(
++    BrowserContext* browser_context,
++    ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories) {
++  LOG(INFO) << "[termsurf-pdf] extension-factory"
++            << " scheme=chrome-extension type=worker-main";
++  factories->emplace(
++      extensions::kExtensionScheme,
++      extensions::CreateExtensionWorkerMainResourceURLLoaderFactory(
++          browser_context));
++}
++
++void RegisterTsPdfExtensionServiceWorkerUpdateURLLoaderFactory(
++    BrowserContext* browser_context,
++    ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories) {
++  LOG(INFO) << "[termsurf-pdf] extension-factory"
++            << " scheme=chrome-extension type=service-worker";
++  factories->emplace(
++      extensions::kExtensionScheme,
++      extensions::CreateExtensionServiceWorkerScriptURLLoaderFactory(
++          browser_context));
++}
++
++void RegisterTsPdfExtensionSubresourceURLLoaderFactory(
++    int render_process_id,
++    int render_frame_id,
++    const std::optional<url::Origin>& request_initiator_origin,
++    ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories) {
++  LOG(INFO) << "[termsurf-pdf] extension-factory"
++            << " scheme=chrome-extension type=subresource";
++  factories->emplace(extensions::kExtensionScheme,
++                     extensions::CreateExtensionURLLoaderFactory(
++                         render_process_id, render_frame_id));
++
++  RenderProcessHost* process_host =
++      RenderProcessHost::FromID(render_process_id);
++  if (!process_host) {
++    return;
++  }
++  RenderFrameHost* frame_host =
++      RenderFrameHost::FromID(render_process_id, render_frame_id);
++  if (!frame_host) {
++    return;
++  }
++  const extensions::Extension* extension = GetExtensionForInitiatorOrigin(
++      process_host->GetBrowserContext(), request_initiator_origin);
++  if (!IsTsPdfComponentExtension(extension)) {
++    return;
++  }
++
++  factories->emplace(kChromeUIScheme,
++                     CreateWebUIURLLoaderFactory(frame_host, kChromeUIScheme,
++                                                 {kChromeUIResourcesHost}));
++  LOG(INFO) << "[termsurf-pdf] chrome-resources-factory extension_id="
++            << extension->id() << " process_id=" << render_process_id
++            << " frame_id=" << render_frame_id;
++}
++
++bool MaybeUseTsPdfProcessPerSite(BrowserContext* browser_context,
++                                 const GURL& site_url,
++                                 bool* use_process_per_site) {
++  if (!site_url.SchemeIs(extensions::kExtensionScheme)) {
++    return false;
++  }
++
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    *use_process_per_site = false;
++    return true;
++  }
++
++  const extensions::Extension* extension =
++      registry->enabled_extensions().GetByID(site_url.GetHost());
++  if (!extension) {
++    *use_process_per_site = false;
++    return true;
++  }
++
++  LOG(INFO) << "[termsurf-pdf] process-per-site extension_id="
++            << extension->id() << " effective_url=" << site_url;
++  *use_process_per_site = true;
++  return true;
++}
++
++bool MaybeHandleTsPdfExtensionURL(const GURL& url, bool* handled) {
++  if (!url.SchemeIs(extensions::kExtensionScheme)) {
++    return false;
++  }
++
++  static bool logged_once = false;
++  if (!logged_once) {
++    logged_once = true;
++    LOG(INFO) << "[termsurf-pdf] handled-url url=" << url;
++  }
++  *handled = true;
++  return true;
++}
++
++void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
++  BrowserContext* browser_context = site_instance->GetBrowserContext();
++  if (browser_context->IsOffTheRecord()) {
++    return;
++  }
++
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return;
++  }
++
++  const extensions::Extension* extension =
++      registry->enabled_extensions().GetExtensionOrAppByURL(
++          site_instance->GetSiteURL());
++  if (!extension) {
++    if (site_instance->GetSiteURL().SchemeIs(extensions::kExtensionScheme)) {
++      LOG(INFO) << "[termsurf-pdf] process-map-miss site_url="
++                << site_instance->GetSiteURL();
++    }
++    return;
++  }
++
++  if (site_instance->GetSecurityPrincipal().IsSandboxed()) {
++    return;
++  }
++
++  const int process_id = site_instance->GetProcess()->GetDeprecatedID();
++  extensions::ProcessMap::Get(browser_context)
++      ->Insert(extension->id(), process_id);
++  LOG(INFO) << "[termsurf-pdf] process-map-insert extension_id="
++            << extension->id() << " process_id=" << process_id
++            << " site_url=" << site_instance->GetSiteURL();
++
++  if (IsTsPdfComponentExtension(extension)) {
++    auto* renderer_startup_helper =
++        extensions::RendererStartupHelperFactory::GetForBrowserContext(
++            browser_context);
++    LOG(INFO) << "[termsurf-pdf] pdf-process-map-helper extension_id="
++              << extension->id() << " process_id=" << process_id
++              << " helper=" << (renderer_startup_helper != nullptr);
++    if (renderer_startup_helper) {
++      renderer_startup_helper->ActivateExtensionInProcess(
++          *extension, site_instance->GetProcess());
++      LOG(INFO) << "[termsurf-pdf] pdf-activate-request extension_id="
++                << extension->id() << " process_id=" << process_id
++                << " called=1";
++    }
++    ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
++        process_id, url::Origin::CreateFromNormalizedTuple(
++                        kChromeUIScheme, kChromeUIResourcesHost, 0));
++    LOG(INFO) << "[termsurf-pdf] chrome-resources-grant extension_id="
++              << extension->id() << " process_id=" << process_id;
++  }
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.h b/content/libtermsurf_chromium/ts_pdf_browser_support.h
+new file mode 100644
+index 0000000000..c8debb9482
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.h
+@@ -0,0 +1,94 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_BROWSER_SUPPORT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_BROWSER_SUPPORT_H_
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/containers/flat_set.h"
++#include "base/functional/callback_forward.h"
++#include "base/memory/scoped_refptr.h"
++#include "content/public/browser/content_browser_client.h"
++#include "content/public/browser/global_routing_id.h"
++#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
++#include "url/origin.h"
++
++class GURL;
++
++namespace base {
++class CommandLine;
++class SequencedTaskRunner;
++}  // namespace base
++
++namespace blink {
++class AssociatedInterfaceRegistry;
++class URLLoaderThrottle;
++}  // namespace blink
++
++namespace mojo {
++template <typename Context>
++class BinderMapWithContext;
++template <typename Interface>
++class PendingRemote;
++}  // namespace mojo
++
++namespace network {
++struct ResourceRequest;
++}  // namespace network
++
++namespace content {
++
++class BrowserContext;
++class NavigationThrottleRegistry;
++class NavigationUIData;
++class RenderFrameHost;
++class SiteInstance;
++class URLLoaderRequestInterceptor;
++class WebContents;
++
++void AddTsPdfNavigationThrottles(NavigationThrottleRegistry& registry);
++void AddTsPdfURLLoaderThrottles(
++    std::vector<std::unique_ptr<blink::URLLoaderThrottle>>* throttles,
++    const network::ResourceRequest& request,
++    FrameTreeNodeId frame_tree_node_id);
++void AddTsPdfURLLoaderRequestInterceptors(
++    std::vector<std::unique_ptr<URLLoaderRequestInterceptor>>* interceptors,
++    FrameTreeNodeId frame_tree_node_id);
++base::flat_set<std::string> GetTsPdfExternalPluginMimeTypes(
++    BrowserContext* browser_context);
++void RegisterTsPdfBrowserInterfaceBindersForFrame(
++    RenderFrameHost* render_frame_host,
++    mojo::BinderMapWithContext<RenderFrameHost*>* map);
++void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
++    RenderFrameHost& render_frame_host,
++    blink::AssociatedInterfaceRegistry& associated_registry);
++void AppendTsPdfRendererCommandLineSwitches(base::CommandLine* command_line);
++bool IsTsPdfExtensionScheme(const std::string& scheme);
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++CreateTsPdfExtensionNavigationURLLoaderFactory(
++    FrameTreeNodeId frame_tree_node_id);
++void RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(
++    BrowserContext* browser_context,
++    ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories);
++void RegisterTsPdfExtensionServiceWorkerUpdateURLLoaderFactory(
++    BrowserContext* browser_context,
++    ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories);
++void RegisterTsPdfExtensionSubresourceURLLoaderFactory(
++    int render_process_id,
++    int render_frame_id,
++    const std::optional<url::Origin>& request_initiator_origin,
++    ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories);
++bool MaybeUseTsPdfProcessPerSite(BrowserContext* browser_context,
++                                 const GURL& site_url,
++                                 bool* use_process_per_site);
++bool MaybeHandleTsPdfExtensionURL(const GURL& url, bool* handled);
++void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_BROWSER_SUPPORT_H_
+diff --git a/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc b/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+index 48455ea205..5a891926b5 100644
+--- a/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
++++ b/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+@@ -14,26 +14,26 @@ TsPDFDocumentHelperClient::~TsPDFDocumentHelperClient() = default;
+ 
+ void TsPDFDocumentHelperClient::OnDocumentLoadComplete(
+     content::RenderFrameHost* render_frame_host) {
+-  LOG(INFO) << "[issue-792-exp10] pdf-document-load-complete frame_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-document-load-complete frame_url="
+             << render_frame_host->GetLastCommittedURL();
+ }
+ 
+ void TsPDFDocumentHelperClient::UpdateContentRestrictions(
+     content::RenderFrameHost* render_frame_host,
+     int content_restrictions) {
+-  LOG(INFO) << "[issue-792-exp10] pdf-content-restrictions frame_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-content-restrictions frame_url="
+             << render_frame_host->GetLastCommittedURL()
+             << " restrictions=" << content_restrictions;
+ }
+ 
+ void TsPDFDocumentHelperClient::OnSaveURL() {
+-  LOG(INFO) << "[issue-792-exp10] pdf-save-url";
++  LOG(INFO) << "[termsurf-pdf] pdf-save-url";
+ }
+ 
+ void TsPDFDocumentHelperClient::SetPluginCanSave(
+     content::RenderFrameHost* render_frame_host,
+     bool can_save) {
+-  LOG(INFO) << "[issue-792-exp10] pdf-plugin-can-save frame_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-plugin-can-save frame_url="
+             << render_frame_host->GetLastCommittedURL()
+             << " can_save=" << can_save;
+ }
+@@ -41,7 +41,7 @@ void TsPDFDocumentHelperClient::SetPluginCanSave(
+ #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+ void TsPDFDocumentHelperClient::OnSearchifyStarted(
+     content::RenderFrameHost* render_frame_host) {
+-  LOG(INFO) << "[issue-792-exp10] pdf-searchify-started frame_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-searchify-started frame_url="
+             << render_frame_host->GetLastCommittedURL();
+ }
+ #endif
+diff --git a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+index f5ea3ecf71..d7e3f39291 100644
+--- a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
++++ b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+@@ -41,7 +41,7 @@ class TsPdfHelpBubbleHandlerFactory
+       mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
+       mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler)
+       override {
+-    LOG(INFO) << "[issue-792-exp10] pdf-help-bubble-create-handler frame_url="
++    LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-create-handler frame_url="
+               << frame_url_ << " site_url=" << site_url_;
+   }
+ 
+@@ -62,12 +62,12 @@ void BindTsPdfHelpBubbleHandlerFactory(
+       render_frame_host->GetSiteInstance()->GetSiteURL().spec();
+ 
+   if (!IsPdfExtensionFrame(render_frame_host)) {
+-    LOG(INFO) << "[issue-792-exp10] pdf-help-bubble-binder-reject frame_url="
++    LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-binder-reject frame_url="
+               << frame_url << " site_url=" << site_url;
+     return;
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp10] pdf-help-bubble-binder frame_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-binder frame_url="
+             << frame_url << " site_url=" << site_url;
+   mojo::MakeSelfOwnedReceiver(
+       std::make_unique<TsPdfHelpBubbleHandlerFactory>(frame_url, site_url),
+diff --git a/content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.cc b/content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.cc
+index bad4fad8c0..cd1ae41508 100644
+--- a/content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.cc
++++ b/content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.cc
+@@ -48,7 +48,7 @@ TsPdfIframeNavigationThrottle::WillProcessResponse() {
+     return PROCEED;
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp14] pdf-iframe-throttle-deferred url="
++  LOG(INFO) << "[termsurf-pdf] pdf-iframe-throttle-deferred url="
+             << navigation_handle()->GetURL();
+   return PROCEED;
+ }
+diff --git a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+new file mode 100644
+index 0000000000..4c76fd06e8
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+@@ -0,0 +1,174 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_renderer_support.h"
++
++#include <memory>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "components/pdf/common/constants.h"
++#include "components/pdf/common/pdf_util.h"
++#include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
++#include "components/printing/renderer/print_render_frame_helper.h"
++#include "content/public/common/url_constants.h"
++#include "content/public/renderer/render_frame.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/mojom/guest_view.mojom.h"
++#include "extensions/renderer/guest_view/mime_handler_view/mime_handler_view_container_manager.h"
++#include "printing/buildflags/buildflags.h"
++#include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/platform/web_url.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_element.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++#include "third_party/blink/public/web/web_plugin_params.h"
++#include "third_party/blink/public/web/web_security_policy.h"
++
++namespace content {
++namespace {
++
++#if BUILDFLAG(ENABLE_PRINTING)
++class TsPrintRenderFrameHelperDelegate
++    : public printing::PrintRenderFrameHelper::Delegate {
++ public:
++  TsPrintRenderFrameHelperDelegate() = default;
++  ~TsPrintRenderFrameHelperDelegate() override = default;
++
++  blink::WebElement GetPdfElement(blink::WebLocalFrame* frame) override {
++    return blink::WebElement();
++  }
++
++  bool IsPrintPreviewEnabled() override { return false; }
++
++  bool IsScriptedPrintEnabled() override { return false; }
++
++  bool ShouldGenerateTaggedPDF() override { return false; }
++
++  bool OverridePrint(blink::WebLocalFrame* frame) override { return false; }
++};
++#endif  // BUILDFLAG(ENABLE_PRINTING)
++
++bool HasInternalId(const blink::WebElement& plugin_element) {
++  return plugin_element.HasAttribute(blink::WebString::FromUTF8("internalid"));
++}
++
++}  // namespace
++
++void AllowTsPdfViewerChromeResources() {
++  // Renderer setup cannot consult the ExtensionRegistry, so keep this
++  // process-wide rule keyed to the fixed PDF extension origin.
++  blink::WebURL pdf_viewer_origin =
++      GURL(std::string(extensions::kExtensionScheme) + "://" +
++           extension_misc::kPdfExtensionId);
++  blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
++      pdf_viewer_origin, blink::WebString::FromUTF8(kChromeUIScheme),
++      blink::WebString::FromUTF8(kChromeUIResourcesHost), /*port=*/0,
++      network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
++      network::mojom::CorsPortMatchMode::kAllowAnyPort,
++      network::mojom::CorsOriginAccessMatchPriority::kMaxPriority);
++  LOG(INFO) << "[termsurf-pdf] chrome-resources-renderer-origin extension_id="
++            << extension_misc::kPdfExtensionId;
++}
++
++void BindTsPdfMimeHandlerView(RenderFrame* render_frame) {
++  render_frame->GetAssociatedInterfaceRegistry()
++      ->AddInterface<extensions::mojom::MimeHandlerViewContainerManager>(
++          base::BindRepeating(
++              &extensions::MimeHandlerViewContainerManager::BindReceiver,
++              base::Unretained(render_frame)));
++  LOG(INFO) << "[termsurf-pdf] mime-handler-container-manager-bound "
++            << "render_frame=" << render_frame;
++}
++
++void CreateTsPdfPrintRenderFrameHelper(RenderFrame* render_frame) {
++#if BUILDFLAG(ENABLE_PRINTING)
++  new printing::PrintRenderFrameHelper(
++      render_frame, std::make_unique<TsPrintRenderFrameHelperDelegate>());
++#endif  // BUILDFLAG(ENABLE_PRINTING)
++}
++
++bool MaybeHandleTsPdfPluginExternally(RenderFrame* render_frame,
++                                      const blink::WebElement& plugin_element,
++                                      const GURL& original_url,
++                                      const std::string& mime_type,
++                                      bool* handled) {
++  if (mime_type == pdf::kInternalPluginMimeType && render_frame &&
++      render_frame->GetWebFrame()) {
++    const bool allowed_origin = IsPdfInternalPluginAllowedOrigin(
++        render_frame->GetWebFrame()->GetSecurityOrigin(), {});
++    LOG(INFO) << "[termsurf-pdf] internal-plugin-external-check "
++              << "document_url=" << TsPdfDocumentUrl(render_frame)
++              << " original_url=" << original_url << " mime_type=" << mime_type
++              << " allowed_origin=" << (allowed_origin ? 1 : 0);
++    if (allowed_origin) {
++      LOG(INFO) << "[termsurf-pdf] internal-plugin-externalized handled=1";
++      *handled = true;
++      return true;
++    }
++
++    LOG(INFO) << "[termsurf-pdf] internal-plugin-externalized "
++              << "handled=0 reason=disallowed-origin";
++  }
++
++  const bool has_internal_id = HasInternalId(plugin_element);
++  const bool is_pdf_mime = mime_type == pdf::kPDFMimeType ||
++                           mime_type == pdf::kInternalPluginMimeType;
++  *handled = has_internal_id && is_pdf_mime;
++
++  LOG(INFO) << "[termsurf-pdf] is-plugin-handled-externally mime_type="
++            << mime_type << " url=" << original_url
++            << " document_url=" << TsPdfDocumentUrl(render_frame)
++            << " has_internal_id=" << has_internal_id
++            << " plugin_lookup=" << (*handled ? "ok" : "missing")
++            << " handled=" << *handled;
++  LOG(INFO) << "[termsurf-pdf] renderer-plugin-external document_url="
++            << TsPdfDocumentUrl(render_frame)
++            << " original_url=" << original_url << " mime_type=" << mime_type
++            << " has_internal_id=" << has_internal_id
++            << " handled=" << *handled;
++
++  return true;
++}
++
++bool MaybeCreateTsPdfPlugin(RenderFrame* render_frame,
++                            const blink::WebPluginParams& params,
++                            blink::WebPlugin** plugin,
++                            bool* handled) {
++  if (params.mime_type.Utf8() != pdf::kInternalPluginMimeType) {
++    *handled = false;
++    return false;
++  }
++
++  const bool has_pdf_renderer = pdf::IsPdfRenderer();
++  LOG(INFO) << "[termsurf-pdf] internal-plugin-create-check "
++            << "document_url=" << TsPdfDocumentUrl(render_frame)
++            << " mime_type=" << params.mime_type.Utf8()
++            << " url=" << GURL(params.url)
++            << " has_pdf_renderer=" << (has_pdf_renderer ? 1 : 0);
++  if (!has_pdf_renderer) {
++    LOG(INFO) << "[termsurf-pdf] internal-plugin-create-skipped "
++              << "reason=missing-pdf-renderer";
++    *handled = false;
++    return true;
++  }
++
++  *plugin = pdf::CreateInternalPlugin(std::move(params), render_frame, {});
++  LOG(INFO) << "[termsurf-pdf] internal-plugin-create-result "
++            << "created=" << (*plugin ? 1 : 0);
++  *handled = true;
++  return true;
++}
++
++std::string TsPdfDocumentUrl(RenderFrame* render_frame) {
++  if (!render_frame || !render_frame->GetWebFrame()) {
++    return "";
++  }
++  return GURL(render_frame->GetWebFrame()->GetDocument().Url()).spec();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_renderer_support.h b/content/libtermsurf_chromium/ts_pdf_renderer_support.h
+new file mode 100644
+index 0000000000..6a3b29f230
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_renderer_support.h
+@@ -0,0 +1,41 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_RENDERER_SUPPORT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_RENDERER_SUPPORT_H_
++
++#include <string>
++
++#include "url/gurl.h"
++
++namespace blink {
++class WebElement;
++class WebPlugin;
++struct WebPluginParams;
++}  // namespace blink
++
++namespace content {
++
++class RenderFrame;
++
++void AllowTsPdfViewerChromeResources();
++void BindTsPdfMimeHandlerView(RenderFrame* render_frame);
++void CreateTsPdfPrintRenderFrameHelper(RenderFrame* render_frame);
++
++bool MaybeHandleTsPdfPluginExternally(RenderFrame* render_frame,
++                                      const blink::WebElement& plugin_element,
++                                      const GURL& original_url,
++                                      const std::string& mime_type,
++                                      bool* handled);
++
++bool MaybeCreateTsPdfPlugin(RenderFrame* render_frame,
++                            const blink::WebPluginParams& params,
++                            blink::WebPlugin** plugin,
++                            bool* handled);
++
++std::string TsPdfDocumentUrl(RenderFrame* render_frame);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_RENDERER_SUPPORT_H_
+diff --git a/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc b/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+index 6c73054de1..fccd87a64e 100644
+--- a/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
++++ b/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+@@ -62,7 +62,7 @@ std::optional<GURL> TsPdfStreamDelegate::MapToOriginalUrl(
+     NavigationHandle& navigation_handle) {
+   RenderFrameHost* embedder_frame = navigation_handle.GetParentFrame();
+   if (!embedder_frame) {
+-    LOG(INFO) << "[issue-792-exp14] pdf-map-to-original stream_url="
++    LOG(INFO) << "[termsurf-pdf] pdf-map-to-original stream_url="
+               << navigation_handle.GetURL() << " original_url= success=0";
+     return std::nullopt;
+   }
+@@ -84,7 +84,7 @@ std::optional<GURL> TsPdfStreamDelegate::MapToOriginalUrl(
+   const GURL& stream_url = navigation_handle.GetURL();
+   if (!stream || stream->extension_id() != extension_misc::kPdfExtensionId ||
+       stream->stream_url() != stream_url || !stream->pdf_plugin_attributes()) {
+-    LOG(INFO) << "[issue-792-exp14] pdf-map-to-original stream_url="
++    LOG(INFO) << "[termsurf-pdf] pdf-map-to-original stream_url="
+               << stream_url << " original_url= success=0";
+     return std::nullopt;
+   }
+@@ -119,7 +119,7 @@ std::optional<GURL> TsPdfStreamDelegate::MapToOriginalUrl(
+ 
+   TsStreamInfoHelper::CreateForCurrentDocument(embedder_frame,
+                                                std::move(info));
+-  LOG(INFO) << "[issue-792-exp14] pdf-map-to-original stream_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-map-to-original stream_url="
+             << stream_url << " original_url=" << original_url
+             << " success=1";
+   return original_url;
+@@ -128,7 +128,7 @@ std::optional<GURL> TsPdfStreamDelegate::MapToOriginalUrl(
+ std::optional<pdf::PdfStreamDelegate::StreamInfo>
+ TsPdfStreamDelegate::GetStreamInfo(RenderFrameHost* embedder_frame) {
+   if (!embedder_frame) {
+-    LOG(INFO) << "[issue-792-exp14] pdf-get-stream-info frame_url="
++    LOG(INFO) << "[termsurf-pdf] pdf-get-stream-info frame_url="
+               << " has_stream=0";
+     return std::nullopt;
+   }
+@@ -136,13 +136,13 @@ TsPdfStreamDelegate::GetStreamInfo(RenderFrameHost* embedder_frame) {
+   TsStreamInfoHelper* helper =
+       TsStreamInfoHelper::GetForCurrentDocument(embedder_frame);
+   if (!helper) {
+-    LOG(INFO) << "[issue-792-exp14] pdf-get-stream-info frame_url="
++    LOG(INFO) << "[termsurf-pdf] pdf-get-stream-info frame_url="
+               << embedder_frame->GetLastCommittedURL() << " has_stream=0";
+     return std::nullopt;
+   }
+ 
+   auto stream_info = helper->TakeStreamInfo();
+-  LOG(INFO) << "[issue-792-exp14] pdf-get-stream-info frame_url="
++  LOG(INFO) << "[termsurf-pdf] pdf-get-stream-info frame_url="
+             << embedder_frame->GetLastCommittedURL()
+             << " has_stream=" << (stream_info.has_value() ? 1 : 0);
+   return stream_info;
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index 8637dda722..2966055faf 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -123,20 +123,20 @@ bool AddPdfStreamContainer(
+       -1, embedded, handler_url, extension_id, std::move(transferrable_loader),
+       original_url);
+ 
+-  LOG(INFO) << "[issue-792-exp16] interceptor-manager-created "
++  LOG(INFO) << "[termsurf-pdf] interceptor-manager-created "
+             << "frame_tree_node_id=" << frame_tree_node_id;
+   pdf::PdfViewerStreamManager::Create(web_contents);
+   pdf::PdfViewerStreamManager::FromWebContents(web_contents)
+       ->AddStreamContainer(frame_tree_node_id, internal_id,
+                            std::move(stream_container));
+-  LOG(INFO) << "[issue-792-exp14] stream-container-added frame_tree_node_id="
++  LOG(INFO) << "[termsurf-pdf] stream-container-added frame_tree_node_id="
+             << frame_tree_node_id << " internal_id=" << internal_id
+             << " original_url=" << original_url
+             << " handler_url=" << handler_url;
+-  LOG(INFO) << "[issue-792-exp15] stream-container-added-before-resume "
++  LOG(INFO) << "[termsurf-pdf] stream-container-added-before-resume "
+             << "frame_tree_node_id=" << frame_tree_node_id
+             << " internal_id=" << internal_id;
+-  LOG(INFO) << "[issue-792-exp16] interceptor-stream-added "
++  LOG(INFO) << "[termsurf-pdf] interceptor-stream-added "
+             << "frame_tree_node_id=" << frame_tree_node_id
+             << " internal_id=" << internal_id;
+   return true;
+@@ -187,7 +187,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+     ClearAllButFrameAncestors(response_head);
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp14] plugin-response-intercept mime_type="
++  LOG(INFO) << "[termsurf-pdf] plugin-response-intercept mime_type="
+             << response_head->mime_type << " extension_id=" << extension_id
+             << " frame_tree_node_id=" << frame_tree_node_id_;
+ 
+@@ -198,7 +198,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+       new_client.BindNewPipeAndPassReceiver();
+ 
+   const std::string internal_id = base::UnguessableToken::Create().ToString();
+-  LOG(INFO) << "[issue-792-exp16] oopif-template-body frame_tree_node_id="
++  LOG(INFO) << "[termsurf-pdf] oopif-template-body frame_tree_node_id="
+             << frame_tree_node_id_ << " internal_id=" << internal_id
+             << " original_url=" << response_url;
+   const std::string payload =
+@@ -206,7 +206,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+           response_url, response_head->mime_type, internal_id);
+   const std::string pdf_extension_url =
+       extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec();
+-  LOG(INFO) << "[issue-792-exp19] wrapper-payload "
++  LOG(INFO) << "[termsurf-pdf] wrapper-payload "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " internal_id=" << internal_id << " bytes=" << payload.size()
+             << " has_template="
+@@ -221,7 +221,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+             << (payload.find(internal_id) != std::string::npos ? 1 : 0)
+             << " has_pdf_extension_url="
+             << (payload.find(pdf_extension_url) != std::string::npos ? 1 : 0);
+-  LOG(INFO) << "[issue-792-exp16] interceptor-template-created "
++  LOG(INFO) << "[termsurf-pdf] interceptor-template-created "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " internal_id=" << internal_id;
+   *defer = true;
+@@ -243,7 +243,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   delegate_->InterceptResponse(std::move(dummy_new_loader),
+                                std::move(new_client_receiver), &original_loader,
+                                &original_client, &consumer_handle);
+-  LOG(INFO) << "[issue-792-exp16] interceptor-response-swapped "
++  LOG(INFO) << "[termsurf-pdf] interceptor-response-swapped "
+             << "frame_tree_node_id=" << frame_tree_node_id_;
+ 
+   auto deep_copied_response = response_head->Clone();
+@@ -266,7 +266,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ 
+   bool embedded =
+       request_destination_ != network::mojom::RequestDestination::kDocument;
+-  LOG(INFO) << "[issue-792-exp17] wrapper-classification-before "
++  LOG(INFO) << "[termsurf-pdf] wrapper-classification-before "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " mime_type=" << response_head->mime_type
+             << " intercepted_by_plugin="
+@@ -278,7 +278,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+                             internal_id)) {
+     response_head->intercepted_by_plugin = true;
+   }
+-  LOG(INFO) << "[issue-792-exp17] wrapper-classification-after "
++  LOG(INFO) << "[termsurf-pdf] wrapper-classification-after "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " mime_type=" << response_head->mime_type
+             << " intercepted_by_plugin="
+@@ -293,7 +293,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ }
+ 
+ void TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad() {
+-  LOG(INFO) << "[issue-792-exp16] interceptor-resume frame_tree_node_id="
++  LOG(INFO) << "[termsurf-pdf] interceptor-resume frame_tree_node_id="
+             << frame_tree_node_id_;
+   delegate_->Resume();
+ }
+diff --git a/content/libtermsurf_chromium/ts_plugin_utils.cc b/content/libtermsurf_chromium/ts_plugin_utils.cc
+index 884db3cbd5..45c8077605 100644
+--- a/content/libtermsurf_chromium/ts_plugin_utils.cc
++++ b/content/libtermsurf_chromium/ts_plugin_utils.cc
+@@ -39,7 +39,7 @@ base::flat_map<std::string, std::string> GetTsPluginMimeTypeToExtensionIdMap(
+     }
+   }
+ 
+-  LOG(INFO) << "[issue-792-exp14] plugin-mime-map mime_type="
++  LOG(INFO) << "[termsurf-pdf] plugin-mime-map mime_type="
+             << pdf::kPDFMimeType << " extension_id="
+             << (result.contains(pdf::kPDFMimeType)
+                     ? result[pdf::kPDFMimeType]
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index 822c8251ad..95d2ce4c54 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -103,7 +103,7 @@ void TsTabObserver::TitleWasSet(NavigationEntry* entry) {
+     return;
+   }
+   std::string title = base::UTF16ToUTF8(entry->GetTitleForDisplay());
+-  LOG(INFO) << "[issue-794-exp15] title-was-set title=" << title;
++  LOG(INFO) << "[termsurf-pdf-title] title-was-set title=" << title;
+   TsNotifyTitleChanged(reinterpret_cast<void*>(handle_), title.c_str());
+ #endif
+ }
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index 92f76975a1..1bd1512c48 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -978,7 +978,7 @@ void PdfViewWebPlugin::UpdateGeometry(const gfx::Rect& window_rect,
+                                       const gfx::Rect& unobscured_rect,
+                                       bool is_visible) {
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp8] plugin-update-geometry window_x="
++    LOG(INFO) << "[termsurf-pdf-resize] plugin-update-geometry window_x="
+               << window_rect.x() << " window_y=" << window_rect.y()
+               << " window_width=" << window_rect.width()
+               << " window_height=" << window_rect.height()
+@@ -2785,7 +2785,7 @@ void PdfViewWebPlugin::OnGeometryChanged(double old_zoom,
+   RecalculateAreas(old_zoom, old_device_scale);
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp8] plugin-geometry-changed plugin_width="
++    LOG(INFO) << "[termsurf-pdf-resize] plugin-geometry-changed plugin_width="
+               << plugin_rect_.width()
+               << " plugin_height=" << plugin_rect_.height()
+               << " available_x=" << available_area_.x()
+@@ -3104,7 +3104,7 @@ bool PdfViewWebPlugin::HandleWebInputEvent(const blink::WebInputEvent& event) {
+     const gfx::PointF original_position = original_mouse.PositionInWidget();
+     const gfx::PointF transformed_position =
+         transformed_mouse.PositionInWidget();
+-    LOG(INFO) << "[issue-794-exp7] plugin-input type="
++    LOG(INFO) << "[termsurf-pdf-input] plugin-input type="
+               << static_cast<int>(event.GetType())
+               << " original_x=" << original_position.x()
+               << " original_y=" << original_position.y()
+diff --git a/pdf/pdfium/pdfium_engine.cc b/pdf/pdfium/pdfium_engine.cc
+index b2a90cc2ad..c0303deae5 100644
+--- a/pdf/pdfium/pdfium_engine.cc
++++ b/pdf/pdfium/pdfium_engine.cc
+@@ -782,7 +782,7 @@ void PDFiumEngine::PluginSizeUpdated(const gfx::Size& size) {
+   OnSelectionPositionChanged();
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp8] pdfium-plugin-size-updated old_width="
++    LOG(INFO) << "[termsurf-pdf-resize] pdfium-plugin-size-updated old_width="
+               << old_size.width() << " old_height=" << old_size.height()
+               << " new_width=" << size.width()
+               << " new_height=" << size.height()
+@@ -1794,7 +1794,7 @@ bool PDFiumEngine::OnLeftMouseDown(const blink::WebMouseEvent& event) {
+     if (!Issue794InputTraceEnabled()) {
+       return;
+     }
+-    LOG(INFO) << "[issue-794-exp7] pdfium-mouse event=left-down outcome="
++    LOG(INFO) << "[termsurf-pdf-input] pdfium-mouse event=left-down outcome="
+               << outcome << " widget_x=" << point.x()
+               << " widget_y=" << point.y()
+               << " left_down_before=" << left_button_down_before
+@@ -2010,7 +2010,7 @@ bool PDFiumEngine::OnMouseUp(const blink::WebMouseEvent& event) {
+     if (!Issue794InputTraceEnabled()) {
+       return;
+     }
+-    LOG(INFO) << "[issue-794-exp7] pdfium-mouse event=mouse-up outcome="
++    LOG(INFO) << "[termsurf-pdf-input] pdfium-mouse event=mouse-up outcome="
+               << outcome << " widget_x=" << point.x()
+               << " widget_y=" << point.y()
+               << " left_down_before=" << left_button_down_before
+@@ -2087,7 +2087,7 @@ bool PDFiumEngine::OnMouseMove(const blink::WebMouseEvent& event) {
+     if (!Issue794InputTraceEnabled()) {
+       return;
+     }
+-    LOG(INFO) << "[issue-794-exp7] pdfium-mouse event=mouse-move outcome="
++    LOG(INFO) << "[termsurf-pdf-input] pdfium-mouse event=mouse-move outcome="
+               << outcome << " widget_x=" << point.x()
+               << " widget_y=" << point.y()
+               << " left_down_before=" << left_button_down_before
+@@ -4410,7 +4410,7 @@ void PDFiumEngine::OnSelectionTextChanged() {
+   DCHECK_NE(focus_field_type_, FocusFieldType::kText);
+   std::string selected_text = GetSelectedText();
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[issue-794-exp7] pdfium-selection-changed length="
++    LOG(INFO) << "[termsurf-pdf-input] pdfium-selection-changed length="
+               << selected_text.size() << " sample=\""
+               << Issue794SelectedTextSample(selected_text) << "\"";
+   }
+-- 
+2.54.0
+

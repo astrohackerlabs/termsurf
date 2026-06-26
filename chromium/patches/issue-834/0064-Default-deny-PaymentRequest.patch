@@ -1,7 +1,7 @@
 From caef0456ae357a1286ad2219efd03c4fc96f9be6 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 18:09:03 -0500
-Subject: [PATCH 64/84] Default-deny PaymentRequest
+Subject: [PATCH 64/85] Default-deny PaymentRequest
 
 A checkout knocked with wallet dreams,
 We answered with polite regimes:

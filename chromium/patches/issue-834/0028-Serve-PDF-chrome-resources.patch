@@ -1,7 +1,7 @@
 From be3142add2a07d07166c83fe16f70001db05f6df Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 10:45:22 -0500
-Subject: [PATCH 28/84] Serve PDF chrome resources
+Subject: [PATCH 28/85] Serve PDF chrome resources
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

@@ -1,7 +1,7 @@
 From 890c437d5fc8a9773ed9e4de2d725b99a0aa7bb6 Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 15:19:27 -0500
-Subject: [PATCH 80/84] Probe app-modal PDF print panels
+Subject: [PATCH 80/85] Probe app-modal PDF print panels
 
 A print sheet tried the center stage,
 With helper held outside the cage.

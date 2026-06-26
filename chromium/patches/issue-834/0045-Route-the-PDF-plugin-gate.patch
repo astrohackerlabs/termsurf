@@ -1,7 +1,7 @@
 From 97f388967d82391c535ab1e21822f55b547c54ad Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Fri, 29 May 2026 16:49:19 -0500
-Subject: [PATCH 45/84] Route the PDF plugin gate
+Subject: [PATCH 45/85] Route the PDF plugin gate
 
 The plugin knocked, the guard asked why,
 "Are you PDF?" came no reply.

@@ -1,7 +1,7 @@
 From 39b91ac0bf1cfcde281608280e37ae24ea3e3d06 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 23 May 2026 07:51:11 -0500
-Subject: [PATCH 18/84] Use direct NSMenu for selects
+Subject: [PATCH 18/85] Use direct NSMenu for selects
 
 The popup cell shifted left with pride,
 So menus took a straighter ride.

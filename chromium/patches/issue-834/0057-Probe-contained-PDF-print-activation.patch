@@ -1,7 +1,7 @@
 From a18decbce1c1cb9b8768dfea9863e38af843bafb Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 13:44:32 -0500
-Subject: [PATCH 57/84] Probe contained PDF print activation
+Subject: [PATCH 57/85] Probe contained PDF print activation
 
 ---
  .../renderer/pdf_view_web_plugin_client.cc    | 83 +++++++++++++++++--

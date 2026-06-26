@@ -144,6 +144,26 @@ xcodebuild -downloadComponent MetalToolchain
 webkit/src/Tools/Scripts/build-webkit --debug
 ```
 
+## Build Helper
+
+For normal TermSurf development builds, use the repository helper:
+
+```bash
+scripts/build.sh webkit
+```
+
+That command builds Debug WebKit by delegating to
+`webkit/src/Tools/Scripts/build-webkit --debug`. Release builds are available
+with:
+
+```bash
+scripts/build.sh webkit --release
+```
+
+`scripts/build.sh webkit --clean` explicitly cleans WebKit's upstream build
+products before rebuilding. Build outputs remain under
+`webkit/src/WebKitBuild/`.
+
 Capture the local state after the build:
 
 ```bash

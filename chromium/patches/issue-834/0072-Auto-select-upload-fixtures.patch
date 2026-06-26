@@ -1,7 +1,7 @@
 From 797aa4897cfaaad153503ad04dfaeb9057a0508c Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 22:43:21 -0500
-Subject: [PATCH 72/84] Auto-select upload fixtures
+Subject: [PATCH 72/85] Auto-select upload fixtures
 
 A hidden switch picks one small file,
 Then sends it through the browser aisle.

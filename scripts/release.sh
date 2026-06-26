@@ -1,22 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build, package, upload, and publish a release to GitHub and Homebrew.
+# Build and package a release. Publishing requires TERMSURF_RELEASE_PUBLISH=1.
+# Requires local checkouts at ~/dev/termsurf and ~/dev/homebrew-termsurf.
 # Usage: scripts/release.sh [version]
 # Default version: 0.1.0
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/roamium-resources.sh"
-source "$SCRIPT_DIR/surfari-resources.sh"
 VERSION="${1:-0.1.0}"
 ARCH="aarch64-apple-darwin"
 TARBALL_NAME="termsurf-${VERSION}-${ARCH}.tar.gz"
 STAGING_DIR="$REPO_DIR/dist/release"
 CHROMIUM_OUT="$REPO_DIR/chromium/src/out/Default"
-WEBKIT_BUILD="$REPO_DIR/webkit/src/WebKitBuild/Debug"
+WEBKIT_RELEASE_OUT="$REPO_DIR/webkit/src/WebKitBuild/Release"
 GHOSTBOARD_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf.app"
-CASK_FILE="$REPO_DIR/homebrew/Casks/termsurf.rb"
+SURFARI_LIB="$REPO_DIR/surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib"
+PUBLIC_REPO="${TERMSURF_PUBLIC_REPO:-$HOME/dev/termsurf}"
+PUBLIC_GITHUB_REPO="${TERMSURF_PUBLIC_GITHUB_REPO:-termsurf/termsurf}"
+HOMEBREW_TAP_REPO="${TERMSURF_HOMEBREW_TAP_REPO:-$HOME/dev/homebrew-termsurf}"
+CASK_FILE="$HOMEBREW_TAP_REPO/Casks/termsurf.rb"
+SURFARI_RUNTIME_ARTIFACTS=(
+  WebKit.framework
+  WebCore.framework
+  JavaScriptCore.framework
+  WebKitLegacy.framework
+  WebInspectorUI.framework
+  WebGPU.framework
+  libANGLE-shared.dylib
+  libWebKitSwift.dylib
+  libwebrtc.dylib
+  com.apple.WebKit.GPU.xpc
+  com.apple.WebKit.Model.xpc
+  com.apple.WebKit.Networking.xpc
+  com.apple.WebKit.WebContent.CaptivePortal.xpc
+  com.apple.WebKit.WebContent.Development.xpc
+  com.apple.WebKit.WebContent.EnhancedSecurity.xpc
+  com.apple.WebKit.WebContent.xpc
+)
 
 echo "==> Packaging TermSurf v${VERSION} for ${ARCH}..."
 
@@ -26,10 +48,17 @@ for f in \
   "$GHOSTBOARD_APP/Contents/MacOS/termsurf" \
   "$REPO_DIR/target/release/roamium" \
   "$REPO_DIR/target/release/surfari" \
-  "$REPO_DIR/surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib" \
-  "$WEBKIT_BUILD/WebKit.framework"; do
-  if [ ! -e "$f" ]; then
+  "$SURFARI_LIB"; do
+  if [ ! -f "$f" ]; then
     echo "Error: Release build not found: $f"
+    echo "Run: scripts/build.sh all --release"
+    exit 1
+  fi
+done
+
+for artifact in "${SURFARI_RUNTIME_ARTIFACTS[@]}"; do
+  if [ ! -e "$WEBKIT_RELEASE_OUT/$artifact" ]; then
+    echo "Error: Surfari runtime artifact not found: $WEBKIT_RELEASE_OUT/$artifact"
     echo "Run: scripts/build.sh all --release"
     exit 1
   fi
@@ -45,13 +74,16 @@ echo "==> Copying binaries..."
 cp "$REPO_DIR/target/release/web" "$STAGING_DIR/"
 cp "$REPO_DIR/target/release/roamium" "$STAGING_DIR/roamium/"
 cp "$REPO_DIR/target/release/surfari" "$STAGING_DIR/surfari/"
-cp "$REPO_DIR/surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib" "$STAGING_DIR/surfari/"
-copy_surfari_runtime_resources "$WEBKIT_BUILD" "$STAGING_DIR/surfari"
-rewrite_surfari_runtime_paths "$WEBKIT_BUILD" "$STAGING_DIR/surfari"
-sign_surfari_runtime_artifacts "$STAGING_DIR/surfari"
 
 # Copy Chromium dylibs and resources
 copy_roamium_runtime_resources "$CHROMIUM_OUT" "$STAGING_DIR/roamium"
+
+# Copy Surfari WebKit runtime resources
+echo "==> Copying Surfari runtime resources..."
+cp "$SURFARI_LIB" "$STAGING_DIR/surfari/"
+for artifact in "${SURFARI_RUNTIME_ARTIFACTS[@]}"; do
+  cp -R "$WEBKIT_RELEASE_OUT/$artifact" "$STAGING_DIR/surfari/"
+done
 
 # Copy .app bundle
 echo "==> Copying TermSurf.app..."
@@ -66,23 +98,77 @@ tar czf "$REPO_DIR/dist/$TARBALL_NAME" .
 SHA=$(shasum -a 256 "$REPO_DIR/dist/$TARBALL_NAME" | awk '{print $1}')
 echo "==> SHA256: $SHA"
 
-if [ "${TERMSURF_RELEASE_PACKAGE_ONLY:-0}" = "1" ]; then
+if [ "${TERMSURF_RELEASE_PACKAGE_ONLY:-0}" = "1" ] ||
+  [ "${TERMSURF_RELEASE_PUBLISH:-0}" != "1" ]; then
   echo "==> Package-only mode: skipping GitHub upload and Homebrew cask update."
   echo "==> Tarball: dist/$TARBALL_NAME"
   exit 0
 fi
 
-# Upload to GitHub (delete old release if it exists)
-echo "==> Uploading to GitHub..."
-cd "$REPO_DIR"
-gh release delete "v${VERSION}" --yes 2>/dev/null || true
-gh release create "v${VERSION}" "dist/${TARBALL_NAME}" --title "v${VERSION}" --notes "v${VERSION}"
+if [ ! -d "$PUBLIC_REPO/.git" ]; then
+  echo "Error: Public repo checkout not found: $PUBLIC_REPO"
+  echo "Clone git@github.com:termsurf/termsurf.git to $PUBLIC_REPO"
+  exit 1
+fi
 
-cd "$REPO_DIR/homebrew"
+if [ ! -d "$HOMEBREW_TAP_REPO/.git" ]; then
+  echo "Error: Homebrew tap checkout not found: $HOMEBREW_TAP_REPO"
+  echo "Clone git@github.com:termsurf/homebrew-termsurf.git to $HOMEBREW_TAP_REPO"
+  exit 1
+fi
+
+if [ ! -f "$CASK_FILE" ]; then
+  echo "Error: Homebrew cask not found: $CASK_FILE"
+  exit 1
+fi
+
+cd "$HOMEBREW_TAP_REPO"
 if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
   echo "==> Checking out Homebrew tap main branch..."
   git checkout main
 fi
+
+if [ -n "$(git status --short)" ]; then
+  echo "Error: Homebrew tap has uncommitted changes: $HOMEBREW_TAP_REPO"
+  echo "Commit, stash, or reset the tap before publishing."
+  exit 1
+fi
+
+cd "$PUBLIC_REPO"
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+  echo "==> Checking out public repo main branch..."
+  git checkout main
+fi
+
+if [ -n "$(git status --short)" ]; then
+  echo "Error: Public repo has uncommitted changes: $PUBLIC_REPO"
+  echo "Commit the synced public source before publishing."
+  exit 1
+fi
+
+if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+  if [ "$(git rev-parse "refs/tags/v${VERSION}^{commit}")" != "$(git rev-parse HEAD)" ]; then
+    echo "Error: v${VERSION} already exists and does not point at public repo HEAD"
+    exit 1
+  fi
+else
+  echo "==> Tagging public repo v${VERSION}..."
+  git tag -a "v${VERSION}" -m "v${VERSION}"
+fi
+
+echo "==> Pushing public source release..."
+git push origin main "v${VERSION}"
+
+# Upload to GitHub (delete old release if it exists)
+echo "==> Uploading to GitHub..."
+cd "$REPO_DIR"
+gh release delete "v${VERSION}" --repo "$PUBLIC_GITHUB_REPO" --yes 2>/dev/null || true
+gh release create "v${VERSION}" "dist/${TARBALL_NAME}" \
+  --repo "$PUBLIC_GITHUB_REPO" \
+  --title "v${VERSION}" \
+  --notes "v${VERSION}"
+
+cd "$HOMEBREW_TAP_REPO"
 
 # Update Homebrew cask
 echo "==> Updating Homebrew cask..."

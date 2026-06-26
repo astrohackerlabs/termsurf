@@ -1,3 +1,0 @@
-[submodule "homebrew"]
-	path = homebrew
-	url = git@github.com:termsurf/homebrew-termsurf.git

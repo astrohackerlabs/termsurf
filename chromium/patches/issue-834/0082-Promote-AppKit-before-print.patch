@@ -1,7 +1,7 @@
 From 588501a88803e2ce02e4c29a1918329316a22562 Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 15:57:13 -0500
-Subject: [PATCH 82/84] Promote AppKit before print
+Subject: [PATCH 82/85] Promote AppKit before print
 
 The app wore a prohibited hat,
 So printing stared and said, "not that."

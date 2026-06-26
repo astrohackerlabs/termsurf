@@ -1,0 +1,1983 @@
+From a9be8bc6e5e76f58e205f9e5ec6488062acc86e2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 08:28:45 -0500
+Subject: [PATCH 23/87] Stand up TermSurf extension foundation
+
+---
+ content/libtermsurf_chromium/BUILD.gn         |  35 +-
+ ...browser_context_keyed_service_factories.cc |  15 +
+ ..._browser_context_keyed_service_factories.h |  14 +
+ .../extensions/ts_extension_prefs.cc          |  52 ++
+ .../extensions/ts_extension_prefs.h           |  24 +
+ .../extensions/ts_extension_system.cc         | 109 +++++
+ .../extensions/ts_extension_system.h          |  63 +++
+ .../extensions/ts_extension_system_factory.cc |  50 ++
+ .../extensions/ts_extension_system_factory.h  |  40 ++
+ .../extensions/ts_extensions_api_provider.cc  |  42 ++
+ .../extensions/ts_extensions_api_provider.h   |  38 ++
+ .../ts_extensions_browser_client.cc           | 461 ++++++++++++++++++
+ .../extensions/ts_extensions_browser_client.h | 138 ++++++
+ .../extensions/ts_extensions_client.cc        | 111 +++++
+ .../extensions/ts_extensions_client.h         |  54 ++
+ .../ts_extensions_renderer_client.cc          |  20 +
+ .../ts_extensions_renderer_client.h           |  26 +
+ .../libtermsurf_chromium/ts_browser_client.cc |  40 +-
+ .../ts_browser_main_parts.cc                  |  85 ++++
+ .../ts_browser_main_parts.h                   |  59 ++-
+ .../ts_content_renderer_client.cc             |  72 +++
+ .../ts_content_renderer_client.h              |  47 ++
+ .../libtermsurf_chromium/ts_main_delegate.cc  |   6 +
+ .../libtermsurf_chromium/ts_main_delegate.h   |   8 +
+ 24 files changed, 1582 insertions(+), 27 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_prefs.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_prefs.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_system.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_system.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_system_factory.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_system_factory.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_client.h
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h
+ create mode 100644 content/libtermsurf_chromium/ts_content_renderer_client.cc
+ create mode 100644 content/libtermsurf_chromium/ts_content_renderer_client.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index a2438eb4ce..1281f8319f 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -7,12 +7,30 @@ import("//build/config/ui.gni")
+ shared_library("libtermsurf_chromium") {
+   testonly = true
+   sources = [
++    "extensions/ts_browser_context_keyed_service_factories.cc",
++    "extensions/ts_browser_context_keyed_service_factories.h",
++    "extensions/ts_extension_prefs.cc",
++    "extensions/ts_extension_prefs.h",
++    "extensions/ts_extension_system.cc",
++    "extensions/ts_extension_system.h",
++    "extensions/ts_extension_system_factory.cc",
++    "extensions/ts_extension_system_factory.h",
++    "extensions/ts_extensions_api_provider.cc",
++    "extensions/ts_extensions_api_provider.h",
++    "extensions/ts_extensions_browser_client.cc",
++    "extensions/ts_extensions_browser_client.h",
++    "extensions/ts_extensions_client.cc",
++    "extensions/ts_extensions_client.h",
++    "extensions/ts_extensions_renderer_client.cc",
++    "extensions/ts_extensions_renderer_client.h",
+     "libtermsurf_chromium.cc",
+     "libtermsurf_chromium.h",
+     "ts_browser_client.cc",
+     "ts_browser_client.h",
+     "ts_browser_main_parts.cc",
+     "ts_browser_main_parts.h",
++    "ts_content_renderer_client.cc",
++    "ts_content_renderer_client.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
+     "ts_tab_observer.cc",
+@@ -31,11 +49,24 @@ shared_library("libtermsurf_chromium") {
+   }
+ 
+   deps = [
+-    "//content/shell:content_shell_app",
+-    "//content/shell:content_shell_lib",
++    "//components/custom_handlers",
++    "//components/keyed_service/content",
++    "//components/keyed_service/core",
++    "//components/pref_registry",
++    "//components/prefs",
++    "//components/user_prefs",
++    "//components/value_store",
+     "//content/public/app",
+     "//content/public/browser",
+     "//content/public/common",
++    "//content/shell:content_shell_app",
++    "//content/shell:content_shell_lib",
++    "//extensions:extensions_resources",
++    "//extensions/browser",
++    "//extensions/browser/api:api_provider",
++    "//extensions/common",
++    "//extensions/common:core_api_provider",
++    "//extensions/renderer",
+   ]
+ 
+   if (is_mac) {
+diff --git a/content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.cc b/content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.cc
+new file mode 100644
+index 0000000000..5713cd9cc0
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.cc
+@@ -0,0 +1,15 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h"
++
++#include "content/libtermsurf_chromium/extensions/ts_extension_system_factory.h"
++
++namespace content {
++
++void EnsureTsBrowserContextKeyedServiceFactoriesBuilt() {
++  TsExtensionSystemFactory::GetInstance();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h b/content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h
+new file mode 100644
+index 0000000000..d737adc5f1
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h
+@@ -0,0 +1,14 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_BROWSER_CONTEXT_KEYED_SERVICE_FACTORIES_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_BROWSER_CONTEXT_KEYED_SERVICE_FACTORIES_H_
++
++namespace content {
++
++void EnsureTsBrowserContextKeyedServiceFactoriesBuilt();
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_BROWSER_CONTEXT_KEYED_SERVICE_FACTORIES_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_prefs.cc b/content/libtermsurf_chromium/extensions/ts_extension_prefs.cc
+new file mode 100644
+index 0000000000..c542e5374d
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_prefs.cc
+@@ -0,0 +1,52 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extension_prefs.h"
++
++#include "base/files/file_path.h"
++#include "base/memory/ref_counted.h"
++#include "components/pref_registry/pref_registry_syncable.h"
++#include "components/prefs/json_pref_store.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/pref_service_factory.h"
++#include "components/user_prefs/user_prefs.h"
++#include "content/public/browser/browser_context.h"
++#include "extensions/browser/extension_prefs.h"
++#include "extensions/browser/permissions_manager.h"
++
++namespace content {
++namespace {
++
++scoped_refptr<PersistentPrefStore> CreatePrefStore(
++    const base::FilePath& profile_path,
++    bool is_off_the_record) {
++  const char* file_name = is_off_the_record
++                              ? "termsurf_extension_prefs_otr.json"
++                              : "termsurf_extension_prefs.json";
++  auto store =
++      base::MakeRefCounted<JsonPrefStore>(profile_path.AppendASCII(file_name));
++  store->ReadPrefs();
++  return store;
++}
++
++}  // namespace
++
++std::unique_ptr<PrefService> CreateTsExtensionPrefService(
++    BrowserContext* browser_context,
++    const base::FilePath& profile_path,
++    bool is_off_the_record) {
++  PrefServiceFactory factory;
++  factory.set_user_prefs(CreatePrefStore(profile_path, is_off_the_record));
++
++  auto* registry = new user_prefs::PrefRegistrySyncable;
++  extensions::ExtensionPrefs::RegisterProfilePrefs(registry);
++  extensions::PermissionsManager::RegisterProfilePrefs(registry);
++
++  std::unique_ptr<PrefService> pref_service = factory.Create(registry);
++  user_prefs::UserPrefs::Set(browser_context, pref_service.get());
++  return pref_service;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_prefs.h b/content/libtermsurf_chromium/extensions/ts_extension_prefs.h
+new file mode 100644
+index 0000000000..a02a64b9eb
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_prefs.h
+@@ -0,0 +1,24 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_PREFS_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_PREFS_H_
++
++#include <memory>
++
++#include "base/files/file_path.h"
++
++class PrefService;
++
++namespace content {
++class BrowserContext;
++
++std::unique_ptr<PrefService> CreateTsExtensionPrefService(
++    BrowserContext* browser_context,
++    const base::FilePath& profile_path,
++    bool is_off_the_record);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_PREFS_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_system.cc b/content/libtermsurf_chromium/extensions/ts_extension_system.cc
+new file mode 100644
+index 0000000000..f93808a58b
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_system.cc
+@@ -0,0 +1,109 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
++
++#include "base/check.h"
++#include "base/notreached.h"
++#include "components/value_store/value_store_factory_impl.h"
++#include "content/public/browser/browser_context.h"
++#include "extensions/browser/null_app_sorting.h"
++#include "extensions/browser/quota_service.h"
++#include "extensions/browser/service_worker_manager.h"
++#include "extensions/browser/user_script_manager.h"
++
++namespace content {
++
++TsExtensionSystem::TsExtensionSystem(BrowserContext* browser_context)
++    : browser_context_(browser_context),
++      store_factory_(base::MakeRefCounted<value_store::ValueStoreFactoryImpl>(
++          browser_context->GetPath())) {}
++
++TsExtensionSystem::~TsExtensionSystem() = default;
++
++void TsExtensionSystem::FinishInitialization() {
++  ready_.Signal();
++}
++
++void TsExtensionSystem::ReloadExtension(
++    const extensions::ExtensionId& extension_id) {}
++
++void TsExtensionSystem::InitForRegularProfile(bool extensions_enabled) {
++  service_worker_manager_ =
++      std::make_unique<extensions::ServiceWorkerManager>(browser_context_);
++  user_script_manager_ =
++      std::make_unique<extensions::UserScriptManager>(browser_context_);
++  quota_service_ = std::make_unique<extensions::QuotaService>();
++  app_sorting_ = std::make_unique<extensions::NullAppSorting>();
++}
++
++extensions::ExtensionService* TsExtensionSystem::extension_service() {
++  return nullptr;
++}
++
++extensions::ManagementPolicy* TsExtensionSystem::management_policy() {
++  return nullptr;
++}
++
++extensions::ServiceWorkerManager* TsExtensionSystem::service_worker_manager() {
++  return service_worker_manager_.get();
++}
++
++extensions::UserScriptManager* TsExtensionSystem::user_script_manager() {
++  return user_script_manager_.get();
++}
++
++extensions::StateStore* TsExtensionSystem::state_store() {
++  return nullptr;
++}
++
++extensions::StateStore* TsExtensionSystem::rules_store() {
++  return nullptr;
++}
++
++extensions::StateStore* TsExtensionSystem::dynamic_user_scripts_store() {
++  return nullptr;
++}
++
++scoped_refptr<value_store::ValueStoreFactory>
++TsExtensionSystem::store_factory() {
++  return store_factory_;
++}
++
++extensions::QuotaService* TsExtensionSystem::quota_service() {
++  return quota_service_.get();
++}
++
++extensions::AppSorting* TsExtensionSystem::app_sorting() {
++  return app_sorting_.get();
++}
++
++const base::OneShotEvent& TsExtensionSystem::ready() const {
++  return ready_;
++}
++
++bool TsExtensionSystem::is_ready() const {
++  return ready_.is_signaled();
++}
++
++extensions::ContentVerifier* TsExtensionSystem::content_verifier() {
++  return nullptr;
++}
++
++void TsExtensionSystem::InstallUpdate(
++    const extensions::ExtensionId& extension_id,
++    const std::string& public_key,
++    const base::FilePath& temp_dir,
++    bool install_immediately,
++    InstallUpdateCallback install_update_callback) {
++  NOTREACHED();
++}
++
++void TsExtensionSystem::PerformActionBasedOnOmahaAttributes(
++    const extensions::ExtensionId& extension_id,
++    const base::DictValue& attributes) {
++  NOTREACHED();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_system.h b/content/libtermsurf_chromium/extensions/ts_extension_system.h
+new file mode 100644
+index 0000000000..7eb323ca03
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_system.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_SYSTEM_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_SYSTEM_H_
++
++#include <memory>
++#include <string>
++
++#include "base/memory/scoped_refptr.h"
++#include "base/one_shot_event.h"
++#include "extensions/browser/extension_system.h"
++
++namespace content {
++class BrowserContext;
++
++class TsExtensionSystem : public extensions::ExtensionSystem {
++ public:
++  explicit TsExtensionSystem(BrowserContext* browser_context);
++  TsExtensionSystem(const TsExtensionSystem&) = delete;
++  TsExtensionSystem& operator=(const TsExtensionSystem&) = delete;
++  ~TsExtensionSystem() override;
++
++  void FinishInitialization();
++  void ReloadExtension(const extensions::ExtensionId& extension_id);
++
++  void InitForRegularProfile(bool extensions_enabled) override;
++  extensions::ExtensionService* extension_service() override;
++  extensions::ManagementPolicy* management_policy() override;
++  extensions::ServiceWorkerManager* service_worker_manager() override;
++  extensions::UserScriptManager* user_script_manager() override;
++  extensions::StateStore* state_store() override;
++  extensions::StateStore* rules_store() override;
++  extensions::StateStore* dynamic_user_scripts_store() override;
++  scoped_refptr<value_store::ValueStoreFactory> store_factory() override;
++  extensions::QuotaService* quota_service() override;
++  extensions::AppSorting* app_sorting() override;
++  const base::OneShotEvent& ready() const override;
++  bool is_ready() const override;
++  extensions::ContentVerifier* content_verifier() override;
++  void InstallUpdate(const extensions::ExtensionId& extension_id,
++                     const std::string& public_key,
++                     const base::FilePath& temp_dir,
++                     bool install_immediately,
++                     InstallUpdateCallback install_update_callback) override;
++  void PerformActionBasedOnOmahaAttributes(
++      const extensions::ExtensionId& extension_id,
++      const base::DictValue& attributes) override;
++
++ private:
++  raw_ptr<BrowserContext> browser_context_;
++  base::OneShotEvent ready_;
++  scoped_refptr<value_store::ValueStoreFactory> store_factory_;
++  std::unique_ptr<extensions::ServiceWorkerManager> service_worker_manager_;
++  std::unique_ptr<extensions::UserScriptManager> user_script_manager_;
++  std::unique_ptr<extensions::QuotaService> quota_service_;
++  std::unique_ptr<extensions::AppSorting> app_sorting_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_SYSTEM_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_system_factory.cc b/content/libtermsurf_chromium/extensions/ts_extension_system_factory.cc
+new file mode 100644
+index 0000000000..9ca131b349
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_system_factory.cc
+@@ -0,0 +1,50 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extension_system_factory.h"
++
++#include "components/keyed_service/content/browser_context_dependency_manager.h"
++#include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
++#include "extensions/browser/extension_prefs_factory.h"
++#include "extensions/browser/extension_registry_factory.h"
++
++namespace content {
++
++TsExtensionSystemFactory* TsExtensionSystemFactory::GetInstance() {
++  static base::NoDestructor<TsExtensionSystemFactory> instance;
++  return instance.get();
++}
++
++extensions::ExtensionSystem* TsExtensionSystemFactory::GetForBrowserContext(
++    BrowserContext* context) {
++  return static_cast<TsExtensionSystem*>(
++      GetInstance()->GetServiceForBrowserContext(context, true));
++}
++
++TsExtensionSystemFactory::TsExtensionSystemFactory()
++    : extensions::ExtensionSystemProvider(
++          "TsExtensionSystem",
++          BrowserContextDependencyManager::GetInstance()) {
++  DependsOn(extensions::ExtensionPrefsFactory::GetInstance());
++  DependsOn(extensions::ExtensionRegistryFactory::GetInstance());
++}
++
++TsExtensionSystemFactory::~TsExtensionSystemFactory() = default;
++
++std::unique_ptr<KeyedService>
++TsExtensionSystemFactory::BuildServiceInstanceForBrowserContext(
++    BrowserContext* context) const {
++  return std::make_unique<TsExtensionSystem>(context);
++}
++
++BrowserContext* TsExtensionSystemFactory::GetBrowserContextToUse(
++    BrowserContext* context) const {
++  return context;
++}
++
++bool TsExtensionSystemFactory::ServiceIsCreatedWithBrowserContext() const {
++  return true;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_system_factory.h b/content/libtermsurf_chromium/extensions/ts_extension_system_factory.h
+new file mode 100644
+index 0000000000..b9a77c2e49
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_system_factory.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_SYSTEM_FACTORY_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_SYSTEM_FACTORY_H_
++
++#include <memory>
++
++#include "base/no_destructor.h"
++#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
++#include "extensions/browser/extension_system_provider.h"
++
++namespace content {
++
++class TsExtensionSystemFactory : public extensions::ExtensionSystemProvider {
++ public:
++  static TsExtensionSystemFactory* GetInstance();
++  extensions::ExtensionSystem* GetForBrowserContext(
++      BrowserContext* context) override;
++
++  TsExtensionSystemFactory(const TsExtensionSystemFactory&) = delete;
++  TsExtensionSystemFactory& operator=(const TsExtensionSystemFactory&) = delete;
++
++ private:
++  friend base::NoDestructor<TsExtensionSystemFactory>;
++
++  TsExtensionSystemFactory();
++  ~TsExtensionSystemFactory() override;
++
++  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
++      BrowserContext* context) const override;
++  BrowserContext* GetBrowserContextToUse(
++      BrowserContext* context) const override;
++  bool ServiceIsCreatedWithBrowserContext() const override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_SYSTEM_FACTORY_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+new file mode 100644
+index 0000000000..63606adf57
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+@@ -0,0 +1,42 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h"
++
++namespace content {
++
++TsExtensionsAPIProvider::TsExtensionsAPIProvider() = default;
++TsExtensionsAPIProvider::~TsExtensionsAPIProvider() = default;
++
++void TsExtensionsAPIProvider::AddAPIFeatures(
++    extensions::FeatureProvider* provider) {}
++
++void TsExtensionsAPIProvider::AddManifestFeatures(
++    extensions::FeatureProvider* provider) {}
++
++void TsExtensionsAPIProvider::AddPermissionFeatures(
++    extensions::FeatureProvider* provider) {}
++
++void TsExtensionsAPIProvider::AddBehaviorFeatures(
++    extensions::FeatureProvider* provider) {}
++
++void TsExtensionsAPIProvider::AddAPIJSONSources(
++    extensions::JSONFeatureProviderSource* json_source) {}
++
++bool TsExtensionsAPIProvider::IsAPISchemaGenerated(const std::string& name) {
++  return false;
++}
++
++std::string_view TsExtensionsAPIProvider::GetAPISchema(
++    const std::string& name) {
++  return {};
++}
++
++void TsExtensionsAPIProvider::RegisterPermissions(
++    extensions::PermissionsInfo* permissions_info) {}
++
++void TsExtensionsAPIProvider::RegisterManifestHandlers(
++    extensions::ManifestHandlerRegistry* registry) {}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h
+new file mode 100644
+index 0000000000..92db72f07f
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_API_PROVIDER_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_API_PROVIDER_H_
++
++#include <string>
++#include <string_view>
++
++#include "extensions/common/extensions_api_provider.h"
++
++namespace content {
++
++class TsExtensionsAPIProvider : public extensions::ExtensionsAPIProvider {
++ public:
++  TsExtensionsAPIProvider();
++  TsExtensionsAPIProvider(const TsExtensionsAPIProvider&) = delete;
++  TsExtensionsAPIProvider& operator=(const TsExtensionsAPIProvider&) = delete;
++  ~TsExtensionsAPIProvider() override;
++
++  void AddAPIFeatures(extensions::FeatureProvider* provider) override;
++  void AddManifestFeatures(extensions::FeatureProvider* provider) override;
++  void AddPermissionFeatures(extensions::FeatureProvider* provider) override;
++  void AddBehaviorFeatures(extensions::FeatureProvider* provider) override;
++  void AddAPIJSONSources(
++      extensions::JSONFeatureProviderSource* json_source) override;
++  bool IsAPISchemaGenerated(const std::string& name) override;
++  std::string_view GetAPISchema(const std::string& name) override;
++  void RegisterPermissions(
++      extensions::PermissionsInfo* permissions_info) override;
++  void RegisterManifestHandlers(
++      extensions::ManifestHandlerRegistry* registry) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_API_PROVIDER_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+new file mode 100644
+index 0000000000..7db2b9e9f4
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -0,0 +1,461 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h"
++
++#include <utility>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/notreached.h"
++#include "components/custom_handlers/simple_protocol_handler_registry_factory.h"
++#include "components/version_info/version_info.h"
++#include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
++#include "content/libtermsurf_chromium/extensions/ts_extension_system_factory.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/browser_task_traits.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/media_stream_request.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_delegate.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "extensions/browser/api/core_extensions_browser_api_provider.h"
++#include "extensions/browser/api/extensions_api_client.h"
++#include "extensions/browser/api/runtime/runtime_api_delegate.h"
++#include "extensions/browser/event_router.h"
++#include "extensions/browser/extension_host_delegate.h"
++#include "extensions/browser/extension_web_contents_observer.h"
++#include "extensions/browser/extensions_browser_interface_binders.h"
++#include "extensions/browser/media_capture_util.h"
++#include "extensions/browser/safe_browsing_delegate.h"
++#include "extensions/browser/updater/null_extension_cache.h"
++#include "extensions/browser/url_request_util.h"
++#include "extensions/common/api/runtime.h"
++#include "extensions/common/features/feature_channel.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "services/network/public/mojom/url_loader.mojom.h"
++
++namespace content {
++namespace {
++
++class TsKioskDelegate : public extensions::KioskDelegate {
++ public:
++  bool IsAutoLaunchedKioskApp(
++      const extensions::ExtensionId& id) const override {
++    return false;
++  }
++};
++
++class TsExtensionHostDelegate : public extensions::ExtensionHostDelegate {
++ public:
++  void OnExtensionHostCreated(WebContents* web_contents) override {
++    extensions::ExtensionsBrowserClient::Get()
++        ->CreateExtensionWebContentsObserver(web_contents);
++  }
++
++  void CreateTab(std::unique_ptr<WebContents> web_contents,
++                 const GURL& target_url,
++                 const extensions::ExtensionId& extension_id,
++                 WindowOpenDisposition disposition,
++                 const blink::mojom::WindowFeatures& window_features,
++                 bool user_gesture) override {}
++
++  void ProcessMediaAccessRequest(
++      WebContents* web_contents,
++      const MediaStreamRequest& request,
++      MediaResponseCallback callback,
++      const extensions::Extension* extension) override {
++    extensions::media_capture_util::GrantMediaStreamRequest(
++        web_contents, request, std::move(callback), extension);
++  }
++
++  bool CheckMediaAccessPermission(
++      RenderFrameHost* render_frame_host,
++      const url::Origin& security_origin,
++      blink::mojom::MediaStreamType type,
++      const extensions::Extension* extension) override {
++    extensions::media_capture_util::VerifyMediaAccessPermission(type,
++                                                                extension);
++    return true;
++  }
++
++  PictureInPictureResult EnterPictureInPicture(
++      WebContents* web_contents) override {
++    return PictureInPictureResult::kNotSupported;
++  }
++
++  void ExitPictureInPicture() override {}
++};
++
++class TsRuntimeAPIDelegate : public extensions::RuntimeAPIDelegate {
++ public:
++  explicit TsRuntimeAPIDelegate(BrowserContext* browser_context)
++      : browser_context_(browser_context) {}
++
++  void AddUpdateObserver(extensions::UpdateObserver* observer) override {}
++  void RemoveUpdateObserver(extensions::UpdateObserver* observer) override {}
++
++  void ReloadExtension(const extensions::ExtensionId& extension_id) override {
++    if (auto* system = static_cast<TsExtensionSystem*>(
++            extensions::ExtensionSystem::Get(browser_context_))) {
++      system->ReloadExtension(extension_id);
++    }
++  }
++
++  bool CheckForUpdates(const extensions::ExtensionId& extension_id,
++                       UpdateCheckCallback callback) override {
++    return false;
++  }
++
++  void OpenURL(const GURL& uninstall_url) override {}
++
++  bool GetPlatformInfo(extensions::api::runtime::PlatformInfo* info) override {
++#if BUILDFLAG(IS_MAC)
++    info->os = extensions::api::runtime::PlatformOs::kMac;
++#elif BUILDFLAG(IS_LINUX)
++    info->os = extensions::api::runtime::PlatformOs::kLinux;
++#elif BUILDFLAG(IS_WIN)
++    info->os = extensions::api::runtime::PlatformOs::kWin;
++#else
++    info->os = extensions::api::runtime::PlatformOs::kUnknown;
++#endif
++    return true;
++  }
++
++  bool RestartDevice(std::string* error_message) override {
++    *error_message = "Restart is not supported by TermSurf.";
++    return false;
++  }
++
++ private:
++  raw_ptr<BrowserContext> browser_context_;
++};
++
++class TsExtensionWebContentsObserver
++    : public extensions::ExtensionWebContentsObserver,
++      public WebContentsUserData<TsExtensionWebContentsObserver> {
++ public:
++  TsExtensionWebContentsObserver(const TsExtensionWebContentsObserver&) =
++      delete;
++  TsExtensionWebContentsObserver& operator=(
++      const TsExtensionWebContentsObserver&) = delete;
++  ~TsExtensionWebContentsObserver() override = default;
++
++  static void CreateForWebContents(WebContents* web_contents) {
++    WebContentsUserData<TsExtensionWebContentsObserver>::CreateForWebContents(
++        web_contents);
++    FromWebContents(web_contents)->Initialize();
++  }
++
++ private:
++  friend class WebContentsUserData<TsExtensionWebContentsObserver>;
++
++  explicit TsExtensionWebContentsObserver(WebContents* web_contents)
++      : extensions::ExtensionWebContentsObserver(web_contents),
++        WebContentsUserData<TsExtensionWebContentsObserver>(*web_contents) {}
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(TsExtensionWebContentsObserver);
++
++}  // namespace
++
++TsExtensionsBrowserClient::TsExtensionsBrowserClient()
++    : extension_cache_(std::make_unique<extensions::NullExtensionCache>()),
++      safe_browsing_delegate_(
++          std::make_unique<extensions::SafeBrowsingDelegate>()) {
++  AddAPIProvider(
++      std::make_unique<extensions::CoreExtensionsBrowserAPIProvider>());
++  extensions::SetCurrentChannel(version_info::Channel::UNKNOWN);
++}
++
++TsExtensionsBrowserClient::~TsExtensionsBrowserClient() = default;
++
++void TsExtensionsBrowserClient::Init() {
++  api_client_ = std::make_unique<extensions::ExtensionsAPIClient>();
++}
++
++bool TsExtensionsBrowserClient::IsShuttingDown() {
++  return is_shutting_down_;
++}
++
++bool TsExtensionsBrowserClient::AreExtensionsDisabled(
++    const base::CommandLine& command_line,
++    BrowserContext* context) {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsValidContext(void* context) {
++  return pref_services_.contains(static_cast<BrowserContext*>(context));
++}
++
++bool TsExtensionsBrowserClient::IsSameContext(BrowserContext* first,
++                                              BrowserContext* second) {
++  return OriginalContextFor(first) == OriginalContextFor(second);
++}
++
++bool TsExtensionsBrowserClient::HasOffTheRecordContext(
++    BrowserContext* context) {
++  return off_the_record_contexts_.contains(OriginalContextFor(context));
++}
++
++BrowserContext* TsExtensionsBrowserClient::GetOffTheRecordContext(
++    BrowserContext* context) {
++  auto* original = OriginalContextFor(context);
++  auto it = off_the_record_contexts_.find(original);
++  return it == off_the_record_contexts_.end() ? nullptr : it->second.get();
++}
++
++BrowserContext* TsExtensionsBrowserClient::GetOriginalContext(
++    BrowserContext* context) {
++  return OriginalContextFor(context);
++}
++
++BrowserContext* TsExtensionsBrowserClient::GetContextRedirectedToOriginal(
++    BrowserContext* context) {
++  return OriginalContextFor(context);
++}
++
++BrowserContext* TsExtensionsBrowserClient::GetContextOwnInstance(
++    BrowserContext* context) {
++  return context;
++}
++
++BrowserContext* TsExtensionsBrowserClient::GetContextForOriginalOnly(
++    BrowserContext* context) {
++  return context && context->IsOffTheRecord() ? nullptr : context;
++}
++
++bool TsExtensionsBrowserClient::AreExtensionsDisabledForContext(
++    BrowserContext* context) {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsGuestSession(BrowserContext* context) const {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsExtensionIncognitoEnabled(
++    const extensions::ExtensionId& extension_id,
++    BrowserContext* context) const {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::CanExtensionCrossIncognito(
++    const extensions::Extension* extension,
++    BrowserContext* context) const {
++  return false;
++}
++
++base::FilePath TsExtensionsBrowserClient::GetBundleResourcePath(
++    const network::ResourceRequest& request,
++    const base::FilePath& extension_resources_path,
++    int* resource_id) const {
++  *resource_id = 0;
++  return {};
++}
++
++void TsExtensionsBrowserClient::LoadResourceFromResourceBundle(
++    const network::ResourceRequest& request,
++    mojo::PendingReceiver<network::mojom::URLLoader> loader,
++    const base::FilePath& resource_relative_path,
++    int resource_id,
++    scoped_refptr<net::HttpResponseHeaders> headers,
++    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
++  NOTREACHED();
++}
++
++bool TsExtensionsBrowserClient::AllowCrossRendererResourceLoad(
++    const network::ResourceRequest& request,
++    network::mojom::RequestDestination destination,
++    ui::PageTransition page_transition,
++    int child_id,
++    bool is_incognito,
++    const extensions::Extension* extension,
++    const extensions::ExtensionSet& extensions,
++    const extensions::ProcessMap& process_map,
++    const GURL& upstream_url) {
++  bool allowed = false;
++  if (extensions::url_request_util::AllowCrossRendererResourceLoad(
++          request, destination, page_transition, child_id, is_incognito,
++          extension, extensions, process_map, upstream_url, &allowed)) {
++    return allowed;
++  }
++  return false;
++}
++
++PrefService* TsExtensionsBrowserClient::GetPrefServiceForContext(
++    BrowserContext* context) {
++  auto it = pref_services_.find(context);
++  return it == pref_services_.end() ? nullptr : it->second.get();
++}
++
++void TsExtensionsBrowserClient::GetEarlyExtensionPrefsObservers(
++    BrowserContext* context,
++    std::vector<extensions::EarlyExtensionPrefsObserver*>* observers) const {}
++
++extensions::ProcessManagerDelegate*
++TsExtensionsBrowserClient::GetProcessManagerDelegate() const {
++  return nullptr;
++}
++
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++TsExtensionsBrowserClient::GetControlledFrameEmbedderURLLoader(
++    const url::Origin& app_origin,
++    FrameTreeNodeId frame_tree_node_id,
++    BrowserContext* browser_context) {
++  return {};
++}
++
++std::unique_ptr<extensions::ExtensionHostDelegate>
++TsExtensionsBrowserClient::CreateExtensionHostDelegate() {
++  return std::make_unique<TsExtensionHostDelegate>();
++}
++
++bool TsExtensionsBrowserClient::DidVersionUpdate(BrowserContext* context) {
++  return false;
++}
++
++void TsExtensionsBrowserClient::PermitExternalProtocolHandler() {}
++
++bool TsExtensionsBrowserClient::IsInDemoMode() {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsScreensaverInDemoMode(
++    const std::string& app_id) {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsRunningInForcedAppMode() {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsAppModeForcedForApp(
++    const extensions::ExtensionId& extension_id) {
++  return false;
++}
++
++bool TsExtensionsBrowserClient::IsLoggedInAsPublicAccount() {
++  return false;
++}
++
++extensions::ExtensionSystemProvider*
++TsExtensionsBrowserClient::GetExtensionSystemFactory() {
++  return TsExtensionSystemFactory::GetInstance();
++}
++
++void TsExtensionsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
++    mojo::BinderMapWithContext<RenderFrameHost*>* binder_map,
++    RenderFrameHost* render_frame_host,
++    const extensions::Extension* extension) const {
++  extensions::PopulateExtensionFrameBinders(binder_map, render_frame_host,
++                                            extension);
++}
++
++std::unique_ptr<extensions::RuntimeAPIDelegate>
++TsExtensionsBrowserClient::CreateRuntimeAPIDelegate(
++    BrowserContext* context) const {
++  return std::make_unique<TsRuntimeAPIDelegate>(context);
++}
++
++const extensions::ComponentExtensionResourceManager*
++TsExtensionsBrowserClient::GetComponentExtensionResourceManager() {
++  return nullptr;
++}
++
++void TsExtensionsBrowserClient::BroadcastEventToRenderers(
++    extensions::events::HistogramValue histogram_value,
++    const std::string& event_name,
++    base::ListValue args,
++    bool dispatch_to_off_the_record_profiles) {
++  if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
++    GetUIThreadTaskRunner({})->PostTask(
++        FROM_HERE,
++        base::BindOnce(&TsExtensionsBrowserClient::BroadcastEventToRenderers,
++                       base::Unretained(this), histogram_value, event_name,
++                       std::move(args), dispatch_to_off_the_record_profiles));
++    return;
++  }
++
++  for (auto& [context, pref_service] : pref_services_) {
++    if (!dispatch_to_off_the_record_profiles && context->IsOffTheRecord()) {
++      continue;
++    }
++    auto* event_router = extensions::EventRouter::Get(context.get());
++    if (!event_router) {
++      continue;
++    }
++    event_router->BroadcastEvent(std::make_unique<extensions::Event>(
++        histogram_value, event_name, args.Clone(), context.get()));
++  }
++}
++
++extensions::ExtensionCache* TsExtensionsBrowserClient::GetExtensionCache() {
++  return extension_cache_.get();
++}
++
++bool TsExtensionsBrowserClient::IsBackgroundUpdateAllowed() {
++  return true;
++}
++
++bool TsExtensionsBrowserClient::IsMinBrowserVersionSupported(
++    const std::string& min_version) {
++  return true;
++}
++
++void TsExtensionsBrowserClient::CreateExtensionWebContentsObserver(
++    WebContents* web_contents) {
++  TsExtensionWebContentsObserver::CreateForWebContents(web_contents);
++}
++
++extensions::ExtensionWebContentsObserver*
++TsExtensionsBrowserClient::GetExtensionWebContentsObserver(
++    WebContents* web_contents) {
++  return TsExtensionWebContentsObserver::FromWebContents(web_contents);
++}
++
++extensions::KioskDelegate* TsExtensionsBrowserClient::GetKioskDelegate() {
++  if (!kiosk_delegate_) {
++    kiosk_delegate_ = std::make_unique<TsKioskDelegate>();
++  }
++  return kiosk_delegate_.get();
++}
++
++extensions::SafeBrowsingDelegate*
++TsExtensionsBrowserClient::GetSafeBrowsingDelegate() {
++  return safe_browsing_delegate_.get();
++}
++
++std::string TsExtensionsBrowserClient::GetApplicationLocale() {
++  return "en-US";
++}
++
++custom_handlers::ProtocolHandlerRegistry*
++TsExtensionsBrowserClient::GetProtocolHandlerRegistry(BrowserContext* context) {
++  return custom_handlers::SimpleProtocolHandlerRegistryFactory::
++      GetForBrowserContext(context, true);
++}
++
++void TsExtensionsBrowserClient::RegisterContext(BrowserContext* context,
++                                                PrefService* pref_service) {
++  pref_services_[context] = pref_service;
++}
++
++void TsExtensionsBrowserClient::SetOffTheRecordContext(
++    BrowserContext* original,
++    BrowserContext* off_the_record) {
++  off_the_record_contexts_[original] = off_the_record;
++  original_contexts_[off_the_record] = original;
++}
++
++BrowserContext* TsExtensionsBrowserClient::OriginalContextFor(
++    BrowserContext* context) const {
++  auto it = original_contexts_.find(context);
++  return it == original_contexts_.end() ? context : it->second.get();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+new file mode 100644
+index 0000000000..f654239f6a
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+@@ -0,0 +1,138 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_BROWSER_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_BROWSER_CLIENT_H_
++
++#include <map>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "extensions/browser/api/extensions_api_client.h"
++#include "extensions/browser/extensions_browser_client.h"
++#include "extensions/browser/kiosk/kiosk_delegate.h"
++#include "extensions/browser/safe_browsing_delegate.h"
++
++class PrefService;
++
++namespace content {
++
++class TsExtensionsBrowserClient : public extensions::ExtensionsBrowserClient {
++ public:
++  TsExtensionsBrowserClient();
++  TsExtensionsBrowserClient(const TsExtensionsBrowserClient&) = delete;
++  TsExtensionsBrowserClient& operator=(const TsExtensionsBrowserClient&) =
++      delete;
++  ~TsExtensionsBrowserClient() override;
++
++  void Init() override;
++  bool IsShuttingDown() override;
++  bool AreExtensionsDisabled(const base::CommandLine& command_line,
++                             BrowserContext* context) override;
++  bool IsValidContext(void* context) override;
++  bool IsSameContext(BrowserContext* first, BrowserContext* second) override;
++  bool HasOffTheRecordContext(BrowserContext* context) override;
++  BrowserContext* GetOffTheRecordContext(BrowserContext* context) override;
++  BrowserContext* GetOriginalContext(BrowserContext* context) override;
++  BrowserContext* GetContextRedirectedToOriginal(
++      BrowserContext* context) override;
++  BrowserContext* GetContextOwnInstance(BrowserContext* context) override;
++  BrowserContext* GetContextForOriginalOnly(BrowserContext* context) override;
++  bool AreExtensionsDisabledForContext(BrowserContext* context) override;
++  bool IsGuestSession(BrowserContext* context) const override;
++  bool IsExtensionIncognitoEnabled(const extensions::ExtensionId& extension_id,
++                                   BrowserContext* context) const override;
++  bool CanExtensionCrossIncognito(const extensions::Extension* extension,
++                                  BrowserContext* context) const override;
++  base::FilePath GetBundleResourcePath(
++      const network::ResourceRequest& request,
++      const base::FilePath& extension_resources_path,
++      int* resource_id) const override;
++  void LoadResourceFromResourceBundle(
++      const network::ResourceRequest& request,
++      mojo::PendingReceiver<network::mojom::URLLoader> loader,
++      const base::FilePath& resource_relative_path,
++      int resource_id,
++      scoped_refptr<net::HttpResponseHeaders> headers,
++      mojo::PendingRemote<network::mojom::URLLoaderClient> client) override;
++  bool AllowCrossRendererResourceLoad(
++      const network::ResourceRequest& request,
++      network::mojom::RequestDestination destination,
++      ui::PageTransition page_transition,
++      int child_id,
++      bool is_incognito,
++      const extensions::Extension* extension,
++      const extensions::ExtensionSet& extensions,
++      const extensions::ProcessMap& process_map,
++      const GURL& upstream_url) override;
++  PrefService* GetPrefServiceForContext(BrowserContext* context) override;
++  void GetEarlyExtensionPrefsObservers(
++      BrowserContext* context,
++      std::vector<extensions::EarlyExtensionPrefsObserver*>* observers)
++      const override;
++  extensions::ProcessManagerDelegate* GetProcessManagerDelegate()
++      const override;
++  mojo::PendingRemote<network::mojom::URLLoaderFactory>
++  GetControlledFrameEmbedderURLLoader(const url::Origin& app_origin,
++                                      FrameTreeNodeId frame_tree_node_id,
++                                      BrowserContext* browser_context) override;
++  std::unique_ptr<extensions::ExtensionHostDelegate>
++  CreateExtensionHostDelegate() override;
++  bool DidVersionUpdate(BrowserContext* context) override;
++  void PermitExternalProtocolHandler() override;
++  bool IsInDemoMode() override;
++  bool IsScreensaverInDemoMode(const std::string& app_id) override;
++  bool IsRunningInForcedAppMode() override;
++  bool IsAppModeForcedForApp(
++      const extensions::ExtensionId& extension_id) override;
++  bool IsLoggedInAsPublicAccount() override;
++  extensions::ExtensionSystemProvider* GetExtensionSystemFactory() override;
++  void RegisterBrowserInterfaceBindersForFrame(
++      mojo::BinderMapWithContext<RenderFrameHost*>* binder_map,
++      RenderFrameHost* render_frame_host,
++      const extensions::Extension* extension) const override;
++  std::unique_ptr<extensions::RuntimeAPIDelegate> CreateRuntimeAPIDelegate(
++      BrowserContext* context) const override;
++  const extensions::ComponentExtensionResourceManager*
++  GetComponentExtensionResourceManager() override;
++  void BroadcastEventToRenderers(
++      extensions::events::HistogramValue histogram_value,
++      const std::string& event_name,
++      base::ListValue args,
++      bool dispatch_to_off_the_record_profiles) override;
++  extensions::ExtensionCache* GetExtensionCache() override;
++  bool IsBackgroundUpdateAllowed() override;
++  bool IsMinBrowserVersionSupported(const std::string& min_version) override;
++  void CreateExtensionWebContentsObserver(WebContents* web_contents) override;
++  extensions::ExtensionWebContentsObserver* GetExtensionWebContentsObserver(
++      WebContents* web_contents) override;
++  extensions::KioskDelegate* GetKioskDelegate() override;
++  extensions::SafeBrowsingDelegate* GetSafeBrowsingDelegate() override;
++  std::string GetApplicationLocale() override;
++  custom_handlers::ProtocolHandlerRegistry* GetProtocolHandlerRegistry(
++      BrowserContext* context) override;
++
++  void RegisterContext(BrowserContext* context, PrefService* pref_service);
++  void SetOffTheRecordContext(BrowserContext* original,
++                              BrowserContext* off_the_record);
++
++ private:
++  BrowserContext* OriginalContextFor(BrowserContext* context) const;
++
++  std::map<raw_ptr<BrowserContext>, raw_ptr<PrefService>> pref_services_;
++  std::map<raw_ptr<BrowserContext>, raw_ptr<BrowserContext>>
++      off_the_record_contexts_;
++  std::map<raw_ptr<BrowserContext>, raw_ptr<BrowserContext>> original_contexts_;
++  std::unique_ptr<extensions::ExtensionsAPIClient> api_client_;
++  std::unique_ptr<extensions::ExtensionCache> extension_cache_;
++  std::unique_ptr<extensions::KioskDelegate> kiosk_delegate_;
++  std::unique_ptr<extensions::SafeBrowsingDelegate> safe_browsing_delegate_;
++  bool is_shutting_down_ = false;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_BROWSER_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+new file mode 100644
+index 0000000000..64d7202fce
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+@@ -0,0 +1,111 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
++
++#include "base/no_destructor.h"
++#include "content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h"
++#include "extensions/common/core_extensions_api_provider.h"
++#include "extensions/common/permissions/permission_message_provider.h"
++
++namespace content {
++namespace {
++
++class TsPermissionMessageProvider
++    : public extensions::PermissionMessageProvider {
++ public:
++  TsPermissionMessageProvider() = default;
++  TsPermissionMessageProvider(const TsPermissionMessageProvider&) = delete;
++  TsPermissionMessageProvider& operator=(const TsPermissionMessageProvider&) =
++      delete;
++  ~TsPermissionMessageProvider() override = default;
++
++  extensions::PermissionMessages GetPermissionMessages(
++      const extensions::PermissionIDSet& permissions) const override {
++    return {};
++  }
++
++  bool IsPrivilegeIncrease(
++      const extensions::PermissionSet& granted_permissions,
++      const extensions::PermissionSet& requested_permissions,
++      extensions::Manifest::Type extension_type) const override {
++    return false;
++  }
++
++  extensions::PermissionIDSet GetAllPermissionIDs(
++      const extensions::PermissionSet& permissions,
++      extensions::Manifest::Type extension_type) const override {
++    return {};
++  }
++};
++
++}  // namespace
++
++TsExtensionsClient::TsExtensionsClient() {
++  AddAPIProvider(std::make_unique<extensions::CoreExtensionsAPIProvider>());
++  AddAPIProvider(std::make_unique<TsExtensionsAPIProvider>());
++}
++
++TsExtensionsClient::~TsExtensionsClient() = default;
++
++void TsExtensionsClient::Initialize() {}
++
++void TsExtensionsClient::InitializeWebStoreUrls(
++    base::CommandLine* command_line) {}
++
++const extensions::PermissionMessageProvider&
++TsExtensionsClient::GetPermissionMessageProvider() const {
++  static base::NoDestructor<TsPermissionMessageProvider> instance;
++  return *instance;
++}
++
++const std::string TsExtensionsClient::GetProductName() {
++  return "termsurf";
++}
++
++void TsExtensionsClient::FilterHostPermissions(
++    const extensions::URLPatternSet& hosts,
++    extensions::URLPatternSet* new_hosts,
++    extensions::PermissionIDSet* permissions) const {
++  new_hosts->AddPatterns(hosts);
++}
++
++void TsExtensionsClient::SetScriptingAllowlist(
++    const ExtensionsClient::ScriptingAllowlist& allowlist) {
++  scripting_allowlist_ = allowlist;
++}
++
++const extensions::ExtensionsClient::ScriptingAllowlist&
++TsExtensionsClient::GetScriptingAllowlist() const {
++  return scripting_allowlist_;
++}
++
++extensions::URLPatternSet TsExtensionsClient::GetPermittedChromeSchemeHosts(
++    const extensions::Extension* extension,
++    const extensions::APIPermissionSet& api_permissions) const {
++  return {};
++}
++
++bool TsExtensionsClient::IsScriptableURL(const GURL& url,
++                                         std::string* error) const {
++  return true;
++}
++
++const GURL& TsExtensionsClient::GetWebstoreBaseURL() const {
++  return webstore_base_url_;
++}
++
++const GURL& TsExtensionsClient::GetNewWebstoreBaseURL() const {
++  return new_webstore_base_url_;
++}
++
++const GURL& TsExtensionsClient::GetWebstoreUpdateURL() const {
++  return webstore_update_url_;
++}
++
++bool TsExtensionsClient::IsBlocklistUpdateURL(const GURL& url) const {
++  return false;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_client.h
+new file mode 100644
+index 0000000000..7f8cea3b08
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_client.h
+@@ -0,0 +1,54 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_CLIENT_H_
++
++#include <string>
++
++#include "extensions/common/extensions_client.h"
++#include "extensions/common/url_pattern_set.h"
++#include "url/gurl.h"
++
++namespace content {
++
++class TsExtensionsClient : public extensions::ExtensionsClient {
++ public:
++  TsExtensionsClient();
++  TsExtensionsClient(const TsExtensionsClient&) = delete;
++  TsExtensionsClient& operator=(const TsExtensionsClient&) = delete;
++  ~TsExtensionsClient() override;
++
++  void Initialize() override;
++  void InitializeWebStoreUrls(base::CommandLine* command_line) override;
++  const extensions::PermissionMessageProvider& GetPermissionMessageProvider()
++      const override;
++  const std::string GetProductName() override;
++  void FilterHostPermissions(
++      const extensions::URLPatternSet& hosts,
++      extensions::URLPatternSet* new_hosts,
++      extensions::PermissionIDSet* permissions) const override;
++  void SetScriptingAllowlist(
++      const ExtensionsClient::ScriptingAllowlist& allowlist) override;
++  const ExtensionsClient::ScriptingAllowlist& GetScriptingAllowlist()
++      const override;
++  extensions::URLPatternSet GetPermittedChromeSchemeHosts(
++      const extensions::Extension* extension,
++      const extensions::APIPermissionSet& api_permissions) const override;
++  bool IsScriptableURL(const GURL& url, std::string* error) const override;
++  const GURL& GetWebstoreBaseURL() const override;
++  const GURL& GetNewWebstoreBaseURL() const override;
++  const GURL& GetWebstoreUpdateURL() const override;
++  bool IsBlocklistUpdateURL(const GURL& url) const override;
++
++ private:
++  ExtensionsClient::ScriptingAllowlist scripting_allowlist_;
++  GURL webstore_base_url_;
++  GURL new_webstore_base_url_;
++  GURL webstore_update_url_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.cc
+new file mode 100644
+index 0000000000..4082f158c7
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.cc
+@@ -0,0 +1,20 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
++
++namespace content {
++
++TsExtensionsRendererClient::TsExtensionsRendererClient() = default;
++TsExtensionsRendererClient::~TsExtensionsRendererClient() = default;
++
++bool TsExtensionsRendererClient::IsIncognitoProcess() const {
++  return false;
++}
++
++int TsExtensionsRendererClient::GetLowestIsolatedWorldId() const {
++  return 1;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h
+new file mode 100644
+index 0000000000..2fa1c1f28b
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_RENDERER_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_RENDERER_CLIENT_H_
++
++#include "extensions/renderer/extensions_renderer_client.h"
++
++namespace content {
++
++class TsExtensionsRendererClient : public extensions::ExtensionsRendererClient {
++ public:
++  TsExtensionsRendererClient();
++  TsExtensionsRendererClient(const TsExtensionsRendererClient&) = delete;
++  TsExtensionsRendererClient& operator=(const TsExtensionsRendererClient&) =
++      delete;
++  ~TsExtensionsRendererClient() override;
++
++  bool IsIncognitoProcess() const override;
++  int GetLowestIsolatedWorldId() const override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_RENDERER_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 9b8da5ccfc..0749a023e2 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -5,24 +5,25 @@
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+-#include "content/shell/browser/shell_browser_context.h"
+-#include "services/network/public/mojom/network_context.mojom.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
+-#include "third_party/blink/public/common/web_preferences/web_preferences.h"
+-#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
++#include "content/shell/browser/shell_browser_context.h"
++#include "extensions/browser/extension_web_contents_observer.h"
++#include "extensions/browser/extensions_browser_client.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/badging/badging.mojom.h"
++#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+ 
+ namespace content {
+ 
+ // Stub BadgeService — accepts and ignores Badging API calls (Issue 655).
+ // Prevents renderer kills on navigator.setAppBadge().
+-class TsBrowserClient::StubBadgeService
+-    : public blink::mojom::BadgeService {
++class TsBrowserClient::StubBadgeService : public blink::mojom::BadgeService {
+  public:
+   StubBadgeService() = default;
+   ~StubBadgeService() override = default;
+@@ -55,12 +56,24 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   // Call base class first to get NetworkHintsHandler etc.
+   ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+       render_frame_host, map);
++  if (auto* observer =
++          extensions::ExtensionWebContentsObserver::GetForWebContents(
++              WebContents::FromRenderFrameHost(render_frame_host))) {
++    const extensions::Extension* extension =
++        observer->GetExtensionFromFrame(render_frame_host, false);
++    if (extension) {
++      extensions::ExtensionsBrowserClient::Get()
++          ->RegisterBrowserInterfaceBindersForFrame(map, render_frame_host,
++                                                    extension);
++    }
++  }
+   // Add BadgeService stub (Issue 655).
+   map->Add<blink::mojom::BadgeService>(base::BindRepeating(
+       [](TsBrowserClient* self, RenderFrameHost*,
+          mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
+-        if (!self->stub_badge_service_)
++        if (!self->stub_badge_service_) {
+           self->stub_badge_service_ = std::make_unique<StubBadgeService>();
++        }
+         self->stub_badge_service_->Bind(std::move(receiver));
+       },
+       base::Unretained(this)));
+@@ -70,15 +83,14 @@ void TsBrowserClient::OverrideWebPreferences(
+     WebContents* web_contents,
+     SiteInstance& main_frame_site,
+     blink::web_pref::WebPreferences* prefs) {
+-  auto* main_parts = static_cast<TsBrowserMainParts*>(
+-      shell_browser_main_parts());
++  auto* main_parts =
++      static_cast<TsBrowserMainParts*>(shell_browser_main_parts());
+   if (main_parts) {
+     auto scheme = main_parts->GetColorSchemeForWebContents(web_contents);
+     if (scheme.has_value()) {
+       prefs->preferred_color_scheme = scheme.value();
+     } else {
+-      prefs->preferred_color_scheme =
+-          blink::mojom::PreferredColorScheme::kDark;
++      prefs->preferred_color_scheme = blink::mojom::PreferredColorScheme::kDark;
+     }
+   }
+ }
+@@ -95,8 +107,9 @@ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+   // Persistent cookie/network storage.
+   auto* shell_context = static_cast<ShellBrowserContext*>(context);
+   base::FilePath path = shell_context->GetPath();
+-  if (path.empty() || shell_context->IsOffTheRecord())
++  if (path.empty() || shell_context->IsOffTheRecord()) {
+     return;
++  }
+ 
+   // Disable cookie encryption — we don't provide an encryption provider,
+   // and the default (true) hits NOTREACHED() on non-Android.
+@@ -114,8 +127,7 @@ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+   context_params->persist_session_cookies = false;
+ 
+   // Set file paths for persistent storage.
+-  context_params->file_paths =
+-      network::mojom::NetworkContextFilePaths::New();
++  context_params->file_paths = network::mojom::NetworkContextFilePaths::New();
+   context_params->file_paths->data_directory =
+       path.Append(FILE_PATH_LITERAL("Network"));
+   context_params->file_paths->unsandboxed_data_path = path;
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 7c15be0e11..be93d2883c 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -13,11 +13,19 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "components/keyed_service/content/browser_context_dependency_manager.h"
++#include "components/prefs/pref_service.h"
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
++#include "content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h"
++#include "content/libtermsurf_chromium/extensions/ts_extension_prefs.h"
++#include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
++#include "content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h"
++#include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/ts_tab_observer.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/origin_trials_controller_delegate.h"
+ #include "content/public/browser/reload_type.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_widget_host.h"
+@@ -27,6 +35,12 @@
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "content/shell/browser/shell_devtools_frontend.h"
+ #include "content/shell/browser/shell_devtools_manager_delegate.h"
++#include "extensions/browser/browser_context_keyed_service_factories.h"
++#include "extensions/browser/event_router.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_system.h"
++#include "extensions/browser/extensions_browser_client.h"
++#include "extensions/common/extensions_client.h"
+ #include "ui/base/page_transition_types.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+@@ -77,6 +91,77 @@ void TsBrowserMainParts::InitializeMessageLoopContext() {
+   TsNotifyInitialized(this);
+ }
+ 
++void TsBrowserMainParts::InitializeBrowserContexts() {
++  extensions_client_ = std::make_unique<TsExtensionsClient>();
++  extensions::ExtensionsClient::Set(extensions_client_.get());
++  LOG(INFO) << "[issue-792-exp2] extensions-client-set";
++
++  extensions_browser_client_ = std::make_unique<TsExtensionsBrowserClient>();
++  extensions_browser_client_->Init();
++  extensions::ExtensionsBrowserClient::Set(extensions_browser_client_.get());
++  LOG(INFO) << "[issue-792-exp2] extensions-browser-client-set";
++
++  extensions::EnsureBrowserContextKeyedServiceFactoriesBuilt();
++  EnsureTsBrowserContextKeyedServiceFactoriesBuilt();
++  LOG(INFO) << "[issue-792-exp2] keyed-service-factories-built";
++
++  set_browser_context(new ShellBrowserContext(false, true));
++  set_off_the_record_browser_context(new ShellBrowserContext(true, true));
++
++  InitializeExtensionContext(browser_context(), false);
++  InitializeExtensionContext(off_the_record_browser_context(), true);
++  extensions_browser_client_->SetOffTheRecordContext(
++      browser_context(), off_the_record_browser_context());
++
++  BrowserContextDependencyManager::GetInstance()->CreateBrowserContextServices(
++      browser_context());
++
++  extensions::EventRouter::Get(browser_context());
++
++  browser_context()->GetOriginTrialsControllerDelegate();
++  off_the_record_browser_context()->GetOriginTrialsControllerDelegate();
++}
++
++void TsBrowserMainParts::PostMainMessageLoopRun() {
++  ShellBrowserMainParts::PostMainMessageLoopRun();
++  extension_pref_services_.clear();
++}
++
++void TsBrowserMainParts::PostDestroyThreads() {
++  extensions::ExtensionsBrowserClient::Set(nullptr);
++  extensions_browser_client_.reset();
++  extensions::ExtensionsClient::Set(nullptr);
++  extensions_client_.reset();
++  ShellBrowserMainParts::PostDestroyThreads();
++}
++
++void TsBrowserMainParts::InitializeExtensionContext(
++    ShellBrowserContext* context,
++    bool in_memory) {
++  auto pref_service =
++      CreateTsExtensionPrefService(context, context->GetPath(), in_memory);
++  PrefService* pref_service_ptr = pref_service.get();
++  extension_pref_services_[context] = std::move(pref_service);
++  extensions_browser_client_->RegisterContext(context, pref_service_ptr);
++  LOG(INFO) << "[issue-792-exp2] extension-prefs-ready context=" << context
++            << " prefs=" << pref_service_ptr;
++
++  auto* extension_system = static_cast<TsExtensionSystem*>(
++      extensions::ExtensionSystem::Get(context));
++  CHECK(extension_system);
++  extension_system->InitForRegularProfile(/*extensions_enabled=*/true);
++  LOG(INFO) << "[issue-792-exp2] extension-system-init-for-regular-profile"
++            << " context=" << context;
++  extension_system->FinishInitialization();
++  LOG(INFO) << "[issue-792-exp2] extension-system-finish-initialization"
++            << " context=" << context;
++
++  auto* registry = extensions::ExtensionRegistry::Get(context);
++  LOG(INFO) << "[issue-792-exp2] extension-system-ready context=" << context
++            << " registry=" << registry
++            << " is_ready=" << extension_system->is_ready();
++}
++
+ // --- Profile management ---
+ 
+ void* TsBrowserMainParts::CreateBrowserContext(const char* path) {
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 17c5448a05..7f039d699c 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -8,6 +8,7 @@
+ #include <memory>
+ #include <optional>
+ #include <string>
++#include <unordered_map>
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+@@ -25,15 +26,26 @@ namespace content {
+ 
+ class PersistentCompositorBridge;
+ class Shell;
++class TsExtensionsBrowserClient;
++class TsExtensionsClient;
+ class TsTabObserver;
+ class WebContents;
++class BrowserContext;
++
++}  // namespace content
++
++class PrefService;
++
++namespace content {
+ 
+ // Notification functions called by TsBrowserMainParts and TsTabObserver
+ // to fire the C callbacks registered via the public API.
+ void TsNotifyInitialized(class TsBrowserMainParts* parts);
+ void TsNotifyTabReady(void* wc_handle, int tab_id);
+-void TsNotifyCAContextId(void* wc_handle, uint32_t ca_context_id,
+-                          int width, int height);
++void TsNotifyCAContextId(void* wc_handle,
++                         uint32_t ca_context_id,
++                         int width,
++                         int height);
+ void TsNotifyUrlChanged(void* wc_handle, const char* url);
+ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+@@ -52,7 +64,10 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+   void* CreateBrowserContext(const char* path);
+   void DestroyBrowserContext(void* ctx);
+   void* CreateTab(void* ctx, const char* url, int width, int height, bool dark);
+-  void* CreateDevToolsTab(void* ctx, int inspected_tab_id, int width, int height,
++  void* CreateDevToolsTab(void* ctx,
++                          int inspected_tab_id,
++                          int width,
++                          int height,
+                           bool dark);
+   void DestroyTab(void* wc_handle);
+   void NavigateTab(void* wc_handle, const char* url);
+@@ -64,15 +79,28 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+                  double screen_width,
+                  double screen_height,
+                  double screen_scale);
+-  void ForwardMouseEvent(void* wc_handle, int type, int button,
+-                         int x, int y, int click_count, int modifiers);
++  void ForwardMouseEvent(void* wc_handle,
++                         int type,
++                         int button,
++                         int x,
++                         int y,
++                         int click_count,
++                         int modifiers);
+   void ForwardMouseMove(void* wc_handle, int x, int y, int modifiers);
+-  void ForwardScrollEvent(void* wc_handle, int x, int y,
+-                          float delta_x, float delta_y,
+-                          int phase, int momentum_phase,
+-                          bool precise, int modifiers);
+-  void ForwardKeyEvent(void* wc_handle, int type, int keycode,
+-                       const std::string& utf8, int modifiers);
++  void ForwardScrollEvent(void* wc_handle,
++                          int x,
++                          int y,
++                          float delta_x,
++                          float delta_y,
++                          int phase,
++                          int momentum_phase,
++                          bool precise,
++                          int modifiers);
++  void ForwardKeyEvent(void* wc_handle,
++                       int type,
++                       int keycode,
++                       const std::string& utf8,
++                       int modifiers);
+   void SetFocus(void* wc_handle, bool focused);
+   void SetGuiActive(void* wc_handle, bool active, const std::string& reason);
+   void SetColorScheme(void* wc_handle, bool dark);
+@@ -85,6 +113,9 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+  protected:
+   // ShellBrowserMainParts override: fire C callback instead of starting socket.
+   void InitializeMessageLoopContext() override;
++  void InitializeBrowserContexts() override;
++  void PostMainMessageLoopRun() override;
++  void PostDestroyThreads() override;
+ 
+  private:
+   struct TabState {
+@@ -106,8 +137,14 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+ 
+   TabState* FindTab(void* wc_handle);
+ 
++  void InitializeExtensionContext(ShellBrowserContext* context, bool in_memory);
++
+   int next_tab_id_ = 1;
+   std::vector<std::unique_ptr<TabState>> tabs_;
++  std::unique_ptr<TsExtensionsClient> extensions_client_;
++  std::unique_ptr<TsExtensionsBrowserClient> extensions_browser_client_;
++  std::unordered_map<BrowserContext*, std::unique_ptr<PrefService>>
++      extension_pref_services_;
+ };
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+new file mode 100644
+index 0000000000..23bbb229d9
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -0,0 +1,72 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_content_renderer_client.h"
++
++#include "base/logging.h"
++#include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
++#include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
++#include "content/public/renderer/render_frame.h"
++#include "extensions/common/extensions_client.h"
++#include "extensions/renderer/api/core_extensions_renderer_api_provider.h"
++#include "extensions/renderer/dispatcher.h"
++#include "extensions/renderer/extension_frame_helper.h"
++#include "extensions/renderer/extensions_renderer_client.h"
++#include "third_party/blink/public/web/web_plugin_params.h"
++
++namespace content {
++
++TsContentRendererClient::TsContentRendererClient() = default;
++TsContentRendererClient::~TsContentRendererClient() = default;
++
++void TsContentRendererClient::RenderThreadStarted() {
++  ShellContentRendererClient::RenderThreadStarted();
++
++  extensions_client_ = std::make_unique<TsExtensionsClient>();
++  extensions::ExtensionsClient::Set(extensions_client_.get());
++
++  extensions_renderer_client_ = std::make_unique<TsExtensionsRendererClient>();
++  extensions_renderer_client_->AddAPIProvider(
++      std::make_unique<extensions::CoreExtensionsRendererAPIProvider>());
++  extensions::ExtensionsRendererClient::Set(extensions_renderer_client_.get());
++  extensions_renderer_client_->RenderThreadStarted();
++  LOG(INFO) << "[issue-792-exp2] extensions-renderer-client-set";
++}
++
++void TsContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
++  ShellContentRendererClient::RenderFrameCreated(render_frame);
++
++  // ExtensionFrameHelper destroys itself when the RenderFrame is destroyed.
++  new extensions::ExtensionFrameHelper(render_frame, dispatcher());
++  dispatcher()->OnRenderFrameCreated(render_frame);
++}
++
++bool TsContentRendererClient::OverrideCreatePlugin(
++    RenderFrame* render_frame,
++    const blink::WebPluginParams& params,
++    blink::WebPlugin** plugin) {
++  if (extensions_renderer_client_ &&
++      extensions_renderer_client_->OverrideCreatePlugin(render_frame, params)) {
++    return false;
++  }
++  return ShellContentRendererClient::OverrideCreatePlugin(render_frame, params,
++                                                          plugin);
++}
++
++void TsContentRendererClient::RunScriptsAtDocumentStart(
++    RenderFrame* render_frame) {
++  dispatcher()->RunScriptsAtDocumentStart(render_frame);
++}
++
++void TsContentRendererClient::RunScriptsAtDocumentEnd(
++    RenderFrame* render_frame) {
++  dispatcher()->RunScriptsAtDocumentEnd(render_frame);
++}
++
++extensions::Dispatcher* TsContentRendererClient::dispatcher() {
++  CHECK(extensions_renderer_client_);
++  return extensions_renderer_client_->dispatcher();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.h b/content/libtermsurf_chromium/ts_content_renderer_client.h
+new file mode 100644
+index 0000000000..4b618fc35a
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.h
+@@ -0,0 +1,47 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_RENDERER_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_RENDERER_CLIENT_H_
++
++#include <memory>
++
++#include "content/shell/renderer/shell_content_renderer_client.h"
++
++namespace extensions {
++class Dispatcher;
++}  // namespace extensions
++
++namespace content {
++
++class RenderFrame;
++class TsExtensionsClient;
++class TsExtensionsRendererClient;
++
++class TsContentRendererClient : public ShellContentRendererClient {
++ public:
++  TsContentRendererClient();
++  ~TsContentRendererClient() override;
++
++  TsContentRendererClient(const TsContentRendererClient&) = delete;
++  TsContentRendererClient& operator=(const TsContentRendererClient&) = delete;
++
++  void RenderThreadStarted() override;
++  void RenderFrameCreated(RenderFrame* render_frame) override;
++  bool OverrideCreatePlugin(RenderFrame* render_frame,
++                            const blink::WebPluginParams& params,
++                            blink::WebPlugin** plugin) override;
++  void RunScriptsAtDocumentStart(RenderFrame* render_frame) override;
++  void RunScriptsAtDocumentEnd(RenderFrame* render_frame) override;
++
++ private:
++  extensions::Dispatcher* dispatcher();
++
++  std::unique_ptr<TsExtensionsClient> extensions_client_;
++  std::unique_ptr<TsExtensionsRendererClient> extensions_renderer_client_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_RENDERER_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.cc b/content/libtermsurf_chromium/ts_main_delegate.cc
+index fff1576276..1f0df20afe 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.cc
++++ b/content/libtermsurf_chromium/ts_main_delegate.cc
+@@ -13,6 +13,7 @@
+ #include "base/path_service.h"
+ #include "build/build_config.h"
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
++#include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/shell/common/shell_paths.h"
+ #include "content/shell/common/shell_switches.h"
+@@ -119,4 +120,9 @@ ContentBrowserClient* TsMainDelegate::CreateContentBrowserClient() {
+   return browser_client_.get();
+ }
+ 
++ContentRendererClient* TsMainDelegate::CreateContentRendererClient() {
++  renderer_client_ = std::make_unique<TsContentRendererClient>();
++  return renderer_client_.get();
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.h b/content/libtermsurf_chromium/ts_main_delegate.h
+index 9a6d57da39..809c25af5c 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.h
++++ b/content/libtermsurf_chromium/ts_main_delegate.h
+@@ -5,10 +5,14 @@
+ #ifndef CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_MAIN_DELEGATE_H_
+ 
++#include <memory>
++
+ #include "content/shell/app/shell_main_delegate.h"
+ 
+ namespace content {
+ 
++class ContentRendererClient;
++
+ // TsMainDelegate overrides ShellMainDelegate to swap in TsBrowserClient
+ // (which creates TsBrowserMainParts instead of ShellBrowserMainParts).
+ class TsMainDelegate : public ShellMainDelegate {
+@@ -22,6 +26,10 @@ class TsMainDelegate : public ShellMainDelegate {
+   // ContentMainDelegate:
+   std::optional<int> BasicStartupComplete() override;
+   ContentBrowserClient* CreateContentBrowserClient() override;
++  ContentRendererClient* CreateContentRendererClient() override;
++
++ private:
++  std::unique_ptr<ContentRendererClient> renderer_client_;
+ };
+ 
+ }  // namespace content
+-- 
+2.54.0
+

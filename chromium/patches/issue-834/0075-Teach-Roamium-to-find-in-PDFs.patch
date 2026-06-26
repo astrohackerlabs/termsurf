@@ -1,7 +1,7 @@
 From 0a2f0364c5c230cc9dc196a39af1574c597dd882 Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 07:29:04 -0500
-Subject: [PATCH 75/84] Teach Roamium to find in PDFs
+Subject: [PATCH 75/85] Teach Roamium to find in PDFs
 
 Command-F knocked without a bar,
 So find text wandered very far.

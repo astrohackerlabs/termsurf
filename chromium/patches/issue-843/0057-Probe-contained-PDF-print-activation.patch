@@ -1,0 +1,454 @@
+From a18decbce1c1cb9b8768dfea9863e38af843bafb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 13:44:32 -0500
+Subject: [PATCH 57/87] Probe contained PDF print activation
+
+---
+ .../renderer/pdf_view_web_plugin_client.cc    | 83 +++++++++++++++++--
+ ...ts_component_extension_resource_manager.cc | 17 ++++
+ .../extensions/ts_resources_private_api.cc    | 17 +++-
+ .../libtermsurf_chromium/ts_browser_client.cc | 49 +++++++++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  2 +
+ pdf/pdf_view_web_plugin.cc                    | 46 ++++++++++
+ 6 files changed, 206 insertions(+), 8 deletions(-)
+
+diff --git a/components/pdf/renderer/pdf_view_web_plugin_client.cc b/components/pdf/renderer/pdf_view_web_plugin_client.cc
+index e5a6e7f230..6400ea0042 100644
+--- a/components/pdf/renderer/pdf_view_web_plugin_client.cc
++++ b/components/pdf/renderer/pdf_view_web_plugin_client.cc
+@@ -5,11 +5,18 @@
+ #include "components/pdf/renderer/pdf_view_web_plugin_client.h"
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <utility>
+ #include <vector>
+ 
+ #include "base/check_op.h"
++#include "base/command_line.h"
++#include "base/environment.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/process/process_handle.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/values.h"
+ #include "components/pdf/renderer/pdf_accessibility_tree.h"
+ #include "content/public/renderer/render_frame.h"
+@@ -47,6 +54,40 @@
+ #endif  // BUILDFLAG(ENABLE_PRINTING)
+ 
+ namespace pdf {
++namespace {
++
++constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
++constexpr char kTsPdfPrintInterceptFileSwitch[] =
++    "termsurf-pdf-print-intercept-file";
++
++std::optional<base::FilePath> GetTermSurfPdfPrintInterceptPath() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTsPdfPrintInterceptSwitch)) {
++    base::FilePath path =
++        command_line->GetSwitchValuePath(kTsPdfPrintInterceptFileSwitch);
++    if (!path.empty()) {
++      return path;
++    }
++  }
++
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
++  if (!enabled || *enabled != "1") {
++    return std::nullopt;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  if (!path || path->empty()) {
++    return std::nullopt;
++  }
++
++  return base::FilePath::FromUTF8Unsafe(*path);
++}
++
++}  // namespace
+ 
+ PdfViewWebPluginClient::PdfViewWebPluginClient(
+     content::RenderFrame* render_frame)
+@@ -168,8 +209,9 @@ void PdfViewWebPluginClient::SetReferrerForRequest(
+ 
+ void PdfViewWebPluginClient::Alert(const blink::WebString& message) {
+   blink::WebLocalFrame* frame = GetFrame();
+-  if (frame)
++  if (frame) {
+     frame->Alert(message);
++  }
+ }
+ 
+ bool PdfViewWebPluginClient::Confirm(const blink::WebString& message) {
+@@ -248,25 +290,29 @@ void PdfViewWebPluginClient::ConnectOcrIfNeeded() {
+ void PdfViewWebPluginClient::UpdateTextInputState() {
+   // `widget` is null in Print Preview.
+   auto* widget = GetFrame()->FrameWidget();
+-  if (widget)
++  if (widget) {
+     widget->UpdateTextInputState();
++  }
+ }
+ 
+ void PdfViewWebPluginClient::UpdateSelectionBounds() {
+   // `widget` is null in Print Preview.
+   auto* widget = GetFrame()->FrameWidget();
+-  if (widget)
++  if (widget) {
+     widget->UpdateSelectionBounds();
++  }
+ }
+ 
+ std::string PdfViewWebPluginClient::GetEmbedderOriginString() {
+   auto* frame = GetFrame();
+-  if (!frame)
++  if (!frame) {
+     return {};
++  }
+ 
+   auto* parent_frame = frame->Parent();
+-  if (!parent_frame)
++  if (!parent_frame) {
+     return {};
++  }
+ 
+   return GURL(parent_frame->GetSecurityOrigin().ToString().Utf8()).spec();
+ }
+@@ -281,16 +327,18 @@ blink::WebLocalFrame* PdfViewWebPluginClient::GetFrame() const {
+ 
+ void PdfViewWebPluginClient::DidStartLoading() {
+   blink::WebLocalFrameClient* frame_client = GetFrame()->Client();
+-  if (!frame_client)
++  if (!frame_client) {
+     return;
++  }
+ 
+   frame_client->DidStartLoading();
+ }
+ 
+ void PdfViewWebPluginClient::DidStopLoading() {
+   blink::WebLocalFrameClient* frame_client = GetFrame()->Client();
+-  if (!frame_client)
++  if (!frame_client) {
+     return;
++  }
+ 
+   frame_client->DidStopLoading();
+ }
+@@ -298,6 +346,27 @@ void PdfViewWebPluginClient::DidStopLoading() {
+ void PdfViewWebPluginClient::Print() {
+   blink::WebElement element = plugin_container_->GetElement();
+   DCHECK(!element.IsNull());
++  if (std::optional<base::FilePath> intercept_path =
++          GetTermSurfPdfPrintInterceptPath()) {
++    std::string document_url;
++    if (render_frame_ && render_frame_->GetWebFrame()) {
++      document_url =
++          render_frame_->GetWebFrame()->GetDocument().Url().GetString().Utf8();
++    }
++#if BUILDFLAG(ENABLE_PRINTING)
++    const char kEnablePrinting[] = "1";
++#else
++    const char kEnablePrinting[] = "0";
++#endif
++    const std::string line =
++        "pdf-print-intercept"
++        " pid=" +
++        base::NumberToString(base::GetCurrentProcId()) +
++        " enable_printing=" + kEnablePrinting +
++        " document_url=" + document_url + "\n";
++    base::AppendToFile(*intercept_path, line);
++    return;
++  }
+ #if BUILDFLAG(ENABLE_PRINTING)
+   printing::PrintRenderFrameHelper::Get(render_frame_)->PrintNode(element);
+ #endif  // BUILDFLAG(ENABLE_PRINTING)
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+index 84195d18bf..252bffa1e7 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+@@ -4,8 +4,10 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h"
+ 
++#include <memory>
+ #include <string>
+ 
++#include "base/environment.h"
+ #include "base/logging.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "chrome/grit/pdf_resources_map.h"
+@@ -23,6 +25,19 @@ base::FilePath NormalizeAsciiPath(const char* path) {
+   return base::FilePath().AppendASCII(path).NormalizePathSeparators();
+ }
+ 
++bool IsTermSurfPdfPrintInterceptActive() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
++  if (!enabled || *enabled != "1") {
++    return false;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  return path && !path->empty();
++}
++
+ void AddPdfString(ui::TemplateReplacements* replacements,
+                   const char* name,
+                   int resource_id) {
+@@ -196,6 +211,8 @@ void PopulatePdfTemplateReplacements(ui::TemplateReplacements* replacements) {
+   // Enabling the OOPIF attribute switches the bundled viewer into
+   // pdfViewerPrivate.getStreamInfo(), which TermSurf has not implemented yet.
+   (*replacements)["pdfOopifEnabled"] = "";
++  (*replacements)["printingEnabled"] =
++      IsTermSurfPdfPrintInterceptActive() ? "true" : "false";
+ 
+   webui::SetLoadTimeDataDefaults(l10n_util::GetApplicationLocale(std::string()),
+                                  replacements);
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+index ae707f682d..99dc53d387 100644
+--- a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -4,9 +4,11 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_resources_private_api.h"
+ 
++#include <memory>
+ #include <optional>
+ #include <utility>
+ 
++#include "base/environment.h"
+ #include "base/values.h"
+ #include "chrome/common/extensions/api/resources_private.h"
+ #include "chrome/grit/generated_resources.h"
+@@ -23,6 +25,19 @@ namespace {
+ namespace resources_private = extensions::api::resources_private;
+ namespace get_strings = resources_private::GetStrings;
+ 
++bool IsTermSurfPdfPrintInterceptActive() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
++  if (!enabled || *enabled != "1") {
++    return false;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  return path && !path->empty();
++}
++
+ base::DictValue GetPdfStringsForTermSurf() {
+   base::DictValue dict;
+ 
+@@ -206,7 +221,7 @@ base::DictValue GetPdfStringsForTermSurf() {
+   dict.Set("pdfSearchifySaveEnabled", false);
+   dict.Set("pdfTextAnnotationsEnabled", false);
+   dict.Set("pdfUseShowSaveFilePicker", false);
+-  dict.Set("printingEnabled", false);
++  dict.Set("printingEnabled", IsTermSurfPdfPrintInterceptActive());
+ 
+   return dict;
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 5c51e4826e..a20d7bbed4 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
++#include "base/command_line.h"
++#include "base/environment.h"
+ #include "base/logging.h"
+ #include "components/pdf/browser/pdf_document_helper.h"
+ #include "components/pdf/browser/pdf_navigation_throttle.h"
+@@ -28,6 +30,7 @@
+ #include "content/public/browser/url_loader_request_interceptor.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_ui_url_loader_factory.h"
++#include "content/public/common/content_switches.h"
+ #include "content/public/common/url_constants.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "extensions/browser/extension_protocols.h"
+@@ -59,6 +62,27 @@
+ namespace content {
+ namespace {
+ 
++constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
++constexpr char kTsPdfPrintInterceptFileSwitch[] =
++    "termsurf-pdf-print-intercept-file";
++
++std::optional<std::string> GetTsPdfPrintInterceptFileFromEnv() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
++  if (!enabled || *enabled != "1") {
++    return std::nullopt;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  if (!path || path->empty()) {
++    return std::nullopt;
++  }
++
++  return path;
++}
++
+ bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
+   return extension && extension->id() == extension_misc::kPdfExtensionId &&
+          extensions::Manifest::IsComponentLocation(extension->location());
+@@ -322,6 +346,31 @@ void TsBrowserClient::OverrideWebPreferences(
+   }
+ }
+ 
++void TsBrowserClient::AppendExtraCommandLineSwitches(
++    base::CommandLine* command_line,
++    int child_process_id) {
++  ShellContentBrowserClient::AppendExtraCommandLineSwitches(command_line,
++                                                            child_process_id);
++
++  if (command_line->GetSwitchValueASCII(switches::kProcessType) !=
++      switches::kRendererProcess) {
++    return;
++  }
++
++  std::optional<std::string> intercept_file =
++      GetTsPdfPrintInterceptFileFromEnv();
++  if (!intercept_file) {
++    return;
++  }
++
++  // Renderer processes do not reliably inherit the browser process environment.
++  // Forward the contained PDF print test guard explicitly so the PDF plugin can
++  // intercept before reaching native print.
++  command_line->AppendSwitch(kTsPdfPrintInterceptSwitch);
++  command_line->AppendSwitchASCII(kTsPdfPrintInterceptFileSwitch,
++                                  *intercept_file);
++}
++
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+     const std::string& scheme,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index ef11a9dc0b..708d0d7ae4 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -65,6 +65,8 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   void OverrideWebPreferences(WebContents* web_contents,
+                               SiteInstance& main_frame_site,
+                               blink::web_pref::WebPreferences* prefs) override;
++  void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
++                                      int child_process_id) override;
+   mojo::PendingRemote<network::mojom::URLLoaderFactory>
+   CreateNonNetworkNavigationURLLoaderFactory(
+       const std::string& scheme,
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index 33c43b8a78..8ed74ea97a 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <cstdlib>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <utility>
+@@ -18,11 +19,14 @@
+ #include "base/auto_reset.h"
+ #include "base/byte_size.h"
+ #include "base/check_op.h"
++#include "base/command_line.h"
+ #include "base/containers/fixed_flat_map.h"
+ #include "base/containers/queue.h"
+ #include "base/containers/span.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/feature_list.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/i18n/char_iterator.h"
+@@ -34,6 +38,7 @@
+ #include "base/notimplemented.h"
+ #include "base/notreached.h"
+ #include "base/numerics/safe_conversions.h"
++#include "base/process/process_handle.h"
+ #include "base/strings/escape.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -149,12 +154,37 @@ constexpr base::TimeDelta kFindResultCooldown = base::Milliseconds(100);
+ constexpr std::string_view kChromeExtensionHost =
+     "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/";
+ 
++constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
++constexpr char kTsPdfPrintInterceptFileSwitch[] =
++    "termsurf-pdf-print-intercept-file";
++
+ bool Issue794InputTraceEnabled() {
+   static const bool enabled =
+       std::getenv("TERMSURF_PDF_INPUT_TRACE") != nullptr;
+   return enabled;
+ }
+ 
++std::optional<base::FilePath> GetTermSurfPdfPrintInterceptPath() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTsPdfPrintInterceptSwitch)) {
++    base::FilePath path =
++        command_line->GetSwitchValuePath(kTsPdfPrintInterceptFileSwitch);
++    if (!path.empty()) {
++      return path;
++    }
++  }
++
++  const char* enabled = std::getenv("TERMSURF_PDF_PRINT_INTERCEPT");
++  const char* path = std::getenv("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  if (!enabled || std::string_view(enabled) != "1" || !path ||
++      std::string_view(path).empty()) {
++    return std::nullopt;
++  }
++
++  return base::FilePath::FromUTF8Unsafe(path);
++}
++
+ bool Issue794IsMousePointerEvent(blink::WebInputEvent::Type type) {
+   return type == blink::WebInputEvent::Type::kMouseDown ||
+          type == blink::WebInputEvent::Type::kMouseMove ||
+@@ -1355,6 +1385,22 @@ void PdfViewWebPlugin::Email(const std::string& to,
+ }
+ 
+ void PdfViewWebPlugin::Print() {
++  if (std::optional<base::FilePath> intercept_path =
++          GetTermSurfPdfPrintInterceptPath()) {
++    const bool has_engine = !!engine_;
++    const bool can_print =
++        engine_ &&
++        (engine_->HasPermission(DocumentPermission::kPrintLowQuality) ||
++         engine_->HasPermission(DocumentPermission::kPrintHighQuality));
++    const std::string line = base::StrCat(
++        {"pdf-print-intercept pid=",
++         base::NumberToString(base::GetCurrentProcId()),
++         " layer=pdf-view-web-plugin", " has_engine=", has_engine ? "1" : "0",
++         " can_print=", can_print ? "1" : "0", " url=", url_, "\n"});
++    base::AppendToFile(*intercept_path, line);
++    return;
++  }
++
+   if (!engine_) {
+     return;
+   }
+-- 
+2.54.0
+

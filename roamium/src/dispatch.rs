@@ -305,18 +305,6 @@ pub fn handle_message(msg: &TermSurfMessage) {
                     m.modifiers
                 ));
                 unsafe {
-                    if m.r#type == "down" {
-                        trace_pdf_input(format!(
-                            "mouse-event tab={} pane={} ffi=ts_forward_mouse_move reason=pre-click-synthesis coords=({:.2}, {:.2}) modifiers={}",
-                            m.tab_id, t.pane_id, m.x, m.y, m.modifiers
-                        ));
-                        ffi::ts_forward_mouse_move(
-                            t.handle,
-                            m.x as i32,
-                            m.y as i32,
-                            m.modifiers as i32,
-                        );
-                    }
                     ffi::ts_forward_mouse_event(
                         t.handle,
                         mouse_type(&m.r#type),

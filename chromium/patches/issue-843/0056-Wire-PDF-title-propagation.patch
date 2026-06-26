@@ -1,0 +1,335 @@
+From 6b7a1b91411b6f661f5913418efb4de199ef8e3f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 13:00:27 -0500
+Subject: [PATCH 56/87] Wire PDF title propagation
+
+---
+ chrome/browser/resources/pdf/pdf_viewer.ts    | 13 ++-
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../ts_extensions_browser_client.cc           |  4 +
+ .../extensions/ts_pdf_viewer_private_api.cc   | 87 +++++++++++++++++++
+ .../extensions/ts_pdf_viewer_private_api.h    | 31 +++++++
+ .../libtermsurf_chromium/ts_tab_observer.cc   | 48 ++++++----
+ 6 files changed, 159 insertions(+), 26 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.h
+
+diff --git a/chrome/browser/resources/pdf/pdf_viewer.ts b/chrome/browser/resources/pdf/pdf_viewer.ts
+index bf1640e5a1..32716bf47e 100644
+--- a/chrome/browser/resources/pdf/pdf_viewer.ts
++++ b/chrome/browser/resources/pdf/pdf_viewer.ts
+@@ -1237,15 +1237,14 @@ export class PdfViewerElement extends PdfViewerBaseElement {
+     this.documentMetadata_ = metadata;
+     this.title_ = this.documentMetadata_.title || this.fileName_;
+ 
+-    // Tab title is updated only when document.title is called in a
+-    // top-level document (`main_frame` of `WebContents`). For OOPIF PDF viewer,
+-    // the current document is the child of a top-level document, hence using a
+-    // private API to set the tab title.
++    // TermSurf hosts the PDF viewer in an extension child frame even when
++    // pdfOopifEnabled is false, so document.title only updates the child frame.
++    // Keep the child title for local viewer state, and use the private API to
++    // propagate full-page PDF titles to the embedding WebContents.
++    document.title = this.title_;
+     // NOTE: Title should only be set for full-page PDFs.
+-    if (this.pdfOopifEnabled && !this.embedded_) {
++    if (!this.embedded_) {
+       PdfViewerPrivateProxyImpl.getInstance().setPdfDocumentTitle(this.title_);
+-    } else {
+-      document.title = this.title_;
+     }
+ 
+     this.canSerializeDocument_ = this.documentMetadata_.canSerializeDocument;
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 33e85d2060..697e8828f2 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -33,6 +33,8 @@ shared_library("libtermsurf_chromium") {
+     "extensions/ts_pdf_component_extension.h",
+     "extensions/ts_pdf_resource_bundle.cc",
+     "extensions/ts_pdf_resource_bundle.h",
++    "extensions/ts_pdf_viewer_private_api.cc",
++    "extensions/ts_pdf_viewer_private_api.h",
+     "extensions/ts_resources_private_api.cc",
+     "extensions/ts_resources_private_api.h",
+     "libtermsurf_chromium.cc",
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index f0c513d283..34396354b2 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -16,6 +16,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system_factory.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.h"
+ #include "content/libtermsurf_chromium/extensions/ts_resources_private_api.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_task_traits.h"
+@@ -62,6 +63,7 @@ class TsPdfExtensionsBrowserAPIProvider
+ 
+   void RegisterExtensionFunctions(
+       ExtensionFunctionRegistry* registry) override {
++    registry->RegisterFunction<TsPdfViewerPrivateSetPdfDocumentTitleFunction>();
+     registry->RegisterFunction<TsResourcesPrivateGetStringsFunction>();
+   }
+ };
+@@ -217,6 +219,8 @@ TsExtensionsBrowserClient::~TsExtensionsBrowserClient() = default;
+ 
+ void TsExtensionsBrowserClient::Init() {
+   api_client_ = std::make_unique<TsExtensionsAPIClient>();
++  ExtensionFunctionRegistry::GetInstance()
++      .RegisterFunction<TsPdfViewerPrivateSetPdfDocumentTitleFunction>();
+   ExtensionFunctionRegistry::GetInstance()
+       .RegisterFunction<TsResourcesPrivateGetStringsFunction>();
+   component_extension_resource_manager_->SelfTestPdfResource();
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+new file mode 100644
+index 0000000000..57b7fdf7ab
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+@@ -0,0 +1,87 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.h"
++
++#include <optional>
++#include <string>
++
++#include "base/logging.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/common/extensions/api/pdf_viewer_private.h"
++#include "components/pdf/common/constants.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/web_contents.h"
++
++namespace content {
++namespace {
++
++namespace set_pdf_document_title =
++    extensions::api::pdf_viewer_private::SetPdfDocumentTitle;
++
++}  // namespace
++
++TsPdfViewerPrivateSetPdfDocumentTitleFunction::
++    TsPdfViewerPrivateSetPdfDocumentTitleFunction() = default;
++
++TsPdfViewerPrivateSetPdfDocumentTitleFunction::
++    ~TsPdfViewerPrivateSetPdfDocumentTitleFunction() = default;
++
++ExtensionFunction::ResponseAction
++TsPdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
++  WebContents* web_contents = GetSenderWebContents();
++  if (!web_contents) {
++    LOG(INFO)
++        << "[issue-794-exp15] pdf-set-title success=0 reason=no-web-contents";
++    return RespondNow(Error("Could not find a valid web contents."));
++  }
++
++  const std::string mime_type = web_contents->GetContentsMimeType();
++  if (mime_type != pdf::kPDFMimeType) {
++    LOG(INFO) << "[issue-794-exp15] pdf-set-title success=0 reason=mime-guard"
++              << " mime_type=" << mime_type
++              << " url=" << web_contents->GetLastCommittedURL();
++    EXTENSION_FUNCTION_VALIDATE(false);
++  }
++
++  std::optional<set_pdf_document_title::Params> params =
++      set_pdf_document_title::Params::Create(args());
++  if (!params) {
++    LOG(INFO) << "[issue-794-exp15] pdf-set-title success=0 reason=bad-params"
++              << " mime_type=" << mime_type
++              << " url=" << web_contents->GetLastCommittedURL();
++    EXTENSION_FUNCTION_VALIDATE(false);
++  }
++
++  NavigationEntry* entry =
++      web_contents->GetController().GetLastCommittedEntry();
++  if (!entry) {
++    LOG(INFO) << "[issue-794-exp15] pdf-set-title success=0 reason=no-entry"
++              << " title=" << params->title << " mime_type=" << mime_type
++              << " url=" << web_contents->GetLastCommittedURL();
++    return RespondNow(Error("Could not find a committed navigation entry."));
++  }
++
++  LOG(INFO) << "[issue-794-exp15] pdf-set-title before"
++            << " title=" << params->title << " mime_type=" << mime_type
++            << " url=" << web_contents->GetLastCommittedURL() << " has_entry=1"
++            << " entry_title="
++            << base::UTF16ToUTF8(entry->GetTitleForDisplay());
++
++  web_contents->UpdateTitleForEntry(entry, base::UTF8ToUTF16(params->title));
++
++  NavigationEntry* updated_entry =
++      web_contents->GetController().GetLastCommittedEntry();
++  LOG(INFO) << "[issue-794-exp15] pdf-set-title after success=1"
++            << " title=" << params->title
++            << " has_entry=" << (updated_entry ? 1 : 0) << " entry_title="
++            << (updated_entry
++                    ? base::UTF16ToUTF8(updated_entry->GetTitleForDisplay())
++                    : "");
++
++  return RespondNow(NoArguments());
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.h b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.h
+new file mode 100644
+index 0000000000..dbc26f9061
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_VIEWER_PRIVATE_API_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_VIEWER_PRIVATE_API_H_
++
++#include "extensions/browser/extension_function.h"
++
++namespace content {
++
++class TsPdfViewerPrivateSetPdfDocumentTitleFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("pdfViewerPrivate.setPdfDocumentTitle",
++                             PDFVIEWERPRIVATE_SETPDFDOCUMENTTITLE)
++
++  TsPdfViewerPrivateSetPdfDocumentTitleFunction();
++  TsPdfViewerPrivateSetPdfDocumentTitleFunction(
++      const TsPdfViewerPrivateSetPdfDocumentTitleFunction&) = delete;
++  TsPdfViewerPrivateSetPdfDocumentTitleFunction& operator=(
++      const TsPdfViewerPrivateSetPdfDocumentTitleFunction&) = delete;
++
++ protected:
++  ~TsPdfViewerPrivateSetPdfDocumentTitleFunction() override;
++
++  ExtensionFunction::ResponseAction Run() override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_VIEWER_PRIVATE_API_H_
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index 1ca1bbf4d7..822c8251ad 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -9,13 +9,13 @@
+ #include "base/logging.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_view_host.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+-#include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+@@ -40,16 +40,18 @@ void TsTabObserver::ObserveContents(WebContents* web_contents) {
+   Observe(web_contents);
+ }
+ 
+-void TsTabObserver::DidFinishNavigation(
+-    NavigationHandle* navigation_handle) {
+-  if (!navigation_handle->HasCommitted())
++void TsTabObserver::DidFinishNavigation(NavigationHandle* navigation_handle) {
++  if (!navigation_handle->HasCommitted()) {
+     return;
+-  if (!navigation_handle->IsInPrimaryMainFrame())
++  }
++  if (!navigation_handle->IsInPrimaryMainFrame()) {
+     return;
++  }
+ 
+ #if BUILDFLAG(IS_MAC)
+-  if (last_ca_context_id_)
++  if (last_ca_context_id_) {
+     *last_ca_context_id_ = 0;
++  }
+ 
+   std::string url;
+   if (inspected_tab_id_ > 0) {
+@@ -77,33 +79,39 @@ void TsTabObserver::DidStopLoading() {
+ void TsTabObserver::LoadProgressChanged(double progress) {
+ #if BUILDFLAG(IS_MAC)
+   int pct = static_cast<int>(progress * 100);
+-  if (pct >= 100) return;
++  if (pct >= 100) {
++    return;
++  }
+   TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "progress", pct);
+ #endif
+ }
+ 
+ void TsTabObserver::DidFailLoad(RenderFrameHost* render_frame_host,
+-                                 const GURL& validated_url,
+-                                 int error_code) {
++                                const GURL& validated_url,
++                                int error_code) {
+ #if BUILDFLAG(IS_MAC)
+-  if (!render_frame_host->IsInPrimaryMainFrame())
++  if (!render_frame_host->IsInPrimaryMainFrame()) {
+     return;
++  }
+   TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "error", 0);
+ #endif
+ }
+ 
+ void TsTabObserver::TitleWasSet(NavigationEntry* entry) {
+ #if BUILDFLAG(IS_MAC)
+-  if (!entry)
++  if (!entry) {
+     return;
++  }
+   std::string title = base::UTF16ToUTF8(entry->GetTitleForDisplay());
++  LOG(INFO) << "[issue-794-exp15] title-was-set title=" << title;
+   TsNotifyTitleChanged(reinterpret_cast<void*>(handle_), title.c_str());
+ #endif
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
+ void TsTabObserver::OnCursorChanged(const ui::Cursor& cursor) {
+-  TsNotifyCursorChanged(reinterpret_cast<void*>(handle_), static_cast<int>(cursor.type()));
++  TsNotifyCursorChanged(reinterpret_cast<void*>(handle_),
++                        static_cast<int>(cursor.type()));
+ }
+ 
+ void TsTabObserver::SetCALayerParamsCallback(CALayerParamsCallback callback) {
+@@ -118,19 +126,21 @@ void TsTabObserver::SetParentUiLayer(ui::Layer* layer) {
+   parent_ui_layer_ = layer;
+ }
+ 
+-void TsTabObserver::RenderViewHostChanged(
+-    RenderViewHost* old_host, RenderViewHost* new_host) {
+-  if (!new_host)
++void TsTabObserver::RenderViewHostChanged(RenderViewHost* old_host,
++                                          RenderViewHost* new_host) {
++  if (!new_host) {
+     return;
++  }
+   auto* view = web_contents()->GetRenderWidgetHostView();
+-  if (!view)
++  if (!view) {
+     return;
++  }
+ 
+-  if (ca_layer_params_callback_)
++  if (ca_layer_params_callback_) {
+     SetCALayerParamsCallbackOnView(view, ca_layer_params_callback_);
++  }
+ 
+-  auto* rwhi = static_cast<RenderWidgetHostImpl*>(
+-      view->GetRenderWidgetHost());
++  auto* rwhi = static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
+   rwhi->SetCursorChangedCallback(base::BindRepeating(
+       &TsTabObserver::OnCursorChanged, base::Unretained(this)));
+ 
+-- 
+2.54.0
+

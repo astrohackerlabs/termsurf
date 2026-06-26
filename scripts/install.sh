@@ -4,28 +4,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CHROMIUM_OUT="$REPO_DIR/chromium/src/out/Default"
-WEBKIT_BUILD="$REPO_DIR/webkit/src/WebKitBuild/Debug"
 source "$SCRIPT_DIR/roamium-resources.sh"
-source "$SCRIPT_DIR/surfari-resources.sh"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
 GHOSTBOARD_RELEASE_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf.app"
 APPLICATIONS_DIR="${TERMSURF_APPLICATIONS_DIR:-/Applications}"
 ROAMIUM_INSTALL_DIR="${TERMSURF_ROAMIUM_INSTALL_DIR:-/opt/homebrew/opt/termsurf-roamium}"
-SURFARI_INSTALL_DIR="${TERMSURF_SURFARI_INSTALL_DIR:-/opt/homebrew/opt/termsurf-surfari}"
 
 COMPONENT="${1:-}"
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component>"
-  echo "Components: ghostboard, roamium, surfari, webtui, all"
+  echo "Components: ghostboard, roamium, webtui, all"
   exit 1
 fi
 
 case "$COMPONENT" in
-  roamium | surfari | ghostboard | webtui | all) ;;
+  roamium | ghostboard | webtui | all) ;;
   *)
     echo "Unknown component: $COMPONENT"
-    echo "Components: ghostboard, roamium, surfari, webtui, all"
+    echo "Components: ghostboard, roamium, webtui, all"
     exit 1
     ;;
 esac
@@ -46,15 +43,6 @@ needs_root() {
     echo "Error: TERMSURF_ROAMIUM_INSTALL_DIR is not writable: $ROAMIUM_INSTALL_DIR"
     exit 1
   fi
-  if [ "$COMPONENT" = "surfari" ] && [ "$SURFARI_INSTALL_DIR" != "/opt/homebrew/opt/termsurf-surfari" ]; then
-    mkdir -p "$SURFARI_INSTALL_DIR" || {
-      echo "Error: TERMSURF_SURFARI_INSTALL_DIR is not writable: $SURFARI_INSTALL_DIR"
-      exit 1
-    }
-    [ -w "$SURFARI_INSTALL_DIR" ] && return 1
-    echo "Error: TERMSURF_SURFARI_INSTALL_DIR is not writable: $SURFARI_INSTALL_DIR"
-    exit 1
-  fi
   if [ "$COMPONENT" = "ghostboard" ] && [ "$APPLICATIONS_DIR" != "/Applications" ]; then
     mkdir -p "$APPLICATIONS_DIR" || {
       echo "Error: TERMSURF_APPLICATIONS_DIR is not writable: $APPLICATIONS_DIR"
@@ -72,7 +60,6 @@ if [ "$(id -u)" -ne 0 ] && needs_root; then
   exec sudo env \
     TERMSURF_APPLICATIONS_DIR="$APPLICATIONS_DIR" \
     TERMSURF_ROAMIUM_INSTALL_DIR="$ROAMIUM_INSTALL_DIR" \
-    TERMSURF_SURFARI_INSTALL_DIR="$SURFARI_INSTALL_DIR" \
     "$0" "$@"
 fi
 
@@ -102,38 +89,6 @@ install_roamium() {
 
   echo "  Dir: $INSTALL_DIR"
   echo "  Bin: $INSTALL_DIR/roamium"
-}
-
-install_surfari() {
-  local SURFARI_SRC="$REPO_DIR/target/release/surfari"
-  local SURFARI_DYLIB="$REPO_DIR/surfari/libtermsurf_webkit/build/libtermsurf_webkit.dylib"
-  local INSTALL_DIR="$SURFARI_INSTALL_DIR"
-
-  if [ ! -f "$SURFARI_SRC" ]; then
-    echo "Error: Release build not found at $SURFARI_SRC"
-    echo "Run: scripts/build.sh surfari --release"
-    exit 1
-  fi
-  if [ ! -f "$SURFARI_DYLIB" ]; then
-    echo "Error: libtermsurf_webkit not found at $SURFARI_DYLIB"
-    echo "Run: scripts/build.sh surfari --release"
-    exit 1
-  fi
-
-  echo "==> Installing Surfari to $INSTALL_DIR..."
-  rm -rf "$INSTALL_DIR"
-  mkdir -p "$INSTALL_DIR"
-  cp "$SURFARI_SRC" "$INSTALL_DIR/surfari"
-  cp "$SURFARI_DYLIB" "$INSTALL_DIR/libtermsurf_webkit.dylib"
-  copy_surfari_runtime_resources "$WEBKIT_BUILD" "$INSTALL_DIR"
-  rewrite_surfari_runtime_paths "$WEBKIT_BUILD" "$INSTALL_DIR"
-
-  echo "==> Codesigning Surfari..."
-  sign_surfari_runtime_artifacts "$INSTALL_DIR"
-
-  echo "  Dir: $INSTALL_DIR"
-  echo "  Bin: $INSTALL_DIR/surfari"
-  echo "  Dylib: $INSTALL_DIR/libtermsurf_webkit.dylib"
 }
 
 install_ghostboard() {
@@ -182,12 +137,10 @@ install_webtui() {
 
 case "$COMPONENT" in
   roamium)    install_roamium ;;
-  surfari)    install_surfari ;;
   ghostboard) install_ghostboard ;;
   webtui)     install_webtui ;;
   all)
     install_roamium
-    install_surfari
     install_ghostboard
     install_webtui
     echo ""

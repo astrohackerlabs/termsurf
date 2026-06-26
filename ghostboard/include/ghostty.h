@@ -1078,6 +1078,7 @@ GHOSTTY_API int termsurf_forward_key_event(const char*, const char*, int64_t, co
 GHOSTTY_API int termsurf_forward_mouse_event(const char*, const char*, const char*, double, double, int64_t, uint64_t);
 GHOSTTY_API int termsurf_forward_mouse_move(const char*, double, double, uint64_t);
 GHOSTTY_API int termsurf_forward_scroll_event(const char*, double, double, double, double, uint64_t, uint64_t, bool, uint64_t);
+GHOSTTY_API void termsurf_overlay_missed_left_click(const char*);
 GHOSTTY_API size_t termsurf_copy_current_url(const char*, uint8_t*, size_t);
 
 GHOSTTY_API ghostty_config_t ghostty_config_new();

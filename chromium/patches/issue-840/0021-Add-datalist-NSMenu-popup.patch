@@ -1,0 +1,873 @@
+From 4cb5a7fa4553be77b144b3c718482c4bb96a19a1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 09:35:47 -0500
+Subject: [PATCH 21/75] Add datalist NSMenu popup
+
+A datalist knocked, but no one came,
+So Mojo ferried every name.
+The menu bloomed where inputs dwell,
+And Surfari rang the tiny bell.
+---
+ content/shell/BUILD.gn                        |   7 +-
+ .../browser/shell_content_browser_client.cc   |   5 +
+ .../browser/shell_datalist_autofill_driver.h  |  23 ++
+ .../shell_datalist_autofill_driver_mac.mm     | 207 +++++++++++
+ content/shell/common/datalist_autofill.mojom  |  20 ++
+ .../renderer/shell_content_renderer_client.cc |  39 +-
+ .../shell_datalist_autofill_client.cc         | 335 ++++++++++++++++++
+ .../renderer/shell_datalist_autofill_client.h |  76 ++++
+ 8 files changed, 674 insertions(+), 38 deletions(-)
+ create mode 100644 content/shell/browser/shell_datalist_autofill_driver.h
+ create mode 100644 content/shell/browser/shell_datalist_autofill_driver_mac.mm
+ create mode 100644 content/shell/common/datalist_autofill.mojom
+ create mode 100644 content/shell/renderer/shell_datalist_autofill_client.cc
+ create mode 100644 content/shell/renderer/shell_datalist_autofill_client.h
+
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index 2f62da6f78..3c5e633f7d 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -194,6 +194,7 @@ static_library("content_shell_lib") {
+     "browser/shell_content_browser_client.h",
+     "browser/shell_content_index_provider.cc",
+     "browser/shell_content_index_provider.h",
++    "browser/shell_datalist_autofill_driver.h",
+     "browser/shell_devtools_bindings.cc",
+     "browser/shell_devtools_bindings.h",
+     "browser/shell_devtools_frontend.cc",
+@@ -235,6 +236,8 @@ static_library("content_shell_lib") {
+     "renderer/render_frame_test_helper.h",
+     "renderer/shell_content_renderer_client.cc",
+     "renderer/shell_content_renderer_client.h",
++    "renderer/shell_datalist_autofill_client.cc",
++    "renderer/shell_datalist_autofill_client.h",
+     "renderer/shell_render_frame_observer.cc",
+     "renderer/shell_render_frame_observer.h",
+     "utility/shell_content_utility_client.cc",
+@@ -259,6 +262,7 @@ static_library("content_shell_lib") {
+       "browser/shell_application_mac.h",
+       "browser/shell_application_mac.mm",
+       "browser/shell_browser_main_parts_mac.mm",
++      "browser/shell_datalist_autofill_driver_mac.mm",
+       "browser/shell_javascript_dialog_mac.mm",
+       "browser/shell_platform_delegate_mac.mm",
+       "browser/shell_web_contents_view_delegate_mac.mm",
+@@ -333,7 +337,6 @@ static_library("content_shell_lib") {
+     ":shell_controller_mojom",
+     "//base",
+     "//base:base_static",
+-    "//components/autofill/content/renderer",
+     "//components/cdm/renderer",
+     "//components/custom_handlers",
+     "//components/custom_handlers:test_support",
+@@ -1080,6 +1083,7 @@ if (is_mac) {
+ mojom("content_browsertests_mojom") {
+   cpp_only = true
+   sources = [
++    "common/datalist_autofill.mojom",
+     "common/main_frame_counter_test.mojom",
+     "common/memory_coordinator/memory_coordinator_test.mojom",
+     "common/power_monitor_test.mojom",
+@@ -1091,6 +1095,7 @@ mojom("content_browsertests_mojom") {
+     "//sandbox/policy/mojom",
+     "//third_party/blink/public/mojom/fingerprinting_protection",
+     "//third_party/blink/public/mojom/tokens",
++    "//ui/gfx/geometry/mojom",
+   ]
+ }
+ 
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+index cc6bc28cd2..4d5d3cda63 100644
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -108,6 +108,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
++#include "content/shell/browser/shell_datalist_autofill_driver.h"
+ #include "services/device/public/cpp/test/fake_geolocation_system_permission_manager.h"
+ #endif
+ 
+@@ -618,6 +619,10 @@ void ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   map->Add<network_hints::mojom::NetworkHintsHandler>(&BindNetworkHintsHandler);
+   map->Add<content::rust_test::mojom::RustTestService>(
+       base::BindRepeating(&BindRustTestServiceReceiver));
++#if BUILDFLAG(IS_MAC)
++  map->Add<mojom::ShellDatalistAutofillDriver>(
++      base::BindRepeating(&ShellDatalistAutofillDriver::Bind));
++#endif  // BUILDFLAG(IS_MAC)
+ #if BUILDFLAG(IS_WIN)
+   map->Add<media::mojom::MediaFoundationPreferences>(
+       &BindMediaFoundationPreferences);
+diff --git a/content/shell/browser/shell_datalist_autofill_driver.h b/content/shell/browser/shell_datalist_autofill_driver.h
+new file mode 100644
+index 0000000000..314ebe64b1
+--- /dev/null
++++ b/content/shell/browser/shell_datalist_autofill_driver.h
+@@ -0,0 +1,23 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_SHELL_BROWSER_SHELL_DATALIST_AUTOFILL_DRIVER_H_
++#define CONTENT_SHELL_BROWSER_SHELL_DATALIST_AUTOFILL_DRIVER_H_
++
++#include "content/public/browser/render_frame_host.h"
++#include "content/shell/common/datalist_autofill.mojom.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++
++namespace content {
++
++class ShellDatalistAutofillDriver {
++ public:
++  static void Bind(RenderFrameHost* render_frame_host,
++                   mojo::PendingReceiver<mojom::ShellDatalistAutofillDriver>
++                       pending_receiver);
++};
++
++}  // namespace content
++
++#endif  // CONTENT_SHELL_BROWSER_SHELL_DATALIST_AUTOFILL_DRIVER_H_
+diff --git a/content/shell/browser/shell_datalist_autofill_driver_mac.mm b/content/shell/browser/shell_datalist_autofill_driver_mac.mm
+new file mode 100644
+index 0000000000..85dd5cbd8a
+--- /dev/null
++++ b/content/shell/browser/shell_datalist_autofill_driver_mac.mm
+@@ -0,0 +1,207 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/shell/browser/shell_datalist_autofill_driver.h"
++
++#import <Cocoa/Cocoa.h>
++
++#include <cstdlib>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/logging.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/sys_string_conversions.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "mojo/public/cpp/bindings/remote.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include "ui/gfx/geometry/rect_f.h"
++
++@interface ShellDatalistMenuTarget : NSObject
++@property(nonatomic, assign) NSInteger selectedIndex;
++- (void)itemSelected:(id)sender;
++@end
++
++@implementation ShellDatalistMenuTarget
++@synthesize selectedIndex = _selectedIndex;
++
++- (instancetype)init {
++  if ((self = [super init])) {
++    _selectedIndex = -1;
++  }
++  return self;
++}
++
++- (void)itemSelected:(id)sender {
++  NSMenuItem* item = sender;
++  self.selectedIndex = item.tag;
++}
++
++@end
++
++namespace content {
++
++namespace {
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled "
++              << "component=shell-datalist-autofill-driver";
++  }
++}
++
++std::string NSRectToString(NSRect rect) {
++  return base::StringPrintf("{x=%.3f y=%.3f w=%.3f h=%.3f}", rect.origin.x,
++                            rect.origin.y, rect.size.width, rect.size.height);
++}
++
++NSRect InputBoundsToHostViewRect(NSView* host_view,
++                                 const gfx::RectF& input_bounds_in_window) {
++  const NSRect host_bounds = host_view.bounds;
++  CGFloat y = input_bounds_in_window.y();
++  if (!host_view.isFlipped) {
++    y = NSHeight(host_bounds) - input_bounds_in_window.y() -
++        input_bounds_in_window.height();
++  }
++  return NSMakeRect(input_bounds_in_window.x(), y,
++                    input_bounds_in_window.width(),
++                    input_bounds_in_window.height());
++}
++
++class ShellDatalistAutofillDriverImpl
++    : public mojom::ShellDatalistAutofillDriver {
++ public:
++  explicit ShellDatalistAutofillDriverImpl(RenderFrameHost* render_frame_host)
++      : render_frame_host_id_(render_frame_host->GetGlobalId()) {}
++
++  ShellDatalistAutofillDriverImpl(const ShellDatalistAutofillDriverImpl&) =
++      delete;
++  ShellDatalistAutofillDriverImpl& operator=(
++      const ShellDatalistAutofillDriverImpl&) = delete;
++
++  void ShowDatalistPopup(
++      const gfx::RectF& input_bounds_in_window,
++      const std::vector<std::u16string>& values,
++      const std::vector<std::u16string>& labels,
++      mojo::PendingRemote<mojom::ShellDatalistAutofillAgent> agent) override {
++    mojo::Remote<mojom::ShellDatalistAutofillAgent> agent_remote(
++        std::move(agent));
++    RenderFrameHost* render_frame_host =
++        RenderFrameHost::FromID(render_frame_host_id_);
++    WebContents* web_contents =
++        render_frame_host ? WebContents::FromRenderFrameHost(render_frame_host)
++                          : nullptr;
++    NSView* host_view =
++        web_contents ? web_contents->GetNativeView().GetNativeNSView() : nil;
++    if (!host_view || values.empty()) {
++      if (Issue779TraceEnabled()) {
++        Issue779TraceAnnounce();
++        LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                  << " boundary=shell_browser"
++                  << " event=show_popup_failed"
++                  << " has_render_frame_host=" << !!render_frame_host
++                  << " has_web_contents=" << !!web_contents
++                  << " has_host_view=" << !!host_view
++                  << " option_count=" << values.size();
++      }
++      return;
++    }
++
++    NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
++    menu.autoenablesItems = NO;
++    ShellDatalistMenuTarget* target = [[ShellDatalistMenuTarget alloc] init];
++    const size_t item_count = std::min(values.size(), labels.size());
++    for (size_t i = 0; i < item_count; ++i) {
++      std::u16string title = labels[i].empty() ? values[i] : labels[i];
++      NSMenuItem* item =
++          [[NSMenuItem alloc] initWithTitle:base::SysUTF16ToNSString(title)
++                                     action:@selector(itemSelected:)
++                              keyEquivalent:@""];
++      item.target = target;
++      item.tag = static_cast<NSInteger>(i);
++      item.enabled = YES;
++      [menu addItem:item];
++    }
++
++    NSRect input_rect =
++        InputBoundsToHostViewRect(host_view, input_bounds_in_window);
++    NSView* fake_control_view = [[NSView alloc] initWithFrame:input_rect];
++    [host_view addSubview:fake_control_view];
++    const NSPoint menu_location =
++        NSMakePoint(0, NSHeight(fake_control_view.bounds));
++
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " boundary=shell_browser"
++                << " event=show_popup"
++                << " option_count=" << values.size()
++                << " item_count=" << item_count << " input_bounds_in_window="
++                << input_bounds_in_window.ToString()
++                << " input_rect_host_view=" << NSRectToString(input_rect)
++                << " host_view=" << (__bridge void*)host_view
++                << " host_window=" << (__bridge void*)host_view.window;
++    }
++
++    current_menu_ = menu;
++    [menu popUpMenuPositioningItem:nil
++                        atLocation:menu_location
++                            inView:fake_control_view];
++    current_menu_ = nil;
++    [fake_control_view removeFromSuperview];
++
++    const NSInteger selected_index = target.selectedIndex;
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " boundary=shell_browser"
++                << " event=popup_dismissed"
++                << " selected_index=" << selected_index << " reason="
++                << (selected_index >= 0 ? "accepted" : "dismissed");
++    }
++    if (selected_index >= 0 &&
++        static_cast<size_t>(selected_index) < values.size()) {
++      agent_remote->AcceptDataListSuggestion(values[selected_index]);
++    }
++  }
++
++  void HideDatalistPopup() override {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " boundary=shell_browser"
++                << " event=hide_popup";
++    }
++    [current_menu_ cancelTracking];
++  }
++
++ private:
++  GlobalRenderFrameHostId render_frame_host_id_;
++  NSMenu* current_menu_ = nil;
++};
++
++}  // namespace
++
++// static
++void ShellDatalistAutofillDriver::Bind(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<mojom::ShellDatalistAutofillDriver>
++        pending_receiver) {
++  mojo::MakeSelfOwnedReceiver(
++      std::make_unique<ShellDatalistAutofillDriverImpl>(render_frame_host),
++      std::move(pending_receiver));
++}
++
++}  // namespace content
+diff --git a/content/shell/common/datalist_autofill.mojom b/content/shell/common/datalist_autofill.mojom
+new file mode 100644
+index 0000000000..fefca82c90
+--- /dev/null
++++ b/content/shell/common/datalist_autofill.mojom
+@@ -0,0 +1,20 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++module content.mojom;
++
++import "mojo/public/mojom/base/string16.mojom";
++import "ui/gfx/geometry/mojom/geometry.mojom";
++
++interface ShellDatalistAutofillAgent {
++  AcceptDataListSuggestion(mojo_base.mojom.String16 value);
++};
++
++interface ShellDatalistAutofillDriver {
++  ShowDatalistPopup(gfx.mojom.RectF input_bounds_in_window,
++                    array<mojo_base.mojom.String16> values,
++                    array<mojo_base.mojom.String16> labels,
++                    pending_remote<ShellDatalistAutofillAgent> agent);
++  HideDatalistPopup();
++};
+diff --git a/content/shell/renderer/shell_content_renderer_client.cc b/content/shell/renderer/shell_content_renderer_client.cc
+index 26277e4794..26d4143b5b 100644
+--- a/content/shell/renderer/shell_content_renderer_client.cc
++++ b/content/shell/renderer/shell_content_renderer_client.cc
+@@ -11,7 +11,6 @@
+ #include "base/base_switches.h"
+ #include "base/check_op.h"
+ #include "base/command_line.h"
+-#include "base/feature_list.h"
+ #include "base/files/file.h"
+ #include "base/functional/bind.h"
+ #include "base/immediate_crash.h"
+@@ -21,9 +20,6 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/types/pass_key.h"
+-#include "components/autofill/content/renderer/autofill_agent.h"
+-#include "components/autofill/content/renderer/password_autofill_agent.h"
+-#include "components/autofill/content/renderer/password_generation_agent.h"
+ #include "components/cdm/renderer/external_clear_key_key_system_info.h"
+ #include "components/network_hints/renderer/web_prescient_networking_impl.h"
+ #include "components/surface_embed/buildflags/buildflags.h"
+@@ -39,6 +35,7 @@
+ #include "content/shell/common/power_monitor_test_impl.h"
+ #include "content/shell/common/shell_switches.h"
+ #include "content/shell/renderer/memory_coordinator/memory_coordinator_test_impl.h"
++#include "content/shell/renderer/shell_datalist_autofill_client.h"
+ #include "content/shell/renderer/shell_render_frame_observer.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+@@ -47,7 +44,6 @@
+ #include "net/base/net_errors.h"
+ #include "sandbox/policy/sandbox.h"
+ #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
+-#include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/web_url_error.h"
+ #include "third_party/blink/public/web/modules/credentialmanagement/throttle_helper.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+@@ -357,38 +353,7 @@ void ShellContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   // browser tests. If we only create that for browser tests then the override
+   // of this method in WebTestContentRendererClient would not be needed.
+   new ShellRenderFrameObserver(render_frame);
+-
+-  if (!render_frame->IsInFencedFrameTree() ||
+-      base::FeatureList::IsEnabled(blink::features::kFencedFramesAPIChanges)) {
+-    blink::AssociatedInterfaceRegistry* associated_interfaces =
+-        render_frame->GetAssociatedInterfaceRegistry();
+-    auto password_autofill_agent =
+-        std::make_unique<autofill::PasswordAutofillAgent>(
+-            render_frame, associated_interfaces);
+-    auto password_generation_agent =
+-        std::make_unique<autofill::PasswordGenerationAgent>(
+-            render_frame, password_autofill_agent.get(), associated_interfaces);
+-    new autofill::AutofillAgent(render_frame,
+-                                std::move(password_autofill_agent),
+-                                std::move(password_generation_agent),
+-                                associated_interfaces);
+-    if (Issue779TraceEnabled()) {
+-      Issue779TraceAnnounce();
+-      LOG(INFO) << "[issue-779-trace] datalist_autofill"
+-                << " event=ShellContentRendererClient::RenderFrameCreated."
+-                   "autofill_installed"
+-                << " render_frame=" << static_cast<void*>(render_frame)
+-                << " associated_interfaces="
+-                << static_cast<void*>(associated_interfaces);
+-    }
+-  } else if (Issue779TraceEnabled()) {
+-    Issue779TraceAnnounce();
+-    LOG(INFO) << "[issue-779-trace] datalist_autofill"
+-              << " event=ShellContentRendererClient::RenderFrameCreated."
+-                 "autofill_skipped"
+-              << " reason=fenced_frame"
+-              << " render_frame=" << static_cast<void*>(render_frame);
+-  }
++  new ShellDatalistAutofillClient(render_frame);
+ }
+ 
+ bool ShellContentRendererClient::OverrideCreatePlugin(
+diff --git a/content/shell/renderer/shell_datalist_autofill_client.cc b/content/shell/renderer/shell_datalist_autofill_client.cc
+new file mode 100644
+index 0000000000..a92f96e782
+--- /dev/null
++++ b/content/shell/renderer/shell_datalist_autofill_client.cc
+@@ -0,0 +1,335 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/shell/renderer/shell_datalist_autofill_client.h"
++
++#include <cstdlib>
++#include <string>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/task/single_thread_task_runner.h"
++#include "content/public/renderer/render_frame.h"
++#include "third_party/blink/public/common/input/web_keyboard_event.h"
++#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_element.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++#include "third_party/blink/public/web/web_node.h"
++#include "third_party/blink/public/web/web_option_element.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/rect_f.h"
++
++namespace content {
++
++namespace {
++
++constexpr size_t kMaxStringLength = 1024;
++constexpr size_t kMaxListSize = 512;
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled "
++              << "component=shell-datalist-autofill-client";
++  }
++}
++
++std::u16string TruncateForIPC(std::u16string value) {
++  if (value.size() > kMaxStringLength) {
++    value.resize(kMaxStringLength);
++  }
++  return value;
++}
++
++void TrimStringVectorForIPC(std::vector<std::u16string>* strings) {
++  if (strings->size() > kMaxListSize) {
++    strings->resize(kMaxListSize);
++  }
++  for (auto& string : *strings) {
++    if (string.size() > kMaxStringLength) {
++      string.resize(kMaxStringLength);
++    }
++  }
++}
++
++void GetDataListSuggestions(const blink::WebInputElement& element,
++                            std::vector<std::u16string>* values,
++                            std::vector<std::u16string>* labels) {
++  for (const auto& option : element.FilteredDataListOptions()) {
++    if (!option.IsEnabled()) {
++      continue;
++    }
++    std::u16string value = option.Value().Utf16();
++    if (value.empty()) {
++      continue;
++    }
++    values->push_back(TruncateForIPC(std::move(value)));
++    std::u16string label = option.Label().Utf16();
++    if (label.empty()) {
++      label = option.GetText().Utf16();
++    }
++    if (label == values->back()) {
++      labels->emplace_back();
++    } else {
++      labels->push_back(TruncateForIPC(std::move(label)));
++    }
++  }
++
++  TrimStringVectorForIPC(values);
++  TrimStringVectorForIPC(labels);
++}
++
++std::string PreviewString(const std::vector<std::u16string>& strings) {
++  std::string result;
++  const size_t count = std::min<size_t>(strings.size(), 3);
++  for (size_t i = 0; i < count; ++i) {
++    if (i > 0) {
++      result += ",";
++    }
++    result += blink::WebString(strings[i]).Utf8();
++  }
++  return result;
++}
++
++}  // namespace
++
++ShellDatalistAutofillClient::ShellDatalistAutofillClient(
++    RenderFrame* render_frame)
++    : RenderFrameObserver(render_frame) {
++  render_frame->GetWebFrame()->SetAutofillClient(this);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=client_installed"
++              << " render_frame=" << render_frame;
++  }
++}
++
++ShellDatalistAutofillClient::~ShellDatalistAutofillClient() = default;
++
++void ShellDatalistAutofillClient::Shutdown() {
++  HidePopup();
++  receiver_.reset();
++  driver_.reset();
++  weak_ptr_factory_.InvalidateWeakPtrs();
++}
++
++void ShellDatalistAutofillClient::OnDestruct() {
++  Shutdown();
++  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
++                                                                this);
++}
++
++bool ShellDatalistAutofillClient::IsUserGesture() const {
++  return render_frame()->GetWebFrame()->HasTransientUserActivation();
++}
++
++void ShellDatalistAutofillClient::TextFieldDidEndEditing(
++    const blink::WebInputElement& element) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=text_field_did_end_editing";
++  }
++  HidePopup();
++}
++
++void ShellDatalistAutofillClient::TextFieldValueChanged(
++    const blink::WebFormControlElement& element) {
++  const bool user_triggered = IsUserGesture() || render_frame()->IsPasting();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=text_field_value_changed"
++              << " user_triggered=" << user_triggered
++              << " is_pasting=" << render_frame()->IsPasting();
++  }
++  if (!user_triggered) {
++    return;
++  }
++
++  weak_ptr_factory_.InvalidateWeakPtrs();
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&ShellDatalistAutofillClient::TextFieldValueChangedImpl,
++                     weak_ptr_factory_.GetWeakPtr(), element));
++}
++
++void ShellDatalistAutofillClient::TextFieldValueChangedImpl(
++    blink::WebFormControlElement element) {
++  ShowSuggestions(element, {.requires_caret_at_end = true});
++}
++
++void ShellDatalistAutofillClient::TextFieldDidReceiveKeyDown(
++    const blink::WebInputElement& element,
++    const blink::WebKeyboardEvent& event) {
++  const bool arrow_key = event.windows_key_code == ui::VKEY_DOWN ||
++                         event.windows_key_code == ui::VKEY_UP;
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=text_field_key_down"
++              << " windows_key_code=" << event.windows_key_code
++              << " arrow_key=" << arrow_key;
++  }
++  if (arrow_key) {
++    ShowSuggestions(element, {.autofill_on_empty_values = true,
++                              .requires_caret_at_end = true});
++  }
++}
++
++void ShellDatalistAutofillClient::OpenTextDataListChooser(
++    const blink::WebInputElement& element) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=open_text_datalist_chooser";
++  }
++  ShowSuggestions(element, {.autofill_on_empty_values = true});
++}
++
++void ShellDatalistAutofillClient::DataListOptionsChanged(
++    const blink::WebInputElement& element) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=datalist_options_changed"
++              << " focused=" << element.Focused();
++  }
++  if (!element.Focused()) {
++    return;
++  }
++  ShowSuggestions(element, {.requires_caret_at_end = true});
++}
++
++void ShellDatalistAutofillClient::ShowSuggestions(
++    const blink::WebFormControlElement& element,
++    const ShowSuggestionsOptions& options) {
++  if (!element.IsEnabled() || element.IsReadOnly()) {
++    HidePopup();
++    return;
++  }
++  if (!element.SuggestedValue().IsEmpty()) {
++    HidePopup();
++    return;
++  }
++
++  const blink::WebInputElement input_element =
++      element.DynamicTo<blink::WebInputElement>();
++  if (input_element.IsNull() || !input_element.IsTextField() ||
++      !input_element.SuggestedValue().IsEmpty()) {
++    HidePopup();
++    return;
++  }
++
++  const blink::WebString value = element.EditingValue();
++  if (value.length() > kMaxStringLength ||
++      (!options.autofill_on_empty_values && value.IsEmpty()) ||
++      (options.requires_caret_at_end &&
++       (element.SelectionStart() != element.SelectionEnd() ||
++        element.SelectionEnd() != value.length()))) {
++    HidePopup();
++    return;
++  }
++
++  std::vector<std::u16string> values;
++  std::vector<std::u16string> labels;
++  GetDataListSuggestions(input_element, &values, &labels);
++  if (values.empty()) {
++    HidePopup();
++    return;
++  }
++
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=suggestions_extracted"
++              << " option_count=" << values.size()
++              << " preview_values=" << PreviewString(values)
++              << " preview_labels=" << PreviewString(labels);
++  }
++  ShowPopup(element, values, labels);
++}
++
++void ShellDatalistAutofillClient::ShowPopup(
++    const blink::WebFormControlElement& element,
++    const std::vector<std::u16string>& values,
++    const std::vector<std::u16string>& labels) {
++  if (receiver_.is_bound()) {
++    receiver_.reset();
++  }
++  mojo::PendingRemote<mojom::ShellDatalistAutofillAgent> agent =
++      receiver_.BindNewPipeAndPassRemote();
++  const gfx::RectF bounds_in_window(
++      render_frame()->ConvertViewportToWindow(element.BoundsInWidget()));
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=show_popup_request"
++              << " option_count=" << values.size()
++              << " bounds_in_window=" << bounds_in_window.ToString();
++  }
++  GetDriver()->ShowDatalistPopup(bounds_in_window, values, labels,
++                                 std::move(agent));
++}
++
++void ShellDatalistAutofillClient::HidePopup() {
++  if (driver_) {
++    driver_->HideDatalistPopup();
++  }
++}
++
++const mojo::Remote<mojom::ShellDatalistAutofillDriver>&
++ShellDatalistAutofillClient::GetDriver() {
++  if (!driver_) {
++    render_frame()->GetBrowserInterfaceBroker().GetInterface(
++        driver_.BindNewPipeAndPassReceiver());
++  }
++  return driver_;
++}
++
++void ShellDatalistAutofillClient::AcceptDataListSuggestion(
++    const std::u16string& value) {
++  blink::WebElement element =
++      render_frame()->GetWebFrame()->GetDocument().FocusedElement();
++  const bool is_form_control = element.IsFormControlElement();
++  blink::WebInputElement input_element;
++  if (is_form_control) {
++    input_element = element.DynamicTo<blink::WebInputElement>();
++  }
++  const bool can_accept = !input_element.IsNull();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " boundary=shell_renderer"
++              << " event=accept_suggestion"
++              << " is_form_control=" << is_form_control
++              << " can_accept=" << can_accept
++              << " value=" << blink::WebString(value).Utf8();
++  }
++  if (!can_accept) {
++    return;
++  }
++  input_element.SetAutofillValue(blink::WebString(value));
++}
++
++}  // namespace content
+diff --git a/content/shell/renderer/shell_datalist_autofill_client.h b/content/shell/renderer/shell_datalist_autofill_client.h
+new file mode 100644
+index 0000000000..e2c0b884ae
+--- /dev/null
++++ b/content/shell/renderer/shell_datalist_autofill_client.h
+@@ -0,0 +1,76 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_SHELL_RENDERER_SHELL_DATALIST_AUTOFILL_CLIENT_H_
++#define CONTENT_SHELL_RENDERER_SHELL_DATALIST_AUTOFILL_CLIENT_H_
++
++#include <vector>
++
++#include "base/memory/weak_ptr.h"
++#include "content/public/renderer/render_frame_observer.h"
++#include "content/shell/common/datalist_autofill.mojom.h"
++#include "mojo/public/cpp/bindings/receiver.h"
++#include "mojo/public/cpp/bindings/remote.h"
++#include "third_party/blink/public/web/web_autofill_client.h"
++#include "third_party/blink/public/web/web_form_control_element.h"
++#include "third_party/blink/public/web/web_input_element.h"
++
++namespace blink {
++class WebKeyboardEvent;
++}
++
++namespace content {
++
++class ShellDatalistAutofillClient : private RenderFrameObserver,
++                                    private blink::WebAutofillClient,
++                                    private mojom::ShellDatalistAutofillAgent {
++ public:
++  explicit ShellDatalistAutofillClient(RenderFrame* render_frame);
++  ~ShellDatalistAutofillClient() override;
++
++  ShellDatalistAutofillClient(const ShellDatalistAutofillClient&) = delete;
++  ShellDatalistAutofillClient& operator=(const ShellDatalistAutofillClient&) =
++      delete;
++
++ private:
++  struct ShowSuggestionsOptions {
++    bool autofill_on_empty_values = false;
++    bool requires_caret_at_end = false;
++  };
++
++  void Shutdown();
++  bool IsUserGesture() const;
++  void HidePopup();
++  void ShowSuggestions(const blink::WebFormControlElement& element,
++                       const ShowSuggestionsOptions& options);
++  void ShowPopup(const blink::WebFormControlElement& element,
++                 const std::vector<std::u16string>& values,
++                 const std::vector<std::u16string>& labels);
++  const mojo::Remote<mojom::ShellDatalistAutofillDriver>& GetDriver();
++
++  // RenderFrameObserver:
++  void OnDestruct() override;
++
++  // blink::WebAutofillClient:
++  void TextFieldDidEndEditing(const blink::WebInputElement& element) override;
++  void TextFieldValueChanged(
++      const blink::WebFormControlElement& element) override;
++  void TextFieldValueChangedImpl(blink::WebFormControlElement element);
++  void TextFieldDidReceiveKeyDown(
++      const blink::WebInputElement& element,
++      const blink::WebKeyboardEvent& event) override;
++  void OpenTextDataListChooser(const blink::WebInputElement& element) override;
++  void DataListOptionsChanged(const blink::WebInputElement& element) override;
++
++  // mojom::ShellDatalistAutofillAgent:
++  void AcceptDataListSuggestion(const std::u16string& value) override;
++
++  mojo::Remote<mojom::ShellDatalistAutofillDriver> driver_;
++  mojo::Receiver<mojom::ShellDatalistAutofillAgent> receiver_{this};
++  base::WeakPtrFactory<ShellDatalistAutofillClient> weak_ptr_factory_{this};
++};
++
++}  // namespace content
++
++#endif  // CONTENT_SHELL_RENDERER_SHELL_DATALIST_AUTOFILL_CLIENT_H_
+-- 
+2.54.0
+

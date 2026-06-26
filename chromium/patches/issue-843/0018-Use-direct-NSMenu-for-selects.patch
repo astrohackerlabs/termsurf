@@ -1,0 +1,140 @@
+From 39b91ac0bf1cfcde281608280e37ae24ea3e3d06 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 07:51:11 -0500
+Subject: [PATCH 18/87] Use direct NSMenu for selects
+
+The popup cell shifted left with pride,
+So menus took a straighter ride.
+No button-cell shim, no sideways stroll,
+Just NSMenu at the control.
+---
+ .../web_menu_runner_mac.mm                    | 61 +++++++++++--------
+ 1 file changed, 37 insertions(+), 24 deletions(-)
+
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index 8b39c968b8..32a5d07471 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -41,6 +41,10 @@ std::string Issue779NSRectToString(NSRect rect) {
+   return base::SysNSStringToUTF8(NSStringFromRect(rect));
+ }
+ 
++std::string Issue779NSPointToString(NSPoint point) {
++  return base::SysNSStringToUTF8(NSStringFromPoint(point));
++}
++
+ std::string Issue779TopLeftScreenRectToString(NSRect rect, NSScreen* screen) {
+   if (!screen) {
+     return "null";
+@@ -388,29 +392,15 @@ void Issue779TraceShellWindowState(NSString* boundary,
+   // of the menu position of the reland, so be sure to not regress menu
+   // positioning in that case (https://crbug.com/404294118).
+ 
+-  // Set up the button cell, converting to NSView coordinates. The menu is
+-  // positioned such that the currently selected menu item appears over the
+-  // popup button, which is the expected Mac popup menu behavior.
+-  NSPopUpButtonCell* cell = [[NSPopUpButtonCell alloc] initTextCell:@""
+-                                                          pullsDown:NO];
+-  cell.menu = _menu;
+-  // Use -selectItemWithTag: so if the index is out-of-bounds nothing bad
+-  // happens.
++  // Mark the initially selected item for the direct NSMenu experiment.
+   if (index > -1) {
+-    [cell selectItemWithTag:index];
+-  } else {
+-    // If the select element doesn't have any options selected, then index will
+-    // be -1. In this case, selectItemWithTag would make the first option look
+-    // checked, but selectItemAtIndex lets us open the picker with no options
+-    // checked. Not calling anything here would also leave the first item
+-    // checked, we have to explicitly uncheck them by calling selectItemAtIndex
+-    // with -1. https://issues.chromium.org/issues/391648151
+-    [cell selectItemAtIndex:-1];
++    for (NSMenuItem* item in _menu.itemArray) {
++      item.state =
++          item.tag == index ? NSControlStateValueOn : NSControlStateValueOff;
++    }
+   }
+ 
+   if (_rightAligned) {
+-    cell.userInterfaceLayoutDirection =
+-        NSUserInterfaceLayoutDirectionRightToLeft;
+     _menu.userInterfaceLayoutDirection =
+         NSUserInterfaceLayoutDirectionRightToLeft;
+   }
+@@ -431,6 +421,7 @@ void Issue779TraceShellWindowState(NSString* boundary,
+   // repositioned relative to that.
+   NSView* fakeControlView = [[NSView alloc] initWithFrame:bounds];
+   [view addSubview:fakeControlView];
++  NSPoint directMenuLocation = NSMakePoint(0, NSHeight(fakeControlView.bounds));
+   if (Issue779TraceEnabled()) {
+     NSRect fakeWindowBounds =
+         [fakeControlView convertRect:fakeControlView.bounds toView:nil];
+@@ -463,7 +454,14 @@ void Issue779TraceShellWindowState(NSString* boundary,
+                 : std::string("null"))
+         << " attach_popup_frame="
+         << Issue779NSRectToString(fakeControlView.bounds)
+-        << " attach_popup_frame_space=view-local"
++        << " attach_popup_frame_space=fake-control-local"
++        << " appkit_menu_api=direct_nsmenu"
++        << " positioning_item_index=none"
++        << " direct_menu_location="
++        << Issue779NSPointToString(directMenuLocation)
++        << " direct_menu_location_space=fake-control-local"
++        << " visible_menu_top_left=unavailable-appkit-owned"
++        << " known_direct_api_width_risk=true"
+         << " right_aligned=" << static_cast<bool>(_rightAligned)
+         << " final_popup_top_left=unavailable-appkit-owned";
+   }
+@@ -475,7 +473,12 @@ void Issue779TraceShellWindowState(NSString* boundary,
+               << " control=select"
+               << " boundary=appkit-open"
+               << " outcome=entered"
+-              << " reason=before_attach_popup"
++              << " reason=before_direct_nsmenu"
++              << " appkit_menu_api=direct_nsmenu"
++              << " positioning_item_index=none"
++              << " direct_menu_location="
++              << Issue779NSPointToString(directMenuLocation)
++              << " direct_menu_location_space=fake-control-local"
+               << " runner=" << (__bridge void*)self
+               << " view=" << (__bridge void*)view
+               << " window=" << (__bridge void*)view.window
+@@ -492,8 +495,11 @@ void Issue779TraceShellWindowState(NSString* boundary,
+               << " firstResponder=" << Issue779FirstResponder(view.window)
+               << " currentEvent=" << Issue779CurrentEventType();
+   }
+-  [cell attachPopUpWithFrame:fakeControlView.bounds inView:fakeControlView];
+-  [cell performClickWithFrame:fakeControlView.bounds inView:fakeControlView];
++  // TermSurf issue 783 experiment 6 intentionally uses the direct NSMenu API
++  // despite upstream width/truncation concerns, to isolate final x placement.
++  [_menu popUpMenuPositioningItem:nil
++                       atLocation:directMenuLocation
++                           inView:fakeControlView];
+   [view.window setIgnoresMouseEvents:YES];
+   Issue779TraceShellWindowState(@"select_menu", @"after_return", view, self);
+   if (Issue779TraceEnabled()) {
+@@ -517,13 +523,20 @@ void Issue779TraceShellWindowState(NSString* boundary,
+               << (view.window ? static_cast<bool>(view.window.isVisible)
+                               : false)
+               << " app_is_active=" << static_cast<bool>(NSApp.isActive)
++              << " appkit_menu_api=direct_nsmenu"
++              << " positioning_item_index=none"
++              << " direct_menu_location="
++              << Issue779NSPointToString(directMenuLocation)
++              << " direct_menu_location_space=fake-control-local"
++              << " known_direct_api_width_risk=true"
+               << " firstResponder=" << Issue779FirstResponder(view.window)
+               << " currentEvent=" << Issue779CurrentEventType();
+     LOG(INFO) << "[issue-779-trace] native_popup_attempt"
+               << " control=select"
+               << " boundary=appkit-open"
+               << " outcome=closed"
+-              << " reason=perform_click_returned"
++              << " reason=direct_nsmenu_returned"
++              << " appkit_menu_api=direct_nsmenu"
+               << " runner=" << (__bridge void*)self
+               << " view=" << (__bridge void*)view
+               << " window=" << (__bridge void*)view.window
+-- 
+2.54.0
+

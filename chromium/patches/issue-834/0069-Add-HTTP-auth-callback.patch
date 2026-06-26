@@ -1,7 +1,7 @@
 From 895ee8fcf78b82d06c7bb507f4463cb70e232220 Mon Sep 17 00:00:00 2001
 From: "Ryan X. Charles" <ryan@ryanxcharles.com>
 Date: Sat, 30 May 2026 20:49:23 -0500
-Subject: [PATCH 69/84] Add HTTP auth callback
+Subject: [PATCH 69/85] Add HTTP auth callback
 
 A realm asked, "Who goes there?"
 We answered through terminal air.

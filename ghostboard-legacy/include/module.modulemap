@@ -1,7 +1,0 @@
-// This makes TermSurf available to the XCode build for the macOS app.
-// We append "Kit" to it not to be cute, but because targets have to have
-// unique names and we use TermSurf for other things.
-module TermSurfKit {
-    umbrella header "termsurf.h"
-    export *
-}

@@ -222,11 +222,23 @@ extension Ghostty {
         // Timer to remove TermSurf copy-current-URL feedback
         private var termsurfCopyUrlFeedbackTimer: Timer?
 
+        private struct TermSurfOverlayRequest {
+            let contextID: UInt64
+            let col: UInt64
+            let row: UInt64
+            let width: UInt64
+            let height: UInt64
+            let pixelWidth: UInt64
+            let pixelHeight: UInt64
+        }
+
         private var termsurfOverlayRootLayer: CALayer?
         private var termsurfOverlayPositioningLayer: CALayer?
         private var termsurfOverlayHostLayer: CALayer?
         private var termsurfOverlayContextID: UInt64 = 0
         private var termsurfOverlayFrame: CGRect?
+        private var termsurfActiveOverlay: TermSurfOverlayRequest?
+        private var termsurfDeferredOverlay: TermSurfOverlayRequest?
         private var termsurfPressedBrowserKeys: Set<UInt16> = []
         private var termsurfCursorType: Int64 = 0
         private var termsurfMouseOverOverlay: Bool = false
@@ -501,6 +513,14 @@ extension Ghostty {
             dispatchPrecondition(condition: .onQueue(.main))
             let grid = "\(width)x\(height)+\(col)+\(row)"
             let browserPixel = "\(pixelWidth)x\(pixelHeight)"
+            let request = TermSurfOverlayRequest(
+                contextID: contextID,
+                col: col,
+                row: row,
+                width: width,
+                height: height,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight)
 
             guard contextID != 0 else {
                 AppDelegate.logger.warning("TermSurf overlay rejected: context id is zero")
@@ -513,6 +533,19 @@ extension Ghostty {
                 return
             }
 
+            guard isTermSurfSelectedTab else {
+                termsurfDeferredOverlay = request
+                removeTermSurfOverlayLayers(resetDeferred: false)
+                termSurfLogGeometry(
+                    event: "present_deferred",
+                    grid: grid,
+                    browserPixel: browserPixel,
+                    contextID: contextID,
+                    note: "inactive-tab")
+                return
+            }
+
+            termsurfDeferredOverlay = nil
             wantsLayer = true
             guard let surfaceLayer = layer else {
                 AppDelegate.logger.warning("TermSurf overlay rejected: surface has no backing layer")
@@ -525,25 +558,45 @@ extension Ghostty {
                 return
             }
 
+            termsurfActiveOverlay = nil
+            if applyTermSurfOverlay(
+                request,
+                surfaceLayer: surfaceLayer,
+                event: "presented",
+                pixelEventNote: "reported-presented-pixels",
+                geometryNote: "overlay-presented") {
+                termsurfActiveOverlay = request
+            }
+        }
+
+        private func applyTermSurfOverlay(
+            _ request: TermSurfOverlayRequest,
+            surfaceLayer: CALayer,
+            event: String,
+            pixelEventNote: String,
+            geometryNote: String
+        ) -> Bool {
+            let grid = "\(request.width)x\(request.height)+\(request.col)+\(request.row)"
+            let browserPixel = "\(request.pixelWidth)x\(request.pixelHeight)"
             let cellWidth = cellSize.width > 0 ? cellSize.width : 10
             let cellHeight = cellSize.height > 0 ? cellSize.height : 20
             let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
             let paddingLeft = surfaceSize.map { CGFloat($0.padding_left_px) / backingScale } ?? 0
             let paddingTop = surfaceSize.map { CGFloat($0.padding_top_px) / backingScale } ?? 0
             let frame = CGRect(
-                x: paddingLeft + CGFloat(col) * cellWidth,
-                y: paddingTop + CGFloat(row) * cellHeight,
-                width: CGFloat(width) * cellWidth,
-                height: CGFloat(height) * cellHeight)
+                x: paddingLeft + CGFloat(request.col) * cellWidth,
+                y: paddingTop + CGFloat(request.row) * cellHeight,
+                width: CGFloat(request.width) * cellWidth,
+                height: CGFloat(request.height) * cellHeight)
             guard frame.width > 0, frame.height > 0 else {
                 AppDelegate.logger.warning("TermSurf overlay rejected: empty frame")
                 termSurfLogGeometry(
                     event: "present_rejected",
                     grid: grid,
                     browserPixel: browserPixel,
-                    contextID: contextID,
+                    contextID: request.contextID,
                     note: "empty-frame")
-                return
+                return false
             }
 
             CATransaction.begin()
@@ -573,7 +626,7 @@ extension Ghostty {
             positioning.frame = frame
             termsurfOverlayFrame = frame
 
-            if termsurfOverlayHostLayer == nil || termsurfOverlayContextID != contextID {
+            if termsurfOverlayHostLayer == nil || termsurfOverlayContextID != request.contextID {
                 termsurfOverlayHostLayer?.removeFromSuperlayer()
                 guard let hostClass = NSClassFromString("CALayerHost") as? CALayer.Type else {
                     AppDelegate.logger.warning("TermSurf overlay rejected: CALayerHost unavailable")
@@ -581,17 +634,17 @@ extension Ghostty {
                         event: "present_rejected",
                         grid: grid,
                         browserPixel: browserPixel,
-                        contextID: contextID,
+                        contextID: request.contextID,
                         note: "calayerhost-unavailable")
-                    return
+                    return false
                 }
                 let host = hostClass.init()
                 host.name = "TermSurfOverlayHost"
                 host.anchorPoint = .zero
-                host.setValue(NSNumber(value: contextID), forKey: "contextId")
+                host.setValue(NSNumber(value: request.contextID), forKey: "contextId")
                 positioning.addSublayer(host)
                 termsurfOverlayHostLayer = host
-                termsurfOverlayContextID = contextID
+                termsurfOverlayContextID = request.contextID
             }
 
             termsurfOverlayHostLayer?.frame = CGRect(origin: .zero, size: frame.size)
@@ -599,13 +652,13 @@ extension Ghostty {
             let appkitPixelWidth = UInt64((frame.width * backingScale).rounded())
             let appkitPixelHeight = UInt64((frame.height * backingScale).rounded())
             termSurfLogGeometry(
-                event: "presented",
+                event: event,
                 grid: grid,
                 browserPixel: browserPixel,
-                contextID: contextID,
-                note: "overlay-presented")
+                contextID: request.contextID,
+                note: geometryNote)
             termsurfLogGeometry(
-                "layer=appkit event=presented_pixels scenario=\(termsurfGeometryScenario()) identity=\(termSurfGeometryIdentity()) grid=\(grid) browser_pixel=\(browserPixel) appkit_pixel=\(appkitPixelWidth)x\(appkitPixelHeight) backing_scale=\(backingScale) context_id=\(contextID) visible=true note=reported-presented-pixels")
+                "layer=appkit event=presented_pixels scenario=\(termsurfGeometryScenario()) identity=\(termSurfGeometryIdentity()) grid=\(grid) browser_pixel=\(browserPixel) appkit_pixel=\(appkitPixelWidth)x\(appkitPixelHeight) backing_scale=\(backingScale) context_id=\(request.contextID) visible=true note=\(pixelEventNote)")
             id.uuidString.withCString { paneIDPointer in
                 termsurf_overlay_presented_pixels(
                     paneIDPointer,
@@ -615,14 +668,48 @@ extension Ghostty {
             }
 
             AppDelegate.logger.info(
-                "TermSurf overlay presented pane_id=\(self.id.uuidString) context_id=\(contextID) frame=\(NSStringFromRect(frame)) pixel=\(pixelWidth)x\(pixelHeight)")
+                "TermSurf overlay presented pane_id=\(self.id.uuidString) context_id=\(request.contextID) frame=\(NSStringFromRect(frame)) pixel=\(request.pixelWidth)x\(request.pixelHeight)")
             fputs(
-                "TermSurf overlay presented pane_id=\(self.id.uuidString) context_id=\(contextID) frame=\(NSStringFromRect(frame)) pixel=\(pixelWidth)x\(pixelHeight)\n",
+                "TermSurf overlay presented pane_id=\(self.id.uuidString) context_id=\(request.contextID) frame=\(NSStringFromRect(frame)) pixel=\(request.pixelWidth)x\(request.pixelHeight)\n",
                 stderr)
+            return true
+        }
+
+        private func replayActiveTermSurfOverlayAfterFrameResize() {
+            dispatchPrecondition(condition: .onQueue(.main))
+            guard let request = termsurfActiveOverlay else { return }
+            guard termsurfOverlayRootLayer != nil,
+                  termsurfOverlayPositioningLayer != nil,
+                  termsurfOverlayHostLayer != nil
+            else { return }
+            guard let surfaceLayer = layer else { return }
+
+            _ = applyTermSurfOverlay(
+                request,
+                surfaceLayer: surfaceLayer,
+                event: "presented_replay",
+                pixelEventNote: "reported-presented-pixels-frame-size-replay",
+                geometryNote: "overlay-presented-frame-size-replay")
         }
 
         func clearTermSurfOverlay() {
             termSurfLogGeometry(event: "clear", note: "clearing-overlay")
+            removeTermSurfOverlayLayers(resetDeferred: true)
+            termsurfPressedBrowserKeys.removeAll()
+            termsurfCursorType = 0
+            termsurfMouseOverOverlay = false
+            NSCursor.arrow.set()
+            AppDelegate.logger.info("TermSurf overlay cleared pane_id=\(self.id.uuidString)")
+            fputs("TermSurf overlay cleared pane_id=\(self.id.uuidString)\n", stderr)
+        }
+
+        private var isTermSurfSelectedTab: Bool {
+            guard let window else { return false }
+            guard let selected = window.tabGroup?.selectedWindow else { return true }
+            return selected === window
+        }
+
+        private func removeTermSurfOverlayLayers(resetDeferred: Bool) {
             termsurfOverlayHostLayer?.removeFromSuperlayer()
             termsurfOverlayPositioningLayer?.removeFromSuperlayer()
             termsurfOverlayRootLayer?.removeFromSuperlayer()
@@ -631,12 +718,31 @@ extension Ghostty {
             termsurfOverlayRootLayer = nil
             termsurfOverlayContextID = 0
             termsurfOverlayFrame = nil
-            termsurfPressedBrowserKeys.removeAll()
-            termsurfCursorType = 0
-            termsurfMouseOverOverlay = false
-            NSCursor.arrow.set()
-            AppDelegate.logger.info("TermSurf overlay cleared pane_id=\(self.id.uuidString)")
-            fputs("TermSurf overlay cleared pane_id=\(self.id.uuidString)\n", stderr)
+            termsurfActiveOverlay = nil
+            if resetDeferred {
+                termsurfDeferredOverlay = nil
+            }
+        }
+
+        private func restoreDeferredTermSurfOverlayIfSelected(reason: String) {
+            dispatchPrecondition(condition: .onQueue(.main))
+            guard isTermSurfSelectedTab else { return }
+            guard let request = termsurfDeferredOverlay else { return }
+            termSurfLogGeometry(
+                event: "present_deferred_restore",
+                grid: "\(request.width)x\(request.height)+\(request.col)+\(request.row)",
+                browserPixel: "\(request.pixelWidth)x\(request.pixelHeight)",
+                contextID: request.contextID,
+                note: reason)
+            termsurfDeferredOverlay = nil
+            presentTermSurfOverlay(
+                contextID: request.contextID,
+                col: request.col,
+                row: request.row,
+                width: request.width,
+                height: request.height,
+                pixelWidth: request.pixelWidth,
+                pixelHeight: request.pixelHeight)
         }
 
         func setTermSurfCursor(type: Int64) {
@@ -661,6 +767,9 @@ extension Ghostty {
             self.focused = focused
             id.uuidString.withCString { paneID in
                 termsurf_pane_focus_changed(paneID, focused ? 1 : 0)
+            }
+            if focused {
+                restoreDeferredTermSurfOverlayIfSelected(reason: "focus-did-change")
             }
 
             // If we lost our focus then remove the mouse event suppression so
@@ -1045,11 +1154,15 @@ extension Ghostty {
         override func setFrameSize(_ newSize: NSSize) {
             super.setFrameSize(newSize)
             termSurfLogGeometry(event: "frame_size_changed", note: "view-frame-size-changed")
+            replayActiveTermSurfOverlayAfterFrameResize()
         }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             termSurfLogGeometry(event: "view_moved_to_window", note: "window-membership-changed")
+            if window == nil && (termsurfOverlayRootLayer != nil || termsurfDeferredOverlay != nil || termsurfOverlayContextID != 0) {
+                clearTermSurfOverlay()
+            }
         }
 
         override func viewDidHide() {
@@ -1139,9 +1252,13 @@ extension Ghostty {
         }
 
         override func mouseDown(with event: NSEvent) {
-            if forwardTermSurfMouseEvent(event, type: "down", button: "left") {
-                Ghostty.moveFocus(to: self)
+            if let point = termSurfOverlayPoint(for: event) {
+                if forwardTermSurfMouseEvent(event, type: "down", button: "left", point: point) {
+                    Ghostty.moveFocus(to: self)
+                }
                 return
+            } else {
+                notifyTermSurfOverlayMissedLeftClick()
             }
 
             guard let surface = self.surface else { return }
@@ -1867,7 +1984,7 @@ extension Ghostty {
             }
 
             switch event.keyCode {
-            case 0x21, 0x1E, 0x0F:
+            case 0x21, 0x1E, 0x1B, 0x0F:
                 return true
             default:
                 return false
@@ -1905,9 +2022,10 @@ extension Ghostty {
         private func forwardTermSurfMouseEvent(
             _ event: NSEvent,
             type: String,
-            button: String
+            button: String,
+            point providedPoint: TermSurfOverlayPoint? = nil
         ) -> Bool {
-            guard let point = termSurfOverlayPoint(for: event) else { return false }
+            guard let point = providedPoint ?? termSurfOverlayPoint(for: event) else { return false }
 
             let paneID = id.uuidString
             let modifiers = termSurfModifiers(event.modifierFlags, pressedButtons: true)
@@ -1934,6 +2052,13 @@ extension Ghostty {
                     note: "kind=event ns_event=\(event.type.rawValue) type=\(type) button=\(button) click_count=\(max(event.clickCount, 1)) modifiers=\(modifiers) terminal_fallback=false")
             }
             return forwarded != 0
+        }
+
+        private func notifyTermSurfOverlayMissedLeftClick() {
+            let paneID = id.uuidString
+            paneID.withCString { paneIDPointer in
+                termsurf_overlay_missed_left_click(paneIDPointer)
+            }
         }
 
         private func forwardTermSurfMouseMove(_ event: NSEvent) -> Bool {
@@ -2074,6 +2199,16 @@ extension Ghostty {
             case 0x1A: return 0x37
             case 0x1C: return 0x38
             case 0x19: return 0x39
+            case 0x52: return 0x30
+            case 0x53: return 0x31
+            case 0x54: return 0x32
+            case 0x55: return 0x33
+            case 0x56: return 0x34
+            case 0x57: return 0x35
+            case 0x58: return 0x36
+            case 0x59: return 0x37
+            case 0x5B: return 0x38
+            case 0x5C: return 0x39
             case 0x24, 0x4C: return 0x0D
             case 0x30: return 0x09
             case 0x33: return 0x08

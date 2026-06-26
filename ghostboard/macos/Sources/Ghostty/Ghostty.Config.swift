@@ -1,4 +1,3 @@
-import Foundation
 import SwiftUI
 import GhosttyKit
 
@@ -504,56 +503,10 @@ extension Ghostty {
             return v
         }
 
-        private static func color(from color: ghostty_config_color_s) -> Color {
-            .init(
-                red: Double(color.r) / 255,
-                green: Double(color.g) / 255,
-                blue: Double(color.b) / 255
-            )
-        }
-
-        private func configColor(for key: String) -> ghostty_config_color_s? {
-            guard let config = self.config else { return nil }
-
-            var color: ghostty_config_color_s = .init()
-            guard ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
-            return color
-        }
-
-        private func paletteColor(at index: Int) -> ghostty_config_color_s? {
-            guard let config = self.config, index >= 0, index < 256 else { return nil }
-
-            var palette: ghostty_config_palette_s = .init()
-            let key = "palette"
-            guard ghostty_config_get(config, &palette, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
-
-            return withUnsafeBytes(of: palette.colors) { rawBuffer in
-                let colors = rawBuffer.bindMemory(to: ghostty_config_color_s.self)
-                return colors[index]
-            }
-        }
-
-        private static func relativeLuminance(_ color: ghostty_config_color_s) -> Double {
-            func channel(_ value: UInt8) -> Double {
-                let normalized = Double(value) / 255
-                return normalized <= 0.03928
-                    ? normalized / 12.92
-                    : pow((normalized + 0.055) / 1.055, 2.4)
-            }
-
-            return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
-        }
-
-        private static func contrastRatio(_ lhs: ghostty_config_color_s, _ rhs: ghostty_config_color_s) -> Double {
-            let lhsLuminance = relativeLuminance(lhs)
-            let rhsLuminance = relativeLuminance(rhs)
-            let lighter = max(lhsLuminance, rhsLuminance)
-            let darker = min(lhsLuminance, rhsLuminance)
-            return (lighter + 0.05) / (darker + 0.05)
-        }
-
         var backgroundColor: Color {
-            guard let color = configColor(for: "background") else {
+            var color: ghostty_config_color_s = .init()
+            let bg_key = "background"
+            if !ghostty_config_get(config, &color, bg_key, UInt(bg_key.lengthOfBytes(using: .utf8))) {
 #if os(macOS)
                 return Color(NSColor.windowBackgroundColor)
 #elseif os(iOS)
@@ -563,7 +516,11 @@ extension Ghostty {
 #endif
             }
 
-            return Self.color(from: color)
+            return .init(
+                red: Double(color.r) / 255,
+                green: Double(color.g) / 255,
+                blue: Double(color.b) / 255
+            )
         }
 
         var backgroundOpacity: Double {
@@ -600,7 +557,11 @@ extension Ghostty {
                 _ = ghostty_config_get(config, &color, bg_key, UInt(bg_key.lengthOfBytes(using: .utf8)))
             }
 
-            return Self.color(from: color)
+            return .init(
+                red: Double(color.r) / 255,
+                green: Double(color.g) / 255,
+                blue: Double(color.b) / 255
+            )
         }
 
         var splitDividerColor: Color {
@@ -616,40 +577,39 @@ extension Ghostty {
                 return Color(newColor)
             }
 
-            return Self.color(from: color)
+            return .init(
+                red: Double(color.r) / 255,
+                green: Double(color.g) / 255,
+                blue: Double(color.b) / 255
+            )
         }
 
         var focusedSplitBorderColor: Color? {
-            if let color = configColor(for: "focused-split-border-color") {
-                return Self.color(from: color)
+            guard let config = self.config else { return nil }
+            var color: ghostty_config_color_s = .init()
+            let key = "focused-split-border-color"
+            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+                return nil
             }
-
-            guard
-                let background = configColor(for: "background"),
-                let palette6 = paletteColor(at: 6)
-            else { return nil }
-
-            if Self.contrastRatio(background, palette6) >= 2.0 {
-                return Self.color(from: palette6)
-            }
-
-            let fallback = [14, 4, 12]
-                .compactMap { index -> (color: ghostty_config_color_s, contrast: Double)? in
-                    guard let color = paletteColor(at: index) else { return nil }
-                    return (color, Self.contrastRatio(background, color))
-                }
-                .max { lhs, rhs in lhs.contrast < rhs.contrast }
-
-            return fallback.map { Self.color(from: $0.color) } ?? Self.color(from: palette6)
+            return .init(
+                red: Double(color.r) / 255,
+                green: Double(color.g) / 255,
+                blue: Double(color.b) / 255
+            )
         }
 
         var unfocusedSplitBorderColor: Color? {
-            if let color = configColor(for: "unfocused-split-border-color") {
-                return Self.color(from: color)
+            guard let config = self.config else { return nil }
+            var color: ghostty_config_color_s = .init()
+            let key = "unfocused-split-border-color"
+            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+                return nil
             }
-
-            guard let color = paletteColor(at: 8) else { return nil }
-            return Self.color(from: color)
+            return .init(
+                red: Double(color.r) / 255,
+                green: Double(color.g) / 255,
+                blue: Double(color.b) / 255
+            )
         }
 
         var splitBorderWidth: Double {

@@ -9,16 +9,35 @@ Rust FFI shape.
 
 ## Build
 
-Build WebKit first:
+Build WebKit first with the repository helper:
 
 ```bash
-webkit/src/Tools/Scripts/build-webkit --debug
+scripts/build.sh webkit
 ```
 
 Then build the library and smoke test:
 
 ```bash
-surfari/libtermsurf_webkit/build.sh
+scripts/build.sh surfari-lib
+```
+
+To build the wrapper and Rust Surfari binary together:
+
+```bash
+scripts/build.sh surfari
+```
+
+Release builds use the matching Release WebKit output:
+
+```bash
+scripts/build.sh webkit --release
+scripts/build.sh surfari --release
+```
+
+The direct wrapper command remains available when needed:
+
+```bash
+surfari/libtermsurf_webkit/build.sh --configuration Debug
 ```
 
 Outputs:

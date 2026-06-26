@@ -129,7 +129,6 @@ struct ConsoleLogEntry {
     message: String,
     line_no: i32,
     source_id: String,
-    received_at: Instant,
 }
 
 #[derive(Clone)]
@@ -139,7 +138,6 @@ struct RendererCrashState {
     termination_status_code: i32,
     url: String,
     can_reload: bool,
-    received_at: Instant,
 }
 
 // Loading screen stages (Issue 773).
@@ -596,7 +594,6 @@ fn main() -> io::Result<()> {
                 &pending_auth,
                 copy_url_feedback_until,
                 &loading_log,
-                &console_log,
                 &renderer_crash,
                 browser_ready,
                 chromium_wait_start,
@@ -605,6 +602,22 @@ fn main() -> io::Result<()> {
         })?;
         if let Some(trace) = state_trace.as_mut() {
             let latest_console = console_log.last();
+            let latest_console_summary = latest_console
+                .map(|entry| {
+                    format!(
+                        "{}:{} #{} {} {}",
+                        entry
+                            .source_id
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&entry.source_id),
+                        entry.line_no,
+                        entry.tab_id,
+                        entry.level,
+                        entry.message
+                    )
+                })
+                .unwrap_or_default();
             let (
                 renderer_crash_active,
                 renderer_crash_tab_id,
@@ -640,9 +653,7 @@ fn main() -> io::Result<()> {
                 renderer_crash_tab_id,
                 renderer_crash_status,
                 renderer_crash_can_reload,
-                latest_console
-                    .map(|entry| entry.message.as_str())
-                    .unwrap_or_default(),
+                latest_console_summary,
                 identity_label,
                 browser_label,
                 profile,
@@ -664,12 +675,7 @@ fn main() -> io::Result<()> {
                         ("renderer_crash_tab_id", renderer_crash_tab_id),
                         ("renderer_crash_status", renderer_crash_status),
                         ("renderer_crash_can_reload", renderer_crash_can_reload),
-                        (
-                            "latest_console",
-                            latest_console
-                                .map(|entry| entry.message.clone())
-                                .unwrap_or_default(),
-                        ),
+                        ("latest_console", latest_console_summary),
                         ("identity_label", identity_label),
                         ("browser_label", browser_label.to_string()),
                         ("profile", profile.clone()),
@@ -1214,6 +1220,24 @@ fn main() -> io::Result<()> {
                         } else {
                             Mode::Control
                         };
+                        if let Some(trace) = state_trace.as_mut() {
+                            let mode_name = match mode {
+                                Mode::Browse => "browse",
+                                Mode::Control => "control",
+                                Mode::Edit => "edit",
+                                Mode::Command => "command",
+                                Mode::Dialog => "dialog",
+                                Mode::Auth => "auth",
+                            };
+                            trace.write(
+                                "mode_changed",
+                                &[
+                                    ("source", "gui".to_string()),
+                                    ("browsing", browsing.to_string()),
+                                    ("mode", mode_name.to_string()),
+                                ],
+                            );
+                        }
                     }
                     ipc::CompositorMessage::UrlChanged { url: new_url } => {
                         url = new_url;
@@ -1311,7 +1335,6 @@ fn main() -> io::Result<()> {
                             message,
                             line_no,
                             source_id,
-                            received_at: Instant::now(),
                         });
                         if console_log.len() > 100 {
                             let drain_count = console_log.len() - 100;
@@ -1346,7 +1369,6 @@ fn main() -> io::Result<()> {
                             termination_status_code,
                             url,
                             can_reload,
-                            received_at: Instant::now(),
                         });
                     }
                     ipc::CompositorMessage::BrowserReady {
@@ -1603,48 +1625,6 @@ fn viewport_identity_label(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BrowserChromeLayout {
-    viewport_area: Rect,
-    viewport_inner: Rect,
-    url_area: Rect,
-    status_area: Rect,
-}
-
-fn viewport_inner_rect(viewport_area: Rect) -> Rect {
-    Block::default().borders(Borders::ALL).inner(viewport_area)
-}
-
-fn browser_chrome_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserChromeLayout {
-    let (url_area, status_area, viewport_area) = if let Some(rows) = viewport_height_override {
-        let available = area.height.saturating_sub(4);
-        let viewport_height = rows.saturating_add(2).clamp(1, available.max(1));
-        let layout = Layout::vertical([
-            Constraint::Length(3),               // URL bar
-            Constraint::Length(1),               // Status bar
-            Constraint::Length(viewport_height), // Viewport override
-            Constraint::Min(0),                  // Filler
-        ])
-        .split(area);
-        (layout[0], layout[1], layout[2])
-    } else {
-        let layout = Layout::vertical([
-            Constraint::Length(3), // URL bar (1 line + top/bottom border)
-            Constraint::Length(1), // Status bar
-            Constraint::Min(1),    // Viewport (fill remaining)
-        ])
-        .split(area);
-        (layout[0], layout[1], layout[2])
-    };
-
-    BrowserChromeLayout {
-        viewport_area,
-        viewport_inner: viewport_inner_rect(viewport_area),
-        url_area,
-        status_area,
-    }
-}
-
 /// Render the UI and return the viewport inner rect (grid coordinates).
 fn ui(
     frame: &mut Frame,
@@ -1664,7 +1644,6 @@ fn ui(
     pending_auth: &Option<PendingHttpAuth>,
     copy_url_feedback_until: Option<Instant>,
     loading_log: &[(LoadingStage, StageStatus)],
-    console_log: &[ConsoleLogEntry],
     renderer_crash: &Option<RendererCrashState>,
     browser_ready: bool,
     chromium_wait_start: Option<Instant>,
@@ -1676,10 +1655,26 @@ fn ui(
         frame.area(),
     );
 
-    let chrome_layout = browser_chrome_layout(frame.area(), viewport_height_override);
-    let viewport_area = chrome_layout.viewport_area;
-    let url_area = chrome_layout.url_area;
-    let status_area = chrome_layout.status_area;
+    let (viewport_area, url_area, status_area) = if let Some(rows) = viewport_height_override {
+        let available = frame.area().height.saturating_sub(4);
+        let viewport_height = rows.saturating_add(2).clamp(1, available.max(1));
+        let layout = Layout::vertical([
+            Constraint::Length(viewport_height), // Viewport override
+            Constraint::Min(0),                  // Filler
+            Constraint::Length(3),               // URL bar
+            Constraint::Length(1),               // Status bar
+        ])
+        .split(frame.area());
+        (layout[0], layout[2], layout[3])
+    } else {
+        let layout = Layout::vertical([
+            Constraint::Min(1),    // Viewport (fill remaining)
+            Constraint::Length(3), // URL bar (1 line + top/bottom border)
+            Constraint::Length(1), // Status bar
+        ])
+        .split(frame.area());
+        (layout[0], layout[1], layout[2])
+    };
 
     // Border colors based on mode.
     let (url_border, viewport_border) = match mode {
@@ -1816,7 +1811,7 @@ fn ui(
         let hover_label = Line::from(Span::raw(target_url).style(Style::default().fg(DIM)));
         viewport_block = viewport_block.title_bottom(hover_label);
     }
-    let inner = chrome_layout.viewport_inner;
+    let inner = viewport_block.inner(viewport_area);
 
     if let Some(dialog) = pending_dialog {
         let prompt_line = match dialog.dialog_type.as_str() {
@@ -2012,49 +2007,14 @@ fn ui(
 
     let d = Style::default().fg(DIM).bg(BG);
     let f = Style::default().fg(FG).bg(BG);
-    let latest_console = console_log
-        .iter()
-        .rev()
-        .find(|entry| matches!(entry.level.as_str(), "warning" | "error"));
 
-    let crash_is_latest = renderer_crash
-        .as_ref()
-        .map(|crash| {
-            latest_console
-                .map(|entry| crash.received_at >= entry.received_at)
-                .unwrap_or(true)
-        })
-        .unwrap_or(false);
-
-    let hints = if let Some(crash) = renderer_crash.as_ref().filter(|_| crash_is_latest) {
+    let hints = if let Some(crash) = renderer_crash.as_ref() {
         Line::from(vec![
             Span::styled("renderer crashed ", Style::default().fg(RED).bg(BG)),
             Span::styled(
                 format!(
                     "{} code={} #{}",
                     crash.termination_status, crash.termination_status_code, crash.tab_id
-                ),
-                d,
-            ),
-        ])
-    } else if let Some(entry) = latest_console {
-        let color = if entry.level == "error" { RED } else { YELLOW };
-        Line::from(vec![
-            Span::styled(
-                format!("console {} ", entry.level),
-                Style::default().fg(color).bg(BG),
-            ),
-            Span::styled(
-                format!(
-                    "{}:{} #{} {}",
-                    entry
-                        .source_id
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&entry.source_id),
-                    entry.line_no,
-                    entry.tab_id,
-                    entry.message
                 ),
                 d,
             ),
@@ -2146,112 +2106,4 @@ fn ui(
     frame.render_widget(label_widget, status_layout[1]);
 
     inner
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-
-    fn render_capture(mode: Mode) -> (Rect, String) {
-        let backend = TestBackend::new(60, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut editor_state = EditorState::new(Lines::from("https://example.com"));
-        let mut cmd_state = EditorState::new(Lines::from(""));
-        let mut viewport_inner = Rect::default();
-
-        terminal
-            .draw(|frame| {
-                viewport_inner = ui(
-                    frame,
-                    "https://example.com",
-                    "default",
-                    &mode,
-                    &mut editor_state,
-                    &mut cmd_state,
-                    "Example",
-                    false,
-                    0,
-                    1,
-                    &None,
-                    "roamium",
-                    "",
-                    &None,
-                    &None,
-                    None,
-                    &[],
-                    &[],
-                    &None,
-                    true,
-                    None,
-                    None,
-                );
-            })
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let mut out = String::new();
-        for y in 0..buffer.area.height {
-            for x in 0..buffer.area.width {
-                out.push_str(buffer[(x, y)].symbol());
-            }
-            out.push('\n');
-        }
-        (viewport_inner, out)
-    }
-
-    #[test]
-    fn default_layout_places_controls_above_viewport() {
-        let layout = browser_chrome_layout(Rect::new(0, 0, 80, 30), None);
-
-        assert_eq!(layout.url_area, Rect::new(0, 0, 80, 3));
-        assert_eq!(layout.status_area, Rect::new(0, 3, 80, 1));
-        assert_eq!(layout.viewport_area, Rect::new(0, 4, 80, 26));
-        assert_eq!(layout.viewport_inner, Rect::new(1, 5, 78, 24));
-    }
-
-    #[test]
-    fn viewport_height_override_places_controls_above_viewport() {
-        let layout = browser_chrome_layout(Rect::new(0, 0, 80, 30), Some(10));
-
-        assert_eq!(layout.url_area, Rect::new(0, 0, 80, 3));
-        assert_eq!(layout.status_area, Rect::new(0, 3, 80, 1));
-        assert_eq!(layout.viewport_area, Rect::new(0, 4, 80, 12));
-        assert_eq!(layout.viewport_inner, Rect::new(1, 5, 78, 10));
-    }
-
-    #[test]
-    fn small_height_override_clamps_below_controls() {
-        let layout = browser_chrome_layout(Rect::new(0, 0, 80, 5), Some(100));
-
-        assert_eq!(layout.url_area, Rect::new(0, 0, 80, 3));
-        assert_eq!(layout.status_area, Rect::new(0, 3, 80, 1));
-        assert_eq!(layout.viewport_area, Rect::new(0, 4, 80, 1));
-        assert_eq!(layout.viewport_inner, Rect::new(1, 5, 78, 0));
-    }
-
-    #[test]
-    fn issue_836_after_control_capture() {
-        let (viewport_inner, capture) = render_capture(Mode::Control);
-        println!("viewport_inner={viewport_inner:?}\n{capture}");
-
-        let lines: Vec<&str> = capture.lines().collect();
-        assert!(lines[0].starts_with("┌URL"));
-        assert!(lines[3].contains("CONTROL"));
-        assert!(lines[4].starts_with("┌Example"));
-        assert_eq!(viewport_inner, Rect::new(1, 5, 58, 6));
-    }
-
-    #[test]
-    fn issue_836_after_browse_capture() {
-        let (viewport_inner, capture) = render_capture(Mode::Browse);
-        println!("viewport_inner={viewport_inner:?}\n{capture}");
-
-        let lines: Vec<&str> = capture.lines().collect();
-        assert!(lines[0].starts_with("┌URL"));
-        assert!(lines[3].contains("BROWSE"));
-        assert!(lines[4].starts_with("┌Example"));
-        assert_eq!(viewport_inner, Rect::new(1, 5, 58, 6));
-    }
 }

@@ -1,7 +1,7 @@
 From 5d290a336479d86f85c2097c280911cc9d85e267 Mon Sep 17 00:00:00 2001
 From: Max Commits <maxcommits@ryanxcharles.com>
 Date: Mon, 22 Jun 2026 16:41:47 -0500
-Subject: [PATCH 84/84] Trace parent print sheet visibility
+Subject: [PATCH 84/85] Trace parent print sheet visibility
 
 The print sheet waved from AppKit's door,
 A visible panel, ignored once more.

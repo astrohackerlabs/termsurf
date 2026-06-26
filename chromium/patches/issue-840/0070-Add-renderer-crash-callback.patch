@@ -1,0 +1,207 @@
+From 53928baf47835c605741c602dcb1619435cc7b9b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 21:21:02 -0500
+Subject: [PATCH 70/75] Add renderer crash callback
+
+When renderers trip and hit the floor,
+The tab now knocks on TermSurf's door.
+It names the fall, clears out the haze,
+Then lets the page resume its ways.
+---
+ .../libtermsurf_chromium.cc                   | 32 ++++++++++
+ .../libtermsurf_chromium.h                    |  9 +++
+ .../ts_browser_main_parts.h                   |  5 ++
+ .../libtermsurf_chromium/ts_tab_observer.cc   | 58 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_tab_observer.h    |  3 +
+ 5 files changed, 107 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index e634db7c16..dd399f8d36 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -92,6 +92,15 @@ void (*g_on_http_auth_request)(ts_web_contents_t,
+                                void*) = nullptr;
+ void* g_on_http_auth_request_data = nullptr;
+ 
++// Renderer crash callback.
++void (*g_on_renderer_crashed)(ts_web_contents_t,
++                              const char*,
++                              int,
++                              const char*,
++                              bool,
++                              void*) = nullptr;
++void* g_on_renderer_crashed_data = nullptr;
++
+ }  // namespace
+ 
+ namespace content {
+@@ -151,6 +160,18 @@ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url) {
+   }
+ }
+ 
++void TsNotifyRendererCrashed(void* wc_handle,
++                             const char* termination_status,
++                             int termination_status_code,
++                             const char* url,
++                             bool can_reload) {
++  if (g_on_renderer_crashed) {
++    g_on_renderer_crashed(wc_handle, termination_status,
++                          termination_status_code, url, can_reload,
++                          g_on_renderer_crashed_data);
++  }
++}
++
+ void TsNotifyJavaScriptDialogRequest(void* wc_handle,
+                                      uint64_t request_id,
+                                      const char* dialog_type,
+@@ -482,3 +503,14 @@ void ts_set_on_http_auth_request(
+   g_on_http_auth_request = cb;
+   g_on_http_auth_request_data = user_data;
+ }
++
++void ts_set_on_renderer_crashed(void (*cb)(ts_web_contents_t wc,
++                                           const char* termination_status,
++                                           int termination_status_code,
++                                           const char* url,
++                                           bool can_reload,
++                                           void* user_data),
++                                void* user_data) {
++  g_on_renderer_crashed = cb;
++  g_on_renderer_crashed_data = user_data;
++}
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 84ff1ffa66..a35e5a7e83 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -228,6 +228,15 @@ TS_EXPORT void ts_set_on_http_auth_request(
+                void* user_data),
+     void* user_data);
+ 
++TS_EXPORT void ts_set_on_renderer_crashed(
++    void (*cb)(ts_web_contents_t wc,
++               const char* termination_status,
++               int termination_status_code,
++               const char* url,
++               bool can_reload,
++               void* user_data),
++    void* user_data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 9183794de3..be18b481cf 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -51,6 +51,11 @@ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
+ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url);
++void TsNotifyRendererCrashed(void* wc_handle,
++                             const char* termination_status,
++                             int termination_status_code,
++                             const char* url,
++                             bool can_reload);
+ void TsNotifyConsoleMessage(void* wc_handle,
+                             const char* level,
+                             const char* message,
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index b3832c7948..aa7db70236 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -41,6 +41,47 @@ const char* ConsoleLevelToString(blink::mojom::ConsoleMessageLevel level) {
+   return "unknown";
+ }
+ 
++const char* TerminationStatusToString(base::TerminationStatus status) {
++  switch (status) {
++    case base::TERMINATION_STATUS_NORMAL_TERMINATION:
++      return "normal_termination";
++    case base::TERMINATION_STATUS_ABNORMAL_TERMINATION:
++      return "abnormal_termination";
++    case base::TERMINATION_STATUS_PROCESS_WAS_KILLED:
++      return "killed";
++    case base::TERMINATION_STATUS_PROCESS_CRASHED:
++      return "crashed";
++    case base::TERMINATION_STATUS_STILL_RUNNING:
++      return "still_running";
++#if BUILDFLAG(IS_CHROMEOS)
++    case base::TERMINATION_STATUS_PROCESS_WAS_KILLED_BY_OOM:
++      return "killed_by_oom";
++#endif
++#if BUILDFLAG(IS_ANDROID)
++    case base::TERMINATION_STATUS_OOM_PROTECTED:
++      return "oom_protected";
++#endif
++    case base::TERMINATION_STATUS_LAUNCH_FAILED:
++      return "launch_failed";
++    case base::TERMINATION_STATUS_OOM:
++      return "oom";
++#if BUILDFLAG(IS_WIN)
++    case base::TERMINATION_STATUS_INTEGRITY_FAILURE:
++      return "integrity_failure";
++#endif
++    case base::TERMINATION_STATUS_EVICTED_FOR_MEMORY:
++      return "evicted_for_memory";
++    case base::TERMINATION_STATUS_MAX_ENUM:
++      break;
++  }
++  return "unknown";
++}
++
++bool IsNonCrashTerminationStatus(base::TerminationStatus status) {
++  return status == base::TERMINATION_STATUS_NORMAL_TERMINATION ||
++         status == base::TERMINATION_STATUS_STILL_RUNNING;
++}
++
+ }  // namespace
+ 
+ TsTabObserver::TsTabObserver() = default;
+@@ -115,6 +156,23 @@ void TsTabObserver::DidFailLoad(RenderFrameHost* render_frame_host,
+ #endif
+ }
+ 
++void TsTabObserver::PrimaryMainFrameRenderProcessGone(
++    base::TerminationStatus status) {
++#if BUILDFLAG(IS_MAC)
++  if (IsNonCrashTerminationStatus(status)) {
++    return;
++  }
++  std::string url;
++  if (web_contents()) {
++    url = web_contents()->GetVisibleURL().spec();
++  }
++  TsNotifyRendererCrashed(reinterpret_cast<void*>(handle_),
++                          TerminationStatusToString(status),
++                          static_cast<int>(status), url.c_str(), true);
++  TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "error", 0);
++#endif
++}
++
+ void TsTabObserver::TitleWasSet(NavigationEntry* entry) {
+ #if BUILDFLAG(IS_MAC)
+   if (!entry) {
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.h b/content/libtermsurf_chromium/ts_tab_observer.h
+index 6ae740b9b6..e2d1f8d813 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.h
++++ b/content/libtermsurf_chromium/ts_tab_observer.h
+@@ -11,6 +11,7 @@
+ 
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/process/kill.h"
+ #include "build/build_config.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/web_contents_observer.h"
+@@ -52,6 +53,8 @@ class TsTabObserver : public WebContentsObserver {
+   void DidFailLoad(RenderFrameHost* render_frame_host,
+                    const GURL& validated_url,
+                    int error_code) override;
++  void PrimaryMainFrameRenderProcessGone(
++      base::TerminationStatus status) override;
+   void TitleWasSet(NavigationEntry* entry) override;
+   void OnDidAddMessageToConsole(
+       RenderFrameHost* source_frame,
+-- 
+2.54.0
+

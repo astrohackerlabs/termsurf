@@ -1,0 +1,427 @@
+From 7f022732665bd6f2559d1503ba75e95f219eacdf Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 15:48:05 -0500
+Subject: [PATCH 43/75] Trace PDF wrapper body bytes
+
+The parser chewed a tiny page,
+Not what the wrapper wrote on stage.
+So every byte now signs its name,
+And points us toward the static blame.
+---
+ .../core/html/parser/html_document_parser.cc  |  97 ++++++++++
+ .../renderer/core/loader/document_loader.cc   | 168 ++++++++++++++++++
+ 2 files changed, 265 insertions(+)
+
+diff --git a/third_party/blink/renderer/core/html/parser/html_document_parser.cc b/third_party/blink/renderer/core/html/parser/html_document_parser.cc
+index b05d1e6c1d..e7145a6c3f 100644
+--- a/third_party/blink/renderer/core/html/parser/html_document_parser.cc
++++ b/third_party/blink/renderer/core/html/parser/html_document_parser.cc
+@@ -25,10 +25,13 @@
+ 
+ #include "third_party/blink/renderer/core/html/parser/html_document_parser.h"
+ 
++#include <algorithm>
+ #include <memory>
++#include <string_view>
+ #include <utility>
+ 
+ #include "base/feature_list.h"
++#include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -107,6 +110,49 @@ enum class FeatureResetMode {
+ 
+ const char kHistogramScanAndPreloadTime[] = "Blink.ScanAndPreloadTime2";
+ 
++bool ShouldLogIssue792Exp22Parser(const Document& document) {
++  const std::string url = document.Url().GetString().Utf8();
++  return url.find("bitcoin.pdf") != std::string::npos ||
++         url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos;
++}
++
++std::string Issue792Exp22ParserSample(base::span<const char> data) {
++  std::string sample;
++  const size_t limit = std::min<size_t>(data.size(), 64);
++  sample.reserve(limit);
++  for (char c : data.first(limit)) {
++    if (c == '\n') {
++      sample += "\\n";
++    } else if (c == '\r') {
++      sample += "\\r";
++    } else if (c == '\t') {
++      sample += "\\t";
++    } else if (c >= 0x20 && c <= 0x7e) {
++      sample.push_back(c);
++    } else {
++      sample.push_back('.');
++    }
++  }
++  return sample;
++}
++
++std::string Issue792Exp22ParserSample(const String& data) {
++  const std::string utf8 = data.Utf8();
++  return Issue792Exp22ParserSample(base::span<const char>(utf8));
++}
++
++bool Issue792Exp22ParserChunkHas(base::span<const uint8_t> data,
++                                 std::string_view needle) {
++  return std::string_view(reinterpret_cast<const char*>(data.data()),
++                          data.size())
++             .find(needle) != std::string_view::npos;
++}
++
++bool Issue792Exp22ParserStringHas(const String& data, std::string_view needle) {
++  const std::string utf8 = data.Utf8();
++  return std::string_view(utf8).find(needle) != std::string_view::npos;
++}
++
+ bool ThreadedPreloadScannerEnabled(
+     FeatureResetMode reset_mode = FeatureResetMode::kUseCached) {
+   // Cache the feature value since checking for each parser regresses some micro
+@@ -843,6 +889,14 @@ bool HTMLDocumentParser::PumpTokenizer() {
+     task_runner_state_->MarkYield();
+   }
+ 
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-pump url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " result=" << (should_yield ? 1 : 0)
++              << " have_seen_eof=" << (input_.HaveSeenEndOfFile() ? 1 : 0)
++              << " stopped=" << (IsStopped() ? 1 : 0);
++  }
++
+   return should_yield;
+ }
+ 
+@@ -958,6 +1012,25 @@ void HTMLDocumentParser::Append(const String& input_source) {
+               perfetto::Flow::FromPointer(this), "size", input_source.length(),
+               "parser", (void*)this);
+ 
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-append-string url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " length=" << input_source.length()
++              << " stopped=" << (IsStopped() ? 1 : 0)
++              << " prefetch_only=" << (GetDocument()->IsPrefetchOnly() ? 1 : 0)
++              << " has_template="
++              << (Issue792Exp22ParserStringHas(input_source, "<template") ? 1
++                                                                          : 0)
++              << " has_iframe="
++              << (Issue792Exp22ParserStringHas(input_source, "<iframe") ? 1
++                                                                        : 0)
++              << " has_shadowrootmode="
++              << (Issue792Exp22ParserStringHas(input_source, "shadowrootmode")
++                      ? 1
++                      : 0)
++              << " sample=" << Issue792Exp22ParserSample(input_source);
++  }
++
+   if (IsStopped()) {
+     return;
+   }
+@@ -1030,6 +1103,15 @@ void HTMLDocumentParser::Append(const String& input_source) {
+ void HTMLDocumentParser::FinishAppend() {
+   TRACE_EVENT("blink", "HTMLDocumentParser::FinishAppend",
+               perfetto::Flow::FromPointer(this));
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-finish-append url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " should_pump_now="
++              << (ShouldPumpTokenizerNowForFinishAppend() ? 1 : 0)
++              << " is_preloading=" << (IsPreloading() ? 1 : 0)
++              << " in_pump_session="
++              << (task_runner_state_->InPumpSession() ? 1 : 0);
++  }
+   if (ShouldPumpTokenizerNowForFinishAppend()) {
+     PumpTokenizerIfPossible();
+   } else {
+@@ -1393,6 +1475,21 @@ void HTMLDocumentParser::AppendBytes(base::span<const uint8_t> data) {
+ 
+   DCHECK(IsMainThread());
+ 
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-append-bytes url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " size=" << data.size() << " stopped=" << (IsStopped() ? 1 : 0)
++              << " needs_decoder=" << (NeedsDecoder() ? 1 : 0)
++              << " has_template="
++              << (Issue792Exp22ParserChunkHas(data, "<template") ? 1 : 0)
++              << " has_iframe="
++              << (Issue792Exp22ParserChunkHas(data, "<iframe") ? 1 : 0)
++              << " has_shadowrootmode="
++              << (Issue792Exp22ParserChunkHas(data, "shadowrootmode") ? 1 : 0)
++              << " sample="
++              << Issue792Exp22ParserSample(base::as_chars(data));
++  }
++
+   if (data.empty() || IsStopped()) {
+     return;
+   }
+diff --git a/third_party/blink/renderer/core/loader/document_loader.cc b/third_party/blink/renderer/core/loader/document_loader.cc
+index f35fe840c0..3743080b8b 100644
+--- a/third_party/blink/renderer/core/loader/document_loader.cc
++++ b/third_party/blink/renderer/core/loader/document_loader.cc
+@@ -32,6 +32,7 @@
+ #include <algorithm>
+ #include <memory>
+ #include <optional>
++#include <string_view>
+ #include <utility>
+ 
+ #include "base/auto_reset.h"
+@@ -225,6 +226,94 @@ bool ShouldLogIssue792Exp21Document(const KURL& url,
+           url.Host() == "mhjfbmdgcfjbbpaeojofohoefgiehjai");
+ }
+ 
++bool ShouldLogIssue792Exp22DocumentLoader(const DocumentLoader& loader) {
++  Document* document = loader.GetFrame() ? loader.GetFrame()->GetDocument()
++                                         : nullptr;
++  if (!document) {
++    return false;
++  }
++  return ShouldLogIssue792Exp21Document(loader.Url(), loader.MimeType(),
++                                        *document);
++}
++
++std::string Issue792Exp22Sample(base::span<const char> data) {
++  std::string sample;
++  const size_t limit = std::min<size_t>(data.size(), 64);
++  sample.reserve(limit);
++  for (char c : data.first(limit)) {
++    if (c == '\n') {
++      sample += "\\n";
++    } else if (c == '\r') {
++      sample += "\\r";
++    } else if (c == '\t') {
++      sample += "\\t";
++    } else if (c >= 0x20 && c <= 0x7e) {
++      sample.push_back(c);
++    } else {
++      sample.push_back('.');
++    }
++  }
++  return sample;
++}
++
++std::string Issue792Exp22Sample(const String& data) {
++  const std::string utf8 = data.Utf8();
++  return Issue792Exp22Sample(base::span<const char>(utf8));
++}
++
++bool Issue792Exp22ChunkHas(base::span<const char> data,
++                           std::string_view needle) {
++  return std::string_view(data.data(), data.size()).find(needle) !=
++         std::string_view::npos;
++}
++
++bool Issue792Exp22StringHas(const String& data, std::string_view needle) {
++  const std::string utf8 = data.Utf8();
++  return std::string_view(utf8).find(needle) != std::string_view::npos;
++}
++
++void LogIssue792Exp22Chunk(const char* tag,
++                           const DocumentLoader& loader,
++                           base::span<const char> data,
++                           int parser_blocked_count,
++                           bool in_commit_data) {
++  if (!ShouldLogIssue792Exp22DocumentLoader(loader)) {
++    return;
++  }
++  LOG(INFO) << "[issue-792-exp22] " << tag << " url="
++            << loader.Url().GetString().Utf8()
++            << " encoded_size=" << data.size()
++            << " parser_blocked=" << parser_blocked_count
++            << " in_commit_data=" << (in_commit_data ? 1 : 0)
++            << " has_template="
++            << (Issue792Exp22ChunkHas(data, "<template") ? 1 : 0)
++            << " has_iframe=" << (Issue792Exp22ChunkHas(data, "<iframe") ? 1 : 0)
++            << " has_shadowrootmode="
++            << (Issue792Exp22ChunkHas(data, "shadowrootmode") ? 1 : 0)
++            << " has_internal_id="
++            << (Issue792Exp22ChunkHas(data, "internalid") ? 1 : 0)
++            << " sample=" << Issue792Exp22Sample(data);
++}
++
++void LogIssue792Exp22BodyLoaderStart(const DocumentLoader& loader,
++                                     const char* reason,
++                                     bool has_body_loader,
++                                     bool is_static_data,
++                                     bool loading_empty,
++                                     bool is_main_frame) {
++  if (!ShouldLogIssue792Exp22DocumentLoader(loader)) {
++    return;
++  }
++  LOG(INFO) << "[issue-792-exp22] body-loader-start url="
++            << loader.Url().GetString().Utf8()
++            << " mime_type=" << loader.MimeType().Utf8()
++            << " reason=" << reason
++            << " has_body_loader=" << (has_body_loader ? 1 : 0)
++            << " is_static_data=" << (is_static_data ? 1 : 0)
++            << " loading_empty=" << (loading_empty ? 1 : 0)
++            << " is_main_frame=" << (is_main_frame ? 1 : 0);
++}
++
+ Vector<mojom::blink::OriginTrialFeature> CopyInitiatorOriginTrials(
+     const std::vector<int>& initiator_origin_trial_features) {
+   Vector<mojom::blink::OriginTrialFeature> result;
+@@ -1319,6 +1408,8 @@ void DocumentLoader::SetHistoryItemStateForCommit(
+ }
+ 
+ void DocumentLoader::BodyDataReceived(base::span<const char> data) {
++  LogIssue792Exp22Chunk("body-data-received", *this, data,
++                        parser_blocked_count_, in_commit_data_);
+   EncodedBodyData body_data(data);
+   BodyDataReceivedImpl(body_data);
+ }
+@@ -1327,6 +1418,24 @@ void DocumentLoader::DecodedBodyDataReceived(
+     const WebString& data,
+     const WebEncodingData& encoding_data,
+     base::SpanOrSize<const char> encoded_data) {
++  if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++    const String decoded_data(data);
++    LOG(INFO) << "[issue-792-exp22] body-data-received url="
++              << Url().GetString().Utf8() << " encoded_size="
++              << encoded_data.size() << " parser_blocked="
++              << parser_blocked_count_
++              << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++              << " has_template="
++              << (Issue792Exp22StringHas(decoded_data, "<template") ? 1 : 0)
++              << " has_iframe="
++              << (Issue792Exp22StringHas(decoded_data, "<iframe") ? 1 : 0)
++              << " has_shadowrootmode="
++              << (Issue792Exp22StringHas(decoded_data, "shadowrootmode") ? 1
++                                                                         : 0)
++              << " has_internal_id="
++              << (Issue792Exp22StringHas(decoded_data, "internalid") ? 1 : 0)
++              << " sample=" << Issue792Exp22Sample(decoded_data);
++  }
+   // Decoding has already happened, we don't need the decoder anymore.
+   parser_->SetDecoder(nullptr);
+   DecodedBodyData body_data(data, DocumentEncodingData(encoding_data),
+@@ -1650,6 +1759,15 @@ void DocumentLoader::CommitData(BodyData& data) {
+   // avoid unnecessary work. This may happen, for example, when we abort current
+   // committed document which is still loading when initiating a new navigation.
+   if (!frame_ || !frame_->GetDocument()->Parsing() || !parser_) {
++    if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++      LOG(INFO) << "[issue-792-exp22] commit-data url="
++                << Url().GetString().Utf8()
++                << " encoded_size=" << data.EncodedData().size()
++                << " has_frame=" << (frame_ ? 1 : 0)
++                << " document_parsing="
++                << (frame_ && frame_->GetDocument()->Parsing() ? 1 : 0)
++                << " has_parser=" << (parser_ ? 1 : 0) << " action=skip";
++    }
+     return;
+   }
+ 
+@@ -1657,6 +1775,15 @@ void DocumentLoader::CommitData(BodyData& data) {
+   if (data.EncodedData().size()) {
+     data_received_ = true;
+   }
++  if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++    LOG(INFO) << "[issue-792-exp22] commit-data url="
++              << Url().GetString().Utf8()
++              << " encoded_size=" << data.EncodedData().size()
++              << " has_frame=" << (frame_ ? 1 : 0)
++              << " document_parsing="
++              << (frame_ && frame_->GetDocument()->Parsing() ? 1 : 0)
++              << " has_parser=" << (parser_ ? 1 : 0) << " action=append";
++  }
+   data.AppendToParser(this);
+ }
+ 
+@@ -1930,6 +2057,16 @@ void DocumentLoader::CommitSameDocumentNavigationInternal(
+ void DocumentLoader::ProcessDataBuffer(BodyData* data) {
+   DCHECK_GE(state_, kCommitted);
+   if (parser_blocked_count_ || in_commit_data_) {
++    if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++      LOG(INFO) << "[issue-792-exp22] process-data-buffer url="
++                << Url().GetString().Utf8()
++                << " has_data=" << (data ? 1 : 0)
++                << " parser_blocked=" << parser_blocked_count_
++                << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++                << " buffered_encoded=" << data_buffer_->size()
++                << " buffered_decoded=" << decoded_data_buffer_.size()
++                << " action=buffer";
++    }
+     // 1) If parser is blocked, we buffer data and process it upon resume.
+     // 2) If this function is reentered, we defer processing of the additional
+     //    data to the top-level invocation. Reentrant calls can occur because
+@@ -1944,6 +2081,15 @@ void DocumentLoader::ProcessDataBuffer(BodyData* data) {
+   }
+ 
+   if (data) {
++    if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++      LOG(INFO) << "[issue-792-exp22] process-data-buffer url="
++                << Url().GetString().Utf8()
++                << " has_data=1 parser_blocked=" << parser_blocked_count_
++                << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++                << " buffered_encoded=" << data_buffer_->size()
++                << " buffered_decoded=" << decoded_data_buffer_.size()
++                << " action=commit";
++    }
+     CommitData(*data);
+   }
+ 
+@@ -1951,6 +2097,16 @@ void DocumentLoader::ProcessDataBuffer(BodyData* data) {
+   // of CommitData() may queue more data in reentrant invocations, so iterate
+   // until it's empty.
+   DCHECK(data_buffer_->empty() || decoded_data_buffer_.empty());
++  if (ShouldLogIssue792Exp22DocumentLoader(*this) &&
++      (!data_buffer_->empty() || !decoded_data_buffer_.empty())) {
++    LOG(INFO) << "[issue-792-exp22] process-data-buffer url="
++              << Url().GetString().Utf8() << " has_data=0 parser_blocked="
++              << parser_blocked_count_
++              << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++              << " buffered_encoded=" << data_buffer_->size()
++              << " buffered_decoded=" << decoded_data_buffer_.size()
++              << " action=drain";
++  }
+   for (const auto& span : *data_buffer_) {
+     EncodedBodyData body_data(span);
+     CommitData(body_data);
+@@ -2131,6 +2287,9 @@ void DocumentLoader::StartLoadingInternal() {
+     // synchronously and parse it, and it's already loaded in a buffer usually.
+     // This means we should not defer, and we'll finish loading synchronously
+     // from StartLoadingBody().
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "mhtml-archive", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+     return;
+   }
+@@ -2225,6 +2384,9 @@ void DocumentLoader::StartLoadingResponse() {
+   }
+ 
+   if (!url_.ProtocolIsInHttpFamily()) {
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "non-http", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+     return;
+   }
+@@ -2234,6 +2396,9 @@ void DocumentLoader::StartLoadingResponse() {
+     // started loading and it is safe to continue parsing.
+     parser_->CommitPreloadedData();
+   } else {
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "resume", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+   }
+ }
+@@ -3450,6 +3615,9 @@ void DocumentLoader::CreateParserPostCommit() {
+       !is_static_data_ && frame_->IsMainFrame() &&
+       !document->IsPrefetchOnly() && MimeType() == "text/html") {
+     parser_->SetIsPreloading(true);
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "post-commit-preload", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+ 
+     if (!frame_ || !body_loader_) {
+-- 
+2.54.0
+

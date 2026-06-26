@@ -1,0 +1,559 @@
+From fc98c659e9075c287beecb4622a51d7c6294c828 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 15:24:38 -0500
+Subject: [PATCH 61/87] Install PDF print helper
+
+The print button knocked and found no door,
+So we taught each frame a helper more.
+The dialog still hides in future fog,
+But gray no longer eats the doc.
+---
+ .../renderer/pdf_view_web_plugin_client.cc    | 76 ++++++++++++++-
+ .../renderer/print_render_frame_helper.cc     | 95 ++++++++++++++++++-
+ content/libtermsurf_chromium/BUILD.gn         |  1 +
+ .../libtermsurf_chromium/ts_browser_client.cc | 13 +++
+ .../ts_content_renderer_client.cc             | 30 ++++++
+ pdf/pdf_view_web_plugin.cc                    | 52 ++++++++++
+ 6 files changed, 265 insertions(+), 2 deletions(-)
+
+diff --git a/components/pdf/renderer/pdf_view_web_plugin_client.cc b/components/pdf/renderer/pdf_view_web_plugin_client.cc
+index 6400ea0042..48ffb7200d 100644
+--- a/components/pdf/renderer/pdf_view_web_plugin_client.cc
++++ b/components/pdf/renderer/pdf_view_web_plugin_client.cc
+@@ -4,9 +4,11 @@
+ 
+ #include "components/pdf/renderer/pdf_view_web_plugin_client.h"
+ 
++#include <cstdint>
+ #include <memory>
+ #include <optional>
+ #include <string>
++#include <string_view>
+ #include <utility>
+ #include <vector>
+ 
+@@ -16,6 +18,7 @@
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/process/process_handle.h"
++#include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/values.h"
+ #include "components/pdf/renderer/pdf_accessibility_tree.h"
+@@ -59,6 +62,10 @@ namespace {
+ constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
+ constexpr char kTsPdfPrintInterceptFileSwitch[] =
+     "termsurf-pdf-print-intercept-file";
++constexpr char kTsPdfNativePrintTraceSwitch[] =
++    "termsurf-pdf-native-print-trace";
++constexpr char kTsPdfNativePrintTraceFileSwitch[] =
++    "termsurf-pdf-native-print-trace-file";
+ 
+ std::optional<base::FilePath> GetTermSurfPdfPrintInterceptPath() {
+   const base::CommandLine* command_line =
+@@ -87,6 +94,64 @@ std::optional<base::FilePath> GetTermSurfPdfPrintInterceptPath() {
+   return base::FilePath::FromUTF8Unsafe(*path);
+ }
+ 
++std::optional<base::FilePath> GetTermSurfPdfNativePrintTracePath() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTsPdfNativePrintTraceSwitch)) {
++    base::FilePath path =
++        command_line->GetSwitchValuePath(kTsPdfNativePrintTraceFileSwitch);
++    if (!path.empty()) {
++      return path;
++    }
++  }
++
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_NATIVE_PRINT_TRACE");
++  if (!enabled || *enabled != "1") {
++    return std::nullopt;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE");
++  if (!path || path->empty()) {
++    return std::nullopt;
++  }
++
++  return base::FilePath::FromUTF8Unsafe(*path);
++}
++
++std::string TermSurfPdfPrintDocumentUrl(content::RenderFrame* render_frame) {
++  if (!render_frame || !render_frame->GetWebFrame()) {
++    return "";
++  }
++  return render_frame->GetWebFrame()->GetDocument().Url().GetString().Utf8();
++}
++
++void TraceTermSurfPdfNativePrint(content::RenderFrame* render_frame,
++                                 std::string_view event,
++                                 bool has_helper) {
++  std::optional<base::FilePath> trace_path =
++      GetTermSurfPdfNativePrintTracePath();
++  if (!trace_path) {
++    return;
++  }
++
++#if BUILDFLAG(ENABLE_PRINTING)
++  const char kEnablePrinting[] = "1";
++#else
++  const char kEnablePrinting[] = "0";
++#endif
++  const std::string line = base::StrCat(
++      {"pdf-native-print pid=", base::NumberToString(base::GetCurrentProcId()),
++       " source=pdf_view_web_plugin_client.cc event=", event, " render_frame=",
++       base::NumberToString(reinterpret_cast<uintptr_t>(render_frame)),
++       " helper=", has_helper ? "present" : "missing",
++       " enable_printing=", kEnablePrinting,
++       " document_url=", TermSurfPdfPrintDocumentUrl(render_frame), "\n"});
++  base::AppendToFile(*trace_path, line);
++}
++
+ }  // namespace
+ 
+ PdfViewWebPluginClient::PdfViewWebPluginClient(
+@@ -368,7 +433,16 @@ void PdfViewWebPluginClient::Print() {
+     return;
+   }
+ #if BUILDFLAG(ENABLE_PRINTING)
+-  printing::PrintRenderFrameHelper::Get(render_frame_)->PrintNode(element);
++  auto* print_helper = printing::PrintRenderFrameHelper::Get(render_frame_);
++  TraceTermSurfPdfNativePrint(render_frame_, "client-print", print_helper);
++  if (!print_helper) {
++    TraceTermSurfPdfNativePrint(render_frame_, "helper-missing", false);
++    return;
++  }
++  TraceTermSurfPdfNativePrint(render_frame_, "print-node", true);
++  print_helper->PrintNode(element);
++#else
++  TraceTermSurfPdfNativePrint(render_frame_, "printing-disabled", false);
+ #endif  // BUILDFLAG(ENABLE_PRINTING)
+ }
+ 
+diff --git a/components/printing/renderer/print_render_frame_helper.cc b/components/printing/renderer/print_render_frame_helper.cc
+index aa6e60f155..d2535c16a8 100644
+--- a/components/printing/renderer/print_render_frame_helper.cc
++++ b/components/printing/renderer/print_render_frame_helper.cc
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <tuple>
+@@ -17,7 +18,11 @@
+ #include <vector>
+ 
+ #include "base/check_is_test.h"
++#include "base/command_line.h"
+ #include "base/debug/alias.h"
++#include "base/environment.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+ #include "base/i18n/rtl.h"
+ #include "base/json/json_writer.h"
+@@ -125,6 +130,59 @@ bool g_is_preview_enabled = false;
+ 
+ constexpr int kAllowedIpcDepthForPrint = 1;
+ 
++constexpr char kTsPdfNativePrintTraceSwitch[] =
++    "termsurf-pdf-native-print-trace";
++constexpr char kTsPdfNativePrintTraceFileSwitch[] =
++    "termsurf-pdf-native-print-trace-file";
++
++std::optional<base::FilePath> GetTermSurfPdfNativePrintTracePath() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTsPdfNativePrintTraceSwitch)) {
++    base::FilePath path =
++        command_line->GetSwitchValuePath(kTsPdfNativePrintTraceFileSwitch);
++    if (!path.empty()) {
++      return path;
++    }
++  }
++
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_NATIVE_PRINT_TRACE");
++  if (!enabled || *enabled != "1") {
++    return std::nullopt;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE");
++  if (!path || path->empty()) {
++    return std::nullopt;
++  }
++
++  return base::FilePath::FromUTF8Unsafe(*path);
++}
++
++void TraceTermSurfPdfNativePrint(std::string_view event,
++                                 content::RenderFrame* render_frame) {
++  std::optional<base::FilePath> trace_path =
++      GetTermSurfPdfNativePrintTracePath();
++  if (!trace_path) {
++    return;
++  }
++
++  const std::string document_url =
++      render_frame && render_frame->GetWebFrame()
++          ? render_frame->GetWebFrame()->GetDocument().Url().GetString().Utf8()
++          : "";
++  const std::string line = base::StrCat(
++      {"pdf-native-print pid=", base::NumberToString(base::GetCurrentProcId()),
++       " source=print_render_frame_helper.cc event=", event,
++       " render_frame=",
++       base::NumberToString(reinterpret_cast<uintptr_t>(render_frame)),
++       " document_url=", document_url, "\n"});
++  base::AppendToFile(*trace_path, line);
++}
++
+ struct PageSizeMarginsWithOrientation {
+   mojom::PageSizeMarginsPtr page_size_margins;
+   mojom::PageOrientation page_orientation =
+@@ -2034,9 +2092,11 @@ int PrintRenderFrameHelper::GetFitToPageScaleFactor(
+ #endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
+ 
+ void PrintRenderFrameHelper::PrintNode(const blink::WebNode& node) {
++  TraceTermSurfPdfNativePrint("print-node-enter", render_frame());
+   if (node.IsNull() || !node.GetDocument().GetFrame()) {
+     // This can occur when the context menu refers to an invalid WebNode.
+     // See http://crbug.com/100890#c17 for a repro case.
++    TraceTermSurfPdfNativePrint("print-node-invalid", render_frame());
+     return;
+   }
+ 
+@@ -2044,11 +2104,13 @@ void PrintRenderFrameHelper::PrintNode(const blink::WebNode& node) {
+     // This can happen as a result of processing sync messages when printing
+     // from ppapi plugins. It's a rare case, so its OK to just fail here.
+     // See http://crbug.com/159165.
++    TraceTermSurfPdfNativePrint("print-node-in-progress", render_frame());
+     return;
+   }
+ 
+   if (g_is_preview_enabled) {
+ #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
++    TraceTermSurfPdfNativePrint("print-node-preview", render_frame());
+     print_in_progress_ = true;
+     RecordDebugEvent(DebugEvent::kInitWithNode);
+     print_preview_context_.InitWithNode(node);
+@@ -2063,8 +2125,10 @@ void PrintRenderFrameHelper::PrintNode(const blink::WebNode& node) {
+ 
+   blink::WebLocalFrame* frame = node.GetDocument().GetFrame();
+   if (!frame) {
++    TraceTermSurfPdfNativePrint("print-node-missing-frame", render_frame());
+     return;
+   }
++  content::RenderFrame* trace_render_frame = render_frame();
+ 
+   print_in_progress_ = true;
+ 
+@@ -2075,21 +2139,29 @@ void PrintRenderFrameHelper::PrintNode(const blink::WebNode& node) {
+   auto weak_this = weak_ptr_factory_.GetWeakPtr();
+   frame->DispatchBeforePrintEvent(/*print_client=*/nullptr);
+   if (!weak_this) {
++    TraceTermSurfPdfNativePrint("print-node-after-beforeprint-destroyed",
++                                trace_render_frame);
+     return;
+   }
+ 
++  TraceTermSurfPdfNativePrint("print-node-call-print", trace_render_frame);
+   Print(duplicate_node.GetDocument().GetFrame(), duplicate_node,
+         PrintRequestType::kRegular);
+   // Check if `this` is still valid.
+   if (!weak_this) {
++    TraceTermSurfPdfNativePrint("print-node-after-print-destroyed",
++                                trace_render_frame);
+     return;
+   }
+ 
+   frame->DispatchAfterPrintEvent();
+   if (!weak_this) {
++    TraceTermSurfPdfNativePrint("print-node-after-afterprint-destroyed",
++                                trace_render_frame);
+     return;
+   }
+ 
++  TraceTermSurfPdfNativePrint("print-node-exit", trace_render_frame);
+   print_in_progress_ = false;
+ }
+ 
+@@ -2097,23 +2169,29 @@ void PrintRenderFrameHelper::Print(blink::WebLocalFrame* frame,
+                                    const blink::WebNode& node,
+                                    PrintRequestType print_request_type) {
+   // If still not finished with earlier print request simply ignore.
+-  if (prep_frame_view_)
++  if (prep_frame_view_) {
++    TraceTermSurfPdfNativePrint("print-prep-in-progress", render_frame());
+     return;
++  }
+ 
+   FrameReference frame_ref(frame);
+ 
++  TraceTermSurfPdfNativePrint("print-init-settings-enter", render_frame());
+   if (!InitPrintSettings(frame, node)) {
++    TraceTermSurfPdfNativePrint("print-init-settings-failed", render_frame());
+     // Browser triggered this code path. It already knows about the failure.
+     notify_browser_of_print_failure_ = false;
+ 
+     DidFinishPrinting(PrintingResult::kFailPrintInit);
+     return;
+   }
++  TraceTermSurfPdfNativePrint("print-init-settings-ok", render_frame());
+ 
+   uint32_t expected_page_count = CalculateNumberOfPages(frame, node);
+ 
+   // Some full screen plugins can say they don't want to print.
+   if (!expected_page_count || expected_page_count > kMaxPageCount) {
++    TraceTermSurfPdfNativePrint("print-invalid-page-count", render_frame());
+     DidFinishPrinting(PrintingResult::kFailPrint);
+     return;
+   }
+@@ -2365,7 +2443,11 @@ bool PrintRenderFrameHelper::PrintPagesNative(
+   }
+ 
+   bool completed = false;
++  TraceTermSurfPdfNativePrint("did-print-document-enter", render_frame());
+   GetPrintManagerHost()->DidPrintDocument(std::move(page_params), &completed);
++  TraceTermSurfPdfNativePrint(completed ? "did-print-document-completed"
++                                        : "did-print-document-not-completed",
++                              render_frame());
+   return completed;
+ }
+ 
+@@ -2399,7 +2481,12 @@ bool PrintRenderFrameHelper::InitPrintSettings(blink::WebLocalFrame* frame,
+   ignore_css_margins_ = false;
+ 
+   mojom::PrintPagesParams settings;
++  TraceTermSurfPdfNativePrint("get-default-print-settings-enter",
++                              render_frame());
+   GetPrintManagerHost()->GetDefaultPrintSettings(&settings.params);
++  TraceTermSurfPdfNativePrint(settings.params ? "get-default-print-settings-ok"
++                                              : "get-default-print-settings-null",
++                              render_frame());
+ 
+   // Check if the printer returned any settings, if the settings are null,
+   // assume there are no printer drivers configured. So safely terminate.
+@@ -2515,12 +2602,18 @@ mojom::PrintPagesParamsPtr PrintRenderFrameHelper::GetPrintSettingsFromUser(
+   params->margin_type = margin_type;
+   params->is_scripted = is_scripted;
+ 
++  TraceTermSurfPdfNativePrint("did-show-print-dialog-enter", render_frame());
+   GetPrintManagerHost()->DidShowPrintDialog();
++  TraceTermSurfPdfNativePrint("did-show-print-dialog-exit", render_frame());
+ 
+   print_pages_params_.reset();
+ 
+   mojom::PrintPagesParamsPtr print_settings;
++  TraceTermSurfPdfNativePrint("scripted-print-enter", render_frame());
+   GetPrintManagerHost()->ScriptedPrint(std::move(params), &print_settings);
++  TraceTermSurfPdfNativePrint(print_settings ? "scripted-print-settings-ok"
++                                             : "scripted-print-settings-null",
++                              render_frame());
+   return print_settings;
+   // WARNING: `this` may be gone at this point. Do not do any more work here
+   // and just return.
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 697e8828f2..d2a80d78a7 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -90,6 +90,7 @@ shared_library("libtermsurf_chromium") {
+     "//components/pdf/browser",
+     "//components/pdf/browser:interceptors",
+     "//components/pdf/renderer",
++    "//components/printing/renderer",
+     "//components/pref_registry",
+     "//components/prefs",
+     "//components/resources:components_resources",
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 7c86587763..2128a95ace 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -69,6 +69,10 @@ constexpr char kTsPdfPrintBridgeTraceSwitch[] =
+     "termsurf-pdf-print-bridge-trace";
+ constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
+     "termsurf-pdf-print-bridge-trace-file";
++constexpr char kTsPdfNativePrintTraceSwitch[] =
++    "termsurf-pdf-native-print-trace";
++constexpr char kTsPdfNativePrintTraceFileSwitch[] =
++    "termsurf-pdf-native-print-trace-file";
+ 
+ std::optional<std::string> GetTsPdfTraceFileFromEnv(
+     const std::string& enabled_var,
+@@ -379,6 +383,15 @@ void TsBrowserClient::AppendExtraCommandLineSwitches(
+     command_line->AppendSwitchASCII(kTsPdfPrintBridgeTraceFileSwitch,
+                                     *bridge_trace_file);
+   }
++
++  std::optional<std::string> native_print_trace_file =
++      GetTsPdfTraceFileFromEnv("TERMSURF_PDF_NATIVE_PRINT_TRACE",
++                               "TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE");
++  if (native_print_trace_file) {
++    command_line->AppendSwitch(kTsPdfNativePrintTraceSwitch);
++    command_line->AppendSwitchASCII(kTsPdfNativePrintTraceFileSwitch,
++                                    *native_print_trace_file);
++  }
+ }
+ 
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index b98b5e4937..a260a9efb4 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -4,11 +4,14 @@
+ 
+ #include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ 
++#include <memory>
++
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "components/pdf/common/constants.h"
+ #include "components/pdf/common/pdf_util.h"
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
++#include "components/printing/renderer/print_render_frame_helper.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
+ #include "content/public/common/url_constants.h"
+@@ -21,6 +24,7 @@
+ #include "extensions/renderer/extension_frame_helper.h"
+ #include "extensions/renderer/extensions_renderer_client.h"
+ #include "extensions/renderer/guest_view/mime_handler_view/mime_handler_view_container_manager.h"
++#include "printing/buildflags/buildflags.h"
+ #include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
+ #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+ #include "third_party/blink/public/platform/web_string.h"
+@@ -34,6 +38,27 @@
+ namespace content {
+ namespace {
+ 
++#if BUILDFLAG(ENABLE_PRINTING)
++class TsPrintRenderFrameHelperDelegate
++    : public printing::PrintRenderFrameHelper::Delegate {
++ public:
++  TsPrintRenderFrameHelperDelegate() = default;
++  ~TsPrintRenderFrameHelperDelegate() override = default;
++
++  blink::WebElement GetPdfElement(blink::WebLocalFrame* frame) override {
++    return blink::WebElement();
++  }
++
++  bool IsPrintPreviewEnabled() override { return false; }
++
++  bool IsScriptedPrintEnabled() override { return false; }
++
++  bool ShouldGenerateTaggedPDF() override { return false; }
++
++  bool OverridePrint(blink::WebLocalFrame* frame) override { return false; }
++};
++#endif  // BUILDFLAG(ENABLE_PRINTING)
++
+ void AllowPdfViewerChromeResources() {
+   // Renderer setup cannot consult the ExtensionRegistry, so keep this
+   // process-wide rule keyed to the fixed PDF extension origin.
+@@ -95,6 +120,11 @@ void TsContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   // ExtensionFrameHelper destroys itself when the RenderFrame is destroyed.
+   new extensions::ExtensionFrameHelper(render_frame, dispatcher());
+   dispatcher()->OnRenderFrameCreated(render_frame);
++
++#if BUILDFLAG(ENABLE_PRINTING)
++  new printing::PrintRenderFrameHelper(
++      render_frame, std::make_unique<TsPrintRenderFrameHelperDelegate>());
++#endif  // BUILDFLAG(ENABLE_PRINTING)
+ }
+ 
+ bool TsContentRendererClient::IsPluginHandledExternally(
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index 808e4c6d65..92f76975a1 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -161,6 +161,10 @@ constexpr char kTsPdfPrintBridgeTraceSwitch[] =
+     "termsurf-pdf-print-bridge-trace";
+ constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
+     "termsurf-pdf-print-bridge-trace-file";
++constexpr char kTsPdfNativePrintTraceSwitch[] =
++    "termsurf-pdf-native-print-trace";
++constexpr char kTsPdfNativePrintTraceFileSwitch[] =
++    "termsurf-pdf-native-print-trace-file";
+ 
+ struct TermSurfPdfPrintInterceptState {
+   bool has_intercept_switch = false;
+@@ -231,6 +235,45 @@ std::optional<base::FilePath> GetTermSurfPdfPrintBridgeTracePath() {
+   return base::FilePath::FromUTF8Unsafe(path);
+ }
+ 
++std::optional<base::FilePath> GetTermSurfPdfNativePrintTracePath() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTsPdfNativePrintTraceSwitch)) {
++    base::FilePath path =
++        command_line->GetSwitchValuePath(kTsPdfNativePrintTraceFileSwitch);
++    if (!path.empty()) {
++      return path;
++    }
++  }
++
++  const char* enabled = std::getenv("TERMSURF_PDF_NATIVE_PRINT_TRACE");
++  const char* path = std::getenv("TERMSURF_PDF_NATIVE_PRINT_TRACE_FILE");
++  if (!enabled || std::string_view(enabled) != "1" || !path ||
++      std::string_view(path).empty()) {
++    return std::nullopt;
++  }
++
++  return base::FilePath::FromUTF8Unsafe(path);
++}
++
++void TraceTermSurfPdfNativePrint(std::string_view event,
++                                 bool has_engine,
++                                 bool can_print,
++                                 const std::string& url) {
++  std::optional<base::FilePath> trace_path =
++      GetTermSurfPdfNativePrintTracePath();
++  if (!trace_path) {
++    return;
++  }
++
++  const std::string line = base::StrCat(
++      {"pdf-native-print pid=", base::NumberToString(base::GetCurrentProcId()),
++       " source=pdf_view_web_plugin.cc event=", event,
++       " has_engine=", BoolString(has_engine),
++       " can_print=", BoolString(can_print), " url=", url, "\n"});
++  base::AppendToFile(*trace_path, line);
++}
++
+ std::string TermSurfFileBasename(const base::FilePath& path) {
+   return path.BaseName().MaybeAsASCII();
+ }
+@@ -1581,6 +1624,8 @@ void PdfViewWebPlugin::Print() {
+     return;
+   }
+ 
++  TraceTermSurfPdfNativePrint("post-invoke-print-dialog", has_engine, can_print,
++                              url_);
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+       FROM_HERE, base::BindOnce(&PdfViewWebPlugin::OnInvokePrintDialog,
+                                 weak_factory_.GetWeakPtr()));
+@@ -3121,6 +3166,13 @@ void PdfViewWebPlugin::HandleImeCommit(const blink::WebString& text) {
+ }
+ 
+ void PdfViewWebPlugin::OnInvokePrintDialog() {
++  const bool has_engine = !!engine_;
++  const bool can_print =
++      engine_ &&
++      (engine_->HasPermission(DocumentPermission::kPrintLowQuality) ||
++       engine_->HasPermission(DocumentPermission::kPrintHighQuality));
++  TraceTermSurfPdfNativePrint("invoke-print-dialog", has_engine, can_print,
++                              url_);
+   client_->Print();
+ }
+ 
+-- 
+2.54.0
+

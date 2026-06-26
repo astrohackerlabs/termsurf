@@ -1,0 +1,78 @@
+From e1e62c8ccbbb07a05e5f67f792d548ce4d7ce983 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 12:00:01 -0500
+Subject: [PATCH 32/87] Load extension renderer resources
+
+The module map had named its prize,
+But bytes were hiding from its eyes.
+A pak was packed, then brought to shore,
+Now MIME asks for one gate more.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  1 +
+ .../extensions/ts_pdf_resource_bundle.cc      | 31 +++++++++++++++++++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 7bee1fb9a8..d98d4913a4 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -80,6 +80,7 @@ shared_library("libtermsurf_chromium") {
+     "//content/public/common",
+     "//content/shell:content_shell_app",
+     "//content/shell:content_shell_lib",
++    "//extensions:extensions_renderer_resources",
+     "//extensions:extensions_resources",
+     "//extensions/browser",
+     "//extensions/browser/api:api_provider",
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index 407acf3681..cd5ec5b2d3 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -15,6 +15,7 @@
+ #include "base/strings/string_util.h"
+ #include "chrome/grit/common_resources.h"
+ #include "chrome/grit/pdf_resources.h"
++#include "extensions/grit/extensions_renderer_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+ namespace content {
+@@ -83,6 +84,36 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+   LOG(INFO) << "[issue-792-exp8] chrome-common-pak path="
+             << common_pak_path.AsUTF8Unsafe() << " found=" << common_found
+             << " loaded=" << !api_features.empty();
++
++  base::FilePath extensions_renderer_pak_path =
++      assets_path.AppendASCII("gen")
++          .AppendASCII("extensions")
++          .AppendASCII("extensions_renderer_resources.pak");
++  const bool extensions_renderer_found =
++      base::PathExists(extensions_renderer_pak_path);
++  if (extensions_renderer_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        extensions_renderer_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::string mime_handler_private;
++  std::string mime_handler_mojom;
++  if (extensions_renderer_found) {
++    mime_handler_private =
++        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++            IDR_MIME_HANDLER_PRIVATE_CUSTOM_BINDINGS_JS);
++    mime_handler_mojom =
++        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++            IDR_MIME_HANDLER_MOJOM_JS);
++  }
++  const bool extensions_renderer_loaded =
++      !mime_handler_private.empty() && !mime_handler_mojom.empty();
++  LOG(INFO) << "[issue-792-exp11] extensions-renderer-pak path="
++            << extensions_renderer_pak_path.AsUTF8Unsafe()
++            << " found=" << extensions_renderer_found
++            << " loaded=" << extensions_renderer_loaded
++            << " mimeHandlerPrivate_bytes=" << mime_handler_private.size()
++            << " mime_handler_mojom_bytes=" << mime_handler_mojom.size();
+ }
+ 
+ }  // namespace content
+-- 
+2.54.0
+

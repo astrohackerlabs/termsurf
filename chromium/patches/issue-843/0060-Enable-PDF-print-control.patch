@@ -1,0 +1,86 @@
+From d72c64c9801b20b93004a1a8f08eadec5d31046f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 14:49:06 -0500
+Subject: [PATCH 60/87] Enable PDF print control
+
+---
+ ...ts_component_extension_resource_manager.cc | 19 ++++---------------
+ .../extensions/ts_resources_private_api.cc    | 18 ++++--------------
+ 2 files changed, 8 insertions(+), 29 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+index 8ae248aad7..bb9dbcfddd 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+@@ -25,19 +25,6 @@ base::FilePath NormalizeAsciiPath(const char* path) {
+   return base::FilePath().AppendASCII(path).NormalizePathSeparators();
+ }
+ 
+-bool IsTermSurfPdfPrintInterceptActive() {
+-  std::unique_ptr<base::Environment> env = base::Environment::Create();
+-  std::optional<std::string> enabled =
+-      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
+-  if (!enabled || *enabled != "1") {
+-    return false;
+-  }
+-
+-  std::optional<std::string> path =
+-      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
+-  return path && !path->empty();
+-}
+-
+ bool IsTermSurfPdfPrintBridgeTraceActive() {
+   std::unique_ptr<base::Environment> env = base::Environment::Create();
+   std::optional<std::string> enabled =
+@@ -224,8 +211,10 @@ void PopulatePdfTemplateReplacements(ui::TemplateReplacements* replacements) {
+   // Enabling the OOPIF attribute switches the bundled viewer into
+   // pdfViewerPrivate.getStreamInfo(), which TermSurf has not implemented yet.
+   (*replacements)["pdfOopifEnabled"] = "";
+-  (*replacements)["printingEnabled"] =
+-      IsTermSurfPdfPrintInterceptActive() ? "true" : "false";
++  // TermSurf no longer gates the production PDF print control on the
++  // automation-only intercept. Document print permissions are still enforced in
++  // the plugin print path before native print is invoked.
++  (*replacements)["printingEnabled"] = "true";
+   (*replacements)["termsurfPdfPrintBridgeTrace"] =
+       IsTermSurfPdfPrintBridgeTraceActive() ? "true" : "false";
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+index f499f61de8..e602f34bce 100644
+--- a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -25,19 +25,6 @@ namespace {
+ namespace resources_private = extensions::api::resources_private;
+ namespace get_strings = resources_private::GetStrings;
+ 
+-bool IsTermSurfPdfPrintInterceptActive() {
+-  std::unique_ptr<base::Environment> env = base::Environment::Create();
+-  std::optional<std::string> enabled =
+-      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
+-  if (!enabled || *enabled != "1") {
+-    return false;
+-  }
+-
+-  std::optional<std::string> path =
+-      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
+-  return path && !path->empty();
+-}
+-
+ bool IsTermSurfPdfPrintBridgeTraceActive() {
+   std::unique_ptr<base::Environment> env = base::Environment::Create();
+   std::optional<std::string> enabled =
+@@ -234,7 +221,10 @@ base::DictValue GetPdfStringsForTermSurf() {
+   dict.Set("pdfSearchifySaveEnabled", false);
+   dict.Set("pdfTextAnnotationsEnabled", false);
+   dict.Set("pdfUseShowSaveFilePicker", false);
+-  dict.Set("printingEnabled", IsTermSurfPdfPrintInterceptActive());
++  // TermSurf no longer gates the production PDF print control on the
++  // automation-only intercept. Document print permissions are still enforced in
++  // the plugin print path before native print is invoked.
++  dict.Set("printingEnabled", true);
+   dict.Set("termsurfPdfPrintBridgeTrace",
+            IsTermSurfPdfPrintBridgeTraceActive());
+ 
+-- 
+2.54.0
+

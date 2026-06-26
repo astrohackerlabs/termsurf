@@ -1,0 +1,200 @@
+From 2726cf8c2a06d5257eb00d7e591f2a21a50234ff Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 09:11:24 -0500
+Subject: [PATCH 20/87] Probe datalist Autofill wiring
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A datalist knocked on Blink’s small door,
+We taught a client to answer once more.
+The popup stayed coy, the trail stayed bright,
+A failed little lantern for the next night.
+---
+ .../content_autofill_driver_factory.cc        | 39 +++++++++++++++++++
+ .../content/renderer/autofill_agent.cc        |  2 +-
+ content/shell/BUILD.gn                        |  1 +
+ .../renderer/shell_content_renderer_client.cc | 39 ++++++++++++++++++-
+ 4 files changed, 79 insertions(+), 2 deletions(-)
+
+diff --git a/components/autofill/content/browser/content_autofill_driver_factory.cc b/components/autofill/content/browser/content_autofill_driver_factory.cc
+index da9e79440c..19df5e050a 100644
+--- a/components/autofill/content/browser/content_autofill_driver_factory.cc
++++ b/components/autofill/content/browser/content_autofill_driver_factory.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "components/autofill/content/browser/content_autofill_driver_factory.h"
+ 
++#include <cstdlib>
+ #include <memory>
+ #include <utility>
+ #include <vector>
+@@ -29,6 +30,25 @@ namespace autofill {
+ 
+ class ScopedAutofillManagersObservation;
+ 
++namespace {
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO)
++        << "[issue-779-trace] trace_enabled component=autofill-driver-factory";
++  }
++}
++
++}  // namespace
++
+ void ContentAutofillDriverFactory::Observer::OnAutofillDriverFactoryDestroyed(
+     AutofillDriverFactory& factory) {
+   OnContentAutofillDriverFactoryDestroyed(
+@@ -76,12 +96,31 @@ void ContentAutofillDriverFactory::BindAutofillDriver(
+ 
+   ContentAutofillDriverFactory* factory = FromWebContents(web_contents);
+   if (!factory) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=ContentAutofillDriverFactory::BindAutofillDriver."
++                   "missing_client"
++                << " render_frame_host="
++                << static_cast<void*>(render_frame_host)
++                << " web_contents=" << static_cast<void*>(web_contents);
++    }
+     // The message pipe will be closed and raise a connection error to peer
+     // side. The peer side can reconnect later when needed.
+     return;
+   }
+ 
+   if (auto* driver = factory->DriverForFrame(render_frame_host)) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=ContentAutofillDriverFactory::BindAutofillDriver."
++                   "bind"
++                << " render_frame_host="
++                << static_cast<void*>(render_frame_host)
++                << " web_contents=" << static_cast<void*>(web_contents)
++                << " driver=" << static_cast<void*>(driver);
++    }
+     driver->BindPendingReceiver(std::move(pending_receiver));
+   }
+ }
+diff --git a/components/autofill/content/renderer/autofill_agent.cc b/components/autofill/content/renderer/autofill_agent.cc
+index 984558ca84..5112169500 100644
+--- a/components/autofill/content/renderer/autofill_agent.cc
++++ b/components/autofill/content/renderer/autofill_agent.cc
+@@ -1021,7 +1021,7 @@ void AutofillAgent::OpenTextDataListChooser(const WebInputElement& element) {
+               << " event=AutofillAgent::OpenTextDataListChooser"
+               << " agent=" << static_cast<void*>(this)
+               << " render_frame=" << static_cast<void*>(unsafe_render_frame())
+-              << " element=" << static_cast<void*>(&element)
++              << " element=" << static_cast<const void*>(&element)
+               << " value_length=" << element.Value().length();
+   }
+   ShowSuggestions(
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index 5048bdea20..2f62da6f78 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -333,6 +333,7 @@ static_library("content_shell_lib") {
+     ":shell_controller_mojom",
+     "//base",
+     "//base:base_static",
++    "//components/autofill/content/renderer",
+     "//components/cdm/renderer",
+     "//components/custom_handlers",
+     "//components/custom_handlers:test_support",
+diff --git a/content/shell/renderer/shell_content_renderer_client.cc b/content/shell/renderer/shell_content_renderer_client.cc
+index 089e88acf3..26277e4794 100644
+--- a/content/shell/renderer/shell_content_renderer_client.cc
++++ b/content/shell/renderer/shell_content_renderer_client.cc
+@@ -5,11 +5,13 @@
+ #include "content/shell/renderer/shell_content_renderer_client.h"
+ 
+ #include <cstdlib>
++#include <memory>
+ #include <string>
+ 
+ #include "base/base_switches.h"
+ #include "base/check_op.h"
+ #include "base/command_line.h"
++#include "base/feature_list.h"
+ #include "base/files/file.h"
+ #include "base/functional/bind.h"
+ #include "base/immediate_crash.h"
+@@ -19,6 +21,9 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/types/pass_key.h"
++#include "components/autofill/content/renderer/autofill_agent.h"
++#include "components/autofill/content/renderer/password_autofill_agent.h"
++#include "components/autofill/content/renderer/password_generation_agent.h"
+ #include "components/cdm/renderer/external_clear_key_key_system_info.h"
+ #include "components/network_hints/renderer/web_prescient_networking_impl.h"
+ #include "components/surface_embed/buildflags/buildflags.h"
+@@ -42,6 +47,7 @@
+ #include "net/base/net_errors.h"
+ #include "sandbox/policy/sandbox.h"
+ #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
++#include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/web_url_error.h"
+ #include "third_party/blink/public/web/modules/credentialmanagement/throttle_helper.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+@@ -51,7 +57,6 @@
+ #include "v8/include/v8.h"
+ 
+ #if BUILDFLAG(ENABLE_MOJO_CDM)
+-#include "base/feature_list.h"
+ #include "media/base/media_switches.h"
+ #endif
+ 
+@@ -352,6 +357,38 @@ void ShellContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   // browser tests. If we only create that for browser tests then the override
+   // of this method in WebTestContentRendererClient would not be needed.
+   new ShellRenderFrameObserver(render_frame);
++
++  if (!render_frame->IsInFencedFrameTree() ||
++      base::FeatureList::IsEnabled(blink::features::kFencedFramesAPIChanges)) {
++    blink::AssociatedInterfaceRegistry* associated_interfaces =
++        render_frame->GetAssociatedInterfaceRegistry();
++    auto password_autofill_agent =
++        std::make_unique<autofill::PasswordAutofillAgent>(
++            render_frame, associated_interfaces);
++    auto password_generation_agent =
++        std::make_unique<autofill::PasswordGenerationAgent>(
++            render_frame, password_autofill_agent.get(), associated_interfaces);
++    new autofill::AutofillAgent(render_frame,
++                                std::move(password_autofill_agent),
++                                std::move(password_generation_agent),
++                                associated_interfaces);
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=ShellContentRendererClient::RenderFrameCreated."
++                   "autofill_installed"
++                << " render_frame=" << static_cast<void*>(render_frame)
++                << " associated_interfaces="
++                << static_cast<void*>(associated_interfaces);
++    }
++  } else if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=ShellContentRendererClient::RenderFrameCreated."
++                 "autofill_skipped"
++              << " reason=fenced_frame"
++              << " render_frame=" << static_cast<void*>(render_frame);
++  }
+ }
+ 
+ bool ShellContentRendererClient::OverrideCreatePlugin(
+-- 
+2.54.0
+

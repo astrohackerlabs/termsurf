@@ -26,7 +26,7 @@ Do not move or rename it.
 ## Current State
 
 - Current fully archived build baseline: `148.0.7778.97-issue-794-exp19`
-- Latest documented Chromium branch: `148.0.7778.97-issue-834-exp5`
+- Latest documented Chromium branch: `148.0.7778.97-issue-843`
 - Base version: `148.0.7778.97`
 - Version policy: track the Chromium version used by the latest stable Electron
   release unless an issue explicitly records a temporary exception.

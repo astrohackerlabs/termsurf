@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -66,6 +67,7 @@ typedef void (*ts_render_probe_cb)(
     int webkit_green,
     const char *error,
     void *user_data);
+typedef void (*ts_webkit_test_task_cb)(void *user_data);
 
 int ts_content_main(int argc, const char *const *argv);
 void ts_set_on_initialized(ts_initialized_cb callback, void *user_data);
@@ -152,6 +154,14 @@ void ts_set_on_renderer_crashed(ts_renderer_crashed_cb cb, void *user_data);
 void ts_set_on_render_probe(ts_render_probe_cb cb, void *user_data);
 
 void ts_webkit_test_capture_render_probe(ts_web_contents_t wc);
+void ts_webkit_test_post_delayed_task(double seconds, ts_webkit_test_task_cb callback, void *user_data);
+int ts_webkit_test_write_pdf_save(
+    const char *download_dir,
+    const char *suggested_filename,
+    const uint8_t *data,
+    size_t data_len,
+    char *out_path,
+    size_t out_path_len);
 
 #ifdef __cplusplus
 }

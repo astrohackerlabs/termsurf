@@ -37,9 +37,7 @@ const default_devtools_reservation_timeout_ms: i64 = 15_000;
 const roamium_path_env = "TERMSURF_ROAMIUM_PATH";
 const surfari_path_env = "TERMSURF_SURFARI_PATH";
 const installed_roamium_path_env = "TERMSURF_INSTALLED_ROAMIUM_PATH";
-const installed_surfari_path_env = "TERMSURF_INSTALLED_SURFARI_PATH";
 const installed_roamium_path = "/opt/homebrew/opt/termsurf-roamium/roamium";
-const installed_surfari_path = "/opt/homebrew/opt/termsurf-surfari/surfari";
 
 const termsurf_open_split = if (builtin.is_test) testTermsurfOpenSplit else @extern(*const fn (
     pane_id: [*:0]const u8,
@@ -66,6 +64,11 @@ const termsurf_set_cursor = if (builtin.is_test) testTermsurfSetCursor else @ext
     pane_id: [*:0]const u8,
     cursor_type: i64,
 ) callconv(.c) void, .{ .name = "termsurf_set_cursor" });
+
+const termsurf_set_title = if (builtin.is_test) testTermsurfSetTitle else @extern(*const fn (
+    pane_id: [*:0]const u8,
+    title: [*:0]const u8,
+) callconv(.c) void, .{ .name = "termsurf_set_title" });
 
 fn testTermsurfOpenSplit(
     pane_id: [*:0]const u8,
@@ -104,6 +107,11 @@ fn testTermsurfClearOverlay(pane_id: [*:0]const u8) callconv(.c) void {
 fn testTermsurfSetCursor(pane_id: [*:0]const u8, cursor_type: i64) callconv(.c) void {
     _ = pane_id;
     _ = cursor_type;
+}
+
+fn testTermsurfSetTitle(pane_id: [*:0]const u8, title: [*:0]const u8) callconv(.c) void {
+    _ = pane_id;
+    _ = title;
 }
 
 const ConnType = enum {
@@ -299,6 +307,17 @@ const FocusChangedSnapshot = struct {
     }
 };
 
+const ModeChangedSnapshot = struct {
+    tui_fd: std.posix.fd_t = -1,
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+    browsing: bool = false,
+
+    fn paneId(self: *const ModeChangedSnapshot) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+};
+
 const GuiActiveTarget = struct {
     browser_fd: std.posix.fd_t = -1,
     pane_id: [max_pane_id_len]u8 = undefined,
@@ -347,6 +366,22 @@ const CursorSnapshot = struct {
 
     fn paneId(self: *const CursorSnapshot) []const u8 {
         return self.pane_id[0..self.pane_id_len];
+    }
+};
+
+const TitleSnapshot = struct {
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+    title: [max_url_len]u8 = undefined,
+    title_len: usize = 0,
+    tab_id: i64 = 0,
+
+    fn paneId(self: *const TitleSnapshot) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+
+    fn titleText(self: *const TitleSnapshot) []const u8 {
+        return self.title[0..self.title_len];
     }
 };
 
@@ -709,6 +744,9 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CURSOR_CHANGED => {
                     handleCursorChanged(fd, msg.*.unnamed_0.cursor_changed);
+                },
+                c.TERMSURF__TERM_SURF_MESSAGE__MSG_TITLE_CHANGED => {
+                    handleTitleChanged(fd, msg.*.unnamed_0.title_changed);
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_MODE_CHANGED => {
                     handleModeChanged(msg.*.unnamed_0.mode_changed);
@@ -1536,36 +1574,14 @@ fn resolveBrowserExecutable(browser: []const u8) ?[]const u8 {
                 "SetOverlay: named browser unresolved browser={s} env={s} value={s}",
                 .{ browser, surfari_path_env, resolved },
             );
+            return null;
         }
 
-        if (std.posix.getenv(surfari_path_env) == null) {
-            log.warn(
-                "SetOverlay: named browser unresolved browser={s} env={s}",
-                .{ browser, surfari_path_env },
-            );
-        }
-
-        if (comptime build_config.is_debug) return null;
-
-        if (std.posix.getenv(installed_surfari_path_env)) |resolved| {
-            if (resolved.len != 0 and isAbsolutePath(resolved)) {
-                log.info(
-                    "SetOverlay: named browser resolved browser={s} env={s} path={s}",
-                    .{ browser, installed_surfari_path_env, resolved },
-                );
-                return resolved;
-            }
-            log.warn(
-                "SetOverlay: installed browser override ignored browser={s} env={s} value={s}",
-                .{ browser, installed_surfari_path_env, resolved },
-            );
-        }
-
-        log.info(
-            "SetOverlay: named browser resolved browser={s} installed_path={s}",
-            .{ browser, installed_surfari_path },
+        log.warn(
+            "SetOverlay: named browser unresolved browser={s} env={s}",
+            .{ browser, surfari_path_env },
         );
-        return installed_surfari_path;
+        return null;
     }
 
     log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
@@ -2207,6 +2223,10 @@ pub fn forwardMouseEvent(
     click_count: i64,
     modifiers: u64,
 ) bool {
+    if (std.mem.eql(u8, event_type, "down") and std.mem.eql(u8, button, "left")) {
+        enterBrowseFromOverlayClick(pane_id);
+    }
+
     const snapshot = snapshotBrowserInput(pane_id, false) orelse return false;
 
     var mouse_event: c.Termsurf__MouseEvent = undefined;
@@ -2233,6 +2253,59 @@ pub fn forwardMouseEvent(
         .{ snapshot.paneId(), snapshot.tab_id, event_type, button, x, y, click_count, modifiers },
     );
     return true;
+}
+
+pub fn overlayMissedLeftClick(pane_id: []const u8) void {
+    var mode_changed: ?ModeChangedSnapshot = null;
+    var focus_changed: ?FocusChangedSnapshot = null;
+
+    state_mutex.lock();
+    if (findPane(pane_id)) |pane_index| {
+        const pane = &panes[pane_index];
+        if (pane.browsing) {
+            pane.browsing = false;
+            mode_changed = snapshotModeChanged(pane, false);
+            focus_changed = snapshotFocusChanged(pane, false);
+            log.info("ClickModeChanged: pane_id={s} browsing=false reason=overlay_miss", .{pane_id});
+        }
+    }
+    state_mutex.unlock();
+
+    sendClickModeSnapshots(mode_changed, focus_changed);
+}
+
+fn enterBrowseFromOverlayClick(pane_id: []const u8) void {
+    var mode_changed: ?ModeChangedSnapshot = null;
+    var focus_changed: ?FocusChangedSnapshot = null;
+
+    state_mutex.lock();
+    if (findPane(pane_id)) |pane_index| {
+        const pane = &panes[pane_index];
+        if (!pane.browsing) {
+            pane.browsing = true;
+            mode_changed = snapshotModeChanged(pane, true);
+            if (pane.focused) {
+                focus_changed = snapshotFocusChanged(pane, true);
+            }
+            log.info("ClickModeChanged: pane_id={s} browsing=true reason=overlay_click", .{pane_id});
+        }
+    }
+    state_mutex.unlock();
+
+    sendClickModeSnapshots(mode_changed, focus_changed);
+}
+
+fn sendClickModeSnapshots(mode_changed: ?ModeChangedSnapshot, focus_changed: ?FocusChangedSnapshot) void {
+    if (mode_changed) |snapshot| {
+        sendModeChangedToWeb(&snapshot) catch |err| {
+            log.warn("ModeChanged send failed pane_id={s} browsing={} err={}", .{ snapshot.paneId(), snapshot.browsing, err });
+        };
+    }
+    if (focus_changed) |snapshot| {
+        sendFocusChanged(&snapshot) catch |err| {
+            log.warn("FocusChanged send failed pane_id={s} err={}", .{ snapshot.paneId(), err });
+        };
+    }
 }
 
 pub fn forwardMouseMove(
@@ -2324,6 +2397,32 @@ fn snapshotBrowserInput(pane_id: []const u8, require_browsing: bool) ?BrowserInp
     };
     if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
     return snapshot;
+}
+
+fn snapshotModeChanged(pane: *const PaneState, browsing: bool) ?ModeChangedSnapshot {
+    if (pane.tui_fd < 0) return null;
+
+    var snapshot: ModeChangedSnapshot = .{
+        .tui_fd = pane.tui_fd,
+        .browsing = browsing,
+    };
+    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+    return snapshot;
+}
+
+fn sendModeChangedToWeb(snapshot: *const ModeChangedSnapshot) !void {
+    var mode: c.Termsurf__ModeChanged = undefined;
+    c.termsurf__mode_changed__init(&mode);
+    mode.pane_id = @constCast(snapshot.pane_id[0..snapshot.pane_id_len :0].ptr);
+    mode.browsing = if (snapshot.browsing) 1 else 0;
+
+    var wrapper: c.Termsurf__TermSurfMessage = undefined;
+    c.termsurf__term_surf_message__init(&wrapper);
+    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_MODE_CHANGED;
+    wrapper.unnamed_0.mode_changed = &mode;
+
+    try sendProtobuf(snapshot.tui_fd, &wrapper);
+    log.info("ModeChanged: pane_id={s} browsing={} source=gui", .{ snapshot.paneId(), snapshot.browsing });
 }
 
 fn sendCloseTab(snapshot: *const CloseTabSnapshot) !void {
@@ -2592,6 +2691,66 @@ fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) voi
     if (cursor_snapshot) |cursor_snapshot_value| setCursor(&cursor_snapshot_value);
 }
 
+fn handleTitleChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__TitleChanged) void {
+    const title_changed = req orelse {
+        log.warn("TitleChanged: missing payload", .{});
+        return;
+    };
+    const title = cString(title_changed.*.title);
+    if (title.len == 0) {
+        log.info("TitleChanged: empty title ignored tab_id={}", .{title_changed.*.tab_id});
+        return;
+    }
+
+    var title_snapshot: ?TitleSnapshot = null;
+
+    state_mutex.lock();
+
+    const server_index = findServerByFd(fd) orelse {
+        log.warn("TitleChanged: unknown browser fd={} tab_id={}", .{ fd, title_changed.*.tab_id });
+        state_mutex.unlock();
+        return;
+    };
+    const profile = servers[server_index].profileName();
+    const browser = servers[server_index].browserName();
+    const lookup_index = findTabLookup(profile, browser, title_changed.*.tab_id) orelse {
+        log.warn(
+            "TitleChanged: unknown tab key={s}/{s} tab_id={} title={s}",
+            .{ profile, browser, title_changed.*.tab_id, title },
+        );
+        state_mutex.unlock();
+        return;
+    };
+    const pane_id = tab_lookups[lookup_index].paneId();
+    const pane_index = findPane(pane_id) orelse {
+        log.warn("TitleChanged: tab maps to missing pane_id={s}", .{pane_id});
+        state_mutex.unlock();
+        return;
+    };
+
+    var snapshot: TitleSnapshot = .{
+        .tab_id = title_changed.*.tab_id,
+    };
+    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, panes[pane_index].paneId())) {
+        log.warn("TitleChanged: pane_id too long pane_id={s}", .{panes[pane_index].paneId()});
+    } else if (!copyText(&snapshot.title, &snapshot.title_len, title)) {
+        log.warn("TitleChanged: title too long pane_id={s} tab_id={}", .{
+            panes[pane_index].paneId(),
+            title_changed.*.tab_id,
+        });
+    } else {
+        title_snapshot = snapshot;
+    }
+
+    log.info(
+        "TitleChanged: pane_id={s} tab_id={} title={s}",
+        .{ panes[pane_index].paneId(), title_changed.*.tab_id, title },
+    );
+    state_mutex.unlock();
+
+    if (title_snapshot) |title_snapshot_value| setTitle(&title_snapshot_value);
+}
+
 fn snapshotOverlay(pane: *const PaneState) ?OverlaySnapshot {
     if (pane.ca_context_id == 0) return null;
     if (pane.width == 0 or pane.height == 0) return null;
@@ -2644,6 +2803,17 @@ fn setCursor(snapshot: *const CursorSnapshot) void {
     log.info(
         "SetCursor: pane_id={s} tab_id={} cursor_type={}",
         .{ snapshot.paneId(), snapshot.tab_id, snapshot.cursor_type },
+    );
+}
+
+fn setTitle(snapshot: *const TitleSnapshot) void {
+    termsurf_set_title(
+        snapshot.pane_id[0..snapshot.pane_id_len :0].ptr,
+        snapshot.title[0..snapshot.title_len :0].ptr,
+    );
+    log.info(
+        "SetTitle: pane_id={s} tab_id={} title={s}",
+        .{ snapshot.paneId(), snapshot.tab_id, snapshot.titleText() },
     );
 }
 
@@ -3310,7 +3480,7 @@ test "termsurf server register matches profile and browser" {
     const surfari: [:0]const u8 = "surfari";
     const roamium: [:0]const u8 = "roamium";
 
-    try testWithRestoredEnv(surfari_path_env, testSurfariResolutionWithInstalledEnvRestore);
+    try testWithRestoredEnv(surfari_path_env, testSurfariResolution);
 
     var surfari_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const surfari_data_dir = buildUserDataDir(&surfari_data_dir_buf, surfari, profile) orelse return error.UserDataDirFailed;
@@ -3400,31 +3570,14 @@ fn testSurfariResolution() !void {
     const testing = std.testing;
     const surfari: [:0]const u8 = "surfari";
     const fake_path: [:0]const u8 = "/tmp/termsurf-test-surfari";
-    const fake_installed_path: [:0]const u8 = "/tmp/termsurf-test-installed-surfari";
 
     _ = c.unsetenv(surfari_path_env);
-    _ = c.unsetenv(installed_surfari_path_env);
-    if (comptime build_config.is_debug) {
-        try testing.expect(resolveBrowserExecutable(surfari) == null);
-    } else {
-        try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutable(surfari).?);
-    }
+    try testing.expect(resolveBrowserExecutable(surfari) == null);
     try testing.expect(resolveBrowserExecutable("unknown-browser") == null);
     try testing.expectEqualStrings("/tmp/absolute-browser", resolveBrowserExecutable("/tmp/absolute-browser").?);
 
-    if (c.setenv(installed_surfari_path_env, fake_installed_path, 1) != 0) return error.SetenvFailed;
-    if (comptime build_config.is_debug) {
-        try testing.expect(resolveBrowserExecutable(surfari) == null);
-    } else {
-        try testing.expectEqualStrings(fake_installed_path, resolveBrowserExecutable(surfari).?);
-    }
-
     if (c.setenv(surfari_path_env, fake_path, 1) != 0) return error.SetenvFailed;
     try testing.expectEqualStrings(fake_path, resolveBrowserExecutable(surfari).?);
-}
-
-fn testSurfariResolutionWithInstalledEnvRestore() !void {
-    try testWithRestoredEnv(installed_surfari_path_env, testSurfariResolution);
 }
 
 fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void) !void {

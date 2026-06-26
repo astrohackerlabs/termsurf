@@ -344,6 +344,8 @@ class AppDelegate: NSObject,
                 NSApp.arrangeInFront(nil)
             }
         }
+
+        termsurfRunActivationProbeIfRequested()
     }
 
     func applicationDidHide(_ notification: Notification) {

@@ -1,0 +1,262 @@
+From 8a4af7e2fde16f2dc8d39e72f89ef4653ed3f442 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 13:52:37 -0500
+Subject: [PATCH 37/87] Trace PDF claim lifecycle
+
+A claim stood beside the stream,
+But downloads cut short the dream.
+So logs caught the race,
+At the content_shell place,
+Where PDFs leave render's regime.
+---
+ .../browser/pdf/pdf_viewer_stream_manager.cc  | 68 ++++++++++++++++++-
+ ...esponse_interceptor_url_loader_throttle.cc | 29 ++++----
+ 2 files changed, 82 insertions(+), 15 deletions(-)
+
+diff --git a/chrome/browser/pdf/pdf_viewer_stream_manager.cc b/chrome/browser/pdf/pdf_viewer_stream_manager.cc
+index fcf22882cb..acb532210d 100644
+--- a/chrome/browser/pdf/pdf_viewer_stream_manager.cc
++++ b/chrome/browser/pdf/pdf_viewer_stream_manager.cc
+@@ -193,6 +193,11 @@ void PdfViewerStreamManager::AddStreamContainer(
+     const std::string& internal_id,
+     std::unique_ptr<extensions::StreamContainer> stream_container) {
+   CHECK(stream_container);
++  const size_t count_before = stream_infos_.size();
++  const bool replacing_unclaimed =
++      ContainsUnclaimedStreamInfo(frame_tree_node_id);
++  const GURL original_url = stream_container->original_url();
++  const GURL handler_url = stream_container->handler_url();
+ 
+   // If an entry with the same frame tree node ID already exists in
+   // `stream_infos_`, then a new PDF navigation has occurred. If the
+@@ -204,6 +209,13 @@ void PdfViewerStreamManager::AddStreamContainer(
+   auto embedder_host_info = GetUnclaimedEmbedderHostInfo(frame_tree_node_id);
+   stream_infos_[embedder_host_info] = std::make_unique<extensions::StreamInfo>(
+       internal_id, std::move(stream_container));
++  LOG(INFO) << "[issue-792-exp16] pvs-add frame_tree_node_id="
++            << frame_tree_node_id << " internal_id=" << internal_id
++            << " original_url=" << original_url
++            << " handler_url=" << handler_url
++            << " count_before=" << count_before
++            << " count_after=" << stream_infos_.size()
++            << " replacing_unclaimed=" << replacing_unclaimed;
+ }
+ 
+ base::WeakPtr<extensions::StreamContainer>
+@@ -312,6 +324,8 @@ bool PdfViewerStreamManager::ContainsUnclaimedStreamInfo(
+ 
+ void PdfViewerStreamManager::DeleteUnclaimedStreamInfo(
+     content::FrameTreeNodeId frame_tree_node_id) {
++  LOG(INFO) << "[issue-792-exp16] pvs-delete-unclaimed frame_tree_node_id="
++            << frame_tree_node_id;
+   CHECK(stream_infos_.erase(GetUnclaimedEmbedderHostInfo(frame_tree_node_id)));
+ 
+   if (stream_infos_.empty()) {
+@@ -322,6 +336,15 @@ void PdfViewerStreamManager::DeleteUnclaimedStreamInfo(
+ 
+ void PdfViewerStreamManager::RenderFrameDeleted(
+     content::RenderFrameHost* render_frame_host) {
++  const content::FrameTreeNodeId frame_tree_node_id =
++      render_frame_host->GetFrameTreeNodeId();
++  LOG(INFO) << "[issue-792-exp16] pvs-render-frame-deleted "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " active=" << render_frame_host->IsActive() << " has_unclaimed="
++            << ContainsUnclaimedStreamInfo(frame_tree_node_id)
++            << " has_claimed="
++            << static_cast<bool>(GetClaimedStreamInfo(render_frame_host));
++
+   // When the PDF embedder frame is deleted, delete its stream.
+   if (GetClaimedStreamInfo(render_frame_host)) {
+     DeleteClaimedStreamInfo(render_frame_host);
+@@ -340,8 +363,6 @@ void PdfViewerStreamManager::RenderFrameDeleted(
+ 
+   // If `render_frame_host` is an unrelated host (there isn't an unclaimed
+   // stream), ignore.
+-  content::FrameTreeNodeId frame_tree_node_id =
+-      render_frame_host->GetFrameTreeNodeId();
+   if (!ContainsUnclaimedStreamInfo(frame_tree_node_id)) {
+     return;
+   }
+@@ -358,6 +379,12 @@ void PdfViewerStreamManager::RenderFrameHostChanged(
+   if (!old_host) {
+     return;
+   }
++  LOG(INFO) << "[issue-792-exp16] pvs-rfh-changed "
++            << "old_frame_tree_node_id=" << old_host->GetFrameTreeNodeId()
++            << " new_frame_tree_node_id="
++            << (new_host ? new_host->GetFrameTreeNodeId().value() : -1)
++            << " old_has_claimed="
++            << static_cast<bool>(GetClaimedStreamInfo(old_host));
+ 
+   if (MaybeDeleteStreamOnPdfExtensionHostChanged(old_host) ||
+       MaybeDeleteStreamOnPdfContentHostChanged(old_host)) {
+@@ -381,6 +408,7 @@ void PdfViewerStreamManager::RenderFrameHostChanged(
+ 
+ void PdfViewerStreamManager::FrameDeleted(
+     content::FrameTreeNodeId frame_tree_node_id) {
++  const size_t stream_count_before = stream_infos_.size();
+   // If a PDF host is deleted, delete the associated `StreamInfo`.
+   for (auto iter = stream_infos_.begin(); iter != stream_infos_.end();) {
+     extensions::StreamInfo* stream_info = iter->second.get();
+@@ -407,6 +435,10 @@ void PdfViewerStreamManager::FrameDeleted(
+       ++iter;
+     }
+   }
++  LOG(INFO) << "[issue-792-exp16] pvs-frame-deleted frame_tree_node_id="
++            << frame_tree_node_id
++            << " stream_count_before=" << stream_count_before
++            << " stream_count_after=" << stream_infos_.size();
+ 
+   // Delete `this` if there are no remaining stream infos.
+   if (stream_infos_.empty()) {
+@@ -417,6 +449,16 @@ void PdfViewerStreamManager::FrameDeleted(
+ 
+ void PdfViewerStreamManager::DidStartNavigation(
+     content::NavigationHandle* navigation_handle) {
++  const content::FrameTreeNodeId frame_tree_node_id =
++      navigation_handle->GetFrameTreeNodeId();
++  LOG(INFO) << "[issue-792-exp16] pvs-start frame_tree_node_id="
++            << frame_tree_node_id << " url=" << navigation_handle->GetURL()
++            << " is_pdf=" << navigation_handle->IsPdf()
++            << " is_in_main_frame=" << navigation_handle->IsInMainFrame()
++            << " has_unclaimed="
++            << ContainsUnclaimedStreamInfo(frame_tree_node_id)
++            << " stream_count=" << stream_infos_.size();
++
+   // Set the content host frame tree node ID if the navigation is for a content
+   // host. This needs to occur before the network request for the PDF content
+   // navigation so that
+@@ -438,13 +480,26 @@ void PdfViewerStreamManager::DidStartNavigation(
+ 
+ void PdfViewerStreamManager::ReadyToCommitNavigation(
+     content::NavigationHandle* navigation_handle) {
++  const content::FrameTreeNodeId frame_tree_node_id =
++      navigation_handle->GetFrameTreeNodeId();
++  LOG(INFO) << "[issue-792-exp16] pvs-ready frame_tree_node_id="
++            << frame_tree_node_id << " url=" << navigation_handle->GetURL()
++            << " is_pdf=" << navigation_handle->IsPdf() << " has_unclaimed="
++            << ContainsUnclaimedStreamInfo(frame_tree_node_id)
++            << " stream_count=" << stream_infos_.size();
++
+   if (navigation_handle->IsPdf()) {
+     SetManagerCrashKeys(stream_infos_.size());
+     SetContentNavigationCrashKeys(navigation_handle, UserDataKey());
+   }
+ 
+   // Maybe register a PDF subresource override in the PDF content host.
+-  if (MaybeRegisterPdfSubresourceOverride(navigation_handle)) {
++  const bool handled_subresource_override =
++      MaybeRegisterPdfSubresourceOverride(navigation_handle);
++  LOG(INFO) << "[issue-792-exp16] pvs-ready-subresource-override "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " handled=" << handled_subresource_override;
++  if (handled_subresource_override) {
+     return;
+   }
+ 
+@@ -457,12 +512,17 @@ void PdfViewerStreamManager::ReadyToCommitNavigation(
+   content::RenderFrameHost* embedder_host =
+       navigation_handle->GetRenderFrameHost();
+   if (!ContainsUnclaimedStreamInfo(embedder_host->GetFrameTreeNodeId())) {
++    LOG(INFO) << "[issue-792-exp16] pvs-no-claim frame_tree_node_id="
++              << embedder_host->GetFrameTreeNodeId() << " reason=no-unclaimed";
+     return;
+   }
+ 
+   extensions::StreamInfo* claimed_stream_info = ClaimStreamInfo(embedder_host);
+   LOG(INFO) << "[issue-792-exp15] pdf-stream-claim frame_tree_node_id="
+             << embedder_host->GetFrameTreeNodeId() << " claimed=1";
++  LOG(INFO) << "[issue-792-exp16] pvs-claim frame_tree_node_id="
++            << embedder_host->GetFrameTreeNodeId() << " claimed=1 original_url="
++            << claimed_stream_info->stream()->original_url();
+ 
+   // Set the internal ID to set up postMessage later, when the PDF content host
+   // finishes navigating.
+@@ -649,6 +709,8 @@ void PdfViewerStreamManager::DeleteClaimedStreamInfo(
+     content::RenderFrameHost* embedder_host) {
+   auto iter = stream_infos_.find(GetEmbedderHostInfo(embedder_host));
+   CHECK(iter != stream_infos_.end());
++  LOG(INFO) << "[issue-792-exp16] pvs-delete-claimed frame_tree_node_id="
++            << embedder_host->GetFrameTreeNodeId();
+ 
+   extensions::StreamInfo* stream_info = iter->second.get();
+   if (stream_info->mime_handler_view_container_manager()) {
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index a295638bdf..4b25c471a7 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -123,6 +123,8 @@ bool AddPdfStreamContainer(
+       -1, embedded, handler_url, extension_id, std::move(transferrable_loader),
+       original_url);
+ 
++  LOG(INFO) << "[issue-792-exp16] interceptor-manager-created "
++            << "frame_tree_node_id=" << frame_tree_node_id;
+   pdf::PdfViewerStreamManager::Create(web_contents);
+   pdf::PdfViewerStreamManager::FromWebContents(web_contents)
+       ->AddStreamContainer(frame_tree_node_id, internal_id,
+@@ -134,6 +136,9 @@ bool AddPdfStreamContainer(
+   LOG(INFO) << "[issue-792-exp15] stream-container-added-before-resume "
+             << "frame_tree_node_id=" << frame_tree_node_id
+             << " internal_id=" << internal_id;
++  LOG(INFO) << "[issue-792-exp16] interceptor-stream-added "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " internal_id=" << internal_id;
+   return true;
+ }
+ 
+@@ -192,15 +197,16 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   mojo::PendingReceiver<network::mojom::URLLoaderClient> new_client_receiver =
+       new_client.BindNewPipeAndPassReceiver();
+ 
+-  const std::string stream_id =
+-      base::Uuid::GenerateRandomV4().AsLowercaseString();
+   const std::string internal_id = base::UnguessableToken::Create().ToString();
+-  LOG(INFO) << "[issue-792-exp15] override-body-start frame_tree_node_id="
++  LOG(INFO) << "[issue-792-exp16] oopif-template-body frame_tree_node_id="
+             << frame_tree_node_id_ << " internal_id=" << internal_id
+-            << " stream_id=" << stream_id << " original_url=" << response_url;
++            << " original_url=" << response_url;
+   const std::string payload =
+       extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
+           response_url, response_head->mime_type, internal_id);
++  LOG(INFO) << "[issue-792-exp16] interceptor-template-created "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " internal_id=" << internal_id;
+   *defer = true;
+ 
+   mojo::ScopedDataPipeProducerHandle producer_handle;
+@@ -220,6 +226,8 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   delegate_->InterceptResponse(std::move(dummy_new_loader),
+                                std::move(new_client_receiver), &original_loader,
+                                &original_client, &consumer_handle);
++  LOG(INFO) << "[issue-792-exp16] interceptor-response-swapped "
++            << "frame_tree_node_id=" << frame_tree_node_id_;
+ 
+   auto deep_copied_response = response_head->Clone();
+   if (response_head->headers) {
+@@ -245,17 +253,14 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+                         std::move(transferrable_loader), response_url,
+                         internal_id);
+ 
+-  std::ignore = extensions::MimeHandlerViewAttachHelper::
+-      OverrideBodyForInterceptedResponse(
+-          frame_tree_node_id_, response_url, response_head->mime_type,
+-          stream_id, internal_id,
+-          base::BindOnce(
+-              &TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad,
+-              weak_factory_.GetWeakPtr()));
++  GetUIThreadTaskRunner({})->PostTask(
++      FROM_HERE,
++      base::BindOnce(&TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad,
++                     weak_factory_.GetWeakPtr()));
+ }
+ 
+ void TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad() {
+-  LOG(INFO) << "[issue-792-exp15] override-body-resume frame_tree_node_id="
++  LOG(INFO) << "[issue-792-exp16] interceptor-resume frame_tree_node_id="
+             << frame_tree_node_id_;
+   delegate_->Resume();
+ }
+-- 
+2.54.0
+

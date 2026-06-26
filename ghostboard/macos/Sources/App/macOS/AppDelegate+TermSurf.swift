@@ -28,6 +28,122 @@ func termsurfLogGeometry(_ message: String) {
     fputs("\(line)\n", stderr)
 }
 
+func termsurfRunActivationProbeIfRequested() {
+    let environment = ProcessInfo.processInfo.environment
+    guard environment["TERMSURF_ISSUE834_GHOSTBOARD_ACTIVATION_PROBE"] != nil else {
+        return
+    }
+
+    let row = environment["TERMSURF_ISSUE834_ACTIVATION_PROBE_ROW"] ?? "ghostboard-gui"
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        termsurfPublishActivationProbePidIfRequested(process: "ghostboard")
+        guard termsurfWaitForActivationProbeWatcherIfRequested() else {
+            termsurfTraceActivationProbe(row: row, phase: "refuse", attempts: "watcher-not-ready")
+            return
+        }
+
+        let attempts = "setActivationPolicyRegular,activateIgnoringOtherApps"
+        termsurfTraceActivationProbe(row: row, phase: "before-activation", attempts: "none")
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.unhide(nil)
+        NSApp.arrangeInFront(nil)
+        termsurfTraceActivationProbe(row: row, phase: "after-activation", attempts: attempts)
+
+        let alert = NSAlert()
+        alert.messageText = "TermSurf Issue 834 Activation Probe"
+        alert.informativeText = row
+        alert.addButton(withTitle: "OK")
+        alert.window.title = "TermSurf Issue 834 Activation Probe"
+        termsurfTraceActivationProbe(row: row, phase: "before-alert", attempts: attempts)
+        let response = alert.runModal()
+        termsurfTraceActivationProbe(
+            row: row,
+            phase: "after-alert",
+            attempts: "\(attempts),response:\(response.rawValue)")
+    }
+}
+
+private func termsurfPublishActivationProbePidIfRequested(process: String) {
+    let environment = ProcessInfo.processInfo.environment
+    guard let path = environment["TERMSURF_ISSUE834_ACTIVATION_PROBE_TRACKED_PIDS_FILE"], !path.isEmpty else {
+        return
+    }
+
+    let url = URL(fileURLWithPath: path)
+    try? FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true)
+    let text = "\(process) \(getpid())\n"
+    try? Data(text.utf8).write(to: url)
+}
+
+private func termsurfWaitForActivationProbeWatcherIfRequested() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    guard let path = environment["TERMSURF_ISSUE834_ACTIVATION_PROBE_WATCHER_READY_FILE"], !path.isEmpty else {
+        return true
+    }
+
+    for _ in 0..<100 {
+        if FileManager.default.fileExists(atPath: path) {
+            return true
+        }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+    }
+    return false
+}
+
+private func termsurfTraceActivationProbe(row: String, phase: String, attempts: String) {
+    let environment = ProcessInfo.processInfo.environment
+    guard let path = environment["TERMSURF_ISSUE834_ACTIVATION_PROBE_TRACE_FILE"], !path.isEmpty else {
+        return
+    }
+
+    let line = "termsurf-activation-probe process=ghostboard row=\(row) phase=\(phase) \(termsurfActivationProbeState(attempts: attempts))"
+    let url = URL(fileURLWithPath: path)
+    try? FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true)
+    let data = Data("\(line)\n".utf8)
+    if FileManager.default.fileExists(atPath: path),
+       let handle = try? FileHandle(forWritingTo: url) {
+        _ = try? handle.seekToEnd()
+        _ = try? handle.write(contentsOf: data)
+        _ = try? handle.close()
+    } else {
+        try? data.write(to: url)
+    }
+    AppDelegate.logger.info("\(line)")
+    fputs("\(line)\n", stderr)
+}
+
+private func termsurfActivationProbeState(attempts: String) -> String {
+    let bundleID = Bundle.main.bundleIdentifier ?? ""
+    return [
+        "pid=\(getpid())",
+        "ppid=\(getppid())",
+        "bundle_id=\(bundleID)",
+        "executable=\(Bundle.main.executablePath ?? "")",
+        "activation_policy=\(NSApp.activationPolicy().rawValue)",
+        "app_active=\(NSApp.isActive ? 1 : 0)",
+        "key_window=\(termsurfDescribeWindow(NSApp.keyWindow))",
+        "main_window=\(termsurfDescribeWindow(NSApp.mainWindow))",
+        "attempts=\(attempts)",
+        "windows={\(NSApp.windows.map(termsurfDescribeWindow).joined(separator: "|"))}",
+    ].joined(separator: " ")
+}
+
+private func termsurfDescribeWindow(_ window: NSWindow?) -> String {
+    guard let window else { return "nil" }
+    return "\(type(of: window)):\(Unmanaged.passUnretained(window).toOpaque())" +
+        ":title={\(window.title)}" +
+        ":visible=\(window.isVisible ? 1 : 0)" +
+        ":key=\(window.isKeyWindow ? 1 : 0)" +
+        ":main=\(window.isMainWindow ? 1 : 0)" +
+        ":can_key=\(window.canBecomeKey ? 1 : 0)" +
+        ":can_main=\(window.canBecomeMain ? 1 : 0)"
+}
+
 @_cdecl("termsurf_clear_overlay")
 func termsurf_clear_overlay(_ paneIDPointer: UnsafePointer<CChar>?) {
     guard let paneIDPointer else {
@@ -91,6 +207,39 @@ func termsurf_set_cursor(_ paneIDPointer: UnsafePointer<CChar>?, _ cursorType: I
         }
 
         target.setTermSurfCursor(type: cursorType)
+    }
+}
+
+@_cdecl("termsurf_set_title")
+func termsurf_set_title(
+    _ paneIDPointer: UnsafePointer<CChar>?,
+    _ titlePointer: UnsafePointer<CChar>?
+) {
+    guard let paneIDPointer, let titlePointer else {
+        termsurfLogOverlay("TermSurf title rejected: missing C string")
+        return
+    }
+
+    let paneID = String(cString: paneIDPointer)
+    let title = String(cString: titlePointer)
+    termsurfLogOverlay("TermSurf title request pane_id=\(paneID) title=\(title)")
+
+    DispatchQueue.main.async {
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
+            termsurfLogOverlay("TermSurf title rejected: missing app delegate")
+            return
+        }
+        guard let uuid = UUID(uuidString: paneID) else {
+            termsurfLogOverlay("TermSurf title rejected: invalid pane id \(paneID)")
+            return
+        }
+        guard let target = appDelegate.findSurface(forUUID: uuid) else {
+            termsurfLogOverlay("TermSurf title rejected: no surface for pane id \(paneID)")
+            return
+        }
+
+        target.setTitle(title)
+        termsurfLogOverlay("TermSurf title applied pane_id=\(paneID) title=\(title)")
     }
 }
 
