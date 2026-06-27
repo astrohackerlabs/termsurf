@@ -1,0 +1,80 @@
+From 502785153614bfe1e86a7958fc11af1c13cb046a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 23:10:40 -0500
+Subject: [PATCH 73/88] Expose incognito context
+
+A context slipped out through a door,
+Promising crumbs nevermore.
+Tabs may go private,
+Profiles survive it,
+And cookies keep off of the floor.
+---
+ content/libtermsurf_chromium/libtermsurf_chromium.cc  | 7 +++++++
+ content/libtermsurf_chromium/libtermsurf_chromium.h   | 4 ++++
+ content/libtermsurf_chromium/ts_browser_main_parts.cc | 4 ++++
+ content/libtermsurf_chromium/ts_browser_main_parts.h  | 1 +
+ 4 files changed, 16 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index dd399f8d36..ff8a10d9fd 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -248,6 +248,13 @@ ts_browser_context_t ts_create_browser_context(const char* path) {
+   return g_main_parts->CreateBrowserContext(path);
+ }
+ 
++ts_browser_context_t ts_create_incognito_browser_context(void) {
++  if (!g_main_parts) {
++    return nullptr;
++  }
++  return g_main_parts->CreateIncognitoBrowserContext();
++}
++
+ void ts_destroy_browser_context(ts_browser_context_t ctx) {
+   if (!g_main_parts) {
+     return;
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index a35e5a7e83..0e3174ee29 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -55,6 +55,10 @@ TS_EXPORT void ts_quit(void);
+    Returns an opaque handle. Synchronous — safe. */
+ TS_EXPORT ts_browser_context_t ts_create_browser_context(const char* path);
+ 
++/* Return the off-the-record BrowserContext owned by Chromium. Synchronous —
++   safe. */
++TS_EXPORT ts_browser_context_t ts_create_incognito_browser_context(void);
++
+ /* Destroy a BrowserContext and release its resources. Synchronous — safe. */
+ TS_EXPORT void ts_destroy_browser_context(ts_browser_context_t ctx);
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 3196866833..94f1d21961 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -314,6 +314,10 @@ void* TsBrowserMainParts::CreateBrowserContext(const char* path) {
+   return static_cast<void*>(browser_context());
+ }
+ 
++void* TsBrowserMainParts::CreateIncognitoBrowserContext() {
++  return static_cast<void*>(off_the_record_browser_context());
++}
++
+ void TsBrowserMainParts::DestroyBrowserContext(void* ctx) {
+   // The default browser context is owned by the base class.
+   // Custom contexts would be deleted here.
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index be18b481cf..82d7627432 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -72,6 +72,7 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+ 
+   // --- C API methods (called from libtermsurf_chromium.cc) ---
+   void* CreateBrowserContext(const char* path);
++  void* CreateIncognitoBrowserContext();
+   void DestroyBrowserContext(void* ctx);
+   void* CreateTab(void* ctx, const char* url, int width, int height, bool dark);
+   void* CreateDevToolsTab(void* ctx,
+-- 
+2.54.0
+

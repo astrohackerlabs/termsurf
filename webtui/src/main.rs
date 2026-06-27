@@ -1625,6 +1625,44 @@ fn viewport_identity_label(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BrowserLayout {
+    viewport_area: Rect,
+    url_area: Rect,
+    status_area: Rect,
+}
+
+fn browser_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserLayout {
+    let layout = if let Some(rows) = viewport_height_override {
+        let available = area.height.saturating_sub(4);
+        let viewport_height = rows.saturating_add(2).clamp(1, available.max(1));
+        Layout::vertical([
+            Constraint::Length(3),               // URL bar
+            Constraint::Length(1),               // Status bar
+            Constraint::Length(viewport_height), // Viewport override
+            Constraint::Min(0),                  // Filler
+        ])
+        .split(area)
+    } else {
+        Layout::vertical([
+            Constraint::Length(3), // URL bar (1 line + top/bottom border)
+            Constraint::Length(1), // Status bar
+            Constraint::Min(1),    // Viewport (fill remaining)
+        ])
+        .split(area)
+    };
+
+    BrowserLayout {
+        url_area: layout[0],
+        status_area: layout[1],
+        viewport_area: layout[2],
+    }
+}
+
+fn viewport_inner_rect(viewport_area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(viewport_area)
+}
+
 /// Render the UI and return the viewport inner rect (grid coordinates).
 fn ui(
     frame: &mut Frame,
@@ -1655,26 +1693,10 @@ fn ui(
         frame.area(),
     );
 
-    let (viewport_area, url_area, status_area) = if let Some(rows) = viewport_height_override {
-        let available = frame.area().height.saturating_sub(4);
-        let viewport_height = rows.saturating_add(2).clamp(1, available.max(1));
-        let layout = Layout::vertical([
-            Constraint::Length(viewport_height), // Viewport override
-            Constraint::Min(0),                  // Filler
-            Constraint::Length(3),               // URL bar
-            Constraint::Length(1),               // Status bar
-        ])
-        .split(frame.area());
-        (layout[0], layout[2], layout[3])
-    } else {
-        let layout = Layout::vertical([
-            Constraint::Min(1),    // Viewport (fill remaining)
-            Constraint::Length(3), // URL bar (1 line + top/bottom border)
-            Constraint::Length(1), // Status bar
-        ])
-        .split(frame.area());
-        (layout[0], layout[1], layout[2])
-    };
+    let layout = browser_layout(frame.area(), viewport_height_override);
+    let viewport_area = layout.viewport_area;
+    let url_area = layout.url_area;
+    let status_area = layout.status_area;
 
     // Border colors based on mode.
     let (url_border, viewport_border) = match mode {
@@ -1811,7 +1833,7 @@ fn ui(
         let hover_label = Line::from(Span::raw(target_url).style(Style::default().fg(DIM)));
         viewport_block = viewport_block.title_bottom(hover_label);
     }
-    let inner = viewport_block.inner(viewport_area);
+    let inner = viewport_inner_rect(viewport_area);
 
     if let Some(dialog) = pending_dialog {
         let prompt_line = match dialog.dialog_type.as_str() {
@@ -2106,4 +2128,176 @@ fn ui(
     frame.render_widget(label_widget, status_layout[1]);
 
     inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::Terminal;
+
+    struct RenderProbe {
+        viewport: Rect,
+        capture: String,
+    }
+
+    fn render_probe(
+        mode: Mode,
+        width: u16,
+        height: u16,
+        override_rows: Option<u16>,
+    ) -> RenderProbe {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut editor_state = EditorState::new(Lines::from("https://example.test"));
+        let mut cmd_state = EditorState::new(Lines::from("open https://example.test"));
+        let mut viewport = Rect::default();
+
+        terminal
+            .draw(|frame| {
+                viewport = ui(
+                    frame,
+                    "https://example.test",
+                    "default",
+                    &mode,
+                    &mut editor_state,
+                    &mut cmd_state,
+                    "Viewport",
+                    false,
+                    -1,
+                    1,
+                    &None,
+                    "roamium",
+                    "",
+                    &None,
+                    &None,
+                    None,
+                    &[],
+                    &None,
+                    true,
+                    None,
+                    override_rows,
+                );
+            })
+            .unwrap();
+
+        RenderProbe {
+            viewport,
+            capture: numbered_buffer_capture(terminal.backend().buffer()),
+        }
+    }
+
+    fn numbered_buffer_capture(buffer: &Buffer) -> String {
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            let mut row = String::new();
+            for x in 0..buffer.area.width {
+                row.push_str(buffer[(x, y)].symbol());
+            }
+            out.push_str(&format!("{y:02}: {row}\n"));
+        }
+        out
+    }
+
+    fn row_containing(capture: &str, needle: &str) -> u16 {
+        capture
+            .lines()
+            .find_map(|line| {
+                line.contains(needle)
+                    .then(|| line[..2].parse::<u16>().unwrap())
+            })
+            .unwrap_or_else(|| panic!("missing {needle:?} in capture:\n{capture}"))
+    }
+
+    fn assert_controls_before_viewport(capture: &str, chrome_marker: &str, status_marker: &str) {
+        let chrome_row = row_containing(capture, chrome_marker);
+        let status_row = row_containing(capture, status_marker);
+        let viewport_row = row_containing(capture, "Viewport");
+        assert!(
+            chrome_row < status_row,
+            "chrome row should precede status row\n{capture}"
+        );
+        assert!(
+            status_row < viewport_row,
+            "status row should precede viewport row\n{capture}"
+        );
+    }
+
+    fn assert_layout_invariants(mode: Mode, area: Rect, override_rows: Option<u16>) {
+        let layout = browser_layout(area, override_rows);
+        let inner = viewport_inner_rect(layout.viewport_area);
+        assert!(
+            layout.url_area.y < layout.status_area.y,
+            "URL area should be above status area: {layout:?}"
+        );
+        assert!(
+            layout.status_area.y < layout.viewport_area.y,
+            "status area should be above viewport area: {layout:?}"
+        );
+        assert!(
+            inner.y > layout.status_area.y,
+            "inner viewport should start below controls: inner={inner:?} layout={layout:?}"
+        );
+        assert!(
+            inner.width > 0 && inner.height > 0,
+            "inner viewport should not collapse: inner={inner:?} layout={layout:?}"
+        );
+
+        let rendered = render_probe(mode, area.width, area.height, override_rows);
+        assert_eq!(
+            rendered.viewport, inner,
+            "ui() return value must be the rect sent as overlay geometry"
+        );
+    }
+
+    #[test]
+    fn default_control_layout_places_controls_above_viewport() {
+        let rendered = render_probe(Mode::Control, 80, 18, None);
+        assert_controls_before_viewport(&rendered.capture, "URL", "edit url");
+        assert_layout_invariants(Mode::Control, Rect::new(0, 0, 80, 18), None);
+    }
+
+    #[test]
+    fn default_browse_layout_places_controls_above_viewport() {
+        let rendered = render_probe(Mode::Browse, 80, 18, None);
+        assert_controls_before_viewport(&rendered.capture, "URL", "back");
+        assert_layout_invariants(Mode::Browse, Rect::new(0, 0, 80, 18), None);
+    }
+
+    #[test]
+    fn issue_836_capture_documents_top_controls() {
+        let control = render_probe(Mode::Control, 80, 18, None);
+        let browse = render_probe(Mode::Browse, 80, 18, None);
+
+        assert_controls_before_viewport(&control.capture, "URL", "edit url");
+        assert_controls_before_viewport(&browse.capture, "URL", "back");
+
+        println!("CONTROL MODE\n{}", control.capture);
+        println!("BROWSE MODE\n{}", browse.capture);
+    }
+
+    #[test]
+    fn edit_and_command_layouts_keep_chrome_above_viewport() {
+        let edit = render_probe(Mode::Edit, 80, 18, None);
+        assert_controls_before_viewport(&edit.capture, "URL", "navigate");
+        assert_layout_invariants(Mode::Edit, Rect::new(0, 0, 80, 18), None);
+
+        let command = render_probe(Mode::Command, 80, 18, None);
+        assert_controls_before_viewport(&command.capture, "COMMAND", "execute");
+        assert_layout_invariants(Mode::Command, Rect::new(0, 0, 80, 18), None);
+    }
+
+    #[test]
+    fn viewport_override_keeps_controls_above_viewport() {
+        let rendered = render_probe(Mode::Control, 80, 20, Some(5));
+        assert_controls_before_viewport(&rendered.capture, "URL", "edit url");
+        assert_layout_invariants(Mode::Control, Rect::new(0, 0, 80, 20), Some(5));
+    }
+
+    #[test]
+    fn small_and_large_panes_keep_non_collapsed_viewport_below_controls() {
+        assert_layout_invariants(Mode::Control, Rect::new(0, 0, 24, 7), None);
+        assert_layout_invariants(Mode::Browse, Rect::new(0, 0, 120, 40), None);
+    }
 }

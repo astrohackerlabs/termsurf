@@ -1,0 +1,209 @@
+From 0f31f5bb3248e5eefe153608d1d769a1e0e29122 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 07:10:34 -0500
+Subject: [PATCH 17/88] Trace select menu x coords
+
+The menu slipped sideways,
+So every bridge now names its place.
+No math was moved today,
+Only breadcrumbs in space.
+---
+ .../render_widget_host_ns_view_bridge.mm      | 59 +++++++++++++++++++
+ .../web_menu_runner_mac.mm                    |  8 +++
+ .../renderer_host/popup_menu_helper_mac.mm    |  6 ++
+ .../renderer_host/render_frame_host_impl.cc   |  7 +++
+ .../web_contents/web_contents_view_mac.mm     |  3 +
+ 5 files changed, 83 insertions(+)
+
+diff --git a/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm b/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm
+index f1b928a61f..1dce73e879 100644
+--- a/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm
++++ b/content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.mm
+@@ -62,6 +62,31 @@ std::string Issue779NSRectToString(NSRect rect) {
+   return base::SysNSStringToUTF8(NSStringFromRect(rect));
+ }
+ 
++std::string Issue779TopLeftScreenRectToString(NSRect rect, NSScreen* screen) {
++  if (!screen) {
++    return "null";
++  }
++  NSRect screen_frame = screen.frame;
++  CGFloat top_left_y = NSMaxY(screen_frame) - NSMaxY(rect);
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"{{%.1f, %.1f}, {%.1f, %.1f}}", rect.origin.x,
++                       top_left_y, rect.size.width, rect.size.height]);
++}
++
++std::string Issue779ScreenFrame(NSView* view) {
++  if (!view || !view.window || !view.window.screen) {
++    return "null";
++  }
++  return Issue779NSRectToString(view.window.screen.frame);
++}
++
++std::string Issue779VisibleFrame(NSView* view) {
++  if (!view || !view.window || !view.window.screen) {
++    return "null";
++  }
++  return Issue779NSRectToString(view.window.screen.visibleFrame);
++}
++
+ }  // namespace
+ 
+ RenderWidgetHostNSViewBridge::RenderWidgetHostNSViewBridge(
+@@ -465,12 +490,39 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
+     NSRect flipped_bounds = [cocoa_view_ flipRectToNSRect:menu->bounds];
++    NSRect flipped_bounds_in_window =
++        [cocoa_view_ convertRect:flipped_bounds toView:nil];
++    NSRect flipped_bounds_in_screen =
++        cocoa_view_.window
++            ? [cocoa_view_.window convertRectToScreen:flipped_bounds_in_window]
++            : NSZeroRect;
++    NSScreen* screen = cocoa_view_.window.screen;
+     LOG(INFO) << "[issue-779-trace] "
+                  "RenderWidgetHostNSViewBridge::DisplayPopupMenu"
++              << " select_x_position=1"
++              << " boundary=appkit_bridge"
++              << " event=display_popup_menu"
+               << " bridge=" << static_cast<void*>(this)
+               << " cocoa_view=" << (__bridge void*)cocoa_view_
+               << " menu_bounds=" << menu->bounds.ToString()
++              << " menu_bounds_space=chromium-view-top-left"
+               << " flipped_bounds=" << Issue779NSRectToString(flipped_bounds)
++              << " flipped_bounds_space=view-local-appkit-bottom-left"
++              << " flipped_bounds_in_window="
++              << Issue779NSRectToString(flipped_bounds_in_window)
++              << " flipped_bounds_in_window_space=window-bottom-left"
++              << " flipped_bounds_in_screen="
++              << (cocoa_view_.window
++                      ? Issue779NSRectToString(flipped_bounds_in_screen)
++                      : std::string("null"))
++              << " flipped_bounds_in_screen_space=screen-bottom-left"
++              << " flipped_bounds_top_left_screen="
++              << (cocoa_view_.window
++                      ? Issue779TopLeftScreenRectToString(
++                            flipped_bounds_in_screen, screen)
++                      : std::string("null"))
++              << " flipped_bounds_top_left_screen_space=screen-top-left"
++              << " right_aligned=" << menu->right_aligned
+               << " selected_item=" << menu->selected_item
+               << " item_count=" << menu->items.size()
+               << " item_font_size=" << menu->item_font_size
+@@ -483,6 +535,13 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
+               << (cocoa_view_.window
+                       ? Issue779NSRectToString(cocoa_view_.window.frame)
+                       : std::string("null"))
++              << " window_content_frame="
++              << (cocoa_view_.window.contentView
++                      ? Issue779NSRectToString(
++                            cocoa_view_.window.contentView.frame)
++                      : std::string("null"))
++              << " screen_frame=" << Issue779ScreenFrame(cocoa_view_)
++              << " visible_frame=" << Issue779VisibleFrame(cocoa_view_)
+               << " is_headless=" << (ns_window && ns_window.isHeadless);
+   }
+   if (ns_window && ns_window.isHeadless) {
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index cc8ac6504c..8b39c968b8 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -311,6 +311,9 @@ void Issue779TraceShellWindowState(NSString* boundary,
+                               : NSZeroRect;
+     NSScreen* screen = view.window.screen;
+     LOG(INFO) << "[issue-779-trace] WebMenuRunner::runMenuInView"
++              << " select_x_position=1"
++              << " boundary=web_menu_runner"
++              << " event=run_menu_in_view"
+               << " path=select"
+               << " join_view=" << (__bridge void*)view
+               << " join_window=" << (__bridge void*)view.window
+@@ -352,6 +355,7 @@ void Issue779TraceShellWindowState(NSString* boundary,
+                       ? Issue779TopLeftScreenRectToString(screenBounds, screen)
+                       : std::string("null"))
+               << " bounds_top_left_screen_space=chromium-screen-top-left"
++              << " right_aligned=" << static_cast<bool>(_rightAligned)
+               << " final_popup_top_left=unavailable-appkit-owned"
+               << " initial_index=" << index
+               << " item_count=" << _menu.numberOfItems;
+@@ -437,6 +441,9 @@ void Issue779TraceShellWindowState(NSString* boundary,
+     NSScreen* screen = fakeControlView.window.screen;
+     LOG(INFO)
+         << "[issue-779-trace] WebMenuRunner::fakeControlView"
++        << " select_x_position=1"
++        << " boundary=web_menu_runner"
++        << " event=fake_control_view"
+         << " path=select"
+         << " join_view=" << (__bridge void*)view
+         << " join_window=" << (__bridge void*)fakeControlView.window
+@@ -457,6 +464,7 @@ void Issue779TraceShellWindowState(NSString* boundary,
+         << " attach_popup_frame="
+         << Issue779NSRectToString(fakeControlView.bounds)
+         << " attach_popup_frame_space=view-local"
++        << " right_aligned=" << static_cast<bool>(_rightAligned)
+         << " final_popup_top_left=unavailable-appkit-owned";
+   }
+ 
+diff --git a/content/browser/renderer_host/popup_menu_helper_mac.mm b/content/browser/renderer_host/popup_menu_helper_mac.mm
+index 575646a453..97c40b6cd6 100644
+--- a/content/browser/renderer_host/popup_menu_helper_mac.mm
++++ b/content/browser/renderer_host/popup_menu_helper_mac.mm
+@@ -82,11 +82,17 @@ void PopupMenuHelper::ShowPopupMenu(
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
+     LOG(INFO) << "[issue-779-trace] PopupMenuHelper::ShowPopupMenu"
++              << " select_x_position=1"
++              << " boundary=browser_anchor"
++              << " event=popup_menu_helper_show_popup_menu"
+               << " webcontents=" << static_cast<void*>(web_contents)
+               << " rwhvm=" << static_cast<void*>(rwhvm)
+               << " input_bounds=" << bounds.ToString()
++              << " input_bounds_space=chromium-root"
+               << " container_bounds=" << client_area.ToString()
++              << " container_bounds_space=screen-top-left"
+               << " bounds_in_screen=" << bounds_in_screen.ToString()
++              << " bounds_in_screen_space=screen-top-left"
+               << " rwhvm_get_view_bounds=" << rwhvm->GetViewBounds().ToString()
+               << " item_count=" << items.size()
+               << " selected_item=" << selected_item
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index de7bb38609..1e57ab73ee 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -9666,11 +9666,18 @@ void RenderFrameHostImpl::ShowPopupMenu(
+     Issue779TraceAnnounce();
+     RenderWidgetHostView* widget_view = GetView();
+     LOG(INFO) << "[issue-779-trace] RenderFrameHostImpl::ShowPopupMenu"
++              << " select_x_position=1"
++              << " boundary=browser_anchor"
++              << " event=render_frame_host_show_popup_menu"
+               << " rfh=" << static_cast<void*>(this)
+               << " webcontents="
+               << static_cast<void*>(WebContents::FromRenderFrameHost(this))
+               << " input_bounds=" << bounds.ToString()
++              << " input_bounds_space=frame-widget"
++              << " original_point=" << original_point.ToString()
+               << " transformed_bounds=" << transformed_bounds.ToString()
++              << " transformed_bounds_space=chromium-root"
++              << " transformed_point=" << transformed_point.ToString()
+               << " view=" << static_cast<void*>(view)
+               << " widget_view=" << static_cast<void*>(widget_view)
+               << " widget_view_bounds="
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 4ac562ffb7..8ad06d505f 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -554,6 +554,9 @@ void WebContentsViewMac::ShowPopupMenu(
+     Issue779TraceAnnounce();
+     NSView* view = GetInProcessNSView();
+     LOG(INFO) << "[issue-779-trace] WebContentsViewMac::ShowPopupMenu"
++              << " select_x_position=1"
++              << " boundary=browser_anchor"
++              << " event=webcontents_view_show_popup_menu"
+               << " path=select"
+               << " popup_menu_helper_before="
+               << static_cast<void*>(popup_menu_helper_.get())
+-- 
+2.54.0
+

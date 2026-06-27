@@ -227,6 +227,7 @@ class AppDelegate: NSObject,
 
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
+        termsurfInstallDebugInputObserverIfRequested()
 
         // Start our update checker.
         updateController.startUpdater()

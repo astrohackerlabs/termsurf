@@ -1,0 +1,121 @@
+From 1c85ad0c1c4bc6772097d21114dbef4a7c886b50 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 07:29:04 -0500
+Subject: [PATCH 75/88] Teach Roamium to find in PDFs
+
+Command-F knocked without a bar,
+So find text wandered very far.
+Now typed words form a search parade,
+And PDF matches get displayed.
+---
+ .../ts_browser_main_parts.cc                  | 58 +++++++++++++++++++
+ .../ts_browser_main_parts.h                   |  3 +
+ 2 files changed, 61 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 94f1d21961..1244f6a180 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -40,6 +40,7 @@
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/page_zoom.h"
++#include "content/public/common/stop_find_action.h"
+ #include "content/shell/browser/shell.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "content/shell/browser/shell_devtools_frontend.h"
+@@ -62,6 +63,7 @@
+ #include "content/public/browser/context_factory.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
+ #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+ #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
+ #include "ui/events/keycodes/dom/dom_code.h"
+@@ -990,6 +992,25 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+   int web_modifiers = modifiers & 0xF;
+   bool has_meta = (web_modifiers & blink::WebInputEvent::kMetaKey) != 0;
+   auto* web_contents = tab->shell->web_contents();
++  auto run_termsurf_find = [&](bool forward, bool new_session) {
++    if (tab->find_text.empty()) {
++      web_contents->StopFinding(STOP_FIND_ACTION_CLEAR_SELECTION);
++      return;
++    }
++    auto options = blink::mojom::FindOptions::New();
++    options->forward = forward;
++    options->match_case = false;
++    options->new_session = new_session;
++    options->find_match = true;
++    web_contents->Find(tab->find_request_id++, tab->find_text,
++                       std::move(options), /*skip_delay=*/false);
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[termsurf-pdf-input] find-command"
++                << " text_len=" << tab->find_text.size()
++                << " forward=" << forward
++                << " new_session=" << new_session;
++    }
++  };
+ 
+   if (has_meta) {
+     bool is_zoom_shortcut = true;
+@@ -1047,6 +1068,43 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+     }
+   }
+ 
++  if (has_meta && type != 1 && keycode == ui::VKEY_F) {
++    tab->find_active = true;
++    tab->find_text.clear();
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[termsurf-pdf-input] find-session action=start";
++    }
++    return;
++  }
++
++  if (tab->find_active && type != 1) {
++    if (keycode == ui::VKEY_ESCAPE) {
++      tab->find_active = false;
++      tab->find_text.clear();
++      web_contents->StopFinding(STOP_FIND_ACTION_CLEAR_SELECTION);
++      if (Issue794InputTraceEnabled()) {
++        LOG(INFO) << "[termsurf-pdf-input] find-session action=stop";
++      }
++      return;
++    }
++    if (keycode == ui::VKEY_BACK) {
++      if (!tab->find_text.empty()) {
++        tab->find_text.pop_back();
++      }
++      run_termsurf_find(/*forward=*/true, /*new_session=*/true);
++      return;
++    }
++    if (keycode == ui::VKEY_RETURN) {
++      run_termsurf_find(/*forward=*/true, /*new_session=*/false);
++      return;
++    }
++    if (!has_meta && !utf8.empty()) {
++      tab->find_text.append(base::UTF8ToUTF16(utf8));
++      run_termsurf_find(/*forward=*/true, /*new_session=*/true);
++      return;
++    }
++  }
++
+   auto event_type = blink::WebInputEvent::Type::kRawKeyDown;
+   if (type == 1) {
+     event_type = blink::WebInputEvent::Type::kKeyUp;
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 82d7627432..51f1d49db1 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -137,6 +137,9 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+     int inspected_tab_id = 0;
+     raw_ptr<Shell> shell;
+     std::unique_ptr<TsTabObserver> tab_observer;
++    bool find_active = false;
++    int find_request_id = 1;
++    std::u16string find_text;
+     blink::mojom::PreferredColorScheme preferred_color_scheme =
+         blink::mojom::PreferredColorScheme::kDark;
+ #if BUILDFLAG(IS_MAC)
+-- 
+2.54.0
+

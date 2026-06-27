@@ -461,6 +461,11 @@ static bool pdfFormOracleTraceEnabled()
     return NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_PDF_FORM_ORACLE_TRACE_FILE"].length > 0;
 }
 
+static bool pdfViewHierarchyTraceEnabled()
+{
+    return NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_PDF_VIEW_HIERARCHY_TRACE_FILE"].length > 0;
+}
+
 static bool pdfPointerPrimeProductionEnabled()
 {
     return !pdfPointerPrimeProductionDisabled() && !pdfSelectionStateTransitionEnabled();
@@ -859,6 +864,29 @@ static void appendPdfFormOracleTrace(NSString *line)
     }
 }
 
+static void appendPdfViewHierarchyTrace(NSString *line)
+{
+    if (!pdfViewHierarchyTraceEnabled())
+        return;
+    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_PDF_VIEW_HIERARCHY_TRACE_FILE"];
+    if (!path.length)
+        return;
+    NSString *entry = [line stringByAppendingString:@"\n"];
+    NSData *data = [entry dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *parent = path.stringByDeletingLastPathComponent;
+    if (parent.length)
+        [fm createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
+    if (![fm fileExistsAtPath:path])
+        [data writeToFile:path atomically:YES];
+    else {
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+        [handle closeFile];
+    }
+}
+
 static NSString *pdfFormOracleToken(NSString *value)
 {
     if (!value.length)
@@ -869,6 +897,15 @@ static NSString *pdfFormOracleToken(NSString *value)
     [result replaceOccurrencesOfString:@"\r" withString:@"\\r" options:0 range:NSMakeRange(0, result.length)];
     [result replaceOccurrencesOfString:@"\t" withString:@"\\t" options:0 range:NSMakeRange(0, result.length)];
     return result;
+}
+
+static bool classNameContains(Class klass, NSString *needle)
+{
+    for (Class current = klass; current; current = class_getSuperclass(current)) {
+        if ([NSStringFromClass(current).lowercaseString containsString:needle.lowercaseString])
+            return true;
+    }
+    return false;
 }
 
 static id pdfAnnotationValueForKey(PDFAnnotation *annotation, NSString *key)
@@ -882,24 +919,133 @@ static id pdfAnnotationValueForKey(PDFAnnotation *annotation, NSString *key)
     }
 }
 
+static PDFDocument *safePDFDocumentFromObject(id object)
+{
+    if (!object || ![object respondsToSelector:@selector(document)])
+        return nil;
+    NSMethodSignature *signature = [object methodSignatureForSelector:@selector(document)];
+    if (!signature || signature.methodReturnType[0] != '@')
+        return nil;
+    @try {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        id document = [object performSelector:@selector(document)];
+#pragma clang diagnostic pop
+        if ([document isKindOfClass:PDFDocument.class])
+            return document;
+    } @catch (NSException *) {
+        return nil;
+    }
+    return nil;
+}
+
 static PDFDocument *pdfDocumentFromViewTree(NSView *view)
 {
     if (!view)
         return nil;
-    if ([view respondsToSelector:@selector(document)]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        id document = [view performSelector:@selector(document)];
-#pragma clang diagnostic pop
-        if ([document isKindOfClass:PDFDocument.class])
-            return document;
-    }
+    if (PDFDocument *document = safePDFDocumentFromObject(view))
+        return document;
     for (NSView *subview in view.subviews) {
         PDFDocument *document = pdfDocumentFromViewTree(subview);
         if (document)
             return document;
     }
     return nil;
+}
+
+static void tracePdfViewHierarchyView(WebContents *contents, NSString *phase, NSView *view, NSUInteger depth, NSInteger parentIndex, NSView *hitTarget, NSResponder *firstResponder, NSMutableSet<NSValue *> *seen, NSUInteger *nextIndex)
+{
+    if (!view || depth > 12 || *nextIndex > 80)
+        return;
+    NSValue *key = [NSValue valueWithPointer:(__bridge const void *)(view)];
+    if ([seen containsObject:key])
+        return;
+    [seen addObject:key];
+    NSUInteger index = (*nextIndex)++;
+
+    NSString *className = NSStringFromClass(view.class) ?: @"unknown";
+    NSString *parentClass = view.superview ? NSStringFromClass(view.superview.class) : @"none";
+    NSString *layerClass = view.layer ? NSStringFromClass(view.layer.class) : @"none";
+    PDFDocument *document = safePDFDocumentFromObject(view);
+    bool isPDFClass = classNameContains(view.class, @"pdf");
+    bool isPDFHost = classNameContains(view.class, @"pdfhost") || classNameContains(view.class, @"wkpdf");
+    bool isPDFKitView = [view isKindOfClass:PDFView.class] || classNameContains(view.class, @"pdfview");
+    bool isScrollView = [view isKindOfClass:NSScrollView.class] || classNameContains(view.class, @"scroll");
+    bool isScrollDocumentView = [view.superview isKindOfClass:NSClipView.class] && ((NSClipView *)view.superview).documentView == view;
+    bool isHitTarget = view == hitTarget || [hitTarget isDescendantOf:view];
+    bool isFirstResponder = view == firstResponder;
+
+    appendPdfViewHierarchyTrace([NSString stringWithFormat:@"surfari-pdf-view-hierarchy tab=%d phase=%@ pdf=%d index=%lu parent_index=%ld depth=%lu class=%@ parent_class=%@ superview_class=%@ frame_w=%.1f frame_h=%.1f bounds_w=%.1f bounds_h=%.1f hidden=%d alpha=%.3f wants_layer=%d layer_class=%@ is_web_view_root=%d is_hit_target=%d is_first_responder=%d is_scroll_document_view=%d responds_document=%d responds_current_page=%d responds_page_count=%d accepts_first_responder=%d responds_mouse_down=%d responds_key_down=%d responds_set_needs_display=%d returns_pdf_document=%d pdf_document_source=%@ page_count=%lu is_pdf_class=%d is_pdfkit_view=%d is_private_pdf_host=%d is_scroll_view=%d marker=issue-853-exp14",
+        contents ? contents->tab_id : 0,
+        phase ?: @"unknown",
+        contents && currentUrlLooksPdf(contents) ? 1 : 0,
+        (unsigned long)index,
+        (long)parentIndex,
+        (unsigned long)depth,
+        className,
+        parentClass,
+        parentClass,
+        view.frame.size.width,
+        view.frame.size.height,
+        view.bounds.size.width,
+        view.bounds.size.height,
+        view.hidden ? 1 : 0,
+        view.alphaValue,
+        view.wantsLayer ? 1 : 0,
+        layerClass,
+        contents && view == contents->web_view ? 1 : 0,
+        isHitTarget ? 1 : 0,
+        isFirstResponder ? 1 : 0,
+        isScrollDocumentView ? 1 : 0,
+        [view respondsToSelector:@selector(document)] ? 1 : 0,
+        [view respondsToSelector:NSSelectorFromString(@"currentPage")] ? 1 : 0,
+        [view respondsToSelector:NSSelectorFromString(@"pageCount")] ? 1 : 0,
+        view.acceptsFirstResponder ? 1 : 0,
+        [view respondsToSelector:@selector(mouseDown:)] ? 1 : 0,
+        [view respondsToSelector:@selector(keyDown:)] ? 1 : 0,
+        [view respondsToSelector:@selector(setNeedsDisplay:)] ? 1 : 0,
+        document ? 1 : 0,
+        document ? @"view-tree" : @"none",
+        document ? (unsigned long)document.pageCount : 0,
+        isPDFClass ? 1 : 0,
+        isPDFKitView ? 1 : 0,
+        isPDFHost ? 1 : 0,
+        isScrollView ? 1 : 0]);
+
+    NSArray<NSView *> *subviews = view.subviews;
+    for (NSView *subview in subviews)
+        tracePdfViewHierarchyView(contents, phase, subview, depth + 1, (NSInteger)index, hitTarget, firstResponder, seen, nextIndex);
+}
+
+static void tracePdfViewHierarchy(WebContents *contents, NSString *phase)
+{
+    if (!pdfViewHierarchyTraceEnabled() || !contents || !contents->web_view || !currentUrlLooksPdf(contents))
+        return;
+
+    WKWebView *webView = contents->web_view;
+    NSPoint center = NSMakePoint(NSMidX(webView.bounds), NSMidY(webView.bounds));
+    NSView *hitTarget = [webView hitTest:center];
+    NSResponder *firstResponder = contents->window.firstResponder;
+    NSMutableSet<NSValue *> *seen = [NSMutableSet set];
+    NSUInteger nextIndex = 0;
+    tracePdfViewHierarchyView(contents, phase, webView, 0, -1, hitTarget, firstResponder, seen, &nextIndex);
+
+    PDFDocument *document = pdfDocumentFromViewTree(webView);
+    NSString *source = document ? @"view-tree" : @"none";
+    if (!document && webView.URL) {
+        PDFDocument *urlDocument = [[PDFDocument alloc] initWithURL:webView.URL];
+        if (urlDocument) {
+            document = urlDocument;
+            source = @"url";
+        }
+    }
+    appendPdfViewHierarchyTrace([NSString stringWithFormat:@"surfari-pdf-view-hierarchy-summary tab=%d phase=%@ pdf=1 visited_count=%lu pdf_document_source=%@ returns_pdf_document=%d page_count=%lu marker=issue-853-exp14",
+        contents->tab_id,
+        phase ?: @"unknown",
+        (unsigned long)seen.count,
+        source,
+        document ? 1 : 0,
+        document ? (unsigned long)document.pageCount : 0]);
 }
 
 static void tracePdfFormPdfKitOracle(WebContents *contents, NSString *phase)
@@ -986,6 +1132,7 @@ static void tracePdfFormOracle(WebContents *contents, NSString *phase)
     if (!pdfFormOracleTraceEnabled() || !contents || !currentUrlLooksPdf(contents))
         return;
 
+    tracePdfViewHierarchy(contents, phase);
     tracePdfFormPdfKitOracle(contents, phase);
 
     NSString *targetField = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_PDF_FORM_TARGET_FIELD"] ?: @"issue834_text";
@@ -6367,6 +6514,7 @@ void ts_forward_mouse_event(ts_web_contents_t wc, int type, int button, int x, i
         tracePdfSelectionSurface(contents, @"after-mouse-up");
         tracePdfSelectedTextRoutes(contents, @"after-mouse-up");
         tracePdfFormOracle(contents, @"after-mouse-up");
+        tracePdfViewHierarchy(contents, @"post-click");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             tracePdfFormOracle(contents, @"after-mouse-up-delayed");
         });
@@ -6705,6 +6853,8 @@ void ts_forward_key_event(ts_web_contents_t wc, int type, int keycode, const cha
         tracePdfPasswordOracle(contents, @"key-up");
     if (is_pdf_url && type == 1)
         tracePdfFormOracle(contents, @"key-up");
+    if (is_pdf_url && type == 1)
+        tracePdfViewHierarchy(contents, @"post-deterministic-input");
     if (is_pdf_url && type == 1)
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             tracePdfFormOracle(contents, @"key-up-delayed");

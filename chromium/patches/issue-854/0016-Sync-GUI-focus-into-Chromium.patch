@@ -1,0 +1,123 @@
+From 3231ca0c57fd607cac4fcff7cd0f51c0c16f5cab Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 06:50:33 -0500
+Subject: [PATCH 16/88] Sync GUI focus into Chromium
+
+When Wezboard steps out of sight,
+The popups bow and quit the light.
+When focus wanders back again,
+The page remembers where it's been.
+---
+ .../libtermsurf_chromium.cc                   |  5 +++
+ .../libtermsurf_chromium.h                    |  3 ++
+ .../ts_browser_main_parts.cc                  | 33 ++++++++++++++++++-
+ .../ts_browser_main_parts.h                   |  1 +
+ 4 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index a5167e4081..bbdeaae1b3 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -217,6 +217,11 @@ void ts_set_focus(ts_web_contents_t wc, bool focused) {
+   g_main_parts->SetFocus(wc, focused);
+ }
+ 
++void ts_set_gui_active(ts_web_contents_t wc, bool active, const char* reason) {
++  if (!g_main_parts) return;
++  g_main_parts->SetGuiActive(wc, active, reason ? reason : "");
++}
++
+ void ts_set_color_scheme(ts_web_contents_t wc, bool dark) {
+   if (!g_main_parts) return;
+   g_main_parts->SetColorScheme(wc, dark);
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 884bee6465..66d3add2dd 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -129,6 +129,9 @@ TS_EXPORT void ts_forward_key_event(ts_web_contents_t wc,
+ /* --- State (all synchronous — safe) --- */
+ 
+ TS_EXPORT void ts_set_focus(ts_web_contents_t wc, bool focused);
++TS_EXPORT void ts_set_gui_active(ts_web_contents_t wc,
++                                 bool active,
++                                 const char* reason);
+ TS_EXPORT void ts_set_color_scheme(ts_web_contents_t wc, bool dark);
+ TS_EXPORT void ts_set_view_size(ts_web_contents_t wc,
+                                 int width,
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 50db87c662..f45f630071 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -13,10 +13,12 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/reload_type.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+@@ -28,7 +30,6 @@
+ #include "ui/base/page_transition_types.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+-#include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h"
+ #include "content/libtermsurf_chromium/ts_compositor_bridge_mac.h"
+ #include "content/libtermsurf_chromium/ts_shell_window_mac.h"
+@@ -737,6 +738,36 @@ void TsBrowserMainParts::SetFocus(void* wc_handle, bool focused) {
+   }
+ }
+ 
++void TsBrowserMainParts::SetGuiActive(void* wc_handle,
++                                      bool active,
++                                      const std::string& reason) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab) return;
++
++  auto* web_contents = tab->shell->web_contents();
++  auto* main_frame = web_contents->GetPrimaryMainFrame();
++  auto* render_widget_host =
++      main_frame ? main_frame->GetRenderWidgetHost() : nullptr;
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
++              << " boundary=chromium_protocol"
++              << " event=set_gui_active"
++              << " active=" << active
++              << " reason=" << reason
++              << " webcontents=" << static_cast<void*>(web_contents)
++              << " render_widget_host="
++              << static_cast<void*>(render_widget_host);
++  }
++  if (!render_widget_host) return;
++
++  auto* render_widget_host_impl =
++      RenderWidgetHostImpl::From(render_widget_host);
++  if (!render_widget_host_impl) return;
++  render_widget_host_impl->SetPageFocus(active);
++}
++
+ void TsBrowserMainParts::SetColorScheme(void* wc_handle, bool dark) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   TabState* tab = FindTab(wc_handle);
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 9496b86dcb..17c5448a05 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -74,6 +74,7 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+   void ForwardKeyEvent(void* wc_handle, int type, int keycode,
+                        const std::string& utf8, int modifiers);
+   void SetFocus(void* wc_handle, bool focused);
++  void SetGuiActive(void* wc_handle, bool active, const std::string& reason);
+   void SetColorScheme(void* wc_handle, bool dark);
+ 
+   // Returns the stored color scheme for the tab owning |web_contents|,
+-- 
+2.54.0
+

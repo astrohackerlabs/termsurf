@@ -21,9 +21,9 @@ tracked.
 ## Current State
 
 - Upstream commit: `1452a43959523449099b2616793fd2c5b6a6487e`
-- Local branch: `webkit-1452a439-issue-756-exp12`
+- Local branch: `webkit-1452a439-issue-853-exp13`
 - Shallow checkout: `true`
-- Purpose: Issue 756 Surfari research and future `libtermsurf_webkit` patches
+- Purpose: Issue 853 Surfari PDF response handoff census
 
 ## Layout
 
@@ -63,10 +63,13 @@ temporary exception.
 
 ## Branches
 
-| Branch                            | Base commit                                | Issue                                         | Description                     |
-| --------------------------------- | ------------------------------------------ | --------------------------------------------- | ------------------------------- |
-| `webkit-1452a439-issue-756`       | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md) | Surfari WebKit integration base |
-| `webkit-1452a439-issue-756-exp12` | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md) | Cursor notification hook        |
+| Branch                            | Base commit                                | Issue                                                    | Description                     |
+| --------------------------------- | ------------------------------------------ | -------------------------------------------------------- | ------------------------------- |
+| `webkit-1452a439-issue-756`       | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md)            | Surfari WebKit integration base |
+| `webkit-1452a439-issue-756-exp12` | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md)            | Cursor notification hook        |
+| `webkit-1452a439-issue-853-exp11` | `ff39892387ab076d7c0ab3d94fdc1bc5727c9ee3` | [Issue 853](../issues/0853-finish-pdf-support/README.md) | PDF form trace execution proof  |
+| `webkit-1452a439-issue-853-exp12` | `3afabe9a5993cf806a33968478dca95a97af94a9` | [Issue 853](../issues/0853-finish-pdf-support/README.md) | PDF path census                 |
+| `webkit-1452a439-issue-853-exp13` | `fe82783248bf44eb48635d03d1d38decbcd9b701` | [Issue 853](../issues/0853-finish-pdf-support/README.md) | PDF response handoff census     |
 
 ## Patches
 

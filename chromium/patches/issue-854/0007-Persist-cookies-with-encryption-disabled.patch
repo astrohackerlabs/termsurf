@@ -1,0 +1,114 @@
+From 9057691b08c8f75f2337be73b43fcc9c5d3c4f79 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 20 Mar 2026 07:22:44 -0500
+Subject: [PATCH 07/88] Persist cookies with encryption disabled
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The crypto delegate was never set,
+NOTREACHED() crashed — a fatal bet.
+Now encryption's off, file_paths are right,
+And cookies might survive the night.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+---
+ .../libtermsurf_chromium/ts_browser_client.cc | 50 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  8 +++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 7464404408..9b8da5ccfc 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -5,6 +5,8 @@
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/shell/browser/shell_browser_context.h"
++#include "services/network/public/mojom/network_context.mojom.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
+@@ -81,4 +83,52 @@ void TsBrowserClient::OverrideWebPreferences(
+   }
+ }
+ 
++void TsBrowserClient::ConfigureNetworkContextParamsForShell(
++    BrowserContext* context,
++    network::mojom::NetworkContextParams* context_params,
++    cert_verifier::mojom::CertVerifierCreationParams*
++        cert_verifier_creation_params) {
++  // Call base class for user_agent, accept_language, zstd, etc.
++  ShellContentBrowserClient::ConfigureNetworkContextParamsForShell(
++      context, context_params, cert_verifier_creation_params);
++
++  // Persistent cookie/network storage.
++  auto* shell_context = static_cast<ShellBrowserContext*>(context);
++  base::FilePath path = shell_context->GetPath();
++  if (path.empty() || shell_context->IsOffTheRecord())
++    return;
++
++  // Disable cookie encryption — we don't provide an encryption provider,
++  // and the default (true) hits NOTREACHED() on non-Android.
++  context_params->enable_encrypted_cookies = false;
++
++  // Enable HTTP cache.
++  context_params->http_cache_enabled = true;
++
++  // Cookie manager params (required by some code paths).
++  context_params->cookie_manager_params =
++      network::mojom::CookieManagerParams::New();
++
++  // Session cookie behavior.
++  context_params->restore_old_session_cookies = false;
++  context_params->persist_session_cookies = false;
++
++  // Set file paths for persistent storage.
++  context_params->file_paths =
++      network::mojom::NetworkContextFilePaths::New();
++  context_params->file_paths->data_directory =
++      path.Append(FILE_PATH_LITERAL("Network"));
++  context_params->file_paths->unsandboxed_data_path = path;
++  context_params->file_paths->cookie_database_name =
++      base::FilePath(FILE_PATH_LITERAL("Cookies"));
++  context_params->file_paths->http_cache_directory =
++      path.Append(FILE_PATH_LITERAL("Cache"));
++  context_params->file_paths->http_server_properties_file_name =
++      base::FilePath(FILE_PATH_LITERAL("Network Persistent State"));
++  context_params->file_paths->transport_security_persister_file_name =
++      base::FilePath(FILE_PATH_LITERAL("TransportSecurity"));
++  context_params->file_paths->trust_token_database_name =
++      base::FilePath(FILE_PATH_LITERAL("Trust Tokens"));
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 58e034b3a7..b671edda23 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -8,6 +8,7 @@
+ #include <memory>
+ 
+ #include "content/shell/browser/shell_content_browser_client.h"
++#include "services/network/public/mojom/network_context.mojom-forward.h"
+ 
+ namespace content {
+ 
+@@ -33,6 +34,13 @@ class TsBrowserClient : public ShellContentBrowserClient {
+       SiteInstance& main_frame_site,
+       blink::web_pref::WebPreferences* prefs) override;
+ 
++ protected:
++  void ConfigureNetworkContextParamsForShell(
++      BrowserContext* context,
++      network::mojom::NetworkContextParams* context_params,
++      cert_verifier::mojom::CertVerifierCreationParams*
++          cert_verifier_creation_params) override;
++
+  private:
+   class StubBadgeService;
+   std::unique_ptr<StubBadgeService> stub_badge_service_;
+-- 
+2.54.0
+

@@ -1910,6 +1910,141 @@ extension Ghostty {
             let y: Double
         }
 
+        enum TermSurfScriptInputError: LocalizedError {
+            case noActiveBrowser
+            case pointOutsideOverlay(Double, Double)
+            case forwardingRejected(String)
+
+            var errorDescription: String? {
+                switch self {
+                case .noActiveBrowser:
+                    return "No active TermSurf browser overlay is available for this terminal."
+                case let .pointOutsideOverlay(x, y):
+                    return "TermSurf browser input point is outside the active overlay: \(x),\(y)."
+                case let .forwardingRejected(kind):
+                    return "TermSurf rejected diagnostic browser input: \(kind)."
+                }
+            }
+        }
+
+        func termSurfScriptForwardMouseEvent(
+            type: String,
+            button: String,
+            x: Double,
+            y: Double,
+            clickCount: Int64,
+            modifiers: UInt64
+        ) throws -> Bool {
+            try termSurfScriptValidateOverlayPoint(x: x, y: y)
+
+            let paneID = id.uuidString
+            let forwarded: Int32 = paneID.withCString { paneIDPointer in
+                type.withCString { typePointer in
+                    button.withCString { buttonPointer in
+                        termsurf_forward_mouse_event(
+                            paneIDPointer,
+                            typePointer,
+                            buttonPointer,
+                            x,
+                            y,
+                            clickCount,
+                            modifiers)
+                    }
+                }
+            }
+
+            guard forwarded != 0 else {
+                throw TermSurfScriptInputError.forwardingRejected("mouse \(type)")
+            }
+            termSurfLogGeometry(
+                event: "script_input_forwarded",
+                hit: true,
+                webPoint: CGPoint(x: x, y: y),
+                note: "kind=mouse type=\(type) button=\(button) click_count=\(clickCount) modifiers=\(modifiers)")
+            return true
+        }
+
+        func termSurfScriptForwardScroll(
+            x: Double,
+            y: Double,
+            deltaX: Double,
+            deltaY: Double,
+            modifiers: UInt64
+        ) throws -> Bool {
+            try termSurfScriptValidateOverlayPoint(x: x, y: y)
+
+            let paneID = id.uuidString
+            let forwarded: Int32 = paneID.withCString { paneIDPointer in
+                termsurf_forward_scroll_event(
+                    paneIDPointer,
+                    x,
+                    y,
+                    deltaX,
+                    deltaY,
+                    0,
+                    0,
+                    false,
+                    modifiers)
+            }
+
+            guard forwarded != 0 else {
+                throw TermSurfScriptInputError.forwardingRejected("scroll")
+            }
+            termSurfLogGeometry(
+                event: "script_input_forwarded",
+                hit: true,
+                webPoint: CGPoint(x: x, y: y),
+                note: "kind=scroll delta=\(deltaX),\(deltaY) modifiers=\(modifiers)")
+            return true
+        }
+
+        func termSurfScriptForwardKey(
+            type: String,
+            windowsKeyCode: Int64,
+            text: String,
+            modifiers: UInt64
+        ) throws -> Bool {
+            guard termSurfScriptHasActiveOverlay else {
+                throw TermSurfScriptInputError.noActiveBrowser
+            }
+
+            let paneID = id.uuidString
+            let forwarded: Int32 = paneID.withCString { paneIDPointer in
+                type.withCString { typePointer in
+                    text.withCString { textPointer in
+                        termsurf_forward_key_event(
+                            paneIDPointer,
+                            typePointer,
+                            windowsKeyCode,
+                            textPointer,
+                            modifiers)
+                    }
+                }
+            }
+
+            guard forwarded != 0 else {
+                throw TermSurfScriptInputError.forwardingRejected("key \(type)")
+            }
+            termSurfLogGeometry(
+                event: "script_input_forwarded",
+                note: "kind=key type=\(type) windows_key_code=\(windowsKeyCode) utf8_len=\(text.utf8.count) modifiers=\(modifiers)")
+            return true
+        }
+
+        private var termSurfScriptHasActiveOverlay: Bool {
+            termsurfOverlayHostLayer != nil && termsurfOverlayFrame != nil
+        }
+
+        private func termSurfScriptValidateOverlayPoint(x: Double, y: Double) throws {
+            guard termSurfScriptHasActiveOverlay, let overlayFrame = termsurfOverlayFrame else {
+                throw TermSurfScriptInputError.noActiveBrowser
+            }
+
+            guard x >= 0, y >= 0, x <= overlayFrame.width, y <= overlayFrame.height else {
+                throw TermSurfScriptInputError.pointOutsideOverlay(x, y)
+            }
+        }
+
         private func termSurfOverlayPoint(for event: NSEvent) -> TermSurfOverlayPoint? {
             guard let overlayFrame = termsurfOverlayFrame else { return nil }
 

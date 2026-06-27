@@ -1,0 +1,271 @@
+From e9d43664562777be087380174e95f7316ae09c32 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 10:45:22 -0500
+Subject: [PATCH 28/88] Serve PDF chrome resources
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The viewer knocked on chrome’s old door,
+We gave just resources, nothing more.
+Now APIs grumble next in line.
+---
+ .../ts_extensions_browser_client.cc           |  1 +
+ .../extensions/ts_extensions_client.cc        | 29 +++++++++
+ .../extensions/ts_extensions_client.h         |  7 +++
+ .../libtermsurf_chromium/ts_browser_client.cc | 59 +++++++++++++++++++
+ .../ts_content_renderer_client.cc             | 26 ++++++++
+ 5 files changed, 122 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 64da0db784..1e018264f2 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "base/check.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "components/custom_handlers/simple_protocol_handler_registry_factory.h"
+ #include "components/version_info/version_info.h"
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+index 64d7202fce..f977413a1e 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+@@ -4,14 +4,26 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ 
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h"
++#include "content/public/common/url_constants.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/core_extensions_api_provider.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/extension_id.h"
++#include "extensions/common/manifest.h"
+ #include "extensions/common/permissions/permission_message_provider.h"
++#include "services/network/public/mojom/cors_origin_pattern.mojom.h"
+ 
+ namespace content {
+ namespace {
+ 
++bool IsTsPdfComponentExtension(const extensions::Extension& extension) {
++  return extension.id() == extension_misc::kPdfExtensionId &&
++         extensions::Manifest::IsComponentLocation(extension.location());
++}
++
+ class TsPermissionMessageProvider
+     : public extensions::PermissionMessageProvider {
+  public:
+@@ -108,4 +120,21 @@ bool TsExtensionsClient::IsBlocklistUpdateURL(const GURL& url) const {
+   return false;
+ }
+ 
++void TsExtensionsClient::AddOriginAccessPermissions(
++    const extensions::Extension& extension,
++    bool is_extension_active,
++    std::vector<network::mojom::CorsOriginPatternPtr>* origin_patterns) const {
++  if (!IsTsPdfComponentExtension(extension)) {
++    return;
++  }
++
++  origin_patterns->push_back(network::mojom::CorsOriginPattern::New(
++      kChromeUIScheme, kChromeUIResourcesHost, /*port=*/0,
++      network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
++      network::mojom::CorsPortMatchMode::kAllowAnyPort,
++      network::mojom::CorsOriginAccessMatchPriority::kMaxPriority));
++  LOG(INFO) << "[issue-792-exp7] chrome-resources-renderer-origin extension_id="
++            << extension.id() << " active=" << is_extension_active;
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_client.h
+index 7f8cea3b08..6686d2b4f4 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_client.h
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_client.h
+@@ -6,9 +6,11 @@
+ #define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSIONS_CLIENT_H_
+ 
+ #include <string>
++#include <vector>
+ 
+ #include "extensions/common/extensions_client.h"
+ #include "extensions/common/url_pattern_set.h"
++#include "services/network/public/mojom/cors_origin_pattern.mojom-forward.h"
+ #include "url/gurl.h"
+ 
+ namespace content {
+@@ -41,6 +43,11 @@ class TsExtensionsClient : public extensions::ExtensionsClient {
+   const GURL& GetNewWebstoreBaseURL() const override;
+   const GURL& GetWebstoreUpdateURL() const override;
+   bool IsBlocklistUpdateURL(const GURL& url) const override;
++  void AddOriginAccessPermissions(
++      const extensions::Extension& extension,
++      bool is_extension_active,
++      std::vector<network::mojom::CorsOriginPatternPtr>* origin_patterns)
++      const override;
+ 
+  private:
+   ExtensionsClient::ScriptingAllowlist scripting_allowlist_;
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 9ec7db7563..4a2aa122d5 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -7,11 +7,14 @@
+ #include "base/logging.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ #include "content/public/browser/browser_context.h"
++#include "content/public/browser/child_process_security_policy.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/security_principal.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_ui_url_loader_factory.h"
++#include "content/public/common/url_constants.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "extensions/browser/extension_protocols.h"
+ #include "extensions/browser/extension_registry.h"
+@@ -20,6 +23,7 @@
+ #include "extensions/browser/process_map.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
++#include "extensions/common/manifest.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
+@@ -29,6 +33,30 @@
+ #include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
+ 
+ namespace content {
++namespace {
++
++bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
++  return extension && extension->id() == extension_misc::kPdfExtensionId &&
++         extensions::Manifest::IsComponentLocation(extension->location());
++}
++
++const extensions::Extension* GetExtensionForInitiatorOrigin(
++    content::BrowserContext* browser_context,
++    const std::optional<url::Origin>& request_initiator_origin) {
++  if (!request_initiator_origin.has_value()) {
++    return nullptr;
++  }
++
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return nullptr;
++  }
++
++  return registry->enabled_extensions().GetExtensionOrAppByURL(
++      request_initiator_origin->GetURL());
++}
++
++}  // namespace
+ 
+ // Stub BadgeService — accepts and ignores Badging API calls (Issue 655).
+ // Prevents renderer kills on navigator.setAppBadge().
+@@ -160,6 +188,29 @@ void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+   factories->emplace(extensions::kExtensionScheme,
+                      extensions::CreateExtensionURLLoaderFactory(
+                          render_process_id, render_frame_id));
++
++  RenderProcessHost* process_host =
++      RenderProcessHost::FromID(render_process_id);
++  if (!process_host) {
++    return;
++  }
++  RenderFrameHost* frame_host =
++      RenderFrameHost::FromID(render_process_id, render_frame_id);
++  if (!frame_host) {
++    return;
++  }
++  const extensions::Extension* extension = GetExtensionForInitiatorOrigin(
++      process_host->GetBrowserContext(), request_initiator_origin);
++  if (!IsTsPdfComponentExtension(extension)) {
++    return;
++  }
++
++  factories->emplace(kChromeUIScheme,
++                     CreateWebUIURLLoaderFactory(frame_host, kChromeUIScheme,
++                                                 {kChromeUIResourcesHost}));
++  LOG(INFO) << "[issue-792-exp7] chrome-resources-factory extension_id="
++            << extension->id() << " process_id=" << render_process_id
++            << " frame_id=" << render_frame_id;
+ }
+ 
+ bool TsBrowserClient::ShouldUseProcessPerSite(BrowserContext* browser_context,
+@@ -231,6 +282,14 @@ void TsBrowserClient::SiteInstanceGotProcessAndSite(
+   LOG(INFO) << "[issue-792-exp6] process-map-insert extension_id="
+             << extension->id() << " process_id=" << process_id
+             << " site_url=" << site_instance->GetSiteURL();
++
++  if (IsTsPdfComponentExtension(extension)) {
++    ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
++        process_id, url::Origin::CreateFromNormalizedTuple(
++                        kChromeUIScheme, kChromeUIResourcesHost, 0));
++    LOG(INFO) << "[issue-792-exp7] chrome-resources-grant extension_id="
++              << extension->id() << " process_id=" << process_id;
++  }
+ }
+ 
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index 23bbb229d9..c3249abf1e 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -7,15 +7,40 @@
+ #include "base/logging.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
++#include "content/public/common/url_constants.h"
+ #include "content/public/renderer/render_frame.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/extensions_client.h"
+ #include "extensions/renderer/api/core_extensions_renderer_api_provider.h"
+ #include "extensions/renderer/dispatcher.h"
+ #include "extensions/renderer/extension_frame_helper.h"
+ #include "extensions/renderer/extensions_renderer_client.h"
++#include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/platform/web_url.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
++#include "third_party/blink/public/web/web_security_policy.h"
+ 
+ namespace content {
++namespace {
++
++void AllowPdfViewerChromeResources() {
++  // Renderer setup cannot consult the ExtensionRegistry, so keep this
++  // process-wide rule keyed to the fixed PDF extension origin.
++  blink::WebURL pdf_viewer_origin =
++      GURL(std::string(extensions::kExtensionScheme) + "://" +
++           extension_misc::kPdfExtensionId);
++  blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
++      pdf_viewer_origin, blink::WebString::FromUTF8(kChromeUIScheme),
++      blink::WebString::FromUTF8(kChromeUIResourcesHost), /*port=*/0,
++      network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
++      network::mojom::CorsPortMatchMode::kAllowAnyPort,
++      network::mojom::CorsOriginAccessMatchPriority::kMaxPriority);
++  LOG(INFO) << "[issue-792-exp7] chrome-resources-renderer-origin extension_id="
++            << extension_misc::kPdfExtensionId;
++}
++
++}  // namespace
+ 
+ TsContentRendererClient::TsContentRendererClient() = default;
+ TsContentRendererClient::~TsContentRendererClient() = default;
+@@ -31,6 +56,7 @@ void TsContentRendererClient::RenderThreadStarted() {
+       std::make_unique<extensions::CoreExtensionsRendererAPIProvider>());
+   extensions::ExtensionsRendererClient::Set(extensions_renderer_client_.get());
+   extensions_renderer_client_->RenderThreadStarted();
++  AllowPdfViewerChromeResources();
+   LOG(INFO) << "[issue-792-exp2] extensions-renderer-client-set";
+ }
+ 
+-- 
+2.54.0
+

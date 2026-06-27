@@ -172,19 +172,18 @@ build_surfari() {
 build_ghostboard() {
   local CONFIGURATION="Debug"
   local ZIG_OPTIMIZE="Debug"
-  local ZIG_VERSION_ARGS=()
   if $RELEASE; then
     CONFIGURATION="Release"
     ZIG_OPTIMIZE="ReleaseFast"
   fi
 
-  if [ -n "${TERMSURF_VERSION:-}" ]; then
-    ZIG_VERSION_ARGS=("-Dversion-string=$TERMSURF_VERSION")
-  fi
-
   echo "==> Building GhostboardKit ($ZIG_OPTIMIZE)..."
   cd "$REPO_DIR/ghostboard"
-  zig build -Demit-macos-app=false -Doptimize="$ZIG_OPTIMIZE" "${ZIG_VERSION_ARGS[@]}"
+  if [ -n "${TERMSURF_VERSION:-}" ]; then
+    zig build -Demit-macos-app=false -Doptimize="$ZIG_OPTIMIZE" "-Dversion-string=$TERMSURF_VERSION"
+  else
+    zig build -Demit-macos-app=false -Doptimize="$ZIG_OPTIMIZE"
+  fi
 
   cd "$REPO_DIR/ghostboard/macos"
   if $CLEAN; then

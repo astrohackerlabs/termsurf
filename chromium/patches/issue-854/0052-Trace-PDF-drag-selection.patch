@@ -1,0 +1,347 @@
+From 7c1acd3a39fdf86c80082ec2472c58fb574c993c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 09:28:53 -0500
+Subject: [PATCH 52/88] Trace PDF drag selection
+
+---
+ pdf/pdf_view_web_plugin.cc  |  44 ++++++++++++-
+ pdf/pdfium/pdfium_engine.cc | 126 +++++++++++++++++++++++++++++++++++-
+ 2 files changed, 167 insertions(+), 3 deletions(-)
+
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index a880fb5be0..becb9b627b 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -8,6 +8,7 @@
+ #include <stdint.h>
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <memory>
+ #include <string>
+ #include <string_view>
+@@ -148,6 +149,18 @@ constexpr base::TimeDelta kFindResultCooldown = base::Milliseconds(100);
+ constexpr std::string_view kChromeExtensionHost =
+     "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/";
+ 
++bool Issue794InputTraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_PDF_INPUT_TRACE") != nullptr;
++  return enabled;
++}
++
++bool Issue794IsMousePointerEvent(blink::WebInputEvent::Type type) {
++  return type == blink::WebInputEvent::Type::kMouseDown ||
++         type == blink::WebInputEvent::Type::kMouseMove ||
++         type == blink::WebInputEvent::Type::kMouseUp;
++}
++
+ // Print Preview base URL.
+ constexpr std::string_view kChromePrintHost = "chrome://print/";
+ 
+@@ -2790,7 +2803,36 @@ bool PdfViewWebPlugin::HandleWebInputEvent(const blink::WebInputEvent& event) {
+   }
+ #endif
+ 
+-  if (engine_->HandleInputEvent(event_to_handle)) {
++  bool engine_handled = engine_->HandleInputEvent(event_to_handle);
++  if (Issue794InputTraceEnabled() &&
++      Issue794IsMousePointerEvent(event.GetType())) {
++    const auto& original_mouse =
++        static_cast<const blink::WebMouseEvent&>(event);
++    const auto& transformed_mouse =
++        static_cast<const blink::WebMouseEvent&>(event_to_handle);
++    const gfx::PointF original_position = original_mouse.PositionInWidget();
++    const gfx::PointF transformed_position =
++        transformed_mouse.PositionInWidget();
++    LOG(INFO) << "[issue-794-exp7] plugin-input type="
++              << static_cast<int>(event.GetType())
++              << " original_x=" << original_position.x()
++              << " original_y=" << original_position.y()
++              << " transformed_x=" << transformed_position.x()
++              << " transformed_y=" << transformed_position.y()
++              << " button=" << static_cast<int>(original_mouse.button)
++              << " click_count=" << original_mouse.ClickCount()
++              << " modifiers=" << original_mouse.GetModifiers()
++              << " available_area_x=" << available_area_.x()
++              << " available_area_y=" << available_area_.y()
++              << " available_area_width=" << available_area_.width()
++              << " available_area_height=" << available_area_.height()
++              << " viewport_to_dip_scale=" << viewport_to_dip_scale_
++              << " device_scale=" << device_scale_
++              << " viewport_to_device_scale=" << viewport_to_device_scale
++              << " engine_handled=" << engine_handled;
++  }
++
++  if (engine_handled) {
+     return true;
+   }
+ 
+diff --git a/pdf/pdfium/pdfium_engine.cc b/pdf/pdfium/pdfium_engine.cc
+index 1e69739e18..44f022eaea 100644
+--- a/pdf/pdfium/pdfium_engine.cc
++++ b/pdf/pdfium/pdfium_engine.cc
+@@ -9,6 +9,7 @@
+ #include <stdint.h>
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <limits>
+ #include <memory>
+ #include <set>
+@@ -24,6 +25,7 @@
+ #include "base/functional/bind.h"
+ #include "base/i18n/rtl.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/notimplemented.h"
+ #include "base/notreached.h"
+@@ -177,6 +179,35 @@ constexpr base::TimeDelta kMaxInitialProgressivePaintTime =
+ 
+ FontMappingMode g_font_mapping_mode = FontMappingMode::kNoMapping;
+ 
++bool Issue794InputTraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_PDF_INPUT_TRACE") != nullptr;
++  return enabled;
++}
++
++const char* Issue794AreaLabel(PDFiumPage::Area area) {
++  switch (area) {
++    case PDFiumPage::NONSELECTABLE_AREA:
++      return "page-non-text";
++    case PDFiumPage::TEXT_AREA:
++      return "text";
++    case PDFiumPage::WEBLINK_AREA:
++    case PDFiumPage::DOCLINK_AREA:
++      return "link";
++    case PDFiumPage::FORM_TEXT_AREA:
++      return "form";
++  }
++  return "unknown";
++}
++
++std::string Issue794SelectedTextSample(std::string text) {
++  base::ReplaceChars(text, "\r\n\t", " ", &text);
++  if (text.size() > 80) {
++    text.resize(80);
++  }
++  return text;
++}
++
+ template <class S>
+ bool IsAboveOrDirectlyLeftOf(const S& lhs, const S& rhs) {
+   return lhs.y() < rhs.y() || (lhs.y() == rhs.y() && lhs.x() < rhs.x());
+@@ -1738,6 +1769,8 @@ void PDFiumEngine::OnTextOrLinkAreaClickInternal(const PointData& point_data,
+ bool PDFiumEngine::OnLeftMouseDown(const blink::WebMouseEvent& event) {
+   DCHECK_EQ(blink::WebPointerProperties::Button::kLeft, event.button);
+ 
++  const bool left_button_down_before = mouse_left_button_down_;
++  const bool selecting_before = selecting_;
+   SetMouseLeftButtonDown(true);
+ 
+   auto selection_invalidator =
+@@ -1748,10 +1781,31 @@ bool PDFiumEngine::OnLeftMouseDown(const blink::WebMouseEvent& event) {
+   auto point_data = GetPointData(point);
+   DCHECK_GE(point_data.form_type, FPDF_FORMFIELD_UNKNOWN);
+   mouse_down_state_.Set(point_data.area, point_data.target);
++  auto log_result = [&](const char* outcome, bool handler_return_value) {
++    if (!Issue794InputTraceEnabled()) {
++      return;
++    }
++    LOG(INFO) << "[issue-794-exp7] pdfium-mouse event=left-down outcome="
++              << outcome << " widget_x=" << point.x()
++              << " widget_y=" << point.y()
++              << " left_down_before=" << left_button_down_before
++              << " left_down_after=" << mouse_left_button_down_
++              << " selecting_before=" << selecting_before
++              << " selecting_after=" << selecting_
++              << " handler_return=" << handler_return_value
++              << " page_index=" << point_data.page_index
++              << " char_index=" << point_data.char_index
++              << " area=" << static_cast<int>(point_data.area)
++              << " area_label=" << Issue794AreaLabel(point_data.area)
++              << " pdf_x=" << point_data.pdf_point.x()
++              << " pdf_y=" << point_data.pdf_point.y()
++              << " selected_text_length=" << GetSelectedText().size();
++  };
+ 
+   // Decide whether to open link or not based on user action in mouse up and
+   // mouse move events.
+   if (IsLinkArea(point_data.area)) {
++    log_result("link-area", true);
+     return true;
+   }
+ 
+@@ -1783,6 +1837,7 @@ bool PDFiumEngine::OnLeftMouseDown(const blink::WebMouseEvent& event) {
+                                 point_data.pdf_point.y());
+     }
+     if (point_data.form_type != FPDF_FORMFIELD_UNKNOWN) {
++      log_result("form-field", true);
+       return true;  // Return now before we get into the selection code.
+     }
+   }
+@@ -1793,6 +1848,7 @@ bool PDFiumEngine::OnLeftMouseDown(const blink::WebMouseEvent& event) {
+ #endif
+ 
+   if (point_data.area != PDFiumPage::TEXT_AREA) {
++    log_result("non-text-area", true);
+     return true;  // Return true so WebKit doesn't do its own highlighting.
+   }
+ 
+@@ -1801,6 +1857,7 @@ bool PDFiumEngine::OnLeftMouseDown(const blink::WebMouseEvent& event) {
+   }
+ 
+   OnTextOrLinkAreaClickInternal(point_data, click_count);
++  log_result("text-area", true);
+   return true;
+ }
+ 
+@@ -1925,6 +1982,8 @@ bool PDFiumEngine::NavigateToLinkDestination(
+ }
+ 
+ bool PDFiumEngine::OnMouseUp(const blink::WebMouseEvent& event) {
++  const bool left_button_down_before = mouse_left_button_down_;
++  const bool selecting_before = selecting_;
+   if (event.button != blink::WebPointerProperties::Button::kLeft &&
+       event.button != blink::WebPointerProperties::Button::kMiddle) {
+     return false;
+@@ -1938,6 +1997,26 @@ bool PDFiumEngine::OnMouseUp(const blink::WebMouseEvent& event) {
+ 
+   const gfx::PointF& point = event.PositionInWidget();
+   auto point_data = GetPointData(point);
++  auto log_result = [&](const char* outcome, bool handler_return_value) {
++    if (!Issue794InputTraceEnabled()) {
++      return;
++    }
++    LOG(INFO) << "[issue-794-exp7] pdfium-mouse event=mouse-up outcome="
++              << outcome << " widget_x=" << point.x()
++              << " widget_y=" << point.y()
++              << " left_down_before=" << left_button_down_before
++              << " left_down_after=" << mouse_left_button_down_
++              << " selecting_before=" << selecting_before
++              << " selecting_after=" << selecting_
++              << " handler_return=" << handler_return_value
++              << " page_index=" << point_data.page_index
++              << " char_index=" << point_data.char_index
++              << " area=" << static_cast<int>(point_data.area)
++              << " area_label=" << Issue794AreaLabel(point_data.area)
++              << " pdf_x=" << point_data.pdf_point.x()
++              << " pdf_y=" << point_data.pdf_point.y()
++              << " selected_text_length=" << GetSelectedText().size();
++  };
+ 
+   // Open link on mouse up for same link for which mouse down happened earlier.
+   if (mouse_down_state_.Matches(point_data.area, point_data.target)) {
+@@ -1955,6 +2034,7 @@ bool PDFiumEngine::OnMouseUp(const blink::WebMouseEvent& event) {
+ 
+     if (NavigateToLinkDestination(point_data.area, point_data.target,
+                                   disposition)) {
++      log_result("navigate-link", true);
+       return true;
+     }
+   }
+@@ -1967,6 +2047,7 @@ bool PDFiumEngine::OnMouseUp(const blink::WebMouseEvent& event) {
+     }
+ 
+     // Prevent middle mouse button from selecting texts.
++    log_result("middle-button", false);
+     return false;
+   }
+ 
+@@ -1977,16 +2058,45 @@ bool PDFiumEngine::OnMouseUp(const blink::WebMouseEvent& event) {
+   }
+ 
+   if (!selecting_) {
++    log_result("not-selecting", false);
+     return false;
+   }
+ 
+   SetSelecting(false);
++  log_result("selection-ended", true);
+   return true;
+ }
+ 
+ bool PDFiumEngine::OnMouseMove(const blink::WebMouseEvent& event) {
++  const bool left_button_down_before = mouse_left_button_down_;
++  const bool selecting_before = selecting_;
+   const gfx::PointF& point = event.PositionInWidget();
+   auto point_data = GetPointData(point);
++  auto log_result = [&](const char* outcome, bool handler_return_value,
++                        bool returned_before_selection, bool extend_reached,
++                        bool extend_return_value) {
++    if (!Issue794InputTraceEnabled()) {
++      return;
++    }
++    LOG(INFO) << "[issue-794-exp7] pdfium-mouse event=mouse-move outcome="
++              << outcome << " widget_x=" << point.x()
++              << " widget_y=" << point.y()
++              << " left_down_before=" << left_button_down_before
++              << " left_down_after=" << mouse_left_button_down_
++              << " selecting_before=" << selecting_before
++              << " selecting_after=" << selecting_
++              << " handler_return=" << handler_return_value
++              << " page_index=" << point_data.page_index
++              << " char_index=" << point_data.char_index
++              << " area=" << static_cast<int>(point_data.area)
++              << " area_label=" << Issue794AreaLabel(point_data.area)
++              << " pdf_x=" << point_data.pdf_point.x()
++              << " pdf_y=" << point_data.pdf_point.y()
++              << " returned_before_selection=" << returned_before_selection
++              << " extend_reached=" << extend_reached
++              << " extend_return=" << extend_return_value
++              << " selected_text_length=" << GetSelectedText().size();
++  };
+ 
+   // Clear `mouse_down_state_` if mouse moves away from where the mouse down
+   // happened.
+@@ -2029,23 +2139,29 @@ bool PDFiumEngine::OnMouseMove(const blink::WebMouseEvent& event) {
+ 
+     // No need to swallow the event, since this might interfere with the
+     // scrollbars if the user is dragging them.
++    log_result("not-selecting", false, true, false, false);
+     return false;
+   }
+ 
+   // We're selecting but right now we're not over text, so don't change the
+   // current selection.
+   if (!PageIndexInBounds(point_data.page_index) || point_data.char_index < 0) {
++    log_result("invalid-page-or-char", false, false, false, false);
+     return false;
+   }
+ 
+   // Similarly, do not select if `area` is not a selectable type. This can occur
+   // even if there is text in the area. e.g. When print previewing.
+   if (!IsSelectableArea(point_data.area)) {
++    log_result("non-selectable-area", false, false, false, false);
+     return false;
+   }
+ 
+   SelectionChangeInvalidator selection_invalidator(this);
+-  return ExtendSelection(point_data);
++  const bool extend_return_value = ExtendSelection(point_data);
++  log_result("extend-selection", extend_return_value, false, true,
++             extend_return_value);
++  return extend_return_value;
+ }
+ 
+ ui::mojom::CursorType PDFiumEngine::DetermineCursorType(PDFiumPage::Area area,
+@@ -4283,7 +4399,13 @@ std::optional<RegionData> PDFiumEngine::GetRegion(const gfx::Point& location,
+ 
+ void PDFiumEngine::OnSelectionTextChanged() {
+   DCHECK_NE(focus_field_type_, FocusFieldType::kText);
+-  client_->SetSelectedText(GetSelectedText());
++  std::string selected_text = GetSelectedText();
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp7] pdfium-selection-changed length="
++              << selected_text.size() << " sample=\""
++              << Issue794SelectedTextSample(selected_text) << "\"";
++  }
++  client_->SetSelectedText(selected_text);
+ }
+ 
+ void PDFiumEngine::OnSelectionPositionChanged() {
+-- 
+2.54.0
+

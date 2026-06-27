@@ -1,0 +1,72 @@
+From ae9e91fe48267e768558d2159d578066d15b0433 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 17:15:08 -0500
+Subject: [PATCH 47/88] Load PDF localized strings
+
+The PDF knew its portrait face,
+But not the string nor where to place.
+A components pak now joins the show,
+And Bitcoin pages start to glow.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  1 +
+ .../extensions/ts_pdf_resource_bundle.cc      | 25 +++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index f0038e8959..4aa16e4947 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -88,6 +88,7 @@ shared_library("libtermsurf_chromium") {
+     "//components/pref_registry",
+     "//components/prefs",
+     "//components/resources:components_resources",
++    "//components/strings:components_strings",
+     "//components/user_prefs",
+     "//components/value_store",
+     "//components/zoom",
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index ce8a244591..20c32a42eb 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -16,6 +16,7 @@
+ #include "chrome/grit/common_resources.h"
+ #include "chrome/grit/pdf_resources.h"
+ #include "components/grit/components_resources.h"
++#include "components/strings/grit/components_strings.h"
+ #include "extensions/grit/extensions_renderer_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+@@ -94,6 +95,30 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+             << (pdf_embedder_html.find("about:blank") != std::string::npos ? 1
+                                                                            : 0);
+ 
++  base::FilePath components_strings_pak_path =
++      assets_path.AppendASCII("gen")
++          .AppendASCII("components")
++          .AppendASCII("strings")
++          .AppendASCII("components_strings_en-US.pak");
++  const bool components_strings_found =
++      base::PathExists(components_strings_pak_path);
++  if (components_strings_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        components_strings_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::u16string portrait_string;
++  if (components_strings_found) {
++    portrait_string = ui::ResourceBundle::GetSharedInstance()
++                          .GetLocalizedString(
++                              IDS_PDF_PROPERTIES_PAGE_SIZE_PORTRAIT);
++  }
++  LOG(INFO) << "[issue-792-exp28] components-strings-pak path="
++            << components_strings_pak_path.AsUTF8Unsafe()
++            << " found=" << components_strings_found
++            << " loaded=" << !portrait_string.empty()
++            << " portrait_bytes=" << portrait_string.size();
++
+   base::FilePath common_pak_path =
+       assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
+           "common_resources.pak");
+-- 
+2.54.0
+

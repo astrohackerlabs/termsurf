@@ -64,6 +64,114 @@ func termsurfRunActivationProbeIfRequested() {
     }
 }
 
+private let termsurfDebugInputNotification = Notification.Name("com.termsurf.debug-input")
+
+func termsurfInstallDebugInputObserverIfRequested() {
+    guard ProcessInfo.processInfo.environment["TERMSURF_TEST_SCRIPTED_BROWSER_INPUT"] == "1" else {
+        return
+    }
+
+    DistributedNotificationCenter.default().addObserver(
+        forName: termsurfDebugInputNotification,
+        object: nil,
+        queue: .main
+    ) { notification in
+        termsurfHandleDebugInputNotification(notification)
+    }
+    termsurfLogGeometry(
+        "layer=bridge event=debug_input_observer scenario=\(termsurfGeometryScenario()) identity=\(termsurfGeometryIdentity(paneID: "unknown:debug-input")) visible=unknown note=installed")
+}
+
+private func termsurfHandleDebugInputNotification(_ notification: Notification) {
+    guard let userInfo = notification.userInfo else {
+        termsurfLogDebugInputReject("missing-user-info")
+        return
+    }
+    guard let targetPID = termsurfDebugInputInt(userInfo["target_pid"]), targetPID == Int(getpid()) else {
+        return
+    }
+    guard let paneID = userInfo["pane_id"] as? String, let uuid = UUID(uuidString: paneID) else {
+        termsurfLogDebugInputReject("missing-or-invalid-pane-id")
+        return
+    }
+    guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+          let target = appDelegate.findSurface(forUUID: uuid) else {
+        termsurfLogDebugInputReject("no-surface pane_id=\(paneID)")
+        return
+    }
+    guard let kind = userInfo["kind"] as? String else {
+        termsurfLogDebugInputReject("missing-kind pane_id=\(paneID)")
+        return
+    }
+
+    do {
+        switch kind {
+        case "mouse-button":
+            _ = try target.termSurfScriptForwardMouseEvent(
+                type: userInfo["action"] as? String ?? "down",
+                button: userInfo["button"] as? String ?? "left",
+                x: try termsurfDebugInputDouble(userInfo["x"], name: "x"),
+                y: try termsurfDebugInputDouble(userInfo["y"], name: "y"),
+                clickCount: Int64(termsurfDebugInputInt(userInfo["click_count"]) ?? 1),
+                modifiers: UInt64(termsurfDebugInputInt(userInfo["modifiers"]) ?? 0))
+        case "scroll":
+            _ = try target.termSurfScriptForwardScroll(
+                x: try termsurfDebugInputDouble(userInfo["x"], name: "x"),
+                y: try termsurfDebugInputDouble(userInfo["y"], name: "y"),
+                deltaX: try termsurfDebugInputDouble(userInfo["delta_x"], name: "delta_x"),
+                deltaY: try termsurfDebugInputDouble(userInfo["delta_y"], name: "delta_y"),
+                modifiers: UInt64(termsurfDebugInputInt(userInfo["modifiers"]) ?? 0))
+        case "key":
+            _ = try target.termSurfScriptForwardKey(
+                type: userInfo["action"] as? String ?? "down",
+                windowsKeyCode: Int64(try termsurfDebugInputRequiredInt(userInfo["key_code"], name: "key_code")),
+                text: userInfo["text"] as? String ?? "",
+                modifiers: UInt64(termsurfDebugInputInt(userInfo["modifiers"]) ?? 0))
+        default:
+            termsurfLogDebugInputReject("invalid-kind kind=\(kind) pane_id=\(paneID)")
+        }
+    } catch {
+        termsurfLogDebugInputReject("error=\(error.localizedDescription) pane_id=\(paneID)")
+    }
+}
+
+private func termsurfDebugInputDouble(_ value: Any?, name: String) throws -> Double {
+    if let value = value as? Double { return value }
+    if let value = value as? NSNumber { return value.doubleValue }
+    if let value = value as? String, let parsed = Double(value) { return parsed }
+    throw TermSurfDebugInputError.missingOrInvalid(name)
+}
+
+private func termsurfDebugInputRequiredInt(_ value: Any?, name: String) throws -> Int {
+    guard let parsed = termsurfDebugInputInt(value) else {
+        throw TermSurfDebugInputError.missingOrInvalid(name)
+    }
+    return parsed
+}
+
+private func termsurfDebugInputInt(_ value: Any?) -> Int? {
+    if let value = value as? Int { return value }
+    if let value = value as? NSNumber { return value.intValue }
+    if let value = value as? String { return Int(value) }
+    return nil
+}
+
+private func termsurfLogDebugInputReject(_ reason: String) {
+    termsurfLogGeometry(
+        "layer=bridge event=debug_input_rejected scenario=\(termsurfGeometryScenario()) identity=\(termsurfGeometryIdentity(paneID: "unknown:debug-input")) visible=unknown note=\(reason)")
+}
+
+private enum TermSurfDebugInputError: LocalizedError {
+    case missingOrInvalid(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .missingOrInvalid(name):
+            return "Missing or invalid debug input field: \(name)."
+        }
+    }
+}
+
 private func termsurfPublishActivationProbePidIfRequested(process: String) {
     let environment = ProcessInfo.processInfo.environment
     guard let path = environment["TERMSURF_ISSUE834_ACTIVATION_PROBE_TRACKED_PIDS_FILE"], !path.isEmpty else {

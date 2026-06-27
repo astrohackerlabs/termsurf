@@ -1,0 +1,84 @@
+From bd37ae9667d27819db0a38d181ef7f779b870ddf Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 26 Jun 2026 18:22:10 -0500
+Subject: [PATCH 88/88] Keep hidden Roamium unfocused
+
+Back tried to borrow the crown,
+
+A glassy shell reached for the light.
+
+We leave it watching from the wings,
+
+And keep the board awake and bright.
+---
+ .../browser/shell_platform_delegate_mac.mm    | 40 ++++++++++++++++++-
+ 1 file changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/content/shell/browser/shell_platform_delegate_mac.mm b/content/shell/browser/shell_platform_delegate_mac.mm
+index ff3d7499eb..ae9670bf9d 100644
+--- a/content/shell/browser/shell_platform_delegate_mac.mm
++++ b/content/shell/browser/shell_platform_delegate_mac.mm
+@@ -94,6 +94,27 @@ const CGFloat kURLBarHeight = 24;
+ const CGFloat kMinimumWindowWidth = 400;
+ const CGFloat kMinimumWindowHeight = 300;
+ 
++void LogTermSurfActivationState(const char* step,
++                                NSWindow* shell_window,
++                                bool hidden) {
++  NSString* title = shell_window.title ?: @"";
++  LOG(INFO) << "termsurf-activation stage=ActivateContents step=" << step
++            << " hidden=" << (hidden ? 1 : 0)
++            << " app_active=" << ([NSApp isActive] ? 1 : 0)
++            << " app_key_is_shell="
++            << ([NSApp keyWindow] == shell_window ? 1 : 0)
++            << " app_main_is_shell="
++            << ([NSApp mainWindow] == shell_window ? 1 : 0)
++            << " shell_key=" << ([shell_window isKeyWindow] ? 1 : 0)
++            << " shell_main=" << ([shell_window isMainWindow] ? 1 : 0)
++            << " shell_visible=" << ([shell_window isVisible] ? 1 : 0)
++            << " shell_ignores_mouse="
++            << ([shell_window ignoresMouseEvents] ? 1 : 0)
++            << " shell_alpha=" << [shell_window alphaValue]
++            << " window_number=" << [shell_window windowNumber] << " title={"
++            << base::SysNSStringToUTF8(title) << "}";
++}
++
+ void MakeShellButton(NSRect* rect,
+                      NSString* title,
+                      NSView* parent,
+@@ -326,14 +347,31 @@ void ShellPlatformDelegate::ActivateContents(Shell* shell,
+   // This focuses the main frame RenderWidgetHost in the window, but does not
+   // make the window itself active. The WebContentsDelegate (this class) is
+   // responsible for doing both.
++  const bool hidden =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHidden);
++  NSWindow* window = shell_data.delegate.window;
++  LogTermSurfActivationState("before_focus", window, hidden);
+   top_contents->Focus();
++  LogTermSurfActivationState("after_focus", window, hidden);
++
++  if (hidden) {
++    // Embedded TermSurf Roamium keeps the content shell window hidden and
++    // exports its layer to Ghostboard. Activating that hidden window steals
++    // key-window status from Ghostboard after browser-driven focus events such
++    // as Back navigation.
++    LogTermSurfActivationState("after_activate", window, hidden);
++    return;
++  }
++
++  LogTermSurfActivationState("before_activate", window, hidden);
+   // This makes the window the active window for the application, and when the
+   // app is active, the window will be also. That makes all RenderWidgetHosts
+   // for the window active (which is separate from focused on mac).
+-  [shell_data.delegate.window makeKeyAndOrderFront:nil];
++  [window makeKeyAndOrderFront:nil];
+   // This makes the application active so that we can actually move focus
+   // between windows and the renderer can receive focus/blur events.
+   [NSApp activateIgnoringOtherApps:YES];
++  LogTermSurfActivationState("after_activate", window, hidden);
+ }
+ 
+ void ShellPlatformDelegate::DidNavigatePrimaryMainFramePostCommit(
+-- 
+2.54.0
+
