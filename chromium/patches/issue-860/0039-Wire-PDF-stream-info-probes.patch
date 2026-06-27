@@ -1,0 +1,237 @@
+From 58a2822c60f58e25b848a9a7b790263c475a9133 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 14:34:33 -0500
+Subject: [PATCH 39/89] Wire PDF stream info probes
+
+The viewer stood beside the stream,
+But never asked it for a dream.
+Now both doors ring a little bell,
+So missing footsteps have to tell.
+---
+ .../pdf_viewer_private_api.cc                 |  6 ++
+ .../ts_mime_handler_binders.cc                | 66 ++++++++++---------
+ .../mime_handler_private.cc                   | 32 +++++++--
+ 3 files changed, 66 insertions(+), 38 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc b/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc
+index 6adc513bf3..570d8cac06 100644
+--- a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc
++++ b/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc
+@@ -7,6 +7,7 @@
+ #include <cmath>
+ #include <memory>
+ 
++#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -129,9 +130,14 @@ ExtensionFunction::ResponseAction PdfViewerPrivateGetStreamInfoFunction::Run() {
+   base::WeakPtr<StreamContainer> stream =
+       GetStreamContainer(render_frame_host());
+   if (!stream) {
++    LOG(INFO) << "[issue-792-exp18] pdf-viewer-private-get-stream-info "
++              << "has_stream=0 stream_url= original_url=";
+     return RespondNow(Error("Failed to get StreamContainer"));
+   }
+ 
++  LOG(INFO) << "[issue-792-exp18] pdf-viewer-private-get-stream-info "
++            << "has_stream=1 stream_url=" << stream->stream_url()
++            << " original_url=" << stream->original_url();
+   api::pdf_viewer_private::StreamInfo stream_info;
+   stream_info.original_url = stream->original_url().spec();
+   stream_info.stream_url = stream->stream_url().spec();
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+index d4a03d5db9..617d945906 100644
+--- a/content/libtermsurf_chromium/ts_mime_handler_binders.cc
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -9,8 +9,11 @@
+ #include <utility>
+ 
+ #include "base/logging.h"
++#include "chrome/browser/pdf/pdf_viewer_stream_manager.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
++#include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
++#include "extensions/browser/mime_handler/stream_container.h"
+ #include "extensions/common/api/mime_handler.mojom.h"
+ #include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+@@ -33,35 +36,6 @@ std::string SiteUrl(RenderFrameHost* render_frame_host) {
+   return render_frame_host->GetSiteInstance()->GetSiteURL().spec();
+ }
+ 
+-class TsMimeHandlerService
+-    : public extensions::mime_handler::MimeHandlerService {
+- public:
+-  explicit TsMimeHandlerService(std::string frame_url)
+-      : frame_url_(std::move(frame_url)) {}
+-
+-  TsMimeHandlerService(const TsMimeHandlerService&) = delete;
+-  TsMimeHandlerService& operator=(const TsMimeHandlerService&) = delete;
+-
+-  ~TsMimeHandlerService() override = default;
+-
+-  void GetStreamInfo(GetStreamInfoCallback callback) override {
+-    LOG(INFO) << "[issue-792-exp12] mime-handler-get-stream-info frame_url="
+-              << frame_url_ << " stream_info=null";
+-    std::move(callback).Run(extensions::mime_handler::StreamInfoPtr());
+-  }
+-
+-  void SetPdfPluginAttributes(
+-      extensions::mime_handler::PdfPluginAttributesPtr pdf_plugin_attributes)
+-      override {
+-    LOG(INFO)
+-        << "[issue-792-exp12] mime-handler-set-pdf-plugin-attributes frame_url="
+-        << frame_url_;
+-  }
+-
+- private:
+-  std::string frame_url_;
+-};
+-
+ class TsBeforeUnloadControl
+     : public extensions::mime_handler::BeforeUnloadControl {
+  public:
+@@ -93,18 +67,46 @@ void BindTsMimeHandlerService(
+         receiver) {
+   const std::string frame_url = FrameUrl(render_frame_host);
+   const std::string site_url = SiteUrl(render_frame_host);
++  const bool is_pdf_extension = IsPdfExtensionFrame(render_frame_host);
+ 
+-  if (!IsPdfExtensionFrame(render_frame_host)) {
++  if (!is_pdf_extension) {
+     LOG(INFO)
+         << "[issue-792-exp12] mime-handler-service-binder-reject frame_url="
+         << frame_url << " site_url=" << site_url;
++    LOG(INFO) << "[issue-792-exp18] mime-handler-service-no-stream frame_url="
++              << frame_url << " reason=not-pdf-extension";
+     return;
+   }
+ 
+   LOG(INFO) << "[issue-792-exp12] mime-handler-service-binder frame_url="
+             << frame_url << " site_url=" << site_url;
+-  mojo::MakeSelfOwnedReceiver(std::make_unique<TsMimeHandlerService>(frame_url),
+-                              std::move(receiver));
++  RenderFrameHost* embedder_host = render_frame_host->GetParent();
++  auto* manager =
++      embedder_host
++          ? pdf::PdfViewerStreamManager::FromRenderFrameHost(embedder_host)
++          : nullptr;
++  base::WeakPtr<extensions::StreamContainer> stream =
++      manager && embedder_host ? manager->GetStreamContainer(embedder_host)
++                               : nullptr;
++  LOG(INFO) << "[issue-792-exp18] mime-handler-service-request frame_url="
++            << frame_url << " site_url=" << site_url
++            << " is_pdf_extension=" << (is_pdf_extension ? 1 : 0)
++            << " has_parent=" << (embedder_host ? 1 : 0)
++            << " has_manager=" << (manager ? 1 : 0)
++            << " has_stream=" << (stream ? 1 : 0);
++
++  if (!stream) {
++    const char* reason =
++        !embedder_host ? "no-parent" : (!manager ? "no-manager" : "no-stream");
++    LOG(INFO) << "[issue-792-exp18] mime-handler-service-no-stream frame_url="
++              << frame_url << " reason=" << reason;
++    return;
++  }
++
++  LOG(INFO) << "[issue-792-exp18] mime-handler-service-bound frame_url="
++            << frame_url << " stream_url=" << stream->stream_url()
++            << " original_url=" << stream->original_url();
++  extensions::MimeHandlerServiceImpl::Create(stream, std::move(receiver));
+ }
+ 
+ void BindTsBeforeUnloadControl(
+diff --git a/extensions/browser/api/mime_handler_private/mime_handler_private.cc b/extensions/browser/api/mime_handler_private/mime_handler_private.cc
+index 789866d271..fed1ea6ad8 100644
+--- a/extensions/browser/api/mime_handler_private/mime_handler_private.cc
++++ b/extensions/browser/api/mime_handler_private/mime_handler_private.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/containers/flat_map.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/string_util.h"
+ #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+@@ -24,8 +25,9 @@ namespace {
+ base::flat_map<std::string, std::string> CreateResponseHeadersMap(
+     const net::HttpResponseHeaders* headers) {
+   base::flat_map<std::string, std::string> result;
+-  if (!headers)
++  if (!headers) {
+     return result;
++  }
+ 
+   size_t iter = 0;
+   std::string header_name;
+@@ -38,11 +40,14 @@ base::flat_map<std::string, std::string> CreateResponseHeadersMap(
+     //
+     // TODO(sammc): Send as bytes instead of a string and let the client decide
+     // how to decode.
+-    if (!base::IsStringASCII(header_name) || !base::IsStringASCII(header_value))
++    if (!base::IsStringASCII(header_name) ||
++        !base::IsStringASCII(header_value)) {
+       continue;
++    }
+     auto& current_value = result[header_name];
+-    if (!current_value.empty())
++    if (!current_value.empty()) {
+       current_value += ", ";
++    }
+     current_value += header_value;
+   }
+   return result;
+@@ -67,22 +72,36 @@ void MimeHandlerServiceImpl::Create(
+ 
+ void MimeHandlerServiceImpl::GetStreamInfo(GetStreamInfoCallback callback) {
+   if (!stream_) {
++    LOG(INFO) << "[issue-792-exp18] real-mime-handler-get-stream-info "
++              << "has_stream=0 stream_url= original_url=";
+     std::move(callback).Run(mime_handler::StreamInfoPtr());
+     return;
+   }
++  LOG(INFO) << "[issue-792-exp18] real-mime-handler-get-stream-info "
++            << "has_stream=1 stream_url=" << stream_->stream_url()
++            << " original_url=" << stream_->original_url();
+   std::move(callback).Run(
+       mojo::ConvertTo<mime_handler::StreamInfoPtr>(*stream_));
+ }
+ 
+ void MimeHandlerServiceImpl::SetPdfPluginAttributes(
+     mime_handler::PdfPluginAttributesPtr pdf_plugin_attributes) {
+-  if (!stream_)
++  if (!stream_) {
++    LOG(INFO) << "[issue-792-exp18] real-mime-handler-set-pdf-attributes "
++              << "has_stream=0 background_color= allow_javascript=";
+     return;
++  }
++
++  LOG(INFO) << "[issue-792-exp18] real-mime-handler-set-pdf-attributes "
++            << "has_stream=1 background_color="
++            << pdf_plugin_attributes->background_color << " allow_javascript="
++            << (pdf_plugin_attributes->allow_javascript ? 1 : 0);
+ 
+   // Check the `background_color` is an integer.
+   double whole = 0.0;
+-  if (std::modf(pdf_plugin_attributes->background_color, &whole) != 0.0)
++  if (std::modf(pdf_plugin_attributes->background_color, &whole) != 0.0) {
+     return;
++  }
+ 
+   // Check the `background_color` is within the range of a uint32_t.
+   if (!base::IsValueInRangeForNumericType<uint32_t>(
+@@ -101,8 +120,9 @@ extensions::mime_handler::StreamInfoPtr TypeConverter<
+     extensions::mime_handler::StreamInfoPtr,
+     extensions::StreamContainer>::Convert(const extensions::StreamContainer&
+                                               stream) {
+-  if (stream.stream_url().is_empty())
++  if (stream.stream_url().is_empty()) {
+     return extensions::mime_handler::StreamInfoPtr();
++  }
+ 
+   auto result = extensions::mime_handler::StreamInfo::New();
+   result->embedded = stream.embedded();
+-- 
+2.54.0
+

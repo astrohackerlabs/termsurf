@@ -126,6 +126,26 @@ static NSURL *profileURL(NSString *basePath, NSString *component, bool directory
     return [baseURL URLByAppendingPathComponent:component isDirectory:directory];
 }
 
+static NSString *safariApplicationNameForUserAgent()
+{
+    NSArray<NSString *> *infoPlistPaths = @[
+        @"/Applications/Safari.app/Contents/Info.plist",
+        @"/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app/Contents/Info.plist",
+    ];
+
+    for (NSString *path in infoPlistPaths) {
+        NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:path];
+        NSString *version = [info objectForKey:@"CFBundleShortVersionString"];
+        if (![version isKindOfClass:NSString.class] || !version.length)
+            continue;
+
+        return [NSString stringWithFormat:@"Version/%@ Safari/605.1.15", version];
+    }
+
+    fprintf(stderr, "[libtermsurf_webkit] could not read Safari version; leaving applicationNameForUserAgent unset\n");
+    return nil;
+}
+
 static CGFloat hostWindowAlpha()
 {
     NSString *value = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_HOST_WINDOW_ALPHA"];
@@ -6255,6 +6275,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = context->data_store;
     configuration.preferences._developerExtrasEnabled = YES;
+    configuration.applicationNameForUserAgent = safariApplicationNameForUserAgent();
     WKUserContentController *user_content_controller = [[WKUserContentController alloc] init];
     contents->console_message_handler = [[TSConsoleMessageHandler alloc] init];
     contents->console_message_handler.owner = contents;

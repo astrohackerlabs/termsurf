@@ -1,0 +1,689 @@
+From b5537e548172f3186354c0133170b58122fc9b1a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 20:08:21 -0500
+Subject: [PATCH 68/89] Add console message callback
+
+The console had stories to tell,
+But no little wire for the spell.
+Now warnings take flight,
+With source, line, and light,
+And land where the terminal dwells.
+---
+ .../libtermsurf_chromium.cc                   | 223 ++++++++++++------
+ .../libtermsurf_chromium.h                    |  93 ++++----
+ .../ts_browser_main_parts.h                   |   5 +
+ .../libtermsurf_chromium/ts_tab_observer.cc   |  36 +++
+ .../libtermsurf_chromium/ts_tab_observer.h    |  17 +-
+ 5 files changed, 257 insertions(+), 117 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index b9200ccb53..bb3b710848 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -6,13 +6,13 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
++#include "content/libtermsurf_chromium/ts_main_delegate.h"
+ #include "content/public/app/content_main.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/shell/browser/shell.h"
+-#include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+-#include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
+-#include "content/libtermsurf_chromium/ts_main_delegate.h"
+ 
+ namespace {
+ 
+@@ -38,8 +38,10 @@ void (*g_on_url_changed)(ts_web_contents_t, const char*, void*) = nullptr;
+ void* g_on_url_changed_data = nullptr;
+ 
+ // Loading state callback.
+-void (*g_on_loading_state)(ts_web_contents_t, const char*, int, void*) =
+-    nullptr;
++void (*g_on_loading_state)(ts_web_contents_t,
++                           const char*,
++                           int,
++                           void*) = nullptr;
+ void* g_on_loading_state_data = nullptr;
+ 
+ // Title changed callback.
+@@ -51,7 +53,9 @@ void (*g_on_cursor_changed)(ts_web_contents_t, int, void*) = nullptr;
+ void* g_on_cursor_changed_data = nullptr;
+ 
+ // Target URL changed callback.
+-void (*g_on_target_url_changed)(ts_web_contents_t, const char*, void*) = nullptr;
++void (*g_on_target_url_changed)(ts_web_contents_t,
++                                const char*,
++                                void*) = nullptr;
+ void* g_on_target_url_changed_data = nullptr;
+ 
+ // JavaScript dialog callback.
+@@ -64,6 +68,15 @@ void (*g_on_javascript_dialog_request)(ts_web_contents_t,
+                                        void*) = nullptr;
+ void* g_on_javascript_dialog_request_data = nullptr;
+ 
++// Console message callback.
++void (*g_on_console_message)(ts_web_contents_t,
++                             const char*,
++                             const char*,
++                             int,
++                             const char*,
++                             void*) = nullptr;
++void* g_on_console_message_data = nullptr;
++
+ }  // namespace
+ 
+ namespace content {
+@@ -71,46 +84,56 @@ namespace content {
+ // Called by TsBrowserMainParts when initialization is complete.
+ void TsNotifyInitialized(TsBrowserMainParts* parts) {
+   g_main_parts = parts;
+-  if (g_on_initialized)
++  if (g_on_initialized) {
+     g_on_initialized(g_on_initialized_data);
++  }
+ }
+ 
+ // Called by TsTabObserver for state change notifications.
+ void TsNotifyTabReady(void* wc_handle, int tab_id) {
+-  if (g_on_tab_ready)
++  if (g_on_tab_ready) {
+     g_on_tab_ready(wc_handle, tab_id, g_on_tab_ready_data);
++  }
+ }
+ 
+-void TsNotifyCAContextId(void* wc_handle, uint32_t ca_context_id,
+-                          int width, int height) {
+-  if (g_on_ca_context_id)
++void TsNotifyCAContextId(void* wc_handle,
++                         uint32_t ca_context_id,
++                         int width,
++                         int height) {
++  if (g_on_ca_context_id) {
+     g_on_ca_context_id(wc_handle, ca_context_id, width, height,
+                        g_on_ca_context_id_data);
++  }
+ }
+ 
+ void TsNotifyUrlChanged(void* wc_handle, const char* url) {
+-  if (g_on_url_changed)
++  if (g_on_url_changed) {
+     g_on_url_changed(wc_handle, url, g_on_url_changed_data);
++  }
+ }
+ 
+ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress) {
+-  if (g_on_loading_state)
++  if (g_on_loading_state) {
+     g_on_loading_state(wc_handle, state, progress, g_on_loading_state_data);
++  }
+ }
+ 
+ void TsNotifyTitleChanged(void* wc_handle, const char* title) {
+-  if (g_on_title_changed)
++  if (g_on_title_changed) {
+     g_on_title_changed(wc_handle, title, g_on_title_changed_data);
++  }
+ }
+ 
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type) {
+-  if (g_on_cursor_changed)
++  if (g_on_cursor_changed) {
+     g_on_cursor_changed(wc_handle, cursor_type, g_on_cursor_changed_data);
++  }
+ }
+ 
+ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url) {
+-  if (g_on_target_url_changed)
++  if (g_on_target_url_changed) {
+     g_on_target_url_changed(wc_handle, url, g_on_target_url_changed_data);
++  }
+ }
+ 
+ void TsNotifyJavaScriptDialogRequest(void* wc_handle,
+@@ -120,9 +143,20 @@ void TsNotifyJavaScriptDialogRequest(void* wc_handle,
+                                      const char* message,
+                                      const char* default_prompt_text) {
+   if (g_on_javascript_dialog_request) {
+-    g_on_javascript_dialog_request(
+-        wc_handle, request_id, dialog_type, origin_url, message,
+-        default_prompt_text, g_on_javascript_dialog_request_data);
++    g_on_javascript_dialog_request(wc_handle, request_id, dialog_type,
++                                   origin_url, message, default_prompt_text,
++                                   g_on_javascript_dialog_request_data);
++  }
++}
++
++void TsNotifyConsoleMessage(void* wc_handle,
++                            const char* level,
++                            const char* message,
++                            int line_no,
++                            const char* source_id) {
++  if (g_on_console_message) {
++    g_on_console_message(wc_handle, level, message, line_no, source_id,
++                         g_on_console_message_data);
+   }
+ }
+ 
+@@ -138,17 +172,15 @@ int ts_content_main(int argc, const char** argv) {
+   return content::ContentMain(std::move(params));
+ }
+ 
+-void ts_set_on_initialized(void (*callback)(void* user_data),
+-                           void* user_data) {
++void ts_set_on_initialized(void (*callback)(void* user_data), void* user_data) {
+   g_on_initialized = callback;
+   g_on_initialized_data = user_data;
+ }
+ 
+ void ts_post_task(void (*task)(void* user_data), void* user_data) {
+   content::GetUIThreadTaskRunner({})->PostTask(
+-      FROM_HERE,
+-      base::BindOnce([](void (*fn)(void*), void* data) { fn(data); },
+-                     task, user_data));
++      FROM_HERE, base::BindOnce([](void (*fn)(void*), void* data) { fn(data); },
++                                task, user_data));
+ }
+ 
+ void ts_quit(void) {
+@@ -156,12 +188,16 @@ void ts_quit(void) {
+ }
+ 
+ ts_browser_context_t ts_create_browser_context(const char* path) {
+-  if (!g_main_parts) return nullptr;
++  if (!g_main_parts) {
++    return nullptr;
++  }
+   return g_main_parts->CreateBrowserContext(path);
+ }
+ 
+ void ts_destroy_browser_context(ts_browser_context_t ctx) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->DestroyBrowserContext(ctx);
+ }
+ 
+@@ -170,27 +206,35 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
+                                          int width,
+                                          int height,
+                                          bool dark) {
+-  if (!g_main_parts) return nullptr;
++  if (!g_main_parts) {
++    return nullptr;
++  }
+   return g_main_parts->CreateTab(ctx, url, width, height, dark);
+ }
+ 
+-ts_web_contents_t ts_create_devtools_web_contents(
+-    ts_browser_context_t ctx,
+-    int inspected_tab_id,
+-    int width,
+-    int height,
+-    bool dark) {
+-  if (!g_main_parts) return nullptr;
+-  return g_main_parts->CreateDevToolsTab(ctx, inspected_tab_id, width, height, dark);
++ts_web_contents_t ts_create_devtools_web_contents(ts_browser_context_t ctx,
++                                                  int inspected_tab_id,
++                                                  int width,
++                                                  int height,
++                                                  bool dark) {
++  if (!g_main_parts) {
++    return nullptr;
++  }
++  return g_main_parts->CreateDevToolsTab(ctx, inspected_tab_id, width, height,
++                                         dark);
+ }
+ 
+ void ts_destroy_web_contents(ts_web_contents_t wc) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->DestroyTab(wc);
+ }
+ 
+ void ts_load_url(ts_web_contents_t wc, const char* url) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->NavigateTab(wc, url);
+ }
+ 
+@@ -201,16 +245,17 @@ void ts_forward_mouse_event(ts_web_contents_t wc,
+                             int y,
+                             int click_count,
+                             int modifiers) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->ForwardMouseEvent(wc, type, button, x, y, click_count,
+                                   modifiers);
+ }
+ 
+-void ts_forward_mouse_move(ts_web_contents_t wc,
+-                           int x,
+-                           int y,
+-                           int modifiers) {
+-  if (!g_main_parts) return;
++void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers) {
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->ForwardMouseMove(wc, x, y, modifiers);
+ }
+ 
+@@ -223,7 +268,9 @@ void ts_forward_scroll_event(ts_web_contents_t wc,
+                              int momentum_phase,
+                              bool precise,
+                              int modifiers) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->ForwardScrollEvent(wc, x, y, delta_x, delta_y, phase,
+                                    momentum_phase, precise, modifiers);
+ }
+@@ -233,23 +280,30 @@ void ts_forward_key_event(ts_web_contents_t wc,
+                           int keycode,
+                           const char* utf8,
+                           int modifiers) {
+-  if (!g_main_parts) return;
+-  g_main_parts->ForwardKeyEvent(wc, type, keycode, utf8 ? utf8 : "",
+-                                modifiers);
++  if (!g_main_parts) {
++    return;
++  }
++  g_main_parts->ForwardKeyEvent(wc, type, keycode, utf8 ? utf8 : "", modifiers);
+ }
+ 
+ void ts_set_focus(ts_web_contents_t wc, bool focused) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->SetFocus(wc, focused);
+ }
+ 
+ void ts_set_gui_active(ts_web_contents_t wc, bool active, const char* reason) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->SetGuiActive(wc, active, reason ? reason : "");
+ }
+ 
+ void ts_set_color_scheme(ts_web_contents_t wc, bool dark) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->SetColorScheme(wc, dark);
+ }
+ 
+@@ -261,7 +315,9 @@ void ts_set_view_size(ts_web_contents_t wc,
+                       double screen_width,
+                       double screen_height,
+                       double screen_scale) {
+-  if (!g_main_parts) return;
++  if (!g_main_parts) {
++    return;
++  }
+   g_main_parts->ResizeTab(wc, width, height, screen_x, screen_y, screen_width,
+                           screen_height, screen_scale);
+ }
+@@ -279,53 +335,61 @@ bool ts_reply_javascript_dialog(ts_web_contents_t wc,
+       base::UTF8ToUTF16(prompt_text ? prompt_text : ""));
+ }
+ 
+-void ts_set_on_tab_ready(
+-    void (*cb)(ts_web_contents_t wc, int tab_id, void* user_data),
+-    void* user_data) {
++void ts_set_on_tab_ready(void (*cb)(ts_web_contents_t wc,
++                                    int tab_id,
++                                    void* user_data),
++                         void* user_data) {
+   g_on_tab_ready = cb;
+   g_on_tab_ready_data = user_data;
+ }
+ 
+-void ts_set_on_ca_context_id(
+-    void (*cb)(ts_web_contents_t wc, uint32_t ca_context_id,
+-               int width, int height, void* user_data),
+-    void* user_data) {
++void ts_set_on_ca_context_id(void (*cb)(ts_web_contents_t wc,
++                                        uint32_t ca_context_id,
++                                        int width,
++                                        int height,
++                                        void* user_data),
++                             void* user_data) {
+   g_on_ca_context_id = cb;
+   g_on_ca_context_id_data = user_data;
+ }
+ 
+-void ts_set_on_url_changed(
+-    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
+-    void* user_data) {
++void ts_set_on_url_changed(void (*cb)(ts_web_contents_t wc,
++                                      const char* url,
++                                      void* user_data),
++                           void* user_data) {
+   g_on_url_changed = cb;
+   g_on_url_changed_data = user_data;
+ }
+ 
+-void ts_set_on_loading_state(
+-    void (*cb)(ts_web_contents_t wc, const char* state, int progress,
+-               void* user_data),
+-    void* user_data) {
++void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
++                                        const char* state,
++                                        int progress,
++                                        void* user_data),
++                             void* user_data) {
+   g_on_loading_state = cb;
+   g_on_loading_state_data = user_data;
+ }
+ 
+-void ts_set_on_title_changed(
+-    void (*cb)(ts_web_contents_t wc, const char* title, void* user_data),
+-    void* user_data) {
++void ts_set_on_title_changed(void (*cb)(ts_web_contents_t wc,
++                                        const char* title,
++                                        void* user_data),
++                             void* user_data) {
+   g_on_title_changed = cb;
+   g_on_title_changed_data = user_data;
+ }
+ 
+-void ts_set_on_cursor_changed(
+-    void (*cb)(ts_web_contents_t wc, int cursor_type, void* user_data),
+-    void* user_data) {
++void ts_set_on_cursor_changed(void (*cb)(ts_web_contents_t wc,
++                                         int cursor_type,
++                                         void* user_data),
++                              void* user_data) {
+   g_on_cursor_changed = cb;
+   g_on_cursor_changed_data = user_data;
+ }
+ 
+-void ts_set_on_target_url_changed(
+-    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
+-    void* user_data) {
++void ts_set_on_target_url_changed(void (*cb)(ts_web_contents_t wc,
++                                             const char* url,
++                                             void* user_data),
++                                  void* user_data) {
+   g_on_target_url_changed = cb;
+   g_on_target_url_changed_data = user_data;
+ }
+@@ -342,3 +406,14 @@ void ts_set_on_javascript_dialog_request(
+   g_on_javascript_dialog_request = cb;
+   g_on_javascript_dialog_request_data = user_data;
+ }
++
++void ts_set_on_console_message(void (*cb)(ts_web_contents_t wc,
++                                          const char* level,
++                                          const char* message,
++                                          int line_no,
++                                          const char* source_id,
++                                          void* user_data),
++                               void* user_data) {
++  g_on_console_message = cb;
++  g_on_console_message_data = user_data;
++}
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 2c41ccfc28..37a7ab9083 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -66,20 +66,20 @@ TS_EXPORT void ts_destroy_browser_context(ts_browser_context_t ctx);
+    Returns an opaque handle. Synchronous — safe.
+    The on_ca_context_id callback fires when the tab's CAContext is ready. */
+ TS_EXPORT ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx,
+-                                                    const char* url,
+-                                                    int width,
+-                                                    int height,
+-                                                    bool dark);
++                                                   const char* url,
++                                                   int width,
++                                                   int height,
++                                                   bool dark);
+ 
+ /* Create a DevTools WebContents inspecting the tab with the given ID.
+    The inspected tab is looked up internally — no pointer crosses the C boundary
+    (Issue 706 Exp 2). */
+-TS_EXPORT ts_web_contents_t ts_create_devtools_web_contents(
+-    ts_browser_context_t ctx,
+-    int inspected_tab_id,
+-    int width,
+-    int height,
+-    bool dark);
++TS_EXPORT ts_web_contents_t
++ts_create_devtools_web_contents(ts_browser_context_t ctx,
++                                int inspected_tab_id,
++                                int width,
++                                int height,
++                                bool dark);
+ 
+ /* Close and destroy a WebContents. Synchronous — safe. */
+ TS_EXPORT void ts_destroy_web_contents(ts_web_contents_t wc);
+@@ -152,40 +152,43 @@ TS_EXPORT bool ts_reply_javascript_dialog(ts_web_contents_t wc,
+ /* All callbacks fire on the UI thread. The wc parameter identifies which tab
+    changed. Bindings use these to send responses over the socket. */
+ 
+-TS_EXPORT void ts_set_on_tab_ready(
+-    void (*cb)(ts_web_contents_t wc, int tab_id, void* user_data),
+-    void* user_data);
+-
+-TS_EXPORT void ts_set_on_ca_context_id(
+-    void (*cb)(ts_web_contents_t wc,
+-               uint32_t ca_context_id,
+-               int width,
+-               int height,
+-               void* user_data),
+-    void* user_data);
+-
+-TS_EXPORT void ts_set_on_url_changed(
+-    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
+-    void* user_data);
++TS_EXPORT void ts_set_on_tab_ready(void (*cb)(ts_web_contents_t wc,
++                                              int tab_id,
++                                              void* user_data),
++                                   void* user_data);
++
++TS_EXPORT void ts_set_on_ca_context_id(void (*cb)(ts_web_contents_t wc,
++                                                  uint32_t ca_context_id,
++                                                  int width,
++                                                  int height,
++                                                  void* user_data),
++                                       void* user_data);
++
++TS_EXPORT void ts_set_on_url_changed(void (*cb)(ts_web_contents_t wc,
++                                                const char* url,
++                                                void* user_data),
++                                     void* user_data);
+ 
+-TS_EXPORT void ts_set_on_loading_state(
+-    void (*cb)(ts_web_contents_t wc,
+-               const char* state,
+-               int progress,
+-               void* user_data),
+-    void* user_data);
++TS_EXPORT void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
++                                                  const char* state,
++                                                  int progress,
++                                                  void* user_data),
++                                       void* user_data);
+ 
+-TS_EXPORT void ts_set_on_title_changed(
+-    void (*cb)(ts_web_contents_t wc, const char* title, void* user_data),
+-    void* user_data);
++TS_EXPORT void ts_set_on_title_changed(void (*cb)(ts_web_contents_t wc,
++                                                  const char* title,
++                                                  void* user_data),
++                                       void* user_data);
+ 
+-TS_EXPORT void ts_set_on_cursor_changed(
+-    void (*cb)(ts_web_contents_t wc, int cursor_type, void* user_data),
+-    void* user_data);
++TS_EXPORT void ts_set_on_cursor_changed(void (*cb)(ts_web_contents_t wc,
++                                                   int cursor_type,
++                                                   void* user_data),
++                                        void* user_data);
+ 
+-TS_EXPORT void ts_set_on_target_url_changed(
+-    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
+-    void* user_data);
++TS_EXPORT void ts_set_on_target_url_changed(void (*cb)(ts_web_contents_t wc,
++                                                       const char* url,
++                                                       void* user_data),
++                                            void* user_data);
+ 
+ TS_EXPORT void ts_set_on_javascript_dialog_request(
+     void (*cb)(ts_web_contents_t wc,
+@@ -197,8 +200,16 @@ TS_EXPORT void ts_set_on_javascript_dialog_request(
+                void* user_data),
+     void* user_data);
+ 
++TS_EXPORT void ts_set_on_console_message(void (*cb)(ts_web_contents_t wc,
++                                                    const char* level,
++                                                    const char* message,
++                                                    int line_no,
++                                                    const char* source_id,
++                                                    void* user_data),
++                                         void* user_data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+ 
+-#endif  /* CONTENT_LIBTERMSURF_CONTENT_LIBTERMSURF_CHROMIUM_H_ */
++#endif /* CONTENT_LIBTERMSURF_CONTENT_LIBTERMSURF_CHROMIUM_H_ */
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 7d5f9daae5..9183794de3 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -51,6 +51,11 @@ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
+ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url);
++void TsNotifyConsoleMessage(void* wc_handle,
++                            const char* level,
++                            const char* message,
++                            int line_no,
++                            const char* source_id);
+ 
+ class TsBrowserMainParts : public ShellBrowserMainParts {
+  public:
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index 95d2ce4c54..b3832c7948 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -25,6 +25,24 @@
+ 
+ namespace content {
+ 
++namespace {
++
++const char* ConsoleLevelToString(blink::mojom::ConsoleMessageLevel level) {
++  switch (level) {
++    case blink::mojom::ConsoleMessageLevel::kVerbose:
++      return "verbose";
++    case blink::mojom::ConsoleMessageLevel::kInfo:
++      return "info";
++    case blink::mojom::ConsoleMessageLevel::kWarning:
++      return "warning";
++    case blink::mojom::ConsoleMessageLevel::kError:
++      return "error";
++  }
++  return "unknown";
++}
++
++}  // namespace
++
+ TsTabObserver::TsTabObserver() = default;
+ TsTabObserver::~TsTabObserver() = default;
+ 
+@@ -108,6 +126,24 @@ void TsTabObserver::TitleWasSet(NavigationEntry* entry) {
+ #endif
+ }
+ 
++void TsTabObserver::OnDidAddMessageToConsole(
++    RenderFrameHost* source_frame,
++    blink::mojom::ConsoleMessageLevel log_level,
++    const std::u16string& message,
++    int32_t line_no,
++    const std::u16string& source_id,
++    const std::optional<std::u16string>& untrusted_stack_trace) {
++#if BUILDFLAG(IS_MAC)
++  (void)source_frame;
++  (void)untrusted_stack_trace;
++  std::string message_utf8 = base::UTF16ToUTF8(message);
++  std::string source_id_utf8 = base::UTF16ToUTF8(source_id);
++  TsNotifyConsoleMessage(reinterpret_cast<void*>(handle_),
++                         ConsoleLevelToString(log_level), message_utf8.c_str(),
++                         line_no, source_id_utf8.c_str());
++#endif
++}
++
+ #if BUILDFLAG(IS_MAC)
+ void TsTabObserver::OnCursorChanged(const ui::Cursor& cursor) {
+   TsNotifyCursorChanged(reinterpret_cast<void*>(handle_),
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.h b/content/libtermsurf_chromium/ts_tab_observer.h
+index 5db0db672e..6ae740b9b6 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.h
++++ b/content/libtermsurf_chromium/ts_tab_observer.h
+@@ -6,6 +6,8 @@
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_TAB_OBSERVER_H_
+ 
+ #include <cstdint>
++#include <optional>
++#include <string>
+ 
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+@@ -15,7 +17,9 @@
+ #include "ui/base/cursor/cursor.h"
+ #include "ui/gfx/ca_layer_params.h"
+ 
+-namespace ui { class Layer; }
++namespace ui {
++class Layer;
++}
+ 
+ namespace content {
+ 
+@@ -36,7 +40,9 @@ class TsTabObserver : public WebContentsObserver {
+   void SetInspectedTabId(int id);
+ 
+   // The opaque handle passed to C callbacks to identify the tab.
+-  void SetHandle(void* handle) { handle_ = reinterpret_cast<uintptr_t>(handle); }
++  void SetHandle(void* handle) {
++    handle_ = reinterpret_cast<uintptr_t>(handle);
++  }
+ 
+   // WebContentsObserver:
+   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
+@@ -47,6 +53,13 @@ class TsTabObserver : public WebContentsObserver {
+                    const GURL& validated_url,
+                    int error_code) override;
+   void TitleWasSet(NavigationEntry* entry) override;
++  void OnDidAddMessageToConsole(
++      RenderFrameHost* source_frame,
++      blink::mojom::ConsoleMessageLevel log_level,
++      const std::u16string& message,
++      int32_t line_no,
++      const std::u16string& source_id,
++      const std::optional<std::u16string>& untrusted_stack_trace) override;
+ 
+ #if BUILDFLAG(IS_MAC)
+   void RenderViewHostChanged(RenderViewHost* old_host,
+-- 
+2.54.0
+

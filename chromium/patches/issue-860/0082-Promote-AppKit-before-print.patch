@@ -1,0 +1,107 @@
+From b10710ae7530ddfed2700c7b688c9cb879f7b3c0 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 15:57:13 -0500
+Subject: [PATCH 82/89] Promote AppKit before print
+
+The app wore a prohibited hat,
+So printing stared and said, "not that."
+We tipped it regular, traced the scene,
+The panel still stayed shy and unseen.
+---
+ .../ts_browser_main_parts.cc                  | 22 +++++++++++--------
+ .../ts_shell_window_mac.h                     |  2 ++
+ .../ts_shell_window_mac.mm                    | 18 +++++++++++++++
+ 3 files changed, 33 insertions(+), 9 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1c79dc41e4..1329772206 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -1289,12 +1289,11 @@ void TsBrowserMainParts::SetGuiActive(void* wc_handle,
+   }
+ 
+   auto* web_contents = tab->shell->web_contents();
+-  TracePdfNativePrintFromBrowserMainParts(
+-      base::StringPrintf("set-gui-active-enter active=%d reason=%s shell=%p "
+-                         "web_contents=%p",
+-                         active ? 1 : 0, reason.c_str(),
+-                         static_cast<void*>(tab->shell),
+-                         static_cast<void*>(web_contents)));
++  TracePdfNativePrintFromBrowserMainParts(base::StringPrintf(
++      "set-gui-active-enter active=%d reason=%s shell=%p "
++      "web_contents=%p",
++      active ? 1 : 0, reason.c_str(), static_cast<void*>(tab->shell),
++      static_cast<void*>(web_contents)));
+ #if BUILDFLAG(IS_MAC)
+   if (Issue794InputTraceEnabled() || PdfNativePrintTraceEnabled()) {
+     LOG(INFO) << "[termsurf-pdf-input] set-gui-active-before"
+@@ -1308,6 +1307,12 @@ void TsBrowserMainParts::SetGuiActive(void* wc_handle,
+         DescribeShellWindowActivationStateForTermSurf(tab->shell).c_str()));
+   }
+   if (active) {
++    const std::string policy_result =
++        PromoteAppKitActivationPolicyForTermSurf();
++    LOG(INFO) << "[termsurf-pdf-input] set-gui-active-policy-promotion "
++              << policy_result;
++    TracePdfNativePrintFromBrowserMainParts(base::StringPrintf(
++        "set-gui-active-policy-promotion %s", policy_result.c_str()));
+     ActivateShellWindowForTermSurf(tab->shell);
+     TracePdfNativePrintFromBrowserMainParts(
+         "set-gui-active-activate-shell-called");
+@@ -1347,9 +1352,8 @@ void TsBrowserMainParts::SetGuiActive(void* wc_handle,
+     return;
+   }
+   render_widget_host_impl->SetPageFocus(active);
+-  TracePdfNativePrintFromBrowserMainParts(
+-      base::StringPrintf("set-gui-active-page-focus active=%d",
+-                         active ? 1 : 0));
++  TracePdfNativePrintFromBrowserMainParts(base::StringPrintf(
++      "set-gui-active-page-focus active=%d", active ? 1 : 0));
+ }
+ 
+ void TsBrowserMainParts::SetColorScheme(void* wc_handle, bool dark) {
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+index 5375e9ed1d..ca2d6e365f 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.h
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -17,6 +17,8 @@ void ConfigureShellWindowForTermSurf(Shell* shell);
+ 
+ std::string DescribeShellWindowActivationStateForTermSurf(Shell* shell);
+ 
++std::string PromoteAppKitActivationPolicyForTermSurf();
++
+ void ActivateShellWindowForTermSurf(Shell* shell);
+ 
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index 9300cdab6c..15a23cbdad 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -74,6 +74,24 @@ std::string DescribeShellWindowActivationStateForTermSurf(Shell* shell) {
+   return out.str();
+ }
+ 
++std::string PromoteAppKitActivationPolicyForTermSurf() {
++  const NSApplicationActivationPolicy before_policy = NSApp.activationPolicy;
++  BOOL setter_result = YES;
++  if (before_policy == NSApplicationActivationPolicyProhibited) {
++    setter_result =
++        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
++  }
++  const NSApplicationActivationPolicy after_policy = NSApp.activationPolicy;
++
++  std::ostringstream out;
++  out << "policy_before=" << static_cast<int>(before_policy) << " attempted="
++      << (before_policy == NSApplicationActivationPolicyProhibited ? 1 : 0)
++      << " setter_result=" << (setter_result ? 1 : 0)
++      << " policy_after=" << static_cast<int>(after_policy)
++      << " changed=" << (before_policy != after_policy ? 1 : 0);
++  return out.str();
++}
++
+ void ActivateShellWindowForTermSurf(Shell* shell) {
+   if (!shell || !shell->web_contents()) {
+     return;
+-- 
+2.54.0
+

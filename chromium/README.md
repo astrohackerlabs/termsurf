@@ -20,15 +20,15 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Current fully archived build baseline: `148.0.7778.271-issue-857`
-- Latest documented branch: `148.0.7778.271-issue-857`
+- Current fully archived build baseline: `148.0.7778.271-issue-860`
+- Latest documented branch: `148.0.7778.271-issue-860`
 - Base version: `148.0.7778.271` (tracking Electron's Chromium version)
 
 > **Note:** The `…-issue-789-exp*` and `…-issue-790-exp*` branches are
 > experimental inline-PDF work, **parked** (Issue 790 Exp 7). They are preserved
 > as history. The current fully archived build baseline is
-> `148.0.7778.271-issue-857`, which can be reconstructed from the vanilla
-> `148.0.7778.271` tag with `chromium/patches/issue-857/`.
+> `148.0.7778.271-issue-860`, which can be reconstructed from the vanilla
+> `148.0.7778.271` tag with `chromium/patches/issue-860/`.
 
 ## Branch Strategy
 
@@ -164,6 +164,7 @@ find the most relevant recent branch, create a new branch from it
 | `148.0.7778.97-issue-843`        | [Issue 843](../issues/0843-reconcile-chromium-patch-stacks/README.md)        | Combine Issue 834 PDF and Issue 840 clipboard stacks |
 | `148.0.7778.97-issue-854`        | [Issue 854](../issues/0854-roamium-back-focus-theft/README.md)               | Keep hidden Roamium shell from stealing focus        |
 | `148.0.7778.271-issue-857`       | [Issue 857](../issues/0857-upgrade-chromium-webkit-ghostty/README.md)        | Chromium 148 patch bump for Electron v42.5.0         |
+| `148.0.7778.271-issue-860`       | [Issue 860](../issues/0860-browser-identity-fingerprint-parity/README.md)    | Use Chromium identity metadata in Roamium            |
 | `148.0.7778.97-issue-781`        | [Issue 781](../issues/0781-chromium-upgrade/README.md)                       | Chromium 148 migration                               |
 | `148.0.7778.97-issue-780`        | [Issue 780](../issues/0780-link-drag-freeze/README.md)                       | Suppress native link drag in Roamium                 |
 | `148.0.7778.97-issue-778`        | [Issue 778](../issues/0778-back-nav-title-stale/README.md)                   | Re-emit titles on navigation commit                  |
@@ -223,8 +224,8 @@ git am ../../chromium/patches/issue-{N}/*.patch
 For the current fully archived TermSurf Chromium baseline, use:
 
 ```bash
-git checkout -b 148.0.7778.271-issue-857 148.0.7778.271
-git am ../../chromium/patches/issue-857/*.patch
+git checkout -b 148.0.7778.271-issue-860 148.0.7778.271
+git am ../../chromium/patches/issue-860/*.patch
 ```
 
 ### Generating patches

@@ -207,7 +207,7 @@ const COMMANDS: &[Command] = &[
         exec: |_| CommandResult::Quit,
     },
     Command {
-        names: &["dark", "da"],
+        names: &["dark"],
         exec: |args| match args.first().copied() {
             None => CommandResult::Dark(DarkAction::Toggle),
             Some("on" | "yes" | "y") => CommandResult::Dark(DarkAction::On),
@@ -233,7 +233,7 @@ const COMMANDS: &[Command] = &[
         },
     },
     Command {
-        names: &["devtools", "de"],
+        names: &["devtools", "dev"],
         exec: |args| match args.first().copied() {
             Some("right" | "r") | None => CommandResult::DevTools("right".into()),
             Some("down" | "d") => CommandResult::DevTools("down".into()),
@@ -2249,6 +2249,60 @@ mod tests {
             rendered.viewport, inner,
             "ui() return value must be the rect sent as overlay geometry"
         );
+    }
+
+    fn assert_devtools_command(input: &str, expected_direction: &str) {
+        match dispatch(input) {
+            CommandResult::DevTools(direction) => assert_eq!(direction, expected_direction),
+            _ => panic!("{input:?} did not dispatch DevTools"),
+        }
+    }
+
+    fn assert_dark_command(input: &str, expected: DarkAction) {
+        match (dispatch(input), expected) {
+            (CommandResult::Dark(DarkAction::Toggle), DarkAction::Toggle)
+            | (CommandResult::Dark(DarkAction::On), DarkAction::On)
+            | (CommandResult::Dark(DarkAction::Off), DarkAction::Off)
+            | (CommandResult::Dark(DarkAction::System), DarkAction::System) => {}
+            _ => panic!("{input:?} did not dispatch expected dark command"),
+        }
+    }
+
+    #[test]
+    fn command_aliases_follow_current_policy() {
+        assert_devtools_command("dev", "right");
+        assert_devtools_command("devtools", "right");
+
+        assert!(matches!(dispatch("de"), CommandResult::None));
+        assert!(matches!(dispatch("da"), CommandResult::None));
+
+        assert_dark_command("dark", DarkAction::Toggle);
+    }
+
+    #[test]
+    fn devtools_preserves_full_and_shorthand_directions() {
+        for (input, expected) in [
+            ("devtools right", "right"),
+            ("devtools down", "down"),
+            ("devtools left", "left"),
+            ("devtools up", "up"),
+            ("dev r", "right"),
+            ("dev d", "down"),
+            ("dev l", "left"),
+            ("dev u", "up"),
+        ] {
+            assert_devtools_command(input, expected);
+        }
+    }
+
+    #[test]
+    fn dark_preserves_subcommand_shorthands() {
+        assert_dark_command("dark on", DarkAction::On);
+        assert_dark_command("dark y", DarkAction::On);
+        assert_dark_command("dark off", DarkAction::Off);
+        assert_dark_command("dark n", DarkAction::Off);
+        assert_dark_command("dark system", DarkAction::System);
+        assert_dark_command("dark s", DarkAction::System);
     }
 
     #[test]

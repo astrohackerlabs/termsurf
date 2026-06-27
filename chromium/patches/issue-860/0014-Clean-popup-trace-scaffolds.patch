@@ -1,0 +1,3064 @@
+From f6276a864cb26e2a013141ec5df733e4e24bfb49 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 05:44:25 -0500
+Subject: [PATCH 14/89] Clean popup trace scaffolds
+
+Old watchers packed their clipboards away,
+While popups kept their place in the play.
+The date box still knows where to stand,
+The Shell still dodges every hand.
+---
+ .../web_menu_runner_mac.mm                    | 294 +++++++++++++--
+ .../render_widget_host_view_mac.mm            | 334 +++++++++++-------
+ .../browser/web_contents/web_contents_impl.cc | 211 ++++++++---
+ .../web_contents/web_contents_view_mac.mm     | 301 ++++++++++++++--
+ .../ts_browser_main_parts.cc                  |   3 -
+ .../ts_shell_window_mac.h                     |   2 -
+ .../ts_shell_window_mac.mm                    |  79 -----
+ .../core/exported/web_page_popup_impl.cc      | 294 ++++++++++++---
+ .../renderer/core/exported/web_view_impl.cc   | 140 ++++++--
+ .../core/html/forms/date_time_chooser_impl.cc | 102 +++++-
+ 10 files changed, 1370 insertions(+), 390 deletions(-)
+
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index 112c76462d..0380e26198 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -41,6 +41,148 @@ std::string Issue779NSRectToString(NSRect rect) {
+   return base::SysNSStringToUTF8(NSStringFromRect(rect));
+ }
+ 
++std::string Issue779TopLeftScreenRectToString(NSRect rect, NSScreen* screen) {
++  if (!screen) {
++    return "null";
++  }
++  NSRect screen_frame = screen.frame;
++  CGFloat top_left_y = NSMaxY(screen_frame) - NSMaxY(rect);
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"{{%.1f, %.1f}, {%.1f, %.1f}}", rect.origin.x,
++                       top_left_y, rect.size.width, rect.size.height]);
++}
++
++std::string Issue779ViewScreenFrame(NSView* view) {
++  if (!view || !view.window || !view.window.screen) {
++    return "null";
++  }
++  return Issue779NSRectToString(view.window.screen.frame);
++}
++
++std::string Issue779ViewVisibleFrame(NSView* view) {
++  if (!view || !view.window || !view.window.screen) {
++    return "null";
++  }
++  return Issue779NSRectToString(view.window.screen.visibleFrame);
++}
++
++std::string Issue779FirstResponder(NSWindow* window) {
++  if (!window || !window.firstResponder) {
++    return "null";
++  }
++  return base::SysNSStringToUTF8(
++      NSStringFromClass([window.firstResponder class]));
++}
++
++std::string Issue779CurrentEventType() {
++  NSEvent* event = NSApp.currentEvent;
++  if (!event) {
++    return "null";
++  }
++  return base::SysNSStringToUTF8(
++      [NSString stringWithFormat:@"%ld", static_cast<long>(event.type)]);
++}
++
++NSString* Issue779BoolString(BOOL value) {
++  return value ? @"true" : @"false";
++}
++
++std::string Issue779WindowSummary(NSWindow* window) {
++  if (!window) {
++    return "window=null";
++  }
++  NSMutableArray<NSString*>* child_parts = [NSMutableArray array];
++  for (NSWindow* child in window.childWindows) {
++    [child_parts
++        addObject:[NSString
++                      stringWithFormat:@"%@:%p:%ld:%@:%ld:%@:%@",
++                                       NSStringFromClass(child.class), child,
++                                       static_cast<long>(child.windowNumber),
++                                       NSStringFromRect(child.frame),
++                                       static_cast<long>(child.level),
++                                       Issue779BoolString(child.isVisible),
++                                       Issue779BoolString(
++                                           child.ignoresMouseEvents)]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:
++          @"window=%p window_class=%@ window_number=%ld window_frame=%@ "
++           "window_screen=%@ window_level=%ld collection_behavior=%lu "
++           "style_mask=%lu alpha=%.3f is_visible=%@ ignoresMouseEvents=%@ "
++           "is_key=%@ is_main=%@ content_view=%p content_view_class=%@ "
++           "first_responder=%@ parent_window=%p child_window_count=%lu "
++           "child_windows=%@",
++          window, NSStringFromClass(window.class),
++          static_cast<long>(window.windowNumber), NSStringFromRect(window.frame),
++          window.screen ? NSStringFromRect(window.screen.frame) : @"null",
++          static_cast<long>(window.level),
++          static_cast<unsigned long>(window.collectionBehavior),
++          static_cast<unsigned long>(window.styleMask), window.alphaValue,
++          Issue779BoolString(window.isVisible),
++          Issue779BoolString(window.ignoresMouseEvents),
++          Issue779BoolString(window.isKeyWindow),
++          Issue779BoolString(window.isMainWindow), window.contentView,
++          window.contentView ? NSStringFromClass(window.contentView.class)
++                             : @"null",
++          window.firstResponder ? NSStringFromClass(window.firstResponder.class) : @"null", window.parentWindow,
++          static_cast<unsigned long>(window.childWindows.count),
++          [child_parts componentsJoinedByString:@"|"]]);
++}
++
++std::string Issue779OrderedWindowsSummary() {
++  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
++  NSMutableArray<NSString*>* parts = [NSMutableArray array];
++  NSUInteger limit = std::min<NSUInteger>(windows.count, 3);
++  for (NSUInteger index = 0; index < limit; ++index) {
++    NSWindow* window = windows[index];
++    [parts addObject:[NSString
++                         stringWithFormat:
++                             @"%lu:%p:%@:%ld:%@:%ld:%@:%@",
++                             static_cast<unsigned long>(index), window,
++                             NSStringFromClass(window.class),
++                             static_cast<long>(window.windowNumber),
++                             NSStringFromRect(window.frame),
++                             static_cast<long>(window.level),
++                             Issue779BoolString(window.isVisible),
++                             Issue779BoolString(window.ignoresMouseEvents)]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"ordered_windows_count=%lu ordered_windows_top3=%@",
++                       static_cast<unsigned long>(windows.count),
++                       [parts componentsJoinedByString:@"|"]]);
++}
++
++void Issue779TraceShellWindowState(NSString* boundary,
++                                   NSString* phase,
++                                   NSView* view,
++                                   WebMenuRunner* runner) {
++  if (!Issue779TraceEnabled()) {
++    return;
++  }
++  Issue779TraceAnnounce();
++  NSWindow* window = view.window;
++  LOG(INFO) << "[issue-779-trace] chromium_shell_window_state"
++            << " boundary=" << base::SysNSStringToUTF8(boundary)
++            << " phase=" << base::SysNSStringToUTF8(phase)
++            << " path=select"
++            << " runner=" << (__bridge void*)runner
++            << " view=" << (__bridge void*)view
++            << " window=" << (__bridge void*)window
++            << " key_window=" << (__bridge void*)NSApp.keyWindow
++            << " main_window=" << (__bridge void*)NSApp.mainWindow
++            << " modal_window=" << (__bridge void*)NSApp.modalWindow
++            << " app_is_active=" << Issue779BoolString(NSApp.isActive)
++            << " currentEvent=" << Issue779CurrentEventType()
++            << " shell_window_summary=\"" << Issue779WindowSummary(window)
++            << "\" key_window_summary=\""
++            << Issue779WindowSummary(NSApp.keyWindow)
++            << "\" main_window_summary=\""
++            << Issue779WindowSummary(NSApp.mainWindow)
++            << "\" modal_window_summary=\""
++            << Issue779WindowSummary(NSApp.modalWindow)
++            << "\" " << Issue779OrderedWindowsSummary();
++}
++
+ }  // namespace
+ 
+ @interface MenuWasRunCallbackHolder : NSObject
+@@ -169,28 +311,59 @@ std::string Issue779NSRectToString(NSRect rect) {
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
+     NSRect windowBounds = [view convertRect:bounds toView:nil];
+-    NSRect screenBounds =
+-        view.window ? [view.window convertRectToScreen:windowBounds]
+-                    : NSZeroRect;
++    NSRect screenBounds = view.window
++                              ? [view.window convertRectToScreen:windowBounds]
++                              : NSZeroRect;
++    NSScreen* screen = view.window.screen;
+     LOG(INFO) << "[issue-779-trace] WebMenuRunner::runMenuInView"
++              << " path=select"
++              << " join_view=" << (__bridge void*)view
++              << " join_window=" << (__bridge void*)view.window
+               << " runner=" << (__bridge void*)self
+               << " view=" << (__bridge void*)view
+               << " input_bounds=" << Issue779NSRectToString(bounds)
++              << " input_bounds_space=view-local"
+               << " view_frame=" << Issue779NSRectToString(view.frame)
+               << " view_bounds=" << Issue779NSRectToString(view.bounds)
+-              << " window=" << (__bridge void*)view.window
+-              << " window_frame="
++              << " window=" << (__bridge void*)view.window << " window_frame="
+               << (view.window ? Issue779NSRectToString(view.window.frame)
+                               : std::string("null"))
+-              << " bounds_in_window="
+-              << Issue779NSRectToString(windowBounds)
++              << " window_content_frame="
++              << (view.window.contentView
++                      ? Issue779NSRectToString(view.window.contentView.frame)
++                      : std::string("null"))
++              << " screen_frame=" << Issue779ViewScreenFrame(view)
++              << " visible_frame=" << Issue779ViewVisibleFrame(view)
++              << " window_is_key="
++              << (view.window ? static_cast<bool>(view.window.isKeyWindow)
++                              : false)
++              << " window_is_main="
++              << (view.window ? static_cast<bool>(view.window.isMainWindow)
++                              : false)
++              << " window_is_visible="
++              << (view.window ? static_cast<bool>(view.window.isVisible)
++                              : false)
++              << " app_is_active=" << static_cast<bool>(NSApp.isActive)
++              << " firstResponder=" << Issue779FirstResponder(view.window)
++              << " currentEvent=" << Issue779CurrentEventType()
++              << " bounds_in_window=" << Issue779NSRectToString(windowBounds)
++              << " bounds_in_window_space=window"
+               << " bounds_in_screen="
+               << (view.window ? Issue779NSRectToString(screenBounds)
+                               : std::string("null"))
++              << " bounds_in_screen_space=appkit-screen-bottom-left"
++              << " bounds_top_left_screen="
++              << (view.window
++                      ? Issue779TopLeftScreenRectToString(screenBounds, screen)
++                      : std::string("null"))
++              << " bounds_top_left_screen_space=chromium-screen-top-left"
++              << " final_popup_top_left=unavailable-appkit-owned"
+               << " initial_index=" << index
+               << " item_count=" << _menu.numberOfItems;
+   }
+ 
++  Issue779TraceShellWindowState(@"select_menu", @"before_open", view, self);
++
+   // In a testing situation, make the callback and early-exit.
+   MenuWasRunCallbackHolder* holder =
+       objc_getAssociatedObject(view, &kMenuWasRunCallbackKey);
+@@ -266,30 +439,111 @@ std::string Issue779NSRectToString(NSRect rect) {
+         fakeControlView.window
+             ? [fakeControlView.window convertRectToScreen:fakeWindowBounds]
+             : NSZeroRect;
+-    LOG(INFO) << "[issue-779-trace] WebMenuRunner::fakeControlView"
+-              << " runner=" << (__bridge void*)self
+-              << " fake_control_view=" << (__bridge void*)fakeControlView
+-              << " fake_frame="
+-              << Issue779NSRectToString(fakeControlView.frame)
+-              << " fake_bounds="
+-              << Issue779NSRectToString(fakeControlView.bounds)
+-              << " fake_bounds_in_window="
+-              << Issue779NSRectToString(fakeWindowBounds)
+-              << " fake_bounds_in_screen="
+-              << (fakeControlView.window
+-                      ? Issue779NSRectToString(fakeScreenBounds)
+-                      : std::string("null"));
++    NSScreen* screen = fakeControlView.window.screen;
++    LOG(INFO)
++        << "[issue-779-trace] WebMenuRunner::fakeControlView"
++        << " path=select"
++        << " join_view=" << (__bridge void*)view
++        << " join_window=" << (__bridge void*)fakeControlView.window
++        << " runner=" << (__bridge void*)self
++        << " fake_control_view=" << (__bridge void*)fakeControlView
++        << " fake_frame=" << Issue779NSRectToString(fakeControlView.frame)
++        << " fake_bounds=" << Issue779NSRectToString(fakeControlView.bounds)
++        << " screen_frame=" << Issue779ViewScreenFrame(fakeControlView)
++        << " visible_frame=" << Issue779ViewVisibleFrame(fakeControlView)
++        << " fake_bounds_in_window=" << Issue779NSRectToString(fakeWindowBounds)
++        << " fake_bounds_in_screen="
++        << (fakeControlView.window ? Issue779NSRectToString(fakeScreenBounds)
++                                   : std::string("null"))
++        << " fake_bounds_top_left_screen="
++        << (fakeControlView.window
++                ? Issue779TopLeftScreenRectToString(fakeScreenBounds, screen)
++                : std::string("null"))
++        << " attach_popup_frame="
++        << Issue779NSRectToString(fakeControlView.bounds)
++        << " attach_popup_frame_space=view-local"
++        << " final_popup_top_left=unavailable-appkit-owned";
+   }
+ 
+   // Display the menu.
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=select"
++              << " boundary=appkit-open"
++              << " outcome=entered"
++              << " reason=before_attach_popup"
++              << " runner=" << (__bridge void*)self
++              << " view=" << (__bridge void*)view
++              << " window=" << (__bridge void*)view.window
++              << " window_is_key="
++              << (view.window ? static_cast<bool>(view.window.isKeyWindow)
++                              : false)
++              << " window_is_main="
++              << (view.window ? static_cast<bool>(view.window.isMainWindow)
++                              : false)
++              << " window_is_visible="
++              << (view.window ? static_cast<bool>(view.window.isVisible)
++                              : false)
++              << " app_is_active=" << static_cast<bool>(NSApp.isActive)
++              << " firstResponder=" << Issue779FirstResponder(view.window)
++              << " currentEvent=" << Issue779CurrentEventType();
++  }
+   [cell attachPopUpWithFrame:fakeControlView.bounds inView:fakeControlView];
+   [cell performClickWithFrame:fakeControlView.bounds inView:fakeControlView];
+   [view.window setIgnoresMouseEvents:YES];
++  Issue779TraceShellWindowState(@"select_menu", @"after_return", view, self);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebMenuRunner::runMenuInView.return"
++              << " path=select"
++              << " join_view=" << (__bridge void*)view
++              << " join_window=" << (__bridge void*)view.window
++              << " runner=" << (__bridge void*)self << " selected_item="
++              << (_selectedMenuItemIndex
++                      ? std::to_string(*_selectedMenuItemIndex)
++                      : std::string("none"))
++              << " item_count=" << _menu.numberOfItems
++              << " window_is_key="
++              << (view.window ? static_cast<bool>(view.window.isKeyWindow)
++                              : false)
++              << " window_is_main="
++              << (view.window ? static_cast<bool>(view.window.isMainWindow)
++                              : false)
++              << " window_is_visible="
++              << (view.window ? static_cast<bool>(view.window.isVisible)
++                              : false)
++              << " app_is_active=" << static_cast<bool>(NSApp.isActive)
++              << " firstResponder=" << Issue779FirstResponder(view.window)
++              << " currentEvent=" << Issue779CurrentEventType();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=select"
++              << " boundary=appkit-open"
++              << " outcome=closed"
++              << " reason=perform_click_returned"
++              << " runner=" << (__bridge void*)self
++              << " view=" << (__bridge void*)view
++              << " window=" << (__bridge void*)view.window
++              << " selected_item="
++              << (_selectedMenuItemIndex
++                      ? std::to_string(*_selectedMenuItemIndex)
++                      : std::string("none"));
++  }
+ 
+   [fakeControlView removeFromSuperview];
+ }
+ 
+ - (void)cancelSynchronously {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebMenuRunner::cancelSynchronously"
++              << " path=select"
++              << " runner=" << (__bridge void*)self << " selected_item="
++              << (_selectedMenuItemIndex
++                      ? std::to_string(*_selectedMenuItemIndex)
++                      : std::string("none"))
++              << " item_count=" << _menu.numberOfItems;
++  }
+   [_menu cancelTrackingWithoutAnimation];
+ 
+   // Starting with macOS 14, menus were reimplemented with Cocoa (rather than
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 298375dc25..dd90db82df 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -6,6 +6,7 @@
+ 
+ #import <Carbon/Carbon.h>
+ 
++#include <algorithm>
+ #include <cstdlib>
+ #include <limits>
+ #include <memory>
+@@ -86,9 +87,9 @@
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/menus/cocoa/text_services_context_menu.h"
+ 
++using blink::WebGestureEvent;
+ using blink::WebInputEvent;
+ using blink::WebMouseEvent;
+-using blink::WebGestureEvent;
+ using blink::WebTouchEvent;
+ 
+ namespace content {
+@@ -117,7 +118,8 @@ enum class GetCachedFirstRectResult {
+ // LINT.ThenChange(//tools/metrics/histograms/metadata/input/enums.xml:GetCachedFirstRectResult)
+ 
+ bool Issue779TraceEnabled() {
+-  static const bool enabled = std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+   return enabled;
+ }
+ 
+@@ -137,14 +139,20 @@ void Issue779TraceWebviewBounds(const char* event,
+                                 const gfx::Rect& computed_view_bounds,
+                                 bool attached_to_window,
+                                 bool is_headless) {
+-  if (!Issue779TraceEnabled())
++  if (!Issue779TraceEnabled()) {
+     return;
++  }
+ 
+   Issue779TraceAnnounce();
+   WebContents* web_contents = view->GetWebContents();
+   LOG(INFO) << "[issue-779-trace] chromium_webview_bounds event=" << event
++            << " path="
++            << (web_contents ? "main-or-owned-webcontents"
++                             : "date-page-popup-or-transient")
+             << " view=" << static_cast<void*>(view)
++            << " widget=" << static_cast<void*>(view->host())
+             << " webcontents=" << static_cast<void*>(web_contents)
++            << " has_webcontents=" << static_cast<bool>(web_contents)
+             << " input=" << input.ToString()
+             << " view_bounds_in_window=" << view_bounds_in_window.ToString()
+             << " window_frame_in_screen=" << window_frame_in_screen.ToString()
+@@ -226,8 +234,9 @@ void RenderWidgetHostViewMac::AcceleratedWidgetCALayerParamsUpdated() {
+       browser_compositor_->GetLastCALayerParams();
+   if (ca_layer_params) {
+     ns_view_->SetCALayerParams(*ca_layer_params);
+-    if (ca_layer_params_callback_)
++    if (ca_layer_params_callback_) {
+       ca_layer_params_callback_.Run(*ca_layer_params);
++    }
+   }
+ }
+ 
+@@ -349,8 +358,9 @@ void RenderWidgetHostViewMac::MigrateNSViewBridge(
+   // destroying the associated bridge), and close the receiver (to allow it
+   // to be re-bound). Note that |in_process_ns_view_bridge_| remains valid.
+   remote_ns_view_client_receiver_.reset();
+-  if (remote_ns_view_)
++  if (remote_ns_view_) {
+     remote_ns_view_->Destroy();
++  }
+   remote_ns_view_.reset();
+ 
+   // Enable accessibility focus overriding for remote NSViews.
+@@ -419,8 +429,9 @@ void RenderWidgetHostViewMac::MigrateNSViewBridge(
+ 
+   // Popup windows will specify an invalid |parent_ns_view_id|, because popups
+   // have their own NSWindows (of which they are the content NSView).
+-  if (parent_ns_view_id != remote_cocoa::kInvalidNSViewId)
++  if (parent_ns_view_id != remote_cocoa::kInvalidNSViewId) {
+     remote_ns_view_->SetParentWebContentsNSView(parent_ns_view_id);
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::SetParentUiLayer(ui::Layer* parent_ui_layer) {
+@@ -436,8 +447,9 @@ void RenderWidgetHostViewMac::SetParentUiLayer(ui::Layer* parent_ui_layer) {
+     // https://crbug.com/1222976#c49.
+     ns_view_->DisableDisplay();
+   }
+-  if (browser_compositor_)
++  if (browser_compositor_) {
+     browser_compositor_->SetParentUiLayer(parent_ui_layer);
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::SetParentAccessibilityElement(
+@@ -447,8 +459,9 @@ void RenderWidgetHostViewMac::SetParentAccessibilityElement(
+ }
+ 
+ RenderWidgetHostViewCocoa* RenderWidgetHostViewMac::GetInProcessNSView() const {
+-  if (in_process_ns_view_bridge_)
++  if (in_process_ns_view_bridge_) {
+     return in_process_ns_view_bridge_->GetNSView();
++  }
+   return nullptr;
+ }
+ 
+@@ -458,8 +471,9 @@ void RenderWidgetHostViewMac::SetDelegate(
+ }
+ 
+ ui::TextInputType RenderWidgetHostViewMac::GetTextInputType() {
+-  if (!GetActiveWidget())
++  if (!GetActiveWidget()) {
+     return ui::TEXT_INPUT_TYPE_NONE;
++  }
+   return text_input_manager_->GetTextInputState()->type;
+ }
+ 
+@@ -492,20 +506,41 @@ void RenderWidgetHostViewMac::InitAsPopup(
+     const gfx::Rect& pos,
+     const gfx::Rect& anchor_rect) {
+   DCHECK_EQ(widget_type_, WidgetType::kPopup);
+-  if (Issue779TraceEnabled()) {
+-    Issue779TraceAnnounce();
+-    LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
+-              << " boundary=popup_window"
+-              << " event=InitAsPopup"
+-              << " component=RenderWidgetHostViewMac"
+-              << " view=" << static_cast<void*>(this)
+-              << " parent_view=" << static_cast<void*>(parent_host_view)
+-              << " pos=" << pos.ToString()
+-              << " anchor_rect=" << anchor_rect.ToString();
+-  }
+ 
+-  popup_parent_host_view_ =
++  auto* parent_mac_view =
+       static_cast<RenderWidgetHostViewMac*>(parent_host_view);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO)
++        << "[issue-779-trace] RenderWidgetHostViewMac::InitAsPopup.before"
++        << " path=date-page-popup"
++        << " popup_view=" << static_cast<void*>(this)
++        << " popup_widget=" << static_cast<void*>(host())
++        << " parent_host_view=" << static_cast<void*>(parent_host_view)
++        << " parent_mac_view=" << static_cast<void*>(parent_mac_view)
++        << " popup_parent_before="
++        << static_cast<void*>(popup_parent_host_view_)
++        << " parent_popup_child_before="
++        << static_cast<void*>(parent_mac_view->popup_child_host_view_)
++        << " pos=" << pos.ToString() << " pos_space=screen-top-left"
++        << " anchor_rect=" << anchor_rect.ToString()
++        << " anchor_rect_space=screen-top-left"
++        << " parent_view_bounds=" << parent_mac_view->GetViewBounds().ToString()
++        << " parent_bounds_in_root="
++        << parent_mac_view->GetBoundsInRootWindow().ToString()
++        << " ns_view=" << static_cast<void*>(ns_view_)
++        << " parent_ns_view_id=" << parent_mac_view->ns_view_id_
++        << " window_frame_in_screen=" << window_frame_in_screen_dip_.ToString()
++        << " view_bounds_in_window=" << view_bounds_in_window_dip_.ToString()
++        << " computed_view_bounds=" << GetViewBounds().ToString()
++        << " date_popup_y_delta"
++        << " input_anchor_top_left=" << anchor_rect.ToString()
++        << " init_as_popup_pos=" << pos.ToString()
++        << " delta_input_to_init_as_popup_x=" << (pos.x() - anchor_rect.x())
++        << " delta_input_to_init_as_popup_y=" << (pos.y() - anchor_rect.y());
++  }
++
++  popup_parent_host_view_ = parent_mac_view;
+ 
+   RenderWidgetHostViewMac* old_child =
+       popup_parent_host_view_->popup_child_host_view_;
+@@ -528,6 +563,23 @@ void RenderWidgetHostViewMac::InitAsPopup(
+ 
+   // This path is used by the time/date picker.
+   ns_view_->InitAsPopup(pos, popup_parent_host_view_->ns_view_id_);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO)
++        << "[issue-779-trace] RenderWidgetHostViewMac::InitAsPopup.after"
++        << " path=date-page-popup"
++        << " popup_view=" << static_cast<void*>(this)
++        << " popup_widget=" << static_cast<void*>(host())
++        << " parent_host_view=" << static_cast<void*>(parent_host_view)
++        << " popup_parent_after=" << static_cast<void*>(popup_parent_host_view_)
++        << " parent_popup_child_after="
++        << static_cast<void*>(popup_parent_host_view_->popup_child_host_view_)
++        << " pos=" << pos.ToString()
++        << " anchor_rect=" << anchor_rect.ToString()
++        << " window_frame_in_screen=" << window_frame_in_screen_dip_.ToString()
++        << " view_bounds_in_window=" << view_bounds_in_window_dip_.ToString()
++        << " computed_view_bounds=" << GetViewBounds().ToString();
++  }
+   Show();
+ }
+ 
+@@ -540,8 +592,9 @@ RenderWidgetHostViewMac::GetFocusedViewForTextSelection() {
+ 
+ RenderWidgetHostDelegate*
+ RenderWidgetHostViewMac::GetFocusedRenderWidgetHostDelegate() {
+-  if (auto* focused_widget = GetFocusedWidget())
++  if (auto* focused_widget = GetFocusedWidget()) {
+     return focused_widget->delegate();
++  }
+   return host()->delegate();
+ }
+ 
+@@ -552,8 +605,9 @@ RenderWidgetHostImpl* RenderWidgetHostViewMac::GetWidgetForKeyboardEvent() {
+ }
+ 
+ RenderWidgetHostImpl* RenderWidgetHostViewMac::GetWidgetForIme() {
+-  if (in_keyboard_event_)
++  if (in_keyboard_event_) {
+     return GetWidgetForKeyboardEvent();
++  }
+   return GetActiveWidget();
+ }
+ 
+@@ -670,17 +724,15 @@ void RenderWidgetHostViewMac::SetSize(const gfx::Size& size) {
+ }
+ 
+ void RenderWidgetHostViewMac::SetBounds(const gfx::Rect& rect) {
+-  Issue779TraceWebviewBounds("SetBounds.before", this, rect,
+-                             view_bounds_in_window_dip_,
+-                             window_frame_in_screen_dip_, GetViewBounds(),
+-                             [GetInProcessNSView() window] != nil,
+-                             IsHeadless());
++  Issue779TraceWebviewBounds(
++      "SetBounds.before", this, rect, view_bounds_in_window_dip_,
++      window_frame_in_screen_dip_, GetViewBounds(),
++      [GetInProcessNSView() window] != nil, IsHeadless());
+   ns_view_->SetBounds(rect);
+-  Issue779TraceWebviewBounds("SetBounds.after", this, rect,
+-                             view_bounds_in_window_dip_,
+-                             window_frame_in_screen_dip_, GetViewBounds(),
+-                             [GetInProcessNSView() window] != nil,
+-                             IsHeadless());
++  Issue779TraceWebviewBounds(
++      "SetBounds.after", this, rect, view_bounds_in_window_dip_,
++      window_frame_in_screen_dip_, GetViewBounds(),
++      [GetInProcessNSView() window] != nil, IsHeadless());
+ 
+   // Check if running with no associated NSWindow and force bounds change
+   // propagation. This occurs while running headless and causes problems with
+@@ -701,8 +753,9 @@ gfx::NativeViewAccessible RenderWidgetHostViewMac::GetNativeViewAccessible() {
+ void RenderWidgetHostViewMac::Focus() {
+   // Ignore redundant calls, as they can cause unending loops of focus-setting.
+   // crbug.com/998123, crbug.com/804184.
+-  if (is_first_responder_ || is_getting_focus_)
++  if (is_first_responder_ || is_getting_focus_) {
+     return;
++  }
+ 
+   base::AutoReset<bool> is_getting_focus_bit(&is_getting_focus_, true);
+   ns_view_->MakeFirstResponder();
+@@ -799,15 +852,17 @@ void RenderWidgetHostViewMac::OnUpdateTextInputStateCalled(
+     TextInputManager* text_input_manager,
+     RenderWidgetHostViewBase* updated_view,
+     bool did_update_state) {
+-  if (!did_update_state)
++  if (!did_update_state) {
+     return;
++  }
+ 
+   const ui::mojom::TextInputState* state =
+       text_input_manager->GetTextInputState();
+-  if (state)
++  if (state) {
+     ns_view_->SetTextInputState(state->type, state->flags);
+-  else
++  } else {
+     ns_view_->SetTextInputState(ui::TEXT_INPUT_TYPE_NONE, 0);
++  }
+ 
+   // |updated_view| is the last view to change its TextInputState which can be
+   // used to start/stop monitoring composition info when it has a focused
+@@ -818,8 +873,9 @@ void RenderWidgetHostViewMac::OnUpdateTextInputStateCalled(
+   // We might end up here when |updated_view| has had active TextInputState and
+   // then got destroyed. In that case, |updated_view->GetRenderWidgetHost()|
+   // returns nullptr.
+-  if (!widget_host)
++  if (!widget_host) {
+     return;
++  }
+ 
+   // Set the monitor state based on the text input focus state.
+   const bool has_focus = HasFocus();
+@@ -856,8 +912,9 @@ void RenderWidgetHostViewMac::OnImeCompositionRangeChanged(
+     bool character_bounds_changed) {
+   const TextInputManager::CompositionRangeInfo* info =
+       GetCompositionRangeInfo();
+-  if (!info)
++  if (!info) {
+     return;
++  }
+   // The RangeChanged message is only sent with valid values. The current
+   // caret position (start == end) will be sent if there is no IME range.
+   ns_view_->SetCompositionRangeInfo(info->range);
+@@ -870,17 +927,20 @@ void RenderWidgetHostViewMac::OnSelectionBoundsChanged(
+ 
+   // The rest of the code is to support the Mac Zoom feature tracking the
+   // text caret; we can skip it if that feature is not currently enabled.
+-  if (!UAZoomEnabled())
++  if (!UAZoomEnabled()) {
+     return;
++  }
+ 
+   RenderWidgetHostViewBase* focused_view = GetFocusedViewForTextSelection();
+-  if (!focused_view)
++  if (!focused_view) {
+     return;
++  }
+ 
+   const TextInputManager::SelectionRegion* region =
+       GetTextInputManager()->GetSelectionRegion(focused_view);
+-  if (!region)
++  if (!region) {
+     return;
++  }
+ 
+   // Create a rectangle for the edge of the selection focus, which will be
+   // the same as the caret position if the selection is collapsed. That's
+@@ -902,8 +962,9 @@ void RenderWidgetHostViewMac::OnTextSelectionChanged(
+   DCHECK_EQ(GetTextInputManager(), text_input_manager);
+ 
+   const TextInputManager::TextSelection* selection = GetTextSelection();
+-  if (!selection)
++  if (!selection) {
+     return;
++  }
+ 
+   ns_view_->SetTextSelection(selection->text(), selection->offset(),
+                              selection->range());
+@@ -954,8 +1015,9 @@ void RenderWidgetHostViewMac::Destroy() {
+   ns_view_ = nullptr;
+   in_process_ns_view_bridge_.reset();
+   remote_ns_view_client_receiver_.reset();
+-  if (remote_ns_view_)
++  if (remote_ns_view_) {
+     remote_ns_view_->Destroy();
++  }
+   remote_ns_view_.reset();
+ 
+   // Delete the delegated frame state, which will reach back into
+@@ -966,8 +1028,9 @@ void RenderWidgetHostViewMac::Destroy() {
+   // we release host().
+   NotifyObserversAboutShutdown();
+ 
+-  if (text_input_manager_)
++  if (text_input_manager_) {
+     text_input_manager_->RemoveObserver(this);
++  }
+ 
+   mouse_wheel_phase_handler_.IgnorePendingWheelEndEvent();
+ 
+@@ -979,8 +1042,9 @@ void RenderWidgetHostViewMac::Destroy() {
+ 
+ void RenderWidgetHostViewMac::UpdateTooltipUnderCursor(
+     const std::u16string& tooltip_text) {
+-  if (GetCursorManager()->IsViewUnderCursor(this))
++  if (GetCursorManager()->IsViewUnderCursor(this)) {
+     UpdateTooltip(tooltip_text);
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::UpdateTooltip(
+@@ -1034,8 +1098,9 @@ void RenderWidgetHostViewMac::UpdateScreenInfo() {
+   // and for web platform APIs that expose screen and window info and events.
+   // RenderWidgetHostImpl will query BrowserCompositorMac for the dimensions
+   // to send to the renderer, so BrowserCompositorMac must be updated first.
+-  if (dip_size_changed || any_display_changed)
++  if (dip_size_changed || any_display_changed) {
+     host()->NotifyScreenInfoChanged();
++  }
+ }
+ 
+ viz::ScopedSurfaceIdAllocator
+@@ -1209,8 +1274,9 @@ void RenderWidgetHostViewMac::TakeFallbackContentFrom(
+   // in the NSView for |view_mac|.
+   const gfx::CALayerParams* ca_layer_params =
+       view_mac->browser_compositor_->GetLastCALayerParams();
+-  if (ca_layer_params)
++  if (ca_layer_params) {
+     ns_view_->SetCALayerParams(*ca_layer_params);
++  }
+   browser_compositor_->TakeFallbackContentFrom(
+       view_mac->browser_compositor_.get());
+ }
+@@ -1228,8 +1294,10 @@ bool RenderWidgetHostViewMac::GetLineBreakIndex(
+     const gfx::Range& range,
+     size_t* line_break_point) {
+   DCHECK(line_break_point);
+-  if (range.start() >= bounds.size() || range.is_reversed() || range.is_empty())
++  if (range.start() >= bounds.size() || range.is_reversed() ||
++      range.is_empty()) {
+     return false;
++  }
+ 
+   // We can't check line breaking completely from only rectangle array. Thus we
+   // assume the line breaking as the next character's y offset is larger than
+@@ -1264,8 +1332,9 @@ gfx::Rect RenderWidgetHostViewMac::GetFirstRectForCompositionRange(
+ 
+   const TextInputManager::CompositionRangeInfo* composition_info =
+       GetCompositionRangeInfo();
+-  if (!composition_info)
++  if (!composition_info) {
+     return gfx::Rect();
++  }
+ 
+   DCHECK(actual_range);
+   DCHECK(!composition_info->character_bounds.empty());
+@@ -1303,17 +1372,21 @@ gfx::Range RenderWidgetHostViewMac::ConvertCharacterRangeToCompositionRange(
+     const gfx::Range& request_range) {
+   const TextInputManager::CompositionRangeInfo* composition_info =
+       GetCompositionRangeInfo();
+-  if (!composition_info)
++  if (!composition_info) {
+     return gfx::Range::InvalidRange();
++  }
+ 
+-  if (composition_info->range.is_empty())
++  if (composition_info->range.is_empty()) {
+     return gfx::Range::InvalidRange();
++  }
+ 
+-  if (composition_info->range.is_reversed())
++  if (composition_info->range.is_reversed()) {
+     return gfx::Range::InvalidRange();
++  }
+ 
+-  if (request_range.start() < composition_info->range.start())
++  if (request_range.start() < composition_info->range.start()) {
+     return gfx::Range::InvalidRange();
++  }
+ 
+   // Heuristic: truncate the request range within the composition range.
+   uint32_t truncated_request_start =
+@@ -1358,8 +1431,9 @@ bool RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange(
+   if (selection->range().is_empty() &&
+       requested_range.start() == selection->range().end()) {
+     DCHECK(GetFocusedWidget());
+-    if (actual_range)
++    if (actual_range) {
+       *actual_range = requested_range;
++    }
+ 
+     // Check selection bounds first (currently populated only for EditContext)
+     const std::optional<gfx::Rect> text_selection_bound =
+@@ -1367,8 +1441,7 @@ bool RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange(
+     if (text_selection_bound) {
+       *rect = text_selection_bound.value();
+       TRACE_EVENT1(
+-          "ime",
+-          "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
++          "ime", "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
+           "GetTextSelectionBounds", rect->ToString());
+       return log_result(GetCachedFirstRectResult::kFound);
+     }
+@@ -1377,9 +1450,9 @@ bool RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange(
+     *rect = GetTextInputManager()
+                 ->GetSelectionRegion(GetFocusedWidget()->GetView())
+                 ->caret_rect;
+-    TRACE_EVENT1(
+-        "ime", "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
+-        "caret_rect", rect->ToString());
++    TRACE_EVENT1("ime",
++                 "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
++                 "caret_rect", rect->ToString());
+     return log_result(GetCachedFirstRectResult::kFound);
+   }
+ 
+@@ -1390,14 +1463,15 @@ bool RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange(
+       return log_result(GetCachedFirstRectResult::kNotBoundedBySelection);
+     }
+     DCHECK(GetFocusedWidget());
+-    if (actual_range)
++    if (actual_range) {
+       *actual_range = selection->range();
++    }
+     *rect = GetTextInputManager()
+                 ->GetSelectionRegion(GetFocusedWidget()->GetView())
+                 ->first_selection_rect;
+-    TRACE_EVENT1(
+-        "ime", "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
+-        "first_selection_rect", rect->ToString());
++    TRACE_EVENT1("ime",
++                 "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
++                 "first_selection_rect", rect->ToString());
+     return log_result(GetCachedFirstRectResult::kFound);
+   }
+ 
+@@ -1509,8 +1583,9 @@ void RenderWidgetHostViewMac::UnlockPointer() {
+   ns_view_->SetCursorLocked(false);
+   ns_view_->SetCursorLockedUnacceleratedMovement(false);
+ 
+-  if (host())
++  if (host()) {
+     host()->LostPointerLock();
++  }
+ }
+ 
+ bool RenderWidgetHostViewMac::GetIsPointerLockedUnadjustedMovementForTesting() {
+@@ -1530,8 +1605,9 @@ bool RenderWidgetHostViewMac::LockKeyboard(
+   std::optional<std::vector<uint32_t>> uint_dom_codes;
+   if (dom_codes) {
+     uint_dom_codes.emplace();
+-    for (const auto& dom_code : *dom_codes)
++    for (const auto& dom_code : *dom_codes) {
+       uint_dom_codes->push_back(static_cast<uint32_t>(dom_code));
++    }
+   }
+   is_keyboard_locked_ = true;
+   ns_view_->LockKeyboard(uint_dom_codes);
+@@ -1539,8 +1615,9 @@ bool RenderWidgetHostViewMac::LockKeyboard(
+ }
+ 
+ void RenderWidgetHostViewMac::UnlockKeyboard() {
+-  if (!is_keyboard_locked_)
++  if (!is_keyboard_locked_) {
+     return;
++  }
+ 
+   is_keyboard_locked_ = false;
+   ns_view_->UnlockKeyboard();
+@@ -1639,8 +1716,9 @@ bool RenderWidgetHostViewMac::ShouldRouteEvents() const {
+   // Event routing requires a valid frame sink (that is, that we be connected to
+   // a ui::Compositor), which is not guaranteed to be the case.
+   // https://crbug.com/844095
+-  if (!browser_compositor_->GetRootFrameSinkId().is_valid())
++  if (!browser_compositor_->GetRootFrameSinkId().is_valid()) {
+     return false;
++  }
+ 
+   return host()->delegate() && host()->delegate()->GetInputEventRouter();
+ }
+@@ -1661,8 +1739,9 @@ void RenderWidgetHostViewMac::InjectTouchEvent(
+     const ui::LatencyInfo& latency_info) {
+   ui::FilteredGestureProvider::TouchHandlingResult result =
+       gesture_provider_.OnTouchEvent(MotionEventWeb(event));
+-  if (!result.succeeded)
++  if (!result.succeeded) {
+     return;
++  }
+ 
+   if (ShouldRouteEvents()) {
+     WebTouchEvent touch_event(event);
+@@ -1698,8 +1777,9 @@ viz::FrameSinkId RenderWidgetHostViewMac::GetRootFrameSinkId() {
+ viz::SurfaceId RenderWidgetHostViewMac::GetCurrentSurfaceId() const {
+   // |browser_compositor_| could be null if this method is called during its
+   // destruction.
+-  if (!browser_compositor_)
++  if (!browser_compositor_) {
+     return viz::SurfaceId();
++  }
+   return browser_compositor_->GetDelegatedFrameHost()->GetCurrentSurfaceId();
+ }
+ 
+@@ -1713,16 +1793,19 @@ void RenderWidgetHostViewMac::SetActive(bool active) {
+   if (host()) {
+     UpdateActiveState(active);
+     if (active) {
+-      if (HasFocus())
++      if (HasFocus()) {
+         host()->GotFocus();
++      }
+     } else {
+       host()->LostFocus();
+     }
+   }
+-  if (HasFocus())
++  if (HasFocus()) {
+     SetTextInputActive(active);
+-  if (!active)
++  }
++  if (!active) {
+     UnlockPointer();
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::ShowDefinitionForSelection() {
+@@ -1756,8 +1839,9 @@ viz::SurfaceId RenderWidgetHostViewMac::GetFallbackSurfaceIdForTesting() const {
+ }
+ 
+ void RenderWidgetHostViewMac::SetBackgroundLayerColor(SkColor color) {
+-  if (color == background_layer_color_)
++  if (color == background_layer_color_) {
+     return;
++  }
+   background_layer_color_ = color;
+   ns_view_->SetBackgroundColor(color);
+ }
+@@ -1773,10 +1857,11 @@ void RenderWidgetHostViewMac::DisableDisplayFeatureOverrideForEmulation() {
+ 
+ void RenderWidgetHostViewMac::OverrideDisplayFeatureForEmulation(
+     const DisplayFeature* display_feature) {
+-  if (display_feature)
++  if (display_feature) {
+     display_feature_ = *display_feature;
+-  else
++  } else {
+     display_feature_ = std::nullopt;
++  }
+   host()->SynchronizeVisualProperties();
+ }
+ 
+@@ -1869,8 +1954,9 @@ void RenderWidgetHostViewMac::RequestShutdown() {
+ }
+ 
+ void RenderWidgetHostViewMac::OnFirstResponderChanged(bool is_first_responder) {
+-  if (is_first_responder_ == is_first_responder)
++  if (is_first_responder_ == is_first_responder) {
+     return;
++  }
+   is_first_responder_ = is_first_responder;
+   accessibility_focus_overrider_.SetViewIsFirstResponder(is_first_responder_);
+ 
+@@ -1906,22 +1992,23 @@ void RenderWidgetHostViewMac::OnFirstResponderChanged(bool is_first_responder) {
+ }
+ 
+ void RenderWidgetHostViewMac::OnWindowIsKeyChanged(bool is_key) {
+-  if (is_window_key_ == is_key)
++  if (is_window_key_ == is_key) {
+     return;
++  }
+   is_window_key_ = is_key;
+   accessibility_focus_overrider_.SetWindowIsKey(is_window_key_);
+-  if (is_first_responder_)
++  if (is_first_responder_) {
+     SetActive(is_key);
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::OnBoundsInWindowChanged(
+     const gfx::Rect& view_bounds_in_window_dip,
+     bool attached_to_window) {
+-  Issue779TraceWebviewBounds("OnBoundsInWindowChanged.before", this,
+-                             view_bounds_in_window_dip,
+-                             view_bounds_in_window_dip_,
+-                             window_frame_in_screen_dip_, GetViewBounds(),
+-                             attached_to_window, IsHeadless());
++  Issue779TraceWebviewBounds(
++      "OnBoundsInWindowChanged.before", this, view_bounds_in_window_dip,
++      view_bounds_in_window_dip_, window_frame_in_screen_dip_, GetViewBounds(),
++      attached_to_window, IsHeadless());
+   bool view_size_changed =
+       view_bounds_in_window_dip_.size() != view_bounds_in_window_dip.size();
+ 
+@@ -1934,38 +2021,36 @@ void RenderWidgetHostViewMac::OnBoundsInWindowChanged(
+     view_bounds_in_window_dip_.set_size(view_bounds_in_window_dip.size());
+   }
+ 
+-  if (view_size_changed)
++  if (view_size_changed) {
+     UpdateScreenInfo();
++  }
+ 
+-  Issue779TraceWebviewBounds("OnBoundsInWindowChanged.after", this,
+-                             view_bounds_in_window_dip,
+-                             view_bounds_in_window_dip_,
+-                             window_frame_in_screen_dip_, GetViewBounds(),
+-                             attached_to_window, IsHeadless());
++  Issue779TraceWebviewBounds(
++      "OnBoundsInWindowChanged.after", this, view_bounds_in_window_dip,
++      view_bounds_in_window_dip_, window_frame_in_screen_dip_, GetViewBounds(),
++      attached_to_window, IsHeadless());
+ }
+ 
+ void RenderWidgetHostViewMac::OnWindowFrameInScreenChanged(
+     const gfx::Rect& window_frame_in_screen_dip) {
+-  Issue779TraceWebviewBounds("OnWindowFrameInScreenChanged.before", this,
+-                             window_frame_in_screen_dip,
+-                             view_bounds_in_window_dip_,
+-                             window_frame_in_screen_dip_, GetViewBounds(),
+-                             [GetInProcessNSView() window] != nil,
+-                             IsHeadless());
+-  if (window_frame_in_screen_dip_ == window_frame_in_screen_dip)
++  Issue779TraceWebviewBounds(
++      "OnWindowFrameInScreenChanged.before", this, window_frame_in_screen_dip,
++      view_bounds_in_window_dip_, window_frame_in_screen_dip_, GetViewBounds(),
++      [GetInProcessNSView() window] != nil, IsHeadless());
++  if (window_frame_in_screen_dip_ == window_frame_in_screen_dip) {
+     return;
++  }
+ 
+   window_frame_in_screen_dip_ = window_frame_in_screen_dip;
+-  Issue779TraceWebviewBounds("OnWindowFrameInScreenChanged.after", this,
+-                             window_frame_in_screen_dip,
+-                             view_bounds_in_window_dip_,
+-                             window_frame_in_screen_dip_, GetViewBounds(),
+-                             [GetInProcessNSView() window] != nil,
+-                             IsHeadless());
+-  if (host()->delegate())
++  Issue779TraceWebviewBounds(
++      "OnWindowFrameInScreenChanged.after", this, window_frame_in_screen_dip,
++      view_bounds_in_window_dip_, window_frame_in_screen_dip_, GetViewBounds(),
++      [GetInProcessNSView() window] != nil, IsHeadless());
++  if (host()->delegate()) {
+     host()->delegate()->SendScreenRects();
+-  else
++  } else {
+     host()->SendScreenRects();
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::OnScreenInfosChanged(
+@@ -2036,8 +2121,9 @@ void RenderWidgetHostViewMac::RouteOrProcessTouchEvent(
+   blink::WebTouchEvent web_event = const_web_event;
+   ui::FilteredGestureProvider::TouchHandlingResult result =
+       gesture_provider_.OnTouchEvent(MotionEventWeb(web_event));
+-  if (!result.succeeded)
++  if (!result.succeeded) {
+     return;
++  }
+ 
+   ui::LatencyInfo latency_info;
+   latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
+@@ -2072,11 +2158,13 @@ void RenderWidgetHostViewMac::RouteOrProcessWheelEvent(
+ 
+ void RenderWidgetHostViewMac::ForwardMouseEvent(
+     const blink::WebMouseEvent& web_event) {
+-  if (host())
++  if (host()) {
+     host()->ForwardMouseEvent(web_event);
++  }
+ 
+-  if (web_event.GetType() == WebInputEvent::Type::kMouseLeave)
++  if (web_event.GetType() == WebInputEvent::Type::kMouseLeave) {
+     SetTooltipText(std::u16string());
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::ForwardWheelEvent(
+@@ -2160,13 +2248,15 @@ void RenderWidgetHostViewMac::LookUpDictionaryOverlayFromRange(
+     const gfx::Range& range) {
+   content::RenderWidgetHostViewBase* focused_view =
+       GetFocusedViewForTextSelection();
+-  if (!focused_view)
++  if (!focused_view) {
+     return;
++  }
+ 
+   RenderWidgetHostImpl* widget_host =
+       RenderWidgetHostImpl::From(focused_view->GetRenderWidgetHost());
+-  if (!widget_host)
++  if (!widget_host) {
+     return;
++  }
+ 
+   int32_t target_widget_process_id =
+       widget_host->GetProcess()->GetDeprecatedID();
+@@ -2181,8 +2271,9 @@ void RenderWidgetHostViewMac::LookUpDictionaryOverlayFromRange(
+ void RenderWidgetHostViewMac::LookUpDictionaryOverlayAtPoint(
+     const gfx::PointF& root_point_in_dips) {
+   if (!host() || !host()->delegate() ||
+-      !host()->delegate()->GetInputEventRouter())
++      !host()->delegate()->GetInputEventRouter()) {
+     return;
++  }
+ 
+   // With zoom-for-dsf, RenderWidgetHost coordinate system is physical points,
+   // which means we have to scale the point by device scale factor.
+@@ -2201,12 +2292,14 @@ void RenderWidgetHostViewMac::LookUpDictionaryOverlayAtPoint(
+ 
+   RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+       static_cast<RenderWidgetHostViewBase*>(view)->GetRenderWidgetHost());
+-  if (!widget_host)
++  if (!widget_host) {
+     return;
++  }
+ 
+   // For popups, do not support QuickLook.
+-  if (popup_parent_host_view_)
++  if (popup_parent_host_view_) {
+     return;
++  }
+ 
+   int32_t target_widget_process_id =
+       widget_host->GetProcess()->GetDeprecatedID();
+@@ -2224,8 +2317,9 @@ bool RenderWidgetHostViewMac::SyncGetCharacterIndexAtPoint(
+   *index = UINT32_MAX;
+ 
+   if (!host() || !host()->delegate() ||
+-      !host()->delegate()->GetInputEventRouter())
++      !host()->delegate()->GetInputEventRouter()) {
+     return true;
++  }
+ 
+   gfx::PointF transformed_point;
+   auto* view = host()
+@@ -2239,8 +2333,9 @@ bool RenderWidgetHostViewMac::SyncGetCharacterIndexAtPoint(
+ 
+   RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+       static_cast<RenderWidgetHostViewBase*>(view)->GetRenderWidgetHost());
+-  if (!widget_host)
++  if (!widget_host) {
+     return true;
++  }
+ 
+   *index = TextInputClientMac::GetInstance()->GetCharacterIndexAtPoint(
+       widget_host, gfx::ToFlooredPoint(transformed_point));
+@@ -2333,8 +2428,9 @@ void RenderWidgetHostViewMac::Copy() {
+ 
+ void RenderWidgetHostViewMac::CopyToFindPboard() {
+   WebContents* web_contents = GetWebContents();
+-  if (web_contents)
++  if (web_contents) {
+     web_contents->CopyToFindPboard();
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::CenterSelection() {
+@@ -2545,8 +2641,9 @@ void RenderWidgetHostViewMac::OnGotStringForDictionaryOverlay(
+     if (auto* selection = GetTextSelection()) {
+       const std::u16string& selected_text = selection->selected_text();
+       NSString* ns_selected_text = base::SysUTF16ToNSString(selected_text);
+-      if ([ns_selected_text length] == 0)
++      if ([ns_selected_text length] == 0) {
+         return;
++      }
+       scoped_refptr<ui::UniquePasteboard> pasteboard = new ui::UniquePasteboard;
+       if ([pasteboard->get() writeObjects:@[ ns_selected_text ]]) {
+         NSPerformService(@"Look Up in Dictionary", pasteboard->get());
+@@ -2576,8 +2673,9 @@ void RenderWidgetHostViewMac::OnGotStringForDictionaryOverlay(
+ void RenderWidgetHostViewMac::SetTooltipText(
+     const std::u16string& tooltip_text) {
+   ns_view_->SetTooltipText(tooltip_text);
+-  if (tooltip_observer_for_testing_)
++  if (tooltip_observer_for_testing_) {
+     tooltip_observer_for_testing_->OnTooltipTextUpdated(tooltip_text);
++  }
+ }
+ 
+ void RenderWidgetHostViewMac::UpdateWindowsNow() {
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index ec6bc91dea..76273ce40e 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -7,8 +7,9 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
+-#include <cstdlib>
++#include <atomic>
+ #include <cmath>
++#include <cstdlib>
+ #include <memory>
+ #include <optional>
+ #include <set>
+@@ -288,29 +289,24 @@ namespace content {
+ 
+ namespace {
+ 
+-bool PagePopupAltTabTraceEnabled() {
++bool Issue779TraceEnabled() {
+   static const bool enabled =
+       std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+   return enabled;
+ }
+ 
+-void PagePopupAltTabTrace(const char* event,
+-                          const WebContentsImpl* web_contents,
+-                          int process_id,
+-                          int widget_route_id,
+-                          const gfx::Rect& rect,
+-                          const gfx::Rect& anchor_rect) {
+-  if (!PagePopupAltTabTraceEnabled())
+-    return;
+-  LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
+-            << " boundary=pagepopup_lifecycle"
+-            << " event=" << event
+-            << " component=WebContentsImpl"
+-            << " webcontents=" << web_contents
+-            << " process_id=" << process_id
+-            << " widget_route_id=" << widget_route_id
+-            << " rect=" << rect.ToString()
+-            << " anchor_rect=" << anchor_rect.ToString();
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO)
++        << "[issue-779-trace] trace_enabled component=content-webcontents";
++  }
++}
++
++int Issue779NextPopupSequence() {
++  static std::atomic<int> sequence{0};
++  return ++sequence;
+ }
+ 
+ // These values are persisted to logs. Entries should not be renumbered and
+@@ -5871,17 +5867,50 @@ void WebContentsImpl::ShowCreatedWidget(int process_id,
+                                         int widget_route_id,
+                                         const gfx::Rect& initial_rect,
+                                         const gfx::Rect& initial_anchor_rect) {
+-  PagePopupAltTabTrace("show_created_widget_enter", this, process_id,
+-                       widget_route_id, initial_rect, initial_anchor_rect);
+   OPTIONAL_TRACE_EVENT2("content", "WebContentsImpl::ShowCreatedWidget",
+                         "process_id", process_id, "widget_route_id",
+                         widget_route_id);
++  const int popup_sequence =
++      Issue779TraceEnabled() ? Issue779NextPopupSequence() : 0;
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " popup_sequence=" << popup_sequence
++              << " attempt=" << popup_sequence
++              << " control=date"
++              << " boundary=browser-popup-open"
++              << " outcome=entered"
++              << " reason=show_created_widget_entry"
++              << " webcontents=" << static_cast<void*>(this)
++              << " process_id=" << process_id
++              << " widget_route_id=" << widget_route_id
++              << " initial_rect=" << initial_rect.ToString()
++              << " initial_anchor_rect=" << initial_anchor_rect.ToString();
++  }
+   RenderWidgetHostViewBase* widget_host_view =
+       static_cast<RenderWidgetHostViewBase*>(
+           GetCreatedWidget(process_id, widget_route_id));
+   if (!widget_host_view) {
+-    PagePopupAltTabTrace("show_created_widget_missing_view", this, process_id,
+-                         widget_route_id, initial_rect, initial_anchor_rect);
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] WebContentsImpl::ShowCreatedWidget"
++                << " path=date-page-popup"
++                << " popup_sequence=" << popup_sequence
++                << " result=no_created_widget"
++                << " webcontents=" << static_cast<void*>(this)
++                << " process_id=" << process_id
++                << " widget_route_id=" << widget_route_id
++                << " initial_rect=" << initial_rect.ToString()
++                << " initial_anchor_rect=" << initial_anchor_rect.ToString();
++      LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++                << " popup_sequence=" << popup_sequence
++                << " attempt=" << popup_sequence
++                << " control=date"
++                << " boundary=browser-popup-open"
++                << " outcome=suppressed"
++                << " reason=no_created_widget"
++                << " webcontents=" << static_cast<void*>(this);
++    }
+     return;
+   }
+ 
+@@ -5889,8 +5918,29 @@ void WebContentsImpl::ShowCreatedWidget(int process_id,
+   if (base::FeatureList::IsEnabled(
+           blink::features::kBlockSelectPopupUnfocusedWindow) &&
+       !rwh->is_active()) {
+-    PagePopupAltTabTrace("show_created_widget_inactive_host", this, process_id,
+-                         widget_route_id, initial_rect, initial_anchor_rect);
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] WebContentsImpl::ShowCreatedWidget"
++                << " path=date-page-popup"
++                << " popup_sequence=" << popup_sequence
++                << " result=destroyed_unfocused_window"
++                << " webcontents=" << static_cast<void*>(this)
++                << " process_id=" << process_id
++                << " widget_route_id=" << widget_route_id
++                << " widget_host_view=" << static_cast<void*>(widget_host_view)
++                << " initial_rect=" << initial_rect.ToString()
++                << " initial_anchor_rect=" << initial_anchor_rect.ToString()
++                << " rwh=" << static_cast<void*>(rwh)
++                << " rwh_is_active=" << rwh->is_active();
++      LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++                << " popup_sequence=" << popup_sequence
++                << " attempt=" << popup_sequence
++                << " control=date"
++                << " boundary=browser-popup-open"
++                << " outcome=suppressed"
++                << " reason=unfocused_window"
++                << " webcontents=" << static_cast<void*>(this);
++    }
+     // If the OS window isn't focused, then don't open select element popups for
+     // it: https://issues.chromium.org/issues/365089001
+     widget_host_view->host()->ShutdownAndDestroyWidget(true);
+@@ -5934,12 +5984,56 @@ void WebContentsImpl::ShowCreatedWidget(int process_id,
+   }
+ 
+   RenderWidgetHostImpl* render_widget_host_impl = widget_host_view->host();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebContentsImpl::ShowCreatedWidget"
++              << " path=date-page-popup"
++              << " popup_sequence=" << popup_sequence
++              << " result=before_guards"
++              << " webcontents=" << static_cast<void*>(this)
++              << " process_id=" << process_id
++              << " widget_route_id=" << widget_route_id
++              << " initial_rect=" << initial_rect.ToString()
++              << " initial_anchor_rect=" << initial_anchor_rect.ToString()
++              << " needs_transform=" << needs_transform
++              << " transformed_rect=" << transformed_rect.ToString()
++              << " transformed_anchor_rect="
++              << transformed_anchor_rect.ToString()
++              << " this_view=" << static_cast<void*>(this_view)
++              << " outer_webcontents=" << static_cast<void*>(outer_web_contents)
++              << " outermost_webcontents="
++              << static_cast<void*>(outermost_web_contents)
++              << " parent_view=" << static_cast<void*>(view)
++              << " widget_host_view=" << static_cast<void*>(widget_host_view)
++              << " popup_render_widget_host="
++              << static_cast<void*>(render_widget_host_impl)
++              << " visibility=" << static_cast<int>(GetVisibility())
++              << " rwh=" << static_cast<void*>(rwh)
++              << " rwh_is_active=" << rwh->is_active();
++  }
+ 
+   // A background tab cannot show a popup over the active tab.
+   if (GetVisibility() != Visibility::VISIBLE) {
+-    PagePopupAltTabTrace("show_created_widget_hidden_webcontents", this,
+-                         process_id, widget_route_id, transformed_rect,
+-                         transformed_anchor_rect);
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] WebContentsImpl::ShowCreatedWidget"
++                << " path=date-page-popup"
++                << " popup_sequence=" << popup_sequence
++                << " result=destroyed_background_tab"
++                << " webcontents=" << static_cast<void*>(this)
++                << " process_id=" << process_id
++                << " widget_route_id=" << widget_route_id
++                << " transformed_rect=" << transformed_rect.ToString()
++                << " visibility=" << static_cast<int>(GetVisibility());
++      LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++                << " popup_sequence=" << popup_sequence
++                << " attempt=" << popup_sequence
++                << " control=date"
++                << " boundary=browser-popup-open"
++                << " outcome=suppressed"
++                << " reason=background_tab"
++                << " webcontents=" << static_cast<void*>(this);
++    }
+     render_widget_host_impl->ShutdownAndDestroyWidget(true);
+     return;
+   }
+@@ -5949,25 +6043,63 @@ void WebContentsImpl::ShowCreatedWidget(int process_id,
+           ->GetExclusionAreaBoundsInScreen(outermost_web_contents);
+   if (permission_exclusion_area_bounds &&
+       permission_exclusion_area_bounds->Intersects(transformed_rect)) {
+-    PagePopupAltTabTrace("show_created_widget_permission_exclusion", this,
+-                         process_id, widget_route_id, transformed_rect,
+-                         transformed_anchor_rect);
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] WebContentsImpl::ShowCreatedWidget"
++                << " path=date-page-popup"
++                << " popup_sequence=" << popup_sequence
++                << " result=destroyed_permission_exclusion"
++                << " webcontents=" << static_cast<void*>(this)
++                << " process_id=" << process_id
++                << " widget_route_id=" << widget_route_id
++                << " transformed_rect=" << transformed_rect.ToString()
++                << " exclusion_area="
++                << permission_exclusion_area_bounds->ToString();
++      LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++                << " popup_sequence=" << popup_sequence
++                << " attempt=" << popup_sequence
++                << " control=date"
++                << " boundary=browser-popup-open"
++                << " outcome=suppressed"
++                << " reason=permission_exclusion"
++                << " webcontents=" << static_cast<void*>(this);
++    }
+     render_widget_host_impl->ShutdownAndDestroyWidget(true);
+     return;
+   }
+ 
+-  PagePopupAltTabTrace("show_created_widget_before_init_popup", this,
+-                       process_id, widget_route_id, transformed_rect,
+-                       transformed_anchor_rect);
+   widget_host_view->InitAsPopup(view, transformed_rect,
+                                 transformed_anchor_rect);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebContentsImpl::ShowCreatedWidget"
++              << " path=date-page-popup"
++              << " popup_sequence=" << popup_sequence
++              << " result=after_init_as_popup"
++              << " webcontents=" << static_cast<void*>(this)
++              << " process_id=" << process_id
++              << " widget_route_id=" << widget_route_id
++              << " transformed_rect=" << transformed_rect.ToString()
++              << " transformed_anchor_rect="
++              << transformed_anchor_rect.ToString()
++              << " parent_view=" << static_cast<void*>(view)
++              << " widget_host_view=" << static_cast<void*>(widget_host_view)
++              << " popup_render_widget_host="
++              << static_cast<void*>(render_widget_host_impl);
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " popup_sequence=" << popup_sequence
++              << " attempt=" << popup_sequence
++              << " control=date"
++              << " boundary=browser-popup-open"
++              << " outcome=opened"
++              << " reason=after_init_as_popup"
++              << " webcontents=" << static_cast<void*>(this)
++              << " transformed_rect=" << transformed_rect.ToString();
++  }
+ 
+   // Renderer-owned popup widgets wait for the renderer to request for them
+   // to be shown. We signal that this condition is satisfied by calling Init().
+   render_widget_host_impl->Init();
+-  PagePopupAltTabTrace("show_created_widget_after_init", this, process_id,
+-                       widget_route_id, transformed_rect,
+-                       transformed_anchor_rect);
+ }
+ 
+ std::optional<CreatedWindow> WebContentsImpl::GetCreatedWindow(
+@@ -10613,7 +10745,6 @@ bool WebContentsImpl::ShouldIgnoreInputEvents() {
+   return web_contents->ShouldIgnoreInputEvents();
+ }
+ 
+-
+ void WebContentsImpl::FocusOwningWebContents(
+     RenderWidgetHostImpl* render_widget_host) {
+   OPTIONAL_TRACE_EVENT1("content", "WebContentsImpl::FocusOwningWebContents",
+@@ -12589,8 +12720,8 @@ bool WebContentsImpl::CancelPrerendering(FrameTreeNode* frame_tree_node,
+         ->CancelPrerendering(PrerenderCancellationReason(final_status));
+   }
+   return GetPrerenderHostRegistry()->CancelHost(
+-            frame_tree_node->frame_tree().delegate()->GetPrerenderHostId(),
+-            final_status);
++      frame_tree_node->frame_tree().delegate()->GetPrerenderHostId(),
++      final_status);
+ }
+ 
+ ui::mojom::VirtualKeyboardMode WebContentsImpl::GetVirtualKeyboardMode() const {
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index e246118c71..4ac562ffb7 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -5,10 +5,11 @@
+ #import "content/browser/web_contents/web_contents_view_mac.h"
+ 
+ #import <Carbon/Carbon.h>
+-#include <cstdlib>
+ #include <fcntl.h>
+ #include <sys/stat.h>
+ 
++#include <algorithm>
++#include <cstdlib>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -19,6 +20,7 @@
+ #import "base/mac/mac_util.h"
+ #import "base/mac/scoped_sending_event.h"
+ #import "base/message_loop/message_pump_apple.h"
++#include "base/strings/sys_string_conversions.h"
+ #include "base/task/current_thread.h"
+ #include "base/task/thread_pool.h"
+ #include "base/threading/thread_restrictions.h"
+@@ -79,6 +81,141 @@ void Issue779TraceAnnounce() {
+   }
+ }
+ 
++std::string Issue779NSRectToString(NSRect rect) {
++  return base::SysNSStringToUTF8(NSStringFromRect(rect));
++}
++
++std::string Issue779ScreenFrame(NSView* view) {
++  if (!view || !view.window || !view.window.screen) {
++    return "null";
++  }
++  return Issue779NSRectToString(view.window.screen.frame);
++}
++
++std::string Issue779VisibleFrame(NSView* view) {
++  if (!view || !view.window || !view.window.screen) {
++    return "null";
++  }
++  return Issue779NSRectToString(view.window.screen.visibleFrame);
++}
++
++std::string Issue779FirstResponder(NSWindow* window) {
++  if (!window || !window.firstResponder) {
++    return "null";
++  }
++  return base::SysNSStringToUTF8(
++      NSStringFromClass([window.firstResponder class]));
++}
++
++std::string Issue779CurrentEventType() {
++  NSEvent* event = NSApp.currentEvent;
++  if (!event) {
++    return "null";
++  }
++  return base::SysNSStringToUTF8(
++      [NSString stringWithFormat:@"%ld", static_cast<long>(event.type)]);
++}
++
++NSString* Issue779BoolString(BOOL value) {
++  return value ? @"true" : @"false";
++}
++
++std::string Issue779WindowSummary(NSWindow* window) {
++  if (!window) {
++    return "window=null";
++  }
++  NSMutableArray<NSString*>* child_parts = [NSMutableArray array];
++  for (NSWindow* child in window.childWindows) {
++    [child_parts
++        addObject:[NSString
++                      stringWithFormat:@"%@:%p:%ld:%@:%ld:%@:%@",
++                                       NSStringFromClass(child.class), child,
++                                       static_cast<long>(child.windowNumber),
++                                       NSStringFromRect(child.frame),
++                                       static_cast<long>(child.level),
++                                       Issue779BoolString(child.isVisible),
++                                       Issue779BoolString(
++                                           child.ignoresMouseEvents)]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:
++          @"window=%p window_class=%@ window_number=%ld window_frame=%@ "
++           "window_screen=%@ window_level=%ld collection_behavior=%lu "
++           "style_mask=%lu alpha=%.3f is_visible=%@ ignoresMouseEvents=%@ "
++           "is_key=%@ is_main=%@ content_view=%p content_view_class=%@ "
++           "first_responder=%@ parent_window=%p child_window_count=%lu "
++           "child_windows=%@",
++          window, NSStringFromClass(window.class),
++          static_cast<long>(window.windowNumber), NSStringFromRect(window.frame),
++          window.screen ? NSStringFromRect(window.screen.frame) : @"null",
++          static_cast<long>(window.level),
++          static_cast<unsigned long>(window.collectionBehavior),
++          static_cast<unsigned long>(window.styleMask), window.alphaValue,
++          Issue779BoolString(window.isVisible),
++          Issue779BoolString(window.ignoresMouseEvents),
++          Issue779BoolString(window.isKeyWindow),
++          Issue779BoolString(window.isMainWindow), window.contentView,
++          window.contentView ? NSStringFromClass(window.contentView.class)
++                             : @"null",
++          window.firstResponder ? NSStringFromClass(window.firstResponder.class) : @"null", window.parentWindow,
++          static_cast<unsigned long>(window.childWindows.count),
++          [child_parts componentsJoinedByString:@"|"]]);
++}
++
++std::string Issue779OrderedWindowsSummary() {
++  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
++  NSMutableArray<NSString*>* parts = [NSMutableArray array];
++  NSUInteger limit = std::min<NSUInteger>(windows.count, 3);
++  for (NSUInteger index = 0; index < limit; ++index) {
++    NSWindow* window = windows[index];
++    [parts addObject:[NSString
++                         stringWithFormat:
++                             @"%lu:%p:%@:%ld:%@:%ld:%@:%@",
++                             static_cast<unsigned long>(index), window,
++                             NSStringFromClass(window.class),
++                             static_cast<long>(window.windowNumber),
++                             NSStringFromRect(window.frame),
++                             static_cast<long>(window.level),
++                             Issue779BoolString(window.isVisible),
++                             Issue779BoolString(window.ignoresMouseEvents)]];
++  }
++  return base::SysNSStringToUTF8([NSString
++      stringWithFormat:@"ordered_windows_count=%lu ordered_windows_top3=%@",
++                       static_cast<unsigned long>(windows.count),
++                       [parts componentsJoinedByString:@"|"]]);
++}
++
++void Issue779TraceShellWindowState(NSString* boundary,
++                                   NSString* phase,
++                                   WebContents* web_contents,
++                                   NSView* view) {
++  if (!Issue779TraceEnabled()) {
++    return;
++  }
++  Issue779TraceAnnounce();
++  NSWindow* window = view.window;
++  LOG(INFO) << "[issue-779-trace] chromium_shell_window_state"
++            << " boundary=" << base::SysNSStringToUTF8(boundary)
++            << " phase=" << base::SysNSStringToUTF8(phase)
++            << " path=select"
++            << " webcontents=" << static_cast<void*>(web_contents)
++            << " view=" << (__bridge void*)view
++            << " window=" << (__bridge void*)window
++            << " key_window=" << (__bridge void*)NSApp.keyWindow
++            << " main_window=" << (__bridge void*)NSApp.mainWindow
++            << " modal_window=" << (__bridge void*)NSApp.modalWindow
++            << " app_is_active=" << Issue779BoolString(NSApp.isActive)
++            << " currentEvent=" << Issue779CurrentEventType()
++            << " shell_window_summary=\"" << Issue779WindowSummary(window)
++            << "\" key_window_summary=\""
++            << Issue779WindowSummary(NSApp.keyWindow)
++            << "\" main_window_summary=\""
++            << Issue779WindowSummary(NSApp.mainWindow)
++            << "\" modal_window_summary=\""
++            << Issue779WindowSummary(NSApp.modalWindow)
++            << "\" " << Issue779OrderedWindowsSummary();
++}
++
+ // This helper's sole task is to write out data for a promised file; the caller
+ // is responsible for opening the file. It takes the drop data and an open file
+ // stream.
+@@ -138,8 +275,9 @@ WebContentsViewMac::WebContentsViewMac(
+       deferred_close_weak_ptr_factory_(this) {}
+ 
+ WebContentsViewMac::~WebContentsViewMac() {
+-  if (views_host_)
++  if (views_host_) {
+     views_host_->OnHostableViewDestroying();
++  }
+   DCHECK(!views_host_);
+   in_process_ns_view_bridge_.reset();
+ }
+@@ -177,7 +315,7 @@ gfx::Rect WebContentsViewMac::GetContainerBounds() const {
+   NSWindow* window = [view window];
+   NSRect bounds;
+ 
+-  if (window)  {
++  if (window) {
+     bounds = [view bounds];
+ 
+     // Convert bounds to window coordinate space.
+@@ -297,37 +435,43 @@ void WebContentsViewMac::StartDragging(
+ }
+ 
+ void WebContentsViewMac::Focus() {
+-  if (delegate())
++  if (delegate()) {
+     delegate()->ResetStoredFocus();
++  }
+ 
+   // Focus the the fullscreen view, if one exists; otherwise, focus the content
+   // native view. This ensures that the view currently attached to a NSWindow is
+   // being used to query or set first responder state.
+   RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+-  if (!rwhv)
++  if (!rwhv) {
+     return;
++  }
+ 
+   static_cast<RenderWidgetHostViewBase*>(rwhv)->Focus();
+ }
+ 
+ void WebContentsViewMac::SetInitialFocus() {
+-  if (delegate())
++  if (delegate()) {
+     delegate()->ResetStoredFocus();
++  }
+ 
+-  if (web_contents_->FocusLocationBarByDefault())
++  if (web_contents_->FocusLocationBarByDefault()) {
+     web_contents_->SetFocusToLocationBar();
+-  else
++  } else {
+     Focus();
++  }
+ }
+ 
+ void WebContentsViewMac::StoreFocus() {
+-  if (delegate())
++  if (delegate()) {
+     delegate()->StoreFocus();
++  }
+ }
+ 
+ void WebContentsViewMac::RestoreFocus() {
+-  if (delegate() && delegate()->RestoreFocus())
++  if (delegate() && delegate()->RestoreFocus()) {
+     return;
++  }
+ 
+   // Fall back to the default focus behavior if we could not restore focus.
+   // TODO(shess): If location-bar gets focus by default, this will
+@@ -338,8 +482,9 @@ void WebContentsViewMac::RestoreFocus() {
+ }
+ 
+ void WebContentsViewMac::FocusThroughTabTraversal(bool reverse) {
+-  if (delegate())
++  if (delegate()) {
+     delegate()->ResetStoredFocus();
++  }
+ 
+   web_contents_->GetRenderViewHost()->SetInitialFocus(reverse);
+ }
+@@ -365,29 +510,34 @@ void WebContentsViewMac::LostFocus(RenderWidgetHostImpl* render_widget_host) {
+ // This is called when the renderer asks us to take focus back (i.e., it has
+ // iterated past the last focusable element on the page).
+ void WebContentsViewMac::TakeFocus(bool reverse) {
+-  if (delegate())
++  if (delegate()) {
+     delegate()->ResetStoredFocus();
++  }
+ 
+   if (web_contents_->GetDelegate() &&
+-      web_contents_->GetDelegate()->TakeFocus(web_contents_, reverse))
++      web_contents_->GetDelegate()->TakeFocus(web_contents_, reverse)) {
+     return;
+-  if (delegate() && delegate()->TakeFocus(reverse))
++  }
++  if (delegate() && delegate()->TakeFocus(reverse)) {
+     return;
++  }
+   if (reverse) {
+     [[GetInProcessNSView() window] selectPreviousKeyView:GetInProcessNSView()];
+   } else {
+     [[GetInProcessNSView() window] selectNextKeyView:GetInProcessNSView()];
+   }
+-  if (remote_ns_view_)
++  if (remote_ns_view_) {
+     remote_ns_view_->TakeFocus(reverse);
++  }
+ }
+ 
+ void WebContentsViewMac::ShowContextMenu(RenderFrameHost& render_frame_host,
+                                          const ContextMenuParams& params) {
+-  if (delegate())
++  if (delegate()) {
+     delegate()->ShowContextMenu(render_frame_host, params);
+-  else
++  } else {
+     DLOG(ERROR) << "Cannot show context menus without a delegate.";
++  }
+ }
+ 
+ #if BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
+@@ -402,11 +552,44 @@ void WebContentsViewMac::ShowPopupMenu(
+     bool allow_multiple_selection) {
+   if (Issue779TraceEnabled()) {
+     Issue779TraceAnnounce();
++    NSView* view = GetInProcessNSView();
+     LOG(INFO) << "[issue-779-trace] WebContentsViewMac::ShowPopupMenu"
++              << " path=select"
++              << " popup_menu_helper_before="
++              << static_cast<void*>(popup_menu_helper_.get())
++              << " helper_alive_before="
++              << static_cast<bool>(popup_menu_helper_)
++              << " join_webcontents=" << static_cast<void*>(web_contents_)
++              << " join_view=" << (__bridge void*)view
++              << " join_window=" << (__bridge void*)view.window
+               << " webcontents=" << static_cast<void*>(web_contents_)
+-              << " render_frame_host="
+-              << static_cast<void*>(render_frame_host)
++              << " render_frame_host=" << static_cast<void*>(render_frame_host)
+               << " input_bounds=" << bounds.ToString()
++              << " input_bounds_space=chromium-root"
++              << " webcontents_view_frame="
++              << Issue779NSRectToString(view.frame)
++              << " webcontents_view_bounds="
++              << Issue779NSRectToString(view.bounds) << " window_frame="
++              << (view.window ? Issue779NSRectToString(view.window.frame)
++                              : std::string("null"))
++              << " window_content_frame="
++              << (view.window.contentView
++                      ? Issue779NSRectToString(view.window.contentView.frame)
++                      : std::string("null"))
++              << " screen_frame=" << Issue779ScreenFrame(view)
++              << " visible_frame=" << Issue779VisibleFrame(view)
++              << " window_is_key="
++              << (view.window ? static_cast<bool>(view.window.isKeyWindow)
++                              : false)
++              << " window_is_main="
++              << (view.window ? static_cast<bool>(view.window.isMainWindow)
++                              : false)
++              << " window_is_visible="
++              << (view.window ? static_cast<bool>(view.window.isVisible)
++                              : false)
++              << " app_is_active=" << static_cast<bool>(NSApp.isActive)
++              << " firstResponder=" << Issue779FirstResponder(view.window)
++              << " currentEvent=" << Issue779CurrentEventType()
+               << " item_count=" << menu_items.size()
+               << " selected_item=" << selected_item
+               << " right_aligned=" << right_aligned
+@@ -414,6 +597,16 @@ void WebContentsViewMac::ShowPopupMenu(
+   }
+   popup_menu_helper_ = std::make_unique<PopupMenuHelper>(
+       this, render_frame_host, std::move(popup_client));
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebContentsViewMac::ShowPopupMenu.helper"
++              << " path=select"
++              << " webcontents=" << static_cast<void*>(web_contents_)
++              << " popup_menu_helper_after_create="
++              << static_cast<void*>(popup_menu_helper_.get())
++              << " helper_alive_after_create="
++              << static_cast<bool>(popup_menu_helper_);
++  }
+   popup_menu_helper_->ShowPopupMenu(bounds, item_font_size, selected_item,
+                                     std::move(menu_items), right_aligned,
+                                     allow_multiple_selection);
+@@ -424,8 +617,46 @@ void WebContentsViewMac::ShowPopupMenu(
+ void WebContentsViewMac::OnMenuClosed() {
+   NSView* view = GetInProcessNSView();
+   [view.window setIgnoresMouseEvents:YES];
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    Issue779TraceShellWindowState(@"select_menu", @"menu_closed_before_reset",
++                                  web_contents_, view);
++    LOG(INFO) << "[issue-779-trace] WebContentsViewMac::OnMenuClosed.before"
++              << " path=select"
++              << " webcontents=" << static_cast<void*>(web_contents_)
++              << " popup_menu_helper_before_reset="
++              << static_cast<void*>(popup_menu_helper_.get())
++              << " helper_alive_before_reset="
++              << static_cast<bool>(popup_menu_helper_)
++              << " join_view=" << (__bridge void*)view
++              << " join_window=" << (__bridge void*)view.window
++              << " window_is_key="
++              << (view.window ? static_cast<bool>(view.window.isKeyWindow)
++                              : false)
++              << " window_is_main="
++              << (view.window ? static_cast<bool>(view.window.isMainWindow)
++                              : false)
++              << " window_is_visible="
++              << (view.window ? static_cast<bool>(view.window.isVisible)
++                              : false)
++              << " app_is_active=" << static_cast<bool>(NSApp.isActive)
++              << " firstResponder=" << Issue779FirstResponder(view.window)
++              << " currentEvent=" << Issue779CurrentEventType();
++  }
+   popup_menu_helper_.reset();
+   [view.window setIgnoresMouseEvents:YES];
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    Issue779TraceShellWindowState(@"select_menu", @"menu_closed_after_reset",
++                                  web_contents_, view);
++    LOG(INFO) << "[issue-779-trace] WebContentsViewMac::OnMenuClosed.after"
++              << " path=select"
++              << " webcontents=" << static_cast<void*>(web_contents_)
++              << " popup_menu_helper_after_reset="
++              << static_cast<void*>(popup_menu_helper_.get())
++              << " helper_alive_after_reset="
++              << static_cast<bool>(popup_menu_helper_);
++  }
+ }
+ 
+ gfx::Rect WebContentsViewMac::GetViewBounds() const {
+@@ -459,8 +690,9 @@ void WebContentsViewMac::CreateView(gfx::NativeView context) {
+                                                               this);
+ 
+   drag_dest_ = [[WebDragDest alloc] initWithWebContentsImpl:web_contents_];
+-  if (delegate_)
++  if (delegate_) {
+     [drag_dest_ setDragDelegate:delegate_->GetDragDestDelegate()];
++  }
+ }
+ 
+ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForWidget(
+@@ -541,8 +773,7 @@ void WebContentsViewMac::RenderViewReady() {}
+ void WebContentsViewMac::RenderViewHostChanged(RenderViewHost* old_host,
+                                                RenderViewHost* new_host) {}
+ 
+-void WebContentsViewMac::SetOverscrollControllerEnabled(bool enabled) {
+-}
++void WebContentsViewMac::SetOverscrollControllerEnabled(bool enabled) {}
+ 
+ // Arrange to call CloseTab() after we're back to the main event loop.
+ // The obvious way to do this would be to post a NonNestable task, but that
+@@ -556,8 +787,9 @@ bool WebContentsViewMac::CloseTabAfterEventTrackingIfNeeded() {
+   deferred_close_weak_ptr_factory_.InvalidateWeakPtrs();
+   auto weak_ptr = deferred_close_weak_ptr_factory_.GetWeakPtr();
+   CFRunLoopPerformBlock(CFRunLoopGetCurrent(), kCFRunLoopDefaultMode, ^{
+-    if (weak_ptr)
++    if (weak_ptr) {
+       weak_ptr->CloseTab();
++    }
+   });
+   return true;
+ }
+@@ -592,10 +824,12 @@ void WebContentsViewMac::OnMouseEvent(std::unique_ptr<ui::Event> event) {
+ }
+ 
+ void WebContentsViewMac::OnBecameFirstResponder(SelectionDirection direction) {
+-  if (!web_contents_)
++  if (!web_contents_) {
+     return;
+-  if (direction == SelectionDirection::kDirect)
++  }
++  if (direction == SelectionDirection::kDirect) {
+     return;
++  }
+ 
+   web_contents_->FocusThroughTabTraversal(direction ==
+                                           SelectionDirection::kReverse);
+@@ -603,8 +837,9 @@ void WebContentsViewMac::OnBecameFirstResponder(SelectionDirection direction) {
+ 
+ void WebContentsViewMac::OnWindowVisibilityChanged(
+     remote_cocoa::mojom::Visibility mojo_visibility) {
+-  if (!web_contents_ || web_contents_->IsBeingDestroyed())
++  if (!web_contents_ || web_contents_->IsBeingDestroyed()) {
+     return;
++  }
+ 
+   // TODO: make content use the mojo type for visibility.
+   Visibility visibility = Visibility::VISIBLE;
+@@ -861,31 +1096,35 @@ void WebContentsViewMac::ViewsHostableSetBounds(
+     int superview_height) {
+   // Update both the in-process and out-of-process NSViews' bounds.
+   in_process_ns_view_bridge_->SetBounds(bounds_in_superview, superview_height);
+-  if (remote_ns_view_)
++  if (remote_ns_view_) {
+     remote_ns_view_->SetBounds(bounds_in_superview, superview_height);
++  }
+ }
+ 
+ void WebContentsViewMac::ViewsHostableSetVisible(bool visible) {
+   // Update both the in-process and out-of-process NSViews' visibility.
+   in_process_ns_view_bridge_->SetVisible(visible);
+-  if (remote_ns_view_)
++  if (remote_ns_view_) {
+     remote_ns_view_->SetVisible(visible);
++  }
+ }
+ 
+ void WebContentsViewMac::ViewsHostableMakeFirstResponder() {
+   // Only make the true NSView become the first responder.
+-  if (remote_ns_view_)
++  if (remote_ns_view_) {
+     remote_ns_view_->MakeFirstResponder();
+-  else
++  } else {
+     in_process_ns_view_bridge_->MakeFirstResponder();
++  }
+ }
+ 
+ void WebContentsViewMac::ViewsHostableSetParentAccessible(
+     gfx::NativeViewAccessible parent_accessibility_element) {
+   views_host_accessibility_element_ = parent_accessibility_element;
+-  for (auto* rwhv_mac : GetChildViews())
++  for (auto* rwhv_mac : GetChildViews()) {
+     rwhv_mac->SetParentAccessibilityElement(
+         views_host_accessibility_element_.Get());
++  }
+ }
+ 
+ gfx::NativeViewAccessible
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 50db87c662..2d1b6232a7 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -72,9 +72,6 @@ TsBrowserMainParts::TabState::TabState() = default;
+ TsBrowserMainParts::TabState::~TabState() = default;
+ 
+ void TsBrowserMainParts::InitializeMessageLoopContext() {
+-#if BUILDFLAG(IS_MAC)
+-  InstallPagePopupAltTabTrace();
+-#endif
+   LOG(INFO) << "[libtermsurf_chromium] Initialized, firing callback";
+   TsNotifyInitialized(this);
+ }
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+index e384020166..9b7d1b6560 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.h
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -11,8 +11,6 @@ namespace content {
+ 
+ class Shell;
+ 
+-void InstallPagePopupAltTabTrace();
+-
+ void ConfigureShellWindowForTermSurf(Shell* shell);
+ 
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index f6cc839d65..e7274e97d7 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -60,87 +60,8 @@ NSRect PrimaryScreenFrame() {
+   return screen.frame;
+ }
+ 
+-std::string WindowSummary(NSWindow* window) {
+-  if (!window)
+-    return "window=null";
+-  return base::SysNSStringToUTF8([NSString
+-      stringWithFormat:
+-          @"window=%p class=%@ number=%ld frame=%@ level=%ld visible=%@ key=%@ "
+-           "main=%@ ignoresMouseEvents=%@",
+-          window, NSStringFromClass(window.class),
+-          static_cast<long>(window.windowNumber), NSStringFromRect(window.frame),
+-          static_cast<long>(window.level), BoolString(window.isVisible),
+-          BoolString(window.isKeyWindow), BoolString(window.isMainWindow),
+-          BoolString(window.ignoresMouseEvents)]);
+-}
+-
+-std::string OrderedWindowsSummary() {
+-  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
+-  NSMutableArray<NSString*>* parts = [NSMutableArray array];
+-  NSUInteger limit = std::min<NSUInteger>(windows.count, 5);
+-  for (NSUInteger index = 0; index < limit; ++index) {
+-    NSWindow* window = windows[index];
+-    [parts addObject:[NSString
+-                         stringWithFormat:@"%lu:%p:%@:%ld:%@:%ld:%@:%@:%@",
+-                                          static_cast<unsigned long>(index),
+-                                          window, NSStringFromClass(window.class),
+-                                          static_cast<long>(window.windowNumber),
+-                                          NSStringFromRect(window.frame),
+-                                          static_cast<long>(window.level),
+-                                          BoolString(window.isVisible),
+-                                          BoolString(window.isKeyWindow),
+-                                          BoolString(window.ignoresMouseEvents)]];
+-  }
+-  return base::SysNSStringToUTF8([NSString
+-      stringWithFormat:@"ordered_windows_count=%lu ordered_windows_top5=%@",
+-                       static_cast<unsigned long>(windows.count),
+-                       [parts componentsJoinedByString:@"|"]]);
+-}
+-
+-void TraceActivationNotification(NSString* event, NSNotification* notification) {
+-  if (!Issue779TraceEnabled())
+-    return;
+-  Issue779TraceAnnounce();
+-  LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
+-            << " boundary=chromium_activation"
+-            << " event=" << base::SysNSStringToUTF8(event)
+-            << " app_is_active=" << BoolString(NSApp.isActive)
+-            << " object=" << (__bridge void*)notification.object
+-            << " key_window_summary=\"" << WindowSummary(NSApp.keyWindow)
+-            << "\" main_window_summary=\"" << WindowSummary(NSApp.mainWindow)
+-            << "\" " << OrderedWindowsSummary();
+-}
+-
+ }  // namespace
+ 
+-void InstallPagePopupAltTabTrace() {
+-  if (!Issue779TraceEnabled())
+-    return;
+-  static bool installed = false;
+-  if (installed)
+-    return;
+-  installed = true;
+-
+-  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+-  NSArray<NSString*>* names = @[
+-    NSApplicationDidResignActiveNotification,
+-    NSApplicationDidBecomeActiveNotification,
+-    NSWindowDidResignKeyNotification,
+-    NSWindowDidBecomeKeyNotification,
+-    NSWindowDidMiniaturizeNotification,
+-    NSWindowDidDeminiaturizeNotification,
+-    NSWindowDidChangeOcclusionStateNotification
+-  ];
+-  for (NSString* name in names) {
+-    [center addObserverForName:name
+-                        object:nil
+-                         queue:nil
+-                    usingBlock:^(NSNotification* notification) {
+-                      TraceActivationNotification(name, notification);
+-                    }];
+-  }
+-}
+-
+ void ConfigureShellWindowForTermSurf(Shell* shell) {
+   if (!shell)
+     return;
+diff --git a/third_party/blink/renderer/core/exported/web_page_popup_impl.cc b/third_party/blink/renderer/core/exported/web_page_popup_impl.cc
+index 72d5df0b8b..66b87f473e 100644
+--- a/third_party/blink/renderer/core/exported/web_page_popup_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_page_popup_impl.cc
+@@ -86,37 +86,38 @@
+ #include "third_party/blink/renderer/platform/widget/input/input_metrics.h"
+ #include "third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h"
+ #include "third_party/blink/renderer/platform/widget/widget_base.h"
++#include "ui/display/screen_info.h"
+ 
+ namespace blink {
+ namespace {
+ 
+-bool PagePopupAltTabTraceEnabled() {
++bool Issue779TraceEnabled() {
+   static const bool enabled =
+       std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+   return enabled;
+ }
+ 
+-void PagePopupAltTabTrace(const char* event, const WebPagePopupImpl* popup) {
+-  if (!PagePopupAltTabTraceEnabled())
+-    return;
+-  LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
+-            << " boundary=pagepopup_lifecycle"
+-            << " event=" << event
+-            << " component=WebPagePopupImpl"
+-            << " popup=" << popup;
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=blink-page-popup";
++  }
+ }
+ 
+ ScrollableArea* ToScrollableArea(Node* node) {
+   DCHECK(node);
+   LayoutBox* scrolling_box = node->GetLayoutBox();
+-  if (auto* element = DynamicTo<Element>(node))
++  if (auto* element = DynamicTo<Element>(node)) {
+     scrolling_box = element->GetLayoutBoxForScrolling();
++  }
+   return scrolling_box ? scrolling_box->GetScrollableArea() : nullptr;
+ }
+ 
+ bool CanScroll(Node* node) {
+-  if (!node)
++  if (!node) {
+     return false;
++  }
+   return ToScrollableArea(node);
+ }
+ 
+@@ -135,8 +136,9 @@ Node* FindFirstScroller(Node* event_target) {
+     }
+     cur_box = cur_box->ContainingBlock();
+   }
+-  if (found && cur_node)
++  if (found && cur_node) {
+     return cur_node;
++  }
+   return nullptr;
+ }
+ 
+@@ -264,8 +266,9 @@ class PagePopupChromeClient final : public EmptyChromeClient {
+     // Destroying/removing the popup's content can be seen as a mutation that
+     // ends up calling ScheduleAnimation(). Since the popup is going away, we
+     // do not wish to actually do anything.
+-    if (popup_->closing_)
++    if (popup_->closing_) {
+       return;
++    }
+ 
+     // When the renderer has a compositor thread we need to follow the
+     // normal code path.
+@@ -398,7 +401,6 @@ WebPagePopupImpl::WebPagePopupImpl(
+           /*is_for_scalable_page=*/true)),
+       handle_(NextPopupHandle()) {
+   DCHECK(popup_client_);
+-  PagePopupAltTabTrace("constructor", this);
+   popup_widget_host_.set_disconnect_handler(blink::BindOnce(
+       &WebPagePopupImpl::WidgetHostDisconnected, blink::Unretained(this)));
+   if (auto* main_frame_widget = opener_web_view->MainFrameViewWidget()) {
+@@ -459,8 +461,9 @@ WebPagePopupImpl::WebPagePopupImpl(
+   DCHECK(frame->DomWindow());
+   DCHECK_EQ(popup_client_->OwnerElement().GetDocument().ExistingAXObjectCache(),
+             frame->GetDocument()->ExistingAXObjectCache());
+-  if (AXObjectCache* cache = frame->GetDocument()->ExistingAXObjectCache())
++  if (AXObjectCache* cache = frame->GetDocument()->ExistingAXObjectCache()) {
+     cache->ChildrenChanged(&popup_client_->OwnerElement());
++  }
+ 
+   page_->DidInitializeCompositing(*widget_base_->AnimationHost());
+ 
+@@ -482,20 +485,45 @@ WebPagePopupImpl::WebPagePopupImpl(
+ }
+ 
+ WebPagePopupImpl::~WebPagePopupImpl() {
+-  PagePopupAltTabTrace("destructor", this);
+   // Ensure DestroyPage was called.
+   DCHECK(!page_);
+ }
+ 
+ void WebPagePopupImpl::DidShowPopup() {
+-  if (!widget_base_)
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::DidShowPopup"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " window_rect=" << WindowRectInScreen().ToString()
++              << " anchor_rect=" << GetAnchorRectInScreen().ToString()
++              << " view_rect=" << ViewRect().ToString();
++  }
++  if (!widget_base_) {
+     return;
++  }
+   widget_base_->AckPendingWindowRect();
+ }
+ 
+ void WebPagePopupImpl::DidSetBounds() {
+-  if (!widget_base_)
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::DidSetBounds"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " window_rect=" << WindowRectInScreen().ToString()
++              << " anchor_rect=" << GetAnchorRectInScreen().ToString()
++              << " view_rect=" << ViewRect().ToString();
++  }
++  if (!widget_base_) {
+     return;
++  }
+   widget_base_->AckPendingWindowRect();
+ }
+ 
+@@ -628,24 +656,28 @@ void WebPagePopupImpl::WarmUpCompositor() {
+ }
+ 
+ void WebPagePopupImpl::PostMessageToPopup(const String& message) {
+-  if (!page_)
++  if (!page_) {
+     return;
++  }
+   ScriptForbiddenScope::AllowUserAgentScript allow_script;
+   MainFrame().DomWindow()->DispatchEvent(*MessageEvent::Create(message));
+ }
+ 
+ void WebPagePopupImpl::Update() {
+-  if (!page_ && !popup_client_)
++  if (!page_ && !popup_client_) {
+     return;
++  }
+ 
+   DOMRect* dom_rect = popup_client_->OwnerElement().GetBoundingClientRect();
+   bool forced_update = (*dom_rect != *popup_owner_client_rect_);
+-  if (forced_update)
++  if (forced_update) {
+     popup_owner_client_rect_ = dom_rect;
++  }
+ 
+   popup_client_->Update(forced_update);
+-  if (forced_update)
++  if (forced_update) {
+     SetWindowRect(WindowRectInScreen());
++  }
+ }
+ 
+ void WebPagePopupImpl::DestroyPage() {
+@@ -655,8 +687,9 @@ void WebPagePopupImpl::DestroyPage() {
+ }
+ 
+ AXObject* WebPagePopupImpl::RootAXObject(Element* popup_owner) {
+-  if (!page_)
++  if (!page_) {
+     return nullptr;
++  }
+   // If |page_| is non-null, the main frame must have a Document.
+   Document* document = MainFrame().GetDocument();
+   AXObjectCacheBase* cache =
+@@ -668,7 +701,33 @@ AXObject* WebPagePopupImpl::RootAXObject(Element* popup_owner) {
+ }
+ 
+ void WebPagePopupImpl::SetWindowRect(const gfx::Rect& rect_in_screen) {
+-  PagePopupAltTabTrace("set_window_rect", this);
++  gfx::Rect anchor_rect_in_screen = GetAnchorRectInScreen();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    const display::ScreenInfo& screen_info = GetScreenInfo();
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::SetWindowRect.before"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " rect_in_screen=" << rect_in_screen.ToString()
++              << " rect_in_screen_space=screen-top-left"
++              << " owner_window_rect_in_screen="
++              << OwnerWindowRectInScreen().ToString()
++              << " owner_window_rect_space=screen-top-left"
++              << " anchor_rect_in_screen=" << anchor_rect_in_screen.ToString()
++              << " anchor_rect_space=screen-top-left"
++              << " window_rect_before=" << WindowRectInScreen().ToString()
++              << " view_rect=" << ViewRect().ToString()
++              << " viewport_visible_rect=" << ViewportVisibleRect().ToString()
++              << " screen_rect=" << screen_info.rect.ToString()
++              << " screen_available_rect="
++              << screen_info.available_rect.ToString()
++              << " device_scale_factor=" << screen_info.device_scale_factor
++              << " should_defer_setting_window_rect="
++              << should_defer_setting_window_rect_;
++  }
+   if (ShouldCheckPopupPositionForTelemetry()) {
+     gfx::Rect owner_window_rect_in_screen = OwnerWindowRectInScreen();
+     Document& document = popup_client_->OwnerElement().GetDocument();
+@@ -685,12 +744,38 @@ void WebPagePopupImpl::SetWindowRect(const gfx::Rect& rect_in_screen) {
+   }
+ 
+   gfx::Rect window_rect = rect_in_screen;
++  bool page_popup_y_fix_applied = false;
++  const bool anchored_at_bottom =
++      rect_in_screen.x() == anchor_rect_in_screen.x() &&
++      rect_in_screen.y() == anchor_rect_in_screen.bottom();
++  const char* page_popup_y_fix_reason = "not-anchored-at-bottom";
++  if (anchor_rect_in_screen.IsEmpty()) {
++    page_popup_y_fix_reason = "empty-anchor";
++  } else if (anchored_at_bottom) {
++    window_rect.set_y(anchor_rect_in_screen.y());
++    page_popup_y_fix_applied = true;
++    page_popup_y_fix_reason = "anchored-at-bottom";
++  }
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] page_popup_y_fix"
++              << " applied=" << page_popup_y_fix_applied
++              << " reason=" << page_popup_y_fix_reason
++              << " rect_in_screen=" << rect_in_screen.ToString()
++              << " anchor_rect=" << anchor_rect_in_screen.ToString()
++              << " corrected_rect=" << window_rect.ToString()
++              << " delta_original_y="
++              << (rect_in_screen.y() - anchor_rect_in_screen.y())
++              << " delta_corrected_y="
++              << (window_rect.y() - anchor_rect_in_screen.y());
++  }
+ 
+   // Popups aren't emulated, but the WidgetScreenRect and WindowScreenRect
+   // given to them are. When they set the WindowScreenRect it is based on those
+   // emulated values, so we reverse the emulation.
+-  if (opener_emulator_scale_)
++  if (opener_emulator_scale_) {
+     EmulatedToScreenRect(window_rect);
++  }
+ 
+   if (!should_defer_setting_window_rect_) {
+     widget_base_->SetPendingWindowRect(window_rect);
+@@ -700,6 +785,21 @@ void WebPagePopupImpl::SetWindowRect(const gfx::Rect& rect_in_screen) {
+   } else {
+     initial_rect_ = window_rect;
+   }
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::SetWindowRect.after"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " rect_in_screen=" << rect_in_screen.ToString()
++              << " window_rect_sent=" << window_rect.ToString()
++              << " window_rect_after=" << WindowRectInScreen().ToString()
++              << " initial_rect=" << initial_rect_.ToString()
++              << " should_defer_setting_window_rect="
++              << should_defer_setting_window_rect_;
++  }
+ }
+ 
+ void WebPagePopupImpl::SetRootLayer(scoped_refptr<cc::Layer> layer) {
+@@ -709,16 +809,18 @@ void WebPagePopupImpl::SetRootLayer(scoped_refptr<cc::Layer> layer) {
+ 
+ void WebPagePopupImpl::SetSuppressFrameRequestsWorkaroundFor704763Only(
+     bool suppress_frame_requests) {
+-  if (!page_)
++  if (!page_) {
+     return;
++  }
+   page_->Animator().SetSuppressFrameRequestsWorkaroundFor704763Only(
+       suppress_frame_requests);
+ }
+ 
+ void WebPagePopupImpl::UpdateLifecycle(WebLifecycleUpdate requested_update,
+                                        DocumentUpdateReason reason) {
+-  if (!page_)
++  if (!page_) {
+     return;
++  }
+   // Popups always update their lifecycle in the context of the containing
+   // document's lifecycle, so explicitly override the reason.
+   page_->UpdateLifecycle(MainFrame(), requested_update,
+@@ -743,8 +845,9 @@ void WebPagePopupImpl::Resize(const gfx::Size& new_size_in_viewport) {
+ 
+ WebInputEventResult WebPagePopupImpl::HandleKeyEvent(
+     const WebKeyboardEvent& event) {
+-  if (closing_)
++  if (closing_) {
+     return WebInputEventResult::kNotHandled;
++  }
+ 
+   if (suppress_next_keypress_event_) {
+     suppress_next_keypress_event_ = false;
+@@ -772,14 +875,16 @@ cc::LayerTreeHost* WebPagePopupImpl::LayerTreeHostForTesting() {
+ 
+ void WebPagePopupImpl::OnCommitRequested() {
+   if (page_ && page_->MainFrame()) {
+-    if (auto* view = MainFrame().View())
++    if (auto* view = MainFrame().View()) {
+       view->OnCommitRequested();
++    }
+   }
+ }
+ 
+ void WebPagePopupImpl::BeginMainFrame(const viz::BeginFrameArgs& args) {
+-  if (!page_)
++  if (!page_) {
+     return;
++  }
+   // FIXME: This should use lastFrameTimeMonotonic but doing so
+   // breaks tests.
+   page_->Animate(base::TimeTicks::Now());
+@@ -794,8 +899,7 @@ void WebPagePopupImpl::ObserveGestureEventAndResult(
+     const WebGestureEvent& gesture_event,
+     const gfx::Vector2dF& unused_delta,
+     const cc::OverscrollBehavior& overscroll_behavior,
+-    bool event_processed) {
+-}
++    bool event_processed) {}
+ 
+ WebInputEventResult WebPagePopupImpl::HandleCharEvent(
+     const WebKeyboardEvent& event) {
+@@ -808,8 +912,9 @@ WebInputEventResult WebPagePopupImpl::HandleCharEvent(
+ 
+ WebInputEventResult WebPagePopupImpl::HandleGestureEvent(
+     const WebGestureEvent& event) {
+-  if (closing_)
++  if (closing_) {
+     return WebInputEventResult::kNotHandled;
++  }
+   if (event.GetType() == WebInputEvent::Type::kGestureTap ||
+       event.GetType() == WebInputEvent::Type::kGestureTapDown) {
+     if (!IsViewportPointInWindow(event.PositionInWidget().x(),
+@@ -912,16 +1017,19 @@ LocalFrame& WebPagePopupImpl::MainFrame() const {
+ }
+ 
+ Element* WebPagePopupImpl::FocusedElement() const {
+-  if (!page_)
++  if (!page_) {
+     return nullptr;
++  }
+ 
+   LocalFrame* frame = page_->GetFocusController().FocusedFrame();
+-  if (!frame)
++  if (!frame) {
+     return nullptr;
++  }
+ 
+   Document* document = frame->GetDocument();
+-  if (!document)
++  if (!document) {
+     return nullptr;
++  }
+ 
+   return document->FocusedElement();
+ }
+@@ -942,12 +1050,14 @@ bool WebPagePopupImpl::ShouldCheckPopupPositionForTelemetry() const {
+ void WebPagePopupImpl::CheckScreenPointInOwnerWindowAndCount(
+     const gfx::PointF& point_in_screen,
+     WebFeature feature) const {
+-  if (!ShouldCheckPopupPositionForTelemetry())
++  if (!ShouldCheckPopupPositionForTelemetry()) {
+     return;
++  }
+ 
+   gfx::Rect owner_window_rect = OwnerWindowRectInScreen();
+-  if (!owner_window_rect.Contains(point_in_screen.x(), point_in_screen.y()))
++  if (!owner_window_rect.Contains(point_in_screen.x(), point_in_screen.y())) {
+     UseCounter::Count(popup_client_->OwnerElement().GetDocument(), feature);
++  }
+ }
+ 
+ gfx::Rect WebPagePopupImpl::OwnerWindowRectInScreen() const {
+@@ -966,22 +1076,25 @@ gfx::Rect WebPagePopupImpl::GetAnchorRectInScreen() const {
+ }
+ 
+ WebInputEventResult WebPagePopupImpl::DispatchBufferedTouchEvents() {
+-  if (closing_)
++  if (closing_) {
+     return WebInputEventResult::kNotHandled;
++  }
+   return MainFrame().GetEventHandler().DispatchBufferedTouchEvents();
+ }
+ 
+ WebInputEventResult WebPagePopupImpl::HandleInputEvent(
+     const WebCoalescedInputEvent& event) {
+-  if (closing_)
++  if (closing_) {
+     return WebInputEventResult::kNotHandled;
++  }
+   DCHECK(!WebInputEvent::IsTouchEventType(event.Event().GetType()));
+   return WidgetEventHandler::HandleInputEvent(event, &MainFrame());
+ }
+ 
+ void WebPagePopupImpl::FocusChanged(mojom::blink::FocusState focus_state) {
+-  if (!page_)
++  if (!page_) {
+     return;
++  }
+   page_->GetFocusController().SetActive(
+       focus_state == mojom::blink::FocusState::kFocused ||
+       focus_state == mojom::blink::FocusState::kNotFocusedAndActive);
+@@ -1018,11 +1131,13 @@ gfx::Rect WebPagePopupImpl::ViewportVisibleRect() {
+ }
+ 
+ KURL WebPagePopupImpl::GetURLForDebugTrace() {
+-  if (!page_)
++  if (!page_) {
+     return {};
++  }
+   WebFrame* main_frame = opener_web_view_->MainFrame();
+-  if (main_frame->IsWebLocalFrame())
++  if (main_frame->IsWebLocalFrame()) {
+     return main_frame->ToWebLocalFrame()->GetDocument().Url();
++  }
+   return {};
+ }
+ 
+@@ -1032,7 +1147,27 @@ void WebPagePopupImpl::WidgetHostDisconnected() {
+ }
+ 
+ void WebPagePopupImpl::Close() {
+-  PagePopupAltTabTrace("close", this);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=entered"
++              << " reason=web_page_popup_close"
++              << " popup=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " has_page=" << static_cast<bool>(page_)
++              << " closing=" << closing_;
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::Close"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " has_page=" << static_cast<bool>(page_)
++              << " closing=" << closing_;
++  }
+   // If the popup is closed from the renderer via Cancel(), then ClosePopup()
+   // has already run on another stack, and destroyed |page_|. If the popup is
+   // closed from the browser via IPC to RenderWidget, then we come here first
+@@ -1056,7 +1191,27 @@ void WebPagePopupImpl::Close() {
+ }
+ 
+ void WebPagePopupImpl::ClosePopup() {
+-  PagePopupAltTabTrace("close_popup", this);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=entered"
++              << " reason=web_page_popup_close_popup_before"
++              << " popup=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " has_page=" << static_cast<bool>(page_)
++              << " closing=" << closing_;
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::ClosePopup.before"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " has_page=" << static_cast<bool>(page_)
++              << " closing=" << closing_;
++  }
+   // There's always a |page_| when we get here because if we Close() this object
+   // due to ClosePopupWidgetSoon(), it will see the |page_| destroyed and not
+   // run this method again. And the renderer does not close the same popup more
+@@ -1103,6 +1258,27 @@ void WebPagePopupImpl::ClosePopup() {
+   // lifetime of this object since it owns a reference, but it should only be
+   // to call HasSamePopupClient().
+   opener_web_view_->CleanupPagePopup();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=closed"
++              << " reason=web_page_popup_close_popup_after"
++              << " popup=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " has_page=" << static_cast<bool>(page_)
++              << " closing=" << closing_;
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::ClosePopup.after"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " has_page=" << static_cast<bool>(page_)
++              << " closing=" << closing_;
++  }
+ }
+ 
+ LocalDOMWindow* WebPagePopupImpl::Window() {
+@@ -1122,9 +1298,27 @@ WebPagePopup::Handle WebPagePopupImpl::GetHandle() const {
+ }
+ 
+ void WebPagePopupImpl::Cancel() {
+-  PagePopupAltTabTrace("cancel", this);
+-  if (popup_client_)
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=cancelled"
++              << " reason=web_page_popup_cancel"
++              << " popup=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_);
++    LOG(INFO) << "[issue-779-trace] WebPagePopupImpl::Cancel"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " opener_web_view=" << static_cast<void*>(opener_web_view_)
++              << " popup_client=" << static_cast<void*>(popup_client_)
++              << " handle=" << GetHandle()
++              << " has_popup_client=" << static_cast<bool>(popup_client_);
++  }
++  if (popup_client_) {
+     popup_client_->CancelPopup();
++  }
+ }
+ 
+ gfx::Rect WebPagePopupImpl::WindowRectInScreen() const {
+@@ -1141,8 +1335,9 @@ void WebPagePopupImpl::InjectScrollbarGestureScroll(
+ }
+ 
+ void WebPagePopupImpl::ScreenRectToEmulated(gfx::Rect& screen_rect) {
+-  if (!opener_emulator_scale_)
++  if (!opener_emulator_scale_) {
+     return;
++  }
+   screen_rect.set_x(
+       opener_widget_screen_origin_.x() +
+       (screen_rect.x() - opener_original_widget_screen_origin_.x()) /
+@@ -1154,8 +1349,9 @@ void WebPagePopupImpl::ScreenRectToEmulated(gfx::Rect& screen_rect) {
+ }
+ 
+ void WebPagePopupImpl::EmulatedToScreenRect(gfx::Rect& screen_rect) {
+-  if (!opener_emulator_scale_)
++  if (!opener_emulator_scale_) {
+     return;
++  }
+   screen_rect.set_x(opener_original_widget_screen_origin_.x() +
+                     (screen_rect.x() - opener_widget_screen_origin_.x()) *
+                         opener_emulator_scale_);
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+index e43d165934..c699ab6558 100644
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -249,29 +249,6 @@ namespace blink {
+ 
+ using mojom::blink::EffectiveConnectionType;
+ 
+-namespace {
+-
+-bool PagePopupAltTabTraceEnabled() {
+-  static const bool enabled =
+-      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+-  return enabled;
+-}
+-
+-void PagePopupAltTabTrace(const char* event,
+-                          const WebViewImpl* web_view,
+-                          const WebPagePopupImpl* popup) {
+-  if (!PagePopupAltTabTraceEnabled())
+-    return;
+-  LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
+-            << " boundary=pagepopup_lifecycle"
+-            << " event=" << event
+-            << " component=WebViewImpl"
+-            << " webview=" << web_view
+-            << " page_popup=" << popup;
+-}
+-
+-}  // namespace
+-
+ // Historically, these values came from Webkit in
+ // WebKitLegacy/mac/WebView/WebView.mm (named MinimumZoomMultiplier and
+ // MaximumZoomMultiplier there).
+@@ -286,6 +263,20 @@ HashSet<WebViewImpl*>& WebViewImpl::AllInstances() {
+ 
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=blink-web-view";
++  }
++}
++
+ class EmptyEventListener final : public NativeEventListener {
+  public:
+   void Invoke(ExecutionContext* execution_context, Event*) override {}
+@@ -1084,9 +1075,36 @@ WebInputEventResult WebViewImpl::SendContextMenuEvent() {
+ WebPagePopupImpl* WebViewImpl::OpenPagePopup(PagePopupClient* client) {
+   DCHECK(client);
+ 
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=blink"
++              << " outcome=entered"
++              << " reason=web_view_open_page_popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " client=" << static_cast<void*>(client)
++              << " existing_page_popup="
++              << static_cast<void*>(page_popup_.get());
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::OpenPagePopup.before"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " client=" << static_cast<void*>(client)
++              << " existing_page_popup="
++              << static_cast<void*>(page_popup_.get()) << " owner_element="
++              << static_cast<void*>(&client->OwnerElement());
++  }
++
+   // This guarantees there is never more than 1 PagePopup active at a time.
+-  PagePopupAltTabTrace("open_before_cancel_existing", this, page_popup_.get());
+   CancelPagePopup();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::OpenPagePopup.after_cancel"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " client=" << static_cast<void*>(client)
++              << " page_popup=" << static_cast<void*>(page_popup_.get());
++  }
+   DCHECK(!page_popup_);
+ 
+   LocalFrame* opener_frame = client->OwnerElement().GetDocument().GetFrame();
+@@ -1121,21 +1139,59 @@ WebPagePopupImpl* WebViewImpl::OpenPagePopup(PagePopupClient* client) {
+       std::move(popup_widget_host), std::move(widget_host),
+       std::move(widget_receiver), this, agent_group_scheduler,
+       opener_widget->GetOriginalScreenInfos(), client);
+-  PagePopupAltTabTrace("open_after_create", this, page_popup_.get());
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::OpenPagePopup.after_assign"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " client=" << static_cast<void*>(client)
++              << " opener_frame=" << static_cast<void*>(opener_frame)
++              << " opener_widget=" << static_cast<void*>(opener_widget)
++              << " page_popup=" << static_cast<void*>(page_popup_.get());
++  }
+   EnablePopupMouseWheelEventListener(web_opener_frame->LocalRoot());
+   return page_popup_.get();
+ }
+ 
+ void WebViewImpl::CancelPagePopup() {
+-  PagePopupAltTabTrace("cancel_page_popup", this, page_popup_.get());
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=entered"
++              << " reason=web_view_cancel_page_popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " page_popup=" << static_cast<void*>(page_popup_.get());
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::CancelPagePopup"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " page_popup=" << static_cast<void*>(page_popup_.get());
++  }
+   if (page_popup_)
+     page_popup_->Cancel();
+ }
+ 
+ void WebViewImpl::ClosePagePopup(PagePopup* popup) {
+-  PagePopupAltTabTrace("close_page_popup", this, page_popup_.get());
+   DCHECK(popup);
+   auto* popup_impl = To<WebPagePopupImpl>(popup);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=entered"
++              << " reason=web_view_close_page_popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " popup=" << static_cast<void*>(popup)
++              << " page_popup=" << static_cast<void*>(page_popup_.get());
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::ClosePagePopup"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " popup=" << static_cast<void*>(popup)
++              << " popup_impl=" << static_cast<void*>(popup_impl)
++              << " page_popup=" << static_cast<void*>(page_popup_.get());
++  }
+   DCHECK_EQ(page_popup_.get(), popup_impl);
+   if (page_popup_.get() != popup_impl)
+     return;
+@@ -1143,10 +1199,36 @@ void WebViewImpl::ClosePagePopup(PagePopup* popup) {
+ }
+ 
+ void WebViewImpl::CleanupPagePopup() {
+-  PagePopupAltTabTrace("cleanup_page_popup_before", this, page_popup_.get());
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=entered"
++              << " reason=web_view_cleanup_page_popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " page_popup_before=" << static_cast<void*>(page_popup_.get());
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::CleanupPagePopup"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " page_popup_before=" << static_cast<void*>(page_popup_.get());
++  }
+   page_popup_ = nullptr;
+   DisablePopupMouseWheelEventListener();
+-  PagePopupAltTabTrace("cleanup_page_popup_after", this, page_popup_.get());
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] native_popup_attempt"
++              << " control=date"
++              << " boundary=cleanup"
++              << " outcome=closed"
++              << " reason=web_view_cleanup_page_popup_after"
++              << " web_view=" << static_cast<void*>(this)
++              << " page_popup_after=" << static_cast<void*>(page_popup_.get());
++    LOG(INFO) << "[issue-779-trace] WebViewImpl::CleanupPagePopup.after"
++              << " path=date-page-popup"
++              << " web_view=" << static_cast<void*>(this)
++              << " page_popup_after=" << static_cast<void*>(page_popup_.get());
++  }
+ }
+ 
+ void WebViewImpl::UpdatePagePopup() {
+diff --git a/third_party/blink/renderer/core/html/forms/date_time_chooser_impl.cc b/third_party/blink/renderer/core/html/forms/date_time_chooser_impl.cc
+index e36aa792fd..077986280b 100644
+--- a/third_party/blink/renderer/core/html/forms/date_time_chooser_impl.cc
++++ b/third_party/blink/renderer/core/html/forms/date_time_chooser_impl.cc
+@@ -40,6 +40,7 @@
+ #include "third_party/blink/renderer/core/dom/element.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/local_frame_view.h"
++#include "third_party/blink/renderer/core/geometry/dom_rect.h"
+ #include "third_party/blink/renderer/core/html/forms/chooser_resource_loader.h"
+ #include "third_party/blink/renderer/core/html/forms/date_time_chooser_client.h"
+ #include "third_party/blink/renderer/core/input_type_names.h"
+@@ -51,26 +52,25 @@
+ #include "third_party/blink/renderer/platform/text/date_components.h"
+ #include "third_party/blink/renderer/platform/text/platform_locale.h"
+ #include "ui/base/ui_base_features.h"
++#include "ui/display/screen_info.h"
+ #include "ui/strings/grit/ax_strings.h"
+ 
+ namespace blink {
++
+ namespace {
+ 
+-bool PagePopupAltTabTraceEnabled() {
++bool Issue779TraceEnabled() {
+   static const bool enabled =
+       std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+   return enabled;
+ }
+ 
+-void PagePopupAltTabTrace(const char* event,
+-                          const DateTimeChooserImpl* chooser) {
+-  if (!PagePopupAltTabTraceEnabled())
+-    return;
+-  LOG(INFO) << "[issue-779-trace] pagepopup_alt_tab"
+-            << " boundary=pagepopup_lifecycle"
+-            << " event=" << event
+-            << " component=DateTimeChooserImpl"
+-            << " chooser=" << chooser;
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=blink-date-time";
++  }
+ }
+ 
+ }  // namespace
+@@ -87,10 +87,53 @@ DateTimeChooserImpl::DateTimeChooserImpl(
+   DCHECK(RuntimeEnabledFeatures::InputMultipleFieldsUIEnabled());
+   DCHECK(frame_);
+   DCHECK(client_);
+-  PagePopupAltTabTrace("before_open", this);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    Element& owner = client_->OwnerElement();
++    LocalFrameView* frame_view = frame_->View();
++    DOMRect* client_rect = owner.GetBoundingClientRect();
++    gfx::Rect visible_bounds = owner.VisibleBoundsInLocalRoot();
++    gfx::Rect screen_anchor =
++        frame_view ? frame_view->GetChromeClient()->LocalRootToScreenDIPs(
++                         visible_bounds, frame_view)
++                   : gfx::Rect();
++    gfx::Rect frame_rect = frame_view ? frame_view->FrameRect() : gfx::Rect();
++    gfx::Rect frame_screen_rect =
++        frame_view ? frame_view->FrameToScreen(frame_rect) : gfx::Rect();
++    const display::ScreenInfo& screen_info =
++        frame_->GetChromeClient().GetScreenInfo(*frame_);
++    LOG(INFO) << "[issue-779-trace] DateTimeChooserImpl::ctor.before_open"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " frame=" << static_cast<void*>(frame_)
++              << " client=" << static_cast<void*>(client_)
++              << " owner_element=" << static_cast<void*>(&owner)
++              << " owner_bounding_client_rect=(" << client_rect->x() << ","
++              << client_rect->y() << " " << client_rect->width() << "x"
++              << client_rect->height() << ")"
++              << " owner_bounding_client_rect_space=viewport-css"
++              << " owner_visible_bounds_local_root="
++              << visible_bounds.ToString()
++              << " owner_visible_bounds_space=local-root"
++              << " owner_anchor_screen_dip=" << screen_anchor.ToString()
++              << " owner_anchor_screen_dip_space=screen-top-left"
++              << " frame_rect=" << frame_rect.ToString()
++              << " frame_screen_rect=" << frame_screen_rect.ToString()
++              << " screen_rect=" << screen_info.rect.ToString()
++              << " screen_available_rect="
++              << screen_info.available_rect.ToString()
++              << " device_scale_factor=" << screen_info.device_scale_factor;
++  }
+   popup_ = frame_->View()->GetChromeClient()->OpenPagePopup(this);
+-  PagePopupAltTabTrace(popup_ ? "after_open_with_popup" : "after_open_no_popup",
+-                       this);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] DateTimeChooserImpl::ctor.after_open"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " frame=" << static_cast<void*>(frame_)
++              << " client=" << static_cast<void*>(client_)
++              << " popup=" << static_cast<void*>(popup_);
++  }
+   parameters_ = nullptr;
+ }
+ 
+@@ -103,11 +146,19 @@ void DateTimeChooserImpl::Trace(Visitor* visitor) const {
+ }
+ 
+ void DateTimeChooserImpl::EndChooser() {
+-  PagePopupAltTabTrace("end_chooser", this);
+-  if (!popup_)
++  if (!popup_) {
+     return;
+-  if (auto* frame_view = frame_->View())
++  }
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] DateTimeChooserImpl::EndChooser"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " popup=" << static_cast<void*>(popup_);
++  }
++  if (auto* frame_view = frame_->View()) {
+     frame_view->GetChromeClient()->ClosePagePopup(popup_);
++  }
+ }
+ 
+ AXObject* DateTimeChooserImpl::RootAXObject(Element* popup_owner) {
+@@ -298,8 +349,9 @@ Locale& DateTimeChooserImpl::GetLocale() {
+ void DateTimeChooserImpl::SetValueAndClosePopup(int num_value,
+                                                 const String& string_value,
+                                                 bool is_keyboard_event) {
+-  if (num_value >= 0)
++  if (num_value >= 0) {
+     SetValue(string_value);
++  }
+   EndChooser();
+ }
+ 
+@@ -308,13 +360,25 @@ void DateTimeChooserImpl::SetValue(const String& value) {
+ }
+ 
+ void DateTimeChooserImpl::CancelPopup() {
+-  PagePopupAltTabTrace("cancel_popup", this);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] DateTimeChooserImpl::CancelPopup"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " popup=" << static_cast<void*>(popup_);
++  }
+   EndChooser();
+ }
+ 
+ void DateTimeChooserImpl::DidClosePopup() {
+-  PagePopupAltTabTrace("did_close_popup", this);
+   DCHECK(client_);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] DateTimeChooserImpl::DidClosePopup"
++              << " path=date-page-popup"
++              << " this=" << static_cast<void*>(this)
++              << " popup_before_clear=" << static_cast<void*>(popup_);
++  }
+   popup_ = nullptr;
+   client_->DidEndChooser();
+ }
+-- 
+2.54.0
+

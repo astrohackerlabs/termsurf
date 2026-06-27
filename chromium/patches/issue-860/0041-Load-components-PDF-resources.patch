@@ -1,0 +1,75 @@
+From de271721d8a7512f25ed16924548ec1bbab05404 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 15:05:47 -0500
+Subject: [PATCH 41/89] Load components PDF resources
+
+The iframe recipe hid from sight,
+In components pak tucked tight.
+Now wrappers bake with proper dough,
+And next we watch the child frame grow.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  1 +
+ .../extensions/ts_pdf_resource_bundle.cc      | 28 +++++++++++++++++++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 77298fa3cc..cd971fcc7d 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -86,6 +86,7 @@ shared_library("libtermsurf_chromium") {
+     "//components/pdf/browser:interceptors",
+     "//components/pref_registry",
+     "//components/prefs",
++    "//components/resources:components_resources",
+     "//components/user_prefs",
+     "//components/value_store",
+     "//components/zoom",
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index cd5ec5b2d3..ce8a244591 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -15,6 +15,7 @@
+ #include "base/strings/string_util.h"
+ #include "chrome/grit/common_resources.h"
+ #include "chrome/grit/pdf_resources.h"
++#include "components/grit/components_resources.h"
+ #include "extensions/grit/extensions_renderer_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+@@ -66,6 +67,33 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+               << " html_signature=" << HasHtmlSignature(index_html);
+   }
+ 
++  base::FilePath components_pak_path =
++      assets_path.AppendASCII("gen")
++          .AppendASCII("components")
++          .AppendASCII("components_resources.pak");
++  const bool components_found = base::PathExists(components_pak_path);
++  if (components_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        components_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::string pdf_embedder_html;
++  if (components_found) {
++    pdf_embedder_html =
++        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++            IDR_PDF_EMBEDDER_HTML);
++  }
++  LOG(INFO) << "[issue-792-exp20] components-resource-pak path="
++            << components_pak_path.AsUTF8Unsafe()
++            << " found=" << components_found
++            << " loaded=" << !pdf_embedder_html.empty()
++            << " pdf_embedder_bytes=" << pdf_embedder_html.size()
++            << " has_iframe="
++            << (pdf_embedder_html.find("<iframe") != std::string::npos ? 1 : 0)
++            << " has_about_blank="
++            << (pdf_embedder_html.find("about:blank") != std::string::npos ? 1
++                                                                           : 0);
++
+   base::FilePath common_pak_path =
+       assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
+           "common_resources.pak");
+-- 
+2.54.0
+

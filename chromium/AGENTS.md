@@ -25,16 +25,16 @@ Do not move or rename it.
 
 ## Current State
 
-- Current fully archived build baseline: `148.0.7778.271-issue-857`
-- Latest documented Chromium branch: `148.0.7778.271-issue-857`
+- Current fully archived build baseline: `148.0.7778.271-issue-860`
+- Latest documented Chromium branch: `148.0.7778.271-issue-860`
 - Base version: `148.0.7778.271`
 - Version policy: track the Chromium version used by the latest stable Electron
   release unless an issue explicitly records a temporary exception.
 - Build output: `chromium/src/out/Default/`
 - Main build target: `libtermsurf_chromium`
 
-`chromium/patches/issue-857/` is the current full-stack patch archive that
-can reconstruct a buildable TermSurf Chromium checkout from the vanilla
+`chromium/patches/issue-860/` is the current full-stack patch archive that can
+reconstruct a buildable TermSurf Chromium checkout from the vanilla
 `148.0.7778.271` tag. Later issue patch directories may be incremental, not
 full-stack archives. Do not document an incremental patch directory as a fresh
 setup path unless it has been regenerated and verified as cumulative from the
@@ -81,8 +81,8 @@ export PATH="/Users/astrohacker/dev/termsurf-com/chromium/depot_tools:$PATH"
 gclient config --name=src https://chromium.googlesource.com/chromium/src.git
 caffeinate gclient sync --revision src@148.0.7778.271 --no-history
 cd src
-git checkout -b 148.0.7778.271-issue-857 148.0.7778.271
-git am ../../chromium/patches/issue-857/*.patch
+git checkout -b 148.0.7778.271-issue-860 148.0.7778.271
+git am ../../chromium/patches/issue-860/*.patch
 gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 autoninja -C out/Default libtermsurf_chromium
 ```

@@ -1,0 +1,475 @@
+From 0cb84ba2b1cf8770852c429a18c486970300160b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 20:49:23 -0500
+Subject: [PATCH 69/89] Add HTTP auth callback
+
+A realm asked, "Who goes there?"
+We answered through terminal air.
+No headers in sight,
+No callback too tight,
+Just credentials handled with care.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../libtermsurf_chromium.cc                   |  65 +++++++++
+ .../libtermsurf_chromium.h                    |  20 +++
+ .../libtermsurf_chromium/ts_browser_client.cc |  29 ++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  13 ++
+ .../ts_http_auth_delegate.cc                  | 131 ++++++++++++++++++
+ .../ts_http_auth_delegate.h                   |  77 ++++++++++
+ 7 files changed, 337 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_http_auth_delegate.cc
+ create mode 100644 content/libtermsurf_chromium/ts_http_auth_delegate.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index b6ddd761b2..0b0053d1ab 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -53,6 +53,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_renderer_client.h",
+     "ts_download_support.cc",
+     "ts_download_support.h",
++    "ts_http_auth_delegate.cc",
++    "ts_http_auth_delegate.h",
+     "ts_javascript_dialog_manager.cc",
+     "ts_javascript_dialog_manager.h",
+     "ts_main_delegate.cc",
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index bb3b710848..e634db7c16 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -7,6 +7,7 @@
+ #include "base/functional/bind.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_http_auth_delegate.h"
+ #include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
+ #include "content/libtermsurf_chromium/ts_main_delegate.h"
+ #include "content/public/app/content_main.h"
+@@ -77,6 +78,20 @@ void (*g_on_console_message)(ts_web_contents_t,
+                              void*) = nullptr;
+ void* g_on_console_message_data = nullptr;
+ 
++// HTTP auth callback.
++void (*g_on_http_auth_request)(ts_web_contents_t,
++                               uint64_t,
++                               const char*,
++                               const char*,
++                               const char*,
++                               const char*,
++                               bool,
++                               bool,
++                               bool,
++                               bool,
++                               void*) = nullptr;
++void* g_on_http_auth_request_data = nullptr;
++
+ }  // namespace
+ 
+ namespace content {
+@@ -160,6 +175,24 @@ void TsNotifyConsoleMessage(void* wc_handle,
+   }
+ }
+ 
++void TsNotifyHttpAuthRequest(void* wc_handle,
++                             uint64_t request_id,
++                             const char* url,
++                             const char* auth_scheme,
++                             const char* challenger,
++                             const char* realm,
++                             bool is_proxy,
++                             bool first_auth_attempt,
++                             bool is_primary_main_frame_navigation,
++                             bool is_navigation) {
++  if (g_on_http_auth_request) {
++    g_on_http_auth_request(wc_handle, request_id, url, auth_scheme, challenger,
++                           realm, is_proxy, first_auth_attempt,
++                           is_primary_main_frame_navigation, is_navigation,
++                           g_on_http_auth_request_data);
++  }
++}
++
+ }  // namespace content
+ 
+ // --- C API Implementation ---
+@@ -335,6 +368,21 @@ bool ts_reply_javascript_dialog(ts_web_contents_t wc,
+       base::UTF8ToUTF16(prompt_text ? prompt_text : ""));
+ }
+ 
++bool ts_reply_http_auth(ts_web_contents_t wc,
++                        uint64_t request_id,
++                        bool accepted,
++                        const char* username,
++                        const char* password) {
++  if (!wc) {
++    return false;
++  }
++  auto* web_contents = static_cast<content::WebContents*>(wc);
++  return content::TsHttpAuthDelegate::Reply(
++      web_contents, request_id, accepted,
++      base::UTF8ToUTF16(username ? username : ""),
++      base::UTF8ToUTF16(password ? password : ""));
++}
++
+ void ts_set_on_tab_ready(void (*cb)(ts_web_contents_t wc,
+                                     int tab_id,
+                                     void* user_data),
+@@ -417,3 +465,20 @@ void ts_set_on_console_message(void (*cb)(ts_web_contents_t wc,
+   g_on_console_message = cb;
+   g_on_console_message_data = user_data;
+ }
++
++void ts_set_on_http_auth_request(
++    void (*cb)(ts_web_contents_t wc,
++               uint64_t request_id,
++               const char* url,
++               const char* auth_scheme,
++               const char* challenger,
++               const char* realm,
++               bool is_proxy,
++               bool first_auth_attempt,
++               bool is_primary_main_frame_navigation,
++               bool is_navigation,
++               void* user_data),
++    void* user_data) {
++  g_on_http_auth_request = cb;
++  g_on_http_auth_request_data = user_data;
++}
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 37a7ab9083..84ff1ffa66 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -147,6 +147,12 @@ TS_EXPORT bool ts_reply_javascript_dialog(ts_web_contents_t wc,
+                                           bool accepted,
+                                           const char* prompt_text);
+ 
++TS_EXPORT bool ts_reply_http_auth(ts_web_contents_t wc,
++                                  uint64_t request_id,
++                                  bool accepted,
++                                  const char* username,
++                                  const char* password);
++
+ /* --- Callbacks --- */
+ 
+ /* All callbacks fire on the UI thread. The wc parameter identifies which tab
+@@ -208,6 +214,20 @@ TS_EXPORT void ts_set_on_console_message(void (*cb)(ts_web_contents_t wc,
+                                                     void* user_data),
+                                          void* user_data);
+ 
++TS_EXPORT void ts_set_on_http_auth_request(
++    void (*cb)(ts_web_contents_t wc,
++               uint64_t request_id,
++               const char* url,
++               const char* auth_scheme,
++               const char* challenger,
++               const char* realm,
++               bool is_proxy,
++               bool first_auth_attempt,
++               bool is_primary_main_frame_navigation,
++               bool is_navigation,
++               void* user_data),
++    void* user_data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 3c9c535559..3109bc627b 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/command_line.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_http_auth_delegate.h"
+ #include "content/libtermsurf_chromium/ts_payment_request.h"
+ #include "content/libtermsurf_chromium/ts_pdf_browser_support.h"
+ #include "content/public/browser/browser_context.h"
+@@ -168,6 +169,34 @@ void TsBrowserClient::AppendExtraCommandLineSwitches(
+   AppendTsPdfRendererCommandLineSwitches(command_line);
+ }
+ 
++std::unique_ptr<LoginDelegate> TsBrowserClient::CreateLoginDelegate(
++    const net::AuthChallengeInfo& auth_info,
++    WebContents* web_contents,
++    BrowserContext* browser_context,
++    const GlobalRequestID& request_id,
++    bool is_request_for_primary_main_frame_navigation,
++    bool is_request_for_navigation,
++    const GURL& url,
++    scoped_refptr<net::HttpResponseHeaders> response_headers,
++    bool first_auth_attempt,
++    GuestPageHolder* guest_page_holder,
++    LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
++  (void)browser_context;
++  (void)request_id;
++  (void)response_headers;
++  (void)guest_page_holder;
++
++  auto delegate = TsHttpAuthDelegate::MaybeCreate(
++      auth_info, web_contents, is_request_for_primary_main_frame_navigation,
++      is_request_for_navigation, url, first_auth_attempt,
++      std::move(auth_required_callback));
++  if (delegate) {
++    return delegate;
++  }
++
++  return nullptr;
++}
++
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+     const std::string& scheme,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 708d0d7ae4..0c20d08cb5 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -12,6 +12,7 @@
+ 
+ #include "base/containers/flat_set.h"
+ #include "base/memory/scoped_refptr.h"
++#include "content/public/browser/login_delegate.h"
+ #include "content/shell/browser/shell_content_browser_client.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
+ #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
+@@ -67,6 +68,18 @@ class TsBrowserClient : public ShellContentBrowserClient {
+                               blink::web_pref::WebPreferences* prefs) override;
+   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
+                                       int child_process_id) override;
++  std::unique_ptr<LoginDelegate> CreateLoginDelegate(
++      const net::AuthChallengeInfo& auth_info,
++      WebContents* web_contents,
++      BrowserContext* browser_context,
++      const GlobalRequestID& request_id,
++      bool is_request_for_primary_main_frame_navigation,
++      bool is_request_for_navigation,
++      const GURL& url,
++      scoped_refptr<net::HttpResponseHeaders> response_headers,
++      bool first_auth_attempt,
++      GuestPageHolder* guest_page_holder,
++      LoginDelegate::LoginAuthRequiredCallback auth_required_callback) override;
+   mojo::PendingRemote<network::mojom::URLLoaderFactory>
+   CreateNonNetworkNavigationURLLoaderFactory(
+       const std::string& scheme,
+diff --git a/content/libtermsurf_chromium/ts_http_auth_delegate.cc b/content/libtermsurf_chromium/ts_http_auth_delegate.cc
+new file mode 100644
+index 0000000000..aadb1ed631
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_http_auth_delegate.cc
+@@ -0,0 +1,131 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_http_auth_delegate.h"
++
++#include <map>
++#include <memory>
++#include <optional>
++#include <utility>
++
++#include "base/strings/string_util.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/auth.h"
++#include "url/gurl.h"
++
++namespace content {
++namespace {
++
++using PendingKey = std::pair<WebContents*, uint64_t>;
++
++std::map<PendingKey, TsHttpAuthDelegate*>& PendingAuthRequests() {
++  static auto* pending = new std::map<PendingKey, TsHttpAuthDelegate*>();
++  return *pending;
++}
++
++uint64_t NextRequestId() {
++  static uint64_t next_request_id = 1;
++  return next_request_id++;
++}
++
++bool IsSupportedChallenge(const net::AuthChallengeInfo& auth_info,
++                          WebContents* web_contents) {
++  return web_contents && !auth_info.is_proxy &&
++         base::EqualsCaseInsensitiveASCII(auth_info.scheme, "basic");
++}
++
++}  // namespace
++
++TsHttpAuthDelegate::TsHttpAuthDelegate(
++    WebContents* web_contents,
++    const net::AuthChallengeInfo& auth_info,
++    bool is_primary_main_frame_navigation,
++    bool is_navigation,
++    const GURL& url,
++    bool first_auth_attempt,
++    LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++    : WebContentsObserver(web_contents),
++      request_id_(NextRequestId()),
++      web_contents_(web_contents),
++      auth_required_callback_(std::move(auth_required_callback)) {
++  PendingAuthRequests()[{web_contents_, request_id_}] = this;
++  TsNotifyHttpAuthRequest(
++      static_cast<void*>(web_contents_), request_id_, url.spec().c_str(),
++      auth_info.scheme.c_str(), auth_info.challenger.Serialize().c_str(),
++      auth_info.realm.c_str(), auth_info.is_proxy, first_auth_attempt,
++      is_primary_main_frame_navigation, is_navigation);
++}
++
++TsHttpAuthDelegate::~TsHttpAuthDelegate() {
++  // Chromium's LoginDelegate contract says destruction means the request was
++  // canceled by //content; do not run the callback from this path.
++  Unregister();
++}
++
++std::unique_ptr<LoginDelegate> TsHttpAuthDelegate::MaybeCreate(
++    const net::AuthChallengeInfo& auth_info,
++    WebContents* web_contents,
++    bool is_primary_main_frame_navigation,
++    bool is_navigation,
++    const GURL& url,
++    bool first_auth_attempt,
++    LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
++  if (!IsSupportedChallenge(auth_info, web_contents)) {
++    return nullptr;
++  }
++
++  return std::make_unique<TsHttpAuthDelegate>(
++      web_contents, auth_info, is_primary_main_frame_navigation, is_navigation,
++      url, first_auth_attempt, std::move(auth_required_callback));
++}
++
++bool TsHttpAuthDelegate::Reply(WebContents* web_contents,
++                               uint64_t request_id,
++                               bool accepted,
++                               const std::u16string& username,
++                               const std::u16string& password) {
++  auto& pending = PendingAuthRequests();
++  const auto key = std::make_pair(web_contents, request_id);
++  auto it = pending.find(key);
++  if (it == pending.end()) {
++    return false;
++  }
++  return it->second->Reply(accepted, username, password);
++}
++
++void TsHttpAuthDelegate::WebContentsDestroyed() {
++  // The WebContents lifetime ended before a protocol reply. Invalidate only;
++  // do not run the auth callback from destruction.
++  Unregister();
++  web_contents_ = nullptr;
++  Observe(nullptr);
++}
++
++bool TsHttpAuthDelegate::Reply(bool accepted,
++                               const std::u16string& username,
++                               const std::u16string& password) {
++  if (!auth_required_callback_) {
++    return false;
++  }
++
++  auto callback = std::move(auth_required_callback_);
++  Unregister();
++
++  if (!accepted) {
++    std::move(callback).Run(std::nullopt);
++    return true;
++  }
++
++  std::move(callback).Run(net::AuthCredentials(username, password));
++  return true;
++}
++
++void TsHttpAuthDelegate::Unregister() {
++  if (!web_contents_) {
++    return;
++  }
++  PendingAuthRequests().erase({web_contents_, request_id_});
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_http_auth_delegate.h b/content/libtermsurf_chromium/ts_http_auth_delegate.h
+new file mode 100644
+index 0000000000..162e47eb12
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_http_auth_delegate.h
+@@ -0,0 +1,77 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_HTTP_AUTH_DELEGATE_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_HTTP_AUTH_DELEGATE_H_
++
++#include <memory>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "content/public/browser/content_browser_client.h"
++#include "content/public/browser/login_delegate.h"
++#include "content/public/browser/web_contents_observer.h"
++
++namespace content {
++
++void TsNotifyHttpAuthRequest(void* wc_handle,
++                             uint64_t request_id,
++                             const char* url,
++                             const char* auth_scheme,
++                             const char* challenger,
++                             const char* realm,
++                             bool is_proxy,
++                             bool first_auth_attempt,
++                             bool is_primary_main_frame_navigation,
++                             bool is_navigation);
++
++class TsHttpAuthDelegate : public LoginDelegate, public WebContentsObserver {
++ public:
++  TsHttpAuthDelegate(
++      WebContents* web_contents,
++      const net::AuthChallengeInfo& auth_info,
++      bool is_primary_main_frame_navigation,
++      bool is_navigation,
++      const GURL& url,
++      bool first_auth_attempt,
++      LoginDelegate::LoginAuthRequiredCallback auth_required_callback);
++  ~TsHttpAuthDelegate() override;
++
++  TsHttpAuthDelegate(const TsHttpAuthDelegate&) = delete;
++  TsHttpAuthDelegate& operator=(const TsHttpAuthDelegate&) = delete;
++
++  static std::unique_ptr<LoginDelegate> MaybeCreate(
++      const net::AuthChallengeInfo& auth_info,
++      WebContents* web_contents,
++      bool is_primary_main_frame_navigation,
++      bool is_navigation,
++      const GURL& url,
++      bool first_auth_attempt,
++      LoginDelegate::LoginAuthRequiredCallback auth_required_callback);
++
++  static bool Reply(WebContents* web_contents,
++                    uint64_t request_id,
++                    bool accepted,
++                    const std::u16string& username,
++                    const std::u16string& password);
++
++  uint64_t request_id() const { return request_id_; }
++
++ private:
++  // WebContentsObserver:
++  void WebContentsDestroyed() override;
++
++  bool Reply(bool accepted,
++             const std::u16string& username,
++             const std::u16string& password);
++  void Unregister();
++
++  const uint64_t request_id_;
++  raw_ptr<WebContents> web_contents_;
++  LoginDelegate::LoginAuthRequiredCallback auth_required_callback_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_HTTP_AUTH_DELEGATE_H_
+-- 
+2.54.0
+
