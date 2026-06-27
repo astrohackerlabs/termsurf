@@ -112,7 +112,7 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>com.mitchellh.ghosttySurfaceId</string>
+			<string>com.termsurf.surfaceId</string>
 			<key>UTTypeDescription</key>
 			<string>TermSurf Ghostboard Surface Identifier</string>
 			<key>UTTypeConformsTo</key>

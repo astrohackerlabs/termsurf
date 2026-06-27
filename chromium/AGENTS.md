@@ -25,17 +25,17 @@ Do not move or rename it.
 
 ## Current State
 
-- Current fully archived build baseline: `148.0.7778.97-issue-794-exp19`
-- Latest documented Chromium branch: `148.0.7778.97-issue-843`
-- Base version: `148.0.7778.97`
+- Current fully archived build baseline: `148.0.7778.271-issue-857`
+- Latest documented Chromium branch: `148.0.7778.271-issue-857`
+- Base version: `148.0.7778.271`
 - Version policy: track the Chromium version used by the latest stable Electron
   release unless an issue explicitly records a temporary exception.
 - Build output: `chromium/src/out/Default/`
 - Main build target: `libtermsurf_chromium`
 
-`chromium/patches/issue-794-exp19/` is the current full-stack patch archive that
+`chromium/patches/issue-857/` is the current full-stack patch archive that
 can reconstruct a buildable TermSurf Chromium checkout from the vanilla
-`148.0.7778.97` tag. Later issue patch directories may be incremental, not
+`148.0.7778.271` tag. Later issue patch directories may be incremental, not
 full-stack archives. Do not document an incremental patch directory as a fresh
 setup path unless it has been regenerated and verified as cumulative from the
 base tag.
@@ -50,8 +50,8 @@ Chromium uses `depot_tools`, `gclient`, `gn`, and `autoninja`.
 Before running Chromium tools:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf/chromium/src
-export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
+cd /Users/astrohacker/dev/termsurf-com/chromium/src
+export PATH="/Users/astrohacker/dev/termsurf-com/chromium/depot_tools:$PATH"
 ```
 
 ## Build Rules
@@ -77,18 +77,18 @@ From the repo root:
 
 ```bash
 cd chromium
-export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
+export PATH="/Users/astrohacker/dev/termsurf-com/chromium/depot_tools:$PATH"
 gclient config --name=src https://chromium.googlesource.com/chromium/src.git
-caffeinate gclient sync --revision src@148.0.7778.97 --no-history
+caffeinate gclient sync --revision src@148.0.7778.271 --no-history
 cd src
-git checkout -b 148.0.7778.97-issue-794-exp19 148.0.7778.97
-git am ../../chromium/patches/issue-794-exp19/*.patch
+git checkout -b 148.0.7778.271-issue-857 148.0.7778.271
+git am ../../chromium/patches/issue-857/*.patch
 gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 autoninja -C out/Default libtermsurf_chromium
 ```
 
 If a different issue branch is needed, first confirm whether its patch archive
-is cumulative from `148.0.7778.97` or incremental on top of another TermSurf
+is cumulative from `148.0.7778.271` or incremental on top of another TermSurf
 branch. When in doubt, reconstruct the fully archived baseline above, then apply
 or recreate the issue branch from the relevant local parent branch.
 
@@ -97,8 +97,8 @@ or recreate the issue branch from the relevant local parent branch.
 From the Chromium source checkout:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf/chromium/src
-export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
+cd /Users/astrohacker/dev/termsurf-com/chromium/src
+export PATH="/Users/astrohacker/dev/termsurf-com/chromium/depot_tools:$PATH"
 gn gen out/Default --args='is_debug=false symbol_level=0 is_component_build=true enable_nacl=false'
 autoninja -C out/Default libtermsurf_chromium
 ```
@@ -123,10 +123,10 @@ Branch names:
 Typical workflow:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf/chromium/src
-export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
-git checkout 148.0.7778.97-issue-{parent}
-git checkout -b 148.0.7778.97-issue-{N}
+cd /Users/astrohacker/dev/termsurf-com/chromium/src
+export PATH="/Users/astrohacker/dev/termsurf-com/chromium/depot_tools:$PATH"
+git checkout 148.0.7778.271-issue-{parent}
+git checkout -b 148.0.7778.271-issue-{N}
 ```
 
 After creating a branch, update `chromium/README.md`:
@@ -153,9 +153,9 @@ until they are regenerated as full-stack archives.
 Generate cumulative patches after committing inside `chromium/src`:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf/chromium/src
+cd /Users/astrohacker/dev/termsurf-com/chromium/src
 rm -rf ../../chromium/patches/issue-{N}
-git format-patch 148.0.7778.97..HEAD -o ../../chromium/patches/issue-{N}
+git format-patch 148.0.7778.271..HEAD -o ../../chromium/patches/issue-{N}
 ```
 
 Then return to the main repo and commit:
@@ -167,9 +167,9 @@ Then return to the main repo and commit:
 Apply a cumulative patch archive from a fresh checkout:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf/chromium/src
-git checkout 148.0.7778.97
-git checkout -b 148.0.7778.97-issue-{N}
+cd /Users/astrohacker/dev/termsurf-com/chromium/src
+git checkout 148.0.7778.271
+git checkout -b 148.0.7778.271-issue-{N}
 git am ../../chromium/patches/issue-{N}/*.patch
 ```
 
@@ -178,7 +178,7 @@ git am ../../chromium/patches/issue-{N}/*.patch
 Use these checks before recording a Chromium experiment result:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf
+cd /Users/astrohacker/dev/termsurf-com
 git status --short
 git -C chromium/src status --short
 git -C chromium/src rev-parse --abbrev-ref HEAD
@@ -189,8 +189,8 @@ git diff --check
 When Chromium source changed, also verify:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf/chromium/src
-export PATH="/Users/astrohacker/dev/termsurf/chromium/depot_tools:$PATH"
+cd /Users/astrohacker/dev/termsurf-com/chromium/src
+export PATH="/Users/astrohacker/dev/termsurf-com/chromium/depot_tools:$PATH"
 autoninja -C out/Default libtermsurf_chromium
 ```
 

@@ -25,11 +25,11 @@ without updating the workspace docs and issue records.
 ## Current State
 
 - Upstream remote: `origin` -> `https://github.com/WebKit/WebKit.git`
-- Base commit: `1452a43959523449099b2616793fd2c5b6a6487e`
-- Active documented branch: `webkit-1452a439-issue-756-exp12`
+- Base commit: `d144dd782ee6ba6fe20cd04b9c8d3e492f3c4254`
+- Active documented branch: `webkit-d144dd78-issue-857`
 - Shallow checkout: `true`
 - Build output: `webkit/src/WebKitBuild/Debug`
-- Main build command: `webkit/src/Tools/Scripts/build-webkit --debug`
+- Main build command: `scripts/build.sh webkit`
 
 Keep the current branch and branch table in `webkit/README.md` current when
 creating, switching, or publishing WebKit branches.
@@ -63,15 +63,49 @@ scripts/build.sh webkit
 That helper delegates to WebKit's own build script:
 
 ```bash
-webkit/src/Tools/Scripts/build-webkit --debug
+webkit/src/Tools/Scripts/build-webkit --debug --only=WebKit --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
 ```
 
 Use `scripts/build.sh webkit --release` for a Release WebKit build. Use
 `scripts/build.sh webkit --clean` only when you explicitly intend to clean the
 upstream WebKit build products before rebuilding.
 
+Set `TERMSURF_WEBKIT_ARCH` to override the helper's default `arm64`
+architecture.
+
+The helper intentionally builds only the `WebKit` scheme by default because
+TermSurf and Surfari need `WebKit.framework`, not WebKit's full test/tool graph.
+Set `TERMSURF_WEBKIT_FULL_BUILD=1` when an issue explicitly needs upstream
+WebKit's default full target graph, including tools such as TestWebKitAPI and
+ImageDiff.
+
 Build outputs stay under `webkit/src/WebKitBuild/`. Do not install frameworks,
 apps, or build products outside the repo unless the user explicitly approves.
+
+After switching WebKit release bases, preserve `WebKitBuild` but refresh staged
+prerequisite products before building `WebKit.framework`:
+
+```bash
+webkit/src/Tools/Scripts/build-webkit --debug --only=bmalloc --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=WTF --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=JavaScriptCore --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=libwebrtc --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=WebGPU --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=ANGLE --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=WebCore --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+scripts/build.sh webkit
+```
+
+Issue 857 used this sequence to refresh stale staged bmalloc, WebRTC, WebGPU,
+and ANGLE products without running `--clean` or deleting `WebKitBuild`.
 
 Keep the checkout shallow unless an experiment needs upstream history for
 merge-base analysis, patch archaeology, or cherry-picks. Record the reason in
@@ -84,12 +118,13 @@ From the repo root:
 ```bash
 mkdir -p webkit
 git clone --depth 1 https://github.com/WebKit/WebKit.git webkit/src
-git -C webkit/src fetch --depth 1 origin 1452a43959523449099b2616793fd2c5b6a6487e
-git -C webkit/src switch -C webkit-1452a439-issue-756 1452a43959523449099b2616793fd2c5b6a6487e
+git -C webkit/src fetch --depth 1 origin d144dd782ee6ba6fe20cd04b9c8d3e492f3c4254
+git -C webkit/src switch -C webkit-d144dd78-issue-857 d144dd782ee6ba6fe20cd04b9c8d3e492f3c4254
+git -C webkit/src am ../../webkit/patches/issue-857/*.patch
 xcode-select -p
 xcodebuild -version
 xcodebuild -downloadComponent MetalToolchain
-webkit/src/Tools/Scripts/build-webkit --debug
+scripts/build.sh webkit
 ```
 
 If applying TermSurf WebKit patches, use the issue patch directory recorded in
@@ -106,7 +141,8 @@ scripts/build.sh webkit
 Equivalent direct WebKit command:
 
 ```bash
-webkit/src/Tools/Scripts/build-webkit --debug
+webkit/src/Tools/Scripts/build-webkit --debug --only=WebKit --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
 ```
 
 Capture useful state after a build:
@@ -116,6 +152,17 @@ git -C webkit/src rev-parse HEAD
 git -C webkit/src rev-parse --abbrev-ref HEAD
 git -C webkit/src rev-parse --is-shallow-repository
 find webkit/src/WebKitBuild -maxdepth 2 -type d | sort | head -50
+```
+
+For incremental-build cache diagnosis, capture no-op timings and rebuild actions
+without `--clean`:
+
+```bash
+mkdir -p ~/dev/termsurf/logs
+/usr/bin/time -p scripts/build.sh webkit --release \
+  > ~/dev/termsurf/logs/webkit-release-incremental.log 2>&1
+rg -n 'CompileC|SwiftCompile|Ld |Libtool|GenerateVerifyModuleInput|BUILD SUCCEEDED|WebKit is now built|real |user |sys' \
+  ~/dev/termsurf/logs/webkit-release-incremental.log
 ```
 
 ## Branch Workflow
@@ -133,7 +180,7 @@ webkit-{short-upstream-commit}-issue-{N}-exp{M}
 Typical workflow:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf
+cd /Users/astrohacker/dev/termsurf-com
 git -C webkit/src switch -C webkit-{short-base}-issue-{N} {base-commit}
 ```
 
@@ -157,7 +204,7 @@ webkit/patches/issue-{N}/
 Generate patches after committing inside `webkit/src`:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf
+cd /Users/astrohacker/dev/termsurf-com
 rm -rf webkit/patches/issue-{N}
 mkdir -p webkit/patches/issue-{N}
 git -C webkit/src format-patch {base-commit}..HEAD \
@@ -173,7 +220,7 @@ Then commit in the main repo:
 Apply patches from a fresh checkout:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf
+cd /Users/astrohacker/dev/termsurf-com
 mkdir -p webkit
 git clone --depth 1 https://github.com/WebKit/WebKit.git webkit/src
 git -C webkit/src fetch --depth 1 origin {base-commit}
@@ -189,7 +236,7 @@ changes yet.
 Use these checks before recording a WebKit experiment result:
 
 ```bash
-cd /Users/astrohacker/dev/termsurf
+cd /Users/astrohacker/dev/termsurf-com
 git status --short
 git -C webkit/src status --short
 git -C webkit/src rev-parse --abbrev-ref HEAD
@@ -201,7 +248,7 @@ git diff --check
 When WebKit source changed, also verify:
 
 ```bash
-webkit/src/Tools/Scripts/build-webkit --debug
+scripts/build.sh webkit
 ```
 
 Use issue-specific tests in addition to the build.

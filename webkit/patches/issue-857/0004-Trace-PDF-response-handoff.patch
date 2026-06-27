@@ -1,0 +1,167 @@
+From d55dbe9f66d593aa5cded2639d8e6c19ad34ad15 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 26 Jun 2026 14:32:20 -0500
+Subject: [PATCH 4/5] Trace PDF response handoff
+
+A PDF knocked once on the frame-loader door,
+We marked the hinges, the latch, and the floor.
+If no one answers, the trace will tell more.
+---
+ .../WebLocalFrameLoaderClient.cpp             | 99 ++++++++++++++++++-
+ 1 file changed, 98 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebKit/WebProcess/WebCoreSupport/WebLocalFrameLoaderClient.cpp b/Source/WebKit/WebProcess/WebCoreSupport/WebLocalFrameLoaderClient.cpp
+index 2a857c89f5..1d45f08140 100644
+--- a/Source/WebKit/WebProcess/WebCoreSupport/WebLocalFrameLoaderClient.cpp
++++ b/Source/WebKit/WebProcess/WebCoreSupport/WebLocalFrameLoaderClient.cpp
+@@ -108,6 +108,10 @@
+ #include <wtf/ProcessID.h>
+ #include <wtf/ProcessPrivilege.h>
+ #include <wtf/RuntimeApplicationChecks.h>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
+ 
+ #if ENABLE(FULLSCREEN_API)
+ #include <WebCore/DocumentFullscreen.h>
+@@ -130,6 +134,58 @@
+ namespace WebKit {
+ using namespace WebCore;
+ 
++IGNORE_CLANG_WARNINGS_BEGIN("unsafe-buffer-usage")
++static std::string termsurfPDFPathTracePath()
++{
++    if (const char* path = std::getenv("TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE"); path && *path)
++        return path;
++
++    const char* tmpdir = std::getenv("TMPDIR");
++    std::string configPath = tmpdir && *tmpdir ? tmpdir : "/tmp";
++    if (configPath.back() != '/')
++        configPath += '/';
++    configPath += "termsurf/issue-853-webkit-trace-config";
++
++    FILE* file = std::fopen(configPath.c_str(), "r");
++    if (!file)
++        return { };
++
++    constexpr const char* prefix = "TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE=";
++    char line[4096];
++    while (std::fgets(line, sizeof(line), file)) {
++        if (std::strncmp(line, prefix, std::strlen(prefix)))
++            continue;
++        std::fclose(file);
++        std::string path = line + std::strlen(prefix);
++        while (!path.empty() && (path.back() == '\n' || path.back() == '\r'))
++            path.pop_back();
++        return path;
++    }
++
++    std::fclose(file);
++    return { };
++}
++
++static void termsurfAppendPDFPathTrace(const char* line)
++{
++    auto path = termsurfPDFPathTracePath();
++    if (path.empty())
++        return;
++
++    FILE* file = std::fopen(path.c_str(), "a");
++    if (!file)
++        return;
++    std::fputs(line, file);
++    std::fputc('\n', file);
++    std::fclose(file);
++}
++IGNORE_CLANG_WARNINGS_END
++
++static bool termsurfURLHasPDFExtension(const URL& url)
++{
++    return url.path().endsWithIgnoringASCIICase(".pdf"_s);
++}
++
+ WebLocalFrameLoaderClient::WebLocalFrameLoaderClient(LocalFrame& localFrame, FrameLoader& loader, Ref<WebFrame>&& frame, ScopeExit<Function<void()>>&& invalidator)
+     : LocalFrameLoaderClient(loader)
+     , WebFrameLoaderClient(WTF::move(frame), WTF::move(invalidator))
+@@ -941,6 +997,16 @@ void WebLocalFrameLoaderClient::dispatchShow()
+ 
+ void WebLocalFrameLoaderClient::dispatchDecidePolicyForResponse(const ResourceResponse& response, const ResourceRequest& request, const String& downloadAttribute, FramePolicyFunction&& function)
+ {
++    if (termsurfURLHasPDFExtension(request.url()) || MIMETypeRegistry::isPDFMIMEType(response.mimeType())) {
++        char line[512];
++        std::snprintf(line, sizeof(line), "termsurf-webkit-pdf-path phase=decide-policy-for-response source=WebLocalFrameLoaderClient.cpp process=webcontent pid=%d main_frame=%d url_ext_pdf=%d mime_pdf=%d marker=issue-853-exp13",
++            getCurrentProcessID(),
++            m_frame->isMainFrame() ? 1 : 0,
++            termsurfURLHasPDFExtension(request.url()) ? 1 : 0,
++            MIMETypeRegistry::isPDFMIMEType(response.mimeType()) ? 1 : 0);
++        termsurfAppendPDFPathTrace(line);
++    }
++
+     RefPtr webPage = m_frame->page();
+     if (!webPage) {
+         WebLocalFrameLoaderClient_RELEASE_LOG(Network, "dispatchDecidePolicyForResponse: ignoring because there's no web page");
+@@ -1633,6 +1699,15 @@ bool WebLocalFrameLoaderClient::canCachePage() const
+ 
+ void WebLocalFrameLoaderClient::convertMainResourceLoadToDownload(DocumentLoader *documentLoader, const ResourceRequest& request, const ResourceResponse& response)
+ {
++    if (termsurfURLHasPDFExtension(request.url()) || MIMETypeRegistry::isPDFMIMEType(response.mimeType())) {
++        char line[512];
++        std::snprintf(line, sizeof(line), "termsurf-webkit-pdf-path phase=local-frame-convert-main-resource-to-download source=WebLocalFrameLoaderClient.cpp process=webcontent pid=%d main_frame=%d url_ext_pdf=%d mime_pdf=%d marker=issue-853-exp13",
++            getCurrentProcessID(),
++            m_frame->isMainFrame() ? 1 : 0,
++            termsurfURLHasPDFExtension(request.url()) ? 1 : 0,
++            MIMETypeRegistry::isPDFMIMEType(response.mimeType()) ? 1 : 0);
++        termsurfAppendPDFPathTrace(line);
++    }
+     m_frame->convertMainResourceLoadToDownload(documentLoader, request, response);
+ }
+ 
+@@ -1654,6 +1729,16 @@ RefPtr<LocalFrame> WebLocalFrameLoaderClient::createFrame(const AtomString& name
+ 
+ RefPtr<Widget> WebLocalFrameLoaderClient::createPlugin(HTMLPlugInElement& pluginElement, const URL& url, const Vector<AtomString>&, const Vector<AtomString>&, const String& mimeType, bool loadManually)
+ {
++    if (termsurfURLHasPDFExtension(url) || MIMETypeRegistry::isPDFMIMEType(mimeType)) {
++        char line[512];
++        std::snprintf(line, sizeof(line), "termsurf-webkit-pdf-path phase=local-frame-create-plugin source=WebLocalFrameLoaderClient.cpp process=webcontent pid=%d main_frame=%d url_ext_pdf=%d mime_pdf=%d load_manually=%d marker=issue-853-exp13",
++            getCurrentProcessID(),
++            m_frame->isMainFrame() ? 1 : 0,
++            termsurfURLHasPDFExtension(url) ? 1 : 0,
++            MIMETypeRegistry::isPDFMIMEType(mimeType) ? 1 : 0,
++            loadManually ? 1 : 0);
++        termsurfAppendPDFPathTrace(line);
++    }
+ #if ENABLE(PDF_PLUGIN)
+     return PluginView::create(pluginElement, url, mimeType, loadManually && !m_frameCameFromBackForwardCache);
+ #else
+@@ -1668,6 +1753,7 @@ RefPtr<Widget> WebLocalFrameLoaderClient::createPlugin(HTMLPlugInElement& plugin
+ void WebLocalFrameLoaderClient::redirectDataToPlugin(Widget& pluginWidget)
+ {
+ #if ENABLE(PDF_PLUGIN)
++    termsurfAppendPDFPathTrace("termsurf-webkit-pdf-path phase=local-frame-redirect-data-to-plugin source=WebLocalFrameLoaderClient.cpp process=webcontent marker=issue-853-exp13");
+     m_pluginView = downcast<PluginView>(pluginWidget);
+ #else
+     UNUSED_PARAM(pluginWidget);
+@@ -1951,7 +2037,18 @@ void WebLocalFrameLoaderClient::notifyPageOfAppBoundBehavior()
+ bool WebLocalFrameLoaderClient::shouldUsePDFPlugin(const String& contentType, StringView path) const
+ {
+     RefPtr page = m_frame->page();
+-    return page && page->shouldUsePDFPlugin(contentType, path);
++    bool shouldUsePDFPlugin = page && page->shouldUsePDFPlugin(contentType, path);
++    if (MIMETypeRegistry::isPDFMIMEType(contentType) || path.endsWithIgnoringASCIICase(".pdf"_s)) {
++        char line[512];
++        std::snprintf(line, sizeof(line), "termsurf-webkit-pdf-path phase=local-frame-should-use-pdf-plugin source=WebLocalFrameLoaderClient.cpp process=webcontent pid=%d main_frame=%d path_ext_pdf=%d mime_pdf=%d result=%d marker=issue-853-exp13",
++            getCurrentProcessID(),
++            m_frame->isMainFrame() ? 1 : 0,
++            path.endsWithIgnoringASCIICase(".pdf"_s) ? 1 : 0,
++            MIMETypeRegistry::isPDFMIMEType(contentType) ? 1 : 0,
++            shouldUsePDFPlugin ? 1 : 0);
++        termsurfAppendPDFPathTrace(line);
++    }
++    return shouldUsePDFPlugin;
+ }
+ 
+ #endif
+-- 
+2.54.0
+

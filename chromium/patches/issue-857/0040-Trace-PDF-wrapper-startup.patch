@@ -1,0 +1,253 @@
+From 85042e67606bd22ce3317f793339d9407ee7d90e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 14:54:25 -0500
+Subject: [PATCH 40/88] Trace PDF wrapper startup
+
+The wrapper brought an empty tray,
+No iframe soup was served today.
+So logs now watch the handoff line,
+And point toward the missing brine.
+---
+ .../browser/pdf/pdf_viewer_stream_manager.cc  | 43 ++++++++++++++++++-
+ .../ts_content_renderer_client.cc             | 15 ++++++-
+ ...esponse_interceptor_url_loader_throttle.cc | 17 ++++++++
+ .../mime_handler_view_embedder.cc             | 23 ++++++++++
+ 4 files changed, 95 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/pdf/pdf_viewer_stream_manager.cc b/chrome/browser/pdf/pdf_viewer_stream_manager.cc
+index acb532210d..93e0ecdafc 100644
+--- a/chrome/browser/pdf/pdf_viewer_stream_manager.cc
++++ b/chrome/browser/pdf/pdf_viewer_stream_manager.cc
+@@ -538,6 +538,19 @@ void PdfViewerStreamManager::DidFinishNavigation(
+     ClearContentNavigationCrashKeys();
+   }
+ 
++  content::RenderFrameHost* parent_host = navigation_handle->GetParentFrame();
++  LOG(INFO) << "[issue-792-exp19] pvs-finish frame_tree_node_id="
++            << navigation_handle->GetFrameTreeNodeId()
++            << " url=" << navigation_handle->GetURL()
++            << " has_committed=" << navigation_handle->HasCommitted()
++            << " is_error_page=" << navigation_handle->IsErrorPage()
++            << " is_pdf=" << navigation_handle->IsPdf()
++            << " has_parent=" << (parent_host ? 1 : 0)
++            << " parent_frame_tree_node_id="
++            << (parent_host ? base::ToString(parent_host->GetFrameTreeNodeId())
++                            : "none")
++            << " stream_count=" << stream_infos_.size();
++
+   // Maybe set up postMessage support after the PDF content host finishes
+   // navigating.
+   if (MaybeSetUpPostMessage(navigation_handle)) {
+@@ -546,8 +559,12 @@ void PdfViewerStreamManager::DidFinishNavigation(
+ 
+   // The rest of the method handles the extension host. The parent host should
+   // be the tracked embedder host.
+-  content::RenderFrameHost* embedder_host = navigation_handle->GetParentFrame();
++  content::RenderFrameHost* embedder_host = parent_host;
+   if (!embedder_host) {
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-no-parent "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId()
++              << " url=" << navigation_handle->GetURL();
+     return;
+   }
+ 
+@@ -555,6 +572,12 @@ void PdfViewerStreamManager::DidFinishNavigation(
+   // host navigates.
+   auto* stream_info = GetClaimedStreamInfo(embedder_host);
+   if (!stream_info) {
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-no-claimed-stream "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId()
++              << " parent_frame_tree_node_id="
++              << embedder_host->GetFrameTreeNodeId()
++              << " url=" << navigation_handle->GetURL();
+     return;
+   }
+ 
+@@ -565,6 +588,15 @@ void PdfViewerStreamManager::DidFinishNavigation(
+     // navigations in other children of the embedder host. Ignore all other
+     // URLs, which was shown to be possible in crbug.com/432497344.
+     const GURL pdf_extension_url = stream_info->stream()->handler_url();
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-extension-already-started "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId() << " url=" << url
++              << " matches_extension_url=" << (url == pdf_extension_url)
++              << " matches_tracked_frame="
++              << (stream_info->extension_host_frame_tree_node_id() ==
++                  navigation_handle->GetFrameTreeNodeId())
++              << " has_committed=" << navigation_handle->HasCommitted()
++              << " is_error_page=" << navigation_handle->IsErrorPage();
+     if (url == pdf_extension_url &&
+         stream_info->extension_host_frame_tree_node_id() ==
+             navigation_handle->GetFrameTreeNodeId() &&
+@@ -597,6 +629,11 @@ void PdfViewerStreamManager::DidFinishNavigation(
+   // extension. Navigate the about:blank embed to the PDF extension URL to load
+   // the PDF extension.
+   if (!url.IsAboutBlank()) {
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-not-about-blank "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId()
++              << " parent_frame_tree_node_id="
++              << embedder_host->GetFrameTreeNodeId() << " url=" << url;
+     return;
+   }
+ 
+@@ -613,6 +650,10 @@ void PdfViewerStreamManager::DidFinishNavigation(
+       about_blank_host->GetFrameTreeNodeId();
+   stream_info->set_extension_host_frame_tree_node_id(
+       extension_host_frame_tree_node_id);
++  LOG(INFO) << "[issue-792-exp19] pvs-finish-about-blank "
++            << "frame_tree_node_id=" << extension_host_frame_tree_node_id
++            << " parent_frame_tree_node_id="
++            << embedder_host->GetFrameTreeNodeId() << " url=" << url;
+   LOG(INFO) << "[issue-792-exp15] pdf-extension-about-blank "
+             << "frame_tree_node_id=" << extension_host_frame_tree_node_id
+             << " embedder=" << embedder_host->GetFrameTreeNodeId();
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index b3ad28199d..005df4d8de 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -111,6 +111,10 @@ bool TsContentRendererClient::IsPluginHandledExternally(
+             << " has_internal_id=" << has_internal_id
+             << " plugin_lookup=" << (handled ? "ok" : "missing")
+             << " handled=" << handled;
++  LOG(INFO) << "[issue-792-exp19] renderer-plugin-external document_url="
++            << DocumentUrl(render_frame) << " original_url=" << original_url
++            << " mime_type=" << mime_type
++            << " has_internal_id=" << has_internal_id << " handled=" << handled;
+ 
+   return handled;
+ }
+@@ -119,8 +123,15 @@ bool TsContentRendererClient::OverrideCreatePlugin(
+     RenderFrame* render_frame,
+     const blink::WebPluginParams& params,
+     blink::WebPlugin** plugin) {
+-  if (extensions_renderer_client_ &&
+-      extensions_renderer_client_->OverrideCreatePlugin(render_frame, params)) {
++  const bool delegated_to_extensions =
++      extensions_renderer_client_ &&
++      extensions_renderer_client_->OverrideCreatePlugin(render_frame, params);
++  LOG(INFO) << "[issue-792-exp19] renderer-override-create-plugin "
++            << "document_url=" << DocumentUrl(render_frame)
++            << " mime_type=" << params.mime_type.Utf8()
++            << " url=" << GURL(params.url)
++            << " delegated_to_extensions=" << delegated_to_extensions;
++  if (delegated_to_extensions) {
+     return false;
+   }
+   return ShellContentRendererClient::OverrideCreatePlugin(render_frame, params,
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index ad21ea5467..8637dda722 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -204,6 +204,23 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   const std::string payload =
+       extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
+           response_url, response_head->mime_type, internal_id);
++  const std::string pdf_extension_url =
++      extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec();
++  LOG(INFO) << "[issue-792-exp19] wrapper-payload "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " internal_id=" << internal_id << " bytes=" << payload.size()
++            << " has_template="
++            << (payload.find("<template") != std::string::npos ? 1 : 0)
++            << " has_iframe="
++            << (payload.find("<iframe") != std::string::npos ? 1 : 0)
++            << " has_embed="
++            << (payload.find("<embed") != std::string::npos ? 1 : 0)
++            << " has_about_blank="
++            << (payload.find("about:blank") != std::string::npos ? 1 : 0)
++            << " has_internal_id="
++            << (payload.find(internal_id) != std::string::npos ? 1 : 0)
++            << " has_pdf_extension_url="
++            << (payload.find(pdf_extension_url) != std::string::npos ? 1 : 0);
+   LOG(INFO) << "[issue-792-exp16] interceptor-template-created "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " internal_id=" << internal_id;
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
+index 897d420db6..2d382b5cc3 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
+@@ -88,6 +88,8 @@ void MimeHandlerViewEmbedder::DidStartNavigation(
+   // PDFExtensionLinkClickTest.OpenPDFWithReplaceState reaches here).
+   if (handle->GetFrameTreeNodeId() == frame_tree_node_id_ &&
+       !handle->IsSameDocument()) {
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=new-navigation "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+   }
+ }
+@@ -104,6 +106,8 @@ void MimeHandlerViewEmbedder::ReadyToCommitNavigation(
+   // It's possible for the navigation to the template HTML document to fail
+   // (e.g. attempting to load a PDF in a fenced frame).
+   if (handle->GetNetErrorCode() != net::OK) {
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=net-error "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+     return;
+   }
+@@ -151,6 +155,14 @@ void MimeHandlerViewEmbedder::RenderFrameCreated(
+             << " owner_matches=" << owner_matches
+             << " name_matches=" << name_matches
+             << " ready=" << ready_to_create_mime_handler_view_;
++  LOG(INFO) << "[issue-792-exp19] mhv-render-frame-created "
++            << "frame_tree_node_id=" << render_frame_host->GetFrameTreeNodeId()
++            << " parent_matches=" << parent_matches
++            << " url_matches=" << url_matches << " owner_type="
++            << static_cast<int>(render_frame_host->GetFrameOwnerElementType())
++            << " owner_matches=" << owner_matches
++            << " name_matches=" << name_matches
++            << " ready=" << ready_to_create_mime_handler_view_;
+ 
+   // If an extension injects a frame before we finish attaching the PDF's
+   // iframe, then we don't want to early out by mistake. We also put an
+@@ -168,6 +180,8 @@ void MimeHandlerViewEmbedder::RenderFrameCreated(
+     // Renderer notifies the browser about creating MimeHandlerView right after
+     // HTMLPlugInElement::RequestObject, which is before the plugin element is
+     // navigated.
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=not-ready "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+     return;
+   }
+@@ -196,6 +210,8 @@ void MimeHandlerViewEmbedder::FrameDeleted(
+       (placeholder_render_frame_host_for_inner_contents_ &&
+        placeholder_render_frame_host_for_inner_contents_
+                ->GetFrameTreeNodeId() == frame_tree_node_id)) {
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=frame-deleted "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+   }
+ }
+@@ -205,6 +221,9 @@ void MimeHandlerViewEmbedder::CreateMimeHandlerViewGuest(
+         before_unload_control_remote) {
+   LOG(INFO) << "[issue-792-exp15] mhv-create-guest frame_tree_node_id="
+             << frame_tree_node_id_ << " stream_id=" << stream_id_;
++  LOG(INFO) << "[issue-792-exp19] mhv-create-guest-start "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " stream_id=" << stream_id_;
+   auto* browser_context = web_contents()->GetBrowserContext();
+   auto* manager =
+       guest_view::GuestViewManager::FromBrowserContext(browser_context);
+@@ -269,6 +288,8 @@ void MimeHandlerViewEmbedder::DidCreateMimeHandlerViewGuest(
+           placeholder_render_frame_host_for_inner_contents_,
+           element_instance_id, is_full_page /* is_full_page_plugin */);
+   // MHVE is no longer required.
++  LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=attach-complete "
++            << "frame_tree_node_id=" << frame_tree_node_id_;
+   DestroySelf();
+ }
+ 
+@@ -292,6 +313,8 @@ void MimeHandlerViewEmbedder::ReadyToCreateMimeHandlerView(
+ void MimeHandlerViewEmbedder::OnFrameSandboxed() {
+   DCHECK(!render_frame_host_);
+   DCHECK(!container_manager_);
++  LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=sandboxed "
++            << "frame_tree_node_id=" << frame_tree_node_id_;
+   DestroySelf();
+ }
+ 
+-- 
+2.54.0
+

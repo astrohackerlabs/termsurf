@@ -20,15 +20,15 @@ No `origin` remote for now. Remote hosting TBD (likely patch set distribution).
 
 ## Current State
 
-- Current fully archived build baseline: `148.0.7778.97-issue-794-exp19`
-- Latest documented branch: `148.0.7778.97-issue-854`
-- Base version: `148.0.7778.97` (tracking Electron's Chromium version)
+- Current fully archived build baseline: `148.0.7778.271-issue-857`
+- Latest documented branch: `148.0.7778.271-issue-857`
+- Base version: `148.0.7778.271` (tracking Electron's Chromium version)
 
 > **Note:** The `…-issue-789-exp*` and `…-issue-790-exp*` branches are
 > experimental inline-PDF work, **parked** (Issue 790 Exp 7). They are preserved
 > as history. The current fully archived build baseline is
-> `148.0.7778.97-issue-794-exp19`, which can be reconstructed from the vanilla
-> `148.0.7778.97` tag with `chromium/patches/issue-794-exp19/`.
+> `148.0.7778.271-issue-857`, which can be reconstructed from the vanilla
+> `148.0.7778.271` tag with `chromium/patches/issue-857/`.
 
 ## Branch Strategy
 
@@ -163,6 +163,7 @@ find the most relevant recent branch, create a new branch from it
 | `148.0.7778.97-issue-834-exp110` | [Issue 834](../issues/0834-full-pdf-support-roamium-surfari/README.md)       | Fix embedded Roamium PDF rendering                   |
 | `148.0.7778.97-issue-843`        | [Issue 843](../issues/0843-reconcile-chromium-patch-stacks/README.md)        | Combine Issue 834 PDF and Issue 840 clipboard stacks |
 | `148.0.7778.97-issue-854`        | [Issue 854](../issues/0854-roamium-back-focus-theft/README.md)               | Keep hidden Roamium shell from stealing focus        |
+| `148.0.7778.271-issue-857`       | [Issue 857](../issues/0857-upgrade-chromium-webkit-ghostty/README.md)        | Chromium 148 patch bump for Electron v42.5.0         |
 | `148.0.7778.97-issue-781`        | [Issue 781](../issues/0781-chromium-upgrade/README.md)                       | Chromium 148 migration                               |
 | `148.0.7778.97-issue-780`        | [Issue 780](../issues/0780-link-drag-freeze/README.md)                       | Suppress native link drag in Roamium                 |
 | `148.0.7778.97-issue-778`        | [Issue 778](../issues/0778-back-nav-title-stale/README.md)                   | Re-emit titles on navigation commit                  |
@@ -214,16 +215,16 @@ To reconstruct a branch from a fresh Chromium checkout:
 
 ```bash
 cd chromium/src
-git checkout 148.0.7778.97
-git checkout -b 148.0.7778.97-issue-{N}
+git checkout 148.0.7778.271
+git checkout -b 148.0.7778.271-issue-{N}
 git am ../../chromium/patches/issue-{N}/*.patch
 ```
 
 For the current fully archived TermSurf Chromium baseline, use:
 
 ```bash
-git checkout -b 148.0.7778.97-issue-794-exp19 148.0.7778.97
-git am ../../chromium/patches/issue-794-exp19/*.patch
+git checkout -b 148.0.7778.271-issue-857 148.0.7778.271
+git am ../../chromium/patches/issue-857/*.patch
 ```
 
 ### Generating patches
@@ -233,7 +234,7 @@ After committing to a Chromium branch, regenerate its patch set:
 ```bash
 cd chromium/src
 rm -rf ../../chromium/patches/issue-{N}/
-git format-patch 148.0.7778.97..HEAD -o ../../chromium/patches/issue-{N}/
+git format-patch 148.0.7778.271..HEAD -o ../../chromium/patches/issue-{N}/
 ```
 
 Then commit the updated patches in the main repo.
@@ -251,10 +252,10 @@ To set up from scratch:
 cd chromium
 export PATH="$(pwd)/depot_tools:$PATH"
 gclient config --name=src https://chromium.googlesource.com/chromium/src.git
-caffeinate gclient sync --revision src@148.0.7778.97 --no-history
+caffeinate gclient sync --revision src@148.0.7778.271 --no-history
 cd src
-git checkout -b 148.0.7778.97-issue-776-exp2 148.0.7778.97
-git am ../../chromium/patches/issue-776-exp2/*.patch
+git checkout -b 148.0.7778.271-issue-857 148.0.7778.271
+git am ../../chromium/patches/issue-857/*.patch
 ```
 
 ```

@@ -20,10 +20,10 @@ tracked.
 
 ## Current State
 
-- Upstream commit: `1452a43959523449099b2616793fd2c5b6a6487e`
-- Local branch: `webkit-1452a439-issue-853-exp13`
+- Upstream commit: `d144dd782ee6ba6fe20cd04b9c8d3e492f3c4254`
+- Local branch: `webkit-d144dd78-issue-857`
 - Shallow checkout: `true`
-- Purpose: Issue 853 Surfari PDF response handoff census
+- Purpose: Issue 857 WebKit release upgrade to `WebKit-7624.2.5.18.2`
 
 ## Layout
 
@@ -63,13 +63,14 @@ temporary exception.
 
 ## Branches
 
-| Branch                            | Base commit                                | Issue                                                    | Description                     |
-| --------------------------------- | ------------------------------------------ | -------------------------------------------------------- | ------------------------------- |
-| `webkit-1452a439-issue-756`       | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md)            | Surfari WebKit integration base |
-| `webkit-1452a439-issue-756-exp12` | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md)            | Cursor notification hook        |
-| `webkit-1452a439-issue-853-exp11` | `ff39892387ab076d7c0ab3d94fdc1bc5727c9ee3` | [Issue 853](../issues/0853-finish-pdf-support/README.md) | PDF form trace execution proof  |
-| `webkit-1452a439-issue-853-exp12` | `3afabe9a5993cf806a33968478dca95a97af94a9` | [Issue 853](../issues/0853-finish-pdf-support/README.md) | PDF path census                 |
-| `webkit-1452a439-issue-853-exp13` | `fe82783248bf44eb48635d03d1d38decbcd9b701` | [Issue 853](../issues/0853-finish-pdf-support/README.md) | PDF response handoff census     |
+| Branch                            | Base commit                                | Issue                                                                 | Description                     |
+| --------------------------------- | ------------------------------------------ | --------------------------------------------------------------------- | ------------------------------- |
+| `webkit-1452a439-issue-756`       | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md)                         | Surfari WebKit integration base |
+| `webkit-1452a439-issue-756-exp12` | `1452a43959523449099b2616793fd2c5b6a6487e` | [Issue 756](../issues/0756-surfari/README.md)                         | Cursor notification hook        |
+| `webkit-1452a439-issue-853-exp11` | `ff39892387ab076d7c0ab3d94fdc1bc5727c9ee3` | [Issue 853](../issues/0853-finish-pdf-support/README.md)              | PDF form trace execution proof  |
+| `webkit-1452a439-issue-853-exp12` | `3afabe9a5993cf806a33968478dca95a97af94a9` | [Issue 853](../issues/0853-finish-pdf-support/README.md)              | PDF path census                 |
+| `webkit-1452a439-issue-853-exp13` | `fe82783248bf44eb48635d03d1d38decbcd9b701` | [Issue 853](../issues/0853-finish-pdf-support/README.md)              | PDF response handoff census     |
+| `webkit-d144dd78-issue-857`       | `d144dd782ee6ba6fe20cd04b9c8d3e492f3c4254` | [Issue 857](../issues/0857-upgrade-chromium-webkit-ghostty/README.md) | WebKit 7624.2.5.18.2 upgrade    |
 
 ## Patches
 
@@ -156,16 +157,51 @@ scripts/build.sh webkit
 ```
 
 That command builds Debug WebKit by delegating to
-`webkit/src/Tools/Scripts/build-webkit --debug`. Release builds are available
-with:
+`webkit/src/Tools/Scripts/build-webkit --debug --only=WebKit --architecture=arm64`
+with module verification disabled for the local Xcode/SDK combination. Set
+`TERMSURF_WEBKIT_ARCH` to override the default architecture. Release builds are
+available with:
 
 ```bash
 scripts/build.sh webkit --release
 ```
 
+The helper builds only the `WebKit` scheme by default. That keeps TermSurf and
+Surfari iteration focused on the framework they actually link while avoiding
+WebKit's broader default graph, such as TestWebKitAPI and other tools. Use the
+full upstream target graph only when an issue explicitly needs it:
+
+```bash
+TERMSURF_WEBKIT_FULL_BUILD=1 scripts/build.sh webkit --release
+```
+
 `scripts/build.sh webkit --clean` explicitly cleans WebKit's upstream build
 products before rebuilding. Build outputs remain under
 `webkit/src/WebKitBuild/`.
+
+After switching WebKit release bases, preserve the build cache but refresh
+staged prerequisite products before building `WebKit.framework`:
+
+```bash
+webkit/src/Tools/Scripts/build-webkit --debug --only=bmalloc --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=WTF --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=JavaScriptCore --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=libwebrtc --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=WebGPU --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=ANGLE --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+webkit/src/Tools/Scripts/build-webkit --debug --only=WebCore --architecture=arm64 \
+  OVERRIDE_ENABLE_MODULE_VERIFIER=NO ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO
+scripts/build.sh webkit
+```
+
+Issue 857 used this sequence to fix stale staged headers/products without
+running `--clean` or deleting `WebKitBuild`.
 
 Capture the local state after the build:
 
@@ -174,6 +210,29 @@ git -C webkit/src rev-parse HEAD
 git -C webkit/src rev-parse --is-shallow-repository
 find webkit/src/WebKitBuild -maxdepth 2 -type d | sort | head -50
 git status --short
+```
+
+### Incremental Build Diagnosis
+
+Repeated no-op WebKit builds should be incremental. For Release builds, the
+normal TermSurf helper should finish in seconds rather than rebuilding all of
+WebCore, WebKit, JavaScriptCore, and TestWebKitAPI.
+
+Capture a diagnosis log with:
+
+```bash
+mkdir -p ~/dev/termsurf/logs
+/usr/bin/time -p scripts/build.sh webkit --release \
+  > ~/dev/termsurf/logs/webkit-release-incremental.log 2>&1
+rg -n 'CompileC|SwiftCompile|Ld |Libtool|GenerateVerifyModuleInput|BUILD SUCCEEDED|WebKit is now built|real |user |sys' \
+  ~/dev/termsurf/logs/webkit-release-incremental.log
+```
+
+If a no-op build is slow, compare it with the full upstream graph:
+
+```bash
+TERMSURF_WEBKIT_FULL_BUILD=1 /usr/bin/time -p scripts/build.sh webkit --release \
+  > ~/dev/termsurf/logs/webkit-release-full-incremental.log 2>&1
 ```
 
 ## Verified Environment

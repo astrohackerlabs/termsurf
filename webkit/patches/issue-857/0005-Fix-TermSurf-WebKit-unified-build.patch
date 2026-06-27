@@ -1,0 +1,105 @@
+From 77a6ab32db0206c19194b55768220ec03a052544 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 27 Jun 2026 10:05:15 -0500
+Subject: [PATCH 5/5] Fix TermSurf WebKit unified build
+
+---
+ Source/WebKit/DerivedSources.make                           | 4 +---
+ Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm           | 4 ++--
+ Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm | 4 ++--
+ .../WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm       | 6 +++---
+ 4 files changed, 8 insertions(+), 10 deletions(-)
+
+diff --git a/Source/WebKit/DerivedSources.make b/Source/WebKit/DerivedSources.make
+index a7d67b20b9..9f21d24c0d 100644
+--- a/Source/WebKit/DerivedSources.make
++++ b/Source/WebKit/DerivedSources.make
+@@ -971,9 +971,7 @@ GENERATED_SERIALIZERS_OUTPUT_FILES = \
+     WebKitPlatformGeneratedSerializers.mm \
+ #
+ 
+-GENERATED_SERIALIZERS_OUTPUT_PATTERNS = $(call to-pattern, $(GENERATED_SERIALIZERS_OUTPUT_FILES))
+-
+-$(GENERATED_SERIALIZERS_OUTPUT_PATTERNS) : $(WebKit2)/Scripts/generate-serializers.py $(SERIALIZATION_DESCRIPTION_FILES) $(WebKit2)/DerivedSources.make $(WEBCORE_SERIALIZATION_DESCRIPTION_FILES_FULLPATH) $(WebKit2)/Scripts/webkit/opaque_ipc_types.py $(WebKit2)/Scripts/webkit/opaque_ipc_types.tracking.in
++$(GENERATED_SERIALIZERS_OUTPUT_FILES) : $(WebKit2)/Scripts/generate-serializers.py $(SERIALIZATION_DESCRIPTION_FILES) $(WebKit2)/DerivedSources.make $(WEBCORE_SERIALIZATION_DESCRIPTION_FILES_FULLPATH) $(WebKit2)/Scripts/webkit/opaque_ipc_types.py $(WebKit2)/Scripts/webkit/opaque_ipc_types.tracking.in
+ 	$(PYTHON) $(WebKit2)/Scripts/generate-serializers.py mm $(filter %.serialization.in,$^)
+ 
+ EXTENSIONS_DIR = $(WebKit2)/WebProcess/Extensions
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
+index 0e515f4816..823793eb1e 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
+@@ -509,7 +509,7 @@ using namespace WebKit::PDFAnnotationTypeHelpers;
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(PDFPlugin);
+ 
+-static void termsurfAppendPDFFormTrace(NSString *line)
++static void termsurfAppendPDFPluginFormTrace(NSString *line)
+ {
+     NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
+     if (!path.length) {
+@@ -1304,7 +1304,7 @@ void PDFPlugin::setActiveAnnotation(SetActiveAnnotationParams&& setActiveAnnotat
+ {
+     // This may be called off the main thread if VoiceOver is running, thus dispatch to the main runloop since it involves main thread only objects.
+     callOnMainRunLoopAndWait([annotation = WTF::move(setActiveAnnotationParams.annotation), this] {
+-        termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=legacy-set-active-annotation source=PDFPlugin.mm pid=%d supports_forms=%d has_annotation=%d widget=%@ read_only=%d",
++        termsurfAppendPDFPluginFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=legacy-set-active-annotation source=PDFPlugin.mm pid=%d supports_forms=%d has_annotation=%d widget=%@ read_only=%d",
+                                              NSProcessInfo.processInfo.processIdentifier,
+                                              supportsForms() ? 1 : 0,
+                                              annotation ? 1 : 0,
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm
+index d685a5f498..6bc5f92a56 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm
+@@ -57,7 +57,7 @@ using namespace WebCore;
+ using namespace HTMLNames;
+ using namespace WebKit::PDFAnnotationTypeHelpers;
+ 
+-static void termsurfAppendPDFFormTrace(NSString *line)
++static void termsurfAppendPDFAnnotationFormTrace(NSString *line)
+ {
+     NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
+     if (!path.length) {
+@@ -119,7 +119,7 @@ void PDFPluginAnnotation::attach(Element* parent)
+     ASSERT(!m_parent);
+ 
+     m_parent = parent;
+-    termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=annotation-attach source=PDFPluginAnnotation.mm pid=%d widget=%@ read_only=%d",
++    termsurfAppendPDFAnnotationFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=annotation-attach source=PDFPluginAnnotation.mm pid=%d widget=%@ read_only=%d",
+                                          NSProcessInfo.processInfo.processIdentifier,
+                                          termsurfPDFAnnotationWidgetKind(m_annotation.get()),
+                                          [m_annotation.get() isReadOnly] ? 1 : 0]);
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm
+index e3ff7b4525..86cbfbada2 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm
+@@ -50,7 +50,7 @@ namespace WebKit {
+ using namespace WebCore;
+ using namespace HTMLNames;
+ 
+-static void termsurfAppendPDFFormTrace(NSString *line)
++static void termsurfAppendPDFTextAnnotationFormTrace(NSString *line)
+ {
+     NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
+     if (!path.length) {
+@@ -118,7 +118,7 @@ Ref<Element> PDFPluginTextAnnotation::createAnnotationElement()
+     Ref document = parent()->document();
+     RetainPtr textAnnotation = annotation();
+     bool isMultiline = [textAnnotation isMultiline];
+-    termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=text-create-element source=PDFPluginTextAnnotation.mm pid=%d multiline=%d value_length=%lu read_only=%d",
++    termsurfAppendPDFTextAnnotationFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=text-create-element source=PDFPluginTextAnnotation.mm pid=%d multiline=%d value_length=%lu read_only=%d",
+                                          NSProcessInfo.processInfo.processIdentifier,
+                                          isMultiline ? 1 : 0,
+                                          (unsigned long)[[textAnnotation widgetStringValue] length],
+@@ -150,7 +150,7 @@ void PDFPluginTextAnnotation::updateGeometry()
+ 
+ void PDFPluginTextAnnotation::commit()
+ {
+-    termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=text-commit source=PDFPluginTextAnnotation.mm pid=%d value_length=%u",
++    termsurfAppendPDFTextAnnotationFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=text-commit source=PDFPluginTextAnnotation.mm pid=%d value_length=%u",
+                                          NSProcessInfo.processInfo.processIdentifier,
+                                          value().length()]);
+     protectedAnnotation().get().widgetStringValue = value().createNSString().get();
+-- 
+2.54.0
+

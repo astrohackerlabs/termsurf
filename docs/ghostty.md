@@ -6,60 +6,80 @@ This repo is a fork of [Ghostty](https://github.com/ghostty-org/ghostty). The
 original Ghostty commit history is part of our git history — we forked, then
 began modifying files in place.
 
-The active Ghostty fork is `gui/`. All browser integration logic is in Zig,
-matching Ghostty's architecture. gui/ receives upstream Ghostty merges.
+The active Ghostty fork is `ghostboard/`. All browser integration logic lives
+inside the Ghostboard fork, matching Ghostty's Zig/Swift architecture.
+`ghostboard/` receives upstream Ghostty subtree merges.
 
-Two earlier Ghostty forks (`ts1/` and `ts5/`) have been archived from the
-working tree. See [early-prototypes.md](early-prototypes.md) for their history.
+Earlier Ghostty forks and prototypes (`ts1/`, `ts5/`, `gui/`, and `ghost/`) have
+been archived from the working tree. See
+[early-prototypes.md](early-prototypes.md) for their history.
 
 ## Remote
 
-| Remote     | URL                                        | Branch |
-| ---------- | ------------------------------------------ | ------ |
-| `upstream` | https://github.com/ghostty-org/ghostty.git | main   |
+| Remote    | URL                                        | Branch |
+| --------- | ------------------------------------------ | ------ |
+| `ghostty` | https://github.com/ghostty-org/ghostty.git | main   |
 
-The `upstream` remote is shared across all Ghostty copies — they all came from
-the same repo.
+The `ghostty` remote tracks upstream Ghostty for `ghostboard/` subtree merges.
 
-## How gui/ was created
+## How ghostboard/ was created
 
-gui/ was created the same way as ts5:
+`ghostboard/` was imported from upstream Ghostty with git subtree history. The
+current subtree marker is:
 
 ```bash
-git subtree add --prefix=gui upstream main
+git-subtree-dir: ghostboard
+git-subtree-split: 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
 ```
 
-It was originally named `ghost/` (after the working name "Ghost") and later
-renamed to `gui/` in Issue 613.
+Historical directories such as `ghost/` and `gui/` are no longer the active
+frontend.
 
-## Merging upstream into gui/
+## Merging upstream into ghostboard/
 
-To pull the latest upstream Ghostty changes into gui/:
+To pull the latest upstream Ghostty changes into `ghostboard/`:
 
 ```bash
-git fetch upstream
-git subtree pull --prefix=gui upstream main -m "Merge upstream Ghostty into gui"
+git fetch ghostty main
+git subtree pull --prefix=ghostboard ghostty main \
+  -m "Merge upstream Ghostty into ghostboard"
 ```
 
 ### Resolving conflicts
 
-gui/ has TermSurf modifications in several files (XPC integration, IOSurface
-overlay, input forwarding). Upstream merges may conflict with these. Key files
-likely to conflict:
+`ghostboard/` has TermSurf modifications in app identity, release/version
+plumbing, browser process launch, browser overlay rendering, input forwarding,
+focus handling, and webview mode/keybinding behavior. Upstream merges may
+conflict with these. Key areas likely to require scrutiny:
 
-- `gui/src/Surface.zig` — Browser state, input routing
-- `gui/src/renderer/Metal.zig` — Overlay rendering
-- `gui/macos/Sources/App/macOS/AppDelegate.swift` — Debug icon override
+- `ghostboard/src/Surface.zig` — browser state and input routing
+- `ghostboard/src/renderer/` — overlay rendering and geometry
+- `ghostboard/macos/Sources/Ghostty/Surface View/` — AppKit surface, focus, and
+  input behavior
+- `ghostboard/macos/Sources/Features/About/` — TermSurf About dialog identity
+- `ghostboard/macos/Sources/App/` — app delegate, app identity, and lifecycle
+- `ghostboard/build.zig` and `ghostboard/src/build/` — build and version
+  metadata
+- `scripts/release.sh` and Homebrew packaging docs — public release assumptions
 
 ### After merging
 
 Verify the build:
 
 ```bash
-cd gui && zig build
+./scripts/build.sh ghostboard
+cd ghostboard
+zig build -Demit-macos-app=false
+zig build test-lib-vt
 ```
 
 If the build fails, common causes are:
 
-- Zig version mismatch (check `gui/build.zig.zon` for the required version)
+- Zig version mismatch (check `ghostboard/build.zig.zon` for the required
+  version)
 - New upstream dependencies or build system changes
+
+Also run targeted TermSurf smoke checks after a Ghostty merge: launch the Debug
+`TermSurf.app`, run the debug `web` client against a repo-built browser, verify
+browser overlay click-to-browse behavior, verify back navigation does not break
+window focus, and inspect app metadata/version output for TermSurf identity.

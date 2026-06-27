@@ -40,6 +40,19 @@ SURFARI_RUNTIME_ARTIFACTS=(
   com.apple.WebKit.WebContent.xpc
 )
 
+surfari_runtime_artifact_source() {
+  local artifact="$1"
+  local source="$WEBKIT_RELEASE_OUT/$artifact"
+
+  if [ "$artifact" = "libWebKitSwift.dylib" ] &&
+    [ ! -e "$source" ] &&
+    [ -e "$WEBKIT_RELEASE_OUT/WebKit.framework/Versions/A/Frameworks/libWebKitSwift.dylib" ]; then
+    source="$WEBKIT_RELEASE_OUT/WebKit.framework/Versions/A/Frameworks/libWebKitSwift.dylib"
+  fi
+
+  printf '%s\n' "$source"
+}
+
 echo "==> Packaging TermSurf v${VERSION} for ${ARCH}..."
 
 check_ghostboard_version() {
@@ -95,8 +108,9 @@ done
 check_ghostboard_version
 
 for artifact in "${SURFARI_RUNTIME_ARTIFACTS[@]}"; do
-  if [ ! -e "$WEBKIT_RELEASE_OUT/$artifact" ]; then
-    echo "Error: Surfari runtime artifact not found: $WEBKIT_RELEASE_OUT/$artifact"
+  artifact_source="$(surfari_runtime_artifact_source "$artifact")"
+  if [ ! -e "$artifact_source" ]; then
+    echo "Error: Surfari runtime artifact not found: $artifact_source"
     echo "Run: scripts/build.sh all --release"
     exit 1
   fi
@@ -120,7 +134,7 @@ copy_roamium_runtime_resources "$CHROMIUM_OUT" "$STAGING_DIR/roamium"
 echo "==> Copying Surfari runtime resources..."
 cp "$SURFARI_LIB" "$STAGING_DIR/surfari/"
 for artifact in "${SURFARI_RUNTIME_ARTIFACTS[@]}"; do
-  cp -R "$WEBKIT_RELEASE_OUT/$artifact" "$STAGING_DIR/surfari/"
+  cp -R "$(surfari_runtime_artifact_source "$artifact")" "$STAGING_DIR/surfari/"
 done
 
 # Copy .app bundle

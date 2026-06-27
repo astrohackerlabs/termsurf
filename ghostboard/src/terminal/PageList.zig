@@ -2582,18 +2582,15 @@ pub fn scroll(self: *PageList, behavior: Scroll) void {
             if (n < midpoint) {
                 // Iterate forward from the first node.
                 var node_it = self.pages.first;
-                var rem: size.CellCountInt = std.math.cast(
-                    size.CellCountInt,
-                    n,
-                ) orelse {
-                    self.viewport = .active;
-                    break :row;
-                };
+                var rem: usize = n;
                 while (node_it) |node| : (node_it = node.next) {
                     if (rem < node.data.size.rows) {
                         self.viewport_pin.* = .{
                             .node = node,
-                            .y = rem,
+                            .y = std.math.cast(size.CellCountInt, rem) orelse {
+                                self.viewport = .active;
+                                break :row;
+                            },
                         };
                         break :row;
                     }
@@ -2603,18 +2600,15 @@ pub fn scroll(self: *PageList, behavior: Scroll) void {
             } else {
                 // Iterate backwards from the last node.
                 var node_it = self.pages.last;
-                var rem: size.CellCountInt = std.math.cast(
-                    size.CellCountInt,
-                    self.total_rows - n,
-                ) orelse {
-                    self.viewport = .active;
-                    break :row;
-                };
+                var rem: usize = self.total_rows - n;
                 while (node_it) |node| : (node_it = node.prev) {
                     if (rem <= node.data.size.rows) {
                         self.viewport_pin.* = .{
                             .node = node,
-                            .y = node.data.size.rows - rem,
+                            .y = std.math.cast(size.CellCountInt, node.data.size.rows - rem) orelse {
+                                self.viewport = .active;
+                                break :row;
+                            },
                         };
                         break :row;
                     }

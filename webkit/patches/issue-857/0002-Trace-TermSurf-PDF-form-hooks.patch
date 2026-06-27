@@ -1,0 +1,416 @@
+From ea7aaf6d4a78342008006e5b28fe309b396f3e5b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 26 Jun 2026 13:48:07 -0500
+Subject: [PATCH 2/5] Trace TermSurf PDF form hooks
+
+A WebKit trail of crumbs appears,
+To prove which codepath volunteers.
+If forms stay quiet after the click,
+The log will show which gear won't tick.
+---
+ .../WebKit/UIProcess/API/Cocoa/WKWebView.mm   | 36 +++++++++++++
+ .../WebProcess/Plugins/PDF/PDFPlugin.mm       | 53 ++++++++++++++++++
+ .../Plugins/PDF/PDFPluginAnnotation.mm        | 51 ++++++++++++++++++
+ .../WebProcess/Plugins/PDF/PDFPluginBase.mm   | 44 +++++++++++++++
+ .../Plugins/PDF/PDFPluginTextAnnotation.mm    | 42 +++++++++++++++
+ .../PDF/UnifiedPDF/UnifiedPDFPlugin.mm        | 54 +++++++++++++++++++
+ 6 files changed, 280 insertions(+)
+
+diff --git a/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm b/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm
+index b888cefe4a..7ca017da07 100644
+--- a/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm
++++ b/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm
+@@ -337,6 +337,40 @@ RetainPtr<NSError> nsErrorFromExceptionDetails(const std::optional<WebCore::Exce
+ 
+ #endif
+ 
++static void termsurfAppendLocalExecutionTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_LOCAL_EXECUTION_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_LOCAL_EXECUTION_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
+ @implementation WKWebView
+ 
+ WK_OBJECT_DISABLE_DISABLE_KVC_IVAR_ACCESS;
+@@ -885,6 +919,8 @@ static void addBrowsingContextControllerMethodStubsIfNeeded()
+     if (!(self = [super initWithFrame:frame]))
+         return nil;
+ 
++    termsurfAppendLocalExecutionTrace([NSString stringWithFormat:@"termsurf-webkit-ui-execution phase=wkwebview-init source=WKWebView.mm pid=%d marker=issue-853-exp11",
++                                                NSProcessInfo.processInfo.processIdentifier]);
+     [self _initializeWithConfiguration:configuration];
+ 
+     return self;
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
+index d6f565801c..84a83e3366 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
+@@ -509,6 +509,53 @@ using namespace WebKit::PDFAnnotationTypeHelpers;
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(PDFPlugin);
+ 
++static void termsurfAppendPDFFormTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
++static NSString *termsurfPDFAnnotationWidgetKind(PDFAnnotation *annotation)
++{
++    if (!annotation)
++        return @"none";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Text))
++        return @"text";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Choice))
++        return @"choice";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Button))
++        return @"button";
++    return @"none";
++}
++
+ bool PDFPlugin::pdfKitLayerControllerIsAvailable()
+ {
+     return getPDFLayerControllerClassSingleton();
+@@ -1213,6 +1260,12 @@ void PDFPlugin::setActiveAnnotation(SetActiveAnnotationParams&& setActiveAnnotat
+ {
+     // This may be called off the main thread if VoiceOver is running, thus dispatch to the main runloop since it involves main thread only objects.
+     callOnMainRunLoopAndWait([annotation = WTF::move(setActiveAnnotationParams.annotation), this] {
++        termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=legacy-set-active-annotation source=PDFPlugin.mm pid=%d supports_forms=%d has_annotation=%d widget=%@ read_only=%d",
++                                             NSProcessInfo.processInfo.processIdentifier,
++                                             supportsForms() ? 1 : 0,
++                                             annotation ? 1 : 0,
++                                             annotation ? termsurfPDFAnnotationWidgetKind(annotation.get()) : @"none",
++                                             annotation && [annotation isReadOnly] ? 1 : 0]);
+         if (!supportsForms())
+             return;
+ 
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm
+index 766ba00368..d685a5f498 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginAnnotation.mm
+@@ -57,6 +57,53 @@ using namespace WebCore;
+ using namespace HTMLNames;
+ using namespace WebKit::PDFAnnotationTypeHelpers;
+ 
++static void termsurfAppendPDFFormTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
++static NSString *termsurfPDFAnnotationWidgetKind(PDFAnnotation *annotation)
++{
++    if (!annotation)
++        return @"none";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Text))
++        return @"text";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Choice))
++        return @"choice";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Button))
++        return @"button";
++    return @"none";
++}
++
+ RefPtr<PDFPluginAnnotation> PDFPluginAnnotation::create(PDFAnnotation *annotation, PDFPluginBase* plugin)
+ {
+     if (annotationIsWidgetOfType(annotation, WidgetType::Text))
+@@ -72,6 +119,10 @@ void PDFPluginAnnotation::attach(Element* parent)
+     ASSERT(!m_parent);
+ 
+     m_parent = parent;
++    termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=annotation-attach source=PDFPluginAnnotation.mm pid=%d widget=%@ read_only=%d",
++                                         NSProcessInfo.processInfo.processIdentifier,
++                                         termsurfPDFAnnotationWidgetKind(m_annotation.get()),
++                                         [m_annotation.get() isReadOnly] ? 1 : 0]);
+     Ref element = createAnnotationElement();
+     m_element = element.copyRef();
+ 
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm
+index eac8cb5194..488597bf75 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm
+@@ -105,6 +105,49 @@ using namespace WebCore;
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(PDFPluginBase);
+ 
++static void termsurfAppendPDFTrace(NSString *environmentKey, NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[environmentKey];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = [environmentKey stringByAppendingString:@"="];
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
++static void termsurfTraceLocalPDFExecution(NSString *phase)
++{
++    termsurfAppendPDFTrace(
++        @"TERMSURF_WEBKIT_LOCAL_EXECUTION_TRACE_FILE",
++        [NSString stringWithFormat:@"termsurf-webkit-local-execution phase=%@ source=PDFPluginBase.mm pid=%d marker=issue-853-exp11",
++                  phase ?: @"unknown",
++                  NSProcessInfo.processInfo.processIdentifier]);
++}
++
+ PluginInfo PDFPluginBase::pluginInfo()
+ {
+     PluginInfo info;
+@@ -248,6 +291,7 @@ void PDFPluginBase::destroy()
+ 
+ void PDFPluginBase::createPDFDocument()
+ {
++    termsurfTraceLocalPDFExecution(@"create-pdf-document");
+     m_pdfDocument = adoptNS([allocPDFDocumentInstance() initWithData:RetainPtr { originalData() }.get()]);
+ }
+ 
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm
+index 6e271523ae..e3ff7b4525 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginTextAnnotation.mm
+@@ -50,6 +50,40 @@ namespace WebKit {
+ using namespace WebCore;
+ using namespace HTMLNames;
+ 
++static void termsurfAppendPDFFormTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
+ static const String cssAlignmentValueForNSTextAlignment(NSTextAlignment alignment)
+ {
+     switch (alignment) {
+@@ -84,6 +118,11 @@ Ref<Element> PDFPluginTextAnnotation::createAnnotationElement()
+     Ref document = parent()->document();
+     RetainPtr textAnnotation = annotation();
+     bool isMultiline = [textAnnotation isMultiline];
++    termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=text-create-element source=PDFPluginTextAnnotation.mm pid=%d multiline=%d value_length=%lu read_only=%d",
++                                         NSProcessInfo.processInfo.processIdentifier,
++                                         isMultiline ? 1 : 0,
++                                         (unsigned long)[[textAnnotation widgetStringValue] length],
++                                         [textAnnotation isReadOnly] ? 1 : 0]);
+ 
+     Ref element = downcast<HTMLTextFormControlElement>(document->createElement(isMultiline ? textareaTag : inputTag, false));
+     element->addEventListener(eventNames().keydownEvent, *eventListener(), false);
+@@ -111,6 +150,9 @@ void PDFPluginTextAnnotation::updateGeometry()
+ 
+ void PDFPluginTextAnnotation::commit()
+ {
++    termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=text-commit source=PDFPluginTextAnnotation.mm pid=%d value_length=%u",
++                                         NSProcessInfo.processInfo.processIdentifier,
++                                         value().length()]);
+     protectedAnnotation().get().widgetStringValue = value().createNSString().get();
+     PDFPluginAnnotation::commit();
+ }
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm b/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm
+index c8c1e990b9..ac65befcf3 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm
+@@ -172,6 +172,53 @@ using namespace WebKit::PDFAnnotationTypeHelpers;
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(UnifiedPDFPlugin);
+ 
++static void termsurfAppendPDFFormTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_FORM_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
++static NSString *termsurfPDFAnnotationWidgetKind(PDFAnnotation *annotation)
++{
++    if (!annotation)
++        return @"none";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Text))
++        return @"text";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Choice))
++        return @"choice";
++    if (annotationIsWidgetOfType(annotation, WidgetType::Button))
++        return @"button";
++    return @"none";
++}
++
+ Ref<UnifiedPDFPlugin> UnifiedPDFPlugin::create(HTMLPlugInElement& pluginElement)
+ {
+     return adoptRef(*new UnifiedPDFPlugin(pluginElement));
+@@ -4059,6 +4106,13 @@ void UnifiedPDFPlugin::setActiveAnnotation(SetActiveAnnotationParams&& setActive
+     callOnMainRunLoopAndWait([annotation = WTF::move(setActiveAnnotationParams.annotation), isInPluginCleanup = WTF::move(setActiveAnnotationParams.isInPluginCleanup), this] {
+ 
+         ASSERT(isInPluginCleanup != IsInPluginCleanup::Yes || !annotation, "Must pass a null annotation when cleaning up the plugin");
++        termsurfAppendPDFFormTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-form phase=unified-set-active-annotation source=UnifiedPDFPlugin.mm pid=%d cleanup=%d supports_forms=%d has_annotation=%d widget=%@ read_only=%d",
++                                             NSProcessInfo.processInfo.processIdentifier,
++                                             isInPluginCleanup == IsInPluginCleanup::Yes ? 1 : 0,
++                                             supportsForms() ? 1 : 0,
++                                             annotation ? 1 : 0,
++                                             annotation ? termsurfPDFAnnotationWidgetKind(annotation.get()) : @"none",
++                                             annotation && [annotation isReadOnly] ? 1 : 0]);
+ 
+         if (isInPluginCleanup != IsInPluginCleanup::Yes && !supportsForms())
+             return;
+-- 
+2.54.0
+

@@ -1,0 +1,368 @@
+From d5815b929eeba13293a32b93916f3a9d96cd2342 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 26 Jun 2026 14:12:43 -0500
+Subject: [PATCH 3/5] Map TermSurf PDF path markers
+
+The PDF trail was shy and thin,
+So markers watched the doorway in.
+UI waved, the plugin stayed mute,
+Now the next clue has a route.
+---
+ .../WebKit/UIProcess/API/Cocoa/WKWebView.mm   | 37 ++++++++++++++
+ .../WebProcess/Plugins/PDF/PDFPlugin.mm       | 44 ++++++++++++++++
+ .../WebProcess/Plugins/PDF/PDFPluginBase.mm   | 15 ++++++
+ .../PDF/UnifiedPDF/UnifiedPDFPlugin.mm        | 44 ++++++++++++++++
+ .../WebProcess/WebPage/Cocoa/WebPageCocoa.mm  | 50 +++++++++++++++++--
+ 5 files changed, 187 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm b/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm
+index 7ca017da07..2cde6349a4 100644
+--- a/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm
++++ b/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm
+@@ -371,6 +371,40 @@ static void termsurfAppendLocalExecutionTrace(NSString *line)
+     [handle closeFile];
+ }
+ 
++static void termsurfAppendPDFPathTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
+ @implementation WKWebView
+ 
+ WK_OBJECT_DISABLE_DISABLE_KVC_IVAR_ACCESS;
+@@ -1105,6 +1139,9 @@ static void addBrowsingContextControllerMethodStubsIfNeeded()
+     THROW_IF_SUSPENDED;
+     if (_page->isServiceWorkerPage())
+         [NSException raise:NSInternalInconsistencyException format:@"The WKWebView was used to load a service worker"];
++    if ([request.URL.path.pathExtension caseInsensitiveCompare:@"pdf"] == NSOrderedSame)
++        termsurfAppendPDFPathTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=wkwebview-load-request source=WKWebView.mm process=ui pid=%d url_ext=pdf marker=issue-853-exp12",
++                                             NSProcessInfo.processInfo.processIdentifier]);
+     return wrapper(_page->loadRequest(request)).autorelease();
+ }
+ 
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
+index 84a83e3366..0e515f4816 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPlugin.mm
+@@ -556,6 +556,47 @@ static NSString *termsurfPDFAnnotationWidgetKind(PDFAnnotation *annotation)
+     return @"none";
+ }
+ 
++static void termsurfAppendPDFPathTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
++static void termsurfTracePDFPath(NSString *phase)
++{
++    termsurfAppendPDFPathTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=%@ source=PDFPlugin.mm process=webcontent plugin=legacy pid=%d marker=issue-853-exp12",
++                                         phase ?: @"unknown",
++                                         NSProcessInfo.processInfo.processIdentifier]);
++}
++
+ bool PDFPlugin::pdfKitLayerControllerIsAvailable()
+ {
+     return getPDFLayerControllerClassSingleton();
+@@ -563,6 +604,7 @@ bool PDFPlugin::pdfKitLayerControllerIsAvailable()
+ 
+ Ref<PDFPlugin> PDFPlugin::create(HTMLPlugInElement& pluginElement)
+ {
++    termsurfTracePDFPath(@"legacy-pdf-plugin-create");
+     return adoptRef(*new PDFPlugin(pluginElement));
+ }
+ 
+@@ -574,6 +616,7 @@ PDFPlugin::PDFPlugin(HTMLPlugInElement& element)
+     , m_pdfLayerController(adoptNS([allocPDFLayerControllerInstance() init]))
+     , m_pdfLayerControllerDelegate(adoptNS([[WKPDFLayerControllerDelegate alloc] initWithPDFPlugin:this]))
+ {
++    termsurfTracePDFPath(@"legacy-pdf-plugin-ctor");
+     Ref document = element.document();
+ 
+     if ([m_pdfLayerController respondsToSelector:@selector(setDisplaysPDFHUDController:)])
+@@ -664,6 +707,7 @@ void PDFPlugin::destroyScrollbar(ScrollbarOrientation orientation)
+ 
+ void PDFPlugin::installPDFDocument()
+ {
++    termsurfTracePDFPath(@"legacy-pdf-plugin-install-document");
+     ASSERT(isMainRunLoop());
+     LOG(IncrementalPDF, "Installing PDF document");
+ 
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm
+index 488597bf75..6906f1b7f1 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/PDFPluginBase.mm
+@@ -148,6 +148,15 @@ static void termsurfTraceLocalPDFExecution(NSString *phase)
+                   NSProcessInfo.processInfo.processIdentifier]);
+ }
+ 
++static void termsurfTracePDFPath(NSString *phase)
++{
++    termsurfAppendPDFTrace(
++        @"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE",
++        [NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=%@ source=PDFPluginBase.mm process=webcontent pid=%d marker=issue-853-exp12",
++                  phase ?: @"unknown",
++                  NSProcessInfo.processInfo.processIdentifier]);
++}
++
+ PluginInfo PDFPluginBase::pluginInfo()
+ {
+     PluginInfo info;
+@@ -270,6 +279,7 @@ void PDFPluginBase::setView(PluginView& view)
+ 
+ void PDFPluginBase::startLoading()
+ {
++    termsurfTracePDFPath(@"pdf-plugin-base-start-loading");
+ #if HAVE(INCREMENTAL_PDF_APIS)
+     if (incrementalPDFLoadingEnabled())
+         m_incrementalLoader = PDFIncrementalLoader::create(*this);
+@@ -292,6 +302,7 @@ void PDFPluginBase::destroy()
+ void PDFPluginBase::createPDFDocument()
+ {
+     termsurfTraceLocalPDFExecution(@"create-pdf-document");
++    termsurfTracePDFPath(@"pdf-plugin-base-create-pdf-document");
+     m_pdfDocument = adoptNS([allocPDFDocumentInstance() initWithData:RetainPtr { originalData() }.get()]);
+ }
+ 
+@@ -520,6 +531,7 @@ void PDFPluginBase::insertRangeRequestData(uint64_t offset, const Vector<uint8_t
+ 
+ void PDFPluginBase::streamDidReceiveResponse(const ResourceResponse& response)
+ {
++    termsurfTracePDFPath(@"pdf-plugin-base-stream-response");
+     m_suggestedFilename = response.suggestedFilename();
+     if (m_suggestedFilename.isEmpty())
+         m_suggestedFilename = suggestedFilenameWithMIMEType(nil, "application/pdf"_s);
+@@ -563,6 +575,7 @@ void PDFPluginBase::streamDidReceiveData(const SharedBuffer& buffer)
+ 
+ void PDFPluginBase::streamDidFinishLoading()
+ {
++    termsurfTracePDFPath(@"pdf-plugin-base-stream-finish");
+     if (m_hasBeenDestroyed)
+         return;
+ 
+@@ -619,6 +632,7 @@ void PDFPluginBase::streamDidFail()
+ 
+ void PDFPluginBase::adoptBackgroundThreadDocument(RetainPtr<PDFDocument>&& backgroundThreadDocument)
+ {
++    termsurfTracePDFPath(@"pdf-plugin-base-adopt-background-document");
+     if (m_hasBeenDestroyed)
+         return;
+ 
+@@ -678,6 +692,7 @@ void PDFPluginBase::startByteRangeRequest(NetscapePlugInStreamLoaderClient& stre
+ 
+ void PDFPluginBase::receivedNonLinearizedPDFSentinel()
+ {
++    termsurfTracePDFPath(@"pdf-plugin-base-nonlinearized-sentinel");
+     m_incrementalPDFLoadingEnabled = false;
+ 
+     if (m_hasBeenDestroyed)
+diff --git a/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm b/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm
+index ac65befcf3..a9852a014b 100644
+--- a/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm
++++ b/Source/WebKit/WebProcess/Plugins/PDF/UnifiedPDF/UnifiedPDFPlugin.mm
+@@ -219,8 +219,50 @@ static NSString *termsurfPDFAnnotationWidgetKind(PDFAnnotation *annotation)
+     return @"none";
+ }
+ 
++static void termsurfAppendPDFPathTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
++static void termsurfTracePDFPath(NSString *phase)
++{
++    termsurfAppendPDFPathTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=%@ source=UnifiedPDFPlugin.mm process=webcontent plugin=unified pid=%d marker=issue-853-exp12",
++                                         phase ?: @"unknown",
++                                         NSProcessInfo.processInfo.processIdentifier]);
++}
++
+ Ref<UnifiedPDFPlugin> UnifiedPDFPlugin::create(HTMLPlugInElement& pluginElement)
+ {
++    termsurfTracePDFPath(@"unified-pdf-plugin-create");
+     return adoptRef(*new UnifiedPDFPlugin(pluginElement));
+ }
+ 
+@@ -231,6 +273,7 @@ UnifiedPDFPlugin::UnifiedPDFPlugin(HTMLPlugInElement& element)
+     , m_dataDetectorOverlayController(PDFDataDetectorOverlayController::create(*this))
+ #endif
+ {
++    termsurfTracePDFPath(@"unified-pdf-plugin-ctor");
+     this->setVerticalScrollElasticity(ScrollElasticity::Automatic);
+     this->setHorizontalScrollElasticity(ScrollElasticity::Automatic);
+ 
+@@ -362,6 +405,7 @@ FrameView* UnifiedPDFPlugin::mainFrameView() const
+ 
+ void UnifiedPDFPlugin::installPDFDocument()
+ {
++    termsurfTracePDFPath(@"unified-pdf-plugin-install-document");
+     ASSERT(isMainRunLoop());
+ 
+     if (m_hasBeenDestroyed)
+diff --git a/Source/WebKit/WebProcess/WebPage/Cocoa/WebPageCocoa.mm b/Source/WebKit/WebProcess/WebPage/Cocoa/WebPageCocoa.mm
+index e89215d468..44026bd236 100644
+--- a/Source/WebKit/WebProcess/WebPage/Cocoa/WebPageCocoa.mm
++++ b/Source/WebKit/WebProcess/WebPage/Cocoa/WebPageCocoa.mm
+@@ -151,6 +151,40 @@ namespace WebKit {
+ 
+ using namespace WebCore;
+ 
++static void termsurfAppendPDFPathTrace(NSString *line)
++{
++    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE"];
++    if (!path.length) {
++        NSString *configPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"termsurf/issue-853-webkit-trace-config"];
++        NSString *config = [NSString stringWithContentsOfFile:configPath encoding:NSUTF8StringEncoding error:nil];
++        NSString *prefix = @"TERMSURF_WEBKIT_PDF_PATH_TRACE_FILE=";
++        for (NSString *row in [config componentsSeparatedByString:@"\n"]) {
++            if ([row hasPrefix:prefix]) {
++                path = [row substringFromIndex:prefix.length];
++                break;
++            }
++        }
++    }
++    if (!path.length)
++        return;
++
++    NSFileManager *fileManager = NSFileManager.defaultManager;
++    NSString *parent = path.stringByDeletingLastPathComponent;
++    if (parent.length)
++        [fileManager createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
++
++    NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
++    if (![fileManager fileExistsAtPath:path]) {
++        [data writeToFile:path atomically:YES];
++        return;
++    }
++
++    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
++    [handle seekToEndOfFile];
++    [handle writeData:data];
++    [handle closeFile];
++}
++
+ void WebPage::platformInitialize(const WebPageCreationParameters& parameters)
+ {
+ #if ENABLE(INITIALIZE_ACCESSIBILITY_ON_DEMAND)
+@@ -238,8 +272,11 @@ void WebPage::requestActiveNowPlayingSessionInfo(CompletionHandler<void(bool, We
+ bool WebPage::shouldUsePDFPlugin(const String& contentType, StringView path) const
+ {
+ #if ENABLE(PDFJS)
+-    if (corePage()->settings().pdfJSViewerEnabled())
++    if (corePage()->settings().pdfJSViewerEnabled()) {
++        termsurfAppendPDFPathTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=should-use-pdf-plugin source=WebPageCocoa.mm process=webcontent pid=%d result=0 reason=pdfjs marker=issue-853-exp12",
++                                             NSProcessInfo.processInfo.processIdentifier]);
+         return false;
++    }
+ #endif
+ 
+     bool pluginEnabled = false;
+@@ -249,10 +286,17 @@ bool WebPage::shouldUsePDFPlugin(const String& contentType, StringView path) con
+ #if ENABLE(UNIFIED_PDF)
+     pluginEnabled |= corePage()->settings().unifiedPDFEnabled();
+ #endif
+-    if (!pluginEnabled)
++    if (!pluginEnabled) {
++        termsurfAppendPDFPathTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=should-use-pdf-plugin source=WebPageCocoa.mm process=webcontent pid=%d result=0 reason=plugin-disabled marker=issue-853-exp12",
++                                             NSProcessInfo.processInfo.processIdentifier]);
+         return false;
++    }
+ 
+-    return MIMETypeRegistry::isPDFMIMEType(contentType) || (contentType.isEmpty() && path.endsWithIgnoringASCIICase(".pdf"_s));
++    bool shouldUsePDFPlugin = MIMETypeRegistry::isPDFMIMEType(contentType) || (contentType.isEmpty() && path.endsWithIgnoringASCIICase(".pdf"_s));
++    termsurfAppendPDFPathTrace([NSString stringWithFormat:@"termsurf-webkit-pdf-path phase=should-use-pdf-plugin source=WebPageCocoa.mm process=webcontent pid=%d result=%d reason=content-check marker=issue-853-exp12",
++                                         NSProcessInfo.processInfo.processIdentifier,
++                                         shouldUsePDFPlugin ? 1 : 0]);
++    return shouldUsePDFPlugin;
+ }
+ #endif
+ 
+-- 
+2.54.0
+

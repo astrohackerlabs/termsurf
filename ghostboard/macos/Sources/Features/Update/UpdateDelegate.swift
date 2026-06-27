@@ -7,13 +7,10 @@ extension UpdateDriver: SPUUpdaterDelegate {
             return nil
         }
 
-        // Sparkle supports a native concept of "channels" but it requires that
-        // you share a single appcast file. We don't want to do that so we
-        // do this instead.
-        switch appDelegate.ghostty.config.autoUpdateChannel {
-        case .tip: return "https://tip.files.ghostty.org/appcast.xml"
-        case .stable: return "https://release.files.ghostty.org/appcast.xml"
-        }
+        // TermSurf is distributed through Homebrew. Do not inherit Ghostty
+        // appcasts or TermSurf could offer Ghostty updates.
+        _ = appDelegate
+        return nil
     }
 
     /// Called when an update is scheduled to install silently,

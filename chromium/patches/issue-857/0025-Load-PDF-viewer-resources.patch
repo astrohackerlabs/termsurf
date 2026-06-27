@@ -1,0 +1,168 @@
+From 7c554cafbd94e61e27902f9754726bbb0cd73076 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 09:26:25 -0500
+Subject: [PATCH 25/88] Load PDF viewer resources
+
+A viewer knocks at the pak-file door,
+Finds index.html on the resource-store.
+No streams, no guests, no render show,
+Just bytes where future PDFs go.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../extensions/ts_pdf_resource_bundle.cc      | 67 +++++++++++++++++++
+ .../extensions/ts_pdf_resource_bundle.h       | 16 +++++
+ .../libtermsurf_chromium/ts_main_delegate.cc  |  8 +++
+ .../libtermsurf_chromium/ts_main_delegate.h   |  1 +
+ 5 files changed, 94 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 2405a44941..a7faa5ab83 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -27,6 +27,8 @@ shared_library("libtermsurf_chromium") {
+     "extensions/ts_extensions_renderer_client.h",
+     "extensions/ts_pdf_component_extension.cc",
+     "extensions/ts_pdf_component_extension.h",
++    "extensions/ts_pdf_resource_bundle.cc",
++    "extensions/ts_pdf_resource_bundle.h",
+     "libtermsurf_chromium.cc",
+     "libtermsurf_chromium.h",
+     "ts_browser_client.cc",
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+new file mode 100644
+index 0000000000..c48517a134
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -0,0 +1,67 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h"
++
++#include <algorithm>
++#include <string>
++
++#include "base/base_paths.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/path_service.h"
++#include "base/strings/string_util.h"
++#include "chrome/grit/pdf_resources.h"
++#include "ui/base/resource/resource_bundle.h"
++
++namespace content {
++namespace {
++
++bool HasHtmlSignature(std::string contents) {
++  constexpr size_t kSignatureBytes = 256;
++  if (contents.size() > kSignatureBytes) {
++    contents.resize(kSignatureBytes);
++  }
++  std::string lower = base::ToLowerASCII(contents);
++  return lower.find("<!doctype html") != std::string::npos ||
++         lower.find("<html") != std::string::npos;
++}
++
++}  // namespace
++
++void LoadTsPdfResourceBundle(const std::string& process_type) {
++  base::FilePath assets_path;
++  if (!base::PathService::Get(base::DIR_ASSETS, &assets_path)) {
++    LOG(INFO) << "[issue-792-exp4] pdf-resource-pak path= found=0 loaded=0";
++    return;
++  }
++
++  base::FilePath pak_path = assets_path.AppendASCII("gen")
++                                .AppendASCII("chrome")
++                                .AppendASCII("pdf_resources.pak");
++  const bool found = base::PathExists(pak_path);
++  if (found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        pak_path, ui::kScaleFactorNone);
++  }
++
++  std::string index_html;
++  if (found) {
++    index_html = ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++        IDR_PDF_INDEX_HTML);
++  }
++  const bool loaded = !index_html.empty();
++  LOG(INFO) << "[issue-792-exp4] pdf-resource-pak path="
++            << pak_path.AsUTF8Unsafe() << " found=" << found
++            << " loaded=" << loaded;
++
++  if (process_type.empty()) {
++    LOG(INFO) << "[issue-792-exp4] pdf-resource-bytes id="
++              << IDR_PDF_INDEX_HTML << " bytes=" << index_html.size()
++              << " html_signature=" << HasHtmlSignature(index_html);
++  }
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h
+new file mode 100644
+index 0000000000..d112c5658a
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_RESOURCE_BUNDLE_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_RESOURCE_BUNDLE_H_
++
++#include <string>
++
++namespace content {
++
++void LoadTsPdfResourceBundle(const std::string& process_type);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_RESOURCE_BUNDLE_H_
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.cc b/content/libtermsurf_chromium/ts_main_delegate.cc
+index 1f0df20afe..9532f1e4e4 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.cc
++++ b/content/libtermsurf_chromium/ts_main_delegate.cc
+@@ -12,6 +12,7 @@
+ #include "base/logging/logging_settings.h"
+ #include "base/path_service.h"
+ #include "build/build_config.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h"
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ #include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ #include "content/public/common/content_switches.h"
+@@ -120,6 +121,13 @@ ContentBrowserClient* TsMainDelegate::CreateContentBrowserClient() {
+   return browser_client_.get();
+ }
+ 
++void TsMainDelegate::PreSandboxStartup() {
++  ShellMainDelegate::PreSandboxStartup();
++  LoadTsPdfResourceBundle(
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          switches::kProcessType));
++}
++
+ ContentRendererClient* TsMainDelegate::CreateContentRendererClient() {
+   renderer_client_ = std::make_unique<TsContentRendererClient>();
+   return renderer_client_.get();
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.h b/content/libtermsurf_chromium/ts_main_delegate.h
+index 809c25af5c..e49cc03a07 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.h
++++ b/content/libtermsurf_chromium/ts_main_delegate.h
+@@ -25,6 +25,7 @@ class TsMainDelegate : public ShellMainDelegate {
+ 
+   // ContentMainDelegate:
+   std::optional<int> BasicStartupComplete() override;
++  void PreSandboxStartup() override;
+   ContentBrowserClient* CreateContentBrowserClient() override;
+   ContentRendererClient* CreateContentRendererClient() override;
+ 
+-- 
+2.54.0
+
