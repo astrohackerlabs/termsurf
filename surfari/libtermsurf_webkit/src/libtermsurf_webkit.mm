@@ -250,6 +250,7 @@ struct WebContents {
     NSString *last_target_url;
     id cursor_observer;
     int last_cursor_type;
+    uint64_t cursor_probe_generation;
     bool suppress_cursor_notifications;
     bool renderer_crash_reported;
     CAContext *remote_context;
@@ -322,6 +323,57 @@ static bool pdfCopyDirectEnabled()
 static bool pdfCopyBridgeEnabled()
 {
     return NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_PDF_COPY_BRIDGE"].length > 0;
+}
+
+static bool surfariCursorTraceEnabled()
+{
+    return NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_CURSOR_TRACE"].length > 0;
+}
+
+static void traceSurfariCursor(WebContents *contents, NSString *phase, NSInteger raw_cursor_type, int mapped_cursor_type)
+{
+    if (!surfariCursorTraceEnabled())
+        return;
+
+    fprintf(stderr,
+        "[libtermsurf_webkit] surfari-cursor phase=%s tab=%d raw=%ld mapped=%d suppress=%d last=%d url=%s\n",
+        phase.UTF8String ?: "",
+        contents ? contents->tab_id : 0,
+        (long)raw_cursor_type,
+        mapped_cursor_type,
+        contents && contents->suppress_cursor_notifications ? 1 : 0,
+        contents ? contents->last_cursor_type : 0,
+        contents && contents->web_view.URL.absoluteString ? contents->web_view.URL.absoluteString.UTF8String : "");
+}
+
+static bool cursorNotificationBelongsToContents(WebContents *contents, id object)
+{
+    if (!contents || !contents->web_view || !object)
+        return false;
+    if (object == contents->web_view)
+        return true;
+    if ([object isKindOfClass:NSView.class])
+        return [(NSView *)object isDescendantOf:contents->web_view];
+    return false;
+}
+
+static void traceSurfariCursorNotification(WebContents *contents, NSString *phase, id object, NSInteger raw_cursor_type, int mapped_cursor_type)
+{
+    if (!surfariCursorTraceEnabled())
+        return;
+
+    NSString *object_class = object ? NSStringFromClass([object class]) : @"nil";
+    fprintf(stderr,
+        "[libtermsurf_webkit] surfari-cursor phase=%s tab=%d raw=%ld mapped=%d suppress=%d last=%d object=%s belongs=%d url=%s\n",
+        phase.UTF8String ?: "",
+        contents ? contents->tab_id : 0,
+        (long)raw_cursor_type,
+        mapped_cursor_type,
+        contents && contents->suppress_cursor_notifications ? 1 : 0,
+        contents ? contents->last_cursor_type : 0,
+        object_class.UTF8String ?: "",
+        cursorNotificationBelongsToContents(contents, object) ? 1 : 0,
+        contents && contents->web_view.URL.absoluteString ? contents->web_view.URL.absoluteString.UTF8String : "");
 }
 
 static NSString *pdfCopyBridgeMode()
@@ -4556,6 +4608,11 @@ static void unregisterContents(WebContents *contents)
     g_web_contents.erase(std::remove(g_web_contents.begin(), g_web_contents.end(), contents), g_web_contents.end());
 }
 
+static bool isRegisteredContents(WebContents *contents)
+{
+    return std::find(g_web_contents.begin(), g_web_contents.end(), contents) != g_web_contents.end();
+}
+
 static WebContents *findContentsByTabId(int tab_id)
 {
     for (WebContents *contents : g_web_contents) {
@@ -5675,13 +5732,55 @@ static void fireCursorChanged(WebContents *contents, int cursor_type)
 {
     if (!contents || !g_callbacks.on_cursor_changed)
         return;
-    if (contents->suppress_cursor_notifications)
+    if (contents->suppress_cursor_notifications) {
+        traceSurfariCursor(contents, @"suppressed", -1, cursor_type);
         return;
+    }
     if (contents->last_cursor_type == cursor_type)
         return;
 
     contents->last_cursor_type = cursor_type;
+    traceSurfariCursor(contents, @"fire", -1, cursor_type);
     g_callbacks.on_cursor_changed(contents, cursor_type, g_callbacks.on_cursor_changed_data);
+}
+
+static void updateCursorFromDocumentPoint(WebContents *contents, int x, int y)
+{
+    if (!contents || !contents->web_view || !g_callbacks.on_cursor_changed)
+        return;
+
+    uint64_t generation = ++contents->cursor_probe_generation;
+    NSString *script = [NSString stringWithFormat:
+        @"(() => {"
+         "const el = document.elementFromPoint(%d, %d);"
+         "if (!el) return 0;"
+         "let node = el;"
+         "while (node) {"
+         "  if (node instanceof HTMLAnchorElement && node.href) return 2;"
+         "  const tag = node.tagName ? node.tagName.toLowerCase() : '';"
+         "  if (tag === 'input' || tag === 'textarea' || node.isContentEditable) return 3;"
+         "  const cursor = getComputedStyle(node).cursor;"
+         "  if (cursor === 'pointer') return 2;"
+         "  if (cursor === 'text' || cursor === 'vertical-text') return 3;"
+         "  node = node.parentElement;"
+         "}"
+         "return 0;"
+         "})()",
+        x,
+        y];
+    [contents->web_view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        if (!isRegisteredContents(contents))
+            return;
+        if (contents->cursor_probe_generation != generation)
+            return;
+        if (error)
+            return;
+        if (![result respondsToSelector:@selector(intValue)])
+            return;
+        int cursor_type = [result intValue];
+        traceSurfariCursor(contents, @"dom", -1, cursor_type);
+        fireCursorChanged(contents, cursor_type);
+    }];
 }
 
 static NSString *consoleBridgeScriptSource(void)
@@ -5812,13 +5911,17 @@ static void installCursorObserver(WebContents *contents)
 {
     contents->cursor_observer = [[NSNotificationCenter defaultCenter]
         addObserverForName:TermSurfCursorChangedNotification
-                    object:contents->web_view
+                    object:nil
                      queue:nil
                 usingBlock:^(NSNotification *notification) {
                     NSNumber *cursor_type = notification.userInfo[TermSurfCursorTypeKey];
                     if (![cursor_type isKindOfClass:NSNumber.class])
                         return;
-                    fireCursorChanged(contents, chromiumCursorTypeForWebCoreCursorType(cursor_type.integerValue));
+                    int mapped_cursor_type = chromiumCursorTypeForWebCoreCursorType(cursor_type.integerValue);
+                    traceSurfariCursorNotification(contents, @"observe", notification.object, cursor_type.integerValue, mapped_cursor_type);
+                    if (!cursorNotificationBelongsToContents(contents, notification.object))
+                        return;
+                    fireCursorChanged(contents, mapped_cursor_type);
                 }];
 }
 
@@ -6255,6 +6358,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->focused = false;
     contents->dark = dark;
     contents->last_cursor_type = -999;
+    contents->cursor_probe_generation = 0;
     contents->suppress_cursor_notifications = false;
     contents->renderer_crash_reported = false;
     contents->snapshot_layer = nil;
@@ -6350,6 +6454,7 @@ ts_web_contents_t ts_create_devtools_web_contents(
     contents->focused = false;
     contents->dark = dark;
     contents->last_cursor_type = -999;
+    contents->cursor_probe_generation = 0;
     contents->suppress_cursor_notifications = false;
     contents->renderer_crash_reported = false;
     contents->snapshot_layer = nil;
@@ -6582,19 +6687,21 @@ void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers)
         deliverMouseEvent(contents, event, is_drag ? @"mouse-drag" : @"mouse-move");
         contents->suppress_cursor_notifications = false;
     } else {
-        [NSApp _setCurrentEvent:event];
-        contents->suppress_cursor_notifications = true;
         if (is_drag) {
+            [NSApp _setCurrentEvent:event];
+            contents->suppress_cursor_notifications = true;
             if ([pdfSelectionEdgeProbeMode() isEqualToString:@"target"]) {
                 NSView *target = [contents->web_view hitTest:event.locationInWindow] ?: contents->web_view;
                 [target mouseDragged:event];
             } else {
                 [contents->web_view mouseDragged:event];
             }
-        } else
-            [contents->web_view _simulateMouseMove:event];
-        contents->suppress_cursor_notifications = false;
-        [NSApp _setCurrentEvent:nil];
+            contents->suppress_cursor_notifications = false;
+            [NSApp _setCurrentEvent:nil];
+        } else {
+            deliverMouseEvent(contents, event, @"mouse-move");
+            updateCursorFromDocumentPoint(contents, x, y);
+        }
     }
     if (is_drag && pdfCopyTraceEnabled()) {
         appendPdfCopyTrace([NSString stringWithFormat:@"surfari-pdf-copy-drag tab=%d x=%d y=%d modifiers=%d location=%@ original_location=%@ edge_mode=%@ edge_delta=%.2f remediation_geometry=%d", contents->tab_id, x, y, modifiers, NSStringFromPoint(event.locationInWindow), NSStringFromPoint(original_location), pdfSelectionEdgeProbeMode() ?: @"none", pdfSelectionEdgeDeltaX(), geometryRemediationApplied ? 1 : 0]);
