@@ -309,9 +309,12 @@ class AppDelegate: NSObject,
              options: [.new, .initial]
         ) { _, change in
             guard let appearance = change.newValue else { return }
+            let isDark = appearance.isDark
+            termsurf_color_scheme_changed(isDark ? 1 : 0)
+
             guard let app = self.ghostty.app else { return }
             let scheme: ghostty_color_scheme_e
-            if appearance.isDark {
+            if isDark {
                 scheme = GHOSTTY_COLOR_SCHEME_DARK
             } else {
                 scheme = GHOSTTY_COLOR_SCHEME_LIGHT

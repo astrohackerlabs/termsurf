@@ -505,6 +505,7 @@ const CreateDevtoolsTabSnapshot = struct {
     inspected_tab_id: i64 = 0,
     pixel_width: u64 = 0,
     pixel_height: u64 = 0,
+    dark: bool = false,
 
     fn paneId(self: *const CreateDevtoolsTabSnapshot) []const u8 {
         return self.pane_id[0..self.pane_id_len];
@@ -534,6 +535,7 @@ var hello_browser_lens: [max_hello_browsers]usize = undefined;
 var hello_browser_count: usize = 0;
 var gui_active: bool = false;
 var pending_gui_activation: bool = false;
+var current_color_scheme_dark: bool = false;
 
 pub fn start() !void {
     mutex.lock();
@@ -928,6 +930,14 @@ pub fn helloConfigChanged(homepage: []const u8, browser_payload: []const u8) voi
         "TermSurf Hello config homepage={s} browsers={s}",
         .{ currentHelloHomepageLocked(), browser_log },
     );
+}
+
+pub fn colorSchemeChanged(dark: bool) void {
+    state_mutex.lock();
+    defer state_mutex.unlock();
+
+    current_color_scheme_dark = dark;
+    log.info("TermSurf color scheme changed dark={}", .{dark});
 }
 
 fn currentHelloHomepage(buf: *[max_homepage_len:0]u8, len: *usize) [:0]const u8 {
@@ -1791,7 +1801,7 @@ fn sendCreateTab(fd: std.posix.fd_t, pane: *const PaneState) !void {
     create_tab.pane_id = @constCast(pane.pane_id[0..pane.pane_id_len :0].ptr);
     create_tab.pixel_width = pane.width * fallback_cell_width;
     create_tab.pixel_height = pane.height * fallback_cell_height;
-    create_tab.dark = 0;
+    create_tab.dark = if (current_color_scheme_dark) 1 else 0;
 
     var wrapper: c.Termsurf__TermSurfMessage = undefined;
     c.termsurf__term_surf_message__init(&wrapper);
@@ -1799,7 +1809,11 @@ fn sendCreateTab(fd: std.posix.fd_t, pane: *const PaneState) !void {
     wrapper.unnamed_0.create_tab = &create_tab;
 
     try sendProtobuf(fd, &wrapper);
-    log.info("sent CreateTab: pane_id={s} url={s}", .{ pane.paneId(), pane.url[0..pane.url_len] });
+    log.info("sent CreateTab: pane_id={s} url={s} dark={}", .{
+        pane.paneId(),
+        pane.url[0..pane.url_len],
+        current_color_scheme_dark,
+    });
     geometryTracePane("create_tab", pane, "sent-create-tab");
 }
 
@@ -1809,6 +1823,7 @@ fn snapshotCreateDevtoolsTab(pane: *const PaneState, browser_fd: std.posix.fd_t)
         .inspected_tab_id = pane.inspected_tab_id,
         .pixel_width = pane.width * fallback_cell_width,
         .pixel_height = pane.height * fallback_cell_height,
+        .dark = current_color_scheme_dark,
     };
     if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
     return snapshot;
@@ -1821,7 +1836,7 @@ fn sendCreateDevtoolsTab(snapshot: *const CreateDevtoolsTabSnapshot) !void {
     create_devtools_tab.inspected_tab_id = snapshot.inspected_tab_id;
     create_devtools_tab.pixel_width = snapshot.pixel_width;
     create_devtools_tab.pixel_height = snapshot.pixel_height;
-    create_devtools_tab.dark = 0;
+    create_devtools_tab.dark = if (snapshot.dark) 1 else 0;
 
     var wrapper: c.Termsurf__TermSurfMessage = undefined;
     c.termsurf__term_surf_message__init(&wrapper);
@@ -1830,8 +1845,8 @@ fn sendCreateDevtoolsTab(snapshot: *const CreateDevtoolsTabSnapshot) !void {
 
     try sendProtobuf(snapshot.browser_fd, &wrapper);
     log.info(
-        "CreateDevtoolsTab: pane_id={s} inspected_tab_id={}",
-        .{ snapshot.paneId(), snapshot.inspected_tab_id },
+        "CreateDevtoolsTab: pane_id={s} inspected_tab_id={} dark={}",
+        .{ snapshot.paneId(), snapshot.inspected_tab_id, snapshot.dark },
     );
 }
 
@@ -3612,6 +3627,64 @@ fn resetTermsurfStateForTest() void {
     hello_browser_count = 0;
     gui_active = false;
     pending_gui_activation = false;
+    current_color_scheme_dark = false;
+}
+
+test "termsurf create tab uses tracked color scheme" {
+    const testing = std.testing;
+
+    for ([_][]const u8{ "roamium", "surfari" }) |browser_name| {
+        for ([_]bool{ false, true }) |dark| {
+            resetTermsurfStateForTest();
+            defer resetTermsurfStateForTest();
+
+            var browser = try testSocketPair();
+            defer testCloseSocketPair(&browser);
+            var tui = try testSocketPair();
+            defer testCloseSocketPair(&tui);
+
+            colorSchemeChanged(dark);
+            try testSetPane(0, "pane-color", "default", browser_name, "https://example.test/color", tui[0]);
+            try sendCreateTab(browser[0], &panes[0]);
+
+            const create = try readTestMessage(browser[1], testing.allocator);
+            defer c.termsurf__term_surf_message__free_unpacked(create, null);
+            try testing.expectEqual(
+                @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_CREATE_TAB),
+                create.*.msg_case,
+            );
+            try testing.expectEqual(@as(c_int, if (dark) 1 else 0), create.*.unnamed_0.create_tab.*.dark);
+        }
+    }
+}
+
+test "termsurf create devtools tab snapshots tracked color scheme" {
+    const testing = std.testing;
+
+    for ([_]bool{ false, true }) |dark| {
+        resetTermsurfStateForTest();
+        defer resetTermsurfStateForTest();
+
+        var browser = try testSocketPair();
+        defer testCloseSocketPair(&browser);
+        var tui = try testSocketPair();
+        defer testCloseSocketPair(&tui);
+
+        colorSchemeChanged(dark);
+        try testSetPane(0, "pane-devtools", "default", "roamium", "", tui[0]);
+        panes[0].inspected_tab_id = 42;
+        const snapshot = snapshotCreateDevtoolsTab(&panes[0], browser[0]).?;
+        colorSchemeChanged(!dark);
+        try sendCreateDevtoolsTab(&snapshot);
+
+        const create = try readTestMessage(browser[1], testing.allocator);
+        defer c.termsurf__term_surf_message__free_unpacked(create, null);
+        try testing.expectEqual(
+            @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_CREATE_DEVTOOLS_TAB),
+            create.*.msg_case,
+        );
+        try testing.expectEqual(@as(c_int, if (dark) 1 else 0), create.*.unnamed_0.create_devtools_tab.*.dark);
+    }
 }
 
 fn testSocketPair() ![2]std.posix.fd_t {

@@ -175,11 +175,82 @@ enum LoopEvent {
 }
 
 // Command dispatch (Issues 659, 772).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DarkAction {
     Toggle,
     On,
     Off,
     System,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedDarkAction {
+    dark: bool,
+    source: &'static str,
+}
+
+fn parse_macos_interface_style_dark(output: &str) -> Option<bool> {
+    match output.trim().to_ascii_lowercase().as_str() {
+        "dark" => Some(true),
+        "light" => Some(false),
+        "" => None,
+        _ => None,
+    }
+}
+
+fn macos_defaults_color_scheme(status_success: bool, stdout: &[u8]) -> Option<bool> {
+    if !status_success {
+        return Some(false);
+    }
+
+    parse_macos_interface_style_dark(&String::from_utf8_lossy(stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn current_system_dark_mode() -> Option<(bool, &'static str)> {
+    let output = std::process::Command::new("/usr/bin/defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .ok()?;
+
+    macos_defaults_color_scheme(output.status.success(), &output.stdout)
+        .map(|dark| (dark, "macos-defaults"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_system_dark_mode() -> Option<(bool, &'static str)> {
+    None
+}
+
+fn resolve_dark_action(
+    action: DarkAction,
+    current_is_dark: bool,
+    system_resolver: impl FnOnce() -> Option<(bool, &'static str)>,
+) -> ResolvedDarkAction {
+    match action {
+        DarkAction::Toggle => ResolvedDarkAction {
+            dark: !current_is_dark,
+            source: "toggle",
+        },
+        DarkAction::On => ResolvedDarkAction {
+            dark: true,
+            source: "explicit-on",
+        },
+        DarkAction::Off => ResolvedDarkAction {
+            dark: false,
+            source: "explicit-off",
+        },
+        DarkAction::System => {
+            if let Some((dark, source)) = system_resolver() {
+                ResolvedDarkAction { dark, source }
+            } else {
+                ResolvedDarkAction {
+                    dark: current_is_dark,
+                    source: "current-state-fallback",
+                }
+            }
+        }
+    }
 }
 
 enum ViewportCommand {
@@ -1113,18 +1184,18 @@ fn main() -> io::Result<()> {
                             match dispatch(&cmd_text) {
                                 CommandResult::Quit => break,
                                 CommandResult::Dark(action) => {
-                                    let dark = match action {
-                                        DarkAction::Toggle => !is_dark,
-                                        DarkAction::On => true,
-                                        DarkAction::Off => false,
-                                        DarkAction::System => false,
-                                    };
+                                    let resolved = resolve_dark_action(
+                                        action,
+                                        is_dark,
+                                        current_system_dark_mode,
+                                    );
                                     let action_label = match action {
                                         DarkAction::Toggle => "toggle",
                                         DarkAction::On => "on",
                                         DarkAction::Off => "off",
                                         DarkAction::System => "system",
                                     };
+                                    let dark = resolved.dark;
                                     is_dark = dark;
                                     let scheme = if dark { "dark" } else { "light" };
                                     if let Some(trace) = state_trace.as_mut() {
@@ -1134,6 +1205,7 @@ fn main() -> io::Result<()> {
                                                 ("action", action_label.to_string()),
                                                 ("scheme", scheme.to_string()),
                                                 ("dark", dark.to_string()),
+                                                ("source", resolved.source.to_string()),
                                                 ("tab_id", current_tab_id.to_string()),
                                             ],
                                         );
@@ -2303,6 +2375,92 @@ mod tests {
         assert_dark_command("dark n", DarkAction::Off);
         assert_dark_command("dark system", DarkAction::System);
         assert_dark_command("dark s", DarkAction::System);
+    }
+
+    #[test]
+    fn parses_macos_interface_style() {
+        assert_eq!(parse_macos_interface_style_dark("Dark\n"), Some(true));
+        assert_eq!(parse_macos_interface_style_dark("dark"), Some(true));
+        assert_eq!(parse_macos_interface_style_dark("Light\n"), Some(false));
+        assert_eq!(parse_macos_interface_style_dark(""), None);
+        assert_eq!(parse_macos_interface_style_dark("Graphite"), None);
+    }
+
+    #[test]
+    fn maps_missing_macos_interface_style_to_light() {
+        assert_eq!(macos_defaults_color_scheme(false, b""), Some(false));
+        assert_eq!(macos_defaults_color_scheme(true, b"Dark\n"), Some(true));
+        assert_eq!(macos_defaults_color_scheme(true, b"Light\n"), Some(false));
+        assert_eq!(macos_defaults_color_scheme(true, b"Graphite\n"), None);
+    }
+
+    #[test]
+    fn resolves_system_dark_action_from_injected_resolver() {
+        assert_eq!(
+            resolve_dark_action(DarkAction::System, false, || {
+                Some((true, "test-system"))
+            }),
+            ResolvedDarkAction {
+                dark: true,
+                source: "test-system",
+            }
+        );
+        assert_eq!(
+            resolve_dark_action(DarkAction::System, true, || {
+                Some((false, "test-system"))
+            }),
+            ResolvedDarkAction {
+                dark: false,
+                source: "test-system",
+            }
+        );
+    }
+
+    #[test]
+    fn system_dark_action_falls_back_to_current_state() {
+        assert_eq!(
+            resolve_dark_action(DarkAction::System, true, || None),
+            ResolvedDarkAction {
+                dark: true,
+                source: "current-state-fallback",
+            }
+        );
+        assert_eq!(
+            resolve_dark_action(DarkAction::System, false, || None),
+            ResolvedDarkAction {
+                dark: false,
+                source: "current-state-fallback",
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_dark_actions_do_not_call_system_resolver() {
+        let resolver = || -> Option<(bool, &'static str)> {
+            panic!("explicit dark actions should not query system appearance")
+        };
+
+        assert_eq!(
+            resolve_dark_action(DarkAction::On, false, resolver),
+            ResolvedDarkAction {
+                dark: true,
+                source: "explicit-on",
+            }
+        );
+        assert_eq!(
+            resolve_dark_action(DarkAction::Off, true, resolver),
+            ResolvedDarkAction {
+                dark: false,
+                source: "explicit-off",
+            }
+        );
+        assert_eq!(
+            resolve_dark_action(DarkAction::Toggle, false, resolver),
+            ResolvedDarkAction {
+                dark: true,
+                source: "toggle",
+            }
+        );
     }
 
     #[test]

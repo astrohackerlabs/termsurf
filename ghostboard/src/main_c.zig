@@ -173,6 +173,10 @@ pub export fn termsurf_hello_config_changed(homepage: [*:0]const u8, browsers: [
     termsurf.helloConfigChanged(std.mem.span(homepage), std.mem.span(browsers));
 }
 
+pub export fn termsurf_color_scheme_changed(dark: c_int) void {
+    termsurf.colorSchemeChanged(dark != 0);
+}
+
 pub export fn termsurf_overlay_presented_pixels(
     pane_id: [*:0]const u8,
     pixel_width: u64,

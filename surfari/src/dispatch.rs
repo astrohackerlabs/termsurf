@@ -257,8 +257,8 @@ pub fn handle_message(msg: &TermSurfMessage) {
         Msg::CreateTab(m) => {
             let url = CString::new(m.url.as_str()).unwrap();
             trace_pdf_input(format!(
-                "create-tab pane={} pixel_width={} pixel_height={} url={}",
-                m.pane_id, m.pixel_width, m.pixel_height, m.url
+                "create-tab pane={} pixel_width={} pixel_height={} url={} dark={}",
+                m.pane_id, m.pixel_width, m.pixel_height, m.url, m.dark
             ));
             tabs().push(TabEntry {
                 handle: std::ptr::null_mut(),

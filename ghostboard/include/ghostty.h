@@ -1073,6 +1073,7 @@ GHOSTTY_API void ghostty_string_free(ghostty_string_s);
 GHOSTTY_API int termsurf_ipc_start(void);
 GHOSTTY_API void termsurf_ipc_stop(void);
 GHOSTTY_API void termsurf_hello_config_changed(const char*, const char*);
+GHOSTTY_API void termsurf_color_scheme_changed(int);
 GHOSTTY_API void termsurf_overlay_presented_pixels(const char*, uint64_t, uint64_t);
 GHOSTTY_API int termsurf_forward_key_event(const char*, const char*, int64_t, const char*, uint64_t);
 GHOSTTY_API int termsurf_forward_mouse_event(const char*, const char*, const char*, double, double, int64_t, uint64_t);
