@@ -53,6 +53,15 @@ surfari_runtime_artifact_source() {
   printf '%s\n' "$source"
 }
 
+cleanup_surfari_rpaths() {
+  local surfari_bin="$STAGING_DIR/surfari/surfari"
+  local surfari_lib="$STAGING_DIR/surfari/libtermsurf_webkit.dylib"
+
+  install_name_tool -delete_rpath "$REPO_DIR/surfari/libtermsurf_webkit/build" "$surfari_bin" 2>/dev/null || true
+  install_name_tool -delete_rpath "$WEBKIT_RELEASE_OUT" "$surfari_lib" 2>/dev/null || true
+  install_name_tool -add_rpath "@loader_path" "$surfari_lib" 2>/dev/null || true
+}
+
 echo "==> Packaging TermSurf v${VERSION} for ${ARCH}..."
 
 check_ghostboard_version() {
@@ -136,6 +145,7 @@ cp "$SURFARI_LIB" "$STAGING_DIR/surfari/"
 for artifact in "${SURFARI_RUNTIME_ARTIFACTS[@]}"; do
   cp -R "$(surfari_runtime_artifact_source "$artifact")" "$STAGING_DIR/surfari/"
 done
+cleanup_surfari_rpaths
 
 # Copy .app bundle
 echo "==> Copying TermSurf.app..."

@@ -38,15 +38,20 @@ The release tarball contains the same top-level package contract:
 ## Verification
 
 After install or upgrade, verify that `web` can open a page from inside TermSurf
-without passing a repo-local browser path. That proves the installed app,
-installed `web` binary, and installed Roamium runtime discovery path are working
-together.
+without passing a repo-local browser path or setting browser path environment
+variables. That proves the installed app, installed `web` binary, and installed
+browser runtime discovery paths are working together.
 
 For local release validation, the smoke test should record elapsed time and
 evidence such as logs or screenshots showing:
 
 - `TermSurf.app` launched from the installed app path;
 - the TermSurf socket was created;
-- `web` opened a simple page such as `https://example.com`;
-- Ghostboard resolved the installed Roamium path;
-- the page rendered successfully.
+- `web --browser roamium https://example.com` opened and rendered the page;
+- Ghostboard resolved the installed Roamium path:
+  `/opt/homebrew/opt/termsurf-roamium/roamium`;
+- `web --browser surfari https://example.com` opened and rendered the page;
+- Ghostboard resolved the installed Surfari path:
+  `/opt/homebrew/opt/termsurf-surfari/surfari`;
+- neither smoke required `TERMSURF_ROAMIUM_PATH`, `TERMSURF_SURFARI_PATH`,
+  `TERMSURF_INSTALLED_ROAMIUM_PATH`, or `TERMSURF_INSTALLED_SURFARI_PATH`.

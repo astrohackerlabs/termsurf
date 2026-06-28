@@ -145,7 +145,7 @@ struct RendererCrashState {
 enum LoadingStage {
     ConnectingToGui,
     StartingBrowser,
-    WaitingForChromium,
+    WaitingForBrowser,
     LoadingPage,
     Ready,
 }
@@ -162,7 +162,7 @@ impl LoadingStage {
         match self {
             LoadingStage::ConnectingToGui => "Connected to GUI",
             LoadingStage::StartingBrowser => "Starting browser engine",
-            LoadingStage::WaitingForChromium => "Waiting for Chromium",
+            LoadingStage::WaitingForBrowser => "Waiting for browser",
             LoadingStage::LoadingPage => "Loading page",
             LoadingStage::Ready => "Ready",
         }
@@ -594,7 +594,7 @@ fn main() -> io::Result<()> {
     let mut console_log: Vec<ConsoleLogEntry> = Vec::new();
     let mut renderer_crash: Option<RendererCrashState> = None;
     let mut renderer_crash_recovery_load_started = false;
-    let mut chromium_wait_start: Option<Instant> = None;
+    let mut browser_wait_start: Option<Instant> = None;
 
     // Populate initial loading stages (Issue 773).
     if compositor.is_some() {
@@ -667,7 +667,7 @@ fn main() -> io::Result<()> {
                 &loading_log,
                 &renderer_crash,
                 browser_ready,
-                chromium_wait_start,
+                browser_wait_start,
                 viewport_height_override,
             );
         })?;
@@ -802,8 +802,8 @@ fn main() -> io::Result<()> {
 
                 // Loading stages (Issue 773).
                 loading_log.push((LoadingStage::StartingBrowser, StageStatus::Done));
-                loading_log.push((LoadingStage::WaitingForChromium, StageStatus::InProgress));
-                chromium_wait_start = Some(Instant::now());
+                loading_log.push((LoadingStage::WaitingForBrowser, StageStatus::InProgress));
+                browser_wait_start = Some(Instant::now());
             }
         }
 
@@ -1463,9 +1463,9 @@ fn main() -> io::Result<()> {
 
                         // Loading stages (Issue 773).
                         browser_ready = true;
-                        // Mark WaitingForChromium as done.
+                        // Mark WaitingForBrowser as done.
                         for entry in loading_log.iter_mut() {
-                            if matches!(entry.0, LoadingStage::WaitingForChromium)
+                            if matches!(entry.0, LoadingStage::WaitingForBrowser)
                                 && matches!(entry.1, StageStatus::InProgress)
                             {
                                 entry.1 = StageStatus::Done;
@@ -1586,18 +1586,19 @@ fn main() -> io::Result<()> {
             }
         }
 
-        // Loading timeout: mark error if Chromium never connects (Issue 773).
+        // Loading timeout: mark error if browser never connects (Issue 773).
         if !browser_ready {
-            if let Some(start) = chromium_wait_start {
+            if let Some(start) = browser_wait_start {
                 if start.elapsed() >= Duration::from_secs(120) {
                     for entry in loading_log.iter_mut() {
-                        if matches!(entry.0, LoadingStage::WaitingForChromium)
+                        if matches!(entry.0, LoadingStage::WaitingForBrowser)
                             && matches!(entry.1, StageStatus::InProgress)
                         {
-                            entry.1 = StageStatus::Error("Timeout — is Roamium installed?".into());
+                            entry.1 =
+                                StageStatus::Error("Timeout — is the browser installed?".into());
                         }
                     }
-                    chromium_wait_start = None; // Don't keep re-triggering.
+                    browser_wait_start = None; // Don't keep re-triggering.
                 }
             }
         }
@@ -1756,7 +1757,7 @@ fn ui(
     loading_log: &[(LoadingStage, StageStatus)],
     renderer_crash: &Option<RendererCrashState>,
     browser_ready: bool,
-    chromium_wait_start: Option<Instant>,
+    browser_wait_start: Option<Instant>,
     viewport_height_override: Option<u16>,
 ) -> Rect {
     // Paint full background.
@@ -2028,7 +2029,7 @@ fn ui(
     } else if !browser_ready && !loading_log.is_empty() {
         // Render loading log (Issue 773).
         const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spinner_frame = chromium_wait_start
+        let spinner_frame = browser_wait_start
             .map(|s| (s.elapsed().as_millis() / 100) as usize % SPINNER.len())
             .unwrap_or(0);
 
@@ -2052,11 +2053,12 @@ fn ui(
                 }
                 _ => {
                     let mut label = stage.label().to_string();
-                    // Show elapsed time for WaitingForChromium.
-                    if matches!(stage, LoadingStage::WaitingForChromium)
+                    // Show elapsed time for WaitingForBrowser.
+                    if matches!(stage, LoadingStage::WaitingForBrowser)
                         && matches!(status, StageStatus::InProgress)
                     {
-                        if let Some(start) = chromium_wait_start {
+                        label = format!("Waiting for {browser_label}");
+                        if let Some(start) = browser_wait_start {
                             let elapsed = start.elapsed().as_secs();
                             label = format!("{} ({}s)", label, elapsed);
                         }
@@ -2068,16 +2070,18 @@ fn ui(
         }
 
         // Warnings based on elapsed time.
-        if let Some(start) = chromium_wait_start {
+        if let Some(start) = browser_wait_start {
             let elapsed = start.elapsed().as_secs();
-            if elapsed >= 120 {
-                // This is handled in the timeout below, but show inline too.
-            } else if elapsed >= 30 {
+            if elapsed < 120 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(
-                    Span::raw("    First launch is slow — Chromium is initializing")
-                        .style(Style::default().fg(COMMENT)),
+                    Span::raw(
+                        "    The first time you load a web browser it may take up to two minutes.",
+                    )
+                    .style(Style::default().fg(COMMENT)),
                 ));
+            } else {
+                // This is handled in the timeout below, but show inline too.
             }
         }
 
@@ -2260,6 +2264,52 @@ mod tests {
         }
     }
 
+    fn render_loading_probe(browser_label: &str) -> RenderProbe {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut editor_state = EditorState::new(Lines::from("https://example.test"));
+        let mut cmd_state = EditorState::new(Lines::from("open https://example.test"));
+        let mut viewport = Rect::default();
+        let loading_log = vec![
+            (LoadingStage::ConnectingToGui, StageStatus::Done),
+            (LoadingStage::StartingBrowser, StageStatus::Done),
+            (LoadingStage::WaitingForBrowser, StageStatus::InProgress),
+        ];
+
+        terminal
+            .draw(|frame| {
+                viewport = ui(
+                    frame,
+                    "https://example.test",
+                    "default",
+                    &Mode::Control,
+                    &mut editor_state,
+                    &mut cmd_state,
+                    "Viewport",
+                    false,
+                    -1,
+                    0,
+                    &None,
+                    browser_label,
+                    "",
+                    &None,
+                    &None,
+                    None,
+                    &loading_log,
+                    &None,
+                    false,
+                    Some(Instant::now()),
+                    None,
+                );
+            })
+            .unwrap();
+
+        RenderProbe {
+            viewport,
+            capture: numbered_buffer_capture(terminal.backend().buffer()),
+        }
+    }
+
     fn numbered_buffer_capture(buffer: &Buffer) -> String {
         let mut out = String::new();
         for y in 0..buffer.area.height {
@@ -2432,6 +2482,32 @@ mod tests {
                 source: "current-state-fallback",
             }
         );
+    }
+
+    #[test]
+    fn loading_screen_uses_browser_label_and_immediate_warning() {
+        for browser_label in ["surfari", "roamium"] {
+            let rendered = render_loading_probe(browser_label);
+            assert!(
+                rendered
+                    .capture
+                    .contains(&format!("Waiting for {browser_label}")),
+                "loading screen should name {browser_label}\n{}",
+                rendered.capture
+            );
+            assert!(
+                rendered
+                    .capture
+                    .contains("The first time you load a web browser"),
+                "loading screen should show immediate engine-neutral warning\n{}",
+                rendered.capture
+            );
+            assert!(
+                !rendered.capture.contains("Chromium"),
+                "loading screen should not mention Chromium\n{}",
+                rendered.capture
+            );
+        }
     }
 
     #[test]

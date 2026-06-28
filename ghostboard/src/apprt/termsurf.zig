@@ -37,7 +37,9 @@ const default_devtools_reservation_timeout_ms: i64 = 15_000;
 const roamium_path_env = "TERMSURF_ROAMIUM_PATH";
 const surfari_path_env = "TERMSURF_SURFARI_PATH";
 const installed_roamium_path_env = "TERMSURF_INSTALLED_ROAMIUM_PATH";
+const installed_surfari_path_env = "TERMSURF_INSTALLED_SURFARI_PATH";
 const installed_roamium_path = "/opt/homebrew/opt/termsurf-roamium/roamium";
+const installed_surfari_path = "/opt/homebrew/opt/termsurf-surfari/surfari";
 
 const termsurf_open_split = if (builtin.is_test) testTermsurfOpenSplit else @extern(*const fn (
     pane_id: [*:0]const u8,
@@ -1523,6 +1525,10 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
 }
 
 fn resolveBrowserExecutable(browser: []const u8) ?[]const u8 {
+    return resolveBrowserExecutableForBuild(browser, build_config.is_debug);
+}
+
+fn resolveBrowserExecutableForBuild(browser: []const u8, is_debug: bool) ?[]const u8 {
     if (isAbsolutePath(browser)) {
         log.info("SetOverlay: browser executable absolute path={s}", .{browser});
         return browser;
@@ -1548,7 +1554,7 @@ fn resolveBrowserExecutable(browser: []const u8) ?[]const u8 {
             );
         }
 
-        if (comptime build_config.is_debug) return null;
+        if (is_debug) return null;
 
         if (std.posix.getenv(installed_roamium_path_env)) |resolved| {
             if (resolved.len != 0 and isAbsolutePath(resolved)) {
@@ -1584,14 +1590,35 @@ fn resolveBrowserExecutable(browser: []const u8) ?[]const u8 {
                 "SetOverlay: named browser unresolved browser={s} env={s} value={s}",
                 .{ browser, surfari_path_env, resolved },
             );
+        }
+
+        if (is_debug) {
+            log.warn(
+                "SetOverlay: named browser unresolved browser={s} env={s}",
+                .{ browser, surfari_path_env },
+            );
             return null;
         }
 
-        log.warn(
-            "SetOverlay: named browser unresolved browser={s} env={s}",
-            .{ browser, surfari_path_env },
+        if (std.posix.getenv(installed_surfari_path_env)) |resolved| {
+            if (resolved.len != 0 and isAbsolutePath(resolved)) {
+                log.info(
+                    "SetOverlay: named browser resolved browser={s} env={s} path={s}",
+                    .{ browser, installed_surfari_path_env, resolved },
+                );
+                return resolved;
+            }
+            log.warn(
+                "SetOverlay: installed browser override ignored browser={s} env={s} value={s}",
+                .{ browser, installed_surfari_path_env, resolved },
+            );
+        }
+
+        log.info(
+            "SetOverlay: named browser resolved browser={s} installed_path={s}",
+            .{ browser, installed_surfari_path },
         );
-        return null;
+        return installed_surfari_path;
     }
 
     log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
@@ -3195,6 +3222,35 @@ fn spawnBrowserProcess(
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
+    var child_env = std.process.getEnvMap(std.heap.c_allocator) catch |err| blk: {
+        log.warn("browser spawn env map unavailable browser={s} err={}", .{ browser_name_z, err });
+        break :blk null;
+    };
+    defer if (child_env) |*env| env.deinit();
+    if (child_env) |*env| {
+        const inherited_framework_path = env.get("DYLD_FRAMEWORK_PATH");
+        if (inherited_framework_path) |framework_path| {
+            if (std.mem.eql(u8, browser_name_z, "surfari")) {
+                log.info(
+                    "browser spawn runtime env browser={s} inherited DYLD_FRAMEWORK_PATH={s}",
+                    .{ browser_name_z, framework_path },
+                );
+            }
+        } else if (shouldSupplySurfariRuntimeFrameworkPath(browser_name_z, inherited_framework_path)) {
+            const framework_path = surfariRuntimeFrameworkPath(browser_name_z, browser_executable_z).?;
+            env.put("DYLD_FRAMEWORK_PATH", framework_path) catch |err| {
+                log.warn(
+                    "browser spawn runtime env skipped browser={s} path={s} err={}",
+                    .{ browser_name_z, framework_path, err },
+                );
+            };
+            log.info(
+                "browser spawn runtime env browser={s} DYLD_FRAMEWORK_PATH={s}",
+                .{ browser_name_z, framework_path },
+            );
+        }
+        child.env_map = env;
+    }
     child.spawn() catch |err| {
         log.warn("browser spawn failed path={s} profile={s} browser={s} err={}", .{ browser_executable_z, profile_z, browser_name_z, err });
         return null;
@@ -3205,6 +3261,15 @@ fn spawnBrowserProcess(
         .{ browser_executable_z, child.id, profile_z, browser_name_z, browser_executable_z, ipc_arg, browser_name_arg, data_arg, listen_arg, log_arg },
     );
     return child.id;
+}
+
+fn shouldSupplySurfariRuntimeFrameworkPath(browser: []const u8, inherited_framework_path: ?[]const u8) bool {
+    return std.mem.eql(u8, browser, "surfari") and inherited_framework_path == null;
+}
+
+fn surfariRuntimeFrameworkPath(browser: []const u8, browser_executable: []const u8) ?[]const u8 {
+    if (!std.mem.eql(u8, browser, "surfari")) return null;
+    return std.fs.path.dirname(browser_executable);
 }
 
 fn buildUserDataDir(buf: []u8, browser: []const u8, profile: []const u8) ?[:0]u8 {
@@ -3495,7 +3560,7 @@ test "termsurf server register matches profile and browser" {
     const surfari: [:0]const u8 = "surfari";
     const roamium: [:0]const u8 = "roamium";
 
-    try testWithRestoredEnv(surfari_path_env, testSurfariResolution);
+    try testBrowserResolutionWithRestoredEnv();
 
     var surfari_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const surfari_data_dir = buildUserDataDir(&surfari_data_dir_buf, surfari, profile) orelse return error.UserDataDirFailed;
@@ -3581,18 +3646,79 @@ test "termsurf server register matches profile and browser" {
     try testing.expectEqual(@as(u64, 0), panes[1].ca_context_id);
 }
 
-fn testSurfariResolution() !void {
+fn testBrowserResolutionWithRestoredEnv() !void {
+    try testWithRestoredEnv(roamium_path_env, testBrowserResolutionRestoreSurfari);
+}
+
+fn testBrowserResolutionRestoreSurfari() !void {
+    try testWithRestoredEnv(surfari_path_env, testBrowserResolutionRestoreInstalledRoamium);
+}
+
+fn testBrowserResolutionRestoreInstalledRoamium() !void {
+    try testWithRestoredEnv(installed_roamium_path_env, testBrowserResolutionRestoreInstalledSurfari);
+}
+
+fn testBrowserResolutionRestoreInstalledSurfari() !void {
+    try testWithRestoredEnv(installed_surfari_path_env, testBrowserResolution);
+}
+
+fn testBrowserResolution() !void {
     const testing = std.testing;
     const surfari: [:0]const u8 = "surfari";
-    const fake_path: [:0]const u8 = "/tmp/termsurf-test-surfari";
+    const roamium: [:0]const u8 = "roamium";
+    const fake_surfari_path: [:0]const u8 = "/tmp/termsurf-test-surfari";
+    const fake_roamium_path: [:0]const u8 = "/tmp/termsurf-test-roamium";
+    const installed_surfari_override: [:0]const u8 = "/tmp/termsurf-installed-surfari";
+    const installed_roamium_override: [:0]const u8 = "/tmp/termsurf-installed-roamium";
+    const invalid_override: [:0]const u8 = "relative-browser";
+
+    _ = c.unsetenv(roamium_path_env);
+    _ = c.unsetenv(surfari_path_env);
+    _ = c.unsetenv(installed_roamium_path_env);
+    _ = c.unsetenv(installed_surfari_path_env);
+
+    try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild("unknown-browser", true) == null);
+    try testing.expectEqualStrings("/tmp/absolute-browser", resolveBrowserExecutableForBuild("/tmp/absolute-browser", true).?);
+
+    try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+    try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+
+    if (c.setenv(surfari_path_env, fake_surfari_path, 1) != 0) return error.SetenvFailed;
+    if (c.setenv(roamium_path_env, fake_roamium_path, 1) != 0) return error.SetenvFailed;
+    try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, true).?);
+    try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+    try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, true).?);
+    try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+
+    if (c.setenv(surfari_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+    if (c.setenv(roamium_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+    try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+    try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+    try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
 
     _ = c.unsetenv(surfari_path_env);
-    try testing.expect(resolveBrowserExecutable(surfari) == null);
-    try testing.expect(resolveBrowserExecutable("unknown-browser") == null);
-    try testing.expectEqualStrings("/tmp/absolute-browser", resolveBrowserExecutable("/tmp/absolute-browser").?);
+    _ = c.unsetenv(roamium_path_env);
+    if (c.setenv(installed_surfari_path_env, installed_surfari_override, 1) != 0) return error.SetenvFailed;
+    if (c.setenv(installed_roamium_path_env, installed_roamium_override, 1) != 0) return error.SetenvFailed;
+    try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+    try testing.expectEqualStrings(installed_surfari_override, resolveBrowserExecutableForBuild(surfari, false).?);
+    try testing.expectEqualStrings(installed_roamium_override, resolveBrowserExecutableForBuild(roamium, false).?);
+}
 
-    if (c.setenv(surfari_path_env, fake_path, 1) != 0) return error.SetenvFailed;
-    try testing.expectEqualStrings(fake_path, resolveBrowserExecutable(surfari).?);
+test "Surfari runtime framework path follows executable directory" {
+    const testing = std.testing;
+    try testing.expect(shouldSupplySurfariRuntimeFrameworkPath("surfari", null));
+    try testing.expect(!shouldSupplySurfariRuntimeFrameworkPath("surfari", "/tmp/WebKitBuild/Debug"));
+    try testing.expect(!shouldSupplySurfariRuntimeFrameworkPath("roamium", null));
+    try testing.expectEqualStrings(
+        "/opt/homebrew/opt/termsurf-surfari",
+        surfariRuntimeFrameworkPath("surfari", "/opt/homebrew/opt/termsurf-surfari/surfari").?,
+    );
+    try testing.expect(surfariRuntimeFrameworkPath("roamium", "/opt/homebrew/opt/termsurf-roamium/roamium") == null);
 }
 
 fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void) !void {
