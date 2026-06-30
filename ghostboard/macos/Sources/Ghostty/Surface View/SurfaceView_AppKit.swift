@@ -292,6 +292,42 @@ extension Ghostty {
                 "layer=appkit event=\(event) scenario=\(termsurfGeometryScenario()) identity=\(termSurfGeometryIdentity(browserTabID: browserTabID)) bounds=\(NSStringFromRect(bounds)) cell=\(cellSize.width)x\(cellSize.height) grid=\(grid) overlay_frame=\(overlayFrame) root_frame=\(rootFrame) positioning_frame=\(positioningFrame) host_frame=\(hostFrame) browser_pixel=\(browserPixel) backing_scale=\(scale) renderer_padding_px=\(paddingPixels) renderer_padding_pt=\(paddingPoints) context_id=\(context) visible=\(termsurfOverlayHostLayer != nil) hit=\(hitValue) raw_point=\(raw) top_point=\(top) web_point=\(web) note=\(note)")
         }
 
+        private var termSurfScrollTraceEnabled: Bool {
+            let environment = ProcessInfo.processInfo.environment
+            return environment["TERMSURF_SCROLL_TRACE"] == "1"
+                || !(environment["TERMSURF_SCROLL_TRACE_FILE"] ?? "").isEmpty
+        }
+
+        private func termSurfLogScroll(_ line: String) {
+            guard termSurfScrollTraceEnabled else { return }
+
+            let row = "ghostboard-scroll \(line)\n"
+            let environment = ProcessInfo.processInfo.environment
+            guard let path = environment["TERMSURF_SCROLL_TRACE_FILE"], !path.isEmpty else {
+                fputs(row, stderr)
+                return
+            }
+
+            let url = URL(fileURLWithPath: path)
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                if !FileManager.default.fileExists(atPath: path) {
+                    FileManager.default.createFile(atPath: path, contents: nil)
+                }
+                let handle = try FileHandle(forWritingTo: url)
+                try handle.seekToEnd()
+                if let data = row.data(using: .utf8) {
+                    try handle.write(contentsOf: data)
+                }
+                try handle.close()
+            } catch {
+                fputs(row, stderr)
+                fputs("ghostboard-scroll trace-write-error path=\(path) error=\(error)\n", stderr)
+            }
+        }
+
         // This is the title from the terminal. This is nil if we're currently using
         // the terminal title as the main title property. If the title is set manually
         // by the user, this is set to the prior value (which may be empty, but non-nil).
@@ -2244,18 +2280,28 @@ extension Ghostty {
         }
 
         private func forwardTermSurfScrollEvent(_ event: NSEvent) -> Bool {
-            guard let point = termSurfOverlayPoint(for: event) else { return false }
-
-            var deltaX = event.scrollingDeltaX
-            var deltaY = event.scrollingDeltaY
+            let rawDeltaX = event.scrollingDeltaX
+            let rawDeltaY = event.scrollingDeltaY
             let precise = event.hasPreciseScrollingDeltas
+            let phase = UInt64(event.phase.rawValue)
+            let momentumPhase = UInt64(event.momentumPhase.rawValue)
+            let modifiers = termSurfModifiers(event.modifierFlags)
+
+            guard let point = termSurfOverlayPoint(for: event) else {
+                let viewPoint = convert(event.locationInWindow, from: nil)
+                termSurfLogScroll(
+                    "event=appkit-scroll pane_id=\(id.uuidString) native_type=\(event.type.rawValue) hit=false raw_delta_x=\(rawDeltaX) raw_delta_y=\(rawDeltaY) forwarded_delta_x=0 forwarded_delta_y=0 precise=\(precise) phase=\(phase) momentum_phase=\(momentumPhase) modifiers=\(modifiers) location_view=\(NSStringFromPoint(viewPoint)) forwarded=false fallback=terminal")
+                return false
+            }
+
+            var deltaX = rawDeltaX
+            var deltaY = rawDeltaY
             if precise {
                 deltaX *= 2
                 deltaY *= 2
             }
 
             let paneID = id.uuidString
-            let modifiers = termSurfModifiers(event.modifierFlags)
             let forwarded: Int32 = paneID.withCString { paneIDPointer in
                 termsurf_forward_scroll_event(
                     paneIDPointer,
@@ -2263,12 +2309,14 @@ extension Ghostty {
                     point.y,
                     deltaX,
                     deltaY,
-                    UInt64(event.phase.rawValue),
-                    UInt64(event.momentumPhase.rawValue),
+                    phase,
+                    momentumPhase,
                     precise,
                     modifiers)
             }
 
+            termSurfLogScroll(
+                "event=appkit-scroll pane_id=\(paneID) native_type=\(event.type.rawValue) hit=true web_x=\(point.x) web_y=\(point.y) raw_delta_x=\(rawDeltaX) raw_delta_y=\(rawDeltaY) forwarded_delta_x=\(deltaX) forwarded_delta_y=\(deltaY) precise=\(precise) phase=\(phase) momentum_phase=\(momentumPhase) modifiers=\(modifiers) forwarded=\(forwarded != 0) fallback=\(forwarded == 0 ? "terminal" : "none")")
             return forwarded != 0
         }
 

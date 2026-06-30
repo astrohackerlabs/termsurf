@@ -257,6 +257,7 @@ struct WebContents {
     CALayer *snapshot_layer;
     bool snapshot_refresh_pending;
     bool snapshot_refresh_again;
+    bool snapshot_refresh_again_scroll;
     NSString *last_render_probe_pass_url;
     NSString *pdf_load_watchdog_url;
     int width;
@@ -328,6 +329,62 @@ static bool pdfCopyBridgeEnabled()
 static bool surfariCursorTraceEnabled()
 {
     return NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_CURSOR_TRACE"].length > 0;
+}
+
+static bool surfariScrollTraceEnabled()
+{
+    return NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_SCROLL_TRACE"].length > 0
+        || NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_SCROLL_TRACE_FILE"].length > 0;
+}
+
+static double surfariScrollSnapshotDelaySeconds()
+{
+    NSString *value = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_SCROLL_SNAPSHOT_DELAY_MS"];
+    if (value.length) {
+        double milliseconds = value.doubleValue;
+        if (milliseconds >= 0.0)
+            return milliseconds / 1000.0;
+    }
+    return 0.016;
+}
+
+static bool surfariScrollSettleRefreshEnabled()
+{
+    NSString *value = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_SCROLL_SETTLE_REFRESH"];
+    return !value.length || ![value isEqualToString:@"0"];
+}
+
+static NSString *surfariScrollDispatchMode()
+{
+    NSString *value = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_SCROLL_DISPATCH_MODE"];
+    return value.length ? value : @"window-send-event";
+}
+
+static void appendSurfariScrollTrace(NSString *line)
+{
+    if (!surfariScrollTraceEnabled())
+        return;
+
+    NSString *entry = [[@"surfari-scroll " stringByAppendingString:line ?: @""] stringByAppendingString:@"\n"];
+    NSString *path = NSProcessInfo.processInfo.environment[@"TERMSURF_SURFARI_SCROLL_TRACE_FILE"];
+    if (!path.length) {
+        fprintf(stderr, "%s", entry.UTF8String ?: "");
+        return;
+    }
+
+    NSData *data = [entry dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *parent = path.stringByDeletingLastPathComponent;
+    if (parent.length)
+        [fm createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
+    if (![fm fileExistsAtPath:path])
+        [data writeToFile:path atomically:YES];
+    else {
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+        [handle closeFile];
+    }
 }
 
 static void traceSurfariCursor(WebContents *contents, NSString *phase, NSInteger raw_cursor_type, int mapped_cursor_type)
@@ -5557,8 +5614,10 @@ static void refreshSnapshotLayerNow(WebContents *contents, NSString *reason)
         fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh reason=%s width=%d height=%d\n", refresh_reason.UTF8String, current->width, current->height);
         current->snapshot_refresh_pending = false;
         if (current->snapshot_refresh_again) {
+            NSString *next_reason = current->snapshot_refresh_again_scroll ? @"scroll" : @"coalesced";
             current->snapshot_refresh_again = false;
-            scheduleSnapshotLayerRefresh(current, @"coalesced");
+            current->snapshot_refresh_again_scroll = false;
+            scheduleSnapshotLayerRefresh(current, next_reason);
         }
     }];
 }
@@ -5567,19 +5626,54 @@ static void scheduleSnapshotLayerRefresh(WebContents *contents, NSString *reason
 {
     if (!contents || !contents->web_view || !useSnapshotLayer())
         return;
+    bool is_scroll_refresh = [reason isEqualToString:@"scroll"];
     if (contents->snapshot_refresh_pending) {
         contents->snapshot_refresh_again = true;
+        contents->snapshot_refresh_again_scroll = contents->snapshot_refresh_again_scroll || is_scroll_refresh;
         return;
     }
     contents->snapshot_refresh_pending = true;
     int tab_id = contents->tab_id;
     NSString *refresh_reason = [reason copy] ?: @"unknown";
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    double delay_seconds = is_scroll_refresh ? surfariScrollSnapshotDelaySeconds() : 0.05;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay_seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         WebContents *current = findContentsByTabId(tab_id);
         if (!current)
             return;
         refreshSnapshotLayerNow(current, refresh_reason);
     });
+}
+
+static bool scrollPhaseEndedOrCancelled(int phase)
+{
+    return (phase & 8) || (phase & 16);
+}
+
+static bool scrollMomentumPhaseEndedOrCancelled(int momentum_phase)
+{
+    return (momentum_phase & 8) || (momentum_phase & 16);
+}
+
+static void scheduleScrollSettleSnapshotRefresh(WebContents *contents, NSTimeInterval delay_seconds)
+{
+    if (!contents || !contents->web_view || !useSnapshotLayer() || !surfariScrollSettleRefreshEnabled())
+        return;
+    int tab_id = contents->tab_id;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay_seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        WebContents *current = findContentsByTabId(tab_id);
+        if (!current)
+            return;
+        scheduleSnapshotLayerRefresh(current, @"scroll");
+    });
+}
+
+static void scheduleScrollSettleSnapshotRefreshes(WebContents *contents, int phase, int momentum_phase)
+{
+    if (!scrollPhaseEndedOrCancelled(phase) && !scrollMomentumPhaseEndedOrCancelled(momentum_phase))
+        return;
+    scheduleScrollSettleSnapshotRefresh(contents, 0.08);
+    scheduleScrollSettleSnapshotRefresh(contents, 0.18);
+    scheduleScrollSettleSnapshotRefresh(contents, 0.35);
 }
 
 static void captureRenderProbeAttempt(WebContents *contents, int attempt)
@@ -6364,6 +6458,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->snapshot_layer = nil;
     contents->snapshot_refresh_pending = false;
     contents->snapshot_refresh_again = false;
+    contents->snapshot_refresh_again_scroll = false;
     contents->pending_javascript_dialogs = [[NSMutableDictionary alloc] init];
     contents->pending_http_auth_requests = [[NSMutableDictionary alloc] init];
 
@@ -6460,6 +6555,7 @@ ts_web_contents_t ts_create_devtools_web_contents(
     contents->snapshot_layer = nil;
     contents->snapshot_refresh_pending = false;
     contents->snapshot_refresh_again = false;
+    contents->snapshot_refresh_again_scroll = false;
     contents->pending_javascript_dialogs = [[NSMutableDictionary alloc] init];
     contents->pending_http_auth_requests = [[NSMutableDictionary alloc] init];
 
@@ -6712,6 +6808,32 @@ void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers)
         scheduleSnapshotLayerRefresh(contents, @"mouse-drag");
 }
 
+static int64_t coreGraphicsScrollPhaseForTermSurfPhase(int phase)
+{
+    if (phase & 1)
+        return kCGScrollPhaseBegan;
+    if (phase & 4)
+        return kCGScrollPhaseChanged;
+    if (phase & 8)
+        return kCGScrollPhaseEnded;
+    if (phase & 16)
+        return kCGScrollPhaseCancelled;
+    if (phase & 32)
+        return kCGScrollPhaseMayBegin;
+    return 0;
+}
+
+static int64_t coreGraphicsMomentumPhaseForTermSurfPhase(int momentum_phase)
+{
+    if (momentum_phase & 1)
+        return kCGMomentumScrollPhaseBegin;
+    if (momentum_phase & 4)
+        return kCGMomentumScrollPhaseContinue;
+    if (momentum_phase & 8)
+        return kCGMomentumScrollPhaseEnd;
+    return kCGMomentumScrollPhaseNone;
+}
+
 void ts_forward_scroll_event(
     ts_web_contents_t wc,
     int x,
@@ -6723,10 +6845,6 @@ void ts_forward_scroll_event(
     bool precise,
     int modifiers)
 {
-    (void)phase;
-    (void)momentum_phase;
-    (void)precise;
-
     WebContents *contents = static_cast<WebContents *>(wc);
     if (!contents)
         return;
@@ -6737,13 +6855,74 @@ void ts_forward_scroll_event(
     CGEventSetLocation(cg_event, eventLocationInGlobalScreen(contents, x, y));
     CGEventSetFlags(cg_event, (CGEventFlags)cocoaModifiers(modifiers));
     CGEventSetIntegerValueField(cg_event, kCGScrollWheelEventIsContinuous, precise ? 1 : 0);
+    if (momentum_phase != 0) {
+        CGEventSetIntegerValueField(cg_event, kCGScrollWheelEventMomentumPhase, coreGraphicsMomentumPhaseForTermSurfPhase(momentum_phase));
+    } else {
+        CGEventSetIntegerValueField(cg_event, kCGScrollWheelEventScrollPhase, coreGraphicsScrollPhaseForTermSurfPhase(phase));
+    }
     NSEvent *event = [NSEvent eventWithCGEvent:cg_event];
+    NSEvent *window_event = [event respondsToSelector:@selector(_eventRelativeToWindow:)] ? [event _eventRelativeToWindow:contents->window] : event;
+    if (!window_event)
+        window_event = event;
+    int64_t cg_continuous = CGEventGetIntegerValueField(cg_event, kCGScrollWheelEventIsContinuous);
+    int64_t cg_scroll_phase = CGEventGetIntegerValueField(cg_event, kCGScrollWheelEventScrollPhase);
+    int64_t cg_momentum_phase = CGEventGetIntegerValueField(cg_event, kCGScrollWheelEventMomentumPhase);
     CFRelease(cg_event);
-    NSView *target = [contents->web_view hitTest:event.locationInWindow] ?: contents->web_view;
-    [NSApp _setCurrentEvent:event];
-    [target scrollWheel:event];
+    NSView *hit_target = [contents->web_view hitTest:window_event.locationInWindow] ?: contents->web_view;
+    NSString *dispatch_mode = surfariScrollDispatchMode();
+    NSView *dispatch_target = [dispatch_mode isEqualToString:@"target"] ? hit_target : contents->web_view;
+    appendSurfariScrollTrace([NSString stringWithFormat:@"event=forward-scroll tab=%d url=%@ x=%d y=%d input_delta_x=%.3f input_delta_y=%.3f input_phase=%d input_momentum_phase=%d input_precise=%d modifiers=%d cg_scroll_phase=%lld cg_momentum_phase=%lld ns_delta_x=%.3f ns_delta_y=%.3f ns_phase=%lu ns_momentum_phase=%lu ns_precise=%d cg_continuous=%lld dispatch_mode=%@ target=%@ hit_target=%@ delivered=before",
+        contents->tab_id,
+        contents->web_view.URL.absoluteString ?: @"",
+        x,
+        y,
+        delta_x,
+        delta_y,
+        phase,
+        momentum_phase,
+        precise ? 1 : 0,
+        modifiers,
+        (long long)cg_scroll_phase,
+        (long long)cg_momentum_phase,
+        event.scrollingDeltaX,
+        event.scrollingDeltaY,
+        (unsigned long)event.phase,
+        (unsigned long)event.momentumPhase,
+        event.hasPreciseScrollingDeltas ? 1 : 0,
+        (long long)cg_continuous,
+        dispatch_mode,
+        dispatch_target ? NSStringFromClass(dispatch_target.class) : @"nil",
+        hit_target ? NSStringFromClass(hit_target.class) : @"nil"]);
+    [NSApp _setCurrentEvent:window_event];
+    if ([dispatch_mode isEqualToString:@"window-send-event"])
+        [contents->window sendEvent:window_event];
+    else
+        [dispatch_target scrollWheel:window_event];
     [NSApp _setCurrentEvent:nil];
+    appendSurfariScrollTrace([NSString stringWithFormat:@"event=forward-scroll tab=%d url=%@ x=%d y=%d input_delta_x=%.3f input_delta_y=%.3f input_phase=%d input_momentum_phase=%d input_precise=%d modifiers=%d cg_scroll_phase=%lld cg_momentum_phase=%lld ns_delta_x=%.3f ns_delta_y=%.3f ns_phase=%lu ns_momentum_phase=%lu ns_precise=%d cg_continuous=%lld dispatch_mode=%@ target=%@ hit_target=%@ delivered=after",
+        contents->tab_id,
+        contents->web_view.URL.absoluteString ?: @"",
+        x,
+        y,
+        delta_x,
+        delta_y,
+        phase,
+        momentum_phase,
+        precise ? 1 : 0,
+        modifiers,
+        (long long)cg_scroll_phase,
+        (long long)cg_momentum_phase,
+        event.scrollingDeltaX,
+        event.scrollingDeltaY,
+        (unsigned long)event.phase,
+        (unsigned long)event.momentumPhase,
+        event.hasPreciseScrollingDeltas ? 1 : 0,
+        (long long)cg_continuous,
+        dispatch_mode,
+        dispatch_target ? NSStringFromClass(dispatch_target.class) : @"nil",
+        hit_target ? NSStringFromClass(hit_target.class) : @"nil"]);
     scheduleSnapshotLayerRefresh(contents, @"scroll");
+    scheduleScrollSettleSnapshotRefreshes(contents, phase, momentum_phase);
 }
 
 static void submitPdfFindQuery(WebContents *contents)

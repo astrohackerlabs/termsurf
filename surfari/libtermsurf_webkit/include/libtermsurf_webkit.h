@@ -103,6 +103,9 @@ void ts_forward_mouse_event(
     int click_count,
     int modifiers);
 void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers);
+/* phase/momentum_phase use AppKit/Blink bitmasks:
+   0=none, 1=began, 2=stationary, 4=changed, 8=ended,
+   16=cancelled, 32=mayBegin. */
 void ts_forward_scroll_event(
     ts_web_contents_t wc,
     int x,
